@@ -6,6 +6,8 @@
 //! The caller must retain this owner across awaits and confirm exit before
 //! releasing its native write fence. Prepared disks are never removed here.
 
+use super::channel::{GuestChannel, RemoteGuestDriver, GUEST_DESKTOP_PORT};
+use super::identifier;
 use super::qmp::{QemuStatus, QmpClient};
 use anyhow::{anyhow, ensure, Context, Result};
 use serde_json::json;
@@ -48,6 +50,8 @@ pub(super) struct QemuProcess {
     pid: u32,
     monitor: Option<QmpClient<UnixStream>>,
     listener: Option<UnixListener>,
+    guest_listener: Option<UnixListener>,
+    guest_channel: Option<GuestChannel<UnixStream>>,
     // Dropped after the child. Only the private monitor directory is disposable.
     runtime: TempDir,
 }
@@ -63,7 +67,7 @@ pub(super) fn regular_file(path: &Path) -> Result<std::fs::Metadata> {
     Ok(metadata)
 }
 
-fn prepare_command(config: &PreparedQemuGuest, socket: &Path) -> Result<Command> {
+fn prepare_command(config: &PreparedQemuGuest, monitor: &Path, guest: &Path) -> Result<Command> {
     use std::os::unix::fs::MetadataExt;
 
     ensure!(
@@ -86,13 +90,8 @@ fn prepare_command(config: &PreparedQemuGuest, socket: &Path) -> Result<Command>
         (base.dev(), base.ino()) != (overlay.dev(), overlay.ino()),
         "base and overlay must be distinct files"
     );
-    let socket = socket.to_str().context("monitor path must be UTF-8")?;
-    // The local chardev uses QEMU keyval syntax, unlike JSON blockdev. Refuse
-    // delimiters rather than interpreting a native filesystem path as options.
-    ensure!(
-        !socket.contains(',') && !socket.chars().any(char::is_control),
-        "monitor path contains unsupported characters"
-    );
+    let monitor = chardev_socket_path(monitor, "monitor")?;
+    let guest = chardev_socket_path(guest, "guest channel")?;
     let base_path = config
         .base_raw
         .to_str()
@@ -155,11 +154,22 @@ fn prepare_command(config: &PreparedQemuGuest, socket: &Path) -> Result<Command>
         "virtio-blk-pci,drive=guest-root",
         "-device",
         "virtio-vga",
+        "-device",
+        "virtio-serial",
     ]);
     command
         .arg("-chardev")
-        .arg(format!("socket,id=control,path={socket},server=off"))
+        .arg(format!("socket,id=control,path={monitor},server=off"))
         .args(["-mon", "chardev=control,mode=control"]);
+    // qemu-ga uses virtio-serial + virtserialport; the host binds the unix
+    // socket and QEMU connects (server=off), matching the owned QMP chardev.
+    command
+        .arg("-chardev")
+        .arg(format!("socket,id=guestctl,path={guest},server=off"))
+        .arg("-device")
+        .arg(format!(
+            "virtserialport,chardev=guestctl,name={GUEST_DESKTOP_PORT}"
+        ));
     command
         .env_clear()
         .stdin(Stdio::null())
@@ -167,6 +177,19 @@ fn prepare_command(config: &PreparedQemuGuest, socket: &Path) -> Result<Command>
         .stderr(Stdio::null())
         .kill_on_drop(true);
     Ok(command)
+}
+
+fn chardev_socket_path<'a>(path: &'a Path, what: &str) -> Result<&'a str> {
+    let path = path
+        .to_str()
+        .with_context(|| format!("{what} path must be UTF-8"))?;
+    // The local chardev uses QEMU keyval syntax, unlike JSON blockdev. Refuse
+    // delimiters rather than interpreting a native filesystem path as options.
+    ensure!(
+        !path.contains(',') && !path.chars().any(char::is_control),
+        "{what} path contains unsupported characters"
+    );
+    Ok(path)
 }
 
 impl QemuProcess {
@@ -184,9 +207,12 @@ impl QemuProcess {
             .map_err(|_| anyhow!("private QEMU runtime directory is unavailable"))?;
         // Restrict access at creation, before binding the monitor or spawning.
         let socket = runtime.path().join("qmp.sock");
-        let mut command = prepare_command(config, &socket)?;
+        let guest_socket = runtime.path().join("guest.sock");
+        let mut command = prepare_command(config, &socket, &guest_socket)?;
         let listener = UnixListener::bind(&socket)
             .map_err(|_| anyhow!("private QEMU monitor could not be bound"))?;
+        let guest_listener = UnixListener::bind(&guest_socket)
+            .map_err(|_| anyhow!("private guest channel could not be bound"))?;
         let child = command
             .spawn()
             .map_err(|_| anyhow!("QEMU could not be started"))?;
@@ -196,6 +222,8 @@ impl QemuProcess {
             pid,
             monitor: None,
             listener: Some(listener),
+            guest_listener: Some(guest_listener),
+            guest_channel: None,
             runtime,
         })
     }
@@ -245,6 +273,51 @@ impl QemuProcess {
         self.monitor.as_mut().context("QEMU monitor is unavailable")
     }
 
+    /// A cancelled or failed handshake is not retried. The caller still owns
+    /// the paused child and must stop/wait it before abandoning the attempt.
+    pub(super) async fn connect_guest_channel(&mut self) -> Result<()> {
+        let listener = self
+            .guest_listener
+            .take()
+            .context("guest channel handshake is retired")?;
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, async {
+            let (stream, _) = tokio::select! {
+                accepted = listener.accept() => accepted.context("guest channel accept failed")?,
+                exited = self.child.wait() => {
+                    exited.map_err(|_| anyhow!("QEMU exit could not be observed"))?;
+                    return Err(anyhow!("QEMU exited before its guest channel became available"));
+                }
+            };
+            ensure!(
+                stream.peer_cred()?.pid() == Some(self.pid as i32),
+                "guest channel peer does not match the owned child"
+            );
+            Ok::<_, anyhow::Error>(stream)
+        })
+        .await
+        .map_err(|_| anyhow!("guest channel handshake exceeded its deadline"))??;
+        self.guest_channel = Some(GuestChannel::new(stream));
+        Ok(())
+    }
+
+    pub(super) fn guest_channel(&mut self) -> Result<&mut GuestChannel<UnixStream>> {
+        self.guest_channel
+            .as_mut()
+            .context("guest channel is unavailable")
+    }
+
+    pub(super) fn bind_guest_driver(
+        &mut self,
+        guest_id: String,
+    ) -> Result<RemoteGuestDriver<UnixStream>> {
+        ensure!(identifier(&guest_id), "guest identity is invalid");
+        let channel = self
+            .guest_channel
+            .take()
+            .context("guest channel is unavailable")?;
+        RemoteGuestDriver::bind(guest_id, channel)
+    }
+
     /// Each input/effect call must remain inside the native authority fence.
     pub(super) async fn resume(&mut self) -> Result<()> {
         Ok(self.monitor()?.resume().await?)
@@ -270,6 +343,8 @@ impl QemuProcess {
             .map_err(|_| anyhow!("QEMU exit could not be observed"))?;
         self.monitor = None;
         self.listener = None;
+        self.guest_channel = None;
+        self.guest_listener = None;
         Ok(status)
     }
 
@@ -278,6 +353,8 @@ impl QemuProcess {
     pub(super) async fn stop(&mut self) -> Result<ExitStatus> {
         self.monitor = None;
         self.listener = None;
+        self.guest_channel = None;
+        self.guest_listener = None;
         if self
             .child
             .try_wait()
