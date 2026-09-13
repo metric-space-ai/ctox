@@ -14,6 +14,7 @@ import {
 
 const CHAT_STYLE_ID = 'ctox-business-chat-style';
 const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
+const CHAT_SUBMISSIONS = new WeakMap();
 const CHAT_CHANNEL = 'business_os.llm.chat';
 const CHAT_COLLECTION = 'business_chats';
 const CHAT_OPEN_EVENT = 'ctox-business-os-chat-open';
@@ -2083,7 +2084,9 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
   // A retained form must submit the current hydrated chat, not its old closure.
   chat = state.chats.find((item) => item.id === chat.id);
   if (!chat) return;
-  if (chat.__submitting) return;
+  let submitting = CHAT_SUBMISSIONS.get(state);
+  if (!submitting) CHAT_SUBMISSIONS.set(state, submitting = new Set());
+  if (submitting.has(chat.id)) return;
   captureDrafts(root, state);
   const input = node.querySelector('[name="message"]');
   const text = String(input?.value || chat.draft || '').trim();
@@ -2094,7 +2097,7 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
 
   const isFuture = chat.createdAt > Date.now();
   if (isFuture) {
-    chat.__submitting = true;
+    submitting.add(chat.id);
     chat.draft = '';
     chat.showFollowUp = false;
     if (input) input.value = '';
@@ -2135,12 +2138,12 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
       await persistChatState({ state, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     } finally {
-      delete chat.__submitting;
+      submitting.delete(chat.id);
     }
     return;
   }
 
-  chat.__submitting = true;
+  submitting.add(chat.id);
   chat.draft = '';
   const isFollowUpSubmission = chat.showFollowUp === true || Boolean(chat.lastTrackingId);
   chat.showFollowUp = false; // Reset follow-up container state
@@ -2163,12 +2166,18 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
         root.__ctoxChatOnTrackingStateChanged?.();
       },
     });
-    if (delivered) chat.attachments = [];
+    const currentChat = state.chats.find((item) => item.id === chat.id);
+    if (delivered && currentChat) {
+      const submitted = new Set(attachments.map((attachment) => attachmentSignature({ attachments: [attachment] })));
+      currentChat.attachments = (currentChat.attachments || []).filter((attachment) => (
+        !submitted.has(attachmentSignature({ attachments: [attachment] }))
+      ));
+    }
     await persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
     root.__ctoxChatOnTrackingStateChanged?.();
   } finally {
-    delete chat.__submitting;
+    submitting.delete(chat.id);
   }
 }
 

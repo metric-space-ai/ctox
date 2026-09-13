@@ -446,6 +446,32 @@ try {
     expect(await page.locator('.ctox-chat-window.is-active .ctox-chat-messages').getByText('Diese Antwort ist vor der Rückfrage eingetroffen.', { exact: true }).count() === 1, 'submitting a retained form must retain the newly hydrated reply exactly once');
   });
 
+  await scenario(page, 'hydration-keeps-in-flight-submit-locked', {
+    count: 1, activeIndex: 0, holdCommand: true,
+  }, async () => {
+    const input = page.locator('.ctox-chat-window.is-active textarea');
+    await input.fill('Diese Aufgabe genau einmal absenden.');
+    await page.locator('.ctox-chat-window.is-active [data-chat-send]').click();
+    await page.evaluate(async () => {
+      await window.chatHarness.waitFor(() => window.chatHarness.releaseCommand);
+      await window.chatHarness.publishMessage('chat_0', {
+        id: 'reply-during-dispatch', role: 'ctox', kind: 'reply',
+        text: 'Während der Annahme synchronisierte Nachricht.', createdAt: Date.now(),
+      });
+    });
+    await page.getByText('Während der Annahme synchronisierte Nachricht.', { exact: true }).waitFor();
+    await input.fill('Noch nicht erneut absenden.');
+    await page.locator('.ctox-chat-window.is-active [data-chat-send]').click();
+    const count = await page.evaluate(async () => {
+      await window.chatHarness.waitForPaint();
+      const count = window.chatHarness.dispatchCount;
+      window.chatHarness.releaseCommand();
+      return count;
+    });
+    expect(count === 1, 'hydration must not unlock a still-pending submission');
+    expect(await input.inputValue() === 'Noch nicht erneut absenden.', 'blocked repeat submit must retain its draft');
+  });
+
   await scenario(page, 'task-link-opens-unobstructed-flow', { count: 1, activeIndex: 0, groupedResearch: true }, async () => {
     await page.locator('.ctox-chat-inspection > summary').click();
     const navigation = await page.evaluate(async () => {
@@ -1448,7 +1474,11 @@ function harnessHtml() {
     function makeCommandBus(options) {
       return {
         dispatch: async (command) => {
+          window.chatHarness.dispatchCount = (window.chatHarness.dispatchCount || 0) + 1;
           window.chatHarness.lastCommand = structuredClone(command);
+          if (options.holdCommand) {
+            await new Promise(resolve => { window.chatHarness.releaseCommand = resolve; });
+          }
           if (options.commandError === 'transient') {
             throw new Error('Timed out waiting for WebRTC response rxdb.query.fetch');
           }
