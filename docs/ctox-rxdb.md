@@ -26,6 +26,26 @@ existing browser controller and command policy. Recovery does not authenticate
 a session, pass review/validation, reopen terminal commands, or weaken the
 owned, expiring lease requirement for ordinary worker commands.
 
+### Outbound MCP research record identity
+
+`web_stack.person_research` binds its proposal to the raw persisted
+`outbound_lead_generation_leads` record, not the MCP descriptor's derived title.
+Runtime leads use top-level `name` and/or `data.firma_name`; legacy `company`,
+`company_name` and `title` are also recognized. Every present identity field
+must be a nonempty string matching `payload.company` after whitespace trimming.
+Conflicting aliases are rejected rather than selecting whichever matches.
+The existing exact record/operation ID, country, module, collection, workspace,
+and stored research-payload constraints remain mandatory. This performs no
+record rewrite, permission expansion, or alternate data access.
+
+The runtime-shaped proposal regressions are
+`person_research_binding_accepts_runtime_lead_name_fields` and
+`person_research_binding_runtime_leads_preserve_identity_and_scope`.
+They cover the production field shape and request/record mismatch rejection;
+a passing proposal does not establish research execution, provider coverage,
+writeback, or browser acceptance. Native execution and a new live pipeline
+check remain required before claiming this repair deployed and verified.
+
 Two implementations, one contract:
 
 | Side | Name | Location |
