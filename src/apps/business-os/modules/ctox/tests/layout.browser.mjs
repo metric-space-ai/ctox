@@ -207,7 +207,10 @@ try {
       await page.screenshot({path:path.join(out,'runtime-save-reload.png')});
       await settings.evaluate(e => e.remove());
     }
-    if (width === 1280) await assertDelayedHarnessStatus(page);
+    if (width === 1280) {
+      await assertDelayedHarnessStatus(page);
+      await assertStatusDuringTaskHydration(page);
+    }
     await page.close();
   }
   console.log(JSON.stringify({passed:results.length,results}));
@@ -270,7 +273,8 @@ async function assertDelayedHarnessStatus(page) {
     assert.equal(await note.isVisible(), paused, 'paused note must follow the native projection in both directions');
     await assertHarnessStatus(paused);
     assert.equal(await pause.textContent(), paused ? 'Crew weiterarbeiten lassen' : 'Crew pausieren');
-    assert.equal(await page.evaluate(() => window.crewFixture.state.mainRenderPending), true);
+    // Status patches arrive ahead of the debounced general render.
+    await page.waitForFunction(() => window.crewFixture.state.mainRenderPending, null, {timeout:10000});
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !window.crewFixture.state.mainRenderPending);
     assert.equal(await page.locator('.ctox-more-actions-body:popover-open').count(), 0, 'closing the menu must flush the deferred main render');
@@ -284,4 +288,134 @@ async function assertDelayedHarnessStatus(page) {
   await page.screenshot({ path: path.join(out, 'harness-resumed-without-reload.png') });
   await page.evaluate(() => window.stopHarnessStatusFixture());
   results.push({ scenario: 'delayed-native-pause-resume-with-open-menu', passed: true });
+}
+
+async function assertStatusDuringTaskHydration(page) {
+  await page.evaluate(async () => {
+    const {state, hooks} = window.crewFixture;
+    state.detailDrawer = null;
+    document.getElementById("fixture-task-drawer")?.remove();
+    let projection = {id:'harness',paused:false,worker_capacity:1,updated_at_ms:1};
+    const listeners = new Set();
+    const doc = value => ({toJSON: () => ({...value})});
+    const task = {id:'status-task',command_id:'status-command',status:'completed',updated_at_ms:1};
+    const command = {id:'status-command',command_id:'status-command',execution_task_id:'status-task',execution_mode:'queue',status:'completed',payload:{title:'Completed status fixture'},updated_at_ms:1};
+    window.holdStatusTaskReads = false;
+    window.statusTaskReadsHeld = 0;
+    window.statusReadCount = 0;
+    const releases = [];
+    window.releaseStatusTaskReads = () => {
+      window.holdStatusTaskReads = false;
+      for (const release of releases.splice(0)) release([]);
+    };
+    state.ctx.db = {collection: name => name === 'ctox_harness_status' ? {
+      findOne: () => ({exec: async () => {
+        window.statusReadCount++;
+        const snapshot = doc(projection);
+        if (window.holdNextStatusRead) {
+          window.holdNextStatusRead = false;
+          return new Promise(resolve => { window.releaseOlderStatusRead = () => resolve(snapshot); });
+        }
+        return snapshot;
+      }}),
+      $: {subscribe: listener => {listeners.add(listener); return {unsubscribe: () => listeners.delete(listener)};}},
+    } : {
+      findOne: () => ({exec: async () => null}),
+      find: () => ({exec: async () => {
+        if (['ctox_harness_events','ctox_runs'].includes(name) && window.holdStatusTaskReads) {
+          window.statusTaskReadsHeld++;
+          return new Promise(resolve => releases.push(resolve));
+        }
+        return name === 'business_commands' ? [doc(command)] : name === 'ctox_queue_tasks' ? [doc(task)] : [];
+      }}),
+    }};
+    window.statusCommands = [];
+    state.ctx.commandBus = {dispatch: async command => {
+      window.statusCommands.push(command);
+      return {status:'completed',result:{ok:true}};
+    }};
+    window.publishHeldTaskStatus = paused => {
+      projection = {...projection,paused,updated_at_ms:projection.updated_at_ms+1};
+      for (const listener of listeners) listener({documentData:{...projection}});
+    };
+    window.stopHeldTaskStatus = hooks.wireLocalRealtime(state);
+    state.harnessStatus = null;
+    hooks.renderMain(state);
+    window.releaseOlderStatusRead = null;
+    window.holdNextStatusRead = true;
+    await hooks.renderFromLocalCache(state);
+  });
+  assert.equal(await page.locator('[data-harness-pause]').count(), 0, 'initial task hydration can finish before status');
+  await page.evaluate(async () => {
+    const {state, hooks} = window.crewFixture;
+    await hooks.renderFromLocalCache(state);
+    await hooks.renderFromLocalCache(state);
+  });
+  await page.evaluate(() => window.releaseOlderStatusRead());
+  await page.locator('[data-harness-pause]').waitFor({state:'attached'});
+  assert.equal(await page.locator('[data-harness-capacity]').inputValue(), '1');
+  assert.equal(await page.evaluate(() => window.statusReadCount), 1, 'unrelated hydration must join the pending status read without invalidating it');
+  await page.evaluate(() => {
+    window.holdStatusTaskReads = true;
+    window.pendingTaskHydration = window.crewFixture.hooks.renderFromLocalCache(window.crewFixture.state);
+  });
+  await page.waitForFunction(() => window.statusTaskReadsHeld > 0 && window.crewFixture.state.refreshInFlight);
+  const menu = page.locator('[data-ctox-main] .ctox-more-actions > summary');
+  const button = page.locator('[data-harness-pause]');
+  const harness = page.locator('[data-ctox-harness]');
+  await menu.click();
+  await button.click();
+  await page.waitForFunction(() => window.statusCommands.length === 1);
+  await page.locator('[data-ctox-main] .ctox-more-actions-body').waitFor({state:'hidden'});
+  await menu.click();
+  await page.evaluate(() => {
+    window.heldTaskPauseButton = document.querySelector('[data-harness-pause]');
+    window.publishHeldTaskStatus(true);
+  });
+  await page.waitForFunction(() => document.querySelector('[data-harness-pause]')?.getAttribute('aria-pressed') === 'true', null, {timeout:10000});
+  assert.equal(await harness.getAttribute('aria-label'), 'Die Crew ist pausiert');
+  assert.equal(await button.evaluate(node => node === window.heldTaskPauseButton), true);
+  assert.equal(await page.locator('.ctox-paused-note').isVisible(), true);
+  await button.click();
+  await page.waitForFunction(() => window.statusCommands.length === 2);
+  await page.locator('[data-ctox-main] .ctox-more-actions-body').waitFor({state:'hidden'});
+  assert.equal(await harness.getAttribute('aria-label'), 'Die Crew ist pausiert', 'completion alone must not resume the displayed status');
+  await page.evaluate(() => window.publishHeldTaskStatus(false));
+  await page.waitForFunction(() => document.querySelector('[data-harness-pause]')?.getAttribute('aria-pressed') === 'false', null, {timeout:10000});
+  assert.equal(await harness.getAttribute('aria-label'), 'Die Crew bearbeitet die Aufgabenliste');
+  assert.equal(await page.locator('.ctox-paused-note').isVisible(), false);
+  assert.equal(await page.evaluate(() => window.crewFixture.state.refreshInFlight), true, 'task detail reads must still be pending');
+  // A superseded status read must not briefly apply its captured paused value.
+  await page.evaluate(() => {
+    window.observedStatusChanges = [];
+    window.statusObserver = new MutationObserver(() => window.observedStatusChanges.push(document.querySelector('[data-harness-pause]').getAttribute('aria-pressed')));
+    window.statusObserver.observe(document.querySelector('[data-harness-pause]'), {attributes:true,attributeFilter:['aria-pressed']});
+    window.releaseOlderStatusRead = null;
+    window.holdNextStatusRead = true;
+    window.publishHeldTaskStatus(true);
+  });
+  await page.waitForFunction(() => typeof window.releaseOlderStatusRead === 'function');
+  await page.evaluate(() => {window.publishHeldTaskStatus(false); window.releaseOlderStatusRead();});
+  await page.waitForFunction(() => !window.crewFixture.state.harnessStatusRead);
+  assert.equal(await page.evaluate(() => window.observedStatusChanges.includes('true')), false, 'superseded status read must never publish its stale value');
+  await page.evaluate(() => {window.statusObserver.disconnect(); window.publishHeldTaskStatus(true);});
+  await page.waitForFunction(() => document.querySelector('[data-harness-pause]')?.getAttribute('aria-pressed') === 'true');
+  // Mutation delivery occurs after the read loop returns, before its finalizer.
+  await page.evaluate(() => {
+    window.settlementEventDelivered = false;
+    const observer = new MutationObserver(() => {
+      observer.disconnect();
+      window.settlementEventDelivered = true;
+      window.publishHeldTaskStatus(true);
+    });
+    observer.observe(document.querySelector('[data-harness-pause]'), {attributes:true,attributeFilter:['aria-pressed']});
+    window.publishHeldTaskStatus(false);
+  });
+  await page.waitForFunction(() => window.settlementEventDelivered && !window.crewFixture.state.harnessStatusRead);
+  assert.equal(await button.getAttribute('aria-pressed'), 'true', 'status event at promise settlement must receive a follow-up read');
+  await page.evaluate(async () => {window.releaseStatusTaskReads(); await window.pendingTaskHydration;});
+  assert.equal(await button.getAttribute('aria-pressed'), 'true', 'general hydration started with false must not overwrite the newer true status');
+  assert.equal(await harness.getAttribute('aria-label'), 'Die Crew ist pausiert');
+  await page.evaluate(() => window.stopHeldTaskStatus());
+  results.push({scenario:'pause-resume-during-selected-task-hydration',passed:true});
 }
