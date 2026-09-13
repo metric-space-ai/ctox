@@ -439,6 +439,60 @@ mod tests {
     }
 
     #[test]
+    fn mcp_app_authority_local_source_compare_and_save_preserves_target_and_conflicts(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let module = fixture(root)?;
+        let original = fs::read_to_string(module.join("index.js"))?;
+        let updated = "export const fixture = 'updated';\n";
+        // The embedded Pi owner uses this compare-and-save boundary, not
+        // delegated modify_app. Prove the resolver keeps its local target.
+        let saved = store::save_module_source_record_if_current(
+            root,
+            store::ModuleSourceSaveMutation {
+                module_id: MODULE.into(),
+                path: "index.js".into(),
+                content: updated.into(),
+            },
+            Some(&original),
+        )?;
+        assert_eq!(saved["ok"], true);
+        assert_eq!(saved["changed"], true);
+        assert!(saved["snapshot_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()));
+        assert_eq!(fs::read_to_string(module.join("index.js"))?, updated);
+        let read = gateway_call(
+            root,
+            "admin",
+            "business_os.read_app_file",
+            serde_json::json!({"module_id": MODULE, "path": "index.js"}),
+        )?;
+        assert_eq!(read["content"], updated);
+
+        let stale = store::save_module_source_record_if_current(
+            root,
+            store::ModuleSourceSaveMutation {
+                module_id: MODULE.into(),
+                path: "index.js".into(),
+                content: "export const fixture = 'stale';\n".into(),
+            },
+            Some(&original),
+        )
+        .unwrap_err();
+        assert!(stale.to_string().contains("coding source conflict"));
+        assert_eq!(fs::read_to_string(module.join("index.js"))?, updated);
+        assert!(!root
+            .join("runtime/business-os/installed-modules")
+            .join(MODULE)
+            .exists());
+        let manifest: Value = serde_json::from_slice(&fs::read(module.join("module.json"))?)?;
+        assert_eq!(manifest["install_scope"], "local");
+        Ok(())
+    }
+
+    #[test]
     fn mcp_app_authority_source_rejects_traversal_mismatched_manifest_and_unbound_customer(
     ) -> anyhow::Result<()> {
         let temp = tempdir()?;

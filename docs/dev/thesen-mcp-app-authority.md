@@ -113,3 +113,15 @@ source-mode fallback. Parent's native test/build/unit state is untouched;
 the already running immutable `6b76bb38b` verification remains that revision,
 not verification of this follow-up. All deployment/adapter checks remain
 parent-owned.
+
+## Embedded Pi source-write regression (2026-09-13)
+
+The separate embedded Pi owner calls `save_module_source_record_if_current`.
+A new focused regression exercises that existing native boundary against an
+operator-owned local module: edit, snapshot receipt, MCP read-back, stale
+baseline rejection, and absence of an installed-module shadow. It does not
+enable delegated `modify_app`, bypass policy, or establish a live Pi turn.
+Native execution of this additional test is pending shared THESEN verification;
+the earlier ten passing tests do not include it. Final Outbound acceptance now
+requires a real live research using every intended adapter, with persisted
+per-source query/results, not source registration or API health alone.
