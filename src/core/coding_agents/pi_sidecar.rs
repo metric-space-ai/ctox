@@ -1329,6 +1329,212 @@ mod tests {
     }
 
     #[test]
+    fn responses_edit_owner_applies_only_complete_source_and_session() -> anyhow::Result<()> {
+        use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
+        let dist = sidecar_dist_path(&repo_root());
+        anyhow::ensure!(
+            node_available() && dist.exists(),
+            "Responses owner regression requires Node and built sidecar"
+        );
+        for incomplete in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path();
+            let module = root.join("src/apps/business-os/modules/widget");
+            std::fs::create_dir_all(&module)?;
+            std::fs::write(
+                module
+                    .parent()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("index.html"),
+                "<!doctype html>",
+            )?;
+            std::fs::write(
+                module.join("module.json"),
+                r#"{"id":"widget","title":"Widget","entry":"modules/widget/index.html"}"#,
+            )?;
+            std::fs::write(module.join("index.js"), "export const v = 1;\n")?;
+            load_module_source_records(
+                root,
+                &ModuleSourceLoadMutation {
+                    module_id: "widget".into(),
+                },
+            )?;
+            let before = project_module_source(root, "widget")?;
+            let key = before
+                .keys()
+                .find(|path| path.ends_with("index.js"))
+                .context("projected index")?
+                .clone();
+
+            // Materialize real isolated projection tables so a missing-table
+            // no-op cannot masquerade as proof that failed turns skip logging.
+            let db = rusqlite::Connection::open(
+                crate::paths::runtime_dir(root).join("business-os-rxdb.sqlite3"),
+            )?;
+            for collection in ["coding_agent_sessions", "coding_agent_events"] {
+                db.execute_batch(&format!("CREATE TABLE ctox_business_os__{collection}__v0 (id TEXT PRIMARY KEY, data TEXT NOT NULL, lastWriteTime REAL NOT NULL)"))?;
+            }
+            crate::business_os::store::record_coding_agent_session_turn(
+                root,
+                "widget",
+                "baseline",
+                &[],
+                1,
+            )?;
+            let session_before: String = db.query_row(
+                "SELECT data FROM ctox_business_os__coding_agent_sessions__v0 WHERE id='pi:widget'",
+                [],
+                |row| row.get(0),
+            )?;
+            let event_count = || {
+                db.query_row::<i64, _, _>(
+                    "SELECT COUNT(*) FROM ctox_business_os__coding_agent_events__v0",
+                    [],
+                    |row| row.get(0),
+                )
+            };
+            assert_eq!(event_count()?, 1, "session logger fixture is active");
+
+            let settings = BTreeMap::from([
+                ("CTOX_CHAT_SOURCE".into(), "api".into()),
+                ("CTOX_API_PROVIDER".into(), "ctox_proxy".into()),
+                ("CTOX_CHAT_MODEL".into(), "MiniMax-M3".into()),
+                ("CTOX_CHAT_MODEL_BASE".into(), "MiniMax-M3".into()),
+                (
+                    "CTOX_UPSTREAM_BASE_URL".into(),
+                    "https://llm.ctox.dev".into(),
+                ),
+                (
+                    "CTOX_LLM_PROXY_API_KEY".into(),
+                    "owner-fixture-secret".into(),
+                ),
+            ]);
+            crate::execution::models::runtime_env::save_runtime_env_map(root, &settings)?;
+            let mut route = resolve_inherited_coding_route(root)?;
+            assert_eq!(route.api, "openai-responses");
+            let upstream =
+                Server::http("127.0.0.1:0").map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            route.base_url = format!(
+                "http://{}/v1",
+                upstream.server_addr().to_ip().context("fixture IP")?
+            );
+            let source_key = key.clone();
+            let worker = std::thread::spawn(move || {
+                for turn in 0..3 {
+                    let mut request = upstream
+                        .recv_timeout(Duration::from_secs(15))
+                        .unwrap()
+                        .expect("real Responses Pi request");
+                    assert_eq!(request.url(), "/v1/responses");
+                    assert!(request.headers().iter().any(|header| header
+                        .field
+                        .as_str()
+                        .as_str()
+                        .eq_ignore_ascii_case("authorization")
+                        && header.value.as_str() == "Bearer owner-fixture-secret"));
+                    let mut body = String::new();
+                    request.as_reader().read_to_string(&mut body).unwrap();
+                    let body: Value = serde_json::from_str(&body).unwrap();
+                    assert_eq!(
+                        body["input"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter(|item| item["type"] == "function_call_output")
+                            .count(),
+                        turn
+                    );
+                    let item = match turn {
+                        0 | 1 => {
+                            serde_json::json!({"type":"function_call", "id":format!("fc-{turn}"), "call_id":format!("call-{turn}"), "name":if turn == 0 {"read"} else {"edit"}, "arguments": if turn == 0 { serde_json::json!({"path":source_key}).to_string() } else { serde_json::json!({"path":source_key, "edits":[{"oldText":"v = 1", "newText":"v = 2"}]}).to_string() }, "status":"completed"})
+                        }
+                        _ => {
+                            serde_json::json!({"type":"message", "id":"msg-final", "role":"assistant", "status":"completed", "content":[{"type":"output_text", "text":"PRIVATE_PROVIDER_TEXT", "annotations":[]}]})
+                        }
+                    };
+                    let mut added = item.clone();
+                    added["status"] = Value::String("in_progress".into());
+                    if turn < 2 {
+                        added["arguments"] = Value::String(String::new());
+                    } else {
+                        added["content"] = serde_json::json!([]);
+                    }
+                    let terminal = if incomplete && turn == 2 {
+                        "incomplete"
+                    } else {
+                        "completed"
+                    };
+                    let delta = if turn < 2 {
+                        serde_json::json!({"type":"response.function_call_arguments.delta", "item_id":item["id"], "output_index":0, "delta":item["arguments"]})
+                    } else {
+                        serde_json::json!({"type":"response.output_text.delta", "item_id":item["id"], "output_index":0, "content_index":0, "delta":"PRIVATE_PROVIDER_TEXT"})
+                    };
+                    let events = [
+                        serde_json::json!({"type":"response.created", "response":{"id":format!("r-{turn}"), "status":"in_progress", "output":[]}}),
+                        serde_json::json!({"type":"response.output_item.added", "output_index":0, "item":added}),
+                        delta,
+                        serde_json::json!({"type":"response.output_item.done", "output_index":0, "item":item}),
+                        serde_json::json!({"type":format!("response.{terminal}"), "response":{"id":format!("r-{turn}"), "status":terminal, "output":[item], "usage":{"input_tokens":10,"output_tokens":10,"total_tokens":20}}}),
+                    ];
+                    let sse = events
+                        .iter()
+                        .map(|event| {
+                            format!(
+                                "event: {}\ndata: {event}\n\n",
+                                event["type"].as_str().unwrap()
+                            )
+                        })
+                        .collect::<String>();
+                    request
+                        .respond(Response::from_string(sse).with_header(
+                            Header::from_bytes("content-type", "text/event-stream").unwrap(),
+                        ))
+                        .unwrap();
+                }
+            });
+            let prepared = prepare_inherited_coding_model_route(root, route)?;
+            let result = run_module_coding_turn(
+                root,
+                &dist,
+                "widget",
+                "Read, edit, finish",
+                false,
+                Some(prepared.model),
+            );
+            worker.join().expect("Responses upstream assertions");
+            drop(prepared.coding_plan_bridge);
+            let persisted = project_module_source(root, "widget")?;
+            let session_after: String = db.query_row(
+                "SELECT data FROM ctox_business_os__coding_agent_sessions__v0 WHERE id='pi:widget'",
+                [],
+                |row| row.get(0),
+            )?;
+            if incomplete {
+                let error = result.unwrap_err().to_string();
+                assert!(
+                    error.contains("incomplete_turn")
+                        && error.contains("\"terminal_stop_reason\":\"length\"")
+                );
+                assert!(
+                    !error.contains("PRIVATE_PROVIDER_TEXT")
+                        && !error.contains("owner-fixture-secret")
+                );
+                assert_eq!(persisted, before);
+                assert_eq!(session_after, session_before);
+                assert_eq!(event_count()?, 1);
+            } else {
+                assert_eq!(result?["ok"], true);
+                assert_eq!(persisted[&key], "export const v = 2;\n");
+                assert_ne!(session_after, session_before);
+                assert_eq!(event_count()?, 2);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn apply_snapshot_round_trips_a_seeded_file_edit() -> anyhow::Result<()> {
         use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
 
