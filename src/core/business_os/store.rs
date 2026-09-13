@@ -13167,6 +13167,10 @@ fn secret_payload_field(command_type: &str) -> Option<&'static str> {
 }
 
 pub(super) fn detach_secret_intake_value(command_id: &str, command: &mut BusinessCommand) {
+    if command.command_type == "ctox.secret.generate" {
+        sanitize_secret_generation_payload(&mut command.payload);
+        return;
+    }
     let Some(field) = secret_payload_field(&command.command_type) else {
         return;
     };
@@ -13179,6 +13183,31 @@ pub(super) fn detach_secret_intake_value(command_id: &str, command: &mut Busines
     };
     if let Some(value) = value.as_str() {
         stash_secret_intake_value(command_id, field, value.to_string());
+    }
+}
+
+/// Generation has no secret input. Reject malformed requests without keeping
+/// any of their payload in claim intents, failed receipts or replicated rows.
+/// Null remains invalid at the strict handler, including after a restart; do
+/// not merely drop unknown fields and accidentally turn rejection into success.
+fn sanitize_secret_generation_payload(payload: &mut Value) {
+    let valid = payload.as_object().is_some_and(|object| {
+        object
+            .keys()
+            .all(|key| matches!(key.as_str(), "name" | "length"))
+            && object
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(is_valid_credential_key)
+            && match object.get("length") {
+                None | Some(Value::Null) => true,
+                Some(length) => length
+                    .as_u64()
+                    .is_some_and(|length| (16..=128).contains(&length)),
+            }
+    });
+    if !valid {
+        *payload = Value::Null;
     }
 }
 
@@ -13204,6 +13233,19 @@ pub(crate) fn detach_secret_from_replicated_document(collection: &str, document:
     let Some(object) = document.as_object_mut() else {
         return;
     };
+    // Match the effective command type used by native intake, not an alias
+    // hidden behind a different authoritative command_type.
+    if object
+        .get("command_type")
+        .or_else(|| object.get("type"))
+        .and_then(Value::as_str)
+        == Some("ctox.secret.generate")
+    {
+        if let Some(payload) = object.get_mut("payload") {
+            sanitize_secret_generation_payload(payload);
+        }
+        return;
+    }
     let Some(field) = ["command_type", "type"]
         .iter()
         .filter_map(|key| object.get(*key).and_then(Value::as_str))
@@ -40484,6 +40526,137 @@ pub(super) mod tests {
             root,
             crate::secrets::credential_scope(),
             "INVALID_PASSWORD"
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn ctox_secret_generate_sanitizer_preserves_valid_requests_and_rejects_invalid_ones() {
+        for payload in [
+            serde_json::json!({"name": "TEST_PASSWORD"}),
+            serde_json::json!({"name": "TEST_PASSWORD", "length": null}),
+            serde_json::json!({"name": "TEST_PASSWORD", "length": 16}),
+            serde_json::json!({"name": "TEST_PASSWORD", "length": 128}),
+        ] {
+            let mut sanitized = payload.clone();
+            sanitize_secret_generation_payload(&mut sanitized);
+            assert_eq!(sanitized, payload);
+        }
+        for payload in [
+            serde_json::json!({"name": "TEST_PASSWORD", "value": "GENERATION_INPUT_CANARY"}),
+            serde_json::json!({"name": {"password": "GENERATION_INPUT_CANARY"}}),
+            serde_json::json!({"name": "TEST_PASSWORD", "length": "GENERATION_INPUT_CANARY"}),
+            serde_json::json!({"name": "TEST_PASSWORD", "length": 15}),
+            serde_json::json!({"name": "TEST_PASSWORD", "length": 129}),
+            serde_json::json!({"name": "TEST_PASSWORD", "scope": "other"}),
+            serde_json::json!(["GENERATION_INPUT_CANARY"]),
+            Value::Null,
+        ] {
+            let mut sanitized = payload;
+            sanitize_secret_generation_payload(&mut sanitized);
+            assert_eq!(sanitized, Value::Null);
+            assert!(
+                serde_json::from_value::<CtoxSecretGenerateMutation>(sanitized.clone()).is_err()
+            );
+            sanitize_secret_generation_payload(&mut sanitized);
+            assert_eq!(sanitized, Value::Null);
+        }
+        // Alias precedence must agree with intake; unrelated commands/collections
+        // are not rewritten by the generator-specific sanitizer.
+        for (collection, document) in [
+            (
+                "other",
+                serde_json::json!({"type": "ctox.secret.generate", "payload": {"value": "kept"}}),
+            ),
+            (
+                "business_commands",
+                serde_json::json!({"command_type": "other", "type": "ctox.secret.generate", "payload": {"value": "kept"}}),
+            ),
+        ] {
+            let mut sanitized = document.clone();
+            detach_secret_from_replicated_document(collection, &mut sanitized);
+            assert_eq!(sanitized, document);
+        }
+    }
+
+    #[test]
+    fn ctox_secret_generate_invalid_intake_keeps_canary_out_of_durable_stores() -> anyhow::Result<()>
+    {
+        fn assert_no_canary_files(dir: &Path, canary: &[u8]) -> anyhow::Result<()> {
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let kind = entry.file_type()?;
+                if kind.is_dir() {
+                    assert_no_canary_files(&entry.path(), canary)?;
+                } else {
+                    anyhow::ensure!(kind.is_file(), "unexpected fixture file type");
+                    let bytes = fs::read(entry.path())?;
+                    anyhow::ensure!(
+                        !bytes.windows(canary.len()).any(|window| window == canary),
+                        "rejected generation payload persisted in {}",
+                        entry.path().display()
+                    );
+                }
+            }
+            Ok(())
+        }
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        seed_business_user(root, "global_admin", "admin")?;
+        seed_business_user(root, "qa", "user")?;
+        let canary = "GENERATION_INTAKE_MUST_NOT_PERSIST";
+        for replicated in [false, true] {
+            for actor in ["global_admin", "qa"] {
+                let id = format!("generate_invalid_{replicated}_{actor}");
+                let mut document = serde_json::json!({
+                    "id": id, "module": "credentials", "type": "ctox.secret.generate",
+                    "payload": {"name": "INVALID_PASSWORD", "value": canary},
+                    "client_context": {"actor": {"id": actor, "display_name": actor}},
+                });
+                if replicated {
+                    detach_secret_from_replicated_document("business_commands", &mut document);
+                    assert_eq!(document["payload"], Value::Null);
+                    let conn = Connection::open(rxdb_store_path(root))?;
+                    rxdb::storage::sqlite::sql::ensure_collection_table(
+                        &conn,
+                        "ctox_business_os__business_commands__v2",
+                    )?;
+                    conn.execute(
+                        "INSERT INTO ctox_business_os__business_commands__v2
+                         (id, revision, deleted, lastWriteTime, data)
+                         VALUES (?1, '1-browser', 0, ?2, ?3)",
+                        params![id, now_ms() as f64, serde_json::to_string(&document)?],
+                    )?;
+                    assert!(sqlite_cells_containing(root, canary)?.is_empty());
+                }
+                let outcome = accept_rxdb_business_command(root, document)?;
+                assert_eq!(outcome["status"], "failed");
+                assert!(!serde_json::to_string(&outcome)?.contains(canary));
+                let conn = open_store(root)?;
+                let stored = outbound_load_required(&conn, "business_commands", &id, "command")?;
+                assert!(!serde_json::to_string(&stored)?.contains(canary));
+                let stored_payload: String = conn.query_row(
+                    "SELECT payload_json FROM business_commands WHERE command_id = ?1",
+                    [&id],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(serde_json::from_str::<Value>(&stored_payload)?, Value::Null);
+                let hits = sqlite_cells_containing(root, canary)?;
+                assert!(
+                    hits.is_empty(),
+                    "rejected generation payload reached durable stores: {hits:?}"
+                );
+                // Include WAL pages and any durable log/receipt files, not only
+                // logical SQLite cells. Read/traversal failures fail the test.
+                assert_no_canary_files(root, canary.as_bytes())?;
+            }
+        }
+        assert!(!crate::secrets::secret_exists(
+            root,
+            crate::secrets::credential_scope(),
+            "INVALID_PASSWORD",
         )?);
         Ok(())
     }

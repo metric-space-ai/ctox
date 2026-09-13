@@ -36,6 +36,14 @@ contains `created`, `name`, `secret_ref: {scope, name, secret_id}`, and
 returned. Command requests/receipts use the existing native dispatcher and
 RxDB/WebRTC path; no HTTP data bridge or new secret database was added.
 
+Malformed generation payloads are replaced with an invalid null payload at
+both replicated-document intake and native command intake, before claim,
+projection or failure receipts persist. This avoids retaining an accidentally
+supplied `value`, nested content or other invalid fields. The strict handler
+still rejects that request; sanitization never converts it into a valid request.
+Valid name/length requests are unchanged. This guard applies to payloads, not
+arbitrary user text placed in unrelated command metadata.
+
 ## Registration integration boundary
 
 This change provides generation and an authorized native command, **not a
@@ -59,6 +67,11 @@ Added native regressions cover length/classes, sample uniqueness (not an entropy
 proof), encrypted storage and metadata-only receipts, reopening/retry behavior,
 preservation of imported credentials, concurrent create-once behavior, invalid
 arguments, and Business OS permission denial/receipt persistence.
+Additional regressions cover invalid-payload sanitization and full native
+intake with synthetic canaries for authorized and denied actors, both directly
+and after the replicated-document sanitizer writes to the real fixture store.
+They check failed receipts and all SQLite stores for the canary, and ensure no
+credential was generated. These added regressions have not yet executed.
 
 Run on the authorized native verification host, with at most two workers:
 
