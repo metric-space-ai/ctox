@@ -365,10 +365,10 @@ async fn manager_thread_ids(client: &IsolatedClient) -> Vec<String> {
 
 async fn run_named_persistent_thread_restart(
     scope: &mut ClientScope,
-    codex_home: &tempfile::TempDir,
+    codex_home: &Path,
     server_uri: &str,
 ) {
-    let config = isolated_mock_config(codex_home.path(), server_uri).await;
+    let config = isolated_mock_config(codex_home, server_uri).await;
 
     let created = {
         let id = scope.start(SessionSource::Exec, Arc::clone(&config)).await;
@@ -377,7 +377,7 @@ async fn run_named_persistent_thread_restart(
             .request(
                 ClientRequest::ThreadStart {
                     request_id: RequestId::Integer(1),
-                    params: persistent_start_params(codex_home.path()),
+                    params: persistent_start_params(codex_home),
                 },
                 "thread/start",
             )
@@ -416,7 +416,7 @@ async fn run_named_persistent_thread_restart(
             )
             .await;
         wait_for_turn_completed(client, &thread_id).await;
-        wait_for_session_index_name(codex_home.path()).await;
+        wait_for_session_index_name(codex_home).await;
 
         let read: ThreadReadResponse = client
             .request(
@@ -458,7 +458,7 @@ async fn run_named_persistent_thread_restart(
             .clone()
             .expect("persistent thread should expose a rollout path");
         assert!(
-            rollout_path.starts_with(codex_home.path()),
+            rollout_path.starts_with(codex_home),
             "rollout must stay inside the isolated home: {}",
             rollout_path.display()
         );
@@ -471,7 +471,7 @@ async fn run_named_persistent_thread_restart(
             rollout.contains(ASSISTANT_MARKER),
             "on-disk rollout should contain the assistant marker"
         );
-        let session_index = std::fs::read_to_string(codex_home.path().join("session_index.jsonl"))
+        let session_index = std::fs::read_to_string(codex_home.join("session_index.jsonl"))
             .expect("session index should persist the thread name");
         assert!(
             session_index.contains(THREAD_NAME),
@@ -494,7 +494,7 @@ async fn run_named_persistent_thread_restart(
         "rollout must survive manager shutdown"
     );
 
-    let restarted_config = isolated_mock_config(codex_home.path(), server_uri).await;
+    let restarted_config = isolated_mock_config(codex_home, server_uri).await;
     let id = scope.start(SessionSource::Exec, restarted_config).await;
     let client = scope.get_mut(id);
     assert!(
@@ -610,13 +610,52 @@ async fn run_named_persistent_thread_restart(
 
 #[tokio::test]
 async fn named_persistent_thread_survives_manager_restart_and_missing_resume_fails_closed() {
+    const CHILD_MARKER: &str = "CTOX_PERSISTENT_RESUME_TEST_CHILD";
+    if std::env::var_os(CHILD_MARKER).is_none() {
+        // Request-time config derivation resolves CODEX_HOME independently of
+        // the startup ConfigBuilder. Isolate that process-wide setting in a
+        // child test process rather than mutating this test runner's environment.
+        let home = tempfile::TempDir::new().expect("isolated child home");
+        let child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "persistent_resume_tests::named_persistent_thread_survives_manager_restart_and_missing_resume_fails_closed",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD_MARKER, "1")
+            .env("CODEX_HOME", home.path())
+            .env("CODEX_SQLITE_HOME", home.path().join("sqlite"))
+            .spawn()
+            .expect("spawn isolated resume test");
+        struct ChildGuard(std::process::Child);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let mut child = ChildGuard(child);
+        let status = timeout(Duration::from_secs(120), async {
+            loop {
+                if let Some(status) = child.0.try_wait().expect("poll isolated resume test") {
+                    return status;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("isolated resume test timed out");
+        assert!(status.success(), "isolated resume test failed: {status}");
+        return;
+    }
+    let codex_home = std::path::PathBuf::from(std::env::var_os("CODEX_HOME").expect("child home"));
     let server = timeout(
         START_TIMEOUT,
         create_mock_responses_server_repeating_assistant(ASSISTANT_MARKER),
     )
     .await
     .expect("mock responses server start timed out");
-    let codex_home = tempfile::TempDir::new().expect("tempdir");
     let mut scope = ClientScope::default();
     let outcome = AssertUnwindSafe(timeout(
         FIXTURE_TIMEOUT,
