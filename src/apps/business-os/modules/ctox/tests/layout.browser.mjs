@@ -244,12 +244,19 @@ async function assertDelayedHarnessStatus(page) {
   const menu = page.locator('[data-ctox-main] .ctox-more-actions > summary');
   const pause = page.locator('[data-harness-pause]');
   const note = page.locator('.ctox-paused-note');
+  const harness = page.locator('[data-ctox-harness]');
+  const assertHarnessStatus = async paused => {
+    const accessibleStatus = await harness.getAttribute('aria-label');
+    assert.match(accessibleStatus, paused ? /^Die Crew ist pausiert:/ : /^Die Crew bearbeitet die Aufgabenliste$/);
+    assert.equal(await harness.getAttribute('title'), accessibleStatus);
+  };
   for (const paused of [true, false]) {
     await menu.click();
     assert.equal(await pause.getAttribute('aria-pressed'), String(!paused));
     await pause.click();
     await page.waitForFunction(count => window.harnessControlCommands.length === count, paused ? 1 : 2);
     assert.equal(await note.isVisible(), !paused, 'command completion must not optimistically change native status');
+    await assertHarnessStatus(!paused);
     await page.locator('.ctox-more-actions-body').waitFor({ state: 'hidden' });
     await menu.click();
     assert.equal(await pause.getAttribute('aria-pressed'), String(!paused), 'reopening before projection must retain the last confirmed status');
@@ -261,12 +268,14 @@ async function assertDelayedHarnessStatus(page) {
     assert.equal(await pause.evaluate(button => button === window.retainedPauseButton), true, 'late projection must patch the active control without replacing its menu');
     assert.equal(await page.locator('.ctox-more-actions-body:popover-open').count(), 1);
     assert.equal(await note.isVisible(), paused, 'paused note must follow the native projection in both directions');
+    await assertHarnessStatus(paused);
     assert.equal(await pause.textContent(), paused ? 'Crew weiterarbeiten lassen' : 'Crew pausieren');
     assert.equal(await page.evaluate(() => window.crewFixture.state.mainRenderPending), true);
     await page.keyboard.press('Escape');
     await page.waitForFunction(() => !window.crewFixture.state.mainRenderPending);
     assert.equal(await page.locator('.ctox-more-actions-body:popover-open').count(), 0, 'closing the menu must flush the deferred main render');
     assert.equal(await note.isVisible(), paused);
+    await assertHarnessStatus(paused);
   }
   const commands = await page.evaluate(() => window.harnessControlCommands);
   assert.deepEqual(commands.map(command => [command.command_type, command.payload.paused]), [
