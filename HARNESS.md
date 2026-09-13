@@ -248,17 +248,27 @@ execution:
 
 Plan-step messages force continuity refresh because they are task boundaries.
 Normal worker slices reuse one named, non-ephemeral harness thread. Its rollout
-is resumed after a service restart. Jobs with a replacement base prompt or a
-narrow no-MCP profile remain deliberately isolated sessions because they have a
-different capability/instruction contract. A queue job's workspace is applied
-as the typed per-turn cwd rather than encoded only in prompt prose.
+is resumed after a service restart. If lookup of that named thread fails, or
+resume of an identified thread fails, or `turn/start` is rejected on the bound
+thread, the native adapter returns an actionable error. It does not start a
+replacement thread and does not resubmit the turn. Ambiguous `turn/start`
+outcomes (timeout, transport, or decode) still poison the process-local session
+so a duplicate turn cannot be issued. First-time creation remains allowed when
+lookup completes and finds no named durable thread. Jobs with a replacement
+base prompt or a narrow no-MCP profile remain deliberately isolated sessions
+because they have a different capability/instruction contract; isolated
+sessions still start fresh/ephemeral threads and may rotate once after a
+definitive `turn/start` rejection. A queue job's workspace is applied as the
+typed per-turn cwd rather than encoded only in prompt prose.
 Systematic-research jobs are also isolated: each attempt starts a fresh
 non-persistent session with the typed CTOX Web tools. This prevents prior
 research history from influencing a new evidence run while preserving the
 server-authoritative research toolchain.
 Before reuse, the worker compares the current composed base instructions and
 model with the live session contract. A mismatch rebuilds the process-local
-client and resumes the durable thread with the new contract.
+client and resumes the durable thread with the new contract. This native
+in-process continuity is not Codex/Claude export/import, cross-device restore,
+or checkpoint-certified provider failover.
 
 Turn timeout defaults follow the resolved provider boundary. Native local
 inference keeps the long local budget; a local proxy/process that resolves to
