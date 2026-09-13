@@ -22,6 +22,7 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'business_os::mcp_channel::app_authority::tests::',
            'business_os::mcp_channel::gateway_lifecycle_tests::',
            'business_os::mcp_channel::tests::gateway_',
+           'business_os::mcp_channel::tests::person_research',
            'business_os::mcp_channel::tests::mcp_ignores_spoofed_context_role_without_gateway_trust',
            'install::tests::state_backup', 'install::tests::restore_state_backup',
            'install::tests::update_backup_retention', 'install::tests::aborted_updates']
@@ -121,6 +122,8 @@ def main():
     if not all(counts.values()):
         raise RuntimeError(f'A required test group is absent: {counts}')
     required = {
+        'business_os::mcp_channel::tests::person_research_binding_accepts_runtime_lead_name_fields',
+        'business_os::mcp_channel::tests::person_research_binding_runtime_leads_preserve_identity_and_scope',
         'business_os::mcp_channel::app_authority::tests::mcp_app_authority_local_source_compare_and_save_preserves_target_and_conflicts',
         'business_os::mcp_channel::gateway_lifecycle_tests::healthy_rotations_never_sleep_or_accumulate_failure_backoff',
         'business_os::mcp_channel::gateway_lifecycle_tests::healthy_rotation_resets_saturated_failure_backoff',
