@@ -163,6 +163,8 @@ fn prepare_command(config: &PreparedQemuGuest, monitor: &Path, guest: &Path) -> 
         .args(["-mon", "chardev=control,mode=control"]);
     // qemu-ga uses virtio-serial + virtserialport; the host binds the unix
     // socket and QEMU connects (server=off), matching the owned QMP chardev.
+    // The guest process owner later invokes run_guest_desktop_effects; this
+    // owner does not start that guest agent.
     command
         .arg("-chardev")
         .arg(format!("socket,id=guestctl,path={guest},server=off"))

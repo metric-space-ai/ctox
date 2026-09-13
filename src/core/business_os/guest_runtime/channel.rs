@@ -12,16 +12,27 @@
 //!
 //! Guest device shape follows qemu-ga: virtio-serial + virtserialport named
 //! `org.ctox.guest.desktop`, appearing as `/dev/virtio-ports/org.ctox.guest.desktop`.
+//! systemd udev creates that path as `SYMLINK+="virtio-ports/$attr{name}"` to
+//! `/dev/vport<device>p<port>`. The guest hook follows only that named alias after
+//! pinning the vport identity; it does not open an arbitrary character device.
 //! https://www.qemu.org/docs/master/interop/qemu-ga.html
 //!
 //! Framing reuses the local IPC convention (u32be length prefix) rather than
 //! QMP newlines, because an observation carries a raw PNG. Guest replies are
 //! untrusted and bounded. One in-flight request; no automatic replay.
+//!
+//! Guest-only hook: `run_guest_desktop_effects` opens the fixed character
+//! device and serves typed observe/input. The host QEMU owner accepts the
+//! chardev. Authorization and guest-process provisioning remain outside this
+//! module.
 
 use super::{identifier, GuestDriver, GuestFrame, GuestInput, GUEST_FRAME_LIMIT};
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::future::Future;
+#[cfg(unix)]
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -229,15 +240,27 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send> GuestDriver for RemoteGuestDriver
 /// Guest-side execution endpoint. Reads typed observe/input frames and calls
 /// the local driver. No identity, shell, or extra arguments are accepted.
 pub(super) async fn serve_guest_desktop<S, D>(
-    mut stream: S,
+    stream: S,
     driver: &D,
 ) -> Result<(), GuestChannelError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
     D: GuestDriver + Sync,
 {
+    serve_guest_desktop_timed(stream, driver, CHANNEL_TIMEOUT).await
+}
+
+async fn serve_guest_desktop_timed<S, D>(
+    mut stream: S,
+    driver: &D,
+    frame_timeout: Duration,
+) -> Result<(), GuestChannelError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    D: GuestDriver + Sync,
+{
     loop {
-        let bytes = match read_frame_or_eof(&mut stream, MAX_CONTROL_BYTES).await? {
+        let bytes = match read_idle_frame(&mut stream, MAX_CONTROL_BYTES, frame_timeout).await? {
             None => return Ok(()),
             Some(bytes) => bytes,
         };
@@ -246,51 +269,329 @@ where
         match request {
             WireRequest::Observe { id } => match driver.capture().await {
                 Ok(frame) => {
-                    write_json(
-                        &mut stream,
-                        &WireReply::Observation {
-                            id,
-                            width: frame.width,
-                            height: frame.height,
-                        },
-                        MAX_CONTROL_BYTES,
-                    )
+                    with_deadline(frame_timeout, async {
+                        write_json(
+                            &mut stream,
+                            &WireReply::Observation {
+                                id,
+                                width: frame.width,
+                                height: frame.height,
+                            },
+                            MAX_CONTROL_BYTES,
+                        )
+                        .await?;
+                        write_frame(&mut stream, &frame.png, GUEST_FRAME_LIMIT).await
+                    })
                     .await?;
-                    write_frame(&mut stream, &frame.png, GUEST_FRAME_LIMIT).await?;
                 }
                 Err(_) => {
-                    write_json(&mut stream, &WireReply::Failed { id }, MAX_CONTROL_BYTES).await?;
+                    with_deadline(
+                        frame_timeout,
+                        write_json(&mut stream, &WireReply::Failed { id }, MAX_CONTROL_BYTES),
+                    )
+                    .await?;
                 }
             },
             WireRequest::Input { id, input } => {
-                let result = if input.validate().is_err() {
-                    Err(())
-                } else {
-                    driver.input(&input).await.map_err(|_| ())
-                };
-                let reply = if result.is_ok() {
-                    WireReply::Applied { id }
-                } else {
-                    WireReply::Failed { id }
-                };
-                write_json(&mut stream, &reply, MAX_CONTROL_BYTES).await?;
+                if input.validate().is_err() {
+                    with_deadline(
+                        frame_timeout,
+                        write_json(&mut stream, &WireReply::Failed { id }, MAX_CONTROL_BYTES),
+                    )
+                    .await?;
+                    continue;
+                }
+                match driver.input(&input).await {
+                    Ok(()) => {
+                        with_deadline(
+                            frame_timeout,
+                            write_json(&mut stream, &WireReply::Applied { id }, MAX_CONTROL_BYTES),
+                        )
+                        .await?;
+                    }
+                    // The helper may have applied a partial effect. Do not send
+                    // Failed (that would re-enable the host) and do not replay.
+                    Err(_) => return Err(GuestChannelError::UnknownOutcome),
+                }
             }
         }
     }
 }
 
-/// Opens the fixed virtio-serial port inside a provisioned Linux guest.
+/// Guest-only typed startup hook. Opens the fixed virtio-serial character
+/// device and serves observe/input. This does not start QEMU, provision an
+/// image, or authorize a caller; the guest process owner invokes it after the
+/// port exists.
 #[cfg(target_os = "linux")]
-pub(super) async fn serve_local_virtio_desktop<D: GuestDriver + Sync>(
+pub(in crate::business_os) async fn run_guest_desktop_effects<D: GuestDriver + Sync>(
     driver: &D,
 ) -> Result<(), GuestChannelError> {
-    let file = tokio::fs::OpenOptions::new()
+    let port = open_guest_virtio_port()?;
+    serve_guest_desktop(port, driver).await
+}
+
+#[cfg(unix)]
+struct NonblockingIo<T: std::os::fd::AsRawFd> {
+    inner: tokio::io::unix::AsyncFd<T>,
+}
+
+#[cfg(unix)]
+impl<T: std::os::fd::AsRawFd> NonblockingIo<T> {
+    fn new(io: T) -> std::io::Result<Self> {
+        Ok(Self {
+            inner: tokio::io::unix::AsyncFd::new(io)?,
+        })
+    }
+}
+
+#[cfg(unix)]
+impl<T> tokio::io::AsyncRead for NonblockingIo<T>
+where
+    T: std::os::fd::AsRawFd + Unpin,
+    for<'a> &'a T: std::io::Read,
+{
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let inner = &self.get_mut().inner;
+        loop {
+            let mut guard = match inner.poll_read_ready(cx) {
+                std::task::Poll::Ready(Ok(guard)) => guard,
+                std::task::Poll::Ready(Err(error)) => return std::task::Poll::Ready(Err(error)),
+                std::task::Poll::Pending => return std::task::Poll::Pending,
+            };
+            let unfilled = buf.initialize_unfilled();
+            match guard.try_io(|io| {
+                let mut reader = io.get_ref();
+                std::io::Read::read(&mut reader, unfilled)
+            }) {
+                Ok(Ok(0)) => return std::task::Poll::Ready(Ok(())),
+                Ok(Ok(count)) => {
+                    buf.advance(count);
+                    return std::task::Poll::Ready(Ok(()));
+                }
+                Ok(Err(error)) => return std::task::Poll::Ready(Err(error)),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl<T> tokio::io::AsyncWrite for NonblockingIo<T>
+where
+    T: std::os::fd::AsRawFd + Unpin,
+    for<'a> &'a T: std::io::Write,
+{
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let inner = &self.get_mut().inner;
+        loop {
+            let mut guard = match inner.poll_write_ready(cx) {
+                std::task::Poll::Ready(Ok(guard)) => guard,
+                std::task::Poll::Ready(Err(error)) => return std::task::Poll::Ready(Err(error)),
+                std::task::Poll::Pending => return std::task::Poll::Pending,
+            };
+            match guard.try_io(|io| {
+                let mut writer = io.get_ref();
+                std::io::Write::write(&mut writer, buf)
+            }) {
+                Ok(result) => return std::task::Poll::Ready(result),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let inner = &self.get_mut().inner;
+        loop {
+            let mut guard = match inner.poll_write_ready(cx) {
+                std::task::Poll::Ready(Ok(guard)) => guard,
+                std::task::Poll::Ready(Err(error)) => return std::task::Poll::Ready(Err(error)),
+                std::task::Poll::Pending => return std::task::Poll::Pending,
+            };
+            match guard.try_io(|io| {
+                let mut writer = io.get_ref();
+                std::io::Write::flush(&mut writer)
+            }) {
+                Ok(result) => return std::task::Poll::Ready(result),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg(unix)]
+fn named_virtio_symlink_target(port_path: &Path) -> Result<PathBuf, GuestChannelError> {
+    let file_name = port_path
+        .file_name()
+        .ok_or(GuestChannelError::Unavailable)?;
+    if file_name != std::ffi::OsStr::new(GUEST_DESKTOP_PORT) {
+        return Err(GuestChannelError::Unavailable);
+    }
+    let ports_dir = port_path.parent().ok_or(GuestChannelError::Unavailable)?;
+    if ports_dir.file_name() != Some(std::ffi::OsStr::new("virtio-ports")) {
+        return Err(GuestChannelError::Unavailable);
+    }
+    let device_dir = ports_dir.parent().ok_or(GuestChannelError::Unavailable)?;
+    let metadata =
+        std::fs::symlink_metadata(port_path).map_err(|_| GuestChannelError::Unavailable)?;
+    if !metadata.file_type().is_symlink() {
+        return Err(GuestChannelError::Unavailable);
+    }
+    let raw = std::fs::read_link(port_path).map_err(|_| GuestChannelError::Unavailable)?;
+    let target = lexical_join(ports_dir, &raw).ok_or(GuestChannelError::Unavailable)?;
+    if target.parent() != Some(device_dir) {
+        return Err(GuestChannelError::Unavailable);
+    }
+    let basename = target.file_name().ok_or(GuestChannelError::Unavailable)?;
+    if vport_device_name(basename).is_none() {
+        return Err(GuestChannelError::Unavailable);
+    }
+    let target_metadata =
+        std::fs::symlink_metadata(&target).map_err(|_| GuestChannelError::Unavailable)?;
+    if target_metadata.file_type().is_symlink() {
+        return Err(GuestChannelError::Unavailable);
+    }
+    Ok(target)
+}
+
+#[cfg(unix)]
+fn pin_virtio_sysfs_name(
+    sysfs_class: &Path,
+    vport: &std::ffi::OsStr,
+) -> Result<(), GuestChannelError> {
+    let name_path = sysfs_class.join(vport).join("name");
+    let name_metadata =
+        std::fs::symlink_metadata(&name_path).map_err(|_| GuestChannelError::Unavailable)?;
+    if name_metadata.file_type().is_symlink() || !name_metadata.is_file() {
+        return Err(GuestChannelError::Unavailable);
+    }
+    let name = std::fs::read_to_string(&name_path).map_err(|_| GuestChannelError::Unavailable)?;
+    if name.trim() != GUEST_DESKTOP_PORT {
+        return Err(GuestChannelError::Unavailable);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn open_nonblocking_char_device(
+    path: &Path,
+) -> Result<NonblockingIo<std::fs::File>, GuestChannelError> {
+    use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+
+    let metadata = std::fs::symlink_metadata(path).map_err(|_| GuestChannelError::Unavailable)?;
+    if metadata.file_type().is_symlink() || !metadata.file_type().is_char_device() {
+        return Err(GuestChannelError::Unavailable);
+    }
+    let file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(GUEST_VIRTIO_PORT_PATH)
-        .await
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
         .map_err(|_| GuestChannelError::Unavailable)?;
-    serve_guest_desktop(file, driver).await
+    let opened = file
+        .metadata()
+        .map_err(|_| GuestChannelError::Unavailable)?;
+    if !opened.file_type().is_char_device() {
+        return Err(GuestChannelError::Unavailable);
+    }
+    NonblockingIo::new(file).map_err(|_| GuestChannelError::Unavailable)
+}
+
+#[cfg(unix)]
+fn open_named_virtio_port(
+    port_path: &Path,
+    sysfs_class: &Path,
+) -> Result<NonblockingIo<std::fs::File>, GuestChannelError> {
+    let target = named_virtio_symlink_target(port_path)?;
+    let basename = target.file_name().ok_or(GuestChannelError::Unavailable)?;
+    pin_virtio_sysfs_name(sysfs_class, basename)?;
+    open_nonblocking_char_device(&target)
+}
+
+#[cfg(unix)]
+fn lexical_join(base: &Path, rel: &Path) -> Option<PathBuf> {
+    if rel.as_os_str().is_empty() {
+        return None;
+    }
+    let path = if rel.is_absolute() {
+        rel.to_path_buf()
+    } else {
+        base.join(rel)
+    };
+    lexical_normalize(&path)
+}
+
+#[cfg(unix)]
+fn lexical_normalize(path: &Path) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) => return None,
+            Component::RootDir => out.push(component),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    return None;
+                }
+            }
+            Component::Normal(_) => out.push(component),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+#[cfg(unix)]
+fn vport_device_name(name: &std::ffi::OsStr) -> Option<&str> {
+    let name = name.to_str()?;
+    let rest = name.strip_prefix("vport")?;
+    let (device, port) = rest.split_once('p')?;
+    if !device.is_empty()
+        && device.bytes().all(|b| b.is_ascii_digit())
+        && !port.is_empty()
+        && port.bytes().all(|b| b.is_ascii_digit())
+    {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn open_guest_virtio_port() -> Result<NonblockingIo<std::fs::File>, GuestChannelError> {
+    open_named_virtio_port(
+        Path::new(GUEST_VIRTIO_PORT_PATH),
+        Path::new("/sys/class/virtio-ports"),
+    )
+}
+
+async fn with_deadline<T>(
+    timeout: Duration,
+    future: impl Future<Output = Result<T, GuestChannelError>>,
+) -> Result<T, GuestChannelError> {
+    tokio::time::timeout(timeout, future)
+        .await
+        .map_err(|_| GuestChannelError::UnknownOutcome)?
 }
 
 async fn write_json<S: AsyncWrite + Unpin, T: Serialize>(
@@ -337,15 +638,18 @@ async fn read_frame<S: AsyncRead + Unpin>(
     stream: &mut S,
     max: usize,
 ) -> Result<Vec<u8>, GuestChannelError> {
-    match read_frame_or_eof(stream, max).await? {
+    match read_idle_frame(stream, max, CHANNEL_TIMEOUT).await? {
         Some(bytes) => Ok(bytes),
         None => Err(GuestChannelError::UnknownOutcome),
     }
 }
 
-async fn read_frame_or_eof<S: AsyncRead + Unpin>(
+/// Idle before the first byte may wait. After a frame starts, the remainder
+/// and any later write are deadline-bound.
+async fn read_idle_frame<S: AsyncRead + Unpin>(
     stream: &mut S,
     max: usize,
+    started_timeout: Duration,
 ) -> Result<Option<Vec<u8>>, GuestChannelError> {
     let mut header = [0_u8; 4];
     match stream.read(&mut header[..1]).await {
@@ -353,19 +657,23 @@ async fn read_frame_or_eof<S: AsyncRead + Unpin>(
         Ok(_) => {}
         Err(_) => return Err(GuestChannelError::UnknownOutcome),
     }
-    if stream.read_exact(&mut header[1..]).await.is_err() {
-        return Err(GuestChannelError::UnknownOutcome);
-    }
-    let size = u32::from_be_bytes(header) as usize;
-    if size == 0 || size > max {
-        return Err(GuestChannelError::UnknownOutcome);
-    }
-    let mut bytes = vec![0; size];
-    stream
-        .read_exact(&mut bytes)
-        .await
-        .map_err(|_| GuestChannelError::UnknownOutcome)?;
-    Ok(Some(bytes))
+    with_deadline(started_timeout, async {
+        stream
+            .read_exact(&mut header[1..])
+            .await
+            .map_err(|_| GuestChannelError::UnknownOutcome)?;
+        let size = u32::from_be_bytes(header) as usize;
+        if size == 0 || size > max {
+            return Err(GuestChannelError::UnknownOutcome);
+        }
+        let mut bytes = vec![0; size];
+        stream
+            .read_exact(&mut bytes)
+            .await
+            .map_err(|_| GuestChannelError::UnknownOutcome)?;
+        Ok(Some(bytes))
+    })
+    .await
 }
 
 #[cfg(test)]

@@ -20,6 +20,8 @@ mod image;
 mod qemu;
 mod qmp;
 mod x11;
+#[cfg(target_os = "linux")]
+pub(super) use channel::run_guest_desktop_effects;
 pub(super) use x11::{X11GuestConfig, X11GuestDriver};
 
 #[derive(Clone, PartialEq, Eq)]
