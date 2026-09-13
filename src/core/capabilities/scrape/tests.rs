@@ -2,6 +2,7 @@ mod completed_empty_query_contract {
     use super::*;
 
     const SCRIPT: &str = r#"
+python3 - <<'CTOX_QUERY_FIXTURE'
 import hashlib,json,os,pathlib,sys
 raw=os.environ['CTOX_SCRAPE_INPUT_JSON']; inp=json.loads(raw)
 mode=inp.get('mode','valid'); run=pathlib.Path(os.environ['CTOX_SCRAPE_RUN_DIR'])
@@ -29,6 +30,7 @@ if mode == 'missing_evidence': path.unlink()
 if mode == 'absent_receipt': del p['query_completion']
 if mode == 'blocked': p['failure_mode']='blocked'
 print(json.dumps(p)); sys.exit(2 if mode == 'exit_error' else 0)
+CTOX_QUERY_FIXTURE
 "#;
 
     fn fixture(root: &Path) -> ScrapeTargetView {
@@ -38,14 +40,14 @@ print(json.dumps(p)); sys.exit(2 if mode == 'exit_error' else 0)
             "config":{"skip_probe":true,"expected_min_records":1,"llm_enrichment":{"enabled":false}},
             "output_schema":{"schema_key":"company.v1"}
         })).unwrap();
-        let path = root.join("query.py");
+        let path = root.join("query.sh");
         fs::write(&path, SCRIPT).unwrap();
         register_script(
             root,
             DEFAULT_RUNTIME_ROOT,
             &target.target_key,
             path.to_str().unwrap(),
-            "python",
+            "shell",
             None,
             None,
         )
@@ -73,7 +75,7 @@ print(json.dumps(p)); sys.exit(2 if mode == 'exit_error' else 0)
         let root = temp_root("completed-empty-query");
         let target = fixture(&root);
         let previous = execute(&root, "records");
-        assert_eq!(previous.status, ScrapeRunStatus::Succeeded);
+        assert_eq!(previous.status, ScrapeRunStatus::Succeeded, "{previous:?}");
         let before: i64 = open_db(&root)
             .unwrap()
             .query_row(
@@ -168,7 +170,7 @@ print(json.dumps(p)); sys.exit(2 if mode == 'exit_error' else 0)
             assert!(outcome.query_completion.is_none(), "{mode}");
             assert!(outcome.materialization.is_none(), "{mode}");
             if mode == "blocked" {
-                assert_eq!(outcome.status, ScrapeRunStatus::Blocked);
+                assert_eq!(outcome.status, ScrapeRunStatus::Blocked, "{outcome:?}");
             }
             let persisted: String = open_db(&root)
                 .unwrap()
