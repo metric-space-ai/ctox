@@ -32,6 +32,9 @@ async fn fixture(
     let context_mut = Arc::get_mut(&mut context).expect("unshared fixture context");
     context_mut.provider = provider;
     context_mut.required_initial_tool = Some("update_plan".to_string());
+    // The default unit fixture has a read-only tool surface, which omits
+    // update_plan. Exercise the planning-capable service turn surface here.
+    context_mut.tools_config.read_only_surface = false;
     (session, context, events)
 }
 
@@ -147,7 +150,7 @@ async fn required_initial_tool_repeated_refusal_fails_after_two_corrections() {
 async fn required_initial_tool_uses_current_turn_not_retained_plan() {
     let server = MockServer::start().await;
     let mock = mount_sse_sequence(&server, vec![plan(), answer("final", "27")]).await;
-    let (session, context, _) = fixture(&server).await;
+    let (session, context, _events) = fixture(&server).await;
     session
         .record_conversation_items(
             &context,
@@ -196,7 +199,7 @@ async fn required_initial_tool_unrelated_call_does_not_release_tools() {
         ev_completed("unknown"),
     ]);
     let mock = mount_sse_sequence(&server, vec![unrelated, plan(), answer("final", "27")]).await;
-    let (session, context, _) = fixture(&server).await;
+    let (session, context, _events) = fixture(&server).await;
     assert_eq!(
         execute(session, context, CancellationToken::new())
             .await
@@ -223,7 +226,7 @@ async fn required_initial_tool_failed_plan_call_keeps_tools_restricted() {
         ev_completed("invalid"),
     ]);
     let mock = mount_sse_sequence(&server, vec![invalid, plan(), answer("final", "27")]).await;
-    let (session, context, _) = fixture(&server).await;
+    let (session, context, _events) = fixture(&server).await;
     assert_eq!(
         execute(session, context, CancellationToken::new())
             .await
@@ -276,7 +279,7 @@ async fn required_initial_tool_survives_stream_disconnect_after_successful_plan(
 #[tokio::test]
 async fn required_initial_tool_cancelled_turn_does_not_request_correction() {
     let server = MockServer::start().await;
-    let (session, context, _) = fixture(&server).await;
+    let (session, context, _events) = fixture(&server).await;
     let cancellation = CancellationToken::new();
     cancellation.cancel();
     assert!(execute(session, context, cancellation).await.is_none());
