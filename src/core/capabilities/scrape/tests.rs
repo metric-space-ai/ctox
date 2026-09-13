@@ -321,6 +321,409 @@ fn upsert_target_creates_workspace_and_manifest() {
         .is_file());
     cleanup_test_root(&root);
 }
+fn scrape_file_snapshot(root: &Path) -> std::collections::BTreeMap<String, String> {
+    fn visit(dir: &Path, root: &Path, snapshot: &mut std::collections::BTreeMap<String, String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(&path, root, snapshot);
+            } else {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                snapshot.insert(relative, fs::read_to_string(path).unwrap());
+            }
+        }
+    }
+
+    let mut snapshot = std::collections::BTreeMap::new();
+    visit(root, root, &mut snapshot);
+    snapshot
+}
+
+fn scrape_script_registration_state(
+    root: &Path,
+    target: &ScrapeTargetView,
+) -> (Value, std::collections::BTreeMap<String, String>) {
+    let conn = open_db(root).unwrap();
+    let target_row = conn
+        .query_row(
+            r#"
+            SELECT target_key, workspace_dir, latest_script_revision_no,
+                   latest_script_sha256, updated_at
+            FROM scrape_target WHERE target_id = ?1
+            "#,
+            params![target.target_id],
+            |row| {
+                Ok(json!({
+                    "target_key": row.get::<_, String>(0)?,
+                    "workspace_dir": row.get::<_, String>(1)?,
+                    "latest_script_revision_no": row.get::<_, Option<i64>>(2)?,
+                    "latest_script_sha256": row.get::<_, Option<String>>(3)?,
+                    "updated_at": row.get::<_, String>(4)?,
+                }))
+            },
+        )
+        .unwrap();
+    let mut statement = conn
+        .prepare(
+            r#"
+        SELECT revision_no, script_path, script_sha256, script_body
+        FROM scrape_script_revision WHERE target_id = ?1 ORDER BY revision_no
+        "#,
+        )
+        .unwrap();
+    let revisions = statement
+        .query_map(params![target.target_id], |row| {
+            Ok(json!({
+                "revision_no": row.get::<_, i64>(0)?,
+                "script_path": row.get::<_, String>(1)?,
+                "script_sha256": row.get::<_, String>(2)?,
+                "script_body": row.get::<_, String>(3)?,
+            }))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    (
+        json!({"target": target_row, "revisions": revisions}),
+        scrape_file_snapshot(&resolve_workspace_dir(root, &target.workspace_dir)),
+    )
+}
+
+fn scrape_source_registration_state(
+    root: &Path,
+    target: &ScrapeTargetView,
+) -> (Value, std::collections::BTreeMap<String, String>) {
+    let conn = open_db(root).unwrap();
+    let target_row = conn
+        .query_row(
+            r#"
+            SELECT target_key, workspace_dir, updated_at
+            FROM scrape_target WHERE target_id = ?1
+            "#,
+            params![target.target_id],
+            |row| {
+                Ok(json!({
+                    "target_key": row.get::<_, String>(0)?,
+                    "workspace_dir": row.get::<_, String>(1)?,
+                    "updated_at": row.get::<_, String>(2)?,
+                }))
+            },
+        )
+        .unwrap();
+    let mut statement = conn
+        .prepare(
+            r#"
+        SELECT source_key, revision_no, module_path, module_sha256, module_body
+        FROM scrape_source_revision WHERE target_id = ?1
+        ORDER BY source_key, revision_no
+        "#,
+        )
+        .unwrap();
+    let revisions = statement
+        .query_map(params![target.target_id], |row| {
+            Ok(json!({
+                "source_key": row.get::<_, String>(0)?,
+                "revision_no": row.get::<_, i64>(1)?,
+                "module_path": row.get::<_, String>(2)?,
+                "module_sha256": row.get::<_, String>(3)?,
+                "module_body": row.get::<_, String>(4)?,
+            }))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    (
+        json!({"target": target_row, "revisions": revisions}),
+        scrape_file_snapshot(&resolve_workspace_dir(root, &target.workspace_dir)),
+    )
+}
+
+#[test]
+fn reject_whitespace_script_registration_before_dedup_and_mutation() {
+    let root = temp_root("reject-empty-script");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "reject-empty-script",
+            "display_name": "Reject Empty Script",
+            "start_url": "https://example.com",
+            "target_kind": "company",
+            "config": {"skip_probe": true},
+            "output_schema": {"schema_key": "company.v1"}
+        }),
+    )
+    .unwrap();
+    let script = root.join("adapter.js");
+    let body = "process.stdout.write('A');\n";
+    fs::write(&script, body).unwrap();
+    let registered = register_script(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        script.to_str().unwrap(),
+        "javascript",
+        Some("initial"),
+        None,
+    )
+    .unwrap();
+    open_db(&root)
+        .unwrap()
+        .execute(
+            r#"
+            UPDATE scrape_script_revision
+            SET script_sha256 = ?2, script_body = ''
+            WHERE target_id = ?1 AND revision_no = ?3
+            "#,
+            params![
+                target.target_id,
+                compute_sha256(""),
+                registered["revision_no"].as_i64().unwrap()
+            ],
+        )
+        .unwrap();
+
+    let blank = root.join("blank.js");
+    fs::write(&blank, " \n\t").unwrap();
+    let before = scrape_script_registration_state(&root, &target);
+    let error = register_script(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        blank.to_str().unwrap(),
+        "javascript",
+        Some("rejected"),
+        None,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("non-whitespace content"),
+        "unexpected: {error}"
+    );
+    assert_eq!(before, scrape_script_registration_state(&root, &target));
+    cleanup_test_root(&root);
+}
+
+#[test]
+fn reject_whitespace_source_registration_before_dedup_and_mutation() {
+    let root = temp_root("reject-empty-source");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "reject-empty-source",
+            "display_name": "Reject Empty Source",
+            "start_url": "https://example.com",
+            "target_kind": "company",
+            "config": {
+                "skip_probe": true,
+                "sources": [{
+                    "source_key": "primary",
+                    "display_name": "Primary",
+                    "start_url": "https://example.com",
+                    "source_kind": "html",
+                    "extraction_module": "sources/primary/extractor.js"
+                }]
+            },
+            "output_schema": {"schema_key": "company.v1"}
+        }),
+    )
+    .unwrap();
+    let module = root.join("extractor.js");
+    let body = "module.exports = 'A';\n";
+    fs::write(&module, body).unwrap();
+    let registered = register_source_module(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        "primary",
+        module.to_str().unwrap(),
+        "javascript",
+        Some("initial"),
+        None,
+    )
+    .unwrap();
+    open_db(&root)
+        .unwrap()
+        .execute(
+            r#"
+            UPDATE scrape_source_revision
+            SET module_sha256 = ?4, module_body = ''
+            WHERE target_id = ?1 AND source_key = ?2 AND revision_no = ?3
+            "#,
+            params![
+                target.target_id,
+                "primary",
+                registered["revision_no"].as_i64().unwrap(),
+                compute_sha256("")
+            ],
+        )
+        .unwrap();
+
+    let blank = root.join("blank.js");
+    fs::write(&blank, "\n \t").unwrap();
+    let before = scrape_source_registration_state(&root, &target);
+    let error = register_source_module(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        "primary",
+        blank.to_str().unwrap(),
+        "javascript",
+        Some("rejected"),
+        None,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("non-whitespace content"),
+        "unexpected: {error}"
+    );
+    assert_eq!(before, scrape_source_registration_state(&root, &target));
+    cleanup_test_root(&root);
+}
+
+#[test]
+fn register_script_self_path_preserves_validated_bytes() {
+    let root = temp_root("script-self-path");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "script-self-path",
+            "display_name": "Script Self Path",
+            "start_url": "https://example.com",
+            "target_kind": "company",
+            "config": {"skip_probe": true},
+            "output_schema": {"schema_key": "company.v1"}
+        }),
+    )
+    .unwrap();
+    let body = "\nprocess.stdout.write('A');\n";
+    let script = root.join("adapter.js");
+    fs::write(&script, body).unwrap();
+    let first = register_script(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        script.to_str().unwrap(),
+        "javascript",
+        Some("initial"),
+        None,
+    )
+    .unwrap();
+    let current = PathBuf::from(first["current_path"].as_str().unwrap());
+    let reactivated = register_script(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        current.to_str().unwrap(),
+        "javascript",
+        Some("self-path"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(reactivated["deduplicated"], json!(true));
+    let revision = PathBuf::from(reactivated["script_path"].as_str().unwrap());
+    assert_eq!(fs::read_to_string(revision).unwrap(), body);
+    assert_eq!(fs::read_to_string(&current).unwrap(), body);
+    let stored_body: String = open_db(&root)
+        .unwrap()
+        .query_row(
+            "SELECT script_body FROM scrape_script_revision WHERE target_id = ?1",
+            params![target.target_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored_body, body);
+    cleanup_test_root(&root);
+}
+
+#[test]
+fn register_source_self_path_preserves_validated_bytes() {
+    let root = temp_root("source-self-path");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "source-self-path",
+            "display_name": "Source Self Path",
+            "start_url": "https://example.com",
+            "target_kind": "company",
+            "config": {
+                "skip_probe": true,
+                "sources": [{
+                    "source_key": "primary",
+                    "display_name": "Primary",
+                    "start_url": "https://example.com",
+                    "source_kind": "html",
+                    "extraction_module": "sources/primary/extractor.js"
+                }]
+            },
+            "output_schema": {"schema_key": "company.v1"}
+        }),
+    )
+    .unwrap();
+    let body = "\nmodule.exports = 'A';\n";
+    let module = root.join("extractor.js");
+    fs::write(&module, body).unwrap();
+    let first = register_source_module(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        "primary",
+        module.to_str().unwrap(),
+        "javascript",
+        Some("initial"),
+        None,
+    )
+    .unwrap();
+    let current = PathBuf::from(first["current_path"].as_str().unwrap());
+    let revision = PathBuf::from(first["module_path"].as_str().unwrap());
+    let configured = PathBuf::from(first["configured_path"].as_str().unwrap());
+    fs::remove_file(&revision).unwrap();
+    fs::write(&configured, "changed").unwrap();
+    let reactivated = register_source_module(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        "primary",
+        current.to_str().unwrap(),
+        "javascript",
+        Some("self-path"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(reactivated["deduplicated"], json!(true));
+    assert_eq!(
+        PathBuf::from(reactivated["module_path"].as_str().unwrap()),
+        revision
+    );
+    assert_eq!(
+        PathBuf::from(reactivated["configured_path"].as_str().unwrap()),
+        configured
+    );
+    for path in [revision, current, configured] {
+        assert_eq!(fs::read_to_string(path).unwrap(), body);
+    }
+    let stored_body: String = open_db(&root)
+        .unwrap()
+        .query_row(
+            "SELECT module_body FROM scrape_source_revision WHERE target_id = ?1",
+            params![target.target_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored_body, body);
+    cleanup_test_root(&root);
+}
 
 #[test]
 fn deduplicated_script_registration_reactivates_the_requested_revision() {
