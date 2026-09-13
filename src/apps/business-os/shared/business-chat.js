@@ -8086,8 +8086,7 @@ ${CREW_CREATURE_BASE_CSS}
       grid-template-columns: max-content var(--ctox-date-pill-width) 26px minmax(0, min(350px, 36dvw)) 26px 36px;
     }
     .ctox-chat-fab {
-      display: grid;
-      grid-template-columns: auto 1fr;
+      display: inline-flex;
       align-items: center;
       gap: 6px;
       /* Reserve the full overlapping member row, including all six portraits. */

@@ -100,7 +100,16 @@ try {
           expect(await page.locator('[data-chat-date-picker]').inputValue() === expectedDate, 'normal arrow click must change the selected day, not toggle Crew');
           expect(await page.locator('.ctox-chat-dock').evaluate((dock) => dock.classList.contains('is-collapsed')) === collapsed, 'day navigation must preserve dock expansion');
         }
-        expect(await page.locator('.ctox-chat-dock').evaluate((dock) => dock.getBoundingClientRect().width < 360), 'the empty dock must remain compact with the full crew pool');
+        const geometry = await page.locator('.ctox-chat-dock').evaluate((dock) => ({
+          width: dock.getBoundingClientRect().width,
+          columns: getComputedStyle(dock).gridTemplateColumns,
+          children: Array.from(dock.children).map((child) => ({
+            className: child.className, width: child.getBoundingClientRect().width,
+            margin: getComputedStyle(child).margin,
+          })),
+        }));
+        results.push({ scenario: 'crew-pool-day-arrow-geometry', crewMembers, collapsed, geometry });
+        expect(geometry.width < 360, `the empty dock must remain compact with ${crewMembers} members (collapsed=${collapsed}): ${JSON.stringify(geometry)}`);
       }
     });
   }
