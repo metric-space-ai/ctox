@@ -79,6 +79,21 @@ await ensureDesktopLayoutWithAuthority({
     collection: db,
     documentId: 'layout',
     defaultLayout,
+    readNativeDocument: async () => undefined,
+    insertMissingSeed: async () => assert.fail('undefined authority is unknown, not absence'),
+    now: () => 42,
+  });
+  assert.deepEqual(result, defaultLayout());
+  assert.equal(db.calls.insert.length, 0);
+  assert.equal(db.calls.findOne, 0);
+}
+
+{
+  const db = collection();
+  const result = await ensureDesktopLayoutWithAuthority({
+    collection: db,
+    documentId: 'layout',
+    defaultLayout,
     readNativeDocument: async () => null,
     insertMissingSeed: async (scopedDb, id, seed) => {
       assert.equal(scopedDb, db);
@@ -123,11 +138,17 @@ await ensureDesktopLayoutWithAuthority({
   assert.deepEqual(db.calls.insert, []);
   assert.equal(db.calls.findOne, 1);
 }
+
 const shellSource = readFileSync(new URL('../../app.js', import.meta.url), 'utf8');
 assert.match(
   shellSource,
   /readNativeCollectionDocument: mod\.id === 'desktop'[\s\S]*state\.sync\?\.readCollectionNativeDocument\(collection, documentId, options\)/,
   'desktop must receive the strict native collection reader',
+);
+assert.match(
+  shellSource,
+  /readCollectionNativeDocument\(collection, documentId, options\)[\s\S]*\.then\(\(document\) => document \?\? null\)/,
+  'the strict reader must normalize native absence to explicit null',
 );
 
 const desktopSource = readFileSync(new URL('./index.js', import.meta.url), 'utf8');

@@ -30,6 +30,11 @@ export async function ensureDesktopLayoutWithAuthority({
     return defaultLayout();
   }
   if (authority) return authority?.toJSON?.() ?? authority;
+  if (authority !== null) {
+    // Undefined/false are unknown or malformed outcomes. Only the strict
+    // reader normalized null represents confirmed native absence.
+    return defaultLayout();
+  }
 
   // Native authority has confirmed absence. Insert once; if another writer wins
   // the race, adopt that row instead of patching defaults over it.
