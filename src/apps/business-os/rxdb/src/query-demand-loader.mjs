@@ -32,6 +32,9 @@ export function createQueryDemandLoader({
   status = null,
   clock = Date.now,
   queryWindowRevalidateMs = DEFAULT_QUERY_WINDOW_REVALIDATE_MS,
+  // Opaque identity of the bridge/connection generation. Strict
+  // requireRevision reads must never cross this boundary.
+  queryGeneration = null,
   // Origin stamp (object or provider fn) for every document this loader
   // writes into the primary store. Demand-fetched documents ARE master
   // state: without the stamp they counted as unsynced LOCAL writes, so the
@@ -61,10 +64,24 @@ export function createQueryDemandLoader({
   // still hashing, causing a concurrent caller to look like a later cache hit
   // instead of sharing the original operation.
   const resolvingByInput = new Map();
+  const consumerSignals = new WeakMap();
+  let nextConsumerSignalSequence = 0;
 
   return {
-    async resolveQuery(query, { window } = {}) {
+    async resolveQuery(query, { window, signal } = {}) {
       const normalizedWindow = normalizeWindow(window, query);
+      const strictRequireRevision = Boolean(query?.requireRevision);
+      const generation = strictRequireRevision ? String(queryGeneration?.() || '') : '';
+      if (strictRequireRevision && !generation) {
+        throw new Error('QUERY_GENERATION_REQUIRED: strict demand read has no bridge generation');
+      }
+      const consumerSignal = signal && typeof signal.addEventListener === 'function' ? signal : null;
+      let signalToken = '';
+      if (consumerSignal) {
+        signalToken = consumerSignals.get(consumerSignal)
+          || `signal-${nextConsumerSignalSequence += 1}`;
+        consumerSignals.set(consumerSignal, signalToken);
+      }
       const fingerprintInput = {
         collection: collectionName,
         schemaVersion: schemaVersion ?? 0,
@@ -77,6 +94,8 @@ export function createQueryDemandLoader({
       const inputKey = JSON.stringify({
         ...fingerprintInput,
         requireRevision: query?.requireRevision ?? null,
+        requireGeneration: generation || null,
+        signalToken: signalToken || null,
       });
       const existingInvocation = resolvingByInput.get(inputKey);
       if (existingInvocation) {
@@ -90,24 +109,51 @@ export function createQueryDemandLoader({
         fingerprint: null,
         cancelledReason: null,
         rejectCancellation: null,
+        consumerCancelled: false,
+        detachConsumerSignal: null,
       };
       const cancellationPromise = new Promise((_, reject) => {
         invocationEntry.rejectCancellation = reject;
       });
       cancellationPromise.catch(() => {});
+      if (consumerSignal) {
+        const abortConsumer = () => {
+          if (invocationEntry.cancelledReason) return;
+          invocationEntry.consumerCancelled = true;
+          invocationEntry.cancelledReason = 'consumer-abort';
+          invocationEntry.rejectCancellation?.(createQueryCancelledError('consumer-abort'));
+          Promise.resolve().then(() => requestCancel?.({
+            requestId: invocationEntry.requestId,
+            fingerprint: invocationEntry.fingerprint,
+            reason: 'consumer-abort',
+          })).catch(() => {});
+        };
+        if (consumerSignal.aborted) abortConsumer();
+        else consumerSignal.addEventListener('abort', abortConsumer, { once: true });
+        invocationEntry.detachConsumerSignal = () => {
+          consumerSignal.removeEventListener('abort', abortConsumer);
+          invocationEntry.detachConsumerSignal = null;
+        };
+      }
+      const assertFresh = () => {
+        throwIfQueryCancelled(invocationEntry);
+        if (strictRequireRevision && queryGeneration?.() !== generation) {
+          throw createQueryGenerationChangedError();
+        }
+      };
       const invocationJob = (async () => {
       const fingerprint = await queryFingerprint(fingerprintInput);
       invocationEntry.fingerprint = fingerprint;
-      throwIfQueryCancelled(invocationEntry);
+      assertFresh();
       const sidecarKey = [collectionName, fingerprint, normalizedWindow.offset, normalizedWindow.limit];
 
       const cached = await sidecar.getQueryWindow(sidecarKey);
-      throwIfQueryCancelled(invocationEntry);
+      assertFresh();
       const cachedDocumentsAvailable = await queryWindowDocumentsAvailable(
         storageCollection,
         cached?.documentIds,
       );
-      throwIfQueryCancelled(invocationEntry);
+      assertFresh();
       if (cached && (cached.complete || cached.everCompleted) && !cachedDocumentsAvailable) {
         await sidecar.invalidateQueryWindow(sidecarKey);
         cached.complete = false;
@@ -146,14 +192,23 @@ export function createQueryDemandLoader({
         && !mutableMembershipWindowStale
         && !queryWindowStale
       ) {
-        // `requireRevision` is an opaque caller token, not a server revision.
-        // Re-fetch once when that token changes; the successful fetch records
-        // it as satisfied so subsequent execs with the same token hit cache.
-        if (
-          query?.requireRevision &&
-          cached.satisfiedRevision !== query.requireRevision
-        ) {
-          // fall through to remote fetch
+        if (strictRequireRevision) {
+          // Same token plus exact bridge/connection/database generation may
+          // reuse the authority result. Any new hydration token or replacement
+          // generation must fetch again.
+          if (
+            cached.satisfiedRevision === query.requireRevision
+            && cached.satisfiedGeneration === generation
+            && !controlPlaneWindowStale
+          ) {
+            await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
+            return readLocalDocuments(
+              storageCollection,
+              query,
+              normalizedWindow,
+              cached.documentIds,
+            );
+          }
         } else if (!controlPlaneWindowStale) {
           await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
           return readLocalDocuments(
@@ -165,7 +220,9 @@ export function createQueryDemandLoader({
         }
       }
 
-      const dedupKey = `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
+      const dedupKey = strictRequireRevision
+        ? `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}|strict|${query.requireRevision}|${generation}`
+        : `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
       const startFetchJob = () => {
         if (inflightByFingerprint.has(dedupKey)) {
           bumpStatus(status, 'queryFetchDedupHitCount');
@@ -177,6 +234,7 @@ export function createQueryDemandLoader({
         const job = (async () => {
         const startedAt = clock();
         try {
+          assertFresh();
           const result = await Promise.race([
             requestQueryFetch({
               requestId,
@@ -194,7 +252,9 @@ export function createQueryDemandLoader({
             }),
             cancellationPromise,
           ]);
+          assertFresh();
           await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
+          assertFresh();
           const documentIds = (result.documents || []).map(extractId).filter(Boolean);
           await sidecar.upsertQueryWindow({
             collection: collectionName,
@@ -205,14 +265,17 @@ export function createQueryDemandLoader({
             complete: true,
             authoritativeRevision: result.authoritativeRevision ?? null,
             satisfiedRevision: query?.requireRevision ?? null,
+            satisfiedGeneration: strictRequireRevision ? generation : null,
             queryShape: {
               selector: query?.selector ?? {},
               sort: normalizeSort(query?.sort),
             },
           });
+          assertFresh();
           await sidecar.touchDocuments(collectionName, documentIds, {
             estimatedBytes: estimateBytesPerDocument(result.documents || []),
           });
+          assertFresh();
           bumpStatus(status, 'queryFetchSuccessCount');
           if (status) status.lastQueryFetchMs = clock() - startedAt;
           v15Log('fetch:ok', { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
@@ -221,6 +284,9 @@ export function createQueryDemandLoader({
           if (isQueryCancelledError(error)) {
             bumpStatus(status, 'queryFetchCancelCount');
             v15Log('fetch:cancel', { fingerprint, error: String(error?.message ?? error) });
+            // A strict authority token has no local fallback. An explicit
+            // consumer abort must not silently become local data either.
+            if (strictRequireRevision || invocationEntry.consumerCancelled) throw error;
             return readLocalDocuments(
               storageCollection,
               query,
@@ -243,6 +309,9 @@ export function createQueryDemandLoader({
       const runCoordinatedFetchJob = async () => {
         if (!multiTabBroker?.claim) return startFetchJob();
         if (multiTabBroker.closed) {
+          if (strictRequireRevision || invocationEntry.consumerCancelled) {
+            throw createQueryCancelledError('multi-tab-broker-closed');
+          }
           return readLocalDocuments(
             storageCollection,
             query,
@@ -250,7 +319,9 @@ export function createQueryDemandLoader({
             cached?.documentIds,
           );
         }
+        assertFresh();
         const leader = await multiTabBroker.claim(dedupKey);
+        assertFresh();
         if (leader) {
           try {
             return await startFetchJob();
@@ -259,7 +330,11 @@ export function createQueryDemandLoader({
           }
         }
         await multiTabBroker.waitForRemote?.(dedupKey, 5_000);
+        assertFresh();
         if (multiTabBroker.closed) {
+          if (strictRequireRevision || invocationEntry.consumerCancelled) {
+            throw createQueryCancelledError('multi-tab-broker-closed');
+          }
           return readLocalDocuments(
             storageCollection,
             query,
@@ -268,9 +343,17 @@ export function createQueryDemandLoader({
           );
         }
         const materialized = await sidecar.getQueryWindow(sidecarKey);
+        assertFresh();
         if (
           materialized?.complete
           && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds)
+          && (
+            !strictRequireRevision
+            || (
+              materialized.satisfiedRevision === query.requireRevision
+              && materialized.satisfiedGeneration === generation
+            )
+          )
         ) {
           bumpStatus(status, 'queryFetchDedupHitCount');
           return readLocalDocuments(
@@ -283,8 +366,12 @@ export function createQueryDemandLoader({
         // The owner may have crashed. Bounded wait plus TTL-aware re-claim
         // lets this tab take over without leaving the query hung forever.
         const takeover = await multiTabBroker.claim(dedupKey);
+        assertFresh();
         if (!takeover) {
           if (multiTabBroker.closed) {
+            if (strictRequireRevision || invocationEntry.consumerCancelled) {
+              throw createQueryCancelledError('multi-tab-broker-closed');
+            }
             return readLocalDocuments(
               storageCollection,
               query,
@@ -371,8 +458,10 @@ export function createQueryDemandLoader({
       try {
         return await invocationJob;
       } finally {
+        invocationEntry.detachConsumerSignal?.();
         if (resolvingByInput.get(inputKey)?.job === invocationJob) resolvingByInput.delete(inputKey);
         invocationEntry.rejectCancellation = null;
+        invocationEntry.detachConsumerSignal = null;
       }
     },
     inflightSize() {
@@ -682,6 +771,14 @@ function createQueryCancelledError(reason) {
 function throwIfQueryCancelled(invocationEntry) {
   if (!invocationEntry.cancelledReason) return;
   throw createQueryCancelledError(invocationEntry.cancelledReason);
+}
+
+function createQueryGenerationChangedError() {
+  const error = new Error('QUERY_CANCELLED: generation-replaced');
+  error.code = 'QUERY_CANCELLED';
+  error.retryable = false;
+  error.generationChanged = true;
+  return error;
 }
 
 let v15LogSink = null;
