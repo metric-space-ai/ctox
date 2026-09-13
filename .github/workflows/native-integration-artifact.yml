@@ -25,7 +25,7 @@ jobs:
       RAYON_NUM_THREADS: '2'
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: never
-      REVIEWED_SOURCE_REVISION: 9b05b54e7fd700736b3fee26d1940dd6c1447019
+      REVIEWED_SOURCE_REVISION: e897c09f619577bc4738287f2482671e2726092b
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
