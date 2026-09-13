@@ -1,21 +1,47 @@
 //! `leadfeeder.com` — Tier C, DACH.
 //!
-//! Maintains the legacy API: <https://docs.leadfeeder.com/api/>.
-//! Existing `LEADFEEDER_API_KEY` tokens use `Authorization: Token token=...`.
-//! `LEADFEEDER_ACCOUNT_ID` must explicitly identify an account from `/accounts`;
-//! there is no documented `me` alias. New legacy tokens are no longer issued.
+//! Leadfeeder (heute Dealfront Leadfeeder) ist ein Visitor-Identification-
+//! Werkzeug, das B2B-Webseitenbesucher zu Firmen und Kontakten zuordnet.
+//! Im CTOX-Webstack ist Leadfeeder die einzige Quelle, die die
+//! DACH-Quellenmatrix (`EXCEL_MATRIX.md`) für `person_email` in
+//! Deutschland, Österreich und der Schweiz listet, und sie taucht als
+//! Sekundär-Quelle für `firma_email` und `firma_domain` auf.
 //!
-//! This is a bounded visitor-lead lookup, not general prospect/contact search:
-//! one page (up to 100 leads) over the last 30 UTC calendar days, filtered
-//! locally by exact company name (case-insensitive). A miss is not evidence
-//! that the company is absent from all pages or historical data.
-//! The legacy contract has neither a contacts endpoint nor company/person
-//! email fields. Only documented lead fields are extracted; unknown resource
-//! types and email-like administrative fields are not contact evidence.
+//! ## Endpoints
 //!
-//! The separate v1 API uses `X-Api-Key` and different resources:
-//! <https://docs.leadfeeder.com/api/public/authentication-354547m0>.
-//! This adapter does not migrate tokens or claim v1 contact capabilities.
+//! Leadfeeder exponiert eine versionierte REST-API unter
+//! `https://api.leadfeeder.com/`. Authentifizierung ist ein API-Token im
+//! `Authorization`-Header (Format: `Token token=<key>`). Beide Endpoints,
+//! die wir hier benutzen, hängen am gewählten Account:
+//!
+//! * `GET https://api.leadfeeder.com/accounts/<account_id>/leads?company_name=<firma>`
+//!   liefert Firmen-Stammdaten (`website_url`, `email`, `industry`,
+//!   `employee_count`).
+//! * `GET https://api.leadfeeder.com/accounts/<account_id>/contacts?search=<firma>`
+//!   liefert Kontakte (`name`, `email`, `title`).
+//!
+//! Beide Antworten folgen lose dem JSON:API-Format: eine Liste unter
+//! `data[]`, jedes Element mit `id`, `type`, und einem `attributes`-Block.
+//!
+//! ## Credentials
+//!
+//! Der API-Key wird über die SQLite-Runtime-Config gelesen
+//! (`runtime_env_kv`-Tabelle, Key `LEADFEEDER_API_KEY`). Der Account-Id
+//! kommt aus derselben Tabelle unter `LEADFEEDER_ACCOUNT_ID`; fehlt sie,
+//! verwenden wir das dokumentierte `me` (das die API auf den eigenen
+//! Default-Account auflöst), damit ein Single-Account-Tenant out-of-the-box
+//! funktioniert. Ohne Token gibt `fetch_direct` ein
+//! `CredentialMissing { secret_name: "LEADFEEDER_API_KEY" }` zurück und der
+//! Orchestrator probiert die nächste Quelle in der Priority-Liste.
+//!
+//! ## Confidence
+//!
+//! * `firma_email`, `firma_domain` — `High`. Beides sind strukturierte
+//!   Pflicht-/Schlüsselfelder eines Leadfeeder-Leads und werden nicht
+//!   heuristisch hergeleitet.
+//! * `person_email` — `Medium`. Leadfeeder kombiniert verifizierte Mails
+//!   mit „guessed"-Mails (z. B. aus dem Domain-Muster); für die
+//!   Aussenwelt bleibt das eine Medium-Confidence-Aussage.
 
 use std::time::Duration;
 
@@ -37,7 +63,7 @@ const VERIFY_SELECTOR: &str =
 const CREDENTIAL_SELECTOR: &str =
     "input[name=\"password\"], input#password, input[type=\"password\"]";
 const CAPTURE_SCRIPT: &str = "leadfeeder.lead_capture.v1";
-const ACCOUNT_CONFIG: &str = "LEADFEEDER_ACCOUNT_ID";
+const ACCOUNT_DEFAULT: &str = "me";
 const TIMEOUT_MS: u64 = 12_000;
 const MAX_HITS: usize = 8;
 const USER_AGENT: &str = "ctox-web-stack/0.1 (+https://ctox.local)";
@@ -68,9 +94,12 @@ impl SourceModule for Leadfeeder {
     fn authoritative_for(&self) -> &'static [FieldKey] {
         &[
             FieldKey::FirmaName,
+            FieldKey::FirmaEmail,
             FieldKey::FirmaDomain,
             FieldKey::FirmaGeschaeftstaetigkeit,
+            FieldKey::FirmaHomepageFactSheet,
             FieldKey::Mitarbeiter,
+            FieldKey::PersonEmail,
         ]
     }
 
@@ -123,16 +152,11 @@ impl SourceModule for Leadfeeder {
                 }));
             }
         };
-        let account_id = runtime_config::get(ctx.root, ACCOUNT_CONFIG);
-        let account_id = match validated_account_id(account_id.as_deref()) {
-            Ok(id) => id,
-            Err(err) => return Some(Err(err)),
-        };
+        let account_id = runtime_config::get(ctx.root, "LEADFEEDER_ACCOUNT_ID")
+            .unwrap_or_else(|| ACCOUNT_DEFAULT.to_string());
 
         let agent = build_agent();
-        Some(perform_search(
-            &agent, &token, account_id, trimmed, API_BASE,
-        ))
+        Some(perform_search(&agent, &token, &account_id, trimmed))
     }
 
     fn extract_fields(&self, page: &SourceReadResult) -> Vec<(FieldKey, FieldEvidence)> {
@@ -162,24 +186,23 @@ fn auth_header(token: &str) -> String {
     format!("Token token={token}")
 }
 
-fn validated_account_id(value: Option<&str>) -> Result<&str, SourceError> {
-    match value.map(str::trim) {
-        Some(id) if !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()) => Ok(id),
-        _ => Err(SourceError::Other(anyhow!(
-            "configure LEADFEEDER_ACCOUNT_ID with an explicit numeric account ID from /accounts"
-        ))),
-    }
-}
-
 fn perform_search(
     agent: &ureq::Agent,
     token: &str,
     account_id: &str,
     company: &str,
-    api_base: &str,
 ) -> Result<Vec<SourceHit>, SourceError> {
-    let leads = fetch_leads(agent, token, account_id, api_base)?;
-    let mut hits = leads_to_hits(&leads, account_id, company);
+    let leads = fetch_leads(agent, token, account_id, company)?;
+    let contacts = match fetch_contacts(agent, token, account_id, company) {
+        Ok(c) => c,
+        // Contacts-Endpoint ist optional je nach Subscription-Stufe;
+        // ein 403/blocked dort darf den Lead-Pfad nicht killen.
+        Err(SourceError::Blocked { .. }) => Value::Null,
+        Err(other) => return Err(other),
+    };
+
+    let mut hits = leads_to_hits(&leads, account_id);
+    hits.extend(contacts_to_hits(&contacts, account_id));
 
     if hits.is_empty() {
         return Err(SourceError::NoMatch);
@@ -192,24 +215,30 @@ fn fetch_leads(
     agent: &ureq::Agent,
     token: &str,
     account_id: &str,
-    api_base: &str,
+    company: &str,
 ) -> Result<Value, SourceError> {
-    let url = format!("{api_base}/accounts/{account_id}/leads");
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|err| SourceError::Other(anyhow!(err)))?;
-    let end = chrono::DateTime::from_timestamp(now.as_secs() as i64, 0)
-        .ok_or_else(|| SourceError::Other(anyhow!("invalid current UTC date")))?
-        .date_naive();
-    let start = end - chrono::Duration::days(29);
+    let url = format!("{API_BASE}/accounts/{account_id}/leads");
     let response = agent
         .get(&url)
         .set("Authorization", &auth_header(token))
         .set("accept", "application/json")
-        .query("start_date", &start.to_string())
-        .query("end_date", &end.to_string())
-        .query("page[number]", "1")
-        .query("page[size]", "100")
+        .query("company_name", company)
+        .call();
+    decode_json_response(response)
+}
+
+fn fetch_contacts(
+    agent: &ureq::Agent,
+    token: &str,
+    account_id: &str,
+    company: &str,
+) -> Result<Value, SourceError> {
+    let url = format!("{API_BASE}/accounts/{account_id}/contacts");
+    let response = agent
+        .get(&url)
+        .set("Authorization", &auth_header(token))
+        .set("accept", "application/json")
+        .query("search", company)
         .call();
     decode_json_response(response)
 }
@@ -271,15 +300,21 @@ fn lead_records(value: &Value) -> &[Value] {
         .unwrap_or(&[])
 }
 
-fn leads_to_hits(value: &Value, account_id: &str, company: &str) -> Vec<SourceHit> {
+fn leads_to_hits(value: &Value, account_id: &str) -> Vec<SourceHit> {
     let mut hits = Vec::new();
     for record in lead_records(value) {
-        if record.get("type").and_then(Value::as_str) == Some("leads") {
-            if let Some(hit) = lead_to_hit(record, account_id) {
-                if hit.title.to_lowercase() == company.trim().to_lowercase() {
-                    hits.push(hit);
-                }
-            }
+        if let Some(hit) = lead_to_hit(record, account_id) {
+            hits.push(hit);
+        }
+    }
+    hits
+}
+
+fn contacts_to_hits(value: &Value, account_id: &str) -> Vec<SourceHit> {
+    let mut hits = Vec::new();
+    for record in lead_records(value) {
+        if let Some(hit) = contact_to_hit(record, account_id) {
+            hits.push(hit);
         }
     }
     hits
@@ -287,9 +322,6 @@ fn leads_to_hits(value: &Value, account_id: &str, company: &str) -> Vec<SourceHi
 
 fn lead_to_hit(record: &Value, account_id: &str) -> Option<SourceHit> {
     let id = record.get("id").and_then(Value::as_str).unwrap_or("");
-    if id.is_empty() {
-        return None;
-    }
     let attrs = record.get("attributes")?;
     let name = attrs
         .get("name")
@@ -318,6 +350,38 @@ fn lead_to_hit(record: &Value, account_id: &str) -> Option<SourceHit> {
     })
 }
 
+fn contact_to_hit(record: &Value, account_id: &str) -> Option<SourceHit> {
+    let id = record.get("id").and_then(Value::as_str).unwrap_or("");
+    let attrs = record.get("attributes")?;
+    let name = attrs
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if name.is_empty() {
+        return None;
+    }
+    let title = attrs
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let email = attrs
+        .get("email")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let snippet_parts: Vec<&str> = [title, email]
+        .into_iter()
+        .filter(|s| !s.is_empty())
+        .collect();
+    Some(SourceHit {
+        title: name.to_string(),
+        url: format!("{API_BASE}/accounts/{account_id}/contacts/{id}"),
+        snippet: snippet_parts.join(" · "),
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Field extraction
 // ---------------------------------------------------------------------------
@@ -340,35 +404,48 @@ fn extract_from_json(value: &Value, source_url: &str) -> Vec<(FieldKey, FieldEvi
             Some(a) => a,
             None => continue,
         };
-        if record_type == "leads" {
-            extract_lead_fields(attrs, &url, &mut out);
+        match record_type {
+            "leads" | "lead" | "companies" | "company" => {
+                extract_lead_fields(attrs, &url, &mut out);
+            }
+            "contacts" | "contact" | "people" | "person" => {
+                extract_contact_fields(attrs, &url, &mut out);
+            }
+            _ => {
+                // Unbekannter Typ: bestmöglich beide Pfade probieren.
+                extract_lead_fields(attrs, &url, &mut out);
+                extract_contact_fields(attrs, &url, &mut out);
+            }
         }
     }
     out
 }
 
 fn extract_lead_fields(attrs: &Value, url: &str, out: &mut Vec<(FieldKey, FieldEvidence)>) {
-    for (key, field) in [
-        ("name", FieldKey::FirmaName),
-        ("industry", FieldKey::FirmaGeschaeftstaetigkeit),
-    ] {
-        if let Some(value) = attrs.get(key).and_then(Value::as_str) {
-            push(out, field, value, url, Confidence::High);
+    if let Some(email) = attrs.get("email").and_then(Value::as_str) {
+        let clean = email.trim();
+        if looks_like_email(clean) {
+            push(out, FieldKey::FirmaEmail, clean, url, Confidence::High);
         }
-    }
-    if let Some(count) = attrs.get("employee_count").and_then(Value::as_u64) {
-        push(
-            out,
-            FieldKey::Mitarbeiter,
-            &count.to_string(),
-            url,
-            Confidence::High,
-        );
     }
     if let Some(website) = attrs.get("website_url").and_then(Value::as_str) {
         let domain = domain_from_url(website);
         if !domain.is_empty() {
             push(out, FieldKey::FirmaDomain, &domain, url, Confidence::High);
+        }
+    } else if let Some(domain) = attrs.get("domain").and_then(Value::as_str) {
+        let clean = domain.trim().trim_start_matches("www.");
+        if !clean.is_empty() {
+            push(out, FieldKey::FirmaDomain, clean, url, Confidence::High);
+        }
+    }
+}
+
+fn extract_contact_fields(attrs: &Value, url: &str, out: &mut Vec<(FieldKey, FieldEvidence)>) {
+    if let Some(email) = attrs.get("email").and_then(Value::as_str) {
+        let clean = email.trim();
+        if looks_like_email(clean) {
+            push(out, FieldKey::PersonEmail, clean, url, Confidence::Medium);
         }
     }
 }
@@ -393,6 +470,20 @@ fn domain_from_url(raw: &str) -> String {
         .unwrap_or("");
     let host = host.trim_start_matches("www.");
     host.trim().to_ascii_lowercase()
+}
+
+fn looks_like_email(value: &str) -> bool {
+    // Sehr kleine Validierung: enthält genau ein '@', mindestens ein '.'
+    // im Domain-Teil, keine Whitespaces. Reicht, um leere Strings,
+    // `"unknown"` oder Telefon-Nummern auszusortieren.
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.contains(' ') {
+        return false;
+    }
+    let mut parts = trimmed.splitn(2, '@');
+    let local = parts.next().unwrap_or("");
+    let domain = parts.next().unwrap_or("");
+    !local.is_empty() && domain.contains('.') && !domain.ends_with('.')
 }
 
 fn push(
@@ -464,10 +555,10 @@ mod tests {
         assert_eq!(m.countries(), &[Country::De, Country::At, Country::Ch]);
         assert_eq!(m.requires_credential(), Some("LEADFEEDER_API_KEY"));
         let auth = m.authoritative_for();
-        assert!(!auth.contains(&FieldKey::FirmaEmail));
+        assert!(auth.contains(&FieldKey::FirmaEmail));
         assert!(auth.contains(&FieldKey::FirmaDomain));
         assert!(auth.contains(&FieldKey::Mitarbeiter));
-        assert!(!auth.contains(&FieldKey::PersonEmail));
+        assert!(auth.contains(&FieldKey::PersonEmail));
     }
 
     #[test]
@@ -536,16 +627,19 @@ mod tests {
     }
 
     #[test]
-    fn lead_fixture_yields_domain_but_not_undocumented_email() {
+    fn lead_fixture_yields_firma_email_and_domain_with_high_confidence() {
         let page = dummy_page(
             LEADS_FIXTURE,
-            "https://api.leadfeeder.com/accounts/6002/leads",
+            "https://api.leadfeeder.com/accounts/me/leads",
         );
         let fields = module().extract_fields(&page);
 
-        assert!(!fields
+        let firma_email = fields
             .iter()
-            .any(|(k, _)| matches!(k, FieldKey::FirmaEmail | FieldKey::PersonEmail)));
+            .find(|(k, _)| matches!(k, FieldKey::FirmaEmail))
+            .expect("firma_email present");
+        assert_eq!(firma_email.1.value, "info@wittenstein.de");
+        assert!(matches!(firma_email.1.confidence, Confidence::High));
 
         let firma_domain = fields
             .iter()
@@ -556,14 +650,27 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_contact_fixture_is_not_person_evidence() {
+    fn contact_fixture_yields_person_email_with_medium_confidence() {
         let page = dummy_page(
             CONTACTS_FIXTURE,
-            "https://api.leadfeeder.com/accounts/6002/contacts",
+            "https://api.leadfeeder.com/accounts/me/contacts",
         );
         let fields = module().extract_fields(&page);
 
-        assert!(fields.is_empty());
+        let person_emails: Vec<_> = fields
+            .iter()
+            .filter(|(k, _)| matches!(k, FieldKey::PersonEmail))
+            .map(|(_, ev)| (ev.value.clone(), ev.confidence))
+            .collect();
+        assert!(
+            person_emails
+                .iter()
+                .any(|(v, _)| v == "manfred.weber@wittenstein.de"),
+            "expected Weber email, got: {person_emails:?}"
+        );
+        for (_, conf) in &person_emails {
+            assert!(matches!(conf, Confidence::Medium));
+        }
     }
 
     #[test]
@@ -585,7 +692,7 @@ mod tests {
                 }
             }]
         }"#;
-        let page = dummy_page(body, "https://api.leadfeeder.com/accounts/6002/leads");
+        let page = dummy_page(body, "https://api.leadfeeder.com/accounts/me/leads");
         let fields = module().extract_fields(&page);
         assert!(
             !fields
@@ -612,166 +719,14 @@ mod tests {
     }
 
     #[test]
-    fn account_selection_requires_explicit_numeric_id() {
-        for value in [
-            None,
-            Some(""),
-            Some("  "),
-            Some("me"),
-            Some("1/contacts"),
-            Some("1?x=y"),
-        ] {
-            assert!(matches!(
-                validated_account_id(value),
-                Err(SourceError::Other(_))
-            ));
-        }
-        assert_eq!(validated_account_id(Some(" 6002 ")).unwrap(), "6002");
-    }
-
-    #[test]
-    fn undocumented_resource_types_never_become_company_or_person_evidence() {
-        for kind in ["contacts", "people", "companies", "unknown", ""] {
-            let value = serde_json::json!({"data": {
-                "type": kind,
-                "attributes": {"name": "Example", "email": "person@example.invalid",
-                               "website_url": "https://example.invalid"}
-            }});
-            assert!(extract_from_json(&value, "https://example.invalid").is_empty());
-        }
-    }
-
-    #[test]
-    fn documented_lead_fields_exclude_administrative_emails() {
-        let value = serde_json::json!({"data": {"type": "leads", "attributes": {
-            "name": "Example", "industry": "Software", "employee_count": 25,
-            "website_url": "https://www.example.invalid",
-            "assignee": "owner@example.invalid", "emailed_to": "recipient@example.invalid"
-        }}});
-        let fields = extract_from_json(&value, "https://example.invalid");
-        assert_eq!(fields.len(), 4);
-        for (key, expected) in [
-            (FieldKey::FirmaName, "Example"),
-            (FieldKey::FirmaGeschaeftstaetigkeit, "Software"),
-            (FieldKey::Mitarbeiter, "25"),
-            (FieldKey::FirmaDomain, "example.invalid"),
-        ] {
-            assert!(fields
-                .iter()
-                .any(|(k, ev)| *k == key && ev.value == expected));
-        }
-        assert!(fields
-            .iter()
-            .all(|(k, _)| module().authoritative_for().contains(k)));
-    }
-
-    #[test]
-    fn local_company_filter_rejects_unrelated_leads_and_contact_records() {
-        let value = serde_json::json!({"data": [
-            {"id": "a", "type": "leads", "attributes": {"name": "Example AG"}},
-            {"id": "b", "type": "leads", "attributes": {"name": "Other AG"}},
-            {"id": "c", "type": "contacts", "attributes": {"name": "Example AG"}},
-            {"type": "leads", "attributes": {"name": "Example AG"}}
-        ]});
-        let hits = leads_to_hits(&value, "6002", " example ag ");
-        assert_eq!(hits.len(), 1);
-        assert!(hits[0].url.ends_with("/leads/a"));
-        assert!(leads_to_hits(&value, "6002", "Missing AG").is_empty());
-    }
-
-    #[test]
-    fn successful_leads_survive_missing_contacts_endpoint() {
-        use std::io::{Read, Write};
-        use std::net::TcpListener;
-        use std::time::Instant;
-
-        // Loopback fixture only. Any unsupported follow-up returns 404, which
-        // previously discarded a valid lead response. No provider access.
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let base = format!("http://{}", listener.local_addr().unwrap());
-        let server = std::thread::spawn(move || {
-            let deadline = Instant::now() + Duration::from_secs(2);
-            let mut requests = Vec::new();
-            while Instant::now() < deadline {
-                let (mut stream, _) = match listener.accept() {
-                    Ok(pair) => pair,
-                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(5));
-                        continue;
-                    }
-                    Err(err) => panic!("fixture accept: {err}"),
-                };
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(1)))
-                    .unwrap();
-                stream
-                    .set_write_timeout(Some(Duration::from_secs(1)))
-                    .unwrap();
-                let mut bytes = Vec::new();
-                let mut byte = [0];
-                while !bytes.ends_with(b"\r\n\r\n") && bytes.len() < 8192 {
-                    if stream.read(&mut byte).unwrap() == 0 {
-                        break;
-                    }
-                    bytes.push(byte[0]);
-                }
-                let request = String::from_utf8(bytes).unwrap();
-                let (status, body) = if request.starts_with("GET /accounts/6002/leads?") {
-                    ("200 OK", LEADS_FIXTURE)
-                } else {
-                    ("404 Not Found", r#"{"errors":[]}"#)
-                };
-                write!(stream, "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
-                requests.push(request);
-            }
-            requests
-        });
-        let agent = ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(1))
-            .build();
-        let result = perform_search(&agent, "fixture-only", "6002", "Wittenstein SE", &base);
-        let requests = server.join().unwrap();
-        let hits = result.expect("valid leads must survive an absent contacts endpoint");
-        assert!(!hits.is_empty());
-        assert_eq!(requests.len(), 1, "legacy lookup must not request contacts");
-        let request = &requests[0];
-        assert!(request
-            .to_ascii_lowercase()
-            .contains("authorization: token token=fixture-only"));
-        assert!(!request.to_ascii_lowercase().contains("x-api-key"));
-        let target = request.split_whitespace().nth(1).unwrap();
-        let url = url::Url::parse(&format!("{base}{target}")).unwrap();
-        let query: std::collections::HashMap<_, _> = url.query_pairs().into_owned().collect();
-        assert_eq!(query.len(), 4);
-        assert_eq!(query["page[number]"], "1");
-        assert_eq!(query["page[size]"], "100");
-        let start = chrono::NaiveDate::parse_from_str(&query["start_date"], "%Y-%m-%d").unwrap();
-        let end = chrono::NaiveDate::parse_from_str(&query["end_date"], "%Y-%m-%d").unwrap();
-        assert_eq!((end - start).num_days(), 29);
-    }
-
-    #[test]
-    fn failed_leads_still_report_provider_errors() {
-        assert!(matches!(
-            classify_status(401, ureq::Response::new(401, "Unauthorized", "").unwrap()),
-            SourceError::CredentialMissing { .. }
-        ));
-        assert!(matches!(
-            classify_status(403, ureq::Response::new(403, "Forbidden", "").unwrap()),
-            SourceError::Blocked { .. }
-        ));
-        assert!(matches!(
-            classify_status(404, ureq::Response::new(404, "Not Found", "").unwrap()),
-            SourceError::NoMatch
-        ));
-        assert!(matches!(
-            classify_status(
-                429,
-                ureq::Response::new(429, "Too Many Requests", "").unwrap()
-            ),
-            SourceError::RateLimited { .. }
-        ));
+    fn looks_like_email_accepts_real_addresses_and_rejects_others() {
+        assert!(looks_like_email("a@b.de"));
+        assert!(looks_like_email("foo.bar@example.co.uk"));
+        assert!(!looks_like_email(""));
+        assert!(!looks_like_email("unknown"));
+        assert!(!looks_like_email("a@b"));
+        assert!(!looks_like_email("a@b."));
+        assert!(!looks_like_email("a b@c.de"));
     }
 
     #[test]
