@@ -64,16 +64,21 @@ function makeHydrate({ storage = null, write = () => {}, syncTaskbar = async () 
     'writeScopedLocalStorage', 'TASKBAR_PINS_KEY', 'TASKBAR_PIN_HYDRATION_TIMEOUT_MS',
     'decodeTaskbarPinCache', 'resolveTaskbarPinState', 'normalizeTaskbarPins',
     'encodeTaskbarPinCache', 'renderTabs', 'syncTaskbarPinsToDesktopLayout',
-    'taskbarPinHydrationGeneration',
-    `${hydrationSource}; const run = (runtimeState, generation = taskbarPinHydrationGeneration) => {
+    'taskbarPinHydrationGeneration', 'taskbarPinHydrationAttemptSequence',
+    'TASKBAR_PIN_HYDRATION_ATTEMPT_DIAGNOSTICS_MAX',
+    `${hydrationSource}; const run = (
+      runtimeState,
+      generation = taskbarPinHydrationGeneration,
+      options,
+    ) => {
       state = runtimeState;
-      return hydrateTaskbarPinsFromDesktopLayout(generation);
+      return hydrateTaskbarPinsFromDesktopLayout(generation, options);
     }; run.setGeneration = (generation) => { taskbarPinHydrationGeneration = generation; };
     return run;`,
   )(
     null, { warn() {} }, key => key, readStorage(storage), write,
     'pins', 20000, decodeTaskbarPinCache, resolveTaskbarPinState,
-    normalizeTaskbarPins, encodeTaskbarPinCache, () => {}, syncTaskbar, 0,
+    normalizeTaskbarPins, encodeTaskbarPinCache, () => {}, syncTaskbar, 0, 0, 8,
   );
   return hydrate;
 }
@@ -95,10 +100,46 @@ function nativeSync(implementation) {
     write: () => { cacheWrites += 1; },
     syncTaskbar: async () => { layoutWrites += 1; },
   });
-  hydrate(state);
+  hydrate(state, 0, { now: () => 100 });
   await Promise.resolve();
   assert.equal(cacheWrites, 0, 'pending native read must not create a cache');
   assert.equal(layoutWrites, 0, 'pending native read must not write the layout');
+  assert.deepEqual(state.taskbarPinHydrationAttempts, [{
+    schema: 'ctox.taskbarPinHydrationAttempt.v1',
+    id: 1,
+    generation: 0,
+    timeoutMs: 20000,
+    outcome: 'pending',
+    startedAtMs: 100,
+  }]);
+}
+
+// A rejected strict native read is observable and remains unknown.
+{
+  const error = new Error('native strict read unavailable');
+  error.code = 'QUERY_CANCELLED';
+  const state = {
+    db: {}, sync: nativeSync(() => Promise.reject(error)), modules: ['x'],
+    taskbarPins: ['fallback'], taskbarPinsKnown: false,
+    taskbarPinsUpdatedAtMs: 0,
+    taskbarPinHydrationAttempts: [],
+  };
+  const clock = { value: 200 };
+  const hydrate = makeHydrate();
+  await assert.rejects(
+    hydrate(state, 0, { now: () => (clock.value += 25) }),
+    /native strict read unavailable/,
+  );
+  assert.equal(state.taskbarPinsKnown, false);
+  assert.equal(state.taskbarPinHydrationAttempts.length, 1);
+  const rejectedAttempt = state.taskbarPinHydrationAttempts[0];
+  assert.equal(rejectedAttempt.generation, 0);
+  assert.equal(rejectedAttempt.outcome, 'rejected');
+  assert.equal(rejectedAttempt.startedAtMs, 225);
+  assert.equal(rejectedAttempt.endedAtMs, 250);
+  assert.equal(rejectedAttempt.durationMs, 25);
+  assert.equal(rejectedAttempt.failureReason, 'QUERY_CANCELLED');
+  assert.equal(rejectedAttempt.failureMessage, 'native strict read unavailable');
 }
 
 // Completed absence is known but is not a user edit or a default layout write.
@@ -119,6 +160,12 @@ function nativeSync(implementation) {
   assert.equal(state.taskbarPinsUpdatedAtMs, 0);
   assert.equal(cacheWrites, 0);
   assert.equal(layoutWrites, 0);
+  assert.equal(state.taskbarPinHydrationAttempts.length, 1);
+  assert.equal(state.taskbarPinHydrationAttempts[0].outcome, 'adopted');
+  assert.equal(state.taskbarPinHydrationAttempts[0].resultPresent, false);
+  assert.equal(state.taskbarPinHydrationAttempts[0].remoteDocumentPresent, false);
+  assert.equal(state.taskbarPinHydrationAttempts[0].resolvedSource, 'local');
+  assert.equal(state.taskbarPinHydrationAttempts[0].knownAfterRead, true);
 }
 
 // Explicit native empty persists and wins ties over a default display value.
@@ -177,7 +224,7 @@ function nativeSync(implementation) {
     write: () => { cacheWrites += 1; },
     syncTaskbar: async () => { layoutWrites += 1; },
   });
-  const pending = hydrate(state);
+  const pending = hydrate(state, 0, { now: () => 0 });
   state.db = { replacement: true };
   state.sync = nativeSync(async () => null);
   resolveNative({ toJSON: () => ({ taskbar_pins: ['old-session'], updated_at_ms: 999 }) });
@@ -186,6 +233,15 @@ function nativeSync(implementation) {
   assert.equal(state.taskbarPinsUpdatedAtMs, 100);
   assert.equal(cacheWrites, 0);
   assert.equal(layoutWrites, 0);
+  const staleAttempt = state.taskbarPinHydrationAttempts.at(-1);
+  assert.equal(staleAttempt.outcome, 'stale_discarded');
+  assert.equal(staleAttempt.startedAtMs, 0);
+  assert.equal(staleAttempt.endedAtMs, 0);
+  assert.equal(staleAttempt.durationMs, 0);
+  assert.equal(staleAttempt.generationStale, false);
+  assert.equal(staleAttempt.databaseStale, true);
+  assert.equal(staleAttempt.syncStale, true);
+  assert.equal(staleAttempt.storageKeyStale, false);
 }
 
 // Same-identity reconnect is represented by the wrapper generation; pending
@@ -200,6 +256,30 @@ function nativeSync(implementation) {
   await makeHydrate()(state);
   assert.deepEqual(state.taskbarPins, ['remote-new']);
   assert.equal(state.taskbarPinsUpdatedAtMs, 500);
+}
+
+// Per-attempt diagnostics are bounded and retain the most recent boundaries.
+{
+  const state = {
+    db: {}, sync: nativeSync(async () => null), modules: ['x'],
+    taskbarPins: ['fallback'], taskbarPinsKnown: false,
+    taskbarPinsUpdatedAtMs: 0,
+    taskbarPinHydrationAttempts: [],
+  };
+  const hydrate = makeHydrate();
+  for (let clock = 0; clock < 10; clock += 1) {
+    await hydrate(state, 0, { now: () => clock });
+  }
+  const attempts = state.taskbarPinHydrationAttempts;
+  assert.equal(attempts.length, 8);
+  assert.equal(attempts.every((entry) => entry.outcome === 'adopted'), true);
+  assert.equal(attempts[0].startedAtMs, 2);
+  assert.equal(attempts.at(-1).startedAtMs, 9);
+  assert.equal(attempts.at(-1).endedAtMs, 9);
+  assert.equal(attempts.at(-1).durationMs, 0);
+  for (let index = 1; index < attempts.length; index += 1) {
+    assert.equal(attempts[index].id > attempts[index - 1].id, true);
+  }
 }
 
 // Write-back rechecks identity before using an authoritative document handle.

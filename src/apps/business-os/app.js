@@ -1,15 +1,15 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
-import { CtoxResizer } from './shared/resizer.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
-import { createAppActions } from './shared/app-actions.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
+import { CtoxResizer } from './shared/resizer.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
+import { createAppActions } from './shared/app-actions.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
+} from './shared/app-lifecycle.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +17,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
+} from './shared/permissions.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
+} from './shared/branding.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
+} from './shared/presentation.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +41,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
-import { createDocumentsFacade } from './shared/documents.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
+} from './shared/shell-permissions-ui.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
+import { createDocumentsFacade } from './shared/documents.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,16 +51,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
+} from './shared/maintenance-state.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
+} from './shared/workspace-session.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
+} from './shared/taskbar-pins.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -68,9 +68,9 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -78,8 +78,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260913-shell-v2-authoritative-pin-retry-v377';
+} from './shared/startup-deadlines.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260913-shell-v2-authoritative-pin-retry-v378';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -93,11 +93,12 @@ const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const TASKBAR_PIN_HYDRATION_TIMEOUT_MS = 20_000;
 const TASKBAR_PIN_HYDRATION_RETRY_BASE_MS = 500;
 const TASKBAR_PIN_HYDRATION_RETRY_WINDOW_MS = 60_000;
+const TASKBAR_PIN_HYDRATION_ATTEMPT_DIAGNOSTICS_MAX = 8;
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260913-shell-v2-authoritative-pin-retry-v377';
+const APP_BUILD = '20260913-shell-v2-authoritative-pin-retry-v378';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -246,6 +247,7 @@ let taskbarPinHydrationRetryTimer = null;
 let taskbarPinHydrationRetryCount = 0;
 let taskbarPinHydrationRetryStartedAtMs = 0;
 let taskbarPinHydrationGeneration = 0;
+let taskbarPinHydrationAttemptSequence = 0;
 let workspaceSessionSaveTimer = null;
 let desktopOpenIconObserver = null;
 let desktopOpenIconObserverTarget = null;
@@ -324,6 +326,7 @@ const state = {
   taskbarPinHydrationRetryCount: 0,
   taskbarPinHydrationRetryStartedAtMs: 0,
   taskbarPinHydrationLastError: null,
+  taskbarPinHydrationAttempts: [],
   taskbarPinsKnown: false,
   taskbarPinsUpdatedAtMs: 0,
   schemaRegistrations: new Map(),
@@ -1648,6 +1651,7 @@ async function openBusinessDataPlane(syncConfig) {
       })
       .catch((error) => {
         if (taskbarPinHydrationGeneration !== pinHydrationGeneration) return;
+        state.taskbarPinHydrationLastError = String(error?.message || error);
         console.warn('[business-os] taskbar pin hydration failed:', error);
       })
       .finally(() => {
@@ -5751,6 +5755,8 @@ function clearTaskbarPinHydrationRetry({ resetAttempts = false } = {}) {
     taskbarPinHydrationRetryStartedAtMs = 0;
     state.taskbarPinHydrationRetryCount = 0;
     state.taskbarPinHydrationRetryStartedAtMs = 0;
+    state.taskbarPinHydrationLastError = null;
+    state.taskbarPinHydrationAttempts = [];
   }
 }
 
@@ -5795,7 +5801,10 @@ function scheduleTaskbarPinHydrationRetry({ now = Date.now } = {}) {
   }, Math.min(5000, TASKBAR_PIN_HYDRATION_RETRY_BASE_MS * attempt));
 }
 
-async function hydrateTaskbarPinsFromDesktopLayout(hydrationGeneration = taskbarPinHydrationGeneration) {
+async function hydrateTaskbarPinsFromDesktopLayout(
+  hydrationGeneration = taskbarPinHydrationGeneration,
+  { now = Date.now } = {},
+) {
   const database = state.db;
   const sync = state.sync;
   const storageKey = scopedStorageKey(TASKBAR_PINS_KEY);
@@ -5805,25 +5814,73 @@ async function hydrateTaskbarPinsFromDesktopLayout(hydrationGeneration = taskbar
     });
     return;
   }
+
+  // Keep the last few actual native-read boundaries. This is intentionally
+  // separate from retry bookkeeping: a swallowed rejection must remain visible
+  // as a failed strict read, while a stale result is recorded as discarded.
+  const attemptId = ++taskbarPinHydrationAttemptSequence;
+  const attempt = {
+    schema: 'ctox.taskbarPinHydrationAttempt.v1',
+    id: attemptId,
+    generation: hydrationGeneration,
+    timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
+    outcome: 'pending',
+    startedAtMs: now(),
+  };
+  if (taskbarPinHydrationGeneration === hydrationGeneration) {
+    state.taskbarPinHydrationAttempts = [
+      ...(Array.isArray(state.taskbarPinHydrationAttempts)
+        ? state.taskbarPinHydrationAttempts
+        : []),
+      attempt,
+    ].slice(-TASKBAR_PIN_HYDRATION_ATTEMPT_DIAGNOSTICS_MAX);
+  }
+  const finishAttempt = (outcome, details = {}, endedAtMs = now()) => {
+    if (taskbarPinHydrationGeneration !== hydrationGeneration) return;
+    const attempts = Array.isArray(state.taskbarPinHydrationAttempts)
+      ? state.taskbarPinHydrationAttempts
+      : [];
+    const index = attempts.findIndex((entry) => entry?.id === attemptId);
+    if (index < 0) return;
+    attempts[index] = {
+      ...attempts[index],
+      ...details,
+      outcome,
+      endedAtMs,
+      durationMs: Math.max(0, endedAtMs - attempts[index].startedAtMs),
+    };
+  };
+
   // The native wrapper owns collection lifecycle, query readiness and an
   // opaque authority token. It rejects pending, stale and cancelled reads;
   // it never translates them into a completed empty answer.
-  let authoritativeDocument = null;
+  let authoritativeDocument;
+  let nativeEndedAtMs;
   try {
     authoritativeDocument = await sync.readCollectionNativeDocument('desktop_layout', 'layout', {
       timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
     });
+    nativeEndedAtMs = now();
   } catch (error) {
-    if (taskbarPinHydrationGeneration === hydrationGeneration) {
-      console.warn('[business-os] authoritative taskbar pin read failed:', error);
-    }
+    nativeEndedAtMs = now();
+    finishAttempt('rejected', {
+      failureReason: String(error?.code || error?.name || 'unknown').slice(0, 80),
+      failureMessage: String(error?.message || error).slice(0, 240),
+    }, nativeEndedAtMs);
+    throw error;
+  }
+  const identity = {
+    generationStale: taskbarPinHydrationGeneration !== hydrationGeneration,
+    databaseStale: state.db !== database,
+    syncStale: state.sync !== sync,
+    storageKeyStale: scopedStorageKey(TASKBAR_PINS_KEY) !== storageKey,
+  };
+  if (identity.generationStale || identity.databaseStale || identity.syncStale
+    || identity.storageKeyStale) {
+    finishAttempt('stale_discarded', { ...identity }, nativeEndedAtMs);
     return;
   }
-  if (taskbarPinHydrationGeneration !== hydrationGeneration
-    || state.db !== database || state.sync !== sync
-    || scopedStorageKey(TASKBAR_PINS_KEY) !== storageKey) {
-    return;
-  }
+
   state.taskbarPinsKnown = true;
   const layout = authoritativeDocument?.toJSON?.() || null;
   const cache = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
@@ -5854,6 +5911,18 @@ async function hydrateTaskbarPinsFromDesktopLayout(hydrationGeneration = taskbar
   // Confirmed absence is not a user edit. Preserve zero rather than inventing
   // an initialization timestamp; remote and real pending values retain theirs.
   state.taskbarPinsUpdatedAtMs = Number(resolved.updatedAtMs || 0);
+  finishAttempt('adopted', {
+    resultPresent: authoritativeDocument !== null,
+    remoteDocumentPresent: layout !== null,
+    remoteUpdatedAtMs: Number(layout?.updated_at_ms || 0),
+    remotePinCount: Array.isArray(layout?.taskbar_pins)
+      ? layout.taskbar_pins.length
+      : null,
+    resolvedSource: resolved.source,
+    knownAfterRead: state.taskbarPinsKnown === true,
+    adoptedPinCount: state.taskbarPins.length,
+    adoptedUpdatedAtMs: state.taskbarPinsUpdatedAtMs,
+  }, nativeEndedAtMs);
   if (resolved.source === 'remote' || localUpdatedAtMs > 0) {
     try {
       writeScopedLocalStorage(

@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { performance } = require('node:perf_hooks');
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-async function capturePinRuntimeEvidence(page, error) {
-  const waitForError = String(error?.message || error);
+async function capturePinRuntimeEvidence(page, error = null) {
+  const waitForError = String(error?.message || error || '');
   const timeoutMs = 5000;
   let diagnosticTimer = null;
   const evaluate = page.evaluate(async waitForError => {
@@ -29,6 +29,7 @@ async function capturePinRuntimeEvidence(page, error) {
         startedAtMs: state?.taskbarPinHydrationRetryStartedAtMs || 0,
         lastError: state?.taskbarPinHydrationLastError || null,
       },
+      hydrationAttempts: [...(state?.taskbarPinHydrationAttempts || [])],
       desktopLayoutDiagnostics: syncDiagnostics,
     };
   }, waitForError).catch(diagnosticError => ({
@@ -203,6 +204,16 @@ async function runDesktopPinReload({ page, readNativeLayout, outputPath }) {
       throw error;
     }
     report.pinConvergenceMs = performance.now() - started;
+    report.firstAuthorityRuntime = await capturePinRuntimeEvidence(fresh);
+    const adoption = report.firstAuthorityRuntime.hydrationAttempts?.find?.((attempt) => (
+      attempt?.outcome === 'adopted'
+      && Number(attempt.remoteUpdatedAtMs) === expected.updated_at_ms
+      && Number(attempt.adoptedUpdatedAtMs) === expected.updated_at_ms
+      && attempt.remotePinCount === expected.taskbar_pins.length
+    ));
+    assert.ok(adoption, 'successful acceptance must bind convergence to an adopted strict-read attempt');
+    assert.equal(adoption.resolvedSource, 'remote');
+    assert.equal(adoption.knownAfterRead, true);
     await fresh.waitForFunction(expected => {
       const pins = [...document.querySelectorAll('button.module-tab[data-pinned="true"]')]
         .filter(button => button.getClientRects().length > 0).map(button => button.dataset.target);
