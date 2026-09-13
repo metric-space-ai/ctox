@@ -257,7 +257,7 @@ async function assertDelayedHarnessStatus(page) {
     await page.waitForFunction(count => window.harnessControlCommands.length === count, paused ? 1 : 2);
     assert.equal(await note.isVisible(), !paused, 'command completion must not optimistically change native status');
     await assertHarnessStatus(!paused);
-    await page.locator('.ctox-more-actions-body').waitFor({ state: 'hidden' });
+    await page.locator('[data-ctox-main] .ctox-more-actions-body').waitFor({ state: 'hidden' });
     await menu.click();
     assert.equal(await pause.getAttribute('aria-pressed'), String(!paused), 'reopening before projection must retain the last confirmed status');
     await page.evaluate(paused => {
