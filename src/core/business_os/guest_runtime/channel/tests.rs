@@ -238,7 +238,8 @@ async fn cancellation_after_input_write_does_not_replay() -> Result<()> {
         async move {
             let mut channel = GuestChannel::new(host_stream);
             {
-                let send = channel.apply_input(&click());
+                let input = click();
+                let send = channel.apply_input(&input);
                 tokio::pin!(send);
                 tokio::select! {
                     _ = &mut send => anyhow::bail!("peer returned an input result"),
