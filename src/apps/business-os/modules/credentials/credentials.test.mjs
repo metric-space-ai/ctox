@@ -215,7 +215,7 @@ test('the manual refresh button is gone; the list is reactive via a subscription
   assert.doesNotMatch(html, /data-action="refresh"/, 'no refresh button in the markup');
   assert.doesNotMatch(indexJs, /=== 'refresh'/, 'no refresh action handler');
   // Reactive: subscribe to business_commands for secret put/delete landings.
-  assert.match(indexJs, /command_type:\s*\{\s*\$in:\s*\[PUT_COMMAND,\s*DELETE_COMMAND\]/, 'subscription scoped to put/delete');
+  assert.match(indexJs, /command_type:\s*\{\s*\$in:\s*\[PUT_COMMAND,\s*DELETE_COMMAND,\s*GENERATE_COMMAND\]/, 'subscription includes generate as well as put/delete');
   assert.match(indexJs, /\.\$\?\.subscribe/, 'subscribes to the collection query');
 });
 

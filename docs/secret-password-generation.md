@@ -46,9 +46,17 @@ arbitrary user text placed in unrelated command metadata.
 
 ## Registration integration boundary
 
+The Credentials app offers a create-only **Generate password** action. It sends
+only the validated name and length 24 through the existing command bus, validates
+the native metadata receipt before reporting success, and refreshes metadata
+after generation (including commands from another client). Existing stored
+credentials are not rotated. Unknown/failed outcomes are not shown as success;
+raw errors and response values are not rendered. The action does not expose the
+generated password or certify provider registration.
+
 This change provides generation and an authorized native command, **not a
 completed autonomous-registration feature**. It does not add a new model tool,
-MCP action, Credentials UI button, provider adapter, or deployment to THESEN.
+MCP action, provider adapter, or deployment to THESEN.
 Consumers must pass a secret reference to an authorized native destination
 adapter. They must not call `secret get` into a shell/tool transcript, insert the
 plaintext into model-authored source, or export it to browser storage. Existing
@@ -82,3 +90,14 @@ cargo test --locked --bin ctox ctox_secret_generate -- --test-threads=2
 
 These tests are not recorded as passing until an actual native run completes.
 Repository-wide native/CTOX DB checks remain separate from this focused proof.
+
+The Credentials UI also has dependency-free module/event-handler regressions:
+
+```sh
+node --experimental-vm-modules --test --test-concurrency=1 src/apps/business-os/modules/credentials/generation.test.mjs
+```
+
+They exercise selector-only dispatch, receipt validation, create-only existing
+records, duplicate-click protection, permission denial, redacted failure and
+metadata refresh using host/DOM doubles. Passing these does not establish a
+real browser registration, encrypted-store integration or live THESEN readiness.
