@@ -11374,6 +11374,27 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
     Ok(Some((id, record)))
 }
 
+/// Required lookup surface: missing/unreadable storage is not an empty query.
+/// Keep every probe on the same read transaction instead of checking readiness
+/// and then reopening through optional helpers which may silently return empty.
+pub(super) fn required_rxdb_collection_read_connection(
+    root: &Path,
+    collection: &str,
+) -> anyhow::Result<(Connection, String)> {
+    anyhow::ensure!(
+        is_safe_rxdb_collection_name(collection),
+        "invalid collection name"
+    );
+    let path = rxdb_store_path(root);
+    let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .context("required lookup store is unavailable")?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    conn.execute_batch("BEGIN")?;
+    let table = rxdb_collection_table_name(&path, &conn, collection)
+        .context("required lookup collection is unavailable")?;
+    Ok((conn, table))
+}
+
 pub(super) fn find_rxdb_collection_records_by_string_field(
     root: &Path,
     collection: &str,
