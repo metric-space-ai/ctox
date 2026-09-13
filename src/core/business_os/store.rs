@@ -6006,6 +6006,16 @@ fn checked_module_manifest_candidate(
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == b'-' || ch == b'_'),
         "unsafe module id"
     );
+    // A shared namespace may be symlinked without containing this module.
+    // Skip only an absent module directory, not a present (even dangling)
+    // module symlink, so lower-priority installed sources remain reachable
+    // without relaxing the checks on an actual source candidate.
+    let module_directory = app_root.join(namespace).join(module_id);
+    match fs::symlink_metadata(&module_directory) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
     let relative = PathBuf::from(namespace).join(module_id).join("module.json");
     ensure_source_path_has_no_symlink_components(app_root, &relative)?;
     let candidate = app_root.join(relative);

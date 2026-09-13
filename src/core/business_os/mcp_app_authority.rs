@@ -601,6 +601,71 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn mcp_app_authority_source_load_skips_absent_module_in_symlinked_namespace(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let installed = installed_fixture(root)?;
+        let shell = root.join("src/apps/business-os");
+        let shared = root.join("shared-builtins");
+        fs::create_dir_all(&shared)?;
+        std::os::unix::fs::symlink(&shared, shell.join("modules"))?;
+        assert_eq!(
+            store::module_manifest_path(root, &shell, MODULE)?,
+            installed.join("module.json")
+        );
+        let loaded = store::load_module_source_records(
+            root,
+            &store::ModuleSourceLoadMutation {
+                module_id: MODULE.to_string(),
+            },
+        )?;
+        assert_eq!(loaded["ok"], true);
+        assert_eq!(loaded["count"], 2);
+        let read = gateway_call(
+            root,
+            "admin",
+            "business_os.read_app_file",
+            serde_json::json!({"module_id": MODULE, "path": "index.js"}),
+        )?;
+        assert_eq!(
+            read["content"],
+            fs::read_to_string(installed.join("index.js"))?
+        );
+
+        // A present higher-priority module must still fail closed, rather
+        // than falling through to the safe installed copy.
+        let bundled = shared.join(MODULE);
+        fs::create_dir_all(&bundled)?;
+        fs::write(
+            bundled.join("module.json"),
+            serde_json::to_vec(&serde_json::json!({"id": MODULE}))?,
+        )?;
+        let error = store::module_manifest_path(root, &shell, MODULE).unwrap_err();
+        assert!(error.to_string().contains("symlink"), "{error:#}");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_app_authority_source_rejects_dangling_module_symlink_before_fallback(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        installed_fixture(root)?;
+        let shell = root.join("src/apps/business-os");
+        fs::create_dir_all(shell.join("modules"))?;
+        std::os::unix::fs::symlink(
+            root.join("absent-module-target"),
+            shell.join("modules").join(MODULE),
+        )?;
+        let error = store::module_manifest_path(root, &shell, MODULE).unwrap_err();
+        assert!(error.to_string().contains("symlink"), "{error:#}");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn mcp_app_authority_source_rejects_symlinked_root_namespace_and_manifest() -> anyhow::Result<()>
     {
         for component in ["module", "namespace", "manifest"] {
