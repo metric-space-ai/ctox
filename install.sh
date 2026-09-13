@@ -242,7 +242,12 @@ run_build_module() {
   printf '  %bcmd:%b' "$C_GREY" "$C_RESET" >&2
   printf ' %q' "$@" >&2
   printf '\n' >&2
-  (cd "$workdir" && "$@")
+  local helper="${BUILD_CACHE_HELPER:-${SCRIPT_DIR}/src/scripts/build-cache.py}"
+  if [[ ! -f "$helper" ]] || ! command -v python3 >/dev/null 2>&1; then
+    printf "Error: build admission requires python3 and src/scripts/build-cache.py from the source checkout.\\n" >&2
+    return 1
+  fi
+  python3 "$helper" --cache-root "$CACHE_ROOT" run --cwd "$workdir" -- "$@" || return $?
   tui_module_done "$label" "$started"
 }
 
@@ -1816,6 +1821,7 @@ CUDASRC
 # ── Build ────────────────────────────────────────────────────────────────────
 build_ctox() {
   local source_root="$1"
+  BUILD_CACHE_HELPER="$source_root/src/scripts/build-cache.py"
   local cargo
   # Fleet guests install from prebuilt releases and have no toolchain; under
   # `set -e` an unguarded resolve_cargo kills the whole installer without a
