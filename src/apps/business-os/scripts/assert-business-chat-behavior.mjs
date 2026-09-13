@@ -392,8 +392,10 @@ try {
   });
 
   await scenario(page, 'first-request-from-past-date-stays-visible-today', {
-    count: 1, activeIndex: 0, selectedOffset: -4,
+    count: 0,
   }, async () => {
+    for (let day = 0; day < 4; day += 1) await page.locator('[data-chat-date-prev]').click();
+    await page.locator('[data-chat-new]').click();
     const input = page.locator('.ctox-chat-window.is-active textarea');
     await input.fill('Neue Aufgabe aus einem bisher leeren historischen Fenster.');
     await page.locator('.ctox-chat-window.is-active [data-chat-send]').click();
@@ -401,21 +403,23 @@ try {
       await window.chatHarness.waitFor(() => window.chatHarness.lastCommand);
       await window.chatHarness.waitForPaint();
       const state = JSON.parse(localStorage.getItem('ctox.businessOs.chat.v1'));
-      const chat = state.chats.find(chat => chat.id === 'chat_0');
+      const chat = state.chats.find(chat => chat.id === state.activeChatId);
       const now = new Date();
       const today = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
       const created = new Date(chat.createdAt);
       const createdDate = [created.getFullYear(), String(created.getMonth() + 1).padStart(2, '0'), String(created.getDate()).padStart(2, '0')].join('-');
       return { today, createdDate, selectedDate: state.selectedDate,
-        visible: Boolean(document.querySelector('[data-chat-id="chat_0"].ctox-chat-window.is-active')) };
+        visible: document.querySelector('.ctox-chat-window.is-active')?.dataset.chatId === chat.id };
     });
     expect(after.createdDate === after.today, 'first submission must date the new chat today even with a typed draft');
     expect(after.selectedDate === after.today && after.visible, 'first submission must keep the submitted chat visible on today');
   });
 
   await scenario(page, 'future-first-request-keeps-scheduled-date', {
-    count: 1, activeIndex: 0, selectedOffset: 2,
+    count: 0,
   }, async () => {
+    for (let day = 0; day < 2; day += 1) await page.locator('[data-chat-date-next]').click();
+    await page.locator('[data-chat-new]').click();
     await page.locator('.ctox-chat-window.is-active textarea').fill('Bitte erst am ausgewählten zukünftigen Tag ausführen.');
     await page.locator('.ctox-chat-window.is-active [data-chat-send]').click();
     const after = await page.evaluate(async () => {
@@ -424,7 +428,7 @@ try {
         return state.chats.some(chat => chat.messages.some(message => message.status === 'scheduled'));
       });
       const state = JSON.parse(localStorage.getItem('ctox.businessOs.chat.v1'));
-      return { future: state.chats.find(chat => chat.id === 'chat_0').createdAt > Date.now(),
+      return { future: state.chats.find(chat => chat.id === state.activeChatId).createdAt > Date.now(),
         dispatched: Boolean(window.chatHarness.lastCommand) };
     });
     expect(after.future && !after.dispatched, 'future drafts must remain scheduled without immediate dispatch');
@@ -1240,6 +1244,8 @@ function harnessHtml() {
       sessionStorage.clear();
       chatCollectionSubscribers = new Set();
       window.chatHarness.lastCommand = null;
+      window.chatHarness.dispatchCount = 0;
+      delete window.chatHarness.releaseCommand;
       const eventBus = createEventBus();
       const on = eventBus.on;
       const off = eventBus.off;
