@@ -1,15 +1,15 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
-import { CtoxResizer } from './shared/resizer.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
-import { createAppActions } from './shared/app-actions.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
+import { CtoxResizer } from './shared/resizer.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
+import { createAppActions } from './shared/app-actions.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
+} from './shared/app-lifecycle.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +17,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
+} from './shared/permissions.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
+} from './shared/branding.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
+} from './shared/presentation.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +41,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
-import { createDocumentsFacade } from './shared/documents.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
+} from './shared/shell-permissions-ui.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
+import { createDocumentsFacade } from './shared/documents.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,16 +51,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
+} from './shared/maintenance-state.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
+} from './shared/workspace-session.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
+} from './shared/taskbar-pins.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -68,9 +68,9 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -78,8 +78,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260913-shell-v2-authoritative-pin-retry-v382';
+} from './shared/startup-deadlines.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260913-shell-v2-authoritative-pin-retry-v383';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -98,7 +98,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260913-shell-v2-authoritative-pin-retry-v382';
+const APP_BUILD = '20260913-shell-v2-authoritative-pin-retry-v383';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
