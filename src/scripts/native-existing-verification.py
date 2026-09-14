@@ -152,7 +152,8 @@ def main():
         'research_without_browser_capture_persists_actual_sellify_outcomes': 1,
         'sellify_lookup_requires_readable_projection_for_all_selector_modes': 1,
         'sellify_lookup_keeps_selector_dedupe_limits_and_literal_fuzzy_matching': 1,
-        'provider_continuation': 5,
+        # Also matches the module path of two configured_research_binding cases.
+        'provider_continuation': 7,
         'configured_research_binding': 2,
         'provider_poll_': 2,
         'provider_command_recovers_across_process_restart_without_duplicate_sources': 1,
