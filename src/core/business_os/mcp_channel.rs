@@ -12652,30 +12652,59 @@ mod tests {
             "web_stack.person_research"
         ));
 
-        let malformed = propose_action(
+        // Supported transport carriers are normalized before typed validation.
+        // Keep every malformed-value probe otherwise valid so it cannot pass
+        // merely because a different field failed first.
+        let mut transported_payload = payload.clone();
+        transported_payload["fields"] = serde_json::json!({"item": ["firma_name"]});
+        transported_payload["include_private"] = serde_json::json!({"item": []});
+        transported_payload["auto_browser_capture"] = serde_json::json!("false");
+        let transported = propose_action(
             root,
             &test_context("business_os.propose_action"),
             "outbound-lead-generation",
             "web_stack.person_research",
             &serde_json::json!({
                 "record_id": "lead_1",
-                "payload": {
-                    "operation_id": "lead_1",
-                    "company": "Acme GmbH",
-                    "country": "DE",
-                    "mode": "new_record",
-                    "fields": { "item": ["firma_name"] },
-                    "include_private": "",
-                    "auto_browser_capture": "true"
-                }
+                "payload": transported_payload
             }),
-        )
-        .expect_err("transport-coerced person-research payload must be rejected before enqueue");
-        let typed = malformed
-            .downcast_ref::<BusinessOsMcpError>()
-            .context("typed payload validation error")?;
-        assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
-        assert_eq!(typed.field.as_deref(), Some("payload.fields"));
+        )?;
+        assert_eq!(
+            transported.payload["fields"],
+            serde_json::json!(["firma_name"])
+        );
+        assert_eq!(
+            transported.payload["include_private"],
+            serde_json::json!([])
+        );
+        assert_eq!(transported.payload["auto_browser_capture"], false);
+        for (field, invalid_value) in [
+            ("fields", serde_json::json!({"item": [42]})),
+            ("include_private", serde_json::json!("")),
+            ("auto_browser_capture", serde_json::json!("not-a-boolean")),
+        ] {
+            let mut malformed_payload = payload.clone();
+            malformed_payload[field] = invalid_value;
+            let malformed = propose_action(
+                root,
+                &test_context("business_os.propose_action"),
+                "outbound-lead-generation",
+                "web_stack.person_research",
+                &serde_json::json!({
+                    "record_id": "lead_1",
+                    "payload": malformed_payload
+                }),
+            )
+            .expect_err("invalid person-research field must be rejected before enqueue");
+            let typed = malformed
+                .downcast_ref::<BusinessOsMcpError>()
+                .context("typed payload validation error")?;
+            assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
+            assert_eq!(
+                typed.field.as_deref(),
+                Some(format!("payload.{field}").as_str())
+            );
+        }
 
         let execute_tool = tool_descriptors()
             .into_iter()
