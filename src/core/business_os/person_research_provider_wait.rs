@@ -327,6 +327,12 @@ mod tests {
         let phase = std::env::var("CTOX_PROVIDER_RECOVERY_TEST_PHASE")?;
         if phase == "first" {
             store::tests::seed_business_user(&root, "researcher", "chef")?;
+            // This isolated fixture has no native/browser peer to create its
+            // collection; optional projection writers otherwise skip the row.
+            crate::business_os::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                &root,
+                "business_commands",
+            )?;
             crate::inference::runtime_env::set_runtime_env_value(
                 &root,
                 "CTOX_WEB_SEARCH_PROVIDER",
@@ -383,6 +389,7 @@ mod tests {
         );
         assert_eq!(started, 1);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut terminal_state = Value::Null;
         loop {
             let current = canonical(&root);
             assert_ne!(
@@ -401,6 +408,20 @@ mod tests {
                 let stored = store::stored_rxdb_business_command_outcome(&conn, RECOVERY_ID)?;
                 let replicated =
                     store::load_rxdb_collection_record(&root, "business_commands", RECOVERY_ID)?;
+                let state = |projection: &Option<Value>| {
+                    json!({
+                        "present": projection.is_some(),
+                        "terminal_status": projection.as_ref()
+                            .and_then(|value| value["terminal_status"].as_str()),
+                        "execution_phase": projection.as_ref()
+                            .and_then(|value| value["execution_phase"].as_str()),
+                        "attempt": projection.as_ref()
+                            .and_then(|value| value["attempt"].as_u64()),
+                        "result_matches": projection.as_ref()
+                            .is_some_and(|value| value["result"] == current["result"]),
+                    })
+                };
+                terminal_state = json!({"local": state(&stored), "rxdb": state(&replicated)});
                 [stored, replicated].iter().all(|projection| {
                     projection.as_ref().is_some_and(|projection| {
                         projection["terminal_status"] == current["terminal_status"]
@@ -417,7 +438,7 @@ mod tests {
             }
             anyhow::ensure!(
                 std::time::Instant::now() < deadline,
-                "native recovery worker exceeded fixture deadline"
+                "native recovery worker exceeded fixture deadline; terminal projections: {terminal_state}"
             );
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
