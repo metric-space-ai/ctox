@@ -39468,6 +39468,12 @@ pub(super) mod tests {
                     "collection": collection, "documents": [old.clone()]
                 }),
             )?;
+            let legacy_before: String = with_store_connection(root, |conn| {
+                Ok(conn.query_row(
+                    "SELECT payload_json FROM business_records WHERE collection=?1 AND record_id='record-1'",
+                    [collection], |row| row.get(0),
+                )?)
+            })?;
             let conn = Connection::open(rxdb_store_path(root))?;
             conn.execute_batch(&format!(
                 "CREATE TABLE ctox_business_os__{collection}__v0 (id TEXT PRIMARY KEY, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"
@@ -39504,8 +39510,7 @@ pub(super) mod tests {
                 )?)
             })?;
             assert_eq!(
-                serde_json::from_str::<Value>(&legacy)?,
-                old,
+                legacy, legacy_before,
                 "readback must not mutate or backfill the legacy record"
             );
         }
