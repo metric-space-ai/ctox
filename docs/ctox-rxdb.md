@@ -749,6 +749,13 @@ persistence target. At boundary level that is the right message (data stays
 in CTOX's local SQLite, never an HTTP service); the precise file for RxDB
 documents is `runtime/business-os-rxdb.sqlite3` as above.
 
+Canonical terminal command projection and canonical outbox delivery replace
+the complete `business_commands.result` value rather than recursively merging
+it with a previous progress result. This removes obsolete provider-wait keys
+while preserving the existing merge behavior for unrelated document metadata.
+Other collections, nonterminal progress, revision generation, secret redaction
+and optional collection availability retain their existing behavior.
+
 ---
 
 ## 5. Connection lifecycle (end to end)

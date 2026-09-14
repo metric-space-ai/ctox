@@ -1,0 +1,26 @@
+{
+  "target_key": "linkedin-com",
+  "display_name": "LinkedIn via Bright Data",
+  "start_url": "https://www.linkedin.com/",
+  "target_kind": "prospect-research",
+  "status": "active",
+  "config": {
+    "expected_provider": "linkedin.com",
+    "async_provider": "brightdata",
+    "access_mode": "provider_api",
+    "adapter_version": "brightdata-v1",
+    "credential_ref": "ctox-secret://credentials/BRIGHTDATA_CREW_API_KEY",
+    "brightdata_collection_authorized": false,
+    "skip_probe": true,
+    "country_hints": ["DE", "AT", "CH"],
+    "expected_min_records": 1,
+    "record_key_fields": ["field", "source_url"],
+    "secret_values_allowed": false,
+    "allowed_domains": ["api.brightdata.com", "www.linkedin.com"]
+  },
+  "output_schema": {
+    "schema_key": "prospect.v1",
+    "primary_artifact_kind": "field_records_json",
+    "record_key_fields": ["field", "source_url"]
+  }
+}
