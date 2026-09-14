@@ -11730,12 +11730,55 @@ impl RxdbProjectionWriterCache {
         updated_at_ms: i64,
         payload: Value,
     ) -> anyhow::Result<()> {
+        self.upsert_with_merge(
+            collection,
+            record_id,
+            updated_at_ms,
+            payload,
+            RxdbProjectionMerge::Recursive,
+        )
+    }
+
+    /// Only callers holding the canonical terminal lifecycle document use this
+    /// boundary. Its result is a snapshot, not a patch to an earlier checkpoint.
+    pub(super) fn upsert_canonical_terminal_command(
+        &mut self,
+        command_id: &str,
+        updated_at_ms: i64,
+        canonical: Value,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            canonical["command_id"].as_str() == Some(command_id)
+                && canonical["execution_phase"] == "terminal"
+                && canonical["terminal_status"]
+                    .as_str()
+                    .is_some_and(crate::command_lifecycle::terminal_status_is_outcome)
+                && canonical.get("result").is_some(),
+            "canonical terminal command projection required"
+        );
+        self.upsert_with_merge(
+            "business_commands",
+            command_id,
+            updated_at_ms,
+            canonical,
+            RxdbProjectionMerge::ReplaceCommandResult,
+        )
+    }
+
+    fn upsert_with_merge(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+        merge: RxdbProjectionMerge,
+    ) -> anyhow::Result<()> {
         if !matches!(self.writers.get(collection), Some(Some(_))) {
             let writer = RxdbCollectionWriter::open(&self.root, collection)?;
             self.writers.insert(collection.to_string(), writer);
         }
         if let Some(Some(writer)) = self.writers.get_mut(collection) {
-            let result = writer.upsert(record_id, updated_at_ms, payload);
+            let result = writer.upsert_with_merge(record_id, updated_at_ms, payload, merge);
             if result.is_err() {
                 self.writers.remove(collection);
             }
@@ -11885,6 +11928,13 @@ impl BusinessProjectionWriter {
     }
 }
 
+#[derive(Clone, Copy)]
+enum RxdbProjectionMerge {
+    Recursive,
+    Replace,
+    ReplaceCommandResult,
+}
+
 struct RxdbCollectionWriter {
     conn: Connection,
     database_path: PathBuf,
@@ -11950,6 +12000,21 @@ impl RxdbCollectionWriter {
         updated_at_ms: i64,
         payload: Value,
     ) -> anyhow::Result<()> {
+        self.upsert_with_merge(
+            record_id,
+            updated_at_ms,
+            payload,
+            RxdbProjectionMerge::Recursive,
+        )
+    }
+
+    fn upsert_with_merge(
+        &mut self,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+        merge: RxdbProjectionMerge,
+    ) -> anyhow::Result<()> {
         upsert_rxdb_collection_record_with_writer(
             &self.conn,
             &self.table,
@@ -11960,7 +12025,7 @@ impl RxdbCollectionWriter {
             payload,
             self.demand_file_storage,
             false,
-            true,
+            merge,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -12046,7 +12111,7 @@ impl RxdbCollectionWriter {
             payload,
             demand_file_storage,
             false,
-            false,
+            RxdbProjectionMerge::Replace,
         )?;
         tx.commit()?;
         self.notify_committed_change();
@@ -12087,7 +12152,7 @@ impl RxdbCollectionWriter {
             payload,
             self.demand_file_storage,
             false,
-            true,
+            RxdbProjectionMerge::Recursive,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -12115,7 +12180,7 @@ impl RxdbCollectionWriter {
             }),
             self.demand_file_storage,
             true,
-            true,
+            RxdbProjectionMerge::Recursive,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -12140,7 +12205,7 @@ impl RxdbCollectionWriter {
             payload,
             self.demand_file_storage,
             deleted,
-            false,
+            RxdbProjectionMerge::Replace,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -12168,8 +12233,20 @@ fn upsert_rxdb_collection_record_with_writer(
     mut payload: Value,
     demand_file_storage: bool,
     deleted: bool,
-    merge_existing: bool,
+    merge: RxdbProjectionMerge,
 ) -> anyhow::Result<()> {
+    // Move the authoritative result out before recursively merging metadata.
+    // Reinserting it afterwards also preserves explicit null/scalar results.
+    let command_result = if matches!(merge, RxdbProjectionMerge::ReplaceCommandResult) {
+        Some(
+            payload
+                .as_object_mut()
+                .and_then(|object| object.remove("result"))
+                .context("canonical command projection is missing its result")?,
+        )
+    } else {
+        None
+    };
     let mut previous_revision = None;
     if let Some(existing_json) = conn
         .query_row(
@@ -12184,11 +12261,14 @@ fn upsert_rxdb_collection_record_with_writer(
                 .get("_rev")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            if merge_existing {
+            if !matches!(merge, RxdbProjectionMerge::Replace) {
                 merge_json_object_values(&mut existing, &payload);
                 payload = existing;
             }
         }
+    }
+    if let Some(result) = command_result {
+        payload["result"] = result;
     }
     let rev = next_direct_rxdb_revision(previous_revision.as_deref());
     if let Some(object) = payload.as_object_mut() {
@@ -18166,13 +18246,21 @@ pub(crate) fn deliver_business_command_outbox(root: &Path, limit: usize) -> anyh
                     .get("updated_at_ms")
                     .and_then(Value::as_i64)
                     .unwrap_or_else(|| now_ms() as i64);
-                upsert_rxdb_collection_record(
-                    root,
-                    "business_commands",
-                    &event.command_id,
-                    updated_at_ms,
-                    projection,
-                )
+                let mut writers = RxdbProjectionWriterCache::new(root);
+                if projection["execution_phase"] == "terminal" {
+                    writers.upsert_canonical_terminal_command(
+                        &event.command_id,
+                        updated_at_ms,
+                        projection,
+                    )
+                } else {
+                    writers.upsert(
+                        "business_commands",
+                        &event.command_id,
+                        updated_at_ms,
+                        projection,
+                    )
+                }
             }
             destination => anyhow::bail!("unsupported command outbox destination `{destination}`"),
         });
