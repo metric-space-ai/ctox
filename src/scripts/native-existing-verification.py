@@ -43,6 +43,9 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'business_os::mcp_channel::gateway_lifecycle_tests::',
            'business_os::mcp_channel::tests::gateway_',
            'business_os::mcp_channel::tests::person_research',
+           'outbound_lead_record_',
+           'outbound_lead_generation_exposes_native_scoped_person_research',
+           'canonical_terminal_command_result_replaces_checkpoint_preserving_metadata',
            'business_os::mcp_channel::tests::mcp_ignores_spoofed_context_role_without_gateway_trust',
            'install::tests::state_backup', 'install::tests::restore_state_backup',
            'install::tests::update_backup_retention', 'install::tests::aborted_updates']
@@ -97,7 +100,7 @@ def main():
                  'pr111': 'cc2ae0d6eb3ea68a7f611cedd2348f767b0b5570',
                  'pr139': 'd44132407bb28a5a0a7c5c4dfbc20eabc3368850',
                  'pr162': '4872366ec039dd49015c144d2a2ea57eeb226802',
-                 'pr163': '3c7ee64da582230494a4108668ce6127124ced8d',
+                 'pr163': '892d5c5800f9d6a6dd0becf0422b51201650bd7a',
                  'pr164': '554fd34bc1df2ad956842289e16207e3e85d6aef',
                  'pr165': '0d3eeecbe6c5d9f53183eca33fb8d414773975b4',
                  'pr113': 'fe33119aa0f960a4501bc68c22cafee2e1799c51',
@@ -163,6 +166,9 @@ def main():
         'credential_reveal_': 7,
         'augmented_research_envelope_matches_returned_payload_and_manifest': 1,
         'augmented_research_persistence_failure_is_not_reported_as_success': 1,
+        'outbound_lead_record_': 2,
+        'outbound_lead_generation_exposes_native_scoped_person_research': 1,
+        'canonical_terminal_command_result_replaces_checkpoint_preserving_metadata': 1,
     }
     if any(counts[key] != count for key, count in expected_counts.items()):
         raise RuntimeError(f'Required exact test counts differ: {counts}')
