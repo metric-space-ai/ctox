@@ -55,6 +55,19 @@ writeback, or browser acceptance. Native execution and a new live pipeline
 check remain required before claiming this repair deployed and verified.
 ### Outbound research source receipts
 
+Scalar `result.fields.person_*` updates without explicit `person_records`
+are grouped by their trimmed `person_key`. Only a unique exact contact key or
+ID match may receive those fields; contact order, shared profile URLs and names
+do not choose the recipient. Partial updates preserve unrelated contact values,
+CRM conflict handling and existing email verdicts. A new key needs its own name
+or email before it can create a separate contact. Ambiguous identities and
+unkeyed updates with several existing contacts remain unresolved with evidence
+retained, rather than being assigned to the first person. Legacy unkeyed
+single-contact outcomes and explicit person-record handling remain supported.
+These projection guards do not retroactively repair earlier assignments or
+establish source accuracy; actual writeback provenance and browser readback
+remain required for acceptance.
+
 The native person-research command retains a `sellify_lookup_runs` receipt in
 its final result and workspace envelope, including actual lookup success,
 `completed_empty`, or failure. Returned CRM record count and contributed field

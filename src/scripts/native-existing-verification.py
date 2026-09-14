@@ -46,6 +46,9 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'outbound_lead_record_',
            'outbound_lead_generation_exposes_native_scoped_person_research',
            'canonical_terminal_command_result_replaces_checkpoint_preserving_metadata',
+           'keyed_scalar_person_fields_',
+           'terminal_research_outcome_projects_',
+           'known_sellify_person_wins_role_conflict_and_research_merges_into_it',
            'business_os::mcp_channel::tests::mcp_ignores_spoofed_context_role_without_gateway_trust',
            'install::tests::state_backup', 'install::tests::restore_state_backup',
            'install::tests::update_backup_retention', 'install::tests::aborted_updates']
@@ -169,6 +172,9 @@ def main():
         'outbound_lead_record_': 2,
         'outbound_lead_generation_exposes_native_scoped_person_research': 1,
         'canonical_terminal_command_result_replaces_checkpoint_preserving_metadata': 1,
+        'keyed_scalar_person_fields_': 5,
+        'terminal_research_outcome_projects_': 2,
+        'known_sellify_person_wins_role_conflict_and_research_merges_into_it': 1,
     }
     if any(counts[key] != count for key, count in expected_counts.items()):
         raise RuntimeError(f'Required exact test counts differ: {counts}')

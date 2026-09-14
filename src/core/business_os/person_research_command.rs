@@ -3,7 +3,7 @@ use ctox_web_stack::sources::{Country, FieldKey, ResearchMode};
 use ctox_web_stack::{KnownPersonRecord, PersonResearchRequest};
 use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -577,6 +577,7 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
     );
     let mut contact = contacts
         .first()
+        .filter(|_| contacts.len() <= 1)
         .filter(|value| value.is_object())
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
@@ -599,6 +600,9 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             .unwrap_or_default(),
     );
     let mut researched_field_keys = Vec::new();
+    let mut keyed_person_fields: BTreeMap<String, serde_json::Map<String, Value>> = BTreeMap::new();
+    let mut unresolved_person_fields = HashSet::new();
+    let mut has_unkeyed_person_fields = false;
 
     for (field_key, field) in outcome
         .get("fields")
@@ -615,7 +619,22 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
         researched_field_keys.push(field_key.clone());
         let value = &restore_german_spelling(value, field);
         if field_key.starts_with("person_") && !has_person_records {
-            contact[field_key] = value.clone();
+            if let Some(person_key) = field
+                .get("person_key")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+            {
+                keyed_person_fields
+                    .entry(person_key.to_string())
+                    .or_default()
+                    .insert(field_key.clone(), value.clone());
+            } else if contacts.len() <= 1 {
+                has_unkeyed_person_fields = true;
+                contact[field_key] = value.clone();
+            } else {
+                unresolved_person_fields.insert(field_key.clone());
+            }
         } else if !field_key.starts_with("person_") {
             data[field_key] = match field_key.as_str() {
                 "firma_land" => normalize_country_to_iso2(value),
@@ -697,8 +716,9 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             person_records,
             &lead_locations,
         );
-    } else if let Some(normalized) =
-        normalize_researched_contact_with_context(contact, &lead_locations)
+    } else if let Some(normalized) = has_unkeyed_person_fields
+        .then(|| normalize_researched_contact_with_context(contact, &lead_locations))
+        .flatten()
     {
         let normalized = with_stable_contact_id(
             existing.get("id").and_then(Value::as_str).unwrap_or("lead"),
@@ -724,6 +744,13 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             contacts.push(normalized);
         }
     }
+    merge_keyed_person_fields(
+        existing.get("id").and_then(Value::as_str).unwrap_or("lead"),
+        &mut contacts,
+        keyed_person_fields,
+        &lead_locations,
+        &mut unresolved_person_fields,
+    );
     deduplicate_contacts(&mut contacts);
     let contact_ids = contacts
         .iter()
@@ -741,8 +768,9 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
     let unverified_field_keys = researched_field_keys
         .iter()
         .filter(|field_key| {
-            independent_research_evidence_count(&evidence, field_key)
-                < required_independent_sources(field_key)
+            unresolved_person_fields.contains(*field_key)
+                || independent_research_evidence_count(&evidence, field_key)
+                    < required_independent_sources(field_key)
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -771,6 +799,92 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             "authenticated_source_capture_runs": outcome.get("authenticated_source_capture_runs").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
         }
     })
+}
+
+/// Scalar person fields have the same identity boundary as explicit records.
+/// Never borrow the first contact, or match a keyed update through a profile
+/// that may itself have been assigned to the wrong person by an earlier run.
+fn merge_keyed_person_fields(
+    lead_id: &str,
+    contacts: &mut Vec<Value>,
+    groups: BTreeMap<String, serde_json::Map<String, Value>>,
+    locations: &[String],
+    unresolved: &mut HashSet<String>,
+) {
+    for (person_key, fields) in groups {
+        let matches = contacts
+            .iter()
+            .enumerate()
+            .filter(|(_, contact)| {
+                ["person_key", "id"].iter().any(|key| {
+                    contact.get(*key).and_then(Value::as_str).map(str::trim)
+                        == Some(person_key.as_str())
+                })
+            })
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if matches.len() > 1 {
+            unresolved.extend(fields.keys().cloned());
+            continue;
+        }
+        let mut candidate = matches
+            .first()
+            .map(|index| contacts[*index].clone())
+            .unwrap_or_else(|| serde_json::json!({"person_key": person_key}));
+        for (field, value) in &fields {
+            candidate[field] = value.clone();
+        }
+        let Some(normalized) = normalize_researched_contact_with_context(candidate, locations)
+        else {
+            unresolved.extend(fields.keys().cloned());
+            continue;
+        };
+        if let Some(index) = matches.first().copied() {
+            // Normalization derives aliases. Copy only aliases affected by the
+            // supplied fields so a partial update cannot clear other values.
+            let mut update = serde_json::Map::new();
+            for field in fields.keys() {
+                if let Some(value) = normalized.get(field) {
+                    update.insert(field.clone(), value.clone());
+                }
+            }
+            for (alias, inputs) in [
+                ("name", &["person_vorname", "person_nachname"][..]),
+                ("email", &["person_email"][..]),
+                ("phone", &["person_telefon"][..]),
+                ("position", &["person_position"][..]),
+                ("role", &["person_funktion", "person_position"][..]),
+                (
+                    "person_funktion_candidate",
+                    &["person_funktion", "person_position"][..],
+                ),
+            ] {
+                if inputs.iter().any(|input| fields.contains_key(*input)) {
+                    if let Some(value) = normalized.get(alias) {
+                        update.insert(alias.to_string(), value.clone());
+                    }
+                }
+            }
+            let mut update = Value::Object(update);
+            keep_email_verdict(&contacts[index], &mut update);
+            if contacts[index].get("crm_known").and_then(Value::as_bool) == Some(true) {
+                merge_research_into_known_contact(&mut contacts[index], &update);
+            } else {
+                merge_json_object_values(&mut contacts[index], &update);
+            }
+        } else if !normalized_contact_name(&normalized).is_empty()
+            || !contact_string(&normalized, &["person_email", "email"]).is_empty()
+        {
+            let mut normalized = normalized;
+            normalized["id"] = Value::String(format!(
+                "contact_{}",
+                javascript_fingerprint(&format!("{lead_id}|person-key|{person_key}"))
+            ));
+            contacts.push(normalized);
+        } else {
+            unresolved.extend(fields.keys().cloned());
+        }
+    }
 }
 
 /// Collapse contact rows that are the same record. Measured on the AKEMI lead
@@ -3141,6 +3255,190 @@ mod tests {
         assert_eq!(document["research_error"], Value::Null);
         assert_eq!(document["research_updated_at_ms"], 2_000);
         assert_eq!(document["payload"]["research_error"], Value::Null);
+    }
+
+    #[test]
+    fn keyed_scalar_person_fields_preserve_alias_only_existing_contact() {
+        let original = serde_json::json!({
+            "id": "contact-roger", "person_key": "roger",
+            "name": "Roger Wintzen", "email": "roger@example.test",
+            "phone": "123", "position": "Director", "role": "Geschäftsführung"
+        });
+        let existing = serde_json::json!({"id": "lead", "contacts": [original.clone()]});
+        let outcome = serde_json::json!({"fields": {"person_linkedin": {
+            "person_key": "roger", "value": "https://www.linkedin.com/in/roger"
+        }}});
+        let patch = outbound_lead_generation_research_outcome_patch(&existing, &outcome, 1);
+        let contact = &patch["contacts"][0];
+        for (key, value) in original.as_object().unwrap() {
+            assert_eq!(&contact[key], value, "{key}");
+        }
+        assert_eq!(
+            contact["person_linkedin"],
+            "https://www.linkedin.com/in/roger"
+        );
+    }
+
+    #[test]
+    fn keyed_scalar_person_fields_keep_distinct_keys_with_identical_attributes() {
+        let mut existing = serde_json::json!({"id": "lead", "contacts": []});
+        for key in ["key-a", "key-b"] {
+            let outcome = serde_json::json!({"fields": {
+                "person_vorname": {"person_key": key, "value": "Alex"},
+                "person_nachname": {"person_key": key, "value": "Muster"},
+                "person_email": {"person_key": key, "value": "shared@example.test"},
+                "person_linkedin": {"person_key": key, "value": "https://www.linkedin.com/in/shared"}
+            }});
+            let patch = outbound_lead_generation_research_outcome_patch(&existing, &outcome, 1);
+            existing["contacts"] = patch["contacts"].clone();
+        }
+        let contacts = existing["contacts"].as_array().unwrap();
+        assert_eq!(contacts.len(), 2);
+        assert_eq!(contacts[0]["person_key"], "key-a");
+        assert_eq!(contacts[1]["person_key"], "key-b");
+        assert_ne!(contacts[0]["id"], contacts[1]["id"]);
+    }
+
+    #[test]
+    fn keyed_scalar_person_fields_follow_identity_in_either_contact_order() {
+        let profile = "https://www.linkedin.com/in/roger-wintzen";
+        for reverse in [false, true] {
+            for crm_known in [false, true] {
+                let arie = serde_json::json!({
+                    "id": "contact-arie", "person_key": "sellify-person-60296",
+                    "person_vorname": "Arie", "person_nachname": "den Boer",
+                    "person_email": "arie@example.test", "email": "arie@example.test",
+                    "crm_known": crm_known, "keep": "arie"
+                });
+                let roger = serde_json::json!({
+                    "id": "contact-roger", "person_key": "sellify-person-60295",
+                    "person_vorname": "Roger", "person_nachname": "Wintzen",
+                    "person_email": "roger@example.test", "email": "roger@example.test",
+                    "person_email_validation": "invalid",
+                    "phone": "123", "position": "existing position",
+                    "crm_known": crm_known, "keep": "roger"
+                });
+                let contacts = if reverse {
+                    vec![roger.clone(), arie.clone()]
+                } else {
+                    vec![arie.clone(), roger.clone()]
+                };
+                let existing = serde_json::json!({
+                    "id": "lead-identity", "contacts": contacts,
+                    "selected_contact_ids": ["contact-arie", "contact-roger"]
+                });
+                let outcome = serde_json::json!({
+                    "person_records": [],
+                    "fields": {
+                        "person_linkedin": {
+                            "person_key": " sellify-person-60295 ", "value": profile,
+                            "candidates": [{"value": profile, "person_key": "sellify-person-60295",
+                                "source_id": "linkedin.com", "source_url": profile}]
+                        },
+                        "person_titel": {
+                            "person_key": "sellify-person-60296", "value": "MBA"
+                        },
+                        "person_email_validation": {
+                            "person_key": "sellify-person-60295", "value": "no_match"
+                        }
+                    }
+                });
+                let patch = outbound_lead_generation_research_outcome_patch(&existing, &outcome, 1);
+                let rows = patch["contacts"].as_array().unwrap();
+                assert_eq!(rows.len(), 2);
+                let a = rows.iter().find(|row| row["id"] == "contact-arie").unwrap();
+                let r = rows
+                    .iter()
+                    .find(|row| row["id"] == "contact-roger")
+                    .unwrap();
+                assert!(a.get("person_linkedin").is_none(), "{reverse}/{crm_known}");
+                assert_eq!(a["person_titel"], "MBA");
+                assert_eq!(a["keep"], "arie");
+                assert_eq!(r["person_linkedin"], profile);
+                assert_eq!(r["person_email_validation"], "invalid");
+                for key in [
+                    "person_key",
+                    "person_email",
+                    "email",
+                    "phone",
+                    "position",
+                    "keep",
+                ] {
+                    assert_eq!(r[key], roger[key], "{key}: {reverse}/{crm_known}");
+                }
+                assert_eq!(
+                    patch["selected_contact_ids"],
+                    existing["selected_contact_ids"]
+                );
+                assert!(patch["evidence"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry["person_key"] == "sellify-person-60295"
+                        && entry["value"] == profile));
+            }
+        }
+    }
+
+    #[test]
+    fn keyed_scalar_person_fields_preserve_unresolved_assignments() {
+        let contacts = serde_json::json!([
+            {"id": "contact-arie", "person_key": "arie",
+             "person_vorname": "Arie", "person_nachname": "Boer"},
+            {"id": "contact-roger", "person_key": "roger",
+             "person_vorname": "Roger", "person_nachname": "Wintzen"}
+        ]);
+        for key in [Value::Null, serde_json::json!("unknown")] {
+            let existing = serde_json::json!({"id": "lead", "contacts": contacts});
+            let outcome = serde_json::json!({"fields": {"person_linkedin": {
+                "person_key": key, "value": "https://www.linkedin.com/in/unknown",
+                "candidates": [{"source_id": "linkedin.com",
+                    "source_url": "https://www.linkedin.com/in/unknown"}]
+            }}});
+            let patch = outbound_lead_generation_research_outcome_patch(&existing, &outcome, 1);
+            assert_eq!(patch["contacts"], contacts);
+            assert_eq!(patch["research_status"], "needs_review");
+            assert_eq!(
+                patch["payload"]["unverified_field_keys"],
+                serde_json::json!(["person_linkedin"])
+            );
+            assert_eq!(patch["evidence"].as_array().unwrap().len(), 1);
+        }
+        // The requested key matches one row's id and a different row's key.
+        let mut ambiguous = contacts.clone();
+        ambiguous[0]["id"] = serde_json::json!("roger");
+        let existing = serde_json::json!({"id": "lead", "contacts": ambiguous});
+        let outcome = serde_json::json!({"fields": {"person_linkedin": {
+            "person_key": "roger", "value": "https://www.linkedin.com/in/roger"
+        }}});
+        let patch = outbound_lead_generation_research_outcome_patch(&existing, &outcome, 1);
+        assert_eq!(patch["contacts"], ambiguous);
+        assert_eq!(patch["research_status"], "needs_review");
+    }
+
+    #[test]
+    fn keyed_scalar_person_fields_do_not_merge_new_identity_by_shared_profile() {
+        let profile = "https://www.linkedin.com/in/roger";
+        let arie = serde_json::json!({
+            "id": "arie", "person_key": "arie",
+            "person_vorname": "Arie", "person_nachname": "Boer",
+            "person_linkedin": profile
+        });
+        let existing = serde_json::json!({"id": "lead", "contacts": [arie.clone()]});
+        let outcome = serde_json::json!({"fields": {
+            "person_vorname": {"person_key": "roger", "value": "Roger"},
+            "person_nachname": {"person_key": "roger", "value": "Wintzen"},
+            "person_linkedin": {"person_key": "roger", "value": profile}
+        }});
+        let patch = outbound_lead_generation_research_outcome_patch(&existing, &outcome, 1);
+        let rows = patch["contacts"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["person_vorname"], "Arie");
+        assert_eq!(rows[0]["person_key"], "arie");
+        assert_eq!(rows[1]["person_key"], "roger");
+        assert_eq!(rows[1]["name"], "Roger Wintzen");
+        assert_eq!(rows[1]["person_linkedin"], profile);
+        assert_ne!(rows[0]["id"], rows[1]["id"]);
     }
 
     #[test]
