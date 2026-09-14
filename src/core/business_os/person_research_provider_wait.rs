@@ -393,8 +393,24 @@ mod tests {
             );
             let done = if phase == "first" {
                 current["result"]["status"] == "awaiting_provider"
+            } else if current["terminal_status"] == "completed" {
+                // Core completion precedes the final lifecycle mirrors. Let
+                // this successful phase finish both writes before exiting its
+                // process; the later terminal phase must remain a true no-op.
+                let conn = store::open_store(&root)?;
+                let stored = store::stored_rxdb_business_command_outcome(&conn, RECOVERY_ID)?;
+                let replicated =
+                    store::load_rxdb_collection_record(&root, "business_commands", RECOVERY_ID)?;
+                [stored, replicated].iter().all(|projection| {
+                    projection.as_ref().is_some_and(|projection| {
+                        projection["terminal_status"] == current["terminal_status"]
+                            && projection["execution_phase"] == current["execution_phase"]
+                            && projection["attempt"] == current["attempt"]
+                            && projection["result"] == current["result"]
+                    })
+                })
             } else {
-                current["terminal_status"] == "completed"
+                false
             };
             if done {
                 return Ok(());
