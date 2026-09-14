@@ -2739,6 +2739,7 @@ mod tests {
                     "auto_browser_capture": false,
                 }),
                 &Value::Null,
+                None,
             )?;
             assert!(result.get("workspace_error").is_none());
             assert_eq!(
