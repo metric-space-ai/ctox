@@ -28,6 +28,14 @@ owned, expiring lease requirement for ordinary worker commands.
 
 ### Outbound MCP research record identity
 
+Single-record reads of `outbound_lead_generation_leads`, including MCP reads
+and research record binding, use the native RxDB document that browser edits
+and native research writebacks update. An older `business_records` row cannot
+shadow it. Missing or deleted authoritative leads remain absent, and read
+errors propagate rather than selecting legacy data. Other collections keep
+their existing ownership and read precedence. This read correction does not
+migrate records or establish collection-list freshness or browser acceptance.
+
 `web_stack.person_research` binds its proposal to the raw persisted
 `outbound_lead_generation_leads` record, not the MCP descriptor's derived title.
 Runtime leads use top-level `name` and/or `data.firma_name`; legacy `company`,

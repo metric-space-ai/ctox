@@ -12508,6 +12508,28 @@ mod tests {
         Ok(())
     }
 
+    fn seed_person_research_leads(root: &Path, body: Value) -> anyhow::Result<()> {
+        fs::create_dir_all(root.join("runtime"))?;
+        let conn = rusqlite::Connection::open(store::rxdb_store_path(root))?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS ctox_business_os__outbound_lead_generation_leads__v0 (
+                id TEXT PRIMARY KEY, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL
+            )",
+        )?;
+        drop(conn);
+        for record in body["documents"].as_array().context("fixture documents")? {
+            let id = record["id"].as_str().context("fixture lead id")?;
+            store::upsert_rxdb_collection_record(
+                root,
+                "outbound_lead_generation_leads",
+                id,
+                2_000,
+                record.clone(),
+            )?;
+        }
+        Ok(())
+    }
+
     #[test]
     fn outbound_lead_generation_exposes_native_scoped_person_research() -> anyhow::Result<()> {
         let temp = tempdir()?;
@@ -12521,7 +12543,7 @@ mod tests {
             Some(serde_json::json!({ "public": true })),
         )?;
         seed_default_mcp_admin(root)?;
-        store::push_collection_records(
+        seed_person_research_leads(
             root,
             serde_json::json!({
                 "collection": "outbound_lead_generation_leads",
@@ -12722,6 +12744,18 @@ mod tests {
                 root,
                 serde_json::json!({
                     "collection": "outbound_lead_generation_leads",
+                    "documents": [{
+                        "id": record_id,
+                        "company": "Obsolete company identity",
+                        "country": "DE",
+                        "updated_at_ms": 1
+                    }]
+                }),
+            )?;
+            seed_person_research_leads(
+                root,
+                serde_json::json!({
+                    "collection": "outbound_lead_generation_leads",
                     "documents": [record]
                 }),
             )?;
@@ -12775,7 +12809,7 @@ mod tests {
             "workspace": "test-workspace",
             "data": { "firma_name": "Beiersdorf Manufacturing Leipzig GmbH" }
         });
-        store::push_collection_records(
+        seed_person_research_leads(
             root,
             serde_json::json!({
                 "collection": "outbound_lead_generation_leads",
@@ -12861,7 +12895,7 @@ mod tests {
             } else {
                 record[path.trim_start_matches('/')] = value;
             }
-            store::push_collection_records(
+            seed_person_research_leads(
                 root,
                 serde_json::json!({
                     "collection": "outbound_lead_generation_leads",
@@ -12910,7 +12944,7 @@ mod tests {
             Some(serde_json::json!({ "public": true })),
         )?;
         seed_default_mcp_admin(root)?;
-        store::push_collection_records(
+        seed_person_research_leads(
             root,
             serde_json::json!({
                 "collection": "outbound_lead_generation_leads",

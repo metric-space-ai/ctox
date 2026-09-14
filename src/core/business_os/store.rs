@@ -10973,6 +10973,13 @@ pub fn pull_collection_record(
         return Ok(None);
     }
     match collection {
+        "outbound_lead_generation_leads" => {
+            // Browser edits and native research writebacks commit to RxDB.
+            // A legacy business_records row must neither shadow that result
+            // nor resurrect a lead missing from its authoritative store.
+            return Ok(load_rxdb_collection_record(root, collection, record_id)?
+                .filter(|record| record.get("_deleted").and_then(Value::as_bool) != Some(true)));
+        }
         "ctox_runtime_settings" if record_id == "runtime-settings" => {
             return Ok(Some(runtime_settings_for_rxdb(root)?));
         }
@@ -39352,6 +39359,113 @@ pub(super) mod tests {
                 .pointer("/documents/0/status")
                 .and_then(Value::as_str),
             Some("completed")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_lead_record_reads_current_rxdb_without_changing_other_owners() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        for collection in ["outbound_lead_generation_leads", "customer_accounts"] {
+            let old = serde_json::json!({
+                "id": "record-1", "command_id": "old-command", "updated_at_ms": 1,
+                "contacts": [{"person_key": "old-person"}], "retained": "legacy"
+            });
+            push_collection_records(
+                root,
+                serde_json::json!({
+                    "collection": collection, "documents": [old.clone()]
+                }),
+            )?;
+            let conn = Connection::open(rxdb_store_path(root))?;
+            conn.execute_batch(&format!(
+                "CREATE TABLE ctox_business_os__{collection}__v0 (id TEXT PRIMARY KEY, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"
+            ))?;
+            drop(conn);
+            upsert_rxdb_collection_record(
+                root,
+                collection,
+                "record-1",
+                2_000,
+                serde_json::json!({
+                    "id": "record-1", "command_id": "current-research",
+                    "research_status": "needs_review",
+                    "contacts": [{"person_key": "first"}, {"person_key": "second"}],
+                    "retained": "current"
+                }),
+            )?;
+
+            let read = pull_collection_record(root, collection, "record-1")?
+                .context("expected authoritative record")?;
+            if collection == "outbound_lead_generation_leads" {
+                assert_eq!(read["command_id"], "current-research");
+                assert_eq!(read["research_status"], "needs_review");
+                assert_eq!(read["contacts"].as_array().unwrap().len(), 2);
+                assert_eq!(read["retained"], "current");
+            } else {
+                assert_eq!(read["command_id"], "old-command");
+                assert_eq!(read["retained"], "legacy");
+            }
+            let legacy: String = with_store_connection(root, |conn| {
+                Ok(conn.query_row(
+                    "SELECT payload_json FROM business_records WHERE collection=?1 AND record_id='record-1'",
+                    [collection], |row| row.get(0),
+                )?)
+            })?;
+            assert_eq!(
+                serde_json::from_str::<Value>(&legacy)?,
+                old,
+                "readback must not mutate or backfill the legacy record"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_lead_record_does_not_resurrect_missing_or_deleted_rxdb_lead() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let collection = "outbound_lead_generation_leads";
+        push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": collection,
+                "documents": [{"id": "record-1", "name": "Legacy lead", "updated_at_ms": 1}]
+            }),
+        )?;
+        assert!(
+            pull_collection_record(root, collection, "record-1")?.is_none(),
+            "missing authoritative storage must not select the legacy row"
+        );
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute_batch(
+            "CREATE TABLE ctox_business_os__outbound_lead_generation_leads__v0 (
+                id TEXT PRIMARY KEY, data TEXT NOT NULL
+            )",
+        )?;
+        assert!(
+            pull_collection_record(root, collection, "record-1")?.is_none(),
+            "confirmed absence must not select the legacy row"
+        );
+        conn.execute(
+            "INSERT INTO ctox_business_os__outbound_lead_generation_leads__v0 (id,data) VALUES ('record-1',?1)",
+            [serde_json::json!({"id":"record-1","_deleted":true,"updated_at_ms":3_000}).to_string()],
+        )?;
+        assert!(
+            pull_collection_record(root, collection, "record-1")?.is_none(),
+            "a tombstone must not resurrect the legacy row"
+        );
+        conn.execute(
+            "UPDATE ctox_business_os__outbound_lead_generation_leads__v0 SET data='invalid-json' WHERE id='record-1'",
+            [],
+        )?;
+        assert!(
+            pull_collection_record(root, collection, "record-1").is_err(),
+            "an unreadable authoritative record must not select the legacy row"
         );
         Ok(())
     }
