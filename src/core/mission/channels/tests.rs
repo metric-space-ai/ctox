@@ -6023,6 +6023,124 @@ fn business_control_claim_suppresses_uncertain_replay_and_returns_terminal_resul
 }
 
 #[test]
+fn business_control_concurrent_claim_preserves_single_owner() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    drop(open_channel_db(&resolve_db_path(root.path(), None))?);
+    let barrier = std::sync::Barrier::new(2);
+    let outcomes = std::thread::scope(|scope| {
+        let run = || {
+            barrier.wait();
+            claim_business_control_command(
+                root.path(),
+                business_command_claim("concurrent-control", "sha256:control"),
+            )
+        };
+        let first = scope.spawn(run);
+        let second = scope.spawn(run);
+        [first.join().unwrap(), second.join().unwrap()]
+    });
+    let mut dispositions = outcomes
+        .into_iter()
+        .map(|outcome| outcome.map(|claim| claim.disposition))
+        .collect::<Result<Vec<_>>>()?;
+    dispositions.sort_unstable();
+    assert_eq!(dispositions, ["new", "uncertain"]);
+    let conn = open_channel_db(&resolve_db_path(root.path(), None))?;
+    let counts: (i64, i64, i64, i64) = conn.query_row(
+        "SELECT
+            (SELECT COUNT(*) FROM business_command_aggregates WHERE command_id = 'concurrent-control'),
+            (SELECT COUNT(*) FROM business_command_effects WHERE command_id = 'concurrent-control'),
+            (SELECT COUNT(*) FROM business_command_transitions WHERE command_id = 'concurrent-control'),
+            (SELECT COUNT(*) FROM business_command_outbox WHERE command_id = 'concurrent-control')",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(counts, (1, 1, 1, 2));
+    let conflict = claim_business_control_command(
+        root.path(),
+        business_command_claim("concurrent-control", "sha256:changed"),
+    )
+    .err()
+    .expect("changed intent must still conflict");
+    assert!(conflict.to_string().contains("idempotency_conflict"));
+    Ok(())
+}
+
+#[test]
+fn business_command_concurrent_worker_result_preserves_immutable_attempt() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let claimed = claim_business_command_with_queue(
+        root.path(),
+        business_command_claim("concurrent-result", "sha256:result"),
+        QueueTaskCreateRequest {
+            title: "Concurrent result".into(),
+            prompt: "Persist the worker result once.".into(),
+            thread_key: "business-os/tests/concurrent-result".into(),
+            workspace_root: Some(root.path().display().to_string()),
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: Some(json!({"idempotency_key": "concurrent-result"})),
+        },
+    )?;
+    let task_id = claimed.task.message_key;
+    lease_queue_task(root.path(), &task_id, "ctox-test")?;
+    for phase in ["leased", "running"] {
+        transition_business_command_for_task(
+            root.path(),
+            &task_id,
+            phase,
+            None,
+            None,
+            None,
+            "test worker starts",
+        )?;
+    }
+    let counts = || -> Result<(i64, i64, i64, i64)> {
+        let conn = open_channel_db(&resolve_db_path(root.path(), None))?;
+        Ok(conn.query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM business_command_results WHERE command_id = 'concurrent-result'),
+                (SELECT COUNT(*) FROM business_command_transitions WHERE command_id = 'concurrent-result'),
+                (SELECT COUNT(*) FROM business_command_outbox WHERE command_id = 'concurrent-result'),
+                (SELECT projection_version FROM business_command_aggregates WHERE command_id = 'concurrent-result')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?)
+    };
+    let before = counts()?;
+    let barrier = std::sync::Barrier::new(2);
+    let outcomes = std::thread::scope(|scope| {
+        let run = || {
+            barrier.wait();
+            persist_business_command_worker_result(root.path(), &task_id, "same result")
+        };
+        let first = scope.spawn(run);
+        let second = scope.spawn(run);
+        [first.join().unwrap(), second.join().unwrap()]
+    });
+    for outcome in outcomes {
+        assert!(outcome?);
+    }
+    let after = counts()?;
+    assert_eq!(after, (1, before.1 + 1, before.2 + 2, before.3 + 1));
+    let projection = business_command_projection(root.path(), "concurrent-result")?;
+    assert_eq!(projection["execution_phase"], "awaiting_review");
+    assert_eq!(projection["terminal_status"], "none");
+    assert_eq!(projection["result"]["user_reply"], "same result");
+    let conflict =
+        persist_business_command_worker_result(root.path(), &task_id, "different result")
+            .expect_err("persisted attempt must remain immutable");
+    assert!(conflict.to_string().contains("immutable"));
+    assert_eq!(
+        counts()?,
+        after,
+        "conflicting reply must not mutate durable state"
+    );
+    Ok(())
+}
+
+#[test]
 fn business_control_progress_is_durable_and_idempotent() {
     let root = business_command_test_root("ctox-business-command-control-progress");
     claim_business_control_command(

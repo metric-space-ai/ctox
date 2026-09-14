@@ -756,8 +756,12 @@ pub(crate) fn claim_business_control_command(
     claim: BusinessCommandClaimRequest,
 ) -> Result<BusinessCommandControlClaim> {
     let db_path = resolve_db_path(root, None);
-    let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let mut conn = open_channel_db(&db_path).context("open database for control command claim")?;
+    // Serialize admission before reading the idempotency record. Two deferred
+    // readers cannot safely upgrade their snapshots to claim the same command.
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .context("reserve database writer for control command claim")?;
     let existing = tx
         .query_row(
             "SELECT idempotency_key, payload_hash, terminal_status, result_json, execution_phase
@@ -774,7 +778,8 @@ pub(crate) fn claim_business_control_command(
                 ))
             },
         )
-        .optional()?;
+        .optional()
+        .context("read existing control command claim")?;
     if let Some((idempotency_key, payload_hash, terminal_status, result_json, phase)) = existing {
         anyhow::ensure!(
             idempotency_key == claim.idempotency_key && payload_hash == claim.payload_hash,
@@ -784,7 +789,8 @@ pub(crate) fn claim_business_control_command(
             .as_deref()
             .map(serde_json::from_str)
             .transpose()?;
-        tx.commit()?;
+        tx.commit()
+            .context("commit existing control command claim")?;
         return Ok(BusinessCommandControlClaim {
             disposition: if phase == "terminal" {
                 "terminal"
@@ -814,7 +820,8 @@ pub(crate) fn claim_business_control_command(
             claim.created_at_ms,
             now_ms,
         ],
-    )?;
+    )
+    .context("insert control command aggregate")?;
     tx.execute(
         "INSERT INTO business_command_effects
             (command_id, effect_key, status, claimed_at_ms, updated_at_ms)
@@ -824,13 +831,15 @@ pub(crate) fn claim_business_control_command(
             format!("control:{}", claim.command_type),
             now_ms,
         ],
-    )?;
+    )
+    .context("insert control command effect")?;
     tx.execute(
         "INSERT INTO business_command_transitions
             (command_id, projection_version, from_phase, to_phase, terminal_status, reason, evidence_json, created_at_ms)
          VALUES (?1, 1, 'local', 'accepted', 'none', 'durable control claim', '{}', ?2)",
         params![claim.command_id, now_ms],
-    )?;
+    )
+    .context("insert control command claim transition")?;
     insert_business_command_outbox_rows(
         &tx,
         &claim.command_id,
@@ -844,8 +853,9 @@ pub(crate) fn claim_business_control_command(
             "projection_version": 1,
         }),
         now_ms,
-    )?;
-    tx.commit()?;
+    )
+    .context("insert control command claim outbox")?;
+    tx.commit().context("commit new control command claim")?;
     Ok(BusinessCommandControlClaim {
         disposition: "new",
         result: None,
@@ -1538,8 +1548,12 @@ pub(crate) fn persist_business_command_worker_result(
     user_reply: &str,
 ) -> Result<bool> {
     let db_path = resolve_db_path(root, None);
-    let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let mut conn = open_channel_db(&db_path).context("open database for typed worker result")?;
+    // Acquire the writer before inspecting the attempt and its immutable result,
+    // so a concurrent completion cannot invalidate a deferred read snapshot.
+    let tx = conn
+        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .context("reserve database writer for typed worker result")?;
     let row = tx
         .query_row(
             "SELECT aggregate_row.command_id, aggregate_row.execution_phase,
@@ -1557,13 +1571,15 @@ pub(crate) fn persist_business_command_worker_result(
                 ))
             },
         )
-        .optional()?;
+        .optional()
+        .context("read command attempt for typed worker result")?;
     let Some((command_id, from_phase, version, attempt)) = row else {
-        tx.commit()?;
+        tx.commit().context("commit absent command result lookup")?;
         return Ok(false);
     };
     if from_phase == "terminal" {
-        tx.commit()?;
+        tx.commit()
+            .context("commit terminal command result replay")?;
         return Ok(true);
     }
     crate::command_lifecycle::validate_execution_phase_transition(&from_phase, "awaiting_review")?;
@@ -1573,13 +1589,15 @@ pub(crate) fn persist_business_command_worker_result(
             params![command_id, attempt],
             |row| row.get::<_, String>(0),
         )
-        .optional()?;
+        .optional()
+        .context("read immutable typed worker result")?;
     if let Some(existing) = existing {
         anyhow::ensure!(
             existing == user_reply,
             "worker result for command `{command_id}` attempt {attempt} is immutable"
         );
-        tx.commit()?;
+        tx.commit()
+            .context("commit immutable typed worker result replay")?;
         return Ok(true);
     }
     let now_ms = epoch_millis();
@@ -1604,7 +1622,8 @@ pub(crate) fn persist_business_command_worker_result(
             (command_id, attempt, status, user_reply, created_at_ms)
          VALUES (?1, ?2, 'succeeded', ?3, ?4)",
         params![command_id, attempt, user_reply, now_ms],
-    )?;
+    )
+    .context("insert immutable typed worker result")?;
     let next_version = version.saturating_add(1);
     tx.execute(
         "UPDATE business_command_aggregates
@@ -1618,7 +1637,8 @@ pub(crate) fn persist_business_command_worker_result(
             serde_json::to_string(&result)?,
             now_ms,
         ],
-    )?;
+    )
+    .context("update command aggregate with typed worker result")?;
     tx.execute(
         "INSERT INTO business_command_transitions
             (command_id, projection_version, from_phase, to_phase, terminal_status, reason, evidence_json, created_at_ms)
@@ -1630,7 +1650,8 @@ pub(crate) fn persist_business_command_worker_result(
             serde_json::to_string(&json!({"task_id": task_id, "attempt": attempt}))?,
             now_ms,
         ],
-    )?;
+    )
+    .context("insert typed worker result transition")?;
     insert_business_command_outbox_rows(
         &tx,
         &command_id,
@@ -1643,8 +1664,10 @@ pub(crate) fn persist_business_command_worker_result(
             "projection_version": next_version,
         }),
         now_ms,
-    )?;
-    tx.commit()?;
+    )
+    .context("insert typed worker result outbox")?;
+    tx.commit()
+        .context("commit typed worker result before review")?;
     crate::business_os::harness_cockpit::schedule_refresh(root);
     Ok(true)
 }
