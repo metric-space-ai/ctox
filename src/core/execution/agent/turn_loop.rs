@@ -1403,10 +1403,10 @@ fn persist_successful_assistant_with_retry(
                 {
                     anyhow::bail!("durable task progress failed: {error}");
                 }
-                // A service-owned queue task may only enter native review
-                // after its durable, model-authored plan is fully complete.
-                // This is intentionally before the finalization marker so a
-                // planless completion remains retryable.
+                // Persist the actual plan before review, including unfinished
+                // steps in a blocked result. Review admission is not terminal
+                // success; only validated completion may reach 100 percent.
+                // A planless completion remains retryable.
                 lcm::run_prepare_task_execution_review(db_path, &worker_attempt.work_key)?;
                 let durable = lcm::run_begin_worker_attempt_finalization(
                     db_path,

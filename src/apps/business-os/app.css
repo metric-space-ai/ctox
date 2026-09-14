@@ -6594,6 +6594,11 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
    neutralized by the Operational Instrument contract below and is replaced
    by the scoped CTOX shell chrome at the end of this file. */
 
+/* Keep shell menus above the loading workspace; modal drawers remain above both. */
+body[data-module-loading] .topbar {
+  z-index: 20;
+}
+
 /* Startup loader follows the active shell theme. */
 .workspace-startup-loader {
   display: flex;

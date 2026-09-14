@@ -3,8 +3,7 @@
 
 use super::backup_restore::file_sha256;
 use super::store::{
-    find_rxdb_collection_record_by_string_field, find_rxdb_collection_records_by_string_field,
-    find_rxdb_collection_records_by_string_field_contains, insert_business_event,
+    find_rxdb_collection_record_by_string_field, insert_business_event,
     is_safe_rxdb_collection_name, load_rxdb_collection_record, now_ms, open_store,
     outbound_first_string, outbound_id_from_command, outbound_load_record,
     outbound_load_records_by_string_field, outbound_load_required, outbound_merge_fields,
@@ -1335,6 +1334,57 @@ fn outbound_registry_latest_script(root: &Path, target_key: &str) -> anyhow::Res
     }))
 }
 
+fn decode_sellify_lookup_record(id: &str, raw: &str) -> anyhow::Result<Value> {
+    let mut record: Value = serde_json::from_str(raw)?;
+    if let Some(object) = record.as_object_mut() {
+        object
+            .entry("id".to_string())
+            .or_insert_with(|| Value::String(id.to_string()));
+    }
+    Ok(record)
+}
+
+fn sellify_lookup_field_rows(
+    conn: &Connection,
+    table: &str,
+    field: &str,
+    value: &str,
+    contains: bool,
+    limit: usize,
+) -> anyhow::Result<Vec<(String, Value)>> {
+    if limit == 0 || (contains && value.trim().len() < 2) {
+        return Ok(Vec::new());
+    }
+    let (predicate, expected) = if contains {
+        let escaped = value
+            .trim()
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        ("LIKE ?2 ESCAPE '\\'", format!("%{escaped}%"))
+    } else {
+        ("= ?2", value.to_string())
+    };
+    let mut statement = conn.prepare(&format!(
+        "SELECT id, data FROM {table}
+         WHERE CAST(json_extract(data, ?1) AS TEXT) {predicate}
+         ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
+         LIMIT ?3"
+    ))?;
+    let rows = statement
+        .query_map(
+            params![format!("$.{field}"), expected, limit as i64],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|(id, raw)| {
+            let record = decode_sellify_lookup_record(&id, &raw)?;
+            Ok((id, record))
+        })
+        .collect()
+}
+
 pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::Result<Value> {
     let entity = outbound_required_string(payload, &["entity"])?;
     let (collection, allowed_fields): (&str, &[&str]) = match entity.as_str() {
@@ -1381,6 +1431,11 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
         ),
         _ => anyhow::bail!("entity must be company or person"),
     };
+    // A completed-empty CRM receipt requires an actual readable collection.
+    // Optional store readers deliberately tolerate absent projections elsewhere;
+    // they must not stand in for a successful Sellify research query here.
+    let (lookup_conn, lookup_table) =
+        super::store::required_rxdb_collection_read_connection(root, collection)?;
     // Campaign imports must see the FULL membership of one campaign; the
     // usual dedupe/lookup cap of 100 would silently truncate it.
     // A name search groups rows server-side (see below), so it may scan many
@@ -1411,7 +1466,15 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             if records.len() >= limit {
                 break;
             }
-            if let Some(record) = load_rxdb_collection_record(root, collection, id)? {
+            let raw = lookup_conn
+                .query_row(
+                    &format!("SELECT data FROM {lookup_table} WHERE id = ?1"),
+                    [id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(raw) = raw {
+                let record = decode_sellify_lookup_record(id, &raw)?;
                 if seen.insert(id.to_string()) {
                     records.push(record);
                 }
@@ -1440,11 +1503,12 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             if expected.is_empty() {
                 continue;
             }
-            for (id, record) in find_rxdb_collection_records_by_string_field(
-                root,
-                collection,
+            for (id, record) in sellify_lookup_field_rows(
+                &lookup_conn,
+                &lookup_table,
                 field,
                 expected,
+                false,
                 limit.saturating_sub(records.len()),
             )? {
                 if seen.insert(id) {
@@ -1478,11 +1542,12 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             if needle.is_empty() {
                 continue;
             }
-            for (id, record) in find_rxdb_collection_records_by_string_field_contains(
-                root,
-                collection,
+            for (id, record) in sellify_lookup_field_rows(
+                &lookup_conn,
+                &lookup_table,
                 field,
                 needle,
+                true,
                 limit.saturating_sub(records.len()),
             )? {
                 if seen.insert(id) {
@@ -2783,6 +2848,11 @@ fn outbound_apply_research_adapter_scrape_effect(
             }
             let evidence = outbound_scrape_test_evidence(&test_effect);
             let evidence_valid = evidence.get("valid").and_then(Value::as_bool) == Some(true);
+            let query_completed_empty = test_outcome.status
+                == scrape::ScrapeRunStatus::CompletedEmpty
+                && test_outcome.records_found == 0
+                && test_outcome.query_completion.is_some()
+                && evidence_valid;
             let test_ok = outbound_scrape_test_passed(
                 test_outcome.status,
                 test_outcome.records_found,
@@ -2790,8 +2860,15 @@ fn outbound_apply_research_adapter_scrape_effect(
                 evidence_valid,
             );
             if let Some(object) = test_effect.as_object_mut() {
-                object.insert("ok".to_string(), Value::Bool(test_ok));
+                object.insert(
+                    "ok".to_string(),
+                    Value::Bool(test_ok || query_completed_empty),
+                );
                 object.insert("test_ok".to_string(), Value::Bool(test_ok));
+                object.insert(
+                    "query_completed".to_string(),
+                    Value::Bool(query_completed_empty),
+                );
                 object.insert("evidence".to_string(), evidence.clone());
                 object.insert(
                     "tested_at_ms".to_string(),
@@ -2800,7 +2877,12 @@ fn outbound_apply_research_adapter_scrape_effect(
             }
             outbound_put_string(record, "last_run_id", test_outcome.run_id.clone());
 
-            if test_ok {
+            if query_completed_empty {
+                // Completed empty queries do not prove nonempty field extraction.
+                outbound_put_string(record, "status", "test_completed_empty");
+                outbound_put_string(record, "scrape_status", "completed_empty");
+                outbound_put_string(record, "last_error", "");
+            } else if test_ok {
                 outbound_put_string(record, "status", "test_ok");
                 outbound_put_string(record, "scrape_status", "test_executed");
                 outbound_put_string(record, "last_error", "");
@@ -2822,6 +2904,12 @@ fn outbound_apply_research_adapter_scrape_effect(
                     ("test_zero_records", "test_zero_records")
                 } else {
                     match test_outcome.status {
+                        scrape::ScrapeRunStatus::AwaitingProvider => {
+                            ("test_awaiting_provider", "test_awaiting_provider")
+                        }
+                        scrape::ScrapeRunStatus::CompletedEmpty => {
+                            ("test_evidence_invalid", "test_evidence_invalid")
+                        }
                         scrape::ScrapeRunStatus::AuthorizationRequired => {
                             ("test_auth_required", "test_auth_required")
                         }
@@ -2972,12 +3060,31 @@ fn outbound_scrape_test_evidence(test_effect: &Value) -> Value {
     let result_artifact = outbound_scrape_artifact_evidence(manifest.as_ref(), "result_json", None);
     let records_artifact =
         outbound_scrape_artifact_evidence(manifest.as_ref(), "records_json", Some(records_found));
+    let query_artifact =
+        outbound_scrape_artifact_evidence(manifest.as_ref(), "query_completion_evidence", Some(0));
+    let captured_query_receipt = query_artifact
+        .get("path")
+        .and_then(Value::as_str)
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    let query_receipt_matches = status != "completed_empty"
+        || (records_found == 0
+            && test_effect
+                .get("query_completion")
+                .is_some_and(Value::is_object)
+            && test_effect.get("query_completion")
+                == manifest
+                    .as_ref()
+                    .and_then(|value| value.pointer("/result/query_completion"))
+            && captured_query_receipt.as_ref() == test_effect.get("query_completion")
+            && query_artifact.get("valid").and_then(Value::as_bool) == Some(true));
     let valid = manifest_path.is_file()
         && manifest.is_some()
         && run_id_matches
         && target_key_matches
         && status_matches
         && record_count_matches
+        && query_receipt_matches
         && result_artifact.get("valid").and_then(Value::as_bool) == Some(true)
         && records_artifact.get("valid").and_then(Value::as_bool) == Some(true);
     serde_json::json!({
@@ -2990,6 +3097,8 @@ fn outbound_scrape_test_evidence(test_effect: &Value) -> Value {
         "target_key_matches": target_key_matches,
         "status_matches": status_matches,
         "record_count_matches": record_count_matches,
+        "query_receipt_matches": query_receipt_matches,
+        "query_completion_artifact": query_artifact,
         "result_artifact": result_artifact,
         "records_artifact": records_artifact,
     })
@@ -7564,6 +7673,91 @@ mod tests {
             .get("last_error")
             .and_then(Value::as_str)
             .is_some_and(|error| error.contains("selector changed")));
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_completed_empty_query_preserves_extraction_test_failure() -> anyhow::Result<()> {
+        let (record, effect) = run_outbound_scrape_test_fixture(
+            r#"
+const fs = require('fs'), path = require('path'), crypto = require('crypto');
+const raw = process.env.CTOX_SCRAPE_INPUT_JSON;
+const run = process.env.CTOX_SCRAPE_RUN_DIR;
+const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+const receipt = {schema:'ctox.scrape.query_completion.v1',run_id:path.basename(run),
+ target_key:process.env.CTOX_SCRAPE_TARGET_KEY,input_sha256:sha(raw),
+ query:JSON.parse(raw).company,provider_url:'https://fixture.example/search',
+ http_status:200,completed:true,results_page:true,blocked:false,
+ matched_records:0,observed_records:0,observation:{result_count:0}};
+const bytes = JSON.stringify(receipt);
+fs.writeFileSync(path.join(run,'outputs/query-evidence.json'),bytes);
+process.stdout.write(JSON.stringify({records:[],query_completion:{
+ evidence_path:'outputs/query-evidence.json',evidence_sha256:sha(bytes)}}));
+"#,
+        )?;
+        assert_eq!(record["status"], "test_completed_empty");
+        assert_eq!(record["scrape_status"], "completed_empty");
+        assert_eq!(record["test_ok"], false);
+        assert!(record.get("last_success_at_ms").is_none());
+        assert_eq!(effect["test"]["status"], "completed_empty");
+        assert_eq!(effect["test"]["ok"], true);
+        assert_eq!(effect["test"]["test_ok"], false);
+        assert_eq!(effect["test"]["query_completed"], true);
+        assert_eq!(effect["test"]["evidence"]["valid"], true);
+        assert_eq!(effect["test"]["records_found"], 0);
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_completed_empty_query_rejects_missing_mismatched_and_tampered_evidence(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let receipt = serde_json::json!({"run_id":"current-run","query":"Current Company"});
+        let capture = root.join("receipt.json");
+        fs::write(&capture, serde_json::to_vec(&receipt)?)?;
+        let mut artifacts = Vec::new();
+        for (kind, name, bytes) in [
+            ("result_json", "result.json", b"{}".as_slice()),
+            ("records_json", "records.json", b"[]".as_slice()),
+        ] {
+            let path = root.join(name);
+            fs::write(&path, bytes)?;
+            artifacts.push(serde_json::json!({"artifact_kind":kind,"path":path,
+                "content_sha256":file_sha256(&path)?.1,"record_count":0}));
+        }
+        artifacts.push(
+            serde_json::json!({"artifact_kind":"query_completion_evidence","path":capture,
+            "content_sha256":file_sha256(&capture)?.1,"record_count":0}),
+        );
+        let manifest_path = root.join("run.json");
+        let manifest = serde_json::json!({"run_id":"current-run","target_key":"provider",
+            "status":"completed_empty","result":{"records_found":0,"query_completion":receipt},
+            "artifacts":artifacts});
+        fs::write(&manifest_path, serde_json::to_vec(&manifest)?)?;
+        let effect = serde_json::json!({"run_id":"current-run","target_key":"provider",
+            "status":"completed_empty","records_found":0,"query_completion":receipt,
+            "run_manifest_path":manifest_path});
+        assert_eq!(outbound_scrape_test_evidence(&effect)["valid"], true);
+        let mut missing = effect.clone();
+        missing.as_object_mut().unwrap().remove("query_completion");
+        assert_eq!(outbound_scrape_test_evidence(&missing)["valid"], false);
+        let mut changed = effect.clone();
+        changed["query_completion"]["query"] = Value::String("Old Company".into());
+        assert_eq!(outbound_scrape_test_evidence(&changed)["valid"], false);
+        let mut changed_manifest = manifest.clone();
+        changed_manifest["result"]["query_completion"] = changed["query_completion"].clone();
+        fs::write(&manifest_path, serde_json::to_vec(&changed_manifest)?)?;
+        assert_eq!(
+            outbound_scrape_test_evidence(&changed)["valid"],
+            false,
+            "matching manifest and return value cannot replace different captured evidence"
+        );
+        fs::write(&manifest_path, serde_json::to_vec(&manifest)?)?;
+        fs::write(&capture, b"{}")?;
+        assert_eq!(outbound_scrape_test_evidence(&effect)["valid"], false);
+        fs::remove_file(&capture)?;
+        assert_eq!(outbound_scrape_test_evidence(&effect)["valid"], false);
         Ok(())
     }
 

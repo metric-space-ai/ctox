@@ -8,7 +8,11 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum ScrapeRunStatus {
+    /// An accepted provider job still needs bounded native continuation.
+    AwaitingProvider,
     Succeeded,
+    /// A current provider query completed with a validated empty-result receipt.
+    CompletedEmpty,
     TemporaryUnreachable,
     PortalDrift,
     Blocked,

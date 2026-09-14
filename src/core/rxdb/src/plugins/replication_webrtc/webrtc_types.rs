@@ -226,6 +226,14 @@ pub trait WebRTCConnectionHandler: Send + Sync {
         None
     }
 
+    /// Durable browser session id captured beside its admitted capability.
+    /// Generic transports without this identity fail closed for callers that
+    /// require session-specific revocation, such as credential reveal.
+    fn set_peer_session_id(&self, _peer: &Self::Peer, _session_id: String) {}
+    fn peer_session_id(&self, _peer: &Self::Peer) -> Option<String> {
+        None
+    }
+
     /// #12c: whether `peer` may replicate `collection`. Generic handlers default
     /// to true (no enforcement); the CTOX handler consults the role bound to the
     /// peer's captured capability token when authz is enabled.

@@ -40,6 +40,24 @@ Attribution rule:
 
 - When a file under this subtree differs from the imported snapshot, describe it as a CTOX fork delta, not as an ambiguous upstream version.
 
+## 2026-09 Required-Tool Completion Recovery
+
+The turn loop tracks successful required-tool calls in the current turn, rather
+than accepting matching calls retained from earlier conversation history. The
+managed Responses request keeps `tool_choice: auto` for provider compatibility.
+If a response ends without the required call, the same bounded turn records a
+developer correction and samples again, at most twice. Repeated refusal emits a
+turn error; cancellation and the caller's existing turn deadline still apply.
+Successful tool results and their recorded outputs survive transport retries
+within the turn. Only a successful real tool result releases the full tool
+surface. No plan or
+activity event is synthesized, and CTOX's durable missing-plan completion guard
+remains authoritative.
+
+Regression coverage in `core/src/codex_required_plan_tests.rs` drives the actual
+turn loop with deterministic Responses streams: text-only recovery, repeated
+refusal, retained history, unrelated calls, failed plan calls, and cancellation.
+
 ## 2026-09 Bound Web-Stack Auth Assist
 
 The typed `ctox_web_auth_assist_request` fork tool no longer treats model-provided
@@ -170,3 +188,11 @@ cargo test --manifest-path src/core/harness/Cargo.toml -p ctox-app-server-client
 ```
 
 Refs #97.
+
+The fixture waits for `TurnCompleted` matching both the started thread and
+turn id before reading persisted history. Concurrent `thread/read` snapshots
+can observe a partially flushed rollout, and stale-turn reconstruction can
+classify that snapshot as interrupted before the live completion event is
+consumed. Such snapshots are not a substitute for terminal events. The exact
+completion status, pre-shutdown disk markers, post-restart history and missing
+identified-resume rejection remain mandatory assertions.

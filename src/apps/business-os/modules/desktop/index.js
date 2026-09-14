@@ -1,6 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { createCtoxLauncher } from './ctoxLauncher.js';
+import { ensureDesktopLayoutWithAuthority } from './layout-authority.js';
 import { makeIconDraggable } from './iconDrag.js?v=20260816-browser-sync-guards-v141';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js?v=20260816-browser-sync-guards-v141';
 import {
@@ -1109,24 +1110,16 @@ export async function mount(ctx) {
     const moduleTitle = titleForModule(doc.module);
     return `${moduleTitle ? `[${moduleTitle}] ` : ''}${doc.command_type || ''}`.trim() || doc.command_id || '';
   }
-
   async function ensureLayout(collection, launcherRef) {
-    if (!collection) return defaultLayout(launcherRef);
-    try {
-      const existing = await collection.findOne(LAYOUT_DOC_ID).exec();
-      if (existing) return existing.toJSON();
-      const seed = {
-        id: LAYOUT_DOC_ID,
-        ...defaultLayout(launcherRef),
-        updated_at_ms: Date.now(),
-      };
-      await upsertSeed(collection, seed.id, seed);
-      return seed;
-    } catch (error) {
-      if (!isDatabaseClosingError(error)) throw error;
-      console.info('[desktop] layout read skipped during database restart; using default layout');
-      return defaultLayout(launcherRef);
-    }
+    return ensureDesktopLayoutWithAuthority({
+      collection,
+      documentId: LAYOUT_DOC_ID,
+      defaultLayout: () => defaultLayout(launcherRef),
+      readNativeDocument: ctx.readNativeCollectionDocument
+        ? () => ctx.readNativeCollectionDocument('desktop_layout', LAYOUT_DOC_ID, { timeoutMs: 5000 })
+        : null,
+      insertMissingSeed,
+    });
   }
 
   function defaultLayout(launcherRef) {
@@ -1434,9 +1427,7 @@ export async function mount(ctx) {
       await collection.insert(seed);
     } catch (error) {
       if (!isConflictError(error)) throw error;
-      const conflicted = await collection.findOne(id).exec();
-      if (!conflicted) throw error;
-      await conflicted.incrementalPatch(seed);
+      return;
     }
   }
 

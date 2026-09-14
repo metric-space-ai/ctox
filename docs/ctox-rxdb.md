@@ -28,6 +28,14 @@ owned, expiring lease requirement for ordinary worker commands.
 
 ### Outbound MCP research record identity
 
+Single-record reads of `outbound_lead_generation_leads`, including MCP reads
+and research record binding, use the native RxDB document that browser edits
+and native research writebacks update. An older `business_records` row cannot
+shadow it. Missing or deleted authoritative leads remain absent, and read
+errors propagate rather than selecting legacy data. Other collections keep
+their existing ownership and read precedence. This read correction does not
+migrate records or establish collection-list freshness or browser acceptance.
+
 `web_stack.person_research` binds its proposal to the raw persisted
 `outbound_lead_generation_leads` record, not the MCP descriptor's derived title.
 Runtime leads use top-level `name` and/or `data.firma_name`; legacy `company`,
@@ -45,6 +53,45 @@ They cover the production field shape and request/record mismatch rejection;
 a passing proposal does not establish research execution, provider coverage,
 writeback, or browser acceptance. Native execution and a new live pipeline
 check remain required before claiming this repair deployed and verified.
+### Outbound research source receipts
+
+Scalar `result.fields.person_*` updates without explicit `person_records`
+are grouped by their trimmed `person_key`. Only a unique exact contact key or
+ID match may receive those fields; contact order, shared profile URLs and names
+do not choose the recipient. Partial updates preserve unrelated contact values,
+CRM conflict handling and existing email verdicts. A new key needs its own name
+or email before it can create a separate contact. Ambiguous identities and
+unkeyed updates with several existing contacts remain unresolved with evidence
+retained, rather than being assigned to the first person. Legacy unkeyed
+single-contact outcomes and explicit person-record handling remain supported.
+These projection guards do not retroactively repair earlier assignments or
+establish source accuracy; actual writeback provenance and browser readback
+remain required for acceptance.
+
+The native person-research command retains a `sellify_lookup_runs` receipt in
+its final result and workspace envelope, including actual lookup success,
+`completed_empty`, or failure. Returned CRM record count and contributed field
+count are separate: an existing CRM match can contribute no requested fields.
+A failed lookup has an unknown (`null`) record count and a bounded error code,
+not a false empty result or raw database error. The enclosing command/workspace
+binds the receipt to the research; it is not a synthetic scrape run.
+
+Sellify lookups require a readable collection and use one read-only SQLite
+transaction for ID, exact-field, and fuzzy-field probes. Missing, non-file,
+corrupt, or unprojected storage fails the lookup instead of producing
+`completed_empty`; a readable collection with no matching records is genuinely
+empty. Optional projection readers elsewhere retain their existing behavior.
+
+Final persistence runs after all native source augmentation and summary, even
+with `auto_browser_capture=false`. Successful persistence leaves `envelope.json`
+equal to the returned payload, including workspace metadata and recovered-error
+removal. The native wrapper exposes the existing `scrape_runs.jsonl` in the
+manifest. Final envelope and manifest replacements are individually atomic;
+the workspace as a whole is not a transactional snapshot. Persistence errors
+remain explicit in `workspace_error` and must not count as durable acceptance.
+These changes do not alter country/field/source selection, access grants,
+record binding or the WebRTC data boundary. A completed command remains distinct
+from all-provider success; inspect actual source outcomes and admissible evidence.
 
 Two implementations, one contract:
 
@@ -82,14 +129,26 @@ mobile suspend/resume, or full runtime compatibility across all hosts.
 
 ### Desktop pin hydration
 
-The shell renders its cached taskbar pins before starting Sync, but reconciles
-`desktop_layout` only after the command transport has been registered. This
-reconciliation does not block shell bootstrap. A pending native read is never
-converted into an absent layout: doing so could assign the fallback pins a new
-local timestamp and overwrite an older, valid remote layout. The actual read
-must settle before pin/cache reconciliation and any write-back. A response for
-a replaced database is discarded. Query failures remain failures; hydration
-does not add retry timers or a second data path.
+The shell may paint UI-only defaults before Sync starts. Cached pin state is
+read from the scoped localStorage entry; a missing or malformed entry is
+unknown, while a valid array — including `[]` — is a known local selection.
+Startup has no initialization timestamp and performs no pin-cache or layout
+write for unknown state.
+
+Authoritative reconciliation uses the existing collection lease and
+query-demand-loader with an opaque `requireRevision` hydration token. Query
+readiness means the negotiated peer has query-fetch capability and the actual
+loader finished installation; registration, transport activity and
+`active$` are not sufficient. Strict required-revision reads are keyed by that
+token plus the actual database/bridge/negotiation/connection generation and
+reject timeout, consumer cancellation, broker closure, loader cancellation and
+generation replacement. They never fall back to local data. A completed native
+query may return no document (confirmed absence) or an explicit `[]` selection.
+Only a strictly newer genuine local edit wins and writes back; ties, older
+locals, remote empty arrays and confirmed absence never create an
+initialization timestamp or layout mutation. Replaced database/runtime/auth
+storage scopes discard pending edits and late results; a reconnect within the
+same identity preserves them until the new authority settles.
 
 The full-host critical-reload fixture additionally runs a separate fresh-context
 pin-preservation story after the 30 timing samples. It confirms a seeded layout
@@ -548,6 +607,14 @@ already exist always render regardless of readiness.
 Explicit non-goal: readiness is a **render hint, never a mount blocker**. The OS
 stays snappy; a module must not wait for sync to appear.
 
+A stricter authority-readiness barrier is separate from the render hint. It
+requires query-fetch capability plus a successfully installed demand loader for
+the current connection generation. `requireRevision` reads use this barrier and
+are never satisfied by ordinary stale-while-revalidate state, a closed
+multi-tab broker, a timeout, or another connection generation. The opaque token
+is carried through the existing in-flight identity and sidecar satisfied-token
+fields; it is not a server revision or new transport.
+
 ### 3.2 Shell integration
 
 **`shared/db.js` — `createBusinessDb({ name })`.** Imports the bundle through
@@ -748,6 +815,13 @@ Note: root `README.md:175-176` names `runtime/ctox.sqlite3` as the
 persistence target. At boundary level that is the right message (data stays
 in CTOX's local SQLite, never an HTTP service); the precise file for RxDB
 documents is `runtime/business-os-rxdb.sqlite3` as above.
+
+Canonical terminal command projection and canonical outbox delivery replace
+the complete `business_commands.result` value rather than recursively merging
+it with a previous progress result. This removes obsolete provider-wait keys
+while preserving the existing merge behavior for unrelated document metadata.
+Other collections, nonterminal progress, revision generation, secret redaction
+and optional collection availability retain their existing behavior.
 
 ---
 
@@ -1408,6 +1482,30 @@ adds the device id and proof-key thumbprint to the invite row. Later reconnects
 require that exact active Device-to-Instance edge; revoke disables both the row
 and actor epoch. This keeps the QR compact without an online reference service.
 
+### 9.3 Transient authorized credential display
+
+`ctox.credentials.reveal.v1` is an auxiliary request on the authenticated native
+peer. Its single exact `{name}` parameter selects an existing `credentials`
+Secret Store value. Native `SecretsManage` workspace permission and
+`business_commands` read permission are required and rechecked after the read.
+The exact current connection, captured capability and admitted browser session
+must still match, and neither signaling-peer nor browser-session identity may be
+revoked. The existing handshake's session id is retained natively with generation-
+owned teardown; it is never accepted from the reveal request body. A missing or
+changed identity fails closed. No wire field or browser storage schema changes.
+This operation creates no business command or replicated secret record. Its
+value-bearing response goes only to the requesting DataChannel; generic errors
+contain no value. It is not available through the Business OS MCP actions.
+
+Credentials requires the new `requestPrivateNative` facade; a still-open older
+shell cannot fall back to its old `requestNative` relay. The private API always
+uses the direct transport. The shell also rejects this method in both cross-tab relay directions: a follower
+must use the directly connected tab rather than moving plaintext over the
+BroadcastChannel coordinator. The Credentials UI displays values only after
+Show, supports user-requested Copy, and clears transient display on its bounded
+timer and lifecycle transitions. Metadata exports remain value-free. See
+`docs/secret-password-generation.md` for exact limits and verification status.
+
 ## 10. Build & release
 
 `dist/ctox-rxdb-js.mjs` is **built** from `src/index.mjs` with a pinned
@@ -1773,6 +1871,8 @@ persisted even on failure. This is the retained-profile browser cohort only;
 | `projection-window-gc-smoke` | Stale projection windows are garbage-collected. |
 | `query-api-smoke` | Query API surface. |
 | `query-fetch-capability-smoke` | Capability negotiation surface. |
+| `query-demand-authoritative-generation-smoke` | Strict authority tokens reject absent/replaced/cancelled generations, accept native empty, and reuse only the same token/generation. |
+| `webrtc-authority-generation-smoke` | Transport renegotiation with identical native session/storage/checkpoint/schema keeps strict query generation stable; changed peer identity or any native-authority input rejects it. |
 | `query-fingerprint-corpus-smoke` | JS fingerprints match the shared JS/Rust corpus byte-for-byte. |
 | `quota-recovery-smoke` | Sidecar behaviour under quota pressure. |
 | `replication-demand-race-smoke` | Concurrent `masterChangesSince` vs query-fetch does not corrupt state. |

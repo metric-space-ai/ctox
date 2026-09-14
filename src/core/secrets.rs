@@ -31,6 +31,11 @@ pub(crate) const SECRET_MASTER_KEY_FILE: &str = "ctox-secrets.key";
 const SECRET_KV_TABLE: &str = "ctox_secret_kv";
 const SECRET_PUT_USAGE: &str = "usage: ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]";
 const SECRET_INTAKE_USAGE: &str = "usage: ctox secret intake --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]";
+const SECRET_GENERATE_USAGE: &str =
+    "usage: ctox secret generate --scope <scope> --name <name> [--length <16..128>]";
+pub const DEFAULT_PASSWORD_LENGTH: usize = 24;
+const PASSWORD_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 type SecretMaterial = Zeroizing<Vec<u8>>;
 
@@ -55,6 +60,14 @@ pub struct SecretRecordView {
     pub metadata: Value,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// A generation receipt, never password material. Replays preserve the original
+/// secret and report `created: false`; generation is not a rotation operation.
+#[derive(Debug, Clone, Serialize)]
+pub struct SecretPasswordGeneration {
+    pub created: bool,
+    pub secret: SecretRecordView,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -91,6 +104,28 @@ pub fn handle_secret_command(root: &Path, args: &[String]) -> Result<()> {
                 .unwrap_or_else(|| json!({}));
             let record = put_secret(root, scope, name, value.as_str(), description, metadata)?;
             print_json(&json!({"ok": true, "secret": record}))
+        }
+        "generate" => {
+            // Accept only metadata arguments. In particular, there is no value,
+            // reveal, overwrite, stdout-password, or environment-output option.
+            let mut flags = HashSet::new();
+            for pair in args[1..].chunks(2) {
+                anyhow::ensure!(
+                    pair.len() == 2
+                        && matches!(pair[0].as_str(), "--scope" | "--name" | "--length")
+                        && flags.insert(pair[0].as_str()),
+                    SECRET_GENERATE_USAGE
+                );
+            }
+            let scope = required_flag_value(args, "--scope").context(SECRET_GENERATE_USAGE)?;
+            let name = required_flag_value(args, "--name").context(SECRET_GENERATE_USAGE)?;
+            let length = find_flag_value(args, "--length")
+                .map(str::parse::<usize>)
+                .transpose()
+                .context(SECRET_GENERATE_USAGE)?
+                .unwrap_or(DEFAULT_PASSWORD_LENGTH);
+            let receipt = generate_secret_password(root, scope, name, length)?;
+            print_json(&json!({"ok": true, "generation": receipt}))
         }
         "intake" => {
             let scope = required_flag_value(args, "--scope").context(SECRET_INTAKE_USAGE)?;
@@ -171,7 +206,7 @@ pub fn handle_secret_command(root: &Path, args: &[String]) -> Result<()> {
             print_json(&json!({"ok": true, "rewrite": result}))
         }
         _ => anyhow::bail!(
-            "usage:\n  ctox secret init\n  ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]\n  ctox secret intake --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]\n  ctox secret list [--scope <scope>]\n  ctox secret show --scope <scope> --name <name>\n  ctox secret get --scope <scope> --name <name>\n  ctox secret delete --scope <scope> --name <name>\n  ctox secret memory-rewrite --db <path> --conversation-id <id> --scope <scope> --name <name> --match-text <text> [--label <text>]"
+            "usage:\n  ctox secret init\n  ctox secret generate --scope <scope> --name <name> [--length <16..128>]\n  ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]\n  ctox secret intake --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]\n  ctox secret list [--scope <scope>]\n  ctox secret show --scope <scope> --name <name>\n  ctox secret get --scope <scope> --name <name>\n  ctox secret delete --scope <scope> --name <name>\n  ctox secret memory-rewrite --db <path> --conversation-id <id> --scope <scope> --name <name> --match-text <text> [--label <text>]"
         ),
     }
 }
@@ -182,6 +217,109 @@ pub fn list_secret_records(root: &Path, scope: Option<&str>) -> Result<Vec<Secre
 
 pub fn read_secret_value(root: &Path, scope: &str, name: &str) -> Result<String> {
     get_secret_value(root, scope, name)
+}
+
+fn random_password(length: usize) -> Result<SecretMaterial> {
+    anyhow::ensure!(
+        (16..=128).contains(&length),
+        "password length must be 16..128"
+    );
+    let random = SystemRandom::new();
+    let mut password = Zeroizing::new(vec![0u8; length]);
+    // A power-of-two alphabet maps uniformly from random bytes. Reject the
+    // entire candidate when a required class is missing, preserving uniformity
+    // over valid passwords instead of forcing characters into fixed positions.
+    for _ in 0..128 {
+        random
+            .fill(password.as_mut_slice())
+            .map_err(|_| anyhow::anyhow!("password randomness unavailable"))?;
+        for byte in password.iter_mut() {
+            *byte = PASSWORD_ALPHABET[usize::from(*byte & 63)];
+        }
+        if password.iter().any(u8::is_ascii_uppercase)
+            && password.iter().any(u8::is_ascii_lowercase)
+            && password.iter().any(u8::is_ascii_digit)
+            && password.iter().any(|byte| matches!(byte, b'-' | b'_'))
+        {
+            return Ok(password);
+        }
+    }
+    anyhow::bail!("password generation exhausted its bounded candidate budget")
+}
+
+/// Generate directly into the existing encrypted store. Only the trusted native
+/// consumer may later resolve the handle; do not use `secret get` in agent logs.
+/// The SQLite write reservation protects create-only semantics across processes.
+pub fn generate_secret_password(
+    root: &Path,
+    scope: &str,
+    name: &str,
+    length: usize,
+) -> Result<SecretPasswordGeneration> {
+    anyhow::ensure!(
+        (16..=128).contains(&length),
+        "password length must be 16..128"
+    );
+    for selector in [scope, name] {
+        anyhow::ensure!(
+            !selector.is_empty()
+                && selector.len() <= 256
+                && !selector.chars().any(|ch| ch.is_whitespace() || ch.is_control()),
+            "secret scope and name must be nonempty, at most 256 bytes, without whitespace or controls"
+        );
+    }
+    let (key_bytes, _) = ensure_secret_master_key(root)?;
+    let mut conn = open_secret_db(root)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let existing = tx
+        .query_row(
+            "SELECT secret_id, scope, secret_name, description, metadata_json, created_at, updated_at
+             FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2",
+            params![scope, name],
+            map_secret_record_row,
+        )
+        .optional()?;
+    if let Some(secret) = existing {
+        tx.commit()?;
+        return Ok(SecretPasswordGeneration {
+            created: false,
+            secret,
+        });
+    }
+    let password = random_password(length)?;
+    let encrypted = encrypt_secret_value(&key_bytes, password.as_slice())?;
+    drop(password);
+    let now = now_iso_string();
+    let secret = SecretRecordView {
+        secret_id: format!("secret:{}:{}", scope, stable_digest(name)),
+        scope: scope.to_string(),
+        secret_name: name.to_string(),
+        description: Some("Generated account password".to_string()),
+        metadata: json!({"source": "secret_generate", "length": length}),
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    tx.execute(
+        "INSERT INTO ctox_secret_records
+         (secret_id, scope, secret_name, description, metadata_json,
+          nonce_b64, ciphertext_b64, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+        params![
+            secret.secret_id,
+            scope,
+            name,
+            secret.description,
+            serde_json::to_string(&secret.metadata)?,
+            encrypted.nonce_b64,
+            encrypted.ciphertext_b64,
+            secret.created_at,
+        ],
+    )?;
+    tx.commit()?;
+    Ok(SecretPasswordGeneration {
+        created: true,
+        secret,
+    })
 }
 
 /// One encrypted secret mutation used by callers that must rotate a credential
@@ -1317,11 +1455,15 @@ fn encrypt_secret_value(key_bytes: &[u8], plaintext: &[u8]) -> Result<EncryptedS
         .fill(&mut nonce_bytes)
         .map_err(|_| anyhow::anyhow!("failed to generate encryption nonce"))?;
     let nonce = aead::Nonce::assume_unique_for_key(nonce_bytes);
-    let mut buffer = plaintext.to_vec();
-    key.seal_in_place_append_tag(nonce, aead::Aad::empty(), &mut buffer)
+    // Reserve the tag before copying plaintext, so appending it cannot leave a
+    // deallocated, unzeroized plaintext allocation behind during Vec growth.
+    let mut buffer = Zeroizing::new(Vec::with_capacity(
+        plaintext.len() + aead::AES_256_GCM.tag_len(),
+    ));
+    buffer.extend_from_slice(plaintext);
+    key.seal_in_place_append_tag(nonce, aead::Aad::empty(), &mut *buffer)
         .map_err(|_| anyhow::anyhow!("failed to encrypt secret value"))?;
     let ciphertext_b64 = BASE64_STANDARD.encode(buffer.as_slice());
-    buffer.zeroize();
     Ok(EncryptedSecretValue {
         nonce_b64: BASE64_STANDARD.encode(nonce_bytes),
         ciphertext_b64,
@@ -1643,6 +1785,131 @@ fn load_credentials_bulk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generated_passwords_have_bounded_length_and_required_classes() -> Result<()> {
+        let mut digests = HashSet::new();
+        for length in [16, DEFAULT_PASSWORD_LENGTH, 128] {
+            for _ in 0..32 {
+                let password = random_password(length)?;
+                assert_eq!(password.len(), length);
+                assert!(password.iter().all(|byte| PASSWORD_ALPHABET.contains(byte)));
+                assert!(password.iter().any(u8::is_ascii_uppercase));
+                assert!(password.iter().any(u8::is_ascii_lowercase));
+                assert!(password.iter().any(u8::is_ascii_digit));
+                assert!(password.iter().any(|byte| matches!(byte, b'-' | b'_')));
+                assert!(digests.insert(Sha256::digest(password.as_slice()).to_vec()));
+            }
+        }
+        for length in [0, 15, 129, usize::MAX] {
+            assert!(random_password(length).is_err());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn generated_password_receipt_and_storage_never_contain_plaintext() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let receipt = generate_secret_password(root.path(), "credentials", "TEST_PASSWORD", 24)?;
+        assert!(receipt.created);
+        let password = Zeroizing::new(read_secret_value(
+            root.path(),
+            "credentials",
+            "TEST_PASSWORD",
+        )?);
+        assert_eq!(password.len(), 24);
+        assert!(!serde_json::to_string(&receipt)?.contains(password.as_str()));
+        assert!(!format!("{receipt:?}").contains(password.as_str()));
+        let raw = fs::read(secret_store_path(root.path()))?;
+        assert!(!raw
+            .windows(password.len())
+            .any(|window| window == password.as_bytes()));
+        // Reopening the store and changing the requested policy does not rotate
+        // the credential used by an already submitted registration.
+        let replay = generate_secret_password(root.path(), "credentials", "TEST_PASSWORD", 32)?;
+        assert!(!replay.created);
+        assert_eq!(receipt.secret.updated_at, replay.secret.updated_at);
+        let reopened = Zeroizing::new(read_secret_value(
+            root.path(),
+            "credentials",
+            "TEST_PASSWORD",
+        )?);
+        assert!(reopened.as_str() == password.as_str());
+        Ok(())
+    }
+
+    #[test]
+    fn generated_password_preserves_existing_imported_secret() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        put_secret(
+            root.path(),
+            "credentials",
+            "TEST_PASSWORD",
+            "existing",
+            None,
+            json!({}),
+        )?;
+        let receipt = generate_secret_password(root.path(), "credentials", "TEST_PASSWORD", 24)?;
+        assert!(!receipt.created);
+        assert!(read_secret_value(root.path(), "credentials", "TEST_PASSWORD")? == "existing");
+        Ok(())
+    }
+
+    #[test]
+    fn generated_password_concurrent_requests_create_once() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        ensure_secret_master_key(root.path())?;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let mut workers = Vec::new();
+        for _ in 0..2 {
+            let path = root.path().to_path_buf();
+            let barrier = barrier.clone();
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                generate_secret_password(&path, "credentials", "TEST_PASSWORD", 24)
+            }));
+        }
+        let mut receipts = Vec::new();
+        for worker in workers {
+            receipts.push(worker.join().expect("generation worker panicked")?);
+        }
+        assert_eq!(receipts.iter().filter(|receipt| receipt.created).count(), 1);
+        assert_eq!(receipts[0].secret.secret_id, receipts[1].secret.secret_id);
+        assert_eq!(
+            list_secret_records(root.path(), Some("credentials"))?.len(),
+            1
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generated_password_rejects_invalid_requests_before_creating_store() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        for (scope, name, length) in [
+            ("", "NAME", 24),
+            ("credentials", "bad name", 24),
+            ("credentials", "NAME", 15),
+        ] {
+            assert!(generate_secret_password(root.path(), scope, name, length).is_err());
+        }
+        for extra in ["--value", "--reveal", "--overwrite", "--scope"] {
+            let args: Vec<String> = [
+                "generate",
+                "--scope",
+                "credentials",
+                "--name",
+                "NAME",
+                extra,
+                "forbidden",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+            assert!(handle_secret_command(root.path(), &args).is_err());
+        }
+        assert!(!secret_store_path(root.path()).exists());
+        Ok(())
+    }
 
     fn temp_root(label: &str) -> PathBuf {
         let mut path = std::env::temp_dir();
