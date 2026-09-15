@@ -7681,18 +7681,29 @@ fn validate_person_research_record_binding(
             );
         }
     }
+    let record_string = |fields: &[&str]| {
+        fields
+            .iter()
+            .find_map(|field| record_object.get(*field).and_then(Value::as_str))
+            .or_else(|| {
+                record_object
+                    .get("data")
+                    .and_then(Value::as_object)
+                    .and_then(|data| {
+                        fields
+                            .iter()
+                            .find_map(|field| data.get(*field).and_then(Value::as_str))
+                    })
+            })
+            .map(str::trim)
+            .unwrap_or_default()
+    };
     let company = payload
         .get("company")
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
-    let bound_company = record_object
-        .get("company")
-        .or_else(|| record_object.get("company_name"))
-        .or_else(|| record_object.get("title"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
+    let bound_company = record_string(&["company", "company_name", "firma_name", "name", "title"]);
     anyhow::ensure!(
         !bound_company.is_empty() && company == bound_company,
         BusinessOsMcpError::validation(
@@ -7705,12 +7716,7 @@ fn validate_person_research_record_binding(
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
-    let bound_country = record_object
-        .get("country")
-        .or_else(|| record_object.get("country_code"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
+    let bound_country = record_string(&["country", "country_code", "land"]);
     anyhow::ensure!(
         !bound_country.is_empty() && country == bound_country,
         BusinessOsMcpError::validation(
@@ -12731,6 +12737,58 @@ mod tests {
                 .downcast_ref::<BusinessOsMcpError>()
                 .map(|error| &error.code),
             Some(&BusinessOsMcpErrorCode::RecordNotFound)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn person_research_record_binding_accepts_nested_lead_data() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "outbound-lead-generation",
+            "Outbound Lead Generation",
+            "1.0.5",
+            &["outbound_lead_generation_leads"],
+            Some(serde_json::json!({ "public": true })),
+        )?;
+        seed_default_mcp_admin(root)?;
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "outbound_lead_generation_leads",
+                "documents": [{
+                    "id": "lead_nested",
+                    "data": {
+                        "name": "Nested GmbH",
+                        "country": "DE"
+                    },
+                    "workspace": "test-workspace"
+                }]
+            }),
+        )?;
+
+        let result = execute_action(
+            root,
+            &test_context("business_os.execute_action"),
+            "outbound-lead-generation",
+            "web_stack.person_research",
+            &serde_json::json!({
+                "record_id": "lead_nested",
+                "run_key": "nested-research-1",
+                "payload": {
+                    "operation_id": "lead_nested",
+                    "company": "Nested GmbH",
+                    "country": "DE",
+                    "mode": "update_person"
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            result.client_context["writeback_contract"],
+            "person_research/native"
         );
         Ok(())
     }
