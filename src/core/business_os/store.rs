@@ -17779,10 +17779,22 @@ pub(crate) fn persist_business_command_lifecycle_projection(
         )
         .optional()?
         .is_some();
-    anyhow::ensure!(
-        exists,
-        "cannot persist lifecycle projection before canonical intake"
-    );
+    // Owner-Befund 18.09.2026 (thesen): JEDER Recherchestart scheiterte hier.
+    // `business_os.chat.task` ist kein Kontrollbefehl und durchlaeuft die
+    // Kontrollbefehl-Aufnahme nicht; endet die Aufgabe terminal, bevor die
+    // kanonische Zeile geschrieben ist, lehnte dieser Waechter die Projektion
+    // ab. Der Aufnahme-Wiederholer gab nach fuenf Versuchen in zwei Sekunden
+    // auf, der Befehl war verbrannt, und die EIGENTLICHE Fehlermeldung wurde
+    // durch "cannot persist lifecycle projection before canonical intake"
+    // ersetzt — die Recherche lief nicht mehr und niemand sah warum.
+    //
+    // Wer hier ankommt, haelt das vollstaendige Lebenszyklus-Dokument in der
+    // Hand. Fehlt die Zeile, wird sie daraus angelegt — genau das, was die
+    // Aufnahme getan haette. Der Waechter bleibt fuer Dokumente ohne
+    // Kennzeichnung bestehen, damit keine leeren Projektionen entstehen.
+    if !exists {
+        seed_canonical_business_command_row(&conn, command_id, document)?;
+    }
     let updated_at_ms = document
         .get("updated_at_ms")
         .and_then(Value::as_i64)
@@ -17794,6 +17806,65 @@ pub(crate) fn persist_business_command_lifecycle_projection(
         updated_at_ms,
         document.clone(),
     )
+}
+
+/// Legt die kanonische `business_commands`-Zeile aus einem Lebenszyklus-
+/// Dokument an. Nur fuer Dokumente mit Modul und Befehlstyp: ohne diese
+/// Angaben waere die Zeile wertlos und der Fehler bleibt richtig.
+fn seed_canonical_business_command_row(
+    conn: &Connection,
+    command_id: &str,
+    document: &Value,
+) -> anyhow::Result<()> {
+    let module = document
+        .get("module")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("cannot persist lifecycle projection before canonical intake")?;
+    let command_type = document
+        .get("command_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("cannot persist lifecycle projection before canonical intake")?;
+    let record_id = document
+        .get("record_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let status = document
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("accepted");
+    let payload = document.get("payload").cloned().unwrap_or(Value::Null);
+    let client_context = document
+        .get("client_context")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let observed_at_ms = document
+        .get("updated_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| now_ms() as i64);
+    conn.execute(
+        "INSERT INTO business_commands
+            (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(command_id) DO UPDATE SET
+            status = excluded.status,
+            observed_at_ms = excluded.observed_at_ms",
+        params![
+            command_id,
+            module,
+            command_type,
+            record_id,
+            status,
+            serde_json::to_string(&payload)?,
+            serde_json::to_string(&client_context)?,
+            observed_at_ms,
+        ],
+    )?;
+    Ok(())
 }
 
 /// Deliver canonical command lifecycle changes from the core SQLite outbox.
