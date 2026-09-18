@@ -244,6 +244,34 @@ Build the writeback in this order: (1) collect the terminal status per field, (2
 
 ## 8. Unblocking across turns (login, captcha, MFA)
 
+**First: try the stored credential yourself. Do not hand a login to the human
+that you can perform.** Owner finding 18.09.2026 (thesen): every auth-assist
+request for dnbhoovers.com, leadfeeder.com and firmenabc.at sat at
+`blocked / waiting_external` with **attempt 0** — since 11.09., for D&B since
+July. Fresh credentials were in the secret store the whole time and were never
+used, so those sources delivered nothing for weeks.
+
+So, before raising `auth-assist-request`:
+
+1. Read the source's `credential_ref` (`ctox-secret://credentials/<NAME>`) from
+   the target config or the app's source record. If it is set, check the secret
+   catalogue (`ctox secret list`) for that name and its date. Never read, print
+   or store the value itself — pass the reference.
+2. Open a browser session for that source with the credential reference and
+   perform the sign-in yourself, then verify it (a page that only a signed-in
+   session shows).
+3. Only when that genuinely fails, raise `auth-assist-request` — and name the
+   **exact** reason in the same sentence: MFA prompt, captcha, lockout, wrong
+   password, changed login URL, HTTP status. "Blocked" without that reason is
+   not a result.
+4. Never report a blocker from memory. A stored blocker catalogue ("DNS
+   sandbox broken", "five-wedge inventory") is a claim about the past; measure
+   it again in this turn (`getent hosts <host>`, `curl -o /dev/null -w
+   '%{http_code}' <url>`) and quote the measurement. If the measurement
+   contradicts the memory, the measurement wins.
+
+Only after that do the two paths below apply.
+
 The human is not always at the keyboard, and your turn is bounded. The system therefore has two paths — use both correctly:
 
 **Same turn (preferred, fastest).** You raised `auth-assist-request`; the owner's browser opens streamed. Poll `auth-assist-status --session-id <id>` a few times while you work other fields. If it reports authenticated, continue in that session (`browser-automation --session-id`, `source-capture --session-id`) and finish the field normally.
