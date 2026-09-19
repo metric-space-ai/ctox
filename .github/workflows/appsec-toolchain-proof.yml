@@ -163,8 +163,26 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$APPSEC_PROOF_ROOT"
+          scope_script=src/tools/appsec-pentest/fixtures/linux-resource-scope.sh
+          bash "$scope_script" /bin/true
+          if bash "$scope_script" /bin/bash -c 'exit 7'; then
+            echo "scope accepted failed command" >&2
+            exit 1
+          fi
+          if bash "$scope_script" /bin/bash -c 'kill -TERM "$PPID"; sleep 1'; then
+            echo "scope accepted terminated supervisor" >&2
+            exit 1
+          fi
+          echo "scope completion controls passed"
           cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib linux_legacy_rlimits_without_delegation -- --ignored --test-threads=1 --nocapture | tee "$APPSEC_PROOF_ROOT/resource-fallback-tests.log"
-          bash src/tools/appsec-pentest/fixtures/linux-resource-scope.sh cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib linux_scanner_cgroup_runtime_ -- --ignored --test-threads=1 --nocapture | tee "$APPSEC_PROOF_ROOT/resource-cgroup-tests.log"
+          bash "$scope_script" cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib linux_scanner_cgroup_runtime_ -- --ignored --test-threads=1 --nocapture | tee "$APPSEC_PROOF_ROOT/resource-cgroup-tests.log"
+          python3 - "$APPSEC_PROOF_ROOT" <<'PY'
+          import pathlib, re, sys
+          for name, count in [("resource-fallback-tests.log", 2), ("resource-cgroup-tests.log", 10)]:
+              content = (pathlib.Path(sys.argv[1]) / name).read_text()
+              assert re.search(rf"(?m)^test result: ok\. {count} passed; 0 failed; 0 ignored;", content), f"incomplete test execution: {name}"
+          print("complete resource test summaries verified")
+          PY
 
       - name: Run AppSec toolchain proof
         shell: bash
