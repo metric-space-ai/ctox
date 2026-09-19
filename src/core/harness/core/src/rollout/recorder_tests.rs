@@ -52,6 +52,51 @@ fn write_session_file(root: &Path, ts: &str, uuid: Uuid) -> std::io::Result<Path
 }
 
 #[tokio::test]
+async fn recorder_flush_propagates_writer_failure() -> std::io::Result<()> {
+    let home = TempDir::new()?;
+    let path = home.path().join("read-only-rollout.jsonl");
+    fs::write(&path, b"original\n")?;
+    // Tokio buffers the write; flushing this read-only handle must report the
+    // actual OS write failure, including when the test runs as an administrator.
+    let mut file = tokio::fs::File::from_std(File::open(&path)?);
+    tokio::io::AsyncWriteExt::write_all(&mut file, b"not writable\n").await?;
+    let (tx, rx) = mpsc::channel(1);
+    let recorder = RolloutRecorder {
+        tx,
+        rollout_path: path.clone(),
+        state_db: None,
+        event_persistence_mode: EventPersistenceMode::Limited,
+    };
+    let writer = rollout_writer(
+        Some(file),
+        None,
+        rx,
+        None,
+        home.path().to_path_buf(),
+        path.clone(),
+        None,
+        None,
+        "test-provider".to_string(),
+        false,
+    );
+    let (flush, write) = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(recorder.flush(), writer)
+    })
+    .await
+    .expect("flush failure must acknowledge without hanging");
+    let write_error = write.expect_err("read-only writer must fail");
+    let flush_error = flush.expect_err("a failed flush must never acknowledge success");
+    assert_eq!(flush_error.kind(), write_error.kind());
+    assert_eq!(flush_error.to_string(), write_error.to_string());
+    assert_eq!(fs::read(path)?, b"original\n");
+    assert!(
+        recorder.flush().await.is_err(),
+        "failed writer stays closed"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<()> {
     let home = TempDir::new().expect("temp dir");
     let config = ConfigBuilder::default()

@@ -101,7 +101,7 @@ enum RolloutCmd {
     },
     /// Ensure all prior writes are processed; respond when flushed.
     Flush {
-        ack: oneshot::Sender<()>,
+        ack: oneshot::Sender<std::io::Result<()>>,
     },
     Shutdown {
         ack: oneshot::Sender<()>,
@@ -561,7 +561,7 @@ impl RolloutRecorder {
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout flush: {e}")))?;
         rx.await
-            .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
+            .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))?
     }
 
     pub(crate) async fn load_rollout_items(
@@ -857,10 +857,10 @@ async fn rollout_writer(
                 if let Some(writer) = writer.as_mut()
                     && let Err(e) = writer.file.flush().await
                 {
-                    let _ = ack.send(());
+                    let _ = ack.send(Err(IoError::new(e.kind(), e.to_string())));
                     return Err(e);
                 }
-                let _ = ack.send(());
+                let _ = ack.send(Ok(()));
             }
             RolloutCmd::Shutdown { ack } => {
                 let _ = ack.send(());
