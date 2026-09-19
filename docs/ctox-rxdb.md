@@ -385,7 +385,10 @@ a nonempty native sample. The original context fixture exit code is preserved.
 These diagnostic timings never replace the command/reload budgets, and a flat
 user-space profile is neither a call graph nor kernel-CPU or tenant acceptance.
 Local process-lifecycle tests cover PID reuse, permission failure, empty samples
-and bounded profiler cleanup. The first usable CTOX profile and its limits are
+and bounded profiler cleanup. Verbose counter-open diagnostics retain the first
+16 KiB and last 16 KiB of stderr, with truncation reported, so long setup output
+cannot hide the final failure. Nonzero recorder exits still fail the proof;
+additional diagnostics do not establish a successful sample. The first usable CTOX profile and its limits are
 recorded below; they do not replace unprofiled acceptance timings.
 
 
