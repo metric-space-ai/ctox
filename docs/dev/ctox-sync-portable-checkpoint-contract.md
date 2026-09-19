@@ -28,7 +28,7 @@ symlink, and platform-reserved-name checks.
 
 Credential bytes, live database files, and unresolved external effects are not
 portable payloads. The session manifest may contain credential references only.
-Any pending effect prevents a durable copy receipt and prevents restore.
+Any pending effect prevents a durable copy receipt, artifact restore, and workspace reconstruction.
 
 ## Restore boundary
 
@@ -38,12 +38,63 @@ target, and removes the target if any write fails. The restored layout contains
 the workspace, provider state, history, attachments, and a `git/` directory
 with `base-commit`, `index.patch`, and `worktree.patch`.
 
-The store deliberately does not run Git, apply patches, start a provider, or
-reconcile an external effect. The future adapter must verify that the checkout
-is exactly `baseCommit`, apply the staged and unstaged patches in that order,
-install required untracked files, and refuse resume if any step is ambiguous.
-Provider export/import/resume remains a separate adapter acceptance gate for
-Codex and Claude; a fresh thread is not an acceptable fallback.
+The artifact restore operation deliberately does not run Git, apply patches,
+start a provider, or reconcile an external effect. Artifact restore is not
+workspace reconstruction. Provider export/import/resume remains a separate
+adapter acceptance gate for Codex and Claude; a fresh thread is not an
+acceptable fallback.
+
+## Workspace reconstruction consumer
+
+`CheckpointStore::reconstruct_workspace` is the adapter-facing Git
+reconstruction operation. It takes a verified checkpoint digest and an
+explicit local repository that already contains the exact
+`workspaceState.baseCommit` objects, then creates a new isolated target
+worktree. It does not change `restore`, start a provider, take over
+execution, or issue a durable copy receipt.
+
+The consumer:
+
+- loads the checkpoint and keeps pending-effect, manifest, hash, and path
+  rejection;
+- refuses a missing or different base object instead of substituting `HEAD`
+  or fetching remotes, credentials, or other network resources;
+- leaves the original source and any existing target untouched; a failed
+  reconstruction removes only the directory it created;
+- checks out exactly `baseCommit`, applies `indexPatch` with the index
+  updated, then applies `worktreePatch` to the worktree, then installs
+  `requiredUntracked` and any owner-supplied `workspace` artifacts into the
+  reconstructed worktree under the same path, symlink, and collision checks;
+- reads the source object format (`sha1` or `sha256`) and initializes the
+  target with that format; any other format fails closed before the target
+  is created;
+- runs Git with a deadline, empty hook/template/config isolation, disabled
+  replace-refs, `pack.threads=2`, and no inherited diff, filter, or credential helpers;
+- rejects patch paths and workspace symlinks that escape the owned target,
+  including chained links such as `a -> .` plus `b -> a/..`;
+- rejects Git metadata path components such as `.git` (matched
+  case-insensitively) in workspace artifacts, required-untracked paths,
+  deleted paths, and patch paths before any target installation;
+- parses mixed quoted and unquoted `diff --git` rename headers as Git
+  writes them, including an unquoted destination path that contains
+  spaces;
+- requires Git `120000` entries that Git writes into the worktree to
+  materialize as real symlinks. Checkout and `git apply --index` require
+  index `120000` paths to be worktree symlinks. After the unstaged
+  worktree patch, only paths that should still be worktree symlinks are
+  checked, so an unstaged deletion or symlink-to-regular-file change can
+  keep `120000` in the index. If a required worktree symlink is written as
+  a regular file (`core.symlinks=false` or a host that has not certified
+  symlink restoration), reconstruction fails closed. Non-Unix hosts fail
+  closed when any Git symlink would be reconstructed. Index listings are
+  streamed and filtered with an explicit 8 MiB metadata budget; larger
+  listings are rejected before reconstruction can report success.
+  Each symlink-validation pass bounds nested symlink expansions to 64
+  follows; exceeding that work budget is rejected before reconstruction
+  can report success.
+
+This package reconstructs a Git workspace. Source-object transfer across
+hosts and real provider export/resume remain subsequent integrations.
 
 ## Capture producer
 
@@ -69,7 +120,20 @@ remain explicit authority and adapter steps.
 The contract tests cover round-trip hashing, Git metadata restoration,
 case/path collision rejection, deleted/untracked overlap rejection, corrupt
 copy rejection, pending-effect blocking, and capture from a real temporary Git
-repository. Production readiness still requires a real Git reconstruction
-consumer, provider export/import/resume evidence, two eligible durable data
-copies, and a cross-host failover drill. Until those callers exist, this
-contract and producer are a fail-closed foundation and not a portability claim.
+repository. Reconstruction tests capture staged and unstaged edits to the same
+file, names with spaces and Unicode (for example `café.txt`), binary data, a
+deletion, and required untracked content, then rebuild an equal
+HEAD/index/worktree through the consumer. They also cover a wrong or
+missing base, an existing target, corrupt artifacts, malicious patch/path
+behavior, chained symlink escape, safe repeated symlink references,
+cycle rejection, imported Git-metadata path rejection, real mixed-quote
+rename roundtrips, and a bounded symlink-resolution work budget. Unix-only
+fixtures create real Git symlink patches;
+non-symlink cases remain enabled on every platform. Reconstruction streams Git
+index listings larger than 64 KiB, rejects a required worktree `120000`
+path materialized as a regular file, and round-trips a staged symlink
+with an unstaged deletion or replacement by a regular file.
+Production readiness still requires provider export/import/resume
+evidence, two eligible durable data copies, and a cross-host failover drill.
+Until those callers exist, this contract is a fail-closed workspace-capture
+and reconstruction foundation and not a session-portability claim.
