@@ -1,7 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { createCtoxLauncher } from './ctoxLauncher.js';
-import { ensureDesktopLayoutWithAuthority } from './layout-authority.js';
+import { ensureDesktopLayoutWithAuthority, isDatabaseClosingError } from './layout-authority.js';
 import { makeIconDraggable } from './iconDrag.js?v=20260816-browser-sync-guards-v141';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js?v=20260816-browser-sync-guards-v141';
 import {
@@ -1056,10 +1056,6 @@ export async function mount(ctx) {
     return typeof unsubscribe === 'function' ? unsubscribe : () => {};
   }
 
-  function isDatabaseClosingError(error) {
-    const message = String(error?.message || error || '');
-    return /IDBDatabase.*closing|database connection is closing/i.test(message);
-  }
 
   function showManagedAuthorizationError(error) {
     const message = String(error?.message || error || '');
@@ -1111,21 +1107,16 @@ export async function mount(ctx) {
     return `${moduleTitle ? `[${moduleTitle}] ` : ''}${doc.command_type || ''}`.trim() || doc.command_id || '';
   }
   async function ensureLayout(collection, launcherRef) {
-    try {
-      return await ensureDesktopLayoutWithAuthority({
-        collection,
-        documentId: LAYOUT_DOC_ID,
-        defaultLayout: () => defaultLayout(launcherRef),
-        readNativeDocument: ctx.readNativeCollectionDocument
-          ? () => ctx.readNativeCollectionDocument('desktop_layout', LAYOUT_DOC_ID, { timeoutMs: 5000 })
-          : null,
-        insertMissingSeed,
-      });
-    } catch (error) {
-      if (!isDatabaseClosingError(error)) throw error;
-      console.info('[desktop] layout read skipped during database restart; using default layout');
-      return defaultLayout(launcherRef);
-    }
+    return ensureDesktopLayoutWithAuthority({
+      collection,
+      documentId: LAYOUT_DOC_ID,
+      defaultLayout: () => defaultLayout(launcherRef),
+      readNativeDocument: ctx.readNativeCollectionDocument
+        ? () => ctx.readNativeCollectionDocument('desktop_layout', LAYOUT_DOC_ID, { timeoutMs: 5000 })
+        : null,
+      insertMissingSeed,
+      onDatabaseClosing: () => console.info('[desktop] layout read skipped during database restart; using default layout'),
+    });
   }
 
   function defaultLayout(launcherRef) {
