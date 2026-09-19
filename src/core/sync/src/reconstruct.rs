@@ -1060,11 +1060,21 @@ async fn transfer_base_objects(
         budget,
     )
     .await?;
+    // Keep the transferred pack as a packfile. `unpack-objects` explodes one
+    // loose object per blob and exceeded the 10s Git deadline on Windows for
+    // the 1200-file index-listing fixture (`unpack-objects -q`).
     git(
         isolation,
         source,
         Some(&pack),
-        &["--git-dir", target_git, "unpack-objects", "-q"],
+        &[
+            "--git-dir",
+            target_git,
+            "index-pack",
+            "-q",
+            "--stdin",
+            "--strict",
+        ],
         4096,
     )
     .await?;
