@@ -37,3 +37,10 @@ imports the actual exported resolver and exercises insert/findOne/exec failure,
 recovery, original error identity and a conflict without a winner.
 `registry-launch-smoke.mjs` retains the adapter/import wiring guard. These
 checks do not prove live sync, authentication or production browser readiness.
+
+The new named export is consumed through
+`layout-authority.js?v=20260919-layout-boundary-v2`. Keep this versioned import
+coherent in the desktop adapter and tests: an existing browser may still cache
+the unversioned helper, which did not export the classifier. The import
+compatibility test checks URL separation and loads the production URL to verify
+its requested exports. It is not a substitute for retained-session browser QA.
