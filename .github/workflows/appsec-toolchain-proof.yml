@@ -63,6 +63,7 @@ jobs:
 
     env:
       CARGO_TERM_COLOR: always
+      CARGO_BUILD_JOBS: "2"
       APPSEC_PROFILE: ${{ inputs.profile || 'standard' }}
       APPSEC_INCLUDE_DATA_BUNDLES: ${{ github.event_name != 'workflow_dispatch' || inputs.include_data_bundles }}
       APPSEC_ATTEST_NATIVE: ${{ github.event_name != 'workflow_dispatch' || inputs.attest_native }}
@@ -94,7 +95,7 @@ jobs:
 
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16
         with:
-          go-version: "1.25.x"
+          go-version: "1.26.4"
           check-latest: true
 
       - uses: actions/setup-java@0f481fcb613427c0f801b606911222b5b6f3083a
@@ -107,7 +108,7 @@ jobs:
         shell: bash
         run: |
           sudo apt-get update
-          packages=(nmap ncat ndiff bubblewrap git ca-certificates pkg-config libssl-dev libfontconfig1-dev libpcap-dev)
+          packages=(nmap ncat ndiff bubblewrap git ca-certificates pkg-config libssl-dev libfontconfig1-dev libpcap-dev libre2-dev)
           if [ "$APPSEC_PROFILE" = "full" ]; then
             packages+=(clamav clamav-freshclam)
           fi
@@ -146,6 +147,14 @@ jobs:
         run: |
           cargo build --locked --manifest-path src/tools/appsec-pentest/Cargo.toml
           cargo build --locked --manifest-path src/tools/web-stack/Cargo.toml --no-default-features --bin ctox-web-stack
+
+      - name: Test scanner environment isolation and probe evidence
+        shell: bash
+        run: |
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib scanner_probe_ -- --test-threads=2
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib python_scanner_plans_do_not_share_dependency_environments -- --test-threads=2
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib python_installer_repairs_an_incompatible_venv_once_then_reuses_it -- --test-threads=2
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib install_plans_use_isolated_python_and_node_runtimes -- --test-threads=2
 
       - name: Run AppSec toolchain proof
         shell: bash
