@@ -1071,7 +1071,6 @@ async fn transfer_base_objects(
             "--git-dir",
             target_git,
             "index-pack",
-            "-q",
             "--strict",
             "--stdin",
         ],
