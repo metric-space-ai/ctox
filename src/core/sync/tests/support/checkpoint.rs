@@ -19,7 +19,27 @@ pub fn copy_receipt(
     sequence: u64,
 ) -> CheckpointCopyReceipt {
     let store = CheckpointStore::open(root.join(format!("copy-{id}")), 4096).unwrap();
-    let data = b"complete synthetic journal for authority fixture";
+    let meta = serde_json::json!({
+        "timestamp": "2026-09-20T12:00:00Z",
+        "type": "session_meta",
+        "payload": {
+            "id": spec.session_id,
+            "timestamp": "2026-09-20T12:00:00Z",
+            "cwd": "/original/workspace",
+            "originator": "codex_cli_rs",
+            "cli_version": "1.0.0",
+            "source": "exec",
+            "model_provider": "test-provider",
+            "base_instructions": {},
+            "capability_profile": "workspace_worker",
+        },
+    });
+    let event = serde_json::json!({
+        "timestamp": "2026-09-20T12:00:00Z",
+        "type": "event_msg",
+        "payload": {"type": "user_message", "message": "ready", "kind": "plain"},
+    });
+    let data = format!("{meta}\n{event}\n").into_bytes();
     let journal = ArtifactRef {
         sha256: format!("{:x}", Sha256::digest(data)),
         size_bytes: data.len() as u64,

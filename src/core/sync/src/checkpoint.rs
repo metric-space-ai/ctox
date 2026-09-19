@@ -1,5 +1,12 @@
 //! Content-addressed session checkpoints. No source tree, credentials or live database is mutated.
-use crate::contracts::{ArtifactRef, CheckpointManifest, WorkspaceEntry, WorkspaceEntryKind};
+use crate::contracts::{
+    ArtifactRef, CheckpointManifest, SessionManifest, WorkspaceEntry, WorkspaceEntryKind,
+};
+use ctox_protocol::portable_journal::{
+    artifact_ref_for, validate_portable_journal, PortableArtifactRef, PortableJournalExpectation,
+    PortableJournalFormat, PortableJournalLimits,
+};
+use ctox_protocol::ThreadId;
 use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeSet,
@@ -10,8 +17,48 @@ use std::{
 
 const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+const PORTABLE_JOURNAL_LIMITS: PortableJournalLimits = PortableJournalLimits {
+    max_bytes: 64 * 1024 * 1024,
+    max_line_bytes: 16 * 1024 * 1024,
+    max_records: 100_000,
+};
 fn invalid(message: impl Into<String>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.into())
+}
+fn portable_journal_expectation(
+    session: &SessionManifest,
+    transport_version: u32,
+) -> io::Result<PortableJournalExpectation> {
+    if session.version != 1 || transport_version != 2 {
+        return Err(invalid("unsupported portable journal input format"));
+    }
+    let session_id = ThreadId::from_string(&session.session_id)
+        .map_err(|_| invalid("invalid portable session identity"))?;
+    Ok(PortableJournalExpectation {
+        format: PortableJournalFormat::current(),
+        session_id,
+    })
+}
+pub(crate) fn validate_capture_journal(
+    session: &SessionManifest,
+    journal_bytes: &[u8],
+) -> io::Result<PortableArtifactRef> {
+    if session.harness != "codex" {
+        return Err(invalid("unsupported portable session harness"));
+    }
+    if journal_bytes.len() as u64 > PORTABLE_JOURNAL_LIMITS.max_bytes {
+        return Err(invalid("portable journal exceeds its byte budget"));
+    }
+    let artifact = artifact_ref_for(journal_bytes);
+    let expected = portable_journal_expectation(session, 2)?;
+    validate_portable_journal(
+        journal_bytes,
+        &artifact,
+        &expected,
+        &PORTABLE_JOURNAL_LIMITS,
+    )
+    .map_err(|_| invalid("invalid portable execution journal"))?;
+    Ok(artifact)
 }
 fn hash_valid(hash: &str) -> bool {
     hash.len() == 64
@@ -133,6 +180,7 @@ impl CheckpointStore {
     pub fn publish(&self, manifest: &CheckpointManifest) -> io::Result<String> {
         validate_manifest(manifest)?;
         self.verify_contents(manifest)?;
+        self.validate_portable_history(manifest)?;
         let bytes = serde_json::to_vec(manifest).map_err(io::Error::other)?;
         if bytes.len() as u64 > MAX_MANIFEST_BYTES {
             return Err(invalid("checkpoint manifest exceeds its budget"));
@@ -168,7 +216,39 @@ impl CheckpointStore {
             serde_json::from_slice(&bytes).map_err(io::Error::other)?;
         validate_manifest(&manifest)?;
         self.verify_contents(&manifest)?;
+        self.validate_portable_history(&manifest)?;
         Ok(manifest)
+    }
+    /// Bind every checkpoint history artifact to strict portable journal syntax.
+    fn validate_portable_history(&self, manifest: &CheckpointManifest) -> io::Result<()> {
+        if manifest.session.harness != "codex" {
+            return Err(invalid("unsupported portable session harness"));
+        }
+        let expected = portable_journal_expectation(&manifest.session, manifest.version)?;
+        for artifact in &manifest.history {
+            if artifact.size_bytes > PORTABLE_JOURNAL_LIMITS.max_bytes {
+                return Err(invalid("portable journal exceeds its byte budget"));
+            }
+            let mut journal = Vec::new();
+            self.open_blob(artifact)?
+                .take(PORTABLE_JOURNAL_LIMITS.max_bytes + 1)
+                .read_to_end(&mut journal)?;
+            if journal.len() as u64 != artifact.size_bytes {
+                return Err(invalid("portable journal artifact length mismatch"));
+            }
+            let expected_artifact = PortableArtifactRef {
+                sha256: artifact.sha256.clone(),
+                size_bytes: artifact.size_bytes,
+            };
+            validate_portable_journal(
+                &journal,
+                &expected_artifact,
+                &expected,
+                &PORTABLE_JOURNAL_LIMITS,
+            )
+            .map_err(|_| invalid("invalid portable execution journal"))?;
+        }
+        Ok(())
     }
     /// Flush verified artifacts and their directory entries before issuing a signed receipt.
     pub(crate) fn verify_durable_copy(&self, digest: &str) -> io::Result<CheckpointManifest> {

@@ -1,6 +1,30 @@
 use ctox_sync::{checkpoint::CheckpointStore, contracts::*};
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, fs, io::Cursor};
+fn journal() -> Vec<u8> {
+    let meta = serde_json::json!({
+        "timestamp": "2026-09-20T12:00:00Z",
+        "type": "session_meta",
+        "payload": {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "timestamp": "2026-09-20T12:00:00Z",
+            "cwd": "/original/workspace",
+            "originator": "codex_cli_rs",
+            "cli_version": "1.0.0",
+            "source": "exec",
+            "model_provider": "test-provider",
+            "base_instructions": {},
+            "capability_profile": "workspace_worker",
+        },
+    });
+    let event = serde_json::json!({
+        "timestamp": "2026-09-20T12:00:00Z",
+        "type": "event_msg",
+        "payload": {"type": "user_message", "message": "ready", "kind": "plain"},
+    });
+    format!("{meta}\n{event}\n").into_bytes()
+}
+
 fn blob(bytes: &[u8]) -> ArtifactRef {
     ArtifactRef {
         sha256: format!("{:x}", Sha256::digest(bytes)),
@@ -14,7 +38,7 @@ fn manifest() -> CheckpointManifest {
         session: SessionManifest {
             version: 1,
             scope_id: "scope".into(),
-            session_id: "session".into(),
+            session_id: "11111111-1111-1111-1111-111111111111".into(),
             harness: "codex".into(),
             harness_version: "pinned".into(),
             model_route_id: "route".into(),
@@ -35,7 +59,7 @@ fn manifest() -> CheckpointManifest {
             }],
             deleted_paths: ["src/removed.rs".into()].into_iter().collect(),
         },
-        history: vec![blob(b"complete journal")],
+        history: vec![blob(&journal())],
         attachments: vec![blob(b"attachment")],
         workspace: vec![WorkspaceEntry {
             path: "src/main.rs".into(),
@@ -54,7 +78,7 @@ fn manifest() -> CheckpointManifest {
 }
 fn populate(store: &CheckpointStore) {
     for bytes in [
-        b"complete journal".as_slice(),
+        journal().as_slice(),
         b"attachment",
         b"uncommitted source",
         b"provider checkpoint",
