@@ -211,6 +211,7 @@ impl CheckpointStore {
                 "--work-tree",
                 path_to_utf8(&target)?,
                 "checkout",
+                "-q",
                 "-f",
                 "HEAD",
             ],
@@ -586,7 +587,9 @@ async fn stream_index_symlink_paths(
         Err(_) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err(invalid("Git command exceeded its deadline"));
+            return Err(invalid(
+                "Git command exceeded its deadline (ls-files -s -z)",
+            ));
         }
     };
     if !status.success() {
@@ -1227,7 +1230,10 @@ async fn git(
         Err(_) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err(invalid("Git command exceeded its deadline"));
+            return Err(invalid(format!(
+                "Git command exceeded its deadline ({})",
+                args.join(" "),
+            )));
         }
     };
     if !status.success() {
