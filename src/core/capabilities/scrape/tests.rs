@@ -1,3 +1,191 @@
+mod completed_empty_query_contract {
+    use super::*;
+
+    const SCRIPT: &str = r#"
+python3 - <<'CTOX_QUERY_FIXTURE'
+import hashlib,json,os,pathlib,sys
+raw=os.environ['CTOX_SCRAPE_INPUT_JSON']; inp=json.loads(raw)
+mode=inp.get('mode','valid'); run=pathlib.Path(os.environ['CTOX_SCRAPE_RUN_DIR'])
+if mode == 'records':
+ print(json.dumps({'records':[{'id':'prior','company_name':'Previous Company'}]})); sys.exit(0)
+r={'schema':'ctox.scrape.query_completion.v1','run_id':run.name,
+ 'target_key':os.environ['CTOX_SCRAPE_TARGET_KEY'],'input_sha256':hashlib.sha256(raw.encode()).hexdigest(),
+ 'query':inp['company'],'provider_url':'https://example.com/search','http_status':200,
+ 'completed':True,'results_page':True,'blocked':False,'matched_records':0,'observed_records':8,
+ 'observation':{'publishers':['Other Company'],'exact_matches':[]}}
+if mode == 'wrong_run': r['run_id']='old-run'
+if mode == 'wrong_target': r['target_key']='other-target'
+if mode == 'wrong_input': r['input_sha256']='0'*64
+if mode == 'wrong_query': r['query']='Different Company'
+if mode == 'wrong_provider': r['provider_url']='https://other.example/search'
+if mode == 'blocked': r['blocked']=True
+if mode == 'http_error': r['http_status']=503
+if mode == 'not_completed': r['completed']=False
+if mode == 'wrong_count': r['matched_records']=1
+if mode == 'no_observation': r['observation']={}
+b=json.dumps(r).encode(); path=run/'outputs/query-evidence.json'; path.write_bytes(b)
+p={'records':[],'query_completion':{'evidence_path':'outputs/query-evidence.json','evidence_sha256':hashlib.sha256(b).hexdigest()}}
+if mode == 'wrong_hash': p['query_completion']['evidence_sha256']='0'*64
+if mode == 'missing_evidence': path.unlink()
+if mode == 'absent_receipt': del p['query_completion']
+if mode == 'blocked': p['failure_mode']='blocked'
+print(json.dumps(p)); sys.exit(2 if mode == 'exit_error' else 0)
+CTOX_QUERY_FIXTURE
+"#;
+
+    fn fixture(root: &Path) -> ScrapeTargetView {
+        let target = upsert_target(root, DEFAULT_RUNTIME_ROOT, json!({
+            "target_key":"query-provider", "display_name":"Query Provider",
+            "start_url":"https://example.com/search", "target_kind":"company",
+            "config":{"skip_probe":true,"expected_min_records":1,"llm_enrichment":{"enabled":false}},
+            "output_schema":{"schema_key":"company.v1"}
+        })).unwrap();
+        let path = root.join("query.sh");
+        fs::write(&path, SCRIPT).unwrap();
+        register_script(
+            root,
+            DEFAULT_RUNTIME_ROOT,
+            &target.target_key,
+            path.to_str().unwrap(),
+            "shell",
+            None,
+            None,
+        )
+        .unwrap();
+        target
+    }
+
+    fn execute(root: &Path, mode: &str) -> ScrapeExecutionOutcome {
+        execute_scrape_with_outcome(
+            root,
+            &[
+                "--target-key".into(),
+                "query-provider".into(),
+                "--input-json".into(),
+                json!({"company":"Current Company","mode":mode}).to_string(),
+                "--timeout-seconds".into(),
+                "10".into(),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn completed_empty_query_persists_current_receipt_without_fabricated_or_old_records() {
+        let root = temp_root("completed-empty-query");
+        let target = fixture(&root);
+        let previous = execute(&root, "records");
+        assert_eq!(previous.status, ScrapeRunStatus::Succeeded, "{previous:?}");
+        let before: i64 = open_db(&root)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM scrape_record_latest WHERE target_id=?1",
+                params![target.target_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let outcome = execute(&root, "valid");
+        assert_eq!(outcome.status, ScrapeRunStatus::CompletedEmpty);
+        assert!(outcome.ok);
+        assert!(!outcome.should_queue_repair);
+        assert!(outcome.repair_request_path.is_none());
+        assert!(outcome.repair_queue_task.is_none());
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.records_found, 0);
+        assert!(outcome.fields_extracted.is_empty());
+        assert!(outcome.materialization.is_none());
+        assert_ne!(outcome.run_id, previous.run_id);
+        let receipt = outcome.query_completion.as_ref().unwrap();
+        assert_eq!(receipt["run_id"], outcome.run_id);
+        assert_eq!(receipt["query"], "Current Company");
+        let conn = open_db(&root).unwrap();
+        let (status, result): (String, String) = conn
+            .query_row(
+                "SELECT status,result_json FROM scrape_run WHERE run_id=?1",
+                params![outcome.run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "completed_empty");
+        assert_eq!(
+            serde_json::from_str::<Value>(&result).unwrap()["query_completion"],
+            *receipt
+        );
+        assert_eq!(
+            load_last_successful_run(&conn, &target.target_id)
+                .unwrap()
+                .unwrap()["run_id"],
+            previous.run_id
+        );
+        let after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM scrape_record_latest WHERE target_id=?1",
+                params![target.target_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            after, before,
+            "empty query must not materialize or erase records"
+        );
+        let manifest: Value =
+            serde_json::from_str(&fs::read_to_string(&outcome.run_manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest["result"]["query_completion"], *receipt);
+        let evidence = manifest["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["artifact_kind"] == "query_completion_evidence")
+            .unwrap();
+        let bytes = fs::read(evidence["path"].as_str().unwrap()).unwrap();
+        assert_eq!(evidence["content_sha256"], compute_sha256_bytes(&bytes));
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), *receipt);
+        drop(conn);
+        cleanup_test_root(&root);
+    }
+
+    #[test]
+    fn invalid_empty_query_receipts_persist_failure_and_never_become_success() {
+        let root = temp_root("invalid-empty-query");
+        fixture(&root);
+        for mode in [
+            "wrong_run",
+            "wrong_target",
+            "wrong_input",
+            "wrong_query",
+            "wrong_provider",
+            "blocked",
+            "http_error",
+            "not_completed",
+            "wrong_count",
+            "no_observation",
+            "wrong_hash",
+            "missing_evidence",
+            "absent_receipt",
+            "exit_error",
+        ] {
+            let outcome = execute(&root, mode);
+            assert!(!outcome.ok, "{mode}");
+            assert_ne!(outcome.status, ScrapeRunStatus::CompletedEmpty, "{mode}");
+            assert!(outcome.query_completion.is_none(), "{mode}");
+            assert!(outcome.materialization.is_none(), "{mode}");
+            if mode == "blocked" {
+                assert_eq!(outcome.status, ScrapeRunStatus::Blocked, "{outcome:?}");
+            }
+            let persisted: String = open_db(&root)
+                .unwrap()
+                .query_row(
+                    "SELECT status FROM scrape_run WHERE run_id=?1",
+                    params![outcome.run_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(persisted, outcome.status.as_str(), "{mode}");
+        }
+        cleanup_test_root(&root);
+    }
+}
+
 // In-tree behavioral tests for the scrape capability (extracted from
 // mod.rs; `use super::*` keeps access to crate-private internals).
 use super::*;
