@@ -178,6 +178,24 @@ async fn recorder_materializes_only_after_explicit_persist() -> std::io::Result<
     let text_after_second_persist = std::fs::read_to_string(&rollout_path)?;
     assert_eq!(text_after_second_persist, text);
 
+    recorder
+        .record_items(&[RolloutItem::EventMsg(EventMsg::AgentMessage(
+            AgentMessageEvent {
+                message: "event-after-materialization".to_string(),
+                phase: None,
+            },
+        ))])
+        .await?;
+    tokio::time::timeout(Duration::from_secs(5), recorder.flush())
+        .await
+        .expect("materialized writer must acknowledge successful flush")?;
+    let flushed_text = std::fs::read_to_string(&rollout_path)?;
+    assert!(flushed_text.starts_with(&text));
+    assert!(
+        flushed_text.contains("event-after-materialization"),
+        "successful flush must make the subsequent event readable"
+    );
+
     recorder.shutdown().await?;
     Ok(())
 }
