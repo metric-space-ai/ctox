@@ -7692,20 +7692,22 @@ fn validate_person_research_record_binding(
         }
     }
     let record_string = |fields: &[&str]| {
-        fields
-            .iter()
-            .find_map(|field| record_object.get(*field).and_then(Value::as_str))
-            .or_else(|| {
-                record_object
-                    .get("data")
-                    .and_then(Value::as_object)
-                    .and_then(|data| {
-                        fields
-                            .iter()
-                            .find_map(|field| data.get(*field).and_then(Value::as_str))
-                    })
-            })
-            .map(str::trim)
+        let find_in = |object: &serde_json::Map<String, Value>| {
+            fields
+                .iter()
+                .find_map(|field| object.get(*field).and_then(Value::as_str))
+                .map(ToOwned::to_owned)
+        };
+        // Prefer the bound lead payload. Some records expose a technical
+        // `title` (often the record id) alongside the human company name.
+        // Looking at the outer object first would bind the request to that id
+        // and reject an otherwise valid research call.
+        record_object
+            .get("data")
+            .and_then(Value::as_object)
+            .and_then(find_in)
+            .or_else(|| find_in(record_object))
+            .map(|value| value.trim().to_owned())
             .unwrap_or_default()
     };
     let company = payload
@@ -13014,6 +13016,30 @@ mod tests {
                 .map(|error| &error.code),
             Some(&BusinessOsMcpErrorCode::RecordNotFound)
         );
+
+        let mismatch = execute_action(
+            root,
+            &context,
+            "outbound-lead-generation",
+            "web_stack.person_research",
+            &serde_json::json!({
+                "record_id": "lead_1",
+                "idempotency_key": "mismatch-1",
+                "payload": {
+                    "operation_id": "lead_1",
+                    "company": "Other GmbH",
+                    "country": "DE",
+                    "mode": "update_person"
+                }
+            }),
+        )
+        .expect_err("company mismatch must be rejected before command acceptance");
+        assert_eq!(
+            mismatch
+                .downcast_ref::<BusinessOsMcpError>()
+                .map(|error| &error.code),
+            Some(&BusinessOsMcpErrorCode::ValidationFailed)
+        );
         Ok(())
     }
 
@@ -13036,6 +13062,7 @@ mod tests {
                 "collection": "outbound_lead_generation_leads",
                 "documents": [{
                     "id": "lead_nested",
+                    "title": "lead_nested",
                     "data": {
                         "name": "Nested GmbH",
                         "country": "DE"
