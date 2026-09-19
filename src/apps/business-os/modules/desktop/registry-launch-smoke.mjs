@@ -145,7 +145,9 @@ assert.ok(
   'Desktop initial icon seeding must tolerate transient IndexedDB connection shutdown'
 );
 assert.ok(
-  desktopSource.includes('return /IDBDatabase.*closing|database connection is closing/i.test(message);'),
+  readFileSync(new URL('./layout-authority.js', import.meta.url), 'utf8')
+    .includes('return /IDBDatabase.*closing|database connection is closing/i.test(message);')
+    && /import \{[^}]*isDatabaseClosingError[^}]*\} from '\.\/layout-authority\.js'/.test(desktopSource),
   'Desktop transient IndexedDB shutdown detection must not depend on DOMException prototype shape'
 );
 assert.ok(
