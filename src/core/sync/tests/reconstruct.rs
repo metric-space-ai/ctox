@@ -307,6 +307,32 @@ async fn reconstruct_rejects_missing_or_wrong_base_without_substituting_head() {
 }
 
 #[tokio::test]
+async fn reconstruct_rejects_source_inside_a_git_subdirectory() {
+    let root = tempfile::tempdir().unwrap();
+    let workspace = prepared_workspace(root.path());
+    fs::write(workspace.join("canary.txt"), "untouched\n").unwrap();
+    let nested = workspace.join("config");
+    let store = CheckpointStore::open(root.path().join("store"), 1024 * 1024).unwrap();
+    let captured = store.capture(request(&workspace)).await.unwrap();
+    let target = root.path().join("reconstructed");
+    let error = store
+        .reconstruct_workspace(&captured.digest, &nested, &target)
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("source repository must be the Git workspace root or a bare repository",),
+        "{error}"
+    );
+    assert!(!target.exists());
+    assert_eq!(
+        fs::read_to_string(workspace.join("canary.txt")).unwrap(),
+        "untouched\n"
+    );
+}
+
+#[tokio::test]
 async fn reconstruct_rejects_existing_target_corrupt_artifacts_and_pending_effects() {
     let root = tempfile::tempdir().unwrap();
     let workspace = prepared_workspace(root.path());
