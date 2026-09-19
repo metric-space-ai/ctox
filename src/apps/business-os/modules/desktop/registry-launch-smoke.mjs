@@ -147,7 +147,7 @@ assert.ok(
 assert.ok(
   readFileSync(new URL('./layout-authority.js', import.meta.url), 'utf8')
     .includes('return /IDBDatabase.*closing|database connection is closing/i.test(message);')
-    && /import \{[^}]*isDatabaseClosingError[^}]*\} from '\.\/layout-authority\.js'/.test(desktopSource),
+    && /import \{[^}]*isDatabaseClosingError[^}]*\} from '\.\/layout-authority\.js\?v=20260919-layout-boundary-v2'/.test(desktopSource),
   'Desktop transient IndexedDB shutdown detection must not depend on DOMException prototype shape'
 );
 assert.ok(
