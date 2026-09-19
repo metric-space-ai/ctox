@@ -152,6 +152,7 @@ jobs:
         shell: bash
         run: |
           cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib scanner_probe_ -- --test-threads=2
+          cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib scanner_pipe_ -- --test-threads=2
           cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib python_scanner_plans_do_not_share_dependency_environments -- --test-threads=2
           cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib python_installer_repairs_an_incompatible_venv_once_then_reuses_it -- --test-threads=2
           cargo test --locked --manifest-path src/tools/appsec-pentest/Cargo.toml --lib install_plans_use_isolated_python_and_node_runtimes -- --test-threads=2
