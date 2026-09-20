@@ -49,6 +49,96 @@ async function capturePinRuntimeEvidence(page, error = null) {
     clearTimeout(diagnosticTimer);
   }
 }
+
+// Seed diagnostics must not repair/restart replication or turn a local read
+// into demand traffic. Retain only fixture pin IDs and scalar health fields.
+function summarizePinSeedDocument(doc) {
+  if (!doc) return null;
+  const pins = Array.isArray(doc.taskbar_pins) ? doc.taskbar_pins : null;
+  return {
+    layoutIdMatches: doc.id === 'layout',
+    taskbar_pins: pins?.slice(0, 16).map(id => ['tickets', 'ctox'].includes(id) ? id : '[other]') ?? null,
+    pinCount: pins?.length ?? null,
+    updated_at_ms: Number.isFinite(doc.updated_at_ms) ? doc.updated_at_ms : null,
+    deleted: doc._deleted === true,
+  };
+}
+
+async function capturePinSeedBrowserEvidence(page) {
+  let timer;
+  const capture = page.evaluate(async () => {
+    const state = globalThis.ctoxBusinessOsSmoke?.state;
+    const collection = state?.db?.collection?.('desktop_layout');
+    const diagnostics = state?.sync?.diagnostics?.collections?.desktop_layout
+      || state?.syncDiagnostics?.collections?.desktop_layout;
+    const resources = state?.sync?.resourceSnapshot?.();
+    const scalar = value => typeof value === 'boolean' || Number.isFinite(value) ? value : null;
+    const status = value => [
+      'pending', 'starting', 'running', 'stopped', 'skipped', 'error', 'failed',
+      'connected', 'disconnected', 'connecting', 'reconnecting', 'restarting',
+      'complete', 'waiting-for-peer', 'stalled', 'stalled-waiting-for-peer',
+      'demand-only', 'paused', 'ready', 'live',
+    ].includes(value) ? value : value == null ? null : '[other]';
+    const error = value => value ? {
+      present: true,
+      // Messages/stacks can contain records, URLs or credentials. Keep only
+      // conventional symbolic codes, never arbitrary error text.
+      code: typeof value.code === 'string' && /^(?:[A-Z][A-Z_]{0,63}|ctox_[a-z_]{1,64})$/.test(value.code)
+        ? value.code : null,
+      retryable: scalar(value.retryable),
+    } : null;
+    const result = {
+      capturedAtMs: Date.now(),
+      collectionPresent: Boolean(collection),
+      demandLoaderPresent: Boolean(collection?.demandLoader),
+      resources: resources ? {
+        active: resources.activeCollections?.includes('desktop_layout') === true,
+        bridge: resources.bridgeCollections?.includes('desktop_layout') === true,
+        pinned: resources.pinnedCollections?.includes('desktop_layout') === true,
+        leaseCount: scalar(resources.leaseCounts?.desktop_layout ?? 0),
+      } : null,
+      replication: diagnostics ? {
+        status: status(diagnostics.status),
+        connectionStatus: status(diagnostics.connectionStatus),
+        initialReplicationState: status(diagnostics.initialReplicationState),
+        active: scalar(diagnostics.active),
+        queryReady: scalar(diagnostics.queryReady),
+        activePeerCount: scalar(diagnostics.frameTransport?.activePeerCount),
+        pushInProgress: scalar(diagnostics.frameTransport?.pushInProgress),
+        pullInProgress: scalar(diagnostics.frameTransport?.pullInProgress),
+        lastError: error(diagnostics.lastError),
+        lastLifecycleEvent: error(diagnostics.lastLifecycleEvent),
+      } : null,
+      hydrationError: error(state?.taskbarPinHydrationLastError),
+    };
+    try {
+      if (!collection?.storageCollection?.findDocumentsById) {
+        return { ...result, documentUnavailable: 'local-reader-unavailable' };
+      }
+      const docs = await collection.storageCollection.findDocumentsById(['layout'], { withDeleted: true });
+      const doc = docs?.layout;
+      const pins = Array.isArray(doc?.taskbar_pins) ? doc.taskbar_pins : null;
+      result.document = doc ? {
+        layoutIdMatches: doc.id === 'layout',
+        taskbar_pins: pins?.slice(0, 16).map(id => ['tickets', 'ctox'].includes(id) ? id : '[other]') ?? null,
+        pinCount: pins?.length ?? null,
+        updated_at_ms: Number.isFinite(doc.updated_at_ms) ? doc.updated_at_ms : null,
+        deleted: doc._deleted === true,
+      } : null;
+    } catch {
+      result.documentUnavailable = 'local-read-failed';
+    }
+    return result;
+  }).catch(() => ({ unavailable: 'browser-evaluate-failed' }));
+  try {
+    return await Promise.race([capture, new Promise(resolve => {
+      timer = setTimeout(() => resolve({ unavailable: 'browser-evaluate-timeout', timeoutMs: 3000 }), 3000);
+    })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function openHeldPinContext({ browser, url, storageState, capturePinWrites = false }) {
   let held = true;
   let heldBytes = 0;
@@ -117,8 +207,16 @@ async function runDesktopPinReload({ page, readNativeLayout, outputPath }) {
     const matches = (doc, wanted = expected) => doc && doc.updated_at_ms === wanted.updated_at_ms
       && JSON.stringify(doc.taskbar_pins) === JSON.stringify(wanted.taskbar_pins);
     const deadline = Date.now() + 60000;
-    while (!matches(await readNativeLayout())) {
-      if (Date.now() >= deadline) throw new Error('native pin seed did not converge');
+    report.seedDiagnostics = { expected, deadlineMs: deadline };
+    report.seedDiagnostics.browserAfterMutation = await capturePinSeedBrowserEvidence(page);
+    let nativeSeedObservation;
+    while (!matches(nativeSeedObservation = await readNativeLayout())) {
+      if (Date.now() >= deadline) {
+        report.seedDiagnostics.lastNativeDocument = summarizePinSeedDocument(nativeSeedObservation);
+        report.seedDiagnostics.timedOutAtMs = Date.now();
+        report.seedDiagnostics.browserAtTimeout = await capturePinSeedBrowserEvidence(page);
+        throw new Error('native pin seed did not converge');
+      }
       await delay(100);
     }
     report.nativeSeed = await readNativeLayout();
