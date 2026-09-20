@@ -3868,13 +3868,27 @@ pub fn load_module_source_records(
         left_path.cmp(right_path)
     });
     let now = now_ms() as i64;
-    let conn = open_store(root)?;
+    let current_ids = files
+        .iter()
+        .filter_map(|file| file.get("id").and_then(Value::as_str))
+        .collect::<HashSet<_>>();
+    let previous = pull_coding_module_source_records(root, &module_id)?;
+    let mut writer = BusinessProjectionWriter::open(root)?;
+    for file in previous {
+        let id = file
+            .get("id")
+            .and_then(Value::as_str)
+            .context("source projection id missing")?;
+        if !current_ids.contains(id) {
+            writer.tombstone_source_projection("business_module_source_files", id, now)?;
+        }
+    }
     let mut file_ids = Vec::with_capacity(files.len());
     for file in &files {
         let Some(id) = file.get("id").and_then(Value::as_str) else {
             continue;
         };
-        upsert_business_record(&conn, "business_module_source_files", id, now, file.clone())?;
+        writer.upsert_source_projection("business_module_source_files", id, now, file.clone())?;
         file_ids.push(id.to_string());
     }
     Ok(serde_json::json!({
@@ -3944,7 +3958,7 @@ fn save_module_source_record_inner(
     let app_root = resolve_business_os_app_root(root)?;
     let module_id = source_sanitize_slug(&mutation.module_id);
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
-    let (module_root, source_app_root) =
+    let (module_root, _source_app_root) =
         resolve_module_source_root_for_root(root, &app_root, &module_id)?;
     let rel = normalize_source_relative_path(&mutation.path)?;
     anyhow::ensure!(
@@ -4017,7 +4031,7 @@ fn save_module_source_record_inner(
     )?;
     drop(conn);
     if changed {
-        record_module_version(root, &source_app_root, &module_id, "edit", "", "")?;
+        super::module_lifecycle::record_module_version_at(root, &module_root, &module_id)?;
     }
     Ok(serde_json::json!({
         "ok": true,
@@ -4025,6 +4039,7 @@ fn save_module_source_record_inner(
         "path": rel_display,
         "source_file_id": file_id,
         "source_file_ids": [file_id],
+        "app_directory": module_root.strip_prefix(root).unwrap_or(&module_root).to_string_lossy().replace('\\', "/"),
         "size_bytes": metadata.len(),
         "modified_at_ms": modified_at_ms(&metadata),
         "sha256": next_sha256,
@@ -5065,7 +5080,35 @@ pub(super) fn resolve_module_source_root_for_root(
     app_root: &Path,
     module_id: &str,
 ) -> anyhow::Result<(PathBuf, PathBuf)> {
-    let manifest_path = module_manifest_path(root, app_root, module_id)?;
+    // The served catalog excludes store templates from the bundled namespace.
+    // Resolve its native selection rather than letting a same-id template shadow
+    // an installed app. Never trust a caller/projection supplied filesystem path.
+    let installed_root = resolve_business_os_installed_app_root(root);
+    let catalog = load_module_manifests(root, app_root, &installed_root)?;
+    let manifest_path = if let Some(selected) = catalog.manifests.iter().find(|m| m.id == module_id)
+    {
+        let selected_path = PathBuf::from(&selected.local_manifest_path);
+        let namespace = selected_path
+            .parent()
+            .and_then(Path::parent)
+            .context("selected module namespace missing")?;
+        let base = namespace.parent().context("selected module root missing")?;
+        let namespace = namespace
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("selected module namespace invalid")?;
+        let checked = checked_module_manifest_candidate(base, namespace, module_id)?
+            .context("selected module source disappeared")?;
+        anyhow::ensure!(checked == selected_path, "selected module source changed");
+        anyhow::ensure!(
+            hex_sha256(&fs::read(&checked)?) == selected.manifest_sha256,
+            "selected module manifest changed; reload before editing"
+        );
+        checked
+    } else {
+        // Preserve source-only lifecycle operations before catalog publication.
+        module_manifest_path(root, app_root, module_id)?
+    };
     let source_app_root = app_root_for_module_manifest(app_root, &manifest_path);
     // Keep the exact selected manifest; re-searching another root can pick a
     // shadowed module with the same id instead of the authorized source.
@@ -5267,7 +5310,10 @@ pub(super) fn compute_module_bundle(
 /// Deterministic bundle hash over an explicit module directory (used for the
 /// live install dir, a catalog source, and a freshly fetched github archive so
 /// they are all comparable).
-fn compute_module_bundle_at(module_root: &Path, module_id: &str) -> anyhow::Result<ModuleBundle> {
+pub(super) fn compute_module_bundle_at(
+    module_root: &Path,
+    module_id: &str,
+) -> anyhow::Result<ModuleBundle> {
     let mut raw = Vec::new();
     collect_module_source_files(module_id, module_root, module_root, &mut raw)?;
     let mut files: Vec<Value> = raw
