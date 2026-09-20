@@ -94,6 +94,22 @@ def main():
                   sidecar_lock_sha256=digest(sidecar.parent.parent / 'package-lock.json'),
                   workflow_run=os.environ.get('GITHUB_RUN_ID'))
     save()
+    sync_tests = [
+        'sync-native-read.test.mjs',
+        'sync-collection-registry.test.mjs',
+        'sync-contract.test.mjs',
+        'sync-desktop-icon-replication.test.mjs',
+        'sync-room-circuit.test.mjs',
+    ]
+    sync_output = run('shell-native-read-regressions', [
+        'node', '--test', '--test-concurrency=1',
+        *['src/apps/business-os/shared/' + name for name in sync_tests],
+    ])
+    for metric, expected in [('tests', 31), ('pass', 31), ('fail', 0), ('skipped', 0)]:
+        if re.findall(r'^# ' + metric + r' (\d+)$', sync_output, re.MULTILINE) != [str(expected)]:
+            raise RuntimeError(f'Unexpected shell native-read regression {metric} count')
+    RECORD['shell_native_read_tests'] = 31
+    save()
     compiled = run('test-compile', ['cargo', 'test', '--locked', '--release',
                    '--bin', 'ctox', '--target', TARGET, '--jobs', '2',
                    '--no-run', '--message-format=json'])
