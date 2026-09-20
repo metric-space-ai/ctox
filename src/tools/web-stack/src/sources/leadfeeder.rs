@@ -77,6 +77,13 @@ const MAX_HITS: usize = 8;
 const MIN_MATCH_SCORE: f64 = 0.75;
 const USER_AGENT: &str = "ctox-web-stack/0.1 (+https://ctox.local)";
 const HIT_FIELDS_PREFIX: &str = "leadfeeder_fields:";
+const HIT_FIELDS_MAX_SNIPPET: usize = 2048;
+const HIT_FIELDS_MAX_KEYS: usize = 8;
+const HIT_FIELDS_MAX_VALUE: usize = 256;
+const HIT_FIELD_KEYS: &[&str] = &["id", "country", "domain", "employees", "industry"];
+const SINGLE_LEGAL_SUFFIXES: &[&str] = &[
+    "ag", "gmbh", "se", "kg", "kgaa", "ohg", "ug", "ltd", "inc", "sa", "sarl", "nv", "bv",
+];
 
 struct Leadfeeder;
 
@@ -216,6 +223,7 @@ impl SourceModule for Leadfeeder {
             .iter()
             .filter(|hit| company_identity_matches(company, &hit.title, None))
             .filter(|hit| hit_country_allowed(&hit.snippet, requested_country))
+            .filter(|hit| hit_company_id(hit).is_some())
             .collect();
         if distinct_hit_ids(&eligible).len() > 1 {
             return Vec::new();
@@ -624,7 +632,7 @@ fn summary_to_hit(
     score: Option<f64>,
     requested_country: Option<&str>,
 ) -> Option<SourceHit> {
-    let id = summary.get("id").and_then(Value::as_str).unwrap_or("");
+    let id = nonempty_provider_id(summary.get("id").and_then(Value::as_str))?;
     let attrs = summary.get("attributes")?;
     let name = attrs
         .get("name")
@@ -671,7 +679,7 @@ fn contacts_to_hits(value: &Value, account_id: &str) -> Vec<SourceHit> {
 }
 
 fn lead_to_hit(record: &Value, account_id: &str, company: &str) -> Option<SourceHit> {
-    let id = record.get("id").and_then(Value::as_str).unwrap_or("");
+    let id = nonempty_provider_id(record.get("id").and_then(Value::as_str))?;
     let attrs = record.get("attributes")?;
     let name = attrs
         .get("name")
@@ -895,21 +903,52 @@ fn company_identity_matches(query: &str, candidate: &str, score: Option<f64>) ->
             return false;
         }
     }
-    let query_tokens = significant_identity_tokens(query);
-    let candidate_tokens = significant_identity_tokens(candidate);
-    !query_tokens.is_empty() && query_tokens == candidate_tokens
+    let (query_body, query_suffix) = split_legal_identity(query);
+    let (candidate_body, candidate_suffix) = split_legal_identity(candidate);
+    if query_body.is_empty() || query_body != candidate_body {
+        return false;
+    }
+    match (query_suffix, candidate_suffix) {
+        (Some(query_suffix), Some(candidate_suffix)) => query_suffix == candidate_suffix,
+        _ => true,
+    }
 }
 
-fn significant_identity_tokens(value: &str) -> Vec<String> {
-    const LEGAL: &[&str] = &[
-        "ag", "gmbh", "mbh", "se", "kg", "kgaa", "ohg", "ug", "ltd", "inc", "sa", "sarl", "nv",
-        "bv", "co", "company",
-    ];
-    normalize_identity(value)
+fn split_legal_identity(value: &str) -> (Vec<String>, Option<String>) {
+    let mut tokens = normalize_identity(value)
         .split_whitespace()
-        .filter(|token| !token.is_empty() && !LEGAL.contains(token))
+        .filter(|token| !token.is_empty())
         .map(str::to_string)
-        .collect()
+        .collect::<Vec<_>>();
+    let suffix = peel_legal_suffix(&mut tokens);
+    (tokens, suffix)
+}
+
+fn peel_legal_suffix(tokens: &mut Vec<String>) -> Option<String> {
+    if tokens.len() >= 4 {
+        let n = tokens.len();
+        if tokens[n - 4] == "gmbh"
+            && matches!(tokens[n - 3].as_str(), "und" | "and")
+            && tokens[n - 2] == "co"
+            && tokens[n - 1] == "kg"
+        {
+            tokens.truncate(n - 4);
+            return Some("gmbh_co_kg".to_string());
+        }
+    }
+    if tokens.len() >= 3 {
+        let n = tokens.len();
+        if tokens[n - 3] == "gmbh" && tokens[n - 2] == "co" && tokens[n - 1] == "kg" {
+            tokens.truncate(n - 3);
+            return Some("gmbh_co_kg".to_string());
+        }
+    }
+    let last = tokens.last()?;
+    if SINGLE_LEGAL_SUFFIXES.contains(&last.as_str()) {
+        tokens.pop()
+    } else {
+        None
+    }
 }
 
 fn normalize_identity(value: &str) -> String {
@@ -989,8 +1028,36 @@ fn encode_hit_fields(
 }
 
 fn parse_hit_fields(snippet: &str) -> Option<Value> {
-    let raw = snippet.trim().strip_prefix(HIT_FIELDS_PREFIX)?;
-    serde_json::from_str(raw).ok()
+    let snippet = snippet.trim();
+    if snippet.is_empty() || snippet.len() > HIT_FIELDS_MAX_SNIPPET {
+        return None;
+    }
+    let raw = snippet.strip_prefix(HIT_FIELDS_PREFIX)?;
+    if raw.is_empty() || raw.len() > HIT_FIELDS_MAX_SNIPPET {
+        return None;
+    }
+    let value: Value = serde_json::from_str(raw).ok()?;
+    let object = value.as_object()?;
+    if object.is_empty() || object.len() > HIT_FIELDS_MAX_KEYS {
+        return None;
+    }
+    for (key, field) in object {
+        if !HIT_FIELD_KEYS.contains(&key.as_str()) {
+            return None;
+        }
+        let text = field.as_str()?;
+        if text.len() > HIT_FIELDS_MAX_VALUE {
+            return None;
+        }
+        if key == "id" && nonempty_provider_id(Some(text)).is_none() {
+            return None;
+        }
+    }
+    Some(value)
+}
+
+fn nonempty_provider_id(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|id| !id.is_empty())
 }
 
 fn hit_field_str<'a>(fields: &'a Value, key: &str) -> Option<&'a str> {
@@ -1027,20 +1094,32 @@ fn hit_company_id(hit: &SourceHit) -> Option<String> {
 fn distinct_hit_ids(hits: &[&SourceHit]) -> Vec<String> {
     let mut ids = Vec::new();
     for hit in hits {
-        let key = hit_company_id(hit).unwrap_or_else(|| hit.title.clone());
-        if !ids.iter().any(|existing| existing == &key) {
-            ids.push(key);
+        let Some(id) = hit_company_id(hit) else {
+            continue;
+        };
+        if !ids.iter().any(|existing| existing == &id) {
+            ids.push(id);
         }
     }
     ids
 }
 
 fn unique_identity_hits(mut hits: Vec<SourceHit>) -> Result<Vec<SourceHit>, SourceError> {
-    if hits.len() <= 1 {
+    if hits.is_empty() {
         return Ok(hits);
     }
-    let refs: Vec<&SourceHit> = hits.iter().collect();
-    if distinct_hit_ids(&refs).len() > 1 {
+    let mut ids = Vec::new();
+    for hit in &hits {
+        let Some(id) = hit_company_id(hit) else {
+            return Err(SourceError::ParseFailed {
+                detail: "missing company id".to_string(),
+            });
+        };
+        if !ids.iter().any(|existing| existing == &id) {
+            ids.push(id);
+        }
+    }
+    if ids.len() > 1 {
         return Err(SourceError::Other(anyhow!("ambiguous_company_identity")));
     }
     hits.truncate(1);
@@ -2022,6 +2101,105 @@ mod tests {
         ));
         assert!(!company_identity_matches("Müller Technik AG", "Muller Technik AG", None));
         assert!(!company_identity_matches("AG", "Example Manufacturing AG", None));
+        assert!(company_identity_matches(
+            "Example Company AG",
+            "Example Company",
+            None
+        ));
+        assert!(company_identity_matches(
+            "Example GmbH & Co. KG",
+            "Example GmbH & Co KG",
+            None
+        ));
+        assert!(company_identity_matches(
+            "Example GmbH und Co. KG",
+            "Example GmbH & Co. KG",
+            None
+        ));
+        assert!(!company_identity_matches("Example AG", "Example GmbH", None));
+        assert!(!company_identity_matches(
+            "Example Manufacturing AG",
+            "Example Manufacturing GmbH",
+            None
+        ));
+        assert!(!company_identity_matches(
+            "Example GmbH & Co. KG",
+            "Example GmbH",
+            None
+        ));
+        assert!(!company_identity_matches("Example Company", "Example AG", None));
+    }
+
+    #[test]
+    fn summary_to_hit_rejects_blank_provider_id() {
+        let blank = serde_json::json!({
+            "id": "  ",
+            "type": "company_summary",
+            "attributes": {
+                "name": "Example Manufacturing AG",
+                "address": { "country_code": "DE" }
+            }
+        });
+        assert!(summary_to_hit(
+            &blank,
+            "acct-fixture-1",
+            "Example Manufacturing AG",
+            Some(0.96),
+            Some("DE"),
+        )
+        .is_none());
+        let missing = serde_json::json!({
+            "type": "company_summary",
+            "attributes": {
+                "name": "Example Manufacturing AG",
+                "address": { "country_code": "DE" }
+            }
+        });
+        assert!(summary_to_hit(
+            &missing,
+            "acct-fixture-1",
+            "Example Manufacturing AG",
+            Some(0.96),
+            Some("DE"),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn unique_identity_hits_rejects_missing_ids_instead_of_title_fallback() {
+        let hits = vec![
+            SourceHit {
+                title: "Example Manufacturing AG".to_string(),
+                url: "https://api.leadfeeder.com/v1/companies/?account_id=acct-fixture-1".to_string(),
+                snippet: String::new(),
+            },
+            SourceHit {
+                title: "Example Manufacturing AG".to_string(),
+                url: "https://api.leadfeeder.com/v1/companies/".to_string(),
+                snippet: String::new(),
+            },
+        ];
+        let err = unique_identity_hits(hits).expect_err("missing ids");
+        assert!(matches!(err, SourceError::ParseFailed { .. }));
+    }
+
+    #[test]
+    fn parse_hit_fields_rejects_invalid_or_oversized_payloads() {
+        assert!(parse_hit_fields("leadfeeder_fields:[1]").is_none());
+        assert!(parse_hit_fields("leadfeeder_fields:{"id":""}").is_none());
+        assert!(parse_hit_fields(
+            "leadfeeder_fields:{"id":"co-1","extra":"nope"}"
+        )
+        .is_none());
+        let oversized = format!(
+            "leadfeeder_fields:{{\"id\":\"{}\"}}",
+            "x".repeat(HIT_FIELDS_MAX_VALUE + 1)
+        );
+        assert!(parse_hit_fields(&oversized).is_none());
+        assert!(parse_hit_fields(
+            "leadfeeder_fields:{"id":"co-fixture-1","domain":"factory-24.test"}"
+        )
+        .is_some());
     }
 
     #[test]
