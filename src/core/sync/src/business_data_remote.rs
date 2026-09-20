@@ -251,6 +251,7 @@ struct Subscription {
     terminal: AtomicBool,
     peer: tokio::sync::Mutex<Option<WebRTCRsConnection>>,
     resume: tokio::sync::Mutex<Option<u64>>,
+    lifecycle: tokio::sync::Mutex<()>,
     notify: Notify,
     task: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     cursors: Arc<Mutex<HashMap<String, CursorRecord>>>,
@@ -1030,6 +1031,10 @@ impl BusinessDataSource {
             let Some(subscription) = subscription else {
                 return Err(RemoteError::reset());
             };
+            // Replacement must wait for an in-flight event to complete its
+            // authority-checked publication. Otherwise state resolved for the
+            // old peer/session could be sent through the new one.
+            let _lifecycle_guard = subscription.lifecycle.lock().await;
             if subscription.terminal.load(Ordering::SeqCst)
                 || subscription.mode != mode
                 || subscription.command_id.as_deref() != command_id
@@ -1140,6 +1145,7 @@ impl BusinessDataSource {
             terminal: AtomicBool::new(false),
             peer: tokio::sync::Mutex::new(Some(peer.clone())),
             resume: tokio::sync::Mutex::new(None),
+            lifecycle: tokio::sync::Mutex::new(()),
             notify: Notify::new(),
             task: tokio::sync::Mutex::new(None),
             cursors: self.cursors.clone(),
@@ -1669,6 +1675,10 @@ impl Subscription {
         collection: &Arc<RxCollection>,
         document_id: String,
     ) -> Result<(), String> {
+        // Hold authority publication and peer/session replacement as one
+        // critical section so an event resolved before replacement cannot be
+        // emitted through a later identity envelope.
+        let _lifecycle_guard = self.lifecycle.lock().await;
         let documents = collection
             .storage_instance
             .find_documents_by_id(&[document_id.clone()], true)

@@ -39,14 +39,17 @@ use std::{
     },
     time::Duration,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
+use tokio::time::timeout;
 
 const AUTHORIZATION_EPOCH: u64 = 12;
 const ACCOUNT_EPOCH: u64 = 34;
-const DATA_TIMEOUT: Duration = Duration::from_secs(5);
 const NO_EVENT_WINDOW: Duration = Duration::from_millis(250);
+
+/// Reads retain partial transport bytes across bounded silence checks.
+type FixtureIpcStream = BufReader<tokio::io::DuplexStream>;
 
 #[derive(Default)]
 struct QueryGate {
@@ -54,6 +57,9 @@ struct QueryGate {
     reject_queries: AtomicBool,
     reject_documents: AtomicBool,
     command_owner_checks: std::sync::atomic::AtomicUsize,
+    command_hold: AtomicBool,
+    command_entered: tokio::sync::Notify,
+    command_release: tokio::sync::Notify,
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
 }
@@ -169,13 +175,43 @@ impl ctox_sync::business_data_remote::BusinessDataAccessPolicy for FixtureSource
                     "fixture command owner mismatch",
                 ));
             }
+            if let Some(owner) = document.get("owner_user_id").and_then(Value::as_str) {
+                if owner != identity.user_id {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::PermissionDenied,
+                        "fixture command owner mismatch",
+                    ));
+                }
+            }
+            if self.query_gate.command_hold.swap(false, Ordering::SeqCst) {
+                self.query_gate.command_entered.notify_one();
+                self.query_gate.command_release.notified().await;
+            }
+            let status = match document.get("status").and_then(Value::as_str) {
+                Some("completed") => {
+                    ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Completed
+                }
+                Some("failed") => {
+                    ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Failed
+                }
+                Some("unknown") => {
+                    ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Unknown
+                }
+                _ => ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Pending,
+            };
             return Ok(
                 ctox_sync::business_data_contract::NativeBusinessDataCommandState {
                     command_id: command_id.to_owned(),
-                    status:
-                        ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Pending,
-                    result: None,
-                    error: None,
+                    status,
+                    result: document
+                        .get("result")
+                        .cloned()
+                        .filter(|value| !value.is_null()),
+                    error: document
+                        .get("last_retry_error")
+                        .or_else(|| document.get("error"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
                 },
             );
         }
@@ -649,13 +685,118 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
             }
             other => panic!("expected B replacement response: {other:?}"),
         }
-        wait_for_caught_up(
+        let replacement_cursor = wait_for_caught_up(
             &mut client_b,
             &session_b,
             "command:overlap-command",
             "B command snapshot",
         )
         .await;
+
+        // Hold B-owned command processing after the durable document has been
+        // resolved, then request the same wire subscription from A. The source
+        // must not move the in-flight event envelope to A's session or peer.
+        query_gate.command_hold.store(true, Ordering::SeqCst);
+        server_db
+            .collection("business_commands")
+            .unwrap()
+            .upsert(json!({
+                "id": "overlap-command",
+                "owner_user_id": "fixture-user",
+                "status": "completed",
+                "result": {"generation": "retired"}
+            }))
+            .await
+            .unwrap();
+        timeout(
+            Duration::from_secs(5),
+            query_gate.command_entered.notified(),
+        )
+        .await
+        .expect("retired command must enter the event barrier");
+        send_request(
+            &mut client_a,
+            "resume-in-flight-command",
+            command_watch_request(&session_a, "overlap-command", &replacement_cursor),
+        )
+        .await;
+        query_gate.command_release.notify_one();
+
+        let retained = read_event(&mut client_b, "retired B command").await;
+        assert_eq!(retained.session, session_b);
+        assert_eq!(retained.subscription_id, "command:overlap-command");
+        let NativeBusinessDataEventPayload::Command { state } = retained.payload else {
+            panic!("expected retained B command event: {:?}", retained.payload);
+        };
+        assert_eq!(state.command_id, "overlap-command");
+        assert_eq!(
+            state.status,
+            ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Completed
+        );
+        assert_eq!(state.result, Some(json!({"generation": "retired"})));
+
+        // A replayed CaughtUp may arrive before the response frame. Consume it
+        // explicitly, then require the positive Subscribed acknowledgement for
+        // A before publishing the next generation.
+        let mut resume_acknowledged = false;
+        while !resume_acknowledged {
+            match read_frame(&mut client_a).await {
+                Frame::Response { response }
+                    if response.request_id == "resume-in-flight-command" =>
+                {
+                    let NativeBusinessDataResult::Subscribed {
+                        session,
+                        subscription_id,
+                    } = response.result
+                    else {
+                        panic!("expected resumed subscription: {response:?}");
+                    };
+                    assert_eq!(session, session_a);
+                    assert_eq!(subscription_id, "command:overlap-command");
+                    resume_acknowledged = true;
+                }
+                Frame::Event { event } => {
+                    assert_eq!(event.session, session_a);
+                    assert_eq!(event.subscription_id, "command:overlap-command");
+                    assert!(
+                        matches!(
+                            event.payload,
+                            NativeBusinessDataEventPayload::CaughtUp { .. }
+                        ),
+                        "resume must not deliver a stale command event: {event:?}"
+                    );
+                }
+                other => panic!("expected in-flight resume response: {other:?}"),
+            }
+        }
+
+        server_db
+            .collection("business_commands")
+            .unwrap()
+            .upsert(json!({
+                "id": "overlap-command",
+                "owner_user_id": "fixture-user",
+                "status": "completed",
+                "result": {"generation": "current"}
+            }))
+            .await
+            .unwrap();
+        let replacement = read_event(&mut client_a, "A replacement command").await;
+        assert_eq!(replacement.session, session_a);
+        assert_eq!(replacement.subscription_id, "command:overlap-command");
+        let NativeBusinessDataEventPayload::Command { state } = replacement.payload else {
+            panic!(
+                "expected A replacement command event: {:?}",
+                replacement.payload
+            );
+        };
+        assert_eq!(state.command_id, "overlap-command");
+        assert_eq!(
+            state.status,
+            ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Completed
+        );
+        assert_eq!(state.result, Some(json!({"generation": "current"})));
+        assert_no_frame(&mut client_b, "replacement command on B").await;
 
         // A post-replacement event for another command is stale for this watch.
         // It must not be relabeled or cross peer boundaries.
@@ -667,30 +808,6 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
             .unwrap();
         assert_no_frame(&mut client_a, "stale foreign command on A").await;
         assert_no_frame(&mut client_b, "stale foreign command on B").await;
-        server_db
-            .collection("business_commands")
-            .unwrap()
-            .insert(json!({
-                "id": "overlap-command",
-                "owner_user_id": "fixture-user",
-                "status": "completed",
-                "result": {"replacement": true}
-            }))
-            .await
-            .unwrap();
-        let replacement = read_event(&mut client_b, "B replacement command").await;
-        assert_eq!(replacement.session, session_b);
-        assert_eq!(replacement.subscription_id, "command:overlap-command");
-        let NativeBusinessDataEventPayload::Command { state } = replacement.payload else {
-            panic!("expected B command event: {:?}", replacement.payload);
-        };
-        assert_eq!(state.command_id, "overlap-command");
-        assert_eq!(
-            state.status,
-            ctox_sync::business_data_contract::NativeBusinessDataCommandStatus::Completed
-        );
-        assert_eq!(state.result, Some(json!({"replacement": true})));
-        assert_no_frame(&mut client_a, "replacement command on A").await;
 
         // Distinct accepted query watches prove isolation is not merely an
         // artifact of command-ID filtering: one selector cannot emit the other
@@ -756,10 +873,10 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
         assert_no_frame(&mut client_a, "B-targeted query on A").await;
 
         send_request(
-            &mut client_b,
-            "cleanup-b-command",
+            &mut client_a,
+            "cleanup-command",
             NativeBusinessDataOperation::Unwatch {
-                session: session_b.clone(),
+                session: session_a.clone(),
                 subscription_id: "command:overlap-command".into(),
             },
         )
@@ -782,18 +899,21 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
             },
         )
         .await;
-        for (request_id, context) in [
-            ("cleanup-b-command", "command"),
-            ("cleanup-b-query", "query"),
-        ] {
-            match read_frame(&mut client_b).await {
-                Frame::Response { response } if response.request_id == request_id => {
-                    let NativeBusinessDataResult::Unwatched { .. } = response.result else {
-                        panic!("expected B {context} unwatch response: {response:?}");
-                    };
-                }
-                other => panic!("expected B {context} cleanup frame: {other:?}"),
+        match read_frame(&mut client_a).await {
+            Frame::Response { response } if response.request_id == "cleanup-command" => {
+                let NativeBusinessDataResult::Unwatched { .. } = response.result else {
+                    panic!("expected A command unwatch response: {response:?}");
+                };
             }
+            other => panic!("expected A command cleanup frame: {other:?}"),
+        }
+        match read_frame(&mut client_b).await {
+            Frame::Response { response } if response.request_id == "cleanup-b-query" => {
+                let NativeBusinessDataResult::Unwatched { .. } = response.result else {
+                    panic!("expected B query unwatch response: {response:?}");
+                };
+            }
+            other => panic!("expected B query cleanup frame: {other:?}"),
         }
         match read_frame(&mut client_a).await {
             Frame::Response { response } if response.request_id == "cleanup-a-query" => {
@@ -830,7 +950,7 @@ async fn open_ipc_client(
 ) -> (
     tempfile::TempDir,
     Arc<rxdb::rx_database::RxDatabase>,
-    tokio::io::DuplexStream,
+    FixtureIpcStream,
     NativeBusinessDataSessionRef,
     Arc<BusinessDataService>,
     JoinHandle<io::Result<()>>,
@@ -860,7 +980,8 @@ async fn open_ipc_client(
     let ipc = BusinessDataIpc::new(Arc::new(move |credentials, events| {
         Ok(Arc::new(service_factory.dispatcher(credentials, events)))
     }));
-    let (mut stream, native) = tokio::io::duplex(64 * 1024);
+    let (stream, native) = tokio::io::duplex(64 * 1024);
+    let mut stream = BufReader::new(stream);
     let serve = tokio::spawn(async move { ipc.serve(Box::new(native)).await });
     send_request(&mut stream, "open", open_request()).await;
     let response =
@@ -902,8 +1023,9 @@ async fn wait_for_caught_up(
     session: &NativeBusinessDataSessionRef,
     subscription_id: &str,
     context: &str,
-) {
+) -> String {
     let mut last_sequence = 0;
+    let mut latest_cursor = String::new();
     loop {
         let event = read_event(stream, context).await;
         assert_eq!(event.session, *session);
@@ -925,20 +1047,67 @@ async fn wait_for_caught_up(
                     "{context} unexpectedly received records"
                 );
             }
-            NativeBusinessDataEventPayload::SnapshotEnd { snapshot_id, .. } => {
+            NativeBusinessDataEventPayload::SnapshotEnd {
+                snapshot_id,
+                cursor,
+            } => {
                 assert_eq!(snapshot_id, subscription_id);
+                latest_cursor = cursor;
             }
-            NativeBusinessDataEventPayload::CaughtUp { .. } => break,
+            NativeBusinessDataEventPayload::CaughtUp { cursor } => {
+                latest_cursor = cursor;
+                break;
+            }
             other => panic!("{context} received unexpected event: {other:?}"),
+        }
+    }
+    latest_cursor
+}
+
+async fn assert_no_frame(stream: &mut FixtureIpcStream, context: &str) {
+    let silence = tokio::time::sleep(NO_EVENT_WINDOW);
+    tokio::pin!(silence);
+    tokio::select! {
+        result = stream.fill_buf() => match result {
+            Ok([]) => panic!("{context} stream closed during silence check"),
+            Ok(bytes) => {
+                let preview = String::from_utf8_lossy(bytes);
+                panic!(
+                    "{context} unexpectedly received {} bytes: {preview}",
+                    bytes.len()
+                );
+            }
+            Err(error) => panic!("{context} stream failed during silence check: {error}"),
+        },
+        _ = &mut silence => {
+            // fill_buf() reads into BufReader storage. If cancellation races a
+            // partial read, those bytes remain observable here instead of being
+            // lost; they count as traffic rather than silence.
+            if !stream.buffer().is_empty() {
+                let preview = String::from_utf8_lossy(stream.buffer());
+                panic!("{context} received partial frame bytes: {preview}");
+            }
         }
     }
 }
 
-async fn assert_no_frame(stream: &mut (impl tokio::io::AsyncRead + Unpin + Send), context: &str) {
-    match tokio::time::timeout(NO_EVENT_WINDOW, read_frame(stream)).await {
-        Ok(Ok(frame)) => panic!("{context} unexpectedly received: {frame:?}"),
-        Ok(Err(error)) => panic!("{context} stream failed while asserting silence: {error}"),
-        Err(_) => {}
+fn command_watch_request(
+    session: &NativeBusinessDataSessionRef,
+    command_id: &str,
+    resume_cursor: &str,
+) -> NativeBusinessDataOperation {
+    NativeBusinessDataOperation::Watch {
+        session: session.clone(),
+        query: ctox_sync::business_data_contract::NativeBusinessDataQuery {
+            collection: "business_commands".into(),
+            scope: NativeBusinessDataScope::Instance {},
+            query: json!({
+                "selector": {"id": {"$eq": command_id}},
+                "sort": [{"id": "asc"}]
+            }),
+            page_size: 1,
+        },
+        resume_cursor: Some(resume_cursor.to_owned()),
     }
 }
 
@@ -2041,9 +2210,9 @@ async fn read_event(
     stream: &mut (impl tokio::io::AsyncRead + Unpin),
     context: &str,
 ) -> ctox_sync::business_data_contract::NativeBusinessDataEvent {
-    let frame = tokio::time::timeout(DATA_TIMEOUT, read_frame(stream))
-        .await
-        .unwrap_or_else(|_| panic!("timed out waiting for {context}"));
+    // The test-level deadline owns cancellation. Reading through the
+    // persistent stream retains any partial frame for the next poll.
+    let frame = read_frame(stream).await;
     match frame {
         Frame::Event { event } => event,
         other => panic!("expected event for {context}: {other:?}"),
