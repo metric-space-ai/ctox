@@ -26,7 +26,7 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: never
       # Reviewed integration: PR142 d7c592ba + PR185 2cb16df3a and CI corrections.
-      REVIEWED_SOURCE_REVISION: '35cb17421465942c925a112d4136465738026fc8'
+      REVIEWED_SOURCE_REVISION: '187ea20fdbeb319134f7a9f9d45268241e6b397f'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
