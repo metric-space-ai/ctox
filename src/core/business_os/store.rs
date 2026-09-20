@@ -39855,11 +39855,17 @@ pub(super) mod tests {
         let temp = tempdir()?;
         let root = temp.path();
         seed_business_user(root, "operator", "chef")?;
-        let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
         for command_type in [
             "outbound.research_source.generate_adapter",
             "outbound.research_source.test",
         ] {
+            // Reactivation changes capability_epoch; it cannot resurrect the
+            // previous case's token. Each admission needs a fresh capability.
+            let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+            assert_eq!(
+                verify_capability_actor(root, &token),
+                Some(("operator".into(), "chef".into()))
+            );
             let mut command = BusinessCommand {
                 origin: CommandOrigin::ReplicatedPeer,
                 id: Some(format!("cmd_{command_type}")),
@@ -39867,10 +39873,10 @@ pub(super) mod tests {
                 command_type: command_type.into(),
                 record_id: None,
                 payload: serde_json::json!({"company":"Fixture GmbH"}),
-                client_context: serde_json::json!({"capability_token":token}),
+                client_context: serde_json::json!({"capability_token":token.clone()}),
             };
-            let receipt =
-                recoverable_background_control_authorization(root, &command).context("receipt")?;
+            let receipt = recoverable_background_control_authorization(root, &command)
+                .with_context(|| format!("authorization receipt for {command_type}"))?;
             command.client_context = serde_json::json!({"actor":{"id":"forged","role":"admin"}, "owner_user_id":"forged"});
             let (session, decision) =
                 revalidate_queue_native_authorization(root, &command, &receipt)?;
@@ -39892,6 +39898,10 @@ pub(super) mod tests {
                 "UPDATE business_users SET active=1 WHERE user_id='operator'",
                 [],
             )?;
+            assert!(
+                verify_capability_actor(root, &token).is_none(),
+                "reactivation must not resurrect a revoked capability"
+            );
         }
         Ok(())
     }
