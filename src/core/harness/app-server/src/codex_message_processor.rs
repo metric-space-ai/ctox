@@ -2972,6 +2972,11 @@ impl CodexMessageProcessor {
         };
 
         let loaded_thread = self.thread_manager.get_thread(thread_uuid).await.ok();
+        let rollout_materialization_pending = match loaded_thread.as_ref() {
+            Some(thread) => thread.rollout_materialization_pending().await,
+            None => false,
+        };
+
         let loaded_thread_state_db = loaded_thread.as_ref().and_then(|thread| thread.state_db());
         let db_summary = if let Some(state_db_ctx) = loaded_thread_state_db.as_ref() {
             read_summary_from_state_db_context_by_thread_id(Some(state_db_ctx), thread_uuid).await
@@ -3004,6 +3009,17 @@ impl CodexMessageProcessor {
         }
 
         if include_turns && rollout_path.is_none() && db_summary.is_some() {
+            // Only a recorder that has not yet completed its first atomic
+            // publication may classify an absent pathname as deferred state.
+            // A materialized loaded thread with a missing file is lost state.
+            if rollout_materialization_pending {
+                self.send_invalid_request_error(
+                    request_id,
+                    format!("thread {thread_uuid} is not materialized yet"),
+                )
+                .await;
+                return;
+            }
             self.send_internal_error(
                 request_id,
                 format!("failed to locate rollout for thread {thread_uuid}"),
@@ -3062,13 +3078,22 @@ impl CodexMessageProcessor {
                     thread.turns = build_turns_from_rollout_items(&items);
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                    self.send_invalid_request_error(
-                        request_id,
-                        format!(
-                            "thread {thread_uuid} is not materialized yet; includeTurns is unavailable before first user message"
-                        ),
-                    )
-                    .await;
+                    if rollout_materialization_pending {
+                        self.send_invalid_request_error(
+                            request_id,
+                            format!("thread {thread_uuid} is not materialized yet"),
+                        )
+                        .await;
+                    } else {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "rollout for thread {thread_uuid} is missing at `{}`",
+                                rollout_path.display()
+                            ),
+                        )
+                        .await;
+                    }
                     return;
                 }
                 Err(err) => {
@@ -7970,6 +7995,37 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn read_summary_from_rollout_fails_closed_when_persisted_rollout_is_invalid() {
+        use std::fs;
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let empty_path = temp_dir.path().join("empty.jsonl");
+        fs::write(&empty_path, b"").expect("write empty rollout");
+        let empty_error = read_summary_from_rollout(&empty_path, "fallback")
+            .await
+            .expect_err("an empty persisted rollout must fail closed");
+        assert!(empty_error.to_string().contains("is empty"));
+
+        let corrupt_path = temp_dir.path().join("corrupt.jsonl");
+        fs::write(
+            &corrupt_path,
+            concat!(
+                "{\"timestamp\":\"2025-09-05T16:53:11.850Z\",\"type\":\"response_item\",",
+                "\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n"
+            ),
+        )
+        .expect("write corrupt rollout");
+        let corrupt_error = read_summary_from_rollout(&corrupt_path, "fallback")
+            .await
+            .expect_err("a non-metadata persisted rollout must fail closed");
+        assert!(
+            corrupt_error
+                .to_string()
+                .contains("does not start with session metadata"),
+            "unexpected corrupt-rollout error: {corrupt_error}"
+        );
+    }
     #[tokio::test]
     async fn read_summary_from_rollout_preserves_agent_nickname() -> Result<()> {
         use ctox_protocol::protocol::RolloutItem;

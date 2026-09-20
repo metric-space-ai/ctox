@@ -1,11 +1,13 @@
 use super::*;
 use crate::config::ConfigBuilder;
 use crate::features::Feature;
+use crate::find_thread_path_by_id_str;
 use chrono::TimeZone;
 use ctox_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use ctox_protocol::protocol::AgentMessageEvent;
 use ctox_protocol::protocol::AskForApproval;
 use ctox_protocol::protocol::EventMsg;
+use ctox_protocol::protocol::InitialHistory;
 use ctox_protocol::protocol::SandboxPolicy;
 use ctox_protocol::protocol::TurnContextItem;
 use ctox_protocol::protocol::UserMessageEvent;
@@ -64,6 +66,8 @@ async fn recorder_flush_propagates_writer_failure() -> std::io::Result<()> {
     let recorder = RolloutRecorder {
         tx,
         rollout_path: path.clone(),
+        materialization_pending: Arc::new(AtomicBool::new(false)),
+        materialization_staging_path: None,
         state_db: None,
         event_persistence_mode: EventPersistenceMode::Limited,
     };
@@ -78,6 +82,7 @@ async fn recorder_flush_propagates_writer_failure() -> std::io::Result<()> {
         None,
         "test-provider".to_string(),
         false,
+        Arc::new(AtomicBool::new(false)),
     );
     let (flush, write) = tokio::time::timeout(Duration::from_secs(5), async {
         tokio::join!(recorder.flush(), writer)
@@ -93,6 +98,457 @@ async fn recorder_flush_propagates_writer_failure() -> std::io::Result<()> {
         recorder.flush().await.is_err(),
         "failed writer stays closed"
     );
+    Ok(())
+}
+fn staging_paths(path: &Path) -> Vec<PathBuf> {
+    let Some(parent) = path.parent() else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    let entries = fs::read_dir(parent).expect("read session directory");
+    for entry in entries.flatten() {
+        let entry_path = entry.path();
+        if entry_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(".rollout-materializing-"))
+        {
+            paths.push(entry_path);
+        }
+    }
+    paths.sort();
+    paths
+}
+
+struct MaterializationBarrierGuard(PathBuf);
+
+impl Drop for MaterializationBarrierGuard {
+    fn drop(&mut self) {
+        release_materialization_barrier(&self.0);
+    }
+}
+
+fn arm_materialization_barrier_for(
+    recorder: &RolloutRecorder,
+) -> (Arc<tokio::sync::Notify>, MaterializationBarrierGuard) {
+    let reached = arm_materialization_barrier(recorder.rollout_path());
+    let guard = MaterializationBarrierGuard(recorder.rollout_path().to_path_buf());
+    (reached, guard)
+}
+
+async fn wait_materialization_reached(reached: &tokio::sync::Notify) {
+    tokio::time::timeout(Duration::from_secs(5), reached.notified())
+        .await
+        .expect("writer must reach its per-recorder materialization barrier");
+}
+
+#[tokio::test]
+async fn concurrent_reader_never_sees_partially_materialized_rollout() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    let thread_id = ThreadId::new();
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            thread_id,
+            None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        None,
+        None,
+    )
+    .await?;
+
+    recorder
+        .record_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+            UserMessageEvent {
+                message: "first-user-message".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        ))])
+        .await?;
+
+    let (reached, barrier_guard) = arm_materialization_barrier_for(&recorder);
+    let persist_recorder = recorder.clone();
+    let persist = tokio::spawn(async move { persist_recorder.persist().await });
+    wait_materialization_reached(&reached).await;
+
+    let (observed_held_tx, observed_held_rx) = tokio::sync::oneshot::channel::<()>();
+    let reader = tokio::spawn({
+        let codex_home = config.codex_home.clone();
+        let rollout_path = recorder.rollout_path().to_path_buf();
+        async move {
+            let mut observed_held_tx = Some(observed_held_tx);
+            loop {
+                let staging = staging_paths(&rollout_path);
+                if !staging.is_empty() && !rollout_path.exists() {
+                    let discovered =
+                        find_thread_path_by_id_str(&codex_home, &thread_id.to_string())
+                            .await
+                            .expect("discovery search");
+                    assert_eq!(
+                        discovered, None,
+                        "discovery must not find writer-owned preparation state"
+                    );
+                    if let Some(observed_held_tx) = observed_held_tx.take() {
+                        observed_held_tx
+                            .send(())
+                            .expect("reader observation receiver stays waiting");
+                    }
+                }
+
+                if rollout_path.exists() {
+                    assert!(
+                        observed_held_tx.is_none(),
+                        "reader must observe the held window"
+                    );
+                    let discovered =
+                        find_thread_path_by_id_str(&codex_home, &thread_id.to_string())
+                            .await
+                            .expect("discovery search");
+                    assert_eq!(discovered.as_ref(), Some(&rollout_path));
+                    let history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+                    let InitialHistory::Resumed(resumed) = history else {
+                        panic!("published rollout must contain history");
+                    };
+                    assert!(
+                        resumed.history.iter().any(|item| matches!(
+                            item,
+                            RolloutItem::EventMsg(EventMsg::UserMessage(event))
+                                if event.message == "first-user-message"
+                        )),
+                        "published rollout must contain complete history"
+                    );
+                    return Ok::<(), std::io::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+    });
+
+    tokio::time::timeout(Duration::from_secs(5), observed_held_rx)
+        .await
+        .expect("reader must observe held staging before release")
+        .expect("reader observation channel");
+    drop(barrier_guard);
+
+    let (persist_result, reader_result) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(persist, reader)
+    })
+    .await
+    .expect("materialization/read race must complete");
+    persist_result.map_err(std::io::Error::other)??;
+    reader_result.map_err(std::io::Error::other)??;
+
+    assert!(
+        staging_paths(recorder.rollout_path()).is_empty(),
+        "writer must remove owned staging after completed publication"
+    );
+    recorder.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn owned_preparation_files_are_unique_and_leave_stale_files_alone() {
+    let home = TempDir::new().expect("temp dir");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await
+        .expect("config");
+    let thread_id = ThreadId::new();
+    let stale_path = config
+        .codex_home
+        .join("sessions/.rollout-materializing-stale.jsonl");
+    fs::create_dir_all(stale_path.parent().expect("stale file parent"))
+        .expect("create stale file directory");
+    fs::write(&stale_path, b"unrelated").expect("write stale file");
+
+    let first = precompute_log_file_info(&config, thread_id).expect("first info");
+    let second = precompute_log_file_info(&config, thread_id).expect("second info");
+    assert_ne!(
+        first.materializing_path, second.materializing_path,
+        "each preparation must be writer-owned"
+    );
+
+    let (first_file, second_file) = tokio::join!(
+        tokio::spawn({
+            let path = first.materializing_path.clone();
+            async move { open_materializing_log_file(&path).expect("first file") }
+        }),
+        tokio::spawn({
+            let path = second.materializing_path.clone();
+            async move { open_materializing_log_file(&path).expect("second file") }
+        }),
+    );
+    drop(first_file.expect("first preparation task"));
+    drop(second_file.expect("second preparation task"));
+
+    assert!(first.materializing_path.exists());
+    assert!(second.materializing_path.exists());
+    assert_eq!(fs::read(&stale_path).expect("stale file"), b"unrelated");
+
+    fs::remove_file(&first.materializing_path).expect("remove first");
+    fs::remove_file(&second.materializing_path).expect("remove second");
+    assert_eq!(fs::read(&stale_path).expect("stale file"), b"unrelated");
+}
+
+#[tokio::test]
+async fn state_visibility_waits_until_public_rollout_publication() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let mut config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    config
+        .features
+        .enable(Feature::Sqlite)
+        .expect("test config should allow sqlite");
+    let state_db = StateRuntime::init(config.codex_home.clone(), config.model_provider_id.clone())
+        .await
+        .expect("state db should initialize");
+    state_db
+        .mark_backfill_complete(None)
+        .await
+        .expect("backfill should be complete");
+
+    let thread_id = ThreadId::new();
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            thread_id,
+            None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        Some(state_db.clone()),
+        None,
+    )
+    .await?;
+    recorder
+        .record_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+            UserMessageEvent {
+                message: "state-visibility".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        ))])
+        .await?;
+
+    let (reached, barrier_guard) = arm_materialization_barrier_for(&recorder);
+    let persist_recorder = recorder.clone();
+    let persist = tokio::spawn(async move { persist_recorder.persist().await });
+    wait_materialization_reached(&reached).await;
+
+    let staging_path = recorder
+        .materialization_staging_path()
+        .expect("deferred recorder keeps its staging path")
+        .to_path_buf();
+    assert!(staging_path.exists());
+    assert!(!recorder.rollout_path().exists());
+    let discovered = find_thread_path_by_id_str(&config.codex_home, &thread_id.to_string())
+        .await
+        .expect("discovery search");
+    assert_eq!(discovered, None, "staging must not be discoverable");
+    assert!(
+        state_db
+            .get_thread(thread_id)
+            .await
+            .expect("state db query")
+            .is_none(),
+        "staging metadata must not publish state"
+    );
+
+    drop(barrier_guard);
+    tokio::time::timeout(Duration::from_secs(5), persist)
+        .await
+        .expect("publication must complete")
+        .expect("persist task must not panic")?;
+
+    assert!(!staging_path.exists());
+    assert!(recorder.rollout_path().exists());
+    let discovered = find_thread_path_by_id_str(&config.codex_home, &thread_id.to_string())
+        .await
+        .expect("discovery search");
+    assert_eq!(discovered.as_deref(), Some(recorder.rollout_path()));
+    assert!(
+        state_db
+            .get_thread(thread_id)
+            .await
+            .expect("state db query")
+            .is_some(),
+        "published rollout must make state visible"
+    );
+    let history = RolloutRecorder::get_rollout_history(recorder.rollout_path()).await?;
+    let InitialHistory::Resumed(resumed) = history else {
+        panic!("published rollout must contain history");
+    };
+    assert!(
+        resumed.history.iter().any(|item| matches!(
+            item,
+            RolloutItem::EventMsg(EventMsg::UserMessage(event))
+                if event.message == "state-visibility"
+        )),
+        "published rollout must contain complete history"
+    );
+    recorder.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn cancelled_persist_caller_does_not_leave_recorder_pending() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    let thread_id = ThreadId::new();
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            thread_id,
+            None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        None,
+        None,
+    )
+    .await?;
+    recorder
+        .record_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+            UserMessageEvent {
+                message: "cancelled-caller".to_string(),
+                images: None,
+                local_images: Vec::new(),
+                text_elements: Vec::new(),
+            },
+        ))])
+        .await?;
+
+    let (reached, barrier_guard) = arm_materialization_barrier_for(&recorder);
+    let persist_recorder = recorder.clone();
+    let persist = tokio::spawn(async move { persist_recorder.persist().await });
+    wait_materialization_reached(&reached).await;
+    assert!(recorder.materialization_pending());
+    persist.abort();
+    persist
+        .await
+        .expect_err("caller cancellation should be visible to test");
+    drop(barrier_guard);
+    tokio::time::timeout(Duration::from_secs(5), recorder.flush())
+        .await
+        .expect("writer completion after cancellation must be bounded")?;
+    assert!(!recorder.materialization_pending());
+    assert!(recorder.rollout_path().exists());
+    assert!(staging_paths(recorder.rollout_path()).is_empty());
+    recorder.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_creation_preserves_exact_staging_path() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    let thread_id = ThreadId::new();
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            thread_id,
+            None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        None,
+        None,
+    )
+    .await?;
+
+    let rollout_path = recorder.rollout_path().to_path_buf();
+    let staging_path = recorder
+        .materialization_staging_path()
+        .expect("deferred recorder keeps its staging path")
+        .to_path_buf();
+    fs::create_dir_all(staging_path.parent().expect("session parent"))?;
+    fs::write(&staging_path, b"unowned-content")?;
+
+    let error = recorder
+        .persist()
+        .await
+        .expect_err("create-new collision must reach the caller");
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert!(
+        !recorder.materialization_pending(),
+        "terminal writer failure must not remain deferred"
+    );
+    assert_eq!(
+        fs::read(&staging_path)?,
+        b"unowned-content",
+        "failed creation must not claim or remove an unowned staging path"
+    );
+    assert!(!rollout_path.exists());
+    Ok(())
+}
+
+#[tokio::test]
+async fn final_path_collision_preserves_owner_and_cleans_own_staging() -> std::io::Result<()> {
+    let home = TempDir::new().expect("temp dir");
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+    let thread_id = ThreadId::new();
+    let recorder = RolloutRecorder::new(
+        &config,
+        RolloutRecorderParams::new(
+            thread_id,
+            None,
+            SessionSource::Exec,
+            BaseInstructions::default(),
+            Vec::new(),
+            EventPersistenceMode::Limited,
+        ),
+        None,
+        None,
+    )
+    .await?;
+    let rollout_path = recorder.rollout_path().to_path_buf();
+    fs::create_dir_all(rollout_path.parent().expect("session parent"))?;
+    fs::write(&rollout_path, b"existing-owner")?;
+
+    let (reached, barrier_guard) = arm_materialization_barrier_for(&recorder);
+    let persist_recorder = recorder.clone();
+    let persist = tokio::spawn(async move { persist_recorder.persist().await });
+    wait_materialization_reached(&reached).await;
+    drop(barrier_guard);
+
+    let error = tokio::time::timeout(Duration::from_secs(5), persist)
+        .await
+        .expect("collision publication must finish")
+        .expect("persist task must not panic")
+        .expect_err("collision must reach the caller");
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    assert!(!recorder.materialization_pending());
+    assert!(staging_paths(&rollout_path).is_empty());
+    assert_eq!(fs::read(&rollout_path)?, b"existing-owner");
     Ok(())
 }
 

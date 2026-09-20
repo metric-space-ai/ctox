@@ -1,10 +1,19 @@
 //! Persist Codex session rollouts (.jsonl) so sessions can be replayed or inspected later.
 
+#[cfg(test)]
+use std::collections::HashMap;
 use std::fs::File;
 use std::fs::{self};
 use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
+#[cfg(test)]
+use std::sync::OnceLock;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 
 use chrono::SecondsFormat;
 use chrono::Utc;
@@ -23,6 +32,7 @@ use tokio::sync::oneshot;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
+use uuid::Uuid;
 
 use super::ARCHIVED_SESSIONS_SUBDIR;
 use super::SESSIONS_SUBDIR;
@@ -74,6 +84,9 @@ use ctox_state::ThreadMetadataBuilder;
 pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
     pub(crate) rollout_path: PathBuf,
+    materialization_pending: Arc<AtomicBool>,
+    #[cfg(test)]
+    materialization_staging_path: Option<PathBuf>,
     state_db: Option<StateDbHandle>,
     event_persistence_mode: EventPersistenceMode,
 }
@@ -97,7 +110,7 @@ pub enum RolloutRecorderParams {
 enum RolloutCmd {
     AddItems(Vec<RolloutItem>),
     Persist {
-        ack: oneshot::Sender<()>,
+        ack: oneshot::Sender<std::io::Result<()>>,
     },
     /// Ensure all prior writes are processed; respond when flushed.
     Flush {
@@ -485,6 +498,11 @@ impl RolloutRecorder {
         // A reasonably-sized bounded channel. If the buffer fills up the send
         // future will yield, which is fine – we only need to ensure we do not
         // perform *blocking* I/O on the caller's thread.
+        let materialization_pending = Arc::new(AtomicBool::new(deferred_log_file_info.is_some()));
+        #[cfg(test)]
+        let materialization_staging_path = deferred_log_file_info
+            .as_ref()
+            .map(|info| info.materializing_path.clone());
         let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
         // Spawn a Tokio task that owns the file handle and performs async
         // writes. Using `tokio::fs::File` keeps everything on the async I/O
@@ -500,11 +518,15 @@ impl RolloutRecorder {
             state_builder,
             config.model_provider_id.clone(),
             config.memories.generate_memories,
+            materialization_pending.clone(),
         ));
 
         Ok(Self {
             tx,
             rollout_path,
+            materialization_pending,
+            #[cfg(test)]
+            materialization_staging_path,
             state_db: state_db_ctx,
             event_persistence_mode,
         })
@@ -512,6 +534,16 @@ impl RolloutRecorder {
 
     pub fn rollout_path(&self) -> &Path {
         self.rollout_path.as_path()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn materialization_staging_path(&self) -> Option<&Path> {
+        self.materialization_staging_path.as_deref()
+    }
+
+    /// True while a fresh recorder has not yet published its rollout pathname.
+    pub(crate) fn materialization_pending(&self) -> bool {
+        self.materialization_pending.load(Ordering::SeqCst)
     }
 
     pub fn state_db(&self) -> Option<StateDbHandle> {
@@ -550,7 +582,7 @@ impl RolloutRecorder {
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout persist: {e}")))?;
         rx.await
-            .map_err(|e| IoError::other(format!("failed waiting for rollout persist: {e}")))
+            .map_err(|e| IoError::other(format!("failed waiting for rollout persist: {e}")))?
     }
 
     /// Flush all queued writes and wait until they are committed by the writer task.
@@ -688,6 +720,10 @@ struct LogFileInfo {
     /// Full path to the rollout file.
     path: PathBuf,
 
+    /// Private writer-owned preparation path. It deliberately contains no
+    /// thread id so discovery cannot find partial preparation state.
+    materializing_path: PathBuf,
+
     /// Session ID (also embedded in filename).
     conversation_id: ThreadId,
 
@@ -721,13 +757,14 @@ fn precompute_log_file_info(
     let path = dir.join(filename);
 
     Ok(LogFileInfo {
+        materializing_path: materialization_path(&path),
         path,
         conversation_id,
         timestamp,
     })
 }
 
-fn open_log_file(path: &Path) -> std::io::Result<File> {
+fn open_materializing_log_file(path: &Path) -> std::io::Result<File> {
     let Some(parent) = path.parent() else {
         return Err(IoError::other(format!(
             "rollout path has no parent: {}",
@@ -737,8 +774,68 @@ fn open_log_file(path: &Path) -> std::io::Result<File> {
     fs::create_dir_all(parent)?;
     std::fs::OpenOptions::new()
         .append(true)
-        .create(true)
+        .create_new(true)
         .open(path)
+}
+#[cfg(test)]
+struct MaterializationBarrier {
+    reached: Arc<tokio::sync::Notify>,
+    release_tx: Option<oneshot::Sender<()>>,
+    release_rx: Option<oneshot::Receiver<()>>,
+}
+
+#[cfg(test)]
+fn materialization_barriers() -> &'static Mutex<HashMap<PathBuf, MaterializationBarrier>> {
+    static BARRIERS: OnceLock<Mutex<HashMap<PathBuf, MaterializationBarrier>>> = OnceLock::new();
+    BARRIERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(test)]
+fn arm_materialization_barrier(rollout_path: &Path) -> Arc<tokio::sync::Notify> {
+    let (release_tx, release_rx) = oneshot::channel();
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let mut barriers = materialization_barriers()
+        .lock()
+        .expect("materialization barrier registry");
+    barriers.insert(
+        rollout_path.to_path_buf(),
+        MaterializationBarrier {
+            reached: Arc::clone(&reached),
+            release_tx: Some(release_tx),
+            release_rx: Some(release_rx),
+        },
+    );
+    reached
+}
+
+#[cfg(test)]
+fn register_materialization_barrier(rollout_path: &Path) -> Option<oneshot::Receiver<()>> {
+    let mut barriers = materialization_barriers()
+        .lock()
+        .expect("materialization barrier registry");
+    let barrier = barriers.get_mut(rollout_path)?;
+    barrier.reached.notify_one();
+    barrier.release_rx.take()
+}
+
+#[cfg(test)]
+fn release_materialization_barrier(rollout_path: &Path) {
+    let mut barriers = materialization_barriers()
+        .lock()
+        .expect("materialization barrier registry");
+    if let Some(barrier) = barriers.remove(rollout_path)
+        && let Some(release_tx) = barrier.release_tx
+    {
+        let _ = release_tx.send(());
+    }
+}
+
+/// Generate a private, writer-owned preparation pathname. It is hidden and
+/// contains no thread id, so filesystem discovery cannot see partial state;
+/// uniqueness prevents one writer from deleting another preparation file.
+fn materialization_path(rollout_path: &Path) -> PathBuf {
+    let parent = rollout_path.parent().unwrap_or_else(|| Path::new(""));
+    parent.join(format!(".rollout-materializing-{}.jsonl", Uuid::new_v4()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -753,6 +850,7 @@ async fn rollout_writer(
     mut state_builder: Option<ThreadMetadataBuilder>,
     default_provider: String,
     generate_memories: bool,
+    materialization_pending: Arc<AtomicBool>,
 ) -> std::io::Result<()> {
     let mut writer = file.map(|file| JsonlWriter { file });
     let mut buffered_items = Vec::<RolloutItem>::new();
@@ -774,6 +872,7 @@ async fn rollout_writer(
             &mut state_builder,
             default_provider.as_str(),
             generate_memories,
+            /*publish_state*/ true,
         )
         .await?;
     }
@@ -798,24 +897,36 @@ async fn rollout_writer(
                     state_db_ctx.as_deref(),
                     state_builder.as_ref(),
                     default_provider.as_str(),
+                    /*publish_state*/ true,
                 )
                 .await?;
             }
             RolloutCmd::Persist { ack } => {
                 if writer.is_none() {
+                    let mut prepared_items = Vec::<RolloutItem>::new();
+                    let mut owned_staging_path = None::<PathBuf>;
                     let result = async {
-                        let Some(log_file_info) = deferred_log_file_info.take() else {
-                            return Err(IoError::other(
-                                "deferred rollout recorder missing log file metadata",
-                            ));
-                        };
-                        let file = open_log_file(log_file_info.path.as_path())?;
+                        let log_file_info = deferred_log_file_info.take().ok_or_else(|| {
+                            IoError::other("deferred rollout recorder missing log file metadata")
+                        })?;
+                        let materializing_path = log_file_info.materializing_path.clone();
+                        // `create_new` inside this call confers ownership. A
+                        // collision must leave the pre-existing path untouched.
+                        let file = open_materializing_log_file(&materializing_path)?;
+                        owned_staging_path = Some(materializing_path.clone());
                         writer = Some(JsonlWriter {
                             file: tokio::fs::File::from_std(file),
                         });
+                        #[cfg(test)]
+                        let release_materialization =
+                            register_materialization_barrier(&rollout_path);
+                        #[cfg(test)]
+                        if let Some(release_materialization) = release_materialization {
+                            release_materialization.await.expect("release channel");
+                        }
 
                         if let Some(session_meta) = meta.take() {
-                            write_session_meta(
+                            let item = write_session_meta(
                                 writer.as_mut(),
                                 session_meta,
                                 &cwd,
@@ -824,8 +935,10 @@ async fn rollout_writer(
                                 &mut state_builder,
                                 default_provider.as_str(),
                                 generate_memories,
+                                /*publish_state*/ false,
                             )
                             .await?;
+                            prepared_items.push(item);
                         }
 
                         if !buffered_items.is_empty() {
@@ -836,21 +949,65 @@ async fn rollout_writer(
                                 state_db_ctx.as_deref(),
                                 state_builder.as_ref(),
                                 default_provider.as_str(),
+                                /*publish_state*/ false,
                             )
                             .await?;
-                            buffered_items.clear();
+                            prepared_items.extend(buffered_items.drain(..));
                         }
 
+                        let Some(writer) = writer.as_mut() else {
+                            return Err(IoError::other(
+                                "materializing rollout recorder lost its writer",
+                            ));
+                        };
+                        writer.file.flush().await?;
+                        // A same-directory hard link is an atomic create-new
+                        // publication. Unlike rename, it cannot replace a final
+                        // pathname owned by another writer.
+                        tokio::fs::hard_link(&materializing_path, &rollout_path).await?;
+
+                        // Publish projection state only after the public
+                        // pathname can observe the complete prepared history.
+                        sync_thread_state_after_write(
+                            state_db_ctx.as_deref(),
+                            &rollout_path,
+                            state_builder.as_ref(),
+                            &prepared_items,
+                            default_provider.as_str(),
+                            (!generate_memories).then_some("disabled"),
+                        )
+                        .await;
+
+                        // Cleanup is deliberately scoped to this writer's
+                        // private preparation name.
+                        tokio::fs::remove_file(&materializing_path).await?;
                         Ok(())
                     }
                     .await;
 
-                    if let Err(err) = result {
-                        let _ = ack.send(());
-                        return Err(err);
+                    // Publication ownership belongs to the writer, not the
+                    // caller. A dropped/cancelled caller cannot strand the
+                    // recorder in pending state, and a terminal writer failure
+                    // must not remain classified as a fresh deferred recorder.
+                    materialization_pending.store(false, Ordering::SeqCst);
+
+                    match result {
+                        Ok(()) => {
+                            let _ = ack.send(Ok(()));
+                        }
+                        Err(err) => {
+                            // Never broaden cleanup to the public name or to
+                            // another writer's private preparation file.
+                            if let Some(path) = owned_staging_path.as_ref() {
+                                let _ = tokio::fs::remove_file(path).await;
+                            }
+                            let _ = ack.send(Err(IoError::new(err.kind(), err.to_string())));
+                            return Err(err);
+                        }
                     }
+                } else {
+                    let _ = ack.send(Ok(()));
                 }
-                let _ = ack.send(());
             }
             RolloutCmd::Flush { ack } => {
                 // Deferred fresh threads may not have an initialized file yet.
@@ -881,7 +1038,8 @@ async fn write_session_meta(
     state_builder: &mut Option<ThreadMetadataBuilder>,
     default_provider: &str,
     generate_memories: bool,
-) -> std::io::Result<()> {
+    publish_state: bool,
+) -> std::io::Result<RolloutItem> {
     let git_info = collect_git_info(cwd).await;
     let session_meta_line = SessionMetaLine {
         meta: session_meta,
@@ -895,16 +1053,18 @@ async fn write_session_meta(
     if let Some(writer) = writer.as_mut() {
         writer.write_rollout_item(&rollout_item).await?;
     }
-    sync_thread_state_after_write(
-        state_db_ctx,
-        rollout_path,
-        state_builder.as_ref(),
-        std::slice::from_ref(&rollout_item),
-        default_provider,
-        (!generate_memories).then_some("disabled"),
-    )
-    .await;
-    Ok(())
+    if publish_state {
+        sync_thread_state_after_write(
+            state_db_ctx,
+            rollout_path,
+            state_builder.as_ref(),
+            std::slice::from_ref(&rollout_item),
+            default_provider,
+            (!generate_memories).then_some("disabled"),
+        )
+        .await;
+    }
+    Ok(rollout_item)
 }
 
 async fn write_and_reconcile_items(
@@ -914,21 +1074,24 @@ async fn write_and_reconcile_items(
     state_db_ctx: Option<&StateRuntime>,
     state_builder: Option<&ThreadMetadataBuilder>,
     default_provider: &str,
+    publish_state: bool,
 ) -> std::io::Result<()> {
     if let Some(writer) = writer.as_mut() {
         for item in items {
             writer.write_rollout_item(item).await?;
         }
     }
-    sync_thread_state_after_write(
-        state_db_ctx,
-        rollout_path,
-        state_builder,
-        items,
-        default_provider,
-        /*new_thread_memory_mode*/ None,
-    )
-    .await;
+    if publish_state {
+        sync_thread_state_after_write(
+            state_db_ctx,
+            rollout_path,
+            state_builder,
+            items,
+            default_provider,
+            /*new_thread_memory_mode*/ None,
+        )
+        .await;
+    }
     Ok(())
 }
 
