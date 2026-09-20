@@ -136,7 +136,7 @@ def main():
     if not all(counts.values()):
         raise RuntimeError(f'A required test group is absent: {counts}')
     if counts['mcp_app_authority'] < 14:
-        raise RuntimeError(f"Missing THESEN managed-authority regressions: {counts}")
+        raise RuntimeError(f"Missing managed-authority regressions: {counts}")
     required = {
         'coding_agents::pi_sidecar::tests::inherited_minimax_route_drives_real_pi_tools_through_native_bridge',
         'coding_agents::pi_sidecar::tests::responses_edit_owner_applies_only_complete_source_and_session',
