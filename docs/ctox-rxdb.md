@@ -10,7 +10,7 @@ disagree, the code wins — and this document should be fixed.
 
 ### Session handoff policy candidate — not production acceptance
 
-The [production integration boundary](dev/ctox-sync-handoff-integration.md)
+The [production integration boundary](ctox-sync-handoff-integration.md)
 traces the existing Workjet context handoff and native library seams, identifies
 their missing callers, and defines the required native lifecycle and evidence.
 
