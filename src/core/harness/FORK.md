@@ -33,8 +33,12 @@ Legacy unscoped `Op::Interrupt` remains available to existing internal callers.
 
 `core/src/codex_interrupt_tests.rs` exercises the public core request method and
 its production dispatch handler with controlled task replacement and abort
-cleanup. These are source-added regressions; compiler/test execution and full
-app-server transport acceptance must be recorded separately before promotion.
+cleanup. `app-server/src/in_process_interrupt_tests.rs` additionally drives the
+real in-process RPC boundary with serialized `TurnInterruptParams`, positive
+matching interrupts, stale/unknown rejections, and exact-turn steering probes
+that verify the successor stays active. Only the model response is mocked.
+These are source-added regressions; compiler/test execution and transport
+acceptance must be recorded separately before promotion.
 This change does not implement queue-claim cancellation or publication fencing.
 
 ## 2026-08 Required Plan and Stable Activity Events
