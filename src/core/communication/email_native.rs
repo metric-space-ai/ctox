@@ -808,8 +808,34 @@ fn store_provider_message(
 ) -> Result<bool> {
     let message_key = message_key_from_remote(account_key, &item.folder_hint, &item.remote_id);
     if known_communication_message(conn, &message_key)? {
+        // Older EWS polls persisted envelopes without bodies. Enrich those rows
+        // in place rather than replaying the upsert/refresh path, which would
+        // overwrite read state, routing metadata and thread customization.
+        if matches!(options.provider.as_str(), "ews" | "owa")
+            && (!item.body_text.is_empty() || !item.body_html.is_empty())
+        {
+            return Ok(conn.execute(
+                r#"UPDATE communication_messages
+                   SET body_text = ?1, body_html = ?2,
+                       preview = CASE WHEN preview = '' OR preview = subject
+                                      THEN ?3 ELSE preview END
+                   WHERE message_key = ?4 AND channel = 'email'
+                     AND account_key = ?5 AND remote_id = ?6 AND folder_hint = ?7
+                     AND body_text = '' AND body_html = ''"#,
+                rusqlite::params![
+                    item.body_text,
+                    item.body_html,
+                    item.preview,
+                    message_key,
+                    account_key,
+                    item.remote_id,
+                    item.folder_hint,
+                ],
+            )? > 0);
+        }
         return Ok(false);
     }
+
     let observed_at = now_iso_string();
     let direction = synced_message_direction(&item.sender_address, &options.email);
     let raw_payload_ref = provider_attachment_refs(&item.metadata).join("\n");
@@ -4649,6 +4675,271 @@ mod tests {
             </t:Message></m:Items></m:GetItemResponseMessage>"#,
             super::xml_escape(id)
         )
+    }
+
+    fn ews_recovery_message(body: &str) -> anyhow::Result<super::MailboxMessage> {
+        let mut messages = super::list_ews_folder("inbox", 1, None, |op, _, _| {
+            Ok(if op == "FindItem" {
+                ews_find_fixture(&["existing-item"])
+            } else {
+                ews_envelope(
+                    "GetItem",
+                    &ews_get_fixture_item(
+                        "existing-item",
+                        &format!(
+                            "<t:Body BodyType=\"Text\">{}</t:Body>",
+                            super::xml_escape(body)
+                        ),
+                    ),
+                )
+            })
+        })?;
+        Ok(messages.remove(0))
+    }
+
+    fn ews_recovery_row(
+        conn: &rusqlite::Connection,
+        table: &str,
+        key_column: &str,
+        key: &str,
+    ) -> anyhow::Result<std::collections::BTreeMap<String, rusqlite::types::Value>> {
+        let mut statement =
+            conn.prepare(&format!("SELECT * FROM {table} WHERE {key_column} = ?1"))?;
+        let columns = statement
+            .column_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        Ok(statement.query_row([key], |row| {
+            columns
+                .iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    Ok((name.clone(), row.get::<_, rusqlite::types::Value>(index)?))
+                })
+                .collect::<rusqlite::Result<_>>()
+        })?)
+    }
+
+    #[test]
+    fn ews_resync_recovers_persisted_empty_body_without_replaying_message_state(
+    ) -> anyhow::Result<()> {
+        for provider in ["ews", "owa"] {
+            let temp = tempfile::tempdir()?;
+            let mut conn = open_channel_db(&temp.path().join("channels.sqlite3"))?;
+            let mut options = empty_options();
+            options.email = "agent@example.test".into();
+            options.provider = provider.into();
+            options.trust_level = "untrusted".into();
+            let account = "email:agent@example.test";
+            let old = ews_recovery_message("")?;
+            let key = super::message_key_from_remote(account, &old.folder_hint, &old.remote_id);
+            let thread = old.thread_key.clone();
+            assert!(super::store_provider_message(
+                &mut conn, &options, account, old
+            )?);
+            super::ensure_routing_rows_for_inbound(&conn)?;
+            conn.execute(
+                "UPDATE communication_messages SET seen=1, status='reviewed', trust_level='trusted',
+                 raw_payload_ref='preserved-attachment', metadata_json='{\"user_note\":\"keep\"}'
+                 WHERE message_key=?1", [&key],
+            )?;
+            conn.execute(
+                "UPDATE communication_threads SET subject='User title', metadata_json='{\"pinned\":true}'
+                 WHERE thread_key=?1", [&thread],
+            )?;
+            conn.execute(
+                "UPDATE communication_routing_state SET route_status='handled', acked_at='2026-09-12T10:00:00Z',
+                 lease_owner='original-worker', failure_attempt_count=2, last_error='preserve audit'
+                 WHERE message_key=?1", [&key],
+            )?;
+            // The same remote ID in another account must not be enriched.
+            let other_account = "email:other@example.test";
+            let mut other = ews_recovery_message("")?;
+            other.thread_key = "other-account-thread".into();
+            let other_key =
+                super::message_key_from_remote(other_account, &other.folder_hint, &other.remote_id);
+            assert!(super::store_provider_message(
+                &mut conn,
+                &options,
+                other_account,
+                other
+            )?);
+            let mut expected =
+                ews_recovery_row(&conn, "communication_messages", "message_key", &key)?;
+            let thread_before =
+                ews_recovery_row(&conn, "communication_threads", "thread_key", &thread)?;
+            let routing_before =
+                ews_recovery_row(&conn, "communication_routing_state", "message_key", &key)?;
+            let other_before =
+                ews_recovery_row(&conn, "communication_messages", "message_key", &other_key)?;
+            let clock_before: i64 = conn.query_row(
+                "SELECT version FROM communication_projection_clock WHERE id=1",
+                [],
+                |row| row.get(0),
+            )?;
+            let mut hydrated = ews_recovery_message("Recovered reply & detail")?;
+            // Fresh envelope differences must not undo operator decisions.
+            hydrated.subject = "Changed remote subject".into();
+            hydrated.thread_key = "changed-remote-thread".into();
+            hydrated.sender_address = "changed@example.test".into();
+            expected.insert(
+                "body_text".into(),
+                rusqlite::types::Value::Text(hydrated.body_text.clone()),
+            );
+            expected.insert(
+                "body_html".into(),
+                rusqlite::types::Value::Text(hydrated.body_html.clone()),
+            );
+            expected.insert(
+                "preview".into(),
+                rusqlite::types::Value::Text(hydrated.preview.clone()),
+            );
+            assert!(super::store_provider_message(
+                &mut conn, &options, account, hydrated
+            )?);
+            super::ensure_routing_rows_for_inbound(&conn)?;
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_messages", "message_key", &key)?,
+                expected
+            );
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_threads", "thread_key", &thread)?,
+                thread_before
+            );
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_routing_state", "message_key", &key)?,
+                routing_before
+            );
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_messages", "message_key", &other_key)?,
+                other_before
+            );
+            let clock_after: i64 = conn.query_row(
+                "SELECT version FROM communication_projection_clock WHERE id=1",
+                [],
+                |row| row.get(0),
+            )?;
+            assert!(
+                clock_after > clock_before,
+                "body enrichment must invalidate the existing projection"
+            );
+            assert!(!super::store_provider_message(
+                &mut conn,
+                &options,
+                account,
+                ews_recovery_message("Later content must not replace recovered content")?
+            )?);
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_messages", "message_key", &key)?,
+                expected
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT version FROM communication_projection_clock WHERE id=1",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )?,
+                clock_after
+            );
+            drop(conn);
+            let conn = open_channel_db(&temp.path().join("channels.sqlite3"))?;
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_messages", "message_key", &key)?,
+                expected
+            );
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_routing_state", "message_key", &key)?,
+                routing_before
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM communication_messages", [], |row| row
+                    .get::<_, i64>(0))?,
+                2
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ews_resync_preserves_nonempty_content_and_other_provider_deduplication() -> anyhow::Result<()>
+    {
+        for (provider, stored_text, stored_html, incoming) in [
+            ("ews", "Existing plain text", "", "New text"),
+            ("owa", "", "<p>Existing HTML</p>", "New text"),
+            ("ews", " ", "", "New text"),
+            ("graph", "", "", "New text"),
+            ("activesync", "", "", "New text"),
+            ("ews", "", "", ""),
+        ] {
+            let temp = tempfile::tempdir()?;
+            let mut conn = open_channel_db(&temp.path().join("channels.sqlite3"))?;
+            let mut options = empty_options();
+            options.email = "agent@example.test".into();
+            options.provider = provider.into();
+            let account = "email:agent@example.test";
+            let mut old = ews_recovery_message(stored_text)?;
+            old.body_html = stored_html.into();
+            let key = super::message_key_from_remote(account, &old.folder_hint, &old.remote_id);
+            assert!(super::store_provider_message(
+                &mut conn, &options, account, old
+            )?);
+            let before = ews_recovery_row(&conn, "communication_messages", "message_key", &key)?;
+            assert!(
+                !super::store_provider_message(
+                    &mut conn,
+                    &options,
+                    account,
+                    ews_recovery_message(incoming)?
+                )?,
+                "{provider}/{stored_text}/{stored_html}"
+            );
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_messages", "message_key", &key)?,
+                before
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ews_resync_preserves_custom_preview_while_hydrating_html() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut conn = open_channel_db(&temp.path().join("channels.sqlite3"))?;
+        let mut options = empty_options();
+        options.email = "agent@example.test".into();
+        options.provider = "ews".into();
+        let account = "email:agent@example.test";
+        let old = ews_recovery_message("")?;
+        let key = super::message_key_from_remote(account, &old.folder_hint, &old.remote_id);
+        assert!(super::store_provider_message(
+            &mut conn, &options, account, old
+        )?);
+        conn.execute(
+            "UPDATE communication_messages SET preview='Custom preview' WHERE message_key=?1",
+            [&key],
+        )?;
+        let mut expected = ews_recovery_row(&conn, "communication_messages", "message_key", &key)?;
+        let mut incoming = ews_recovery_message("")?;
+        incoming.body_html = "<p>Recovered HTML</p>".into();
+        incoming.body_text = super::ews_html_body_text(&incoming.body_html);
+        incoming.preview = incoming.body_text.clone();
+        expected.insert(
+            "body_html".into(),
+            rusqlite::types::Value::Text(incoming.body_html.clone()),
+        );
+        expected.insert(
+            "body_text".into(),
+            rusqlite::types::Value::Text(incoming.body_text.clone()),
+        );
+        assert!(super::store_provider_message(
+            &mut conn, &options, account, incoming
+        )?);
+        assert_eq!(
+            ews_recovery_row(&conn, "communication_messages", "message_key", &key)?,
+            expected
+        );
+        Ok(())
     }
 
     #[test]
