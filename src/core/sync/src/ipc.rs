@@ -95,20 +95,24 @@ impl AuthorityIpc {
                 job_id,
                 ownership,
                 receipts,
+                disclosure,
             } => Command::ProtectCheckpoint {
                 job_id,
                 ownership,
                 receipts,
+                disclosure,
             },
             SyncIpcOperation::TakeOver {
                 job_id,
                 expected,
                 checkpoint_digest,
+                resume,
             } => Command::TakeOver {
                 job_id,
                 expected,
                 checkpoint_digest,
                 owner: self.node.node_id(),
+                resume,
             },
             SyncIpcOperation::BeginEffect {
                 job_id,

@@ -5,7 +5,9 @@
     "CTOX_SYNC_AUTHORITY_PROTOCOL_VERSION": 5,
     "CTOX_SYNC_IPC_PROTOCOL_VERSION": 1,
     "CTOX_SYNC_IPC_MAX_FRAME_BYTES": 65536,
-    "CTOX_SYNC_IPC_DEADLINE_MILLIS": 10000
+    "CTOX_SYNC_IPC_DEADLINE_MILLIS": 10000,
+    "CTOX_SYNC_SESSION_HANDOFF_METHOD": "ctox.sync.session_handoff.authorize.v1",
+    "CTOX_SYNC_SESSION_HANDOFF_PERMIT_VERSION": 1
   },
 
   "copyTypes": ["SyncHostTiming"],
@@ -68,6 +70,24 @@
     "ExecutionOwnership": {
       "nodeId": "u64",
       "generation": "u64"
+    },
+    "SessionHandoffPermit": {
+      "version": "u32",
+      "bindingDigest": "string",
+      "phase": "SessionHandoffPhase",
+      "audience": "string",
+      "nonce": "string",
+      "jobId": "string",
+      "sessionId": "string",
+      "scopeId": "string",
+      "checkpointDigest": "string",
+      "checkpointSequence": "u64",
+      "ownershipGeneration": "u64",
+      "principalEpoch": "u64",
+      "bindingRevision": "u64",
+      "issuedAtMs": "u64",
+      "expiresAtMs": "u64",
+      "signature": "string"
     },
     "CheckpointCopyReceipt": {
       "version": "u32",
@@ -157,8 +177,8 @@
       "revokeWorker": { "nodeId": "u64" },
       "create": { "spec": "ExecutionSpec" },
       "validate": { "jobId": "string", "ownership": "ExecutionOwnership" },
-      "protectCheckpoint": { "jobId": "string", "ownership": "ExecutionOwnership", "receipts": "list:CheckpointCopyReceipt" },
-      "takeOver": { "jobId": "string", "expected": "ExecutionOwnership", "checkpointDigest": "string" },
+      "protectCheckpoint": { "jobId": "string", "ownership": "ExecutionOwnership", "receipts": "list:CheckpointCopyReceipt", "disclosure": "SessionHandoffPermit" },
+      "takeOver": { "jobId": "string", "expected": "ExecutionOwnership", "checkpointDigest": "string", "resume": "SessionHandoffPermit" },
       "beginEffect": { "jobId": "string", "ownership": "ExecutionOwnership", "effectId": "string" },
       "completeEffect": { "jobId": "string", "ownership": "ExecutionOwnership", "effectId": "string" },
       "stop": { "jobId": "string", "ownership": "ExecutionOwnership" }
@@ -179,6 +199,11 @@
     "WorkspaceEntryKind": [
       "file",
       "symlink"
+    ],
+    "SessionHandoffPhase": [
+      "disclose",
+      "receive",
+      "resume"
     ]
   }
 }

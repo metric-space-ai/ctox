@@ -210,6 +210,25 @@ impl AuthorityNode {
                 ));
             }
         }
+        // Admission-time freshness for embedded handoff permits. Consensus
+        // apply replays deterministically without a clock, so expiry is
+        // enforced only here, before the command is proposed.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as u64)
+            .unwrap_or(0);
+        let permit = match &request.command {
+            super::Command::ProtectCheckpoint { disclosure, .. } => Some(disclosure),
+            super::Command::TakeOver { resume, .. } => Some(resume),
+            _ => None,
+        };
+        if let Some(permit) = permit {
+            if permit.issued_at_ms > now_ms || permit.expires_at_ms <= now_ms {
+                return Err(AuthorityFailure::rejected(
+                    "session handoff permit is not currently valid",
+                ));
+            }
+        }
         let observation = self.operations.start("client_write", Phase::Running);
         let result = tokio::time::timeout(self.deadline, self.raft.client_write(request)).await;
         observation.finish(result.as_ref().is_ok_and(|result| result.is_ok()));

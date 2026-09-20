@@ -320,20 +320,31 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
             let copies = |ids: [u64; 2]| ids.into_iter().map(|id|
                 checkpoint_fixture::copy_receipt(root.path(), id, &keys[&id],
                     &handoff_spec, &initial_owner, 1)).collect::<Vec<_>>();
+            let vote_copies = copies([1, 3]);
             assert!(matches!(call(&handoff_endpoints[&1], "coordination-vote-is-not-data",
                 SyncIpcOperation::ProtectCheckpoint {
                     job_id: handoff_spec.job_id.clone(), ownership: initial_owner.clone(),
-                    receipts: copies([1, 3]),
+                    receipts: vote_copies.clone(),
+                    disclosure: checkpoint_fixture::handoff_permit(&keys[&1],
+                        ctox_sync::authority::SessionHandoffPhase::Disclose, &handoff_spec,
+                        &vote_copies[0].checkpoint_digest, vote_copies[0].sequence,
+                        &initial_owner, "coordination-vote-is-not-data"),
                 }).await, SyncIpcResult::Rejected { ref reason } if reason == "CheckpointUnavailable"));
             let receipts = copies([1, 4]);
             let digest = receipts[0].checkpoint_digest.clone();
             assert!(matches!(call(&handoff_endpoints[&1], "protect-on-additional-worker",
                 SyncIpcOperation::ProtectCheckpoint {
-                    job_id: handoff_spec.job_id.clone(), ownership: initial_owner.clone(), receipts,
+                    job_id: handoff_spec.job_id.clone(), ownership: initial_owner.clone(), receipts: receipts.clone(),
+                    disclosure: checkpoint_fixture::handoff_permit(&keys[&1],
+                        ctox_sync::authority::SessionHandoffPhase::Disclose, &handoff_spec,
+                        &digest, receipts[0].sequence, &initial_owner, "protect-on-additional-worker"),
                 }).await, SyncIpcResult::Applied { .. }));
             let operation = SyncIpcOperation::TakeOver {
-                job_id: handoff_spec.job_id.clone(), expected: initial_owner,
-                checkpoint_digest: digest,
+                job_id: handoff_spec.job_id.clone(), expected: initial_owner.clone(),
+                checkpoint_digest: digest.clone(),
+                resume: checkpoint_fixture::handoff_permit(&keys[&4],
+                    ctox_sync::authority::SessionHandoffPhase::Resume, &handoff_spec,
+                    &digest, receipts[0].sequence, &initial_owner, "additional-worker-takeover"),
             };
             let transferred = call(worker.ipc_endpoint(), "additional-worker-takeover", operation.clone()).await;
             let SyncIpcResult::Applied { ownership: transferred_owner, .. } = transferred else {
@@ -739,10 +750,23 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             })
             .collect();
         let checkpoint_digest = receipts[0].checkpoint_digest.clone();
+        let disclosure_for =
+            |request_id: &str, copies: &[ctox_sync::authority::CheckpointCopyReceipt]| {
+                checkpoint_fixture::handoff_permit(
+                    &keys[&1],
+                    ctox_sync::authority::SessionHandoffPhase::Disclose,
+                    &job.spec,
+                    &copies[0].checkpoint_digest,
+                    copies[0].sequence,
+                    &job.ownership,
+                    request_id,
+                )
+            };
         let protect = SyncIpcOperation::ProtectCheckpoint {
             job_id: "job".into(),
             ownership: job.ownership.clone(),
             receipts: receipts.clone(),
+            disclosure: disclosure_for("protect", &receipts),
         };
         // The local IPC cannot impersonate the checkpoint's current owner.
         assert!(matches!(
@@ -758,6 +782,7 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
                 SyncIpcOperation::ProtectCheckpoint {
                     job_id: "job".into(),
                     ownership: job.ownership.clone(),
+                    disclosure: disclosure_for("tampered-copy", &tampered),
                     receipts: tampered,
                 }
             )
@@ -777,18 +802,29 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             ipc_call(nodes[&1].clone(), "protect", protect).await,
             SyncIpcResult::Replayed { .. }
         ));
-        let takeover = SyncIpcOperation::TakeOver {
-            job_id: "job".into(),
-            expected: job.ownership.clone(),
-            checkpoint_digest: checkpoint_digest.clone(),
-        };
+        let takeover_for =
+            |request_id: &str, digest: &str, signer: u64| SyncIpcOperation::TakeOver {
+                job_id: "job".into(),
+                expected: job.ownership.clone(),
+                checkpoint_digest: digest.to_owned(),
+                resume: checkpoint_fixture::handoff_permit(
+                    &keys[&signer],
+                    ctox_sync::authority::SessionHandoffPhase::Resume,
+                    &job.spec,
+                    digest,
+                    receipts[0].sequence,
+                    &job.ownership,
+                    request_id,
+                ),
+            };
+        let takeover = takeover_for("takeover", &checkpoint_digest, 2);
         assert!(
-            matches!(ipc_call(nodes[&3].clone(), "coordination-peer-cannot-takeover", takeover.clone()).await,
+            matches!(ipc_call(nodes[&3].clone(), "coordination-peer-cannot-takeover",
+                takeover_for("coordination-peer-cannot-takeover", &checkpoint_digest, 3)).await,
             SyncIpcResult::Rejected { ref reason } if reason == "UnknownPeer")
         );
         assert!(matches!(ipc_call(nodes[&2].clone(), "wrong-digest",
-            SyncIpcOperation::TakeOver { job_id: "job".into(),
-                expected: job.ownership.clone(), checkpoint_digest: "0".repeat(64) }).await,
+            takeover_for("wrong-digest", &"0".repeat(64), 2)).await,
             SyncIpcResult::Rejected { ref reason } if reason == "CheckpointUnavailable"));
         assert!(matches!(
             ipc_call(
@@ -803,10 +839,9 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             .await,
             SyncIpcResult::Applied { .. }
         ));
-        assert!(
-            matches!(ipc_call(nodes[&2].clone(), "blocked-takeover", takeover.clone()).await,
-            SyncIpcResult::Rejected { ref reason } if reason == "ReconciliationRequired")
-        );
+        assert!(matches!(ipc_call(nodes[&2].clone(), "blocked-takeover",
+                takeover_for("blocked-takeover", &checkpoint_digest, 2)).await,
+            SyncIpcResult::Rejected { ref reason } if reason == "ReconciliationRequired"));
         assert!(matches!(
             ipc_call(
                 nodes[&1].clone(),

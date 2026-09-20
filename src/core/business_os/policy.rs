@@ -55,9 +55,14 @@ pub enum BusinessOsPermission {
     SupportManageSla,
     SupportAgentRequest,
     SupportAgentApply,
+    /// Exact-grant-only session-handoff permissions. No role, workspace manage,
+    /// data permission or sync membership implies them (issue183).
+    SessionHandoffDisclose,
+    SessionHandoffReceive,
+    SessionHandoffExecute,
 }
 
-pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 32] = [
+pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 35] = [
     BusinessOsPermission::WorkspaceManage,
     BusinessOsPermission::WorkspaceBrandingManage,
     BusinessOsPermission::UsersManage,
@@ -90,6 +95,9 @@ pub const BUSINESS_OS_PERMISSIONS: [BusinessOsPermission; 32] = [
     BusinessOsPermission::SupportManageSla,
     BusinessOsPermission::SupportAgentRequest,
     BusinessOsPermission::SupportAgentApply,
+    BusinessOsPermission::SessionHandoffDisclose,
+    BusinessOsPermission::SessionHandoffReceive,
+    BusinessOsPermission::SessionHandoffExecute,
 ];
 
 impl BusinessOsPermission {
@@ -131,6 +139,9 @@ impl BusinessOsPermission {
             Self::SupportManageSla => "support.manage_sla",
             Self::SupportAgentRequest => "support.agent_request",
             Self::SupportAgentApply => "support.agent_apply",
+            Self::SessionHandoffDisclose => "ctox.session_handoff.disclose",
+            Self::SessionHandoffReceive => "ctox.session_handoff.receive",
+            Self::SessionHandoffExecute => "ctox.session_handoff.execute",
         }
     }
 }
@@ -145,6 +156,8 @@ pub enum BusinessOsScopeType {
     Task,
     Approval,
     Mcp,
+    /// Exact binding-scoped grants for native session handoff (issue183).
+    SessionHandoff,
 }
 
 impl BusinessOsScopeType {
@@ -157,6 +170,7 @@ impl BusinessOsScopeType {
             Self::Task => "task",
             Self::Approval => "approval",
             Self::Mcp => "mcp",
+            Self::SessionHandoff => "session_handoff",
         }
     }
 }
@@ -476,6 +490,11 @@ pub fn evaluate(
             matches!(actor.role, BusinessOsRole::Chef | BusinessOsRole::Admin)
                 || scope.assigned_to_actor
         }
+        // Session handoff is never role-authorized: only an exact, active
+        // binding-scoped grant allows it (enforced by the explicit-grant layer).
+        BusinessOsPermission::SessionHandoffDisclose
+        | BusinessOsPermission::SessionHandoffReceive
+        | BusinessOsPermission::SessionHandoffExecute => false,
     };
 
     if allowed {
