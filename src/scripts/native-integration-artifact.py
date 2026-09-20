@@ -40,11 +40,23 @@ def run(name, args):
     remaining = int(DEADLINE - time.monotonic())
     if remaining <= 0:
         raise TimeoutError('Shared validation deadline exceeded')
+    print(f'[stage] {name} started', flush=True)
     with log.open('w') as output:
         process = subprocess.Popen(args, cwd=ROOT, stdout=output,
                                    stderr=subprocess.STDOUT, start_new_session=True)
         try:
-            process.wait(timeout=remaining)
+            while True:
+                try:
+                    process.wait(timeout=min(30, max(1, DEADLINE - time.monotonic())))
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= DEADLINE:
+                        raise
+                    stat = log.stat()
+                    print(json.dumps({'stage': name, 'pid': process.pid,
+                                      'log_bytes': stat.st_size,
+                                      'log_idle_seconds': int(time.time() - stat.st_mtime)}),
+                          flush=True)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGTERM)
             try:
@@ -53,6 +65,7 @@ def run(name, args):
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
             raise
+    print(f'[stage] {name} completed exit={process.returncode}', flush=True)
     RECORD['stages'].append({'name': name, 'command': args, 'exit': process.returncode})
     save()
     if process.returncode:
