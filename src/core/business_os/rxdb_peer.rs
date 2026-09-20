@@ -2956,10 +2956,12 @@ async fn run_native_peer(
                 let business_data_database = Arc::clone(&database);
                 let business_data_source = ctox_sync::business_data_remote::BusinessDataSource::new(
                     business_data_database,
-                    Arc::new(super::rxdb_peer_business_data_source::NativeBusinessDataPolicy::new(
-                        root.clone(),
-                        Arc::clone(&database),
-                    )),
+                    Arc::new(
+                        super::rxdb_peer_business_data_source::NativeBusinessDataPolicy::new(
+                            root.clone(),
+                            Arc::clone(&database),
+                        ),
+                    ),
                     pool.connection_handler.clone(),
                 );
                 business_data_source.register(pool)?;
