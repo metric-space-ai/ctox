@@ -21,8 +21,14 @@ The resolver calls the native encrypted store's optional getter directly; it
 never launches `ctox secret get` or reads plaintext runtime configuration.
 Denied references fail before opening the store. Store/key failures,
 decryption failures, and invalid UTF-8 remain distinct from absence. Public
-errors carry no underlying store error text. Account and authentication mode
-remain separate non-secret configuration. This is an internal capability for
+errors carry no underlying store error text.
+
+For an existing ciphertext row, reads load an existing key only. A missing key
+returns Unavailable without generating or persisting a replacement. Supported
+embedded/runtime legacy keys may migrate through the existing guarded conflict
+checks; only write-side key initialization may generate a new key.
+Account and authentication mode remain separate non-secret configuration.
+This is an internal capability for
 native research operations, not an external arbitrary-secret lookup tool.
 
 `SourceCtx` is unchanged. `SourceModule::fetch_direct_with_resolver` receives
