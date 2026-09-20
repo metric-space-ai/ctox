@@ -9252,6 +9252,9 @@ fn run_completion_review(
             clip_text(&outcome.summary, 160),
         ),
     );
+    if let Some(hold) = incomplete_review_outcome_hold(&outcome) {
+        return hold;
+    }
     // Only enqueue a rework slice for actionable verdicts (FAIL / PARTIAL).
     // `Unavailable` means the reviewer itself failed (timeout, gateway error)
     // — the executor's work might be fine; we surface it but do not auto-rework
@@ -9673,6 +9676,38 @@ fn run_completion_review(
             }
         }
     }
+}
+
+fn incomplete_review_outcome_hold(
+    outcome: &review::ReviewOutcome,
+) -> Option<CompletionReviewDisposition> {
+    let task_outcome = review::parse_task_outcome(&outcome.canonical_report());
+    let could_close = outcome.verdict == review::ReviewVerdict::Pass
+        || matches!(outcome.disposition, review::ReviewDisposition::NoSend);
+    if task_outcome == review::ReviewTaskOutcome::Completed
+        || (task_outcome != review::ReviewTaskOutcome::Blocked && !could_close)
+    {
+        return None;
+    }
+    let reason = if let Some(wait_ref) = outcome
+        .no_send_wait_ref()
+        .filter(|_| outcome.no_send_reason() == Some(review::NoSendReason::WaitingExternal))
+    {
+        review::HoldReason::WaitingExternal(wait_ref)
+    } else if task_outcome == review::ReviewTaskOutcome::Blocked {
+        review::HoldReason::Technical {
+            policy_id: "requested-work-blocked".into(),
+        }
+    } else {
+        review::HoldReason::MissingReviewEvidence
+    };
+    Some(CompletionReviewDisposition::Hold {
+        reason,
+        summary: format!(
+            "Requested work is blocked or unverified. {}",
+            outcome.summary
+        ),
+    })
 }
 
 fn completion_review_unavailable_disposition(
@@ -23662,6 +23697,35 @@ fn existing_timeout_continuation(
 mod tests {
     // ctox-allow-direct-state-write: test fixture module
     use super::*;
+
+    #[test]
+    fn blocked_review_cannot_close_through_pass_or_no_send() {
+        for verdict in [review::ReviewVerdict::Pass, review::ReviewVerdict::Fail] {
+            for disposition in [
+                review::ReviewDisposition::Send,
+                review::ReviewDisposition::NoSend,
+            ] {
+                let mut outcome =
+                    review::ReviewOutcome::skipped("Required operation was not performed");
+                outcome.required = true;
+                outcome.verdict = verdict.clone();
+                outcome.disposition = disposition;
+                outcome.report = "TASK_OUTCOME: blocked\n".into();
+                assert!(matches!(
+                    incomplete_review_outcome_hold(&outcome),
+                    Some(CompletionReviewDisposition::Hold { .. })
+                ));
+            }
+        }
+        let mut outcome = review::ReviewOutcome::skipped("Missing execution evidence");
+        outcome.verdict = review::ReviewVerdict::Pass;
+        assert!(matches!(
+            incomplete_review_outcome_hold(&outcome),
+            Some(CompletionReviewDisposition::Hold { .. })
+        ));
+        outcome.report = "TASK_OUTCOME: completed\n".into();
+        assert!(incomplete_review_outcome_hold(&outcome).is_none());
+    }
     use crate::lcm::{ContinuityKind, LcmConfig, LcmEngine};
     use crate::plan;
     use crate::secrets;

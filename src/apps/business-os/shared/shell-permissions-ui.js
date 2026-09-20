@@ -20,6 +20,11 @@ export function buildModuleTargetContextItems({
         ? (labels.unpinFromTaskbar || 'Von Bar lösen')
         : (labels.pinToTaskbar || 'An Bar anheften'),
       icon: pinned ? '−' : '+',
+      trailingIcon: pinned ? '−' : '+',
+      trailingLabel: pinned
+        ? (labels.unpinFromTaskbar || 'Von Bar lösen')
+        : (labels.pinToTaskbar || 'An Bar anheften'),
+      trailingAction: actions.togglePin,
       action: actions.togglePin,
     },
   ];

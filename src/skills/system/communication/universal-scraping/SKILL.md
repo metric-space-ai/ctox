@@ -187,6 +187,28 @@ Do not report a reusable template as promoted until:
 - it has evidence across more than one target or a strong explicit override reason
 - the promoted template metadata exists in the registry
 
+## Authenticated targets (credentials live in the secret store)
+
+A target whose config carries `credential_ref: ctox-secret://credentials/<NAME>`
+is meant to be scraped **from a signed-in session**, and the sign-in is your
+job, not the owner's.
+
+- Check that the referenced secret exists and when it was last updated
+  (`ctox secret list`). Never read, print, log or embed the value; scripts fetch
+  it at runtime themselves (`ctox secret get --scope credentials --name <NAME>`
+  through `CTOX_BIN`), so it never reaches an artifact.
+- Sign in through the CTOX browser session for that target, verify the session
+  (an element only a signed-in page shows), then derive the extractor as usual.
+- An API-key target (name ends in `_TOKEN` or `_API_KEY`) holds one raw value,
+  not a user/password pair. The script reads it and sends it as the API's
+  credential (for example `Authorization: Bearer <value>`).
+- If the sign-in fails, the run's `failure_mode` is `blocked` and the detail
+  names the exact cause (MFA, captcha, lockout, rejected key with HTTP status).
+  A silent "temporarily unreachable" hides a credential problem and wastes the
+  next run.
+- Never park an authenticated target as "waiting for the owner" without having
+  attempted the sign-in in this turn.
+
 ## Guardrails
 
 - Do not mutate the skill folder with target-specific scripts.
