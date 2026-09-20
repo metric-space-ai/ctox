@@ -4765,8 +4765,10 @@ mod tests {
                 other_account,
                 other
             )?);
+            super::ensure_routing_rows_for_inbound(&conn)?;
             let mut expected =
                 ews_recovery_row(&conn, "communication_messages", "message_key", &key)?;
+
             let thread_before =
                 ews_recovery_row(&conn, "communication_threads", "thread_key", &thread)?;
             let routing_before =
