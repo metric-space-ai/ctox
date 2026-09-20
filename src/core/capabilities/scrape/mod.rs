@@ -5,6 +5,9 @@ use registry::{
 };
 mod execute;
 pub(crate) use execute::execute_scrape_with_outcome;
+pub(crate) use execute::{
+    configured_research_target_binding, execute_scrape_with_research_binding,
+};
 use execute::{execute_scrape, CommandExecution, ProbeResult};
 mod semantic_enrichment;
 pub(crate) use semantic_enrichment::service_semantic_search;
@@ -27,6 +30,9 @@ mod cli;
 pub(crate) use cli::dispatch_capturing;
 pub use cli::handle_scrape_command;
 mod classify;
+mod continuation;
+pub(crate) use continuation::load_provider_wait_receipt;
+mod query_completion;
 use classify::Classification;
 pub(crate) use classify::ScrapeRunStatus;
 
@@ -367,7 +373,9 @@ struct EnrichmentOutcome {
 impl ScrapeRunStatus {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
+            Self::AwaitingProvider => "awaiting_provider",
             Self::Succeeded => "succeeded",
+            Self::CompletedEmpty => "completed_empty",
             Self::TemporaryUnreachable => "temporary_unreachable",
             Self::PortalDrift => "portal_drift",
             Self::Blocked => "blocked",
@@ -383,11 +391,14 @@ pub(crate) struct ScrapeExecutionOutcome {
     pub(crate) target_key: String,
     pub(crate) run_id: String,
     pub(crate) status: ScrapeRunStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    continuation: Option<Value>,
     pub(crate) records_found: i64,
     pub(crate) fields_extracted: Vec<String>,
     pub(crate) latency_ms: u64,
     pub(crate) reason: String,
     pub(crate) error: Option<String>,
+    pub(crate) query_completion: Option<Value>,
     probe: Value,
     should_queue_repair: bool,
     repair_request_path: Option<String>,
@@ -1108,7 +1119,12 @@ fn scrape_error_diagnostic(
     probe: &ProbeResult,
     execution: &CommandExecution,
 ) -> Option<String> {
-    if classification.status == ScrapeRunStatus::Succeeded {
+    if matches!(
+        classification.status,
+        ScrapeRunStatus::Succeeded
+            | ScrapeRunStatus::CompletedEmpty
+            | ScrapeRunStatus::AwaitingProvider
+    ) {
         return None;
     }
     let mut details = vec![format!(
@@ -1950,3 +1966,40 @@ use semantic_enrichment::{
 
 #[cfg(test)]
 mod tests;
+
+/// Register a real executable fixture through the production registry. The
+/// recovery test substitutes provider I/O only, never command execution.
+#[cfg(test)]
+pub(crate) fn register_provider_recovery_fixture(
+    root: &Path,
+    target_key: &str,
+    source_id: &str,
+    script: &str,
+) -> Result<PathBuf> {
+    let mut config = json!({"skip_probe":true,"expected_min_records":1,
+        "expected_provider":source_id,"llm_enrichment":{"enabled":false}});
+    if source_id == "linkedin.com" {
+        config["async_provider"] = json!("brightdata");
+    }
+    let target = upsert_target(
+        root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key":target_key, "display_name":"Recovery fixture",
+            "start_url":format!("https://www.{source_id}/"), "target_kind":"prospect-research",
+            "config":config, "output_schema":{"schema_key":"prospect.v1"}
+        }),
+    )?;
+    let entry = root.join(format!("{target_key}-recovery-fixture.cjs"));
+    fs::write(&entry, script)?;
+    register_script(
+        root,
+        DEFAULT_RUNTIME_ROOT,
+        target_key,
+        entry.to_str().context("fixture path")?,
+        "javascript",
+        None,
+        None,
+    )?;
+    Ok(resolve_workspace_dir(root, &target.workspace_dir).join("fixture-counter.json"))
+}

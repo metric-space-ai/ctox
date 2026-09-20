@@ -180,6 +180,7 @@ test('recording failures retain bounded stdout and stderr without accepting data
         recorder.stdout.write('stdout diagnostic\n' + 'x'.repeat(20000));
         recorder.stdout.write('must not grow the retained buffer');
         recorder.stderr.write('stderr diagnostic\n' + 'y'.repeat(20000));
+        recorder.stderr.write('\nfinal counter-open diagnostic');
         recorder.exitCode = 255;
         recorder.emit('close', 255, null);
       });
@@ -195,6 +196,8 @@ test('recording failures retain bounded stdout and stderr without accepting data
   assert.match(result.recordStderr, /^stderr diagnostic/);
   assert.equal(result.recordStdout.length, 16384);
   assert.equal(result.recordStderr.length, 16384);
+  assert.equal(result.recordStderrTail.length, 16384);
+  assert.match(result.recordStderrTail, /final counter-open diagnostic$/);
   assert.equal(result.recordStdoutTruncated, true);
   assert.equal(result.recordStderrTruncated, true);
 });

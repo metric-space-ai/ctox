@@ -14,7 +14,7 @@ const sourceFiles = [
 ];
 const classifications = new Map(Object.entries({
   apply_outbound_adapter_reconciliation_reply: ['compatibility_mixed', 'execution_task_id'],
-  accept_rxdb_business_command_with_origin: ['compatibility_mixed', 'return explicit execution_task_id/target fields'],
+  accept_rxdb_business_command_with_guest_runtime: ['compatibility_mixed', 'return explicit execution_task_id/target fields'],
   complete_business_command_from_app_validation_success: ['execution_link', 'execution_task_id'],
   delete_ctox_task: ['target_task', 'target_task_id'],
   dispatch_business_command: ['compatibility_mixed', 'return explicit execution_task_id/target fields'],

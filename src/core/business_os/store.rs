@@ -6006,6 +6006,16 @@ fn checked_module_manifest_candidate(
                 .all(|ch| ch.is_ascii_alphanumeric() || ch == b'-' || ch == b'_'),
         "unsafe module id"
     );
+    // A shared namespace may be symlinked without containing this module.
+    // Skip only an absent module directory, not a present (even dangling)
+    // module symlink, so lower-priority installed sources remain reachable
+    // without relaxing the checks on an actual source candidate.
+    let module_directory = app_root.join(namespace).join(module_id);
+    match fs::symlink_metadata(&module_directory) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
     let relative = PathBuf::from(namespace).join(module_id).join("module.json");
     ensure_source_path_has_no_symlink_components(app_root, &relative)?;
     let candidate = app_root.join(relative);
@@ -10963,6 +10973,13 @@ pub fn pull_collection_record(
         return Ok(None);
     }
     match collection {
+        "outbound_lead_generation_leads" => {
+            // Browser edits and native research writebacks commit to RxDB.
+            // A legacy business_records row must neither shadow that result
+            // nor resurrect a lead missing from its authoritative store.
+            return Ok(load_rxdb_collection_record(root, collection, record_id)?
+                .filter(|record| record.get("_deleted").and_then(Value::as_bool) != Some(true)));
+        }
         "ctox_runtime_settings" if record_id == "runtime-settings" => {
             return Ok(Some(runtime_settings_for_rxdb(root)?));
         }
@@ -11364,6 +11381,27 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
     Ok(Some((id, record)))
 }
 
+/// Required lookup surface: missing/unreadable storage is not an empty query.
+/// Keep every probe on the same read transaction instead of checking readiness
+/// and then reopening through optional helpers which may silently return empty.
+pub(super) fn required_rxdb_collection_read_connection(
+    root: &Path,
+    collection: &str,
+) -> anyhow::Result<(Connection, String)> {
+    anyhow::ensure!(
+        is_safe_rxdb_collection_name(collection),
+        "invalid collection name"
+    );
+    let path = rxdb_store_path(root);
+    let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .context("required lookup store is unavailable")?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    conn.execute_batch("BEGIN")?;
+    let table = rxdb_collection_table_name(&path, &conn, collection)
+        .context("required lookup collection is unavailable")?;
+    Ok((conn, table))
+}
+
 pub(super) fn find_rxdb_collection_records_by_string_field(
     root: &Path,
     collection: &str,
@@ -11692,12 +11730,55 @@ impl RxdbProjectionWriterCache {
         updated_at_ms: i64,
         payload: Value,
     ) -> anyhow::Result<()> {
+        self.upsert_with_merge(
+            collection,
+            record_id,
+            updated_at_ms,
+            payload,
+            RxdbProjectionMerge::Recursive,
+        )
+    }
+
+    /// Only callers holding the canonical terminal lifecycle document use this
+    /// boundary. Its result is a snapshot, not a patch to an earlier checkpoint.
+    pub(super) fn upsert_canonical_terminal_command(
+        &mut self,
+        command_id: &str,
+        updated_at_ms: i64,
+        canonical: Value,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            canonical["command_id"].as_str() == Some(command_id)
+                && canonical["execution_phase"] == "terminal"
+                && canonical["terminal_status"]
+                    .as_str()
+                    .is_some_and(crate::command_lifecycle::terminal_status_is_outcome)
+                && canonical.get("result").is_some(),
+            "canonical terminal command projection required"
+        );
+        self.upsert_with_merge(
+            "business_commands",
+            command_id,
+            updated_at_ms,
+            canonical,
+            RxdbProjectionMerge::ReplaceCommandResult,
+        )
+    }
+
+    fn upsert_with_merge(
+        &mut self,
+        collection: &str,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+        merge: RxdbProjectionMerge,
+    ) -> anyhow::Result<()> {
         if !matches!(self.writers.get(collection), Some(Some(_))) {
             let writer = RxdbCollectionWriter::open(&self.root, collection)?;
             self.writers.insert(collection.to_string(), writer);
         }
         if let Some(Some(writer)) = self.writers.get_mut(collection) {
-            let result = writer.upsert(record_id, updated_at_ms, payload);
+            let result = writer.upsert_with_merge(record_id, updated_at_ms, payload, merge);
             if result.is_err() {
                 self.writers.remove(collection);
             }
@@ -11847,6 +11928,13 @@ impl BusinessProjectionWriter {
     }
 }
 
+#[derive(Clone, Copy)]
+enum RxdbProjectionMerge {
+    Recursive,
+    Replace,
+    ReplaceCommandResult,
+}
+
 struct RxdbCollectionWriter {
     conn: Connection,
     database_path: PathBuf,
@@ -11912,6 +12000,21 @@ impl RxdbCollectionWriter {
         updated_at_ms: i64,
         payload: Value,
     ) -> anyhow::Result<()> {
+        self.upsert_with_merge(
+            record_id,
+            updated_at_ms,
+            payload,
+            RxdbProjectionMerge::Recursive,
+        )
+    }
+
+    fn upsert_with_merge(
+        &mut self,
+        record_id: &str,
+        updated_at_ms: i64,
+        payload: Value,
+        merge: RxdbProjectionMerge,
+    ) -> anyhow::Result<()> {
         upsert_rxdb_collection_record_with_writer(
             &self.conn,
             &self.table,
@@ -11922,7 +12025,7 @@ impl RxdbCollectionWriter {
             payload,
             self.demand_file_storage,
             false,
-            true,
+            merge,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -12008,7 +12111,7 @@ impl RxdbCollectionWriter {
             payload,
             demand_file_storage,
             false,
-            false,
+            RxdbProjectionMerge::Replace,
         )?;
         tx.commit()?;
         self.notify_committed_change();
@@ -12049,7 +12152,7 @@ impl RxdbCollectionWriter {
             payload,
             self.demand_file_storage,
             false,
-            true,
+            RxdbProjectionMerge::Recursive,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -12077,7 +12180,7 @@ impl RxdbCollectionWriter {
             }),
             self.demand_file_storage,
             true,
-            true,
+            RxdbProjectionMerge::Recursive,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -12102,7 +12205,7 @@ impl RxdbCollectionWriter {
             payload,
             self.demand_file_storage,
             deleted,
-            false,
+            RxdbProjectionMerge::Replace,
         )?;
         self.notify_committed_change();
         Ok(())
@@ -12130,8 +12233,20 @@ fn upsert_rxdb_collection_record_with_writer(
     mut payload: Value,
     demand_file_storage: bool,
     deleted: bool,
-    merge_existing: bool,
+    merge: RxdbProjectionMerge,
 ) -> anyhow::Result<()> {
+    // Move the authoritative result out before recursively merging metadata.
+    // Reinserting it afterwards also preserves explicit null/scalar results.
+    let command_result = if matches!(merge, RxdbProjectionMerge::ReplaceCommandResult) {
+        Some(
+            payload
+                .as_object_mut()
+                .and_then(|object| object.remove("result"))
+                .context("canonical command projection is missing its result")?,
+        )
+    } else {
+        None
+    };
     let mut previous_revision = None;
     if let Some(existing_json) = conn
         .query_row(
@@ -12146,11 +12261,14 @@ fn upsert_rxdb_collection_record_with_writer(
                 .get("_rev")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            if merge_existing {
+            if !matches!(merge, RxdbProjectionMerge::Replace) {
                 merge_json_object_values(&mut existing, &payload);
                 payload = existing;
             }
         }
+    }
+    if let Some(result) = command_result {
+        payload["result"] = result;
     }
     let rev = next_direct_rxdb_revision(previous_revision.as_deref());
     if let Some(object) = payload.as_object_mut() {
@@ -13278,6 +13396,13 @@ struct CtoxSecretDeleteMutation {
     name: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CtoxSecretGenerateMutation {
+    name: String,
+    length: Option<usize>,
+}
+
 /// Validate a credential key is env-var shaped (UPPER_SNAKE_CASE). Keeps the
 /// credentials scope bounded and prevents odd names leaking into the store.
 fn is_valid_credential_key(name: &str) -> bool {
@@ -13368,6 +13493,10 @@ fn secret_payload_field(command_type: &str) -> Option<&'static str> {
 }
 
 pub(super) fn detach_secret_intake_value(command_id: &str, command: &mut BusinessCommand) {
+    if command.command_type == "ctox.secret.generate" {
+        sanitize_secret_generation_payload(&mut command.payload);
+        return;
+    }
     let Some(field) = secret_payload_field(&command.command_type) else {
         return;
     };
@@ -13380,6 +13509,31 @@ pub(super) fn detach_secret_intake_value(command_id: &str, command: &mut Busines
     };
     if let Some(value) = value.as_str() {
         stash_secret_intake_value(command_id, field, value.to_string());
+    }
+}
+
+/// Generation has no secret input. Reject malformed requests without keeping
+/// any of their payload in claim intents, failed receipts or replicated rows.
+/// Null remains invalid at the strict handler, including after a restart; do
+/// not merely drop unknown fields and accidentally turn rejection into success.
+fn sanitize_secret_generation_payload(payload: &mut Value) {
+    let valid = payload.as_object().is_some_and(|object| {
+        object
+            .keys()
+            .all(|key| matches!(key.as_str(), "name" | "length"))
+            && object
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(is_valid_credential_key)
+            && match object.get("length") {
+                None | Some(Value::Null) => true,
+                Some(length) => length
+                    .as_u64()
+                    .is_some_and(|length| (16..=128).contains(&length)),
+            }
+    });
+    if !valid {
+        *payload = Value::Null;
     }
 }
 
@@ -13405,6 +13559,19 @@ pub(crate) fn detach_secret_from_replicated_document(collection: &str, document:
     let Some(object) = document.as_object_mut() else {
         return;
     };
+    // Match the effective command type used by native intake, not an alias
+    // hidden behind a different authoritative command_type.
+    if object
+        .get("command_type")
+        .or_else(|| object.get("type"))
+        .and_then(Value::as_str)
+        == Some("ctox.secret.generate")
+    {
+        if let Some(payload) = object.get_mut("payload") {
+            sanitize_secret_generation_payload(payload);
+        }
+        return;
+    }
     let Some(field) = ["command_type", "type"]
         .iter()
         .filter_map(|key| object.get(*key).and_then(Value::as_str))
@@ -13472,6 +13639,34 @@ fn put_credential_command(root: &Path, mutation: &CtoxSecretPutMutation) -> anyh
     );
     crate::secrets::set_credential(root, name, &mutation.value)?;
     Ok(serde_json::json!({ "ok": true, "name": name }))
+}
+
+fn generate_credential_command(root: &Path, payload: &Value) -> anyhow::Result<Value> {
+    let mutation: CtoxSecretGenerateMutation =
+        serde_json::from_value(payload.clone()).map_err(|_| {
+            anyhow::anyhow!("expected credential name and optional integer length only")
+        })?;
+    let name = mutation.name.trim();
+    anyhow::ensure!(is_valid_credential_key(name), "invalid credential key");
+    let generation = crate::secrets::generate_secret_password(
+        root,
+        crate::secrets::credential_scope(),
+        name,
+        mutation
+            .length
+            .unwrap_or(crate::secrets::DEFAULT_PASSWORD_LENGTH),
+    )?;
+    Ok(serde_json::json!({
+        "ok": true,
+        "name": name,
+        "created": generation.created,
+        "secret_ref": {
+            "scope": generation.secret.scope,
+            "name": generation.secret.secret_name,
+            "secret_id": generation.secret.secret_id,
+        },
+        "secret_value_revealed": false,
+    }))
 }
 
 /// Remove a credential value from the encrypted secret store.
@@ -15431,6 +15626,38 @@ pub(super) fn handle_secret_command(
     command: &BusinessCommand,
 ) -> anyhow::Result<Value> {
     match command.command_type.as_str() {
+        "ctox.secret.generate" => {
+            // Generation accepts no password input and returns only a handle.
+            // Reuse the server's secret-management authority, never a UI claim.
+            return enforce_command_policy(
+                root,
+                command,
+                |_| {
+                    Ok(CommandPolicyRequirement::workspace(
+                        BusinessOsPermission::SecretsManage,
+                    ))
+                },
+                |_session| match generate_credential_command(root, &command.payload) {
+                    Ok(outcome) => write_rxdb_control_command_outcome(
+                        root,
+                        command,
+                        "completed",
+                        None,
+                        Some("completed"),
+                        outcome,
+                    ),
+                    Err(error) => write_rxdb_control_command_outcome(
+                        root,
+                        command,
+                        "failed",
+                        None,
+                        Some("failed"),
+                        serde_json::json!({"ok": false, "error": error.to_string()}),
+                    ),
+                },
+            )?
+            .into_outcome();
+        }
         "ctox.secret.list" => {
             return enforce_command_policy(
                 root,
@@ -18019,13 +18246,21 @@ pub(crate) fn deliver_business_command_outbox(root: &Path, limit: usize) -> anyh
                     .get("updated_at_ms")
                     .and_then(Value::as_i64)
                     .unwrap_or_else(|| now_ms() as i64);
-                upsert_rxdb_collection_record(
-                    root,
-                    "business_commands",
-                    &event.command_id,
-                    updated_at_ms,
-                    projection,
-                )
+                let mut writers = RxdbProjectionWriterCache::new(root);
+                if projection["execution_phase"] == "terminal" {
+                    writers.upsert_canonical_terminal_command(
+                        &event.command_id,
+                        updated_at_ms,
+                        projection,
+                    )
+                } else {
+                    writers.upsert(
+                        "business_commands",
+                        &event.command_id,
+                        updated_at_ms,
+                        projection,
+                    )
+                }
             }
             destination => anyhow::bail!("unsupported command outbox destination `{destination}`"),
         });
@@ -39217,6 +39452,118 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn outbound_lead_record_reads_current_rxdb_without_changing_other_owners() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        for collection in ["outbound_lead_generation_leads", "customer_accounts"] {
+            let old = serde_json::json!({
+                "id": "record-1", "command_id": "old-command", "updated_at_ms": 1,
+                "contacts": [{"person_key": "old-person"}], "retained": "legacy"
+            });
+            push_collection_records(
+                root,
+                serde_json::json!({
+                    "collection": collection, "documents": [old.clone()]
+                }),
+            )?;
+            let legacy_before: String = with_store_connection(root, |conn| {
+                Ok(conn.query_row(
+                    "SELECT payload_json FROM business_records WHERE collection=?1 AND record_id='record-1'",
+                    [collection], |row| row.get(0),
+                )?)
+            })?;
+            let conn = Connection::open(rxdb_store_path(root))?;
+            conn.execute_batch(&format!(
+                "CREATE TABLE ctox_business_os__{collection}__v0 (id TEXT PRIMARY KEY, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"
+            ))?;
+            drop(conn);
+            upsert_rxdb_collection_record(
+                root,
+                collection,
+                "record-1",
+                2_000,
+                serde_json::json!({
+                    "id": "record-1", "command_id": "current-research",
+                    "research_status": "needs_review",
+                    "contacts": [{"person_key": "first"}, {"person_key": "second"}],
+                    "retained": "current"
+                }),
+            )?;
+
+            let read = pull_collection_record(root, collection, "record-1")?
+                .context("expected authoritative record")?;
+            if collection == "outbound_lead_generation_leads" {
+                assert_eq!(read["command_id"], "current-research");
+                assert_eq!(read["research_status"], "needs_review");
+                assert_eq!(read["contacts"].as_array().unwrap().len(), 2);
+                assert_eq!(read["retained"], "current");
+            } else {
+                assert_eq!(read["command_id"], "old-command");
+                assert_eq!(read["retained"], "legacy");
+            }
+            let legacy: String = with_store_connection(root, |conn| {
+                Ok(conn.query_row(
+                    "SELECT payload_json FROM business_records WHERE collection=?1 AND record_id='record-1'",
+                    [collection], |row| row.get(0),
+                )?)
+            })?;
+            assert_eq!(
+                legacy, legacy_before,
+                "readback must not mutate or backfill the legacy record"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_lead_record_does_not_resurrect_missing_or_deleted_rxdb_lead() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let collection = "outbound_lead_generation_leads";
+        push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": collection,
+                "documents": [{"id": "record-1", "name": "Legacy lead", "updated_at_ms": 1}]
+            }),
+        )?;
+        assert!(
+            pull_collection_record(root, collection, "record-1")?.is_none(),
+            "missing authoritative storage must not select the legacy row"
+        );
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute_batch(
+            "CREATE TABLE ctox_business_os__outbound_lead_generation_leads__v0 (
+                id TEXT PRIMARY KEY, data TEXT NOT NULL
+            )",
+        )?;
+        assert!(
+            pull_collection_record(root, collection, "record-1")?.is_none(),
+            "confirmed absence must not select the legacy row"
+        );
+        conn.execute(
+            "INSERT INTO ctox_business_os__outbound_lead_generation_leads__v0 (id,data) VALUES ('record-1',?1)",
+            [serde_json::json!({"id":"record-1","_deleted":true,"updated_at_ms":3_000}).to_string()],
+        )?;
+        assert!(
+            pull_collection_record(root, collection, "record-1")?.is_none(),
+            "a tombstone must not resurrect the legacy row"
+        );
+        conn.execute(
+            "UPDATE ctox_business_os__outbound_lead_generation_leads__v0 SET data='invalid-json' WHERE id='record-1'",
+            [],
+        )?;
+        assert!(
+            pull_collection_record(root, collection, "record-1").is_err(),
+            "an unreadable authoritative record must not select the legacy row"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn pull_collection_record_uses_keyed_rxdb_fallback_without_scan_window() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -40543,6 +40890,220 @@ pub(super) mod tests {
                 .and_then(Value::as_str),
             Some("denied_collection_and_module_policy")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ctox_secret_generate_is_authorized_reference_only_and_replay_safe() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        seed_business_user(root, "global_admin", "admin")?;
+        seed_business_user(root, "qa", "user")?;
+        let command = |id: &str, actor: &str, name: &str| {
+            serde_json::json!({
+                "id": id, "module": "credentials", "type": "ctox.secret.generate",
+                "payload": {"name": name, "length": 24},
+                "client_context": {"actor": {"id": actor, "display_name": actor}},
+            })
+        };
+        let denied = accept_rxdb_business_command(
+            root,
+            command("generate_denied", "qa", "DENIED_PASSWORD"),
+        )?;
+        assert_eq!(denied.get("status").and_then(Value::as_str), Some("failed"));
+        assert!(!crate::secrets::secret_exists(
+            root,
+            crate::secrets::credential_scope(),
+            "DENIED_PASSWORD"
+        )?);
+        let first = accept_rxdb_business_command(
+            root,
+            command("generate_first", "global_admin", "TEST_PASSWORD"),
+        )?;
+        assert_eq!(
+            first.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            first.pointer("/result/created").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            first
+                .pointer("/result/secret_ref/name")
+                .and_then(Value::as_str),
+            Some("TEST_PASSWORD")
+        );
+        let password = zeroize::Zeroizing::new(crate::secrets::read_secret_value(
+            root,
+            crate::secrets::credential_scope(),
+            "TEST_PASSWORD",
+        )?);
+        assert!(!serde_json::to_string(&first)?.contains(password.as_str()));
+        let replay = accept_rxdb_business_command(
+            root,
+            command("generate_retry", "global_admin", "TEST_PASSWORD"),
+        )?;
+        assert_eq!(
+            replay.pointer("/result/created").and_then(Value::as_bool),
+            Some(false)
+        );
+        let after = zeroize::Zeroizing::new(crate::secrets::read_secret_value(
+            root,
+            crate::secrets::credential_scope(),
+            "TEST_PASSWORD",
+        )?);
+        assert!(after.as_str() == password.as_str());
+        let conn = open_store(root)?;
+        for id in ["generate_first", "generate_retry"] {
+            let stored = outbound_load_required(&conn, "business_commands", id, "command")?;
+            assert!(!serde_json::to_string(&stored)?.contains(password.as_str()));
+        }
+        for payload in [
+            serde_json::json!({"name": "INVALID_PASSWORD", "length": 15}),
+            serde_json::json!({"name": "INVALID_PASSWORD", "value": "not-accepted"}),
+            serde_json::json!({"name": "INVALID_PASSWORD", "scope": "other"}),
+        ] {
+            assert!(generate_credential_command(root, &payload).is_err());
+        }
+        assert!(!crate::secrets::secret_exists(
+            root,
+            crate::secrets::credential_scope(),
+            "INVALID_PASSWORD"
+        )?);
+        Ok(())
+    }
+
+    #[test]
+    fn ctox_secret_generate_sanitizer_preserves_valid_requests_and_rejects_invalid_ones() {
+        for payload in [
+            serde_json::json!({"name": "TEST_PASSWORD"}),
+            serde_json::json!({"name": "TEST_PASSWORD", "length": null}),
+            serde_json::json!({"name": "TEST_PASSWORD", "length": 16}),
+            serde_json::json!({"name": "TEST_PASSWORD", "length": 128}),
+        ] {
+            let mut sanitized = payload.clone();
+            sanitize_secret_generation_payload(&mut sanitized);
+            assert_eq!(sanitized, payload);
+        }
+        for payload in [
+            serde_json::json!({"name": "TEST_PASSWORD", "value": "GENERATION_INPUT_CANARY"}),
+            serde_json::json!({"name": {"password": "GENERATION_INPUT_CANARY"}}),
+            serde_json::json!({"name": "TEST_PASSWORD", "length": "GENERATION_INPUT_CANARY"}),
+            serde_json::json!({"name": "TEST_PASSWORD", "length": 15}),
+            serde_json::json!({"name": "TEST_PASSWORD", "length": 129}),
+            serde_json::json!({"name": "TEST_PASSWORD", "scope": "other"}),
+            serde_json::json!(["GENERATION_INPUT_CANARY"]),
+            Value::Null,
+        ] {
+            let mut sanitized = payload;
+            sanitize_secret_generation_payload(&mut sanitized);
+            assert_eq!(sanitized, Value::Null);
+            assert!(
+                serde_json::from_value::<CtoxSecretGenerateMutation>(sanitized.clone()).is_err()
+            );
+            sanitize_secret_generation_payload(&mut sanitized);
+            assert_eq!(sanitized, Value::Null);
+        }
+        // Alias precedence must agree with intake; unrelated commands/collections
+        // are not rewritten by the generator-specific sanitizer.
+        for (collection, document) in [
+            (
+                "other",
+                serde_json::json!({"type": "ctox.secret.generate", "payload": {"value": "kept"}}),
+            ),
+            (
+                "business_commands",
+                serde_json::json!({"command_type": "other", "type": "ctox.secret.generate", "payload": {"value": "kept"}}),
+            ),
+        ] {
+            let mut sanitized = document.clone();
+            detach_secret_from_replicated_document(collection, &mut sanitized);
+            assert_eq!(sanitized, document);
+        }
+    }
+
+    #[test]
+    fn ctox_secret_generate_invalid_intake_keeps_canary_out_of_durable_stores() -> anyhow::Result<()>
+    {
+        fn assert_no_canary_files(dir: &Path, canary: &[u8]) -> anyhow::Result<()> {
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                let kind = entry.file_type()?;
+                if kind.is_dir() {
+                    assert_no_canary_files(&entry.path(), canary)?;
+                } else {
+                    anyhow::ensure!(kind.is_file(), "unexpected fixture file type");
+                    let bytes = fs::read(entry.path())?;
+                    anyhow::ensure!(
+                        !bytes.windows(canary.len()).any(|window| window == canary),
+                        "rejected generation payload persisted in {}",
+                        entry.path().display()
+                    );
+                }
+            }
+            Ok(())
+        }
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        seed_business_user(root, "global_admin", "admin")?;
+        seed_business_user(root, "qa", "user")?;
+        let canary = "GENERATION_INTAKE_MUST_NOT_PERSIST";
+        for replicated in [false, true] {
+            for actor in ["global_admin", "qa"] {
+                let id = format!("generate_invalid_{replicated}_{actor}");
+                let mut document = serde_json::json!({
+                    "id": id, "module": "credentials", "type": "ctox.secret.generate",
+                    "payload": {"name": "INVALID_PASSWORD", "value": canary},
+                    "client_context": {"actor": {"id": actor, "display_name": actor}},
+                });
+                if replicated {
+                    detach_secret_from_replicated_document("business_commands", &mut document);
+                    assert_eq!(document["payload"], Value::Null);
+                    let conn = Connection::open(rxdb_store_path(root))?;
+                    rxdb::storage::sqlite::sql::ensure_collection_table(
+                        &conn,
+                        "ctox_business_os__business_commands__v2",
+                    )?;
+                    conn.execute(
+                        "INSERT INTO ctox_business_os__business_commands__v2
+                         (id, revision, deleted, lastWriteTime, data)
+                         VALUES (?1, '1-browser', 0, ?2, ?3)",
+                        params![id, now_ms() as f64, serde_json::to_string(&document)?],
+                    )?;
+                    assert!(sqlite_cells_containing(root, canary)?.is_empty());
+                }
+                let outcome = accept_rxdb_business_command(root, document)?;
+                assert_eq!(outcome["status"], "failed");
+                assert!(!serde_json::to_string(&outcome)?.contains(canary));
+                let conn = open_store(root)?;
+                let stored = outbound_load_required(&conn, "business_commands", &id, "command")?;
+                assert!(!serde_json::to_string(&stored)?.contains(canary));
+                let stored_payload: String = conn.query_row(
+                    "SELECT payload_json FROM business_commands WHERE command_id = ?1",
+                    [&id],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(serde_json::from_str::<Value>(&stored_payload)?, Value::Null);
+                let hits = sqlite_cells_containing(root, canary)?;
+                assert!(
+                    hits.is_empty(),
+                    "rejected generation payload reached durable stores: {hits:?}"
+                );
+                // Include WAL pages and any durable log/receipt files, not only
+                // logical SQLite cells. Read/traversal failures fail the test.
+                assert_no_canary_files(root, canary.as_bytes())?;
+            }
+        }
+        assert!(!crate::secrets::secret_exists(
+            root,
+            crate::secrets::credential_scope(),
+            "INVALID_PASSWORD",
+        )?);
         Ok(())
     }
 

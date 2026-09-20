@@ -98,7 +98,7 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter, Connection, OpenFlags, OptionalExtension};
 use rxdb::plugins::replication_webrtc::index_mod::auxiliary_request_metrics_snapshot;
 use rxdb::plugins::replication_webrtc::webrtc_types::{
-    WebRTCPeerSessionValidation, WebRTCPeerSessionValidator,
+    WebRTCConnectionHandler, WebRTCPeerSessionValidation, WebRTCPeerSessionValidator,
 };
 use rxdb::plugins::replication_webrtc::{
     file_fetch_handler::FileRange, CollectionAuthzHook, CollectionEagerPullHook,
@@ -2903,6 +2903,31 @@ async fn run_native_peer(
                 // already auto-registers every multiplexed collection inside
                 // `RxWebRTCReplicationPool::new_multi`.
                 register_demand_file_sources(pool, &database, &root);
+                let credential_reveal_root = root.clone();
+                let credential_reveal_transport = pool.connection_handler.clone();
+                pool.register_auxiliary_request_handler(
+                    super::rxdb_peer_credentials::CREDENTIAL_REVEAL_WEBRTC_METHOD,
+                    Arc::new(move |peer_identity, capability_token, params| {
+                        let root = credential_reveal_root.clone();
+                        let transport = credential_reveal_transport.clone();
+                        Box::pin(async move {
+                            let connection = transport.connection_for_peer(&peer_identity)
+                                .ok_or_else(|| "credential_reveal_denied".to_string())?;
+                            let session_id = transport.peer_session_id(&connection)
+                                .ok_or_else(|| "credential_reveal_denied".to_string())?;
+                            tokio::task::spawn_blocking(move || {
+                                super::rxdb_peer_credentials::handle_credential_reveal_webrtc_request(
+                                    &root, &peer_identity, &session_id, &capability_token, params,
+                                    || transport.is_peer_current(&connection)
+                                        && transport.peer_capability_token(&connection).as_deref() == Some(capability_token.as_str())
+                                        && transport.peer_session_id(&connection).as_deref() == Some(session_id.as_str()),
+                                )
+                            })
+                            .await
+                            .map_err(|_| "credential_reveal_unavailable".to_string())?
+                        })
+                    }),
+                )?;
                 let browser_live_root = root.clone();
                 let browser_live_database = Arc::clone(&database);
                 pool.register_auxiliary_request_handler(

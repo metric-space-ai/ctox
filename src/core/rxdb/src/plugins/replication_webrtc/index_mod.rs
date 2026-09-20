@@ -1536,6 +1536,12 @@ where
                                     .and_then(Value::as_str).map(str::trim)
                                     .filter(|token| !token.is_empty()) {
                                     handler_task.set_peer_capability_token(&item.peer, token.to_string());
+                                    if let Some(session_id) = item.message.params.first()
+                                        .and_then(|p| p.pointer("/peerSession/sessionId"))
+                                        .and_then(Value::as_str).map(str::trim)
+                                        .filter(|session_id| !session_id.is_empty()) {
+                                        handler_task.set_peer_session_id(&item.peer, session_id.to_string());
+                                    }
                                 }
                                 if is_peer_session_valid.is_some() {
                                     pool_task.mark_peer_admitted(&item.peer, false);
@@ -1896,6 +1902,15 @@ where
                         .filter(|token| !token.is_empty())
                     {
                         handler.set_peer_capability_token(&peer, token.to_string());
+                        if let Some(session_id) = protocol_response
+                            .result
+                            .pointer("/peerSession/sessionId")
+                            .and_then(Value::as_str)
+                            .map(str::trim)
+                            .filter(|session_id| !session_id.is_empty())
+                        {
+                            handler.set_peer_session_id(&peer, session_id.to_string());
+                        }
                     }
                     // Open the data plane only after PoP/session admission,
                     // protocol/schema validation, and capability capture have

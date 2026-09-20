@@ -1,18 +1,21 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
+import { mountCredentialReveal } from './reveal.mjs';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 
-// Write-only credentials manager. The browser never receives a secret value:
-// it dispatches ctox.secret.{list,put,delete} control commands over the
+// Encrypted credentials manager. Ordinary commands return metadata only:
+// it dispatches ctox.secret.{list,put,delete,generate} control commands over the
 // RxDB/WebRTC command bus, and the daemon redacts the value from the persisted
 // command record (see store.rs accept_rxdb_business_command). Listing returns
 // metadata only (name + description + set/unset status). The list is REACTIVE:
 // the module subscribes to the shared business_commands collection and re-lists
-// when a ctox.secret.put/delete command lands (no manual refresh button).
+// when a ctox.secret.put/delete/generate command lands (no manual refresh button).
 
-const MOD_BUILD = '20260721-credentials-ia';
+// Explicit Show/Copy uses a separate transient, native-permission-gated channel.
+const MOD_BUILD = '20260913-credentials-reveal';
 const LIST_COMMAND = 'ctox.secret.list';
 const PUT_COMMAND = 'ctox.secret.put';
 const DELETE_COMMAND = 'ctox.secret.delete';
+const GENERATE_COMMAND = 'ctox.secret.generate';
 
 const labels = {
   de: {
@@ -22,7 +25,13 @@ const labels = {
     newTitle: 'Neue Zugangsdaten',
     editKicker: 'Zugangsdatum',
     newKicker: 'Neu',
-    subtitle: 'Write-only: Werte werden verschlüsselt im CTOX-Secret-Store abgelegt und nie an den Browser zurückgegeben.',
+    subtitle: 'Verschlüsselt im CTOX Secret Store. Anzeigen und Kopieren erfordern deine Berechtigung; angezeigte Werte werden nach 30 Sekunden ausgeblendet.',
+    show_btn: 'Anzeigen', hide_btn: 'Ausblenden', copy_btn: 'Kopieren',
+    username: 'Benutzername', password: 'Passwort', copied: 'Kopiert.',
+    copy_failed: 'Kopieren fehlgeschlagen. Wert anzeigen und erneut Kopieren wählen.',
+    reveal_failed: 'Anzeigen nicht möglich. Bitte Berechtigung und Verbindung prüfen.',
+    direct_tab_required: 'Bitte Zugangsdaten im direkt verbundenen Business-OS-Tab öffnen.',
+    private_channel_required: 'Diese Shell unterstützt noch keinen privaten Abruf. Bitte nach dem Update Business OS neu laden.',
     newAction: 'Neue Zugangsdaten',
     importAction: 'Importieren',
     exportAction: 'Exportieren',
@@ -38,7 +47,7 @@ const labels = {
     bandOpen: 'Offen',
     keyLabel: 'Schlüssel',
     valueLabel: 'Wert',
-    valueHint: 'Das Wertfeld bleibt immer leer — gespeicherte Werte werden nie zurückgegeben.',
+    valueHint: 'Dieses Feld dient nur zum Setzen oder Rotieren. Bestehende Werte oben mit Anzeigen oder Kopieren abrufen.',
     status_set: 'Gesetzt',
     status_unset: 'Nicht gesetzt',
     updated: 'aktualisiert {date}',
@@ -63,6 +72,11 @@ const labels = {
     import_invalid: 'Ungültige JSON-Datei.',
     import_empty: 'Keine gültigen Zugangsdaten (Name + Wert) in der Datei.',
     value_required: 'Bitte einen Wert eingeben.',
+    generate_btn: 'Passwort erzeugen',
+    generate_hint: 'Erzeugt ein neues Passwort direkt im verschlüsselten Secret Store. Vorhandene Werte bleiben unverändert.',
+    generated: 'Passwort für {name} im Secret Store erzeugt',
+    already_exists: '{name} ist bereits hinterlegt und wurde nicht verändert.',
+    generate_failed: 'Passworterzeugung nicht bestätigt. Der Eintrag wird erneut geprüft; es wird kein Passwort ersetzt.',
     key_invalid: 'Ungültiger Schlüssel: UPPER_SNAKE_CASE (A–Z, 0–9, _).',
     save_failed: 'Speichern fehlgeschlagen.',
     load_failed: 'Laden fehlgeschlagen.',
@@ -75,7 +89,13 @@ const labels = {
     newTitle: 'New credential',
     editKicker: 'Credential',
     newKicker: 'New',
-    subtitle: 'Write-only: values are stored encrypted in the CTOX secret store and never returned to the browser.',
+    subtitle: 'Encrypted in the CTOX secret store. Showing and copying require your permission; displayed values are hidden after 30 seconds.',
+    show_btn: 'Show', hide_btn: 'Hide', copy_btn: 'Copy',
+    username: 'Username', password: 'Password', copied: 'Copied.',
+    copy_failed: 'Copy failed. Show the value and choose Copy again.',
+    reveal_failed: 'Cannot show this value. Check your permission and connection.',
+    direct_tab_required: 'Open Credentials in the directly connected Business OS tab.',
+    private_channel_required: 'This shell does not support private retrieval yet. Reload Business OS after the update.',
     newAction: 'New credential',
     importAction: 'Import',
     exportAction: 'Export',
@@ -91,7 +111,7 @@ const labels = {
     bandOpen: 'Pending',
     keyLabel: 'Key',
     valueLabel: 'Value',
-    valueHint: 'The value field is always empty — stored values are never returned.',
+    valueHint: 'This field is only for setting or rotating. Use Show or Copy above to retrieve an existing value.',
     status_set: 'Set',
     status_unset: 'Not set',
     updated: 'updated {date}',
@@ -116,6 +136,11 @@ const labels = {
     import_invalid: 'Invalid JSON file.',
     import_empty: 'No valid credentials (name + value) in the file.',
     value_required: 'Please enter a value.',
+    generate_btn: 'Generate password',
+    generate_hint: 'Creates a new password directly in the encrypted secret store. Existing values remain unchanged.',
+    generated: 'Password for {name} generated in the secret store',
+    already_exists: '{name} already exists and was not changed.',
+    generate_failed: 'Password generation was not confirmed. The entry will be checked again; no password will be replaced.',
     key_invalid: 'Invalid key: UPPER_SNAKE_CASE (A–Z, 0–9, _).',
     save_failed: 'Save failed.',
     load_failed: 'Load failed.',
@@ -132,7 +157,7 @@ const tr = (key) => text[key] ?? labels.de[key] ?? key;
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for tests — no DOM, no command bus). None of these
-// ever emit a secret value: credentials are write-only.
+// emit a stored secret value. Explicit reveal is mounted separately.
 // ---------------------------------------------------------------------------
 
 // Auto-reveal model (design-guide "Progressive Disclosure", outbound idiom):
@@ -261,7 +286,8 @@ export function recordDetailHtml(entry) {
     + '<button type="button" class="ctox-pane-icon" data-action="collapse-detail" aria-label="' + esc(tr('closeDetail')) + '" title="' + esc(tr('closeDetail')) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>'
     + '</div>'
     + '</header>'
-    + '<dl class="ctox-fields ctox-fields--stacked">' + rows.join('') + '</dl>';
+    + '<dl class="ctox-fields ctox-fields--stacked">' + rows.join('') + '</dl>'
+    + (entry?.is_set ? '<section data-cred-reveal></section>' : '');
 }
 
 function field(label, valueHtml) {
@@ -269,11 +295,11 @@ function field(label, valueHtml) {
 }
 
 // Export is METADATA ONLY: names, descriptions, set-status and source — never a
-// value. The header field states the write-only contract explicitly, and the
+// value. Explicit single-value display/copy does not change this export, and the
 // payload carries no `value` key on any path.
 export function buildExportPayload(rows, nowMs) {
   return {
-    _comment: 'CTOX credentials metadata export — WRITE-ONLY. Secret values are never exported; import supplies values to (re)write.',
+    _comment: 'CTOX credentials metadata export. Secret values are never exported; use the authorized Show/Copy action for individual values.',
     kind: 'ctox-credentials-metadata',
     exported_at_ms: Number(nowMs) || 0,
     credentials: (Array.isArray(rows) ? rows : []).map((e) => ({
@@ -320,6 +346,24 @@ export function buildCommandDoc(commandType, payload, commandId) {
   };
 }
 
+// The UI supplies a selector only; random bytes are generated by CTOX itself.
+export function buildGenerationPayload(name) {
+  const key = String(name || '').trim();
+  if (!KEY_RE.test(key)) throw new Error('invalid credential key');
+  return { name: key, length: 24 };
+}
+
+export function generationReceiptState(outcome, name) {
+  if (outcome?.ok !== true || outcome.name !== name
+      || outcome.secret_value_revealed !== false
+      || outcome.secret_ref?.scope !== 'credentials'
+      || outcome.secret_ref?.name !== name
+      || typeof outcome.secret_ref?.secret_id !== 'string'
+      || !outcome.secret_ref.secret_id
+      || typeof outcome.created !== 'boolean') return null;
+  return outcome.created ? 'generated' : 'already_exists';
+}
+
 // ---------------------------------------------------------------------------
 // Mount
 // ---------------------------------------------------------------------------
@@ -348,6 +392,7 @@ export async function mount(ctx) {
   const keyEl = root?.querySelector('[data-cred-key]');
   const valueEl = root?.querySelector('[data-cred-value]');
   const submitEl = root?.querySelector('[data-cred-submit]');
+  const generateEl = root?.querySelector('[data-cred-generate]');
   const gateEl = root?.querySelector('[data-cred-gate]');
   const titleEl = root?.querySelector('[data-cred-title]');
   const modeEl = root?.querySelector('[data-cred-mode]');
@@ -365,6 +410,9 @@ export async function mount(ctx) {
   let userCollapsed = false;
   let refreshing = false;
   let refreshQueued = false;
+  let generating = false;
+  let disposed = false;
+  let disposeReveal = null;
   // Canonical collection readiness for the module's backing collection. The
   // credential list is a command-bus round trip, but the command docs live in
   // (and the outcome arrives over) the replicated business_commands bridge —
@@ -429,12 +477,20 @@ export async function mount(ctx) {
 
   // ---- render ---------------------------------------------------------------
   function renderDetail() {
+    disposeReveal?.();
+    disposeReveal = null;
+    if (disposed) return;
     if (!detailEl) return;
     const rec = selectedName ? rowsCache.find((r) => r.name === selectedName) : null;
     const show = shouldRevealRecord(Boolean(rec), userCollapsed);
     detailEl.hidden = !show;
     detailEl.innerHTML = show ? recordDetailHtml(rec) : '';
     if (show) {
+      const revealHost = detailEl.querySelector('[data-cred-reveal]');
+      if (revealHost && rec.is_set && canManage) {
+        disposeReveal = mountCredentialReveal({ host: revealHost, name: rec.name,
+          allowed: canManage, t, sync: ctx.sync });
+      }
       detailEl.setAttribute('data-context-record-id', rec.name || '');
       detailEl.setAttribute('data-context-record-type', 'credential');
       detailEl.setAttribute('data-context-label', rec.name || '');
@@ -443,9 +499,12 @@ export async function mount(ctx) {
     if (titleEl) titleEl.textContent = rec ? rec.name : t('newTitle');
     if (submitEl) submitEl.textContent = rec ? (rec.is_set ? t('btn_rotate') : t('btn_save')) : t('add_btn');
     if (valueEl) valueEl.placeholder = rec && rec.is_set ? t('ph_rotate') : t('ph_set');
+    if (generateEl) generateEl.disabled = !canManage || generating || Boolean(rec?.is_set);
+    if (submitEl) submitEl.disabled = !canManage || generating;
   }
 
   function render() {
+    if (disposed) return;
     if (!canManage) {
       if (listEl) listEl.innerHTML = '<div class="ctox-empty"><strong>' + esc(t('no_permission')) + '</strong></div>';
       writeCounts({ all: 0, set: 0, open: 0 });
@@ -480,6 +539,7 @@ export async function mount(ctx) {
 
   // ---- data (command bus round trip) ----------------------------------------
   async function refresh() {
+    if (disposed) return;
     if (!canManage) { rowsCache = []; render(); return; }
     // Single-flight: a subscription burst must not fan out into parallel lists.
     if (refreshing) { refreshQueued = true; return; }
@@ -494,7 +554,7 @@ export async function mount(ctx) {
           toast(error?.message || t('load_failed'), true);
           rowsCache = [];
         }
-      } while (refreshQueued);
+      } while (refreshQueued && !disposed);
     } finally {
       refreshing = false;
     }
@@ -562,9 +622,35 @@ export async function mount(ctx) {
   }
 
   // ---- write path (ctox.secret.put / ctox.secret.delete) --------------------
+  async function handleGenerate() {
+    if (!canManage || generating) return;
+    let payload;
+    try { payload = buildGenerationPayload(keyEl?.value); }
+    catch { setGate(t('key_invalid'), 'block'); return; }
+    if (rowsCache.some(row => row.name === payload.name && row.is_set)) {
+      setGate(t('already_exists').replace('{name}', payload.name), 'ok');
+      return;
+    }
+    generating = true;
+    renderDetail();
+    try {
+      const { outcome } = await sendCommand(GENERATE_COMMAND, payload);
+      const state = generationReceiptState(outcome, payload.name);
+      if (!state) throw new Error('unconfirmed generation receipt');
+      // Do not copy response values or raw failures into browser state/toasts.
+      toast(t(state).replace('{name}', payload.name));
+    } catch {
+      toast(t('generate_failed'), true);
+    } finally {
+      await refresh();
+      generating = false;
+      renderDetail();
+    }
+  }
+
   async function onSubmit(event) {
     event.preventDefault();
-    if (!canManage) return;
+    if (!canManage || generating) return;
     const name = (keyEl?.value || '').trim();
     const value = valueEl?.value || '';
     if (!KEY_RE.test(name)) { setGate(t('key_invalid'), 'block'); return; }
@@ -672,6 +758,7 @@ export async function mount(ctx) {
     else if (action === 'export') exportRecords();
     else if (action === 'collapse-detail') { userCollapsed = true; renderDetail(); }
     else if (action === 'delete') handleDelete(btn.dataset.name || selectedName);
+    else if (action === 'generate') void handleGenerate();
   }
   const onGrammarChange = () => { render(); };
   function onViewToggle() {
@@ -702,7 +789,7 @@ export async function mount(ctx) {
     } catch { /* readiness is a render hint; absence must never block mount */ }
   }
 
-  // Reactive: re-list when a ctox.secret.put/delete command lands in the shared
+  // Reactive: re-list when a ctox.secret.put/delete/generate command lands in the shared
   // business_commands collection (own writes + peer writes). The selector
   // excludes ctox.secret.list so our own listing never re-triggers a refresh.
   let subscription = null;
@@ -712,9 +799,9 @@ export async function mount(ctx) {
     if (col?.find) {
       try {
         subscription = col
-          .find({ selector: { command_type: { $in: [PUT_COMMAND, DELETE_COMMAND] } } })
+          .find({ selector: { command_type: { $in: [PUT_COMMAND, DELETE_COMMAND, GENERATE_COMMAND] } } })
           .$?.subscribe?.((docs) => {
-            // Only a changed put/delete set re-lists. The query stream also
+            // Only a changed put/delete/generate set re-lists. The query stream also
             // re-emits for unrelated writes to business_commands — including
             // this module's own ctox.secret.list — which made every listing
             // trigger the next one (a list every 2-6 s while the window was
@@ -742,6 +829,9 @@ export async function mount(ctx) {
   }
 
   return () => {
+    disposed = true;
+    disposeReveal?.();
+    disposeReveal = null;
     try { subscription?.unsubscribe?.(); } catch {}
     try { readinessUnsubscribe?.(); } catch {}
     listEl?.removeEventListener('click', onListClick);

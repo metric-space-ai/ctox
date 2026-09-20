@@ -282,8 +282,11 @@ mod crew_cockpit_tests;
 #[cfg(test)]
 #[path = "crew_identity_command_tests.rs"]
 mod crew_identity_tests;
+#[cfg(test)]
+#[path = "guest_command_tests.rs"]
+mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 94] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 97] = [
     "ctox.crew.member.create",
     "ctox.crew.memory.update",
     "ctox.crew.member.update",
@@ -315,6 +318,8 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 94] = [
     "ctox.command.cancel",
     "ctox.file.export",
     "ctox.file.materialize",
+    "ctox.guest.input",
+    "ctox.guest.observe",
     "ctox.mailserver.delete_domain",
     "ctox.mailserver.delete_user",
     "ctox.mailserver.get_config",
@@ -340,6 +345,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 94] = [
     "ctox.provider_subscription.status",
     "ctox.runtime_settings.save",
     "ctox.secret.delete",
+    "ctox.secret.generate",
     "ctox.secret.list",
     "ctox.secret.put",
     "ctox.source.commit",
@@ -617,6 +623,24 @@ pub fn accept_rxdb_business_command_with_origin(
     document: Value,
     origin: CommandOrigin,
 ) -> anyhow::Result<Value> {
+    accept_rxdb_business_command_with_guest_runtime(
+        root,
+        document,
+        origin,
+        super::guest_commands::GuestRuntimeInjection::Unregistered,
+    )
+}
+
+/// Same intake as [`accept_rxdb_business_command_with_origin`], with an explicit
+/// guest owner/driver injection. The public wrappers pass `Unregistered`; a
+/// registered owner is only supplied by this internal boundary. There is no
+/// process-global registry.
+pub(super) fn accept_rxdb_business_command_with_guest_runtime(
+    root: &Path,
+    document: Value,
+    origin: CommandOrigin,
+    guest_runtime: super::guest_commands::GuestRuntimeInjection,
+) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
         .or_else(|| document.get("id"))
@@ -893,6 +917,7 @@ pub fn accept_rxdb_business_command_with_origin(
     }
 
     let mut prepared = PreparedBusinessCommand::from_command(&command)?;
+    prepared.guest_owner = guest_runtime;
     prepared.domain_effect_hash = domain_effect_hash;
     prepared.owns_new_control_claim = owns_new_control_claim;
     match CommandAuthorizationStage::for_command(&command) {
@@ -981,6 +1006,8 @@ enum CentralCommandPolicyRequirement {
     ThreadExternalApproval,
     WorkjetSessionDataRead,
     WorkjetSessionDataWrite,
+    GuestObserve,
+    GuestInput,
 }
 
 impl CentralCommandPolicyRequirement {
@@ -1087,6 +1114,10 @@ impl CentralCommandPolicyRequirement {
             return Some(Self::WorkjetSessionDataWrite);
         } else if command_type == "ctox.workjet.session.transfer.status" {
             return Some(Self::WorkjetSessionDataRead);
+        } else if command_type == "ctox.guest.observe" {
+            return Some(Self::GuestObserve);
+        } else if command_type == "ctox.guest.input" {
+            return Some(Self::GuestInput);
         } else if is_appsec_business_command(command_type) {
             let permission = if appsec_business_command_requires_data_write(command_type) {
                 BusinessOsPermission::DataWrite
@@ -1174,6 +1205,30 @@ impl CentralCommandPolicyRequirement {
                     scope,
                 ))
             }
+            Self::GuestObserve => {
+                super::guest_commands::require_authenticated_actor(session)?;
+                Ok(CommandPolicyRequirement::scoped(
+                    BusinessOsPermission::DataRead,
+                    BusinessOsScope {
+                        scope_type: BusinessOsScopeType::Record,
+                        scope_id: Some(super::guest_commands::guest_record_scope_id(command)),
+                        assigned_to_actor: false,
+                        owned_by_actor: false,
+                    },
+                ))
+            }
+            Self::GuestInput => {
+                super::guest_commands::require_authenticated_actor(session)?;
+                Ok(CommandPolicyRequirement::scoped(
+                    BusinessOsPermission::DataWrite,
+                    BusinessOsScope {
+                        scope_type: BusinessOsScopeType::Record,
+                        scope_id: Some(super::guest_commands::guest_record_scope_id(command)),
+                        assigned_to_actor: false,
+                        owned_by_actor: false,
+                    },
+                ))
+            }
             Self::ThreadExternalApproval => {
                 let approval_id = command
                     .payload
@@ -1219,6 +1274,7 @@ struct PreparedBusinessCommand {
     domain_effect_hash: Option<String>,
     owns_new_control_claim: bool,
     domain_effect_admission: Option<DomainEffectAdmission>,
+    guest_owner: super::guest_commands::GuestRuntimeInjection,
 }
 
 impl PreparedBusinessCommand {
@@ -1244,6 +1300,7 @@ impl PreparedBusinessCommand {
             mutation.client_context = command.client_context.clone();
             prepared.report_mutation = Some(mutation);
         }
+
         Ok(prepared)
     }
 }
@@ -1572,7 +1629,23 @@ fn dispatch_business_command(
                 )),
             }
         }
+        "ctox.guest.observe" | "ctox.guest.input" => {
+            let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
+            super::guest_commands::require_authenticated_actor(session)?;
+            match super::guest_commands::execute_injected(&prepared.guest_owner, session, command) {
+                Ok(outcome) => Ok(BusinessCommandDispatchOutcome::completed(outcome, None)),
+                Err(error) => Ok(BusinessCommandDispatchOutcome::failed(
+                    None,
+                    serde_json::json!({
+                        "ok": false,
+                        "error": error.to_string(),
+                    }),
+                    error,
+                )),
+            }
+        }
         "ctox.secret.list"
+        | "ctox.secret.generate"
         | "ctox.secret.put"
         | "ctox.secret.delete"
         | "ctox.provider_subscription.disconnect"
@@ -2178,7 +2251,7 @@ pub(super) fn complete_and_project_business_control_command(
         .get("updated_at_ms")
         .and_then(Value::as_i64)
         .unwrap_or_else(|| now_ms() as i64);
-    projection_writers.upsert("business_commands", command_id, updated_at_ms, canonical)?;
+    projection_writers.upsert_canonical_terminal_command(command_id, updated_at_ms, canonical)?;
     if let Some((((started, core_ms), read_ms), local_ms)) = completion_started
         .zip(core_completed_ms)
         .zip(canonical_read_ms)
@@ -2216,6 +2289,121 @@ mod tests {
     use std::collections::BTreeSet;
     use std::time::{Duration, Instant};
     use tempfile::tempdir;
+
+    #[test]
+    fn canonical_terminal_command_result_replaces_checkpoint_preserving_metadata(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        super::super::store::tests::seed_business_user(root, "researcher", "chef")?;
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root,
+            "business_commands",
+        )?;
+        for (index, terminal_result) in [
+            json!({
+                "ok": true,
+                "fields": {"person_linkedin": {"value": "https://www.linkedin.com/in/fixture/"}}
+            }),
+            Value::Null,
+            json!("terminal scalar"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let command_id = format!("canonical-result-{index}");
+            let command = BusinessCommand {
+                origin: CommandOrigin::TrustedLocal,
+                id: Some(command_id.clone()),
+                module: "research".into(),
+                command_type: "web_stack.person_research".into(),
+                record_id: None,
+                payload: json!({"company": "Fixture GmbH", "country": "DE"}),
+                client_context: json!({"actor": {"id": "researcher"}}),
+            };
+            channels::claim_business_control_command(
+                root,
+                business_command_core_claim(&command_id, &command)?,
+            )?;
+            let checkpoint = json!({
+                "ok": false,
+                "status": "awaiting_provider",
+                "provider_wait": {"poll_attempt": 1},
+                "provider_resume": {"schema": "ctox.research.provider_resume.v1"},
+                "awaiting_provider_sources": ["linkedin.com"],
+                "fields": {"person_linkedin": {"value": null, "pending_only": true}}
+            });
+            write_rxdb_control_command_progress(root, &command, "running", checkpoint.clone())?;
+            let mut writers = RxdbProjectionWriterCache::new(root);
+            writers.upsert(
+                "business_commands",
+                &command_id,
+                1,
+                json!({"ui_metadata": {"expanded": true, "nested": {"retained": 1}}}),
+            )?;
+            writers.upsert(
+                "business_commands",
+                &command_id,
+                2,
+                json!({"ui_metadata": {"nested": {"added": 2}}}),
+            )?;
+            let metadata = json!({"expanded": true, "nested": {"retained": 1, "added": 2}});
+            let pending = load_rxdb_collection_record(root, "business_commands", &command_id)?
+                .context("pending command projection")?;
+            assert_eq!(pending["ui_metadata"], metadata);
+            assert_eq!(
+                pending["result"]["provider_wait"],
+                checkpoint["provider_wait"]
+            );
+
+            write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                terminal_result,
+            )?;
+            let canonical = channels::business_command_projection(root, &command_id)?;
+            let conn = open_store(root)?;
+            let local = stored_rxdb_business_command_outcome(&conn, &command_id)?
+                .context("local terminal command projection")?;
+            let projected = load_rxdb_collection_record(root, "business_commands", &command_id)?
+                .context("replicated terminal command projection")?;
+            assert_eq!(local["result"], canonical["result"]);
+            assert_eq!(projected["result"], canonical["result"]);
+            assert_eq!(projected["terminal_status"], "completed");
+            assert_eq!(projected["execution_phase"], "terminal");
+            assert_eq!(projected["attempt"], canonical["attempt"]);
+            assert_eq!(projected["ui_metadata"], metadata);
+            assert_ne!(projected["_rev"], pending["_rev"]);
+            for key in [
+                "provider_wait",
+                "provider_resume",
+                "awaiting_provider_sources",
+            ] {
+                assert!(projected["result"].get(key).is_none(), "stale key: {key}");
+            }
+
+            // Simulate a legacy stale projection. Canonical outbox replay must
+            // also restore the whole result, without erasing unrelated metadata.
+            writers.upsert(
+                "business_commands",
+                &command_id,
+                3,
+                json!({"result": checkpoint}),
+            )?;
+            super::super::store::deliver_business_command_outbox(root, 64)?;
+            let replayed = load_rxdb_collection_record(root, "business_commands", &command_id)?
+                .context("replayed terminal command projection")?;
+            assert_eq!(replayed["result"], canonical["result"]);
+            assert_eq!(replayed["terminal_status"], "completed");
+            assert_eq!(replayed["execution_phase"], "terminal");
+            assert_eq!(replayed["attempt"], canonical["attempt"]);
+            assert_eq!(replayed["ui_metadata"], metadata);
+        }
+        Ok(())
+    }
 
     #[test]
     fn intake_stamps_verified_identity_and_preserves_claimed_actor_evidence() -> anyhow::Result<()>

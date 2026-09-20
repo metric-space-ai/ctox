@@ -44,7 +44,7 @@ fn required_initial_tool_is_the_only_visible_required_tool_before_its_call() {
 }
 
 #[test]
-fn required_initial_tool_releases_normal_tool_selection_after_its_call() {
+fn required_initial_tool_ignores_calls_in_retained_history() {
     let tools = vec![
         json!({"type": "function", "name": "exec_command"}),
         json!({"type": "function", "name": "ctox_deep_research"}),
@@ -61,6 +61,10 @@ fn required_initial_tool_releases_normal_tool_selection_after_its_call() {
         super::apply_required_initial_tool(tools.clone(), &input, Some("ctox_deep_research"))
             .unwrap();
 
+    assert_eq!(choice, "auto");
+    assert_eq!(visible, vec![tools[1].clone()]);
+    let (visible, choice) =
+        super::apply_required_initial_tool(tools.clone(), &input, None).unwrap();
     assert_eq!(choice, "auto");
     assert_eq!(visible, tools);
 }
@@ -109,8 +113,7 @@ fn required_initial_tool_notice_is_absent_once_the_full_surface_is_visible() {
         arguments: "{}".to_string(),
         call_id: "call-1".to_string(),
     }];
-    let (visible, _) =
-        super::apply_required_initial_tool(tools.clone(), &input, Some("update_plan")).unwrap();
+    let (visible, _) = super::apply_required_initial_tool(tools.clone(), &input, None).unwrap();
 
     assert!(super::required_initial_tool_notice(&tools, &visible, Some("update_plan")).is_none());
     assert!(super::required_initial_tool_notice(&tools, &tools, None).is_none());

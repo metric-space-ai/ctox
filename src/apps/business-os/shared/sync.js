@@ -22,10 +22,11 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20260913-shell-v2-pending-collection-changes-v375';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260913-shell-v2-pending-collection-changes-v375';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260913-shell-v2-pending-collection-changes-v375';
+} from './sync-contract.js?v=20260914-shell-v2-credentials-registry-v385';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260914-shell-v2-credentials-registry-v385';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260914-shell-v2-credentials-registry-v385';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
+import { assertNativeRequestPrivacy, CREDENTIAL_REVEAL_METHOD } from './native-request-privacy.mjs';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // Multi-tab leadership may span a rolling Business OS release: an already
@@ -34,7 +35,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20260913-shell-v2-pending-collection-changes-v375';
+const MULTI_TAB_COORDINATOR_EPOCH = '20260914-shell-v2-credentials-registry-v385';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -153,6 +154,7 @@ export function createSyncRuntime({
   config,
   onDiagnostic,
   capabilityTokenProvider = getBusinessOsCapabilityToken,
+  onNativeQueryReady = null,
 }) {
   const bridges = new CollectionSyncRegistry();
   const activeCollections = new Set();
@@ -181,6 +183,7 @@ export function createSyncRuntime({
   const multiTabUnsubscribers = [];
   let suspensionReason = '';
   let stopped = false;
+  let nativeReadSequence = 0;
   const publishResourceBudget = () => {
     const root = globalThis.document?.documentElement;
     if (!root?.dataset) return;
@@ -523,7 +526,10 @@ export function createSyncRuntime({
     // them. Without this the Browser app is dead in every tab but one.
     if (typeof multiTabCoordinator.onNativeRequest === 'function') {
       multiTabUnsubscribers.push(multiTabCoordinator.onNativeRequest(
-        (method, params, options) => requestNativeDirectly(method, params, options),
+        (method, params, options) => {
+          assertNativeRequestPrivacy(method, { relayed: true });
+          return requestNativeDirectly(method, params, options);
+        },
       ));
     }
     multiTabUnsubscribers.push(multiTabCoordinator.onRoleChange?.((status) => {
@@ -595,9 +601,20 @@ export function createSyncRuntime({
       recordCommandPlaneMetric(diagnostics.commandPlane, name, metric.durationMs);
       emitDiagnostic({ phase: diagnostics.phase || 'ready' });
     },
+    // A distinct API is essential during rolling updates: older live shell
+    // objects expose requestNative but lack both private-path relay guards.
+    // This path never calls the coordinator proxy, including after role changes.
+    async requestPrivateNative(method, params = {}, options = {}) {
+      if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      if (method !== CREDENTIAL_REVEAL_METHOD) throw new Error('Unsupported private native request.');
+      const coordinator = multiTabCoordinator;
+      assertNativeRequestPrivacy(method, { isLeader: !coordinator || coordinator.isLeader?.() === true });
+      return requestNativeDirectly(method, params, options);
+    },
     async requestNative(method, params = {}, options = {}) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       const coordinator = multiTabCoordinator;
+      assertNativeRequestPrivacy(method, { isLeader: !coordinator || coordinator.isLeader?.() === true });
       // Only the leader holds the WebRTC data channel. A follower that opens
       // its own direct bridge never connects, so ask the leader first and keep
       // the direct path as the fallback for when no leader answers.
@@ -833,6 +850,7 @@ export function createSyncRuntime({
           collection,
           recordCollection,
           capabilityTokenProvider,
+          onNativeQueryReady,
           onFatalPeerError: (error) => scheduleGlobalRestart(collection, error),
           // Passed down explicitly: startWebRtcReplication is a module-level
           // function, so it cannot see this closure. The previous direct call
@@ -1058,6 +1076,65 @@ export function createSyncRuntime({
       if (!suspendedCollections.size) suspensionReason = '';
       return this.restartCollections(requested);
     },
+    async readCollectionNativeDocument(collection, documentId, options = {}) {
+      if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      const normalized = normalizeCollectionName(collection);
+      if (!normalized) throw new Error('collection is required.');
+      const id = String(documentId || '').trim();
+      if (!id) throw new Error('documentId is required.');
+      const budgetMs = Math.max(250, Number(options.timeoutMs) || 15_000);
+      const startedAt = Date.now();
+      const remainingMs = () => Math.max(1, budgetMs - (Date.now() - startedAt));
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      nativeReadSequence = (nativeReadSequence + 1) % Number.MAX_SAFE_INTEGER;
+      const lease = await withRejectingTimeout(
+        () => this.leaseCollection(normalized, 'authoritative-native-read'),
+        remainingMs(),
+        `Native read lease for ${normalized} exceeded ${budgetMs}ms.`,
+      );
+      let timer = null;
+      try {
+        let bridge = lease.bridge;
+        if (!bridge?.state && bridge?.ready) {
+          bridge = await withRejectingTimeout(
+            () => bridge.ready,
+            remainingMs(),
+            `Native read bridge for ${normalized} exceeded ${budgetMs}ms.`,
+          );
+        }
+        const state = bridge?.state;
+        if (!state?.awaitQueryReady) {
+          throw new Error(`Native query readiness is unavailable for ${normalized}.`);
+        }
+        await state.awaitQueryReady(remainingMs());
+        const generation = state.collectionQueryGenerationToken?.(state.activeRemotePeerId);
+        if (!generation) throw new Error(`Native query generation is unavailable for ${normalized}.`);
+        const primaryPath = state.collection?.schema?.primaryPath || 'id';
+        const requireRevision = `authority:${normalized}:${id}:${nativeReadSequence}`;
+        const query = {
+          selector: { [primaryPath]: id },
+          requireRevision,
+        };
+        if (controller) query.signal = controller.signal;
+        const read = state.collection.findOne(query).exec();
+        timer = setTimeout(() => controller?.abort?.(), remainingMs());
+        const document = await read;
+        const currentBridge = lease.bridge;
+        if (currentBridge?.state !== state || state.cancelled) {
+          throw new Error(`Native read generation for ${normalized} was replaced.`);
+        }
+        const currentGeneration = state.collectionQueryGenerationToken?.(state.activeRemotePeerId);
+        if (!currentGeneration || currentGeneration !== generation) {
+          throw new Error(`Native read generation for ${normalized} changed.`);
+        }
+        return document;
+      } finally {
+        if (timer) clearTimeout(timer);
+        controller?.abort?.();
+        await lease.release().catch(() => {});
+      }
+    },
+
     async stop() {
       stopped = true;
       if (globalRestartTimer) clearTimeout(globalRestartTimer);
@@ -1536,6 +1613,7 @@ async function startWebRtcReplication({
   collection,
   recordCollection,
   capabilityTokenProvider,
+  onNativeQueryReady,
   onFatalPeerError,
   scheduleRestart,
 }) {
@@ -1694,6 +1772,9 @@ async function startWebRtcReplication({
           queryReady: demandOnly ? queryReady : true,
           reason: null,
         });
+        if (queryReady && typeof onNativeQueryReady === 'function') {
+          try { onNativeQueryReady(collection, info); } catch (error) { console.error(error); }
+        }
       },
     },
   });

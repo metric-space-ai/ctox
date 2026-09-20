@@ -220,26 +220,16 @@ fn completed_turn(thread: &ctox_app_server_protocol::Thread) -> bool {
         .any(|turn| turn.status == TurnStatus::Completed)
 }
 
-fn failed_turn_error(thread: &ctox_app_server_protocol::Thread) -> Option<String> {
-    thread.turns.iter().find_map(|turn| {
-        matches!(turn.status, TurnStatus::Failed | TurnStatus::Interrupted)
-            .then(|| format!("{:?}: {:?}", turn.status, turn.error))
-    })
-}
-
-fn is_transient_read_error(err: &TypedRequestError) -> bool {
-    let message = err.to_string();
-    message.contains("not materialized yet") || message.contains("includeTurns is unavailable")
-}
-
-async fn wait_for_turn_completed(client: &mut IsolatedClient, thread_id: &str) {
+async fn wait_for_turn_completed(client: &mut IsolatedClient, thread_id: &str, turn_id: &str) {
     timeout(TURN_WAIT_TIMEOUT, async {
-        let mut poll_id = 1000i64;
+        // A partially flushed rollout is not a live completion signal. Wait
+        // for the exact turn's terminal event, then verify durable history in
+        // the caller before shutdown and again after manager restart.
         loop {
             match timeout(Duration::from_millis(250), client.get_mut().next_event()).await {
                 Ok(Some(InProcessServerEvent::ServerNotification(
                     ServerNotification::TurnCompleted(notification),
-                ))) if notification.thread_id == thread_id => {
+                ))) if notification.thread_id == thread_id && notification.turn.id == turn_id => {
                     assert_eq!(
                         notification.turn.status,
                         TurnStatus::Completed,
@@ -263,37 +253,6 @@ async fn wait_for_turn_completed(client: &mut IsolatedClient, thread_id: &str) {
                 }
                 Ok(None) => panic!("in-process event stream closed before turn completed"),
                 Ok(Some(_)) | Err(_) => {}
-            }
-
-            let request_id = RequestId::Integer(poll_id);
-            poll_id += 1;
-            match timeout(
-                REQUEST_TIMEOUT,
-                client
-                    .get()
-                    .request_typed::<ThreadReadResponse>(ClientRequest::ThreadRead {
-                        request_id,
-                        params: ThreadReadParams {
-                            thread_id: thread_id.to_string(),
-                            include_turns: true,
-                        },
-                    }),
-            )
-            .await
-            {
-                Err(_) => panic!("thread/read timed out while waiting for turn completion"),
-                Ok(Err(err)) if is_transient_read_error(&err) => {}
-                Ok(Err(err)) => {
-                    panic!("thread/read failed while waiting for turn completion: {err}")
-                }
-                Ok(Ok(read)) => {
-                    if let Some(error) = failed_turn_error(&read.thread) {
-                        panic!("turn did not complete successfully: {error}");
-                    }
-                    if completed_turn(&read.thread) {
-                        return;
-                    }
-                }
             }
         }
     })
@@ -399,7 +358,7 @@ async fn run_named_persistent_thread_restart(
                 "thread/name/set",
             )
             .await;
-        let _: TurnStartResponse = client
+        let turn_started: TurnStartResponse = client
             .request(
                 ClientRequest::TurnStart {
                     request_id: RequestId::Integer(3),
@@ -415,7 +374,7 @@ async fn run_named_persistent_thread_restart(
                 "turn/start",
             )
             .await;
-        wait_for_turn_completed(client, &thread_id).await;
+        wait_for_turn_completed(client, &thread_id, &turn_started.turn.id).await;
         wait_for_session_index_name(codex_home).await;
 
         let read: ThreadReadResponse = client
