@@ -32,6 +32,7 @@ pub mod office_engine;
 pub(crate) mod office_staging_repair;
 mod person_research_command;
 mod person_research_gap_closure;
+mod populated_store_recovery;
 pub mod policy;
 mod project_chats;
 mod rxdb_peer;
@@ -90,6 +91,12 @@ pub fn audit_customer_apps(root: &std::path::Path) -> anyhow::Result<serde_json:
     }))
 }
 pub(crate) use browser_runtime::BrowserSessionAutomationRequest;
+pub use populated_store_recovery::{
+    backup_native_rxdb_immutable_store, default_native_rxdb_immutable_backup_path,
+    materialize_supported_historical_rxdb_fixture, native_rxdb_cutover_receipt,
+    native_rxdb_store_inventory, restore_native_rxdb_immutable_backup,
+    run_production_native_rxdb_cutover, supported_historical_rxdb_versions,
+};
 pub use rxdb_peer::enqueue_business_command_document;
 pub use rxdb_peer::native_peer_status;
 pub use rxdb_peer::repair_optional_rxdb_collection_schema_drift;

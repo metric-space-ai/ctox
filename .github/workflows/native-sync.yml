@@ -308,6 +308,19 @@ jobs:
             business_os::rxdb_peer::tests::runtime_empty_legacy_table \
             business_os::rxdb_peer::tests::rxdb_schema_drift_repair \
             --test-threads=2 | tee "$RUNNER_TEMP/ctox-host-proof/schema-migration-tests.log"
+          cargo test --locked --bin ctox -- business_os::populated_store_recovery --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/populated-store-recovery-tests.log"
+      - name: Prove populated historical store migration and recovery
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        timeout-minutes: 20
+        shell: bash
+        run: |
+          set -o pipefail
+          POPULATED_STORE_EVIDENCE_DIR="$RUNNER_TEMP/ctox-host-proof" \
+            POPULATED_STORE_ROOT="$RUNNER_TEMP/ctox-host-fixtures/populated-store" \
+            CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
+            node src/core/rxdb/tools/populated_store_recovery_acceptance.js \
+            | tee "$RUNNER_TEMP/ctox-host-proof/populated-store-recovery.jsonl"
       - name: Verify fresh secret reads and bounded Core reader reuse
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash
