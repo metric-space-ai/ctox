@@ -25,7 +25,8 @@ jobs:
       RAYON_NUM_THREADS: '2'
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: never
-      REVIEWED_SOURCE_REVISION: ${{ github.event.pull_request.base.sha || github.sha }}
+      # Reviewed THESEN integration: PR142 d7c592ba + PR185 cadeea2cf.
+      REVIEWED_SOURCE_REVISION: '70f73cd7c2b4d69fba7ad7cc768876950709435c'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
