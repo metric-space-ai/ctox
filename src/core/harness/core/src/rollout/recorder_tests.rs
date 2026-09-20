@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::ConfigBuilder;
 use crate::features::Feature;
+use crate::find_thread_path_by_id_str;
 use chrono::TimeZone;
 use ctox_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use ctox_protocol::protocol::AgentMessageEvent;
