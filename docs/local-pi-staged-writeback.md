@@ -8,7 +8,10 @@ The complete baseline is checked before staging; current native command authorit
 
 The existing ctox.coding.turn path re-resolves its signed/native identity and AppsModify permission after the model returns and after staging validation. The operator CLI continues to have explicit operator authority. This change does NOT grant managed Gateway JSON roles new coding.turn authority. PR142's managed app authority remains limited to create/modify; do not claim an MCP coding route for an unprovisioned Gateway principal.
 
+Release blocker found during focused validation: `--skip-tests` does not make the validator non-executing. Its static checker dynamically imports `schema.js` and `core/records.mjs` and calls exported normalization functions. Those run with the validator process's host permissions. The current process-group timeout is a time bound, not filesystem/network isolation. Do not enable this candidate for model-produced source until validation runs behind an enforced authority boundary or uses checks that do not execute app code. A complete local fixture confirms valid acceptance and rejection of malformed record-helper code; it does not establish isolation.
+
 Pending before release:
+
 
 - Compile and execute the local_coding regressions and existing Pi/native policy suites.
 - Verify the real local validator against a representative complete app, including failure/timeout cleanup; static validation is not browser acceptance.

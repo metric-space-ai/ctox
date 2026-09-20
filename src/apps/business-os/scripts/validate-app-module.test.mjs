@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1432,6 +1432,29 @@ function writeSourceModule(root, moduleId, overrides = {}) {
   const run = runValidator(root, moduleId, '--source');
   assert.notEqual(run.status, 0);
   assert.match(run.stderr, /declares function renderAccounts more than once \(lines 1, 2\)/);
+}
+
+{
+  const root = makeWorkspace();
+  try {
+    writeInstalledModule(root, 'localcoding');
+    const parent = join(root, 'runtime/business-os/local-modules');
+    mkdirSync(parent, { recursive: true });
+    const dir = join(parent, 'localcoding');
+    renameSync(join(root, 'runtime/business-os/installed-modules/localcoding'), dir);
+    const manifest = JSON.parse(readFileSync(join(dir, 'module.json'), 'utf8'));
+    manifest.entry = 'local-modules/localcoding/index.html';
+    manifest.install_scope = 'local';
+    writeJson(join(dir, 'module.json'), manifest);
+    const valid = runValidator(root, 'localcoding', '--local', '--skip-tests');
+    assert.equal(valid.status, 0, `${valid.stderr}\n${valid.stdout}`);
+    writeFileSync(join(dir, 'core/records.mjs'), 'export const broken = ;\n');
+    const invalid = runValidator(root, 'localcoding', '--local', '--skip-tests');
+    assert.notEqual(invalid.status, 0, 'local coding must reject syntax errors outside index.js');
+    assert.match(invalid.stderr, /core\/records\.mjs could not be imported as browser ESM/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 console.log('[validate-app-module.test] OK');
