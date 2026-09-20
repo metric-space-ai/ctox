@@ -371,7 +371,11 @@ impl BusinessDataSource {
         for snapshot in snapshots {
             if let Some(task) = snapshot.task.lock().await.take() {
                 task.abort();
-                let _ = task.await;
+                if let Err(error) = task.await {
+                    if !error.is_cancelled() {
+                        failure.get_or_insert_with(|| io::Error::other(error));
+                    }
+                }
             }
         }
         let subscriptions: Vec<_> = self
@@ -384,7 +388,11 @@ impl BusinessDataSource {
         for subscription in subscriptions {
             if let Some(task) = subscription.task.lock().await.take() {
                 task.abort();
-                let _ = task.await;
+                if let Err(error) = task.await {
+                    if !error.is_cancelled() {
+                        failure.get_or_insert_with(|| io::Error::other(error));
+                    }
+                }
             }
         }
         self.snapshots
@@ -399,7 +407,7 @@ impl BusinessDataSource {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clear();
-        failure
+        failure.map_or(Ok(()), Err)
     }
 
     async fn handle(
@@ -1251,7 +1259,7 @@ impl BusinessDataSource {
             let mut snapshot_complete = false;
             while let Some(item) = receiver.recv().await {
                 match item {
-                    Ok((documents, true)) => {
+                    Ok((_documents, true)) => {
                         snapshot_complete = true;
                         break;
                     }
