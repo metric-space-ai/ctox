@@ -370,7 +370,7 @@ jobs:
             SMOKE_COMMAND_TIMING_REPORT_OUTPUT="$RUNNER_TEMP/ctox-host-proof/command-stages.json" \
             SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/command-processes.json" \
             node src/core/rxdb/tools/browser_rust_smoke.js \
-            | tee "$RUNNER_TEMP/ctox-host-proof/command-browser.log"
+            2>&1 | tee "$RUNNER_TEMP/ctox-host-proof/command-browser.log"
           node src/apps/business-os/rxdb/tests/command-roundtrip-budget.mjs \
             --input "$RUNNER_TEMP/ctox-host-proof/command-marks.json" \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-budget.json"
