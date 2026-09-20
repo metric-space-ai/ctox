@@ -694,7 +694,9 @@ async fn run_named_persistent_thread_restart(
     );
 
     let restarted_config = isolated_mock_config(codex_home, server_uri).await;
-    let id = scope.start(SessionSource::Exec, restarted_config).await;
+    let id = scope
+        .start(SessionSource::Exec, restarted_config.clone())
+        .await;
     let client = scope.get_mut(id);
     assert!(
         manager_thread_ids(&client).await.is_empty(),
