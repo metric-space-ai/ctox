@@ -2185,19 +2185,16 @@ mod tests {
 
     #[test]
     fn parse_hit_fields_rejects_invalid_or_oversized_payloads() {
-        assert!(parse_hit_fields("leadfeeder_fields:[1]").is_none());
-        assert!(parse_hit_fields("leadfeeder_fields:{"id":""}").is_none());
-        assert!(parse_hit_fields(
-            "leadfeeder_fields:{"id":"co-1","extra":"nope"}"
-        )
-        .is_none());
+        assert!(parse_hit_fields(r#"leadfeeder_fields:[1]"#).is_none());
+        assert!(parse_hit_fields(r#"leadfeeder_fields:{"id":""}"#).is_none());
+        assert!(parse_hit_fields(r#"leadfeeder_fields:{"id":"co-1","extra":"nope"}"#).is_none());
         let oversized = format!(
-            "leadfeeder_fields:{{\"id\":\"{}\"}}",
+            r#"leadfeeder_fields:{{"id":"{}"}}"#,
             "x".repeat(HIT_FIELDS_MAX_VALUE + 1)
         );
         assert!(parse_hit_fields(&oversized).is_none());
         assert!(parse_hit_fields(
-            "leadfeeder_fields:{"id":"co-fixture-1","domain":"factory-24.test"}"
+            r#"leadfeeder_fields:{"id":"co-fixture-1","domain":"factory-24.test"}"#
         )
         .is_some());
     }
