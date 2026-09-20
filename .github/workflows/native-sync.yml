@@ -294,6 +294,27 @@ jobs:
             | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
           cargo test --locked --bin ctox -- mission::channels::tests::business_command mission::channels::tests::business_control --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
+          for regression in \
+            admitted_command_projects_rxdb_identity_without_regressing_advanced_status \
+            command_only_outbox_delivers_newer_result_after_queue_stamped_admission \
+            push_collection_records_rebuilds_authoritative_queue_fields_from_snapshot \
+            push_collection_records_does_not_restore_cleared_authoritative_fields \
+            refresh_queue_projection_keeps_canonical_and_compatibility_in_one_transaction \
+            cancelled_record_command_overwrites_running_and_blocked_compatibility \
+            stale_accepted_record_command_does_not_overwrite_running_or_cancelled_compatibility \
+            delayed_accepted_outbox_does_not_regress_terminal_compatibility_status
+          do
+            regression_log="$RUNNER_TEMP/ctox-host-proof/$regression.log"
+            cargo test --locked --bin ctox -- \
+              "business_os::store::tests::$regression" --exact --test-threads=2 \
+              | tee "$regression_log"
+            python3 - "$regression_log" <<'PY'
+          import pathlib
+          import sys
+          result = pathlib.Path(sys.argv[1]).read_text()
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in result, result
+          PY
+          done
       - name: Preserve native schema migration history and deletion markers
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash
