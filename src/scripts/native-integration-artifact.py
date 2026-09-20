@@ -144,7 +144,7 @@ def main():
         'src/apps/business-os/rxdb/tests/customer-identifier-inventory-smoke.mjs'])
     run('content-guard', ['node', 'src/apps/business-os/scripts/audit-business-os-content.mjs'])
     if not focused:
-        # This candidate preserves main shell assets: its four existing suites
+        # These four main sync suites remain unchanged by Desktop recovery and
         # define 26 tests. The five PR185 native-read tests are not on this tree.
         sync_tests = [
             'sync-collection-registry.test.mjs',
@@ -198,6 +198,9 @@ def main():
             'coding_agents::pi_sidecar::tests::module_source_preserves_native_and_rxdb_version_precedence',
             'coding_agents::pi_sidecar::tests::module_source_rejects_invalid_or_ambiguous_snapshots_without_content',
             'coding_agents::pi_sidecar::tests::missing_module_source_stops_before_model_or_sidecar_and_session_write',
+            'coding_agents::pi_sidecar::tests::unchanged_coding_snapshot_does_not_restore_stale_source',
+            'coding_agents::pi_sidecar::tests::changed_coding_snapshot_rejects_stale_files_before_any_write',
+            'business_os::mcp_app_authority::tests::mcp_app_authority_served_source_controls_read_pi_write_and_version',
         }
         missing = required - set(names)
         if missing:
