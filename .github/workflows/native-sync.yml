@@ -2,7 +2,7 @@ name: Native Sync
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, codex/checkpoint-workspace-restore]
     paths:
       - '.github/workflows/native-sync.yml'
       - 'Cargo.toml'
@@ -12,6 +12,8 @@ on:
       - 'src/core/secrets.rs'
       - 'src/core/mission/channels/**'
       - 'src/core/sync/**'
+      - 'src/core/harness/protocol/src/portable_journal*'
+      - 'tests/portable_journal_roundtrip.rs'
       - 'src/core/sync_host/**'
       - 'src/core/sync_host.rs'
       - 'src/core/rxdb/**'
@@ -35,6 +37,8 @@ on:
       - 'src/core/secrets.rs'
       - 'src/core/mission/channels/**'
       - 'src/core/sync/**'
+      - 'src/core/harness/protocol/src/portable_journal*'
+      - 'tests/portable_journal_roundtrip.rs'
       - 'src/core/sync_host/**'
       - 'src/core/sync_host.rs'
       - 'src/core/rxdb/**'
