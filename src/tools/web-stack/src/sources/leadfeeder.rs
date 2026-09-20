@@ -106,13 +106,6 @@ impl std::fmt::Debug for AuthScheme {
 }
 
 impl AuthScheme {
-    fn secret_name(&self) -> &'static str {
-        match self {
-            AuthScheme::ApiKey(_) => SECRET_NAME,
-            AuthScheme::LegacyToken(_) => LEGACY_SECRET_NAME,
-        }
-    }
-
     fn is_legacy(&self) -> bool {
         matches!(self, AuthScheme::LegacyToken(_))
     }
@@ -300,7 +293,9 @@ fn resolve_secret(
         Ok(Some(value)) => {
             let trimmed = value.expose_secret().trim();
             if trimmed.is_empty() {
-                Ok(None)
+                Err(SourceError::Other(anyhow!(
+                    "credential_invalid: empty stored value"
+                )))
             } else {
                 Ok(Some(trimmed.to_string()))
             }
@@ -567,9 +562,7 @@ fn classify_status(status: u16, resp: ureq::Response, auth: &AuthScheme) -> Sour
             retry_after_ms: retry,
         },
         (401, _) | (403, Some("missing_token" | "invalid_api_key" | "invalid_token")) => {
-            SourceError::CredentialMissing {
-                secret_name: auth.secret_name(),
-            }
+            SourceError::Other(anyhow!("authentication_rejected: http {status}"))
         }
         (403, Some(code @ ("insufficient_scope" | "forbidden"))) => {
             SourceError::Other(anyhow!("entitlement: {code}"))
@@ -1949,19 +1942,23 @@ mod tests {
     #[test]
     fn distinguishable_error_classes() {
         let cases: Vec<(u16, &str, fn(&SourceError) -> bool)> = vec![
+            (401, "{}", |err| match err {
+                SourceError::Other(inner) => {
+                    inner.to_string() == "authentication_rejected: http 401"
+                }
+                _ => false,
+            }),
             (429, "{}", |err| {
                 matches!(err, SourceError::RateLimited { .. })
             }),
             (
                 403,
                 r#"{"code":"invalid_api_key","message":"fixture invalid key"}"#,
-                |err| {
-                    matches!(
-                        err,
-                        SourceError::CredentialMissing {
-                            secret_name: SECRET_NAME
-                        }
-                    )
+                |err| match err {
+                    SourceError::Other(inner) => {
+                        inner.to_string() == "authentication_rejected: http 403"
+                    }
+                    _ => false,
                 },
             ),
             (
@@ -2215,6 +2212,27 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert!(mock.recorded().is_empty());
+    }
+
+    #[test]
+    fn resolver_empty_stored_value_is_invalid_not_absent() {
+        for stored in ["", "   "] {
+            let mock = MockApi::spawn(|_req| panic!("invalid stored key must not call API"));
+            let root = TestRoot::new();
+            root.write_env(&[(AUTH_SCHEME_KEY, "api_key")]);
+            let resolver = InjectedResolver::present(&[(SECRET_NAME, stored)]);
+            let error = fetch_direct_with(
+                &root.ctx(),
+                "Example Manufacturing AG",
+                &mock.transport(),
+                Some(&resolver),
+            )
+            .expect("engages")
+            .expect_err("invalid stored key");
+            assert!(matches!(&error, SourceError::Other(_)));
+            assert_eq!(error.to_string(), "credential_invalid: empty stored value");
+            assert!(mock.recorded().is_empty());
+        }
     }
 
     #[test]
