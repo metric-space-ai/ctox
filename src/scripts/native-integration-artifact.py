@@ -200,7 +200,7 @@ def main():
             'coding_agents::pi_sidecar::tests::missing_module_source_stops_before_model_or_sidecar_and_session_write',
             'coding_agents::pi_sidecar::tests::unchanged_coding_snapshot_does_not_restore_stale_source',
             'coding_agents::pi_sidecar::tests::changed_coding_snapshot_rejects_stale_files_before_any_write',
-            'business_os::mcp_app_authority::tests::mcp_app_authority_served_source_controls_read_pi_write_and_version',
+            'business_os::mcp_channel::app_authority::tests::mcp_app_authority_served_source_controls_read_pi_write_and_version',
         }
         missing = required - set(names)
         if missing:
