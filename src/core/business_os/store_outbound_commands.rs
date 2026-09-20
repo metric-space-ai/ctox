@@ -3219,6 +3219,23 @@ fn outbound_queue_research_scraper_generation(
     } else {
         format!("outbound-research-adapter:{target_key}:{command_id}")
     };
+    let test_input = outbound_research_scrape_test_input(command, adapter_payload, source_id)
+        .ok()
+        .map(|mut input| {
+            // The generated worker must use its own real queue task reference.
+            input.as_object_mut().unwrap().remove("task_id");
+            input
+        });
+    let test_instruction = match test_input {
+        Some(input) => {
+            let timeout = outbound_scrape_operation_timeout_ms(input.get("operation_timeout_ms"))?;
+            let runner_seconds = timeout.div_ceil(1_000) + 30;
+            format!(
+                "Schreibe exakt diesen Testinput in eine JSON-Datei unter {workspace}/scripts/: {input}. Ergaenze task_id nur aus der tatsaechlichen eigenen Queue-Aufgabe des Harness, nie aus Target-Config oder geratenen IDs. Fuehre `ctox scrape execute --target-key {target_key} --timeout-seconds {runner_seconds} --input-file <absoluter Pfad zur JSON-Datei>` aus. Dokumentiere Run-ID, Quellen und Felder."
+            )
+        }
+        None => "Es fehlt ein gueltiger expliziter Testinput mit company. Registriere den Adapter, aber fuehre keinen Recherche-Test aus und erfinde keine Firma. Melde input_required.".to_string(),
+    };
     let prompt = format!(
         "Erzeuge oder repariere einen CTOX Universal-Scraping Adapter fuer die Outbound Research Quelle.\n\
          Ziel:\n\
@@ -3232,7 +3249,8 @@ fn outbound_queue_research_scraper_generation(
          - Das Target ist nativ registriert. Registriere den Script-Stand mit `ctox scrape register-script --target-key {target_key} --script-file <absoluter Pfad unter {workspace}/scripts/>`. Registrierung und Execute laufen ueber den bestehenden Daemon-Relay; keine direkten Runtime-Datenbankschreibzugriffe.\n\
          - Der Scraper muss `prospect.v1` Records ausgeben: field, value, confidence, source_url, note.\n\
          - Verwende keine Credential-Werte im Prompt, Code oder Log. Nur Secret-Referenzen sind erlaubt.\n\
-         - Fuehre danach `ctox scrape execute --target-key {target_key} --allow-heal` mit einem kleinen Testinput aus und dokumentiere Run-ID, Quellen und Felder.\n\n\
+         - Lies Anbieter-Konfiguration und Secret-Referenzen aus der registrierten CTOX_SCRAPE_MANIFEST_PATH config. Nutze CTOX_SCRAPE_INPUT_JSON fuer die konkrete Abfrage und operation_timeout_ms fuer die Browseroperation. Config und Owner-Angaben ersetzen keine native Autorisierung; bei Auth-Ablehnung keine alternativen Routen versuchen.\n\
+         - {test_instruction}\n\n\
          target_manifest:\n{manifest}\n\n\
          scrape_contract:\n{contract}\n"
     );
@@ -3428,12 +3446,54 @@ fn outbound_research_scrape_test_input(
             .map(ToOwned::to_owned),
     ])
     .unwrap_or_else(|| "DE".to_string());
+    let operation_timeout_ms = outbound_scrape_operation_timeout_ms(
+        command.payload.pointer("/test_input/operation_timeout_ms"),
+    )?;
     Ok(serde_json::json!({
         "company": company,
         "country": country,
         "source_id": source_id,
         "adapter_test": true,
+        // Correlation only: the auth service must authorize this command.
+        "task_id": command.id.as_deref().map(str::trim).filter(|id| !id.is_empty()),
+        "operation_timeout_ms": operation_timeout_ms,
     }))
+}
+
+fn outbound_scrape_operation_timeout_ms(value: Option<&Value>) -> anyhow::Result<u64> {
+    let timeout = match value {
+        None => 90_000,
+        Some(value) => value.as_u64().context(
+            "test_input.operation_timeout_ms must be an integer between 1000 and 300000",
+        )?,
+    };
+    anyhow::ensure!(
+        (1_000..=300_000).contains(&timeout),
+        "test_input.operation_timeout_ms must be an integer between 1000 and 300000"
+    );
+    Ok(timeout)
+}
+
+fn outbound_scrape_test_execution_args(
+    target_key: &str,
+    input: &Value,
+) -> anyhow::Result<Vec<String>> {
+    let operation_timeout_ms =
+        outbound_scrape_operation_timeout_ms(input.get("operation_timeout_ms"))?;
+    // Leave time to serialize browser evidence before the runner stops its tree.
+    let runner_timeout_seconds = operation_timeout_ms.div_ceil(1_000) + 30;
+    Ok(vec![
+        "execute".to_string(),
+        "--target-key".to_string(),
+        target_key.to_string(),
+        "--trigger-kind".to_string(),
+        "manual".to_string(),
+        "--timeout-seconds".to_string(),
+        runner_timeout_seconds.to_string(),
+        "--allow-heal".to_string(),
+        "--input-json".to_string(),
+        input.to_string(),
+    ])
 }
 
 fn outbound_execute_research_scrape_target(
@@ -3443,18 +3503,7 @@ fn outbound_execute_research_scrape_target(
 ) -> anyhow::Result<scrape::ScrapeExecutionOutcome> {
     scrape::execute_scrape_with_outcome(
         root,
-        &[
-            "execute".to_string(),
-            "--target-key".to_string(),
-            target_key.to_string(),
-            "--trigger-kind".to_string(),
-            "manual".to_string(),
-            "--timeout-seconds".to_string(),
-            "45".to_string(),
-            "--allow-heal".to_string(),
-            "--input-json".to_string(),
-            input.to_string(),
-        ],
+        &outbound_scrape_test_execution_args(target_key, input)?,
     )
 }
 
@@ -7431,6 +7480,10 @@ mod tests {
             .context("generation task")?;
         let task = channels::load_queue_task(root, task_id)?.context("task exists")?;
         let workspace = root.join("runtime/scraping/targets/novel-example");
+        assert!(task.prompt.contains("--input-file"));
+        assert!(task.prompt.contains("--timeout-seconds 120"));
+        assert!(task.prompt.contains("operation_timeout_ms"));
+        assert!(task.prompt.contains("CTOX_SCRAPE_MANIFEST_PATH"));
         assert_eq!(
             task.workspace_root.as_deref(),
             Some(workspace.to_string_lossy().as_ref())
@@ -7720,6 +7773,71 @@ mod tests {
             assert_eq!(input["country"], country);
             assert_eq!(input["source_id"], "fixture.example");
             assert_eq!(input["adapter_test"], true);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scrape_test_contract_rejects_invalid_budget_and_drops_claimed_authority(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path().join("must-remain-absent");
+        let adapter =
+            serde_json::json!({"adapter_kind":"scrape_target", "target_key":"fixture-example"});
+        let mut command = BusinessCommand {
+            id: Some("native-command".into()),
+            module: "outbound".into(),
+            command_type: "outbound.research_source.test".into(),
+            record_id: None,
+            payload: serde_json::json!({"test_input": {
+                "company":"Fixture GmbH", "task_id":"foreign-task",
+                "owner_user_id":"forged", "command_session":"forged",
+                "operation_timeout_ms":90001
+            }}),
+            client_context: serde_json::json!({}),
+            origin: CommandOrigin::TrustedLocal,
+        };
+        let input = outbound_research_scrape_test_input(&command, &adapter, "fixture.example")?;
+        assert_eq!(input["task_id"], "native-command");
+        assert!(input.get("owner_user_id").is_none());
+        assert!(input.get("command_session").is_none());
+        let args = outbound_scrape_test_execution_args("fixture-example", &input)?;
+        let timeout = args
+            .windows(2)
+            .find(|pair| pair[0] == "--timeout-seconds")
+            .unwrap();
+        assert_eq!(timeout[1], "121");
+        let forwarded = args
+            .windows(2)
+            .find(|pair| pair[0] == "--input-json")
+            .unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&forwarded[1])?, input);
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!(999),
+            serde_json::json!(300001),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("90000"),
+            Value::Null,
+        ] {
+            command.payload["test_input"]["operation_timeout_ms"] = invalid;
+            let mut record = adapter.clone();
+            let effect = outbound_apply_research_adapter_scrape_effect(
+                &root,
+                &command,
+                &adapter,
+                "adapter_fixture",
+                "fixture.example",
+                &mut record,
+            )
+            .context("effect")?;
+            assert_eq!(effect["phase"], "input");
+            assert_eq!(effect["test_skipped"], true);
+            assert!(
+                !root.exists(),
+                "invalid operation budget caused registration or execution"
+            );
         }
         Ok(())
     }

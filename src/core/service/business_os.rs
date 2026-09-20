@@ -4998,6 +4998,15 @@ fn resolve_web_stack_auth_owner_user_id_with_env(
     env_owner_user_id: Option<&str>,
     accept_as_trusted_local: bool,
 ) -> anyhow::Result<Option<String>> {
+    if let Some(task) = channels::load_queue_task(root, requesting_task_id)? {
+        anyhow::ensure!(
+            !matches!(
+                task.route_status.as_str(),
+                "cancelled" | "handled" | "failed"
+            ),
+            "requesting queue task is terminal"
+        );
+    }
     let claimed_owner = flag_value(args, "--owner-user-id")
         .or(env_owner_user_id)
         .map(str::trim)
@@ -5028,6 +5037,20 @@ fn resolve_web_stack_auth_owner_user_id_with_env(
         return Ok(Some(verified));
     }
     if accept_as_trusted_local {
+        // Legacy native auth-assist calls explicitly opt into local trust.
+        // The public authenticated-automation path never enables this branch.
+        if let Some(context) =
+            channels::inspect_business_command_for_task(root, requesting_task_id)?
+        {
+            let legacy_owner = context
+                .pointer("/command/payload/owner_user_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|owner| !owner.is_empty());
+            if let Some(owner) = legacy_owner {
+                return Ok(Some(owner.to_string()));
+            }
+        }
         return Ok(claimed_owner.map(str::to_string));
     }
     if let Some(claimed) = claimed_owner {
@@ -5103,34 +5126,29 @@ fn web_stack_auth_owner_from_command_session(
     Ok(Some(session_user_id.to_string()))
 }
 
-fn web_stack_auth_owner_from_command_context(context: &serde_json::Value) -> Option<String> {
-    let parsed_client_context = match context.pointer("/command/client_context") {
-        Some(serde_json::Value::String(value)) => {
-            serde_json::from_str(value).unwrap_or(serde_json::Value::Null)
-        }
-        Some(client_context) => client_context.clone(),
-        None => serde_json::Value::Null,
+fn web_stack_auth_owner_from_command_context(
+    root: &Path,
+    context: &serde_json::Value,
+) -> anyhow::Result<Option<String>> {
+    let Some(admitted_owner) = web_stack_auth_owner_from_native_authorization(context) else {
+        return Ok(None);
     };
-    let from_client_context = ["/owner_user_id", "/actor/id", "/user_id"]
-        .into_iter()
-        .find_map(|pointer| {
-            parsed_client_context
-                .pointer(pointer)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        });
-    from_client_context
-        .or_else(|| web_stack_auth_owner_from_native_authorization(context))
-        .or_else(|| {
-            context
-                .pointer("/command/payload/owner_user_id")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        })
+    let command_id = context
+        .pointer("/command/command_id")
+        .and_then(serde_json::Value::as_str)
+        .context("native authorization has no command identity")?;
+    let current = crate::business_os::store::revalidate_business_command_execution_authorization(
+        root, command_id,
+    )?;
+    let current_owner = current
+        .pointer("/actor/id")
+        .and_then(serde_json::Value::as_str)
+        .context("native authorization has no current actor")?;
+    anyhow::ensure!(
+        current_owner == admitted_owner,
+        "Business OS command authorization actor changed"
+    );
+    Ok(Some(admitted_owner))
 }
 
 fn web_stack_auth_owner_from_native_authorization(context: &serde_json::Value) -> Option<String> {
@@ -5166,11 +5184,10 @@ fn web_stack_auth_owner_from_task_link(
     if requesting_task_id.is_empty() {
         return Ok(None);
     }
-    Ok(
-        channels::inspect_business_command_for_task(root, requesting_task_id)?
-            .as_ref()
-            .and_then(web_stack_auth_owner_from_command_context),
-    )
+    match channels::inspect_business_command_for_task(root, requesting_task_id)? {
+        Some(context) => web_stack_auth_owner_from_command_context(root, &context),
+        None => Ok(None),
+    }
 }
 
 /// Queue tasks spawned by a Business OS command (person-research gap closure)
@@ -5197,9 +5214,17 @@ fn web_stack_auth_owner_from_task_metadata(
     else {
         return Ok(None);
     };
-    Ok(channels::inspect_business_command(root, command_id)?
-        .as_ref()
-        .and_then(web_stack_auth_owner_from_command_context))
+    anyhow::ensure!(
+        !matches!(
+            task.route_status.as_str(),
+            "cancelled" | "handled" | "failed"
+        ),
+        "requesting queue task is terminal"
+    );
+    match channels::inspect_business_command(root, command_id)? {
+        Some(context) => web_stack_auth_owner_from_command_context(root, &context),
+        None => Ok(None),
+    }
 }
 
 fn web_stack_auth_owner_from_command_authorization(
@@ -5210,11 +5235,10 @@ fn web_stack_auth_owner_from_command_authorization(
     if requesting_task_id.is_empty() {
         return Ok(None);
     }
-    Ok(
-        channels::inspect_business_command(root, requesting_task_id)?
-            .as_ref()
-            .and_then(web_stack_auth_owner_from_native_authorization),
-    )
+    match channels::inspect_business_command(root, requesting_task_id)? {
+        Some(context) => web_stack_auth_owner_from_command_context(root, &context),
+        None => Ok(None),
+    }
 }
 
 fn web_stack_auth_owner_from_chat(
@@ -6862,7 +6886,7 @@ mod tests {
                 false,
             )?
             .as_deref(),
-            Some("task-owner")
+            None
         );
         assert_eq!(
             resolve_web_stack_auth_owner_user_id_with_env(root.path(), &[], task_id, None, true)?
@@ -6937,6 +6961,46 @@ mod tests {
             .as_deref(),
             Some("michael.welsch@metric-space.ai")
         );
+
+        let generated = channels::create_queue_task(
+            root.path(),
+            channels::QueueTaskCreateRequest {
+                title: "Generated adapter fixture".into(),
+                prompt: "Fixture only".into(),
+                thread_key: "fixture/adapter".into(),
+                workspace_root: None,
+                priority: "low".into(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(serde_json::json!({"business_os_command_id":command_id,
+                "owner_user_id":"forged", "actor":{"id":"forged"}})),
+            },
+        )?;
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                &generated.message_key,
+                Some("forged"),
+                false,
+            )?
+            .as_deref(),
+            Some("michael.welsch@metric-space.ai")
+        );
+        let mut context = channels::inspect_business_command(root.path(), command_id)?
+            .context("command context")?;
+        context["command"]["client_context"] =
+            serde_json::json!({"owner_user_id":"forged", "actor":{"id":"forged"}});
+        context["command"]["payload"]["owner_user_id"] = serde_json::json!("forged");
+        assert_eq!(
+            web_stack_auth_owner_from_command_context(root.path(), &context)?.as_deref(),
+            Some("michael.welsch@metric-space.ai")
+        );
+        context["command"]
+            .as_object_mut()
+            .unwrap()
+            .remove("native_authorization");
+        assert!(web_stack_auth_owner_from_command_context(root.path(), &context)?.is_none());
 
         crate::business_os::store::upsert_projection_record(
             root.path(),
