@@ -22,6 +22,7 @@ const classifications = new Map(Object.entries({
   materialize_pending_business_chat: ['execution_link', 'execution_task_id; chat contract retains task_id'],
   business_chat_payload: ['execution_link', 'execution_task_id; chat contract retains task_id'],
   outbound_queue_research_scraper_generation: ['domain_queue_reference', 'target_task_id or a domain-specific queue reference'],
+  outbound_research_scrape_test_input: ['command_correlation', 'command_id; adapter input task_id is correlation only, never execution authority'],
   persist_systematic_research_failure: ['execution_link', 'execution_task_id'],
   persist_terminal_business_chat_command_projection: ['execution_link', 'execution_task_id'],
   process_business_chat_reply: ['execution_link', 'execution_task_id'],
