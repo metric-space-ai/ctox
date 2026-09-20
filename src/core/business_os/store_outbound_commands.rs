@@ -2599,6 +2599,34 @@ fn outbound_apply_research_adapter_scrape_effect(
             "adapter_kind": adapter_kind,
         }));
     }
+    // Validate identity before registration, scraping, or automatic healing.
+    // Adapter labels and source IDs describe the provider, never the company.
+    let test_input = if command_type == "outbound.research_source.test" {
+        match outbound_research_scrape_test_input(command, adapter_payload, source_id) {
+            Ok(input) => Some(input),
+            Err(error) => {
+                let message = error.to_string();
+                let test = outbound_persist_scrape_test_preflight_failure(
+                    record,
+                    "test_input_required",
+                    "input_required",
+                    &message,
+                    scrape_effect_started.elapsed(),
+                );
+                return Some(serde_json::json!({
+                    "ok": false,
+                    "phase": "input",
+                    "status": "input_required",
+                    "test_skipped": true,
+                    "error": message,
+                    "required_fields": ["test_input.company"],
+                    "test": test,
+                }));
+            }
+        }
+    } else {
+        None
+    };
     let Some(target_key) = outbound_first_string(&[
         outbound_string(record, &["target_key"]),
         outbound_string(adapter_payload, &["target_key"]),
@@ -2743,10 +2771,10 @@ fn outbound_apply_research_adapter_scrape_effect(
     let test_started = Instant::now();
     match outbound_execute_research_scrape_target(
         root,
-        command,
-        adapter_payload,
-        source_id,
         &target_key,
+        test_input
+            .as_ref()
+            .expect("test input validated before registration"),
     ) {
         Ok(test_outcome) => {
             let expected_fields = record
@@ -3377,20 +3405,18 @@ fn outbound_register_research_scrape_target(
     }))
 }
 
-fn outbound_execute_research_scrape_target(
-    root: &Path,
+fn outbound_research_scrape_test_input(
     command: &BusinessCommand,
     adapter_payload: &Value,
     source_id: &str,
-    target_key: &str,
-) -> anyhow::Result<scrape::ScrapeExecutionOutcome> {
+) -> anyhow::Result<Value> {
     let company = outbound_first_string(&[
         outbound_string(&command.payload, &["test_input", "company"]),
         outbound_string(&command.payload, &["company"]),
-        outbound_string(adapter_payload, &["label"]),
-        Some(source_id.to_string()),
     ])
-    .unwrap_or_else(|| source_id.to_string());
+    .context(
+        "Provide a non-empty test_input.company (or company) before testing this research adapter",
+    )?;
     let country = outbound_first_string(&[
         outbound_string(&command.payload, &["test_input", "country"]),
         outbound_string(&command.payload, &["country"]),
@@ -3402,12 +3428,19 @@ fn outbound_execute_research_scrape_target(
             .map(ToOwned::to_owned),
     ])
     .unwrap_or_else(|| "DE".to_string());
-    let input = serde_json::json!({
+    Ok(serde_json::json!({
         "company": company,
         "country": country,
         "source_id": source_id,
         "adapter_test": true,
-    });
+    }))
+}
+
+fn outbound_execute_research_scrape_target(
+    root: &Path,
+    target_key: &str,
+    input: &Value,
+) -> anyhow::Result<scrape::ScrapeExecutionOutcome> {
     scrape::execute_scrape_with_outcome(
         root,
         &[
@@ -7594,6 +7627,100 @@ mod tests {
         .context("specialized scrape target")?;
         assert_eq!(resolved_dir, specialized_dir);
         assert_eq!(resolved_script, specialized_script);
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scrape_test_missing_identity_has_no_scrape_or_repair_effects() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path().join("must-remain-absent");
+        let adapter = serde_json::json!({
+            "label": "Unternehmenswebsite / Impressum",
+            "countries": ["DE"],
+            "adapter_kind": "scrape_target",
+            "target_key": "fixture-example"
+        });
+        for payload in [
+            serde_json::json!({}),
+            serde_json::json!({"test_input": {"company": ""}}),
+            serde_json::json!({"test_input": {"company": " \t\n "}, "company": "  "}),
+            serde_json::json!({"test_input": {"company": 42}}),
+        ] {
+            let command = BusinessCommand {
+                id: Some("cmd_missing_company".to_string()),
+                module: "outbound".to_string(),
+                command_type: "outbound.research_source.test".to_string(),
+                record_id: Some("adapter_fixture".to_string()),
+                payload,
+                client_context: serde_json::json!({}),
+                origin: CommandOrigin::TrustedLocal,
+            };
+            let mut record = serde_json::json!({
+                "adapter_kind": "scrape_target",
+                "target_key": "fixture-example",
+                "test_ok": true,
+                "payload": {}
+            });
+            let effect = outbound_apply_research_adapter_scrape_effect(
+                &root,
+                &command,
+                &adapter,
+                "adapter_fixture",
+                "fixture.example",
+                &mut record,
+            )
+            .context("test effect")?;
+            assert_eq!(record["status"], "test_input_required");
+            assert_eq!(record["test_ok"], false);
+            assert_eq!(record["last_test"]["status"], "input_required");
+            assert_eq!(effect["phase"], "input");
+            assert_eq!(effect["test_skipped"], true);
+            assert!(effect["error"]
+                .as_str()
+                .unwrap()
+                .contains("test_input.company"));
+            // Registration, run evidence and repair queue persistence all need
+            // this root. Missing input must return before any of those effects.
+            assert!(
+                !root.exists(),
+                "invalid input created scrape or repair state"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scrape_test_uses_explicit_identity_instead_of_adapter_metadata(
+    ) -> anyhow::Result<()> {
+        let adapter = serde_json::json!({"label": "Provider label", "countries": ["DE"]});
+        for (payload, company, country) in [
+            (
+                serde_json::json!({"test_input": {"company": " Fixture GmbH ", "country": " AT "}, "company": "Other", "country": "CH"}),
+                "Fixture GmbH",
+                "AT",
+            ),
+            (
+                serde_json::json!({"company": " Swiss Fixture AG ", "country": " CH "}),
+                "Swiss Fixture AG",
+                "CH",
+            ),
+        ] {
+            let command = BusinessCommand {
+                id: None,
+                module: "outbound".to_string(),
+                command_type: "outbound.research_source.test".to_string(),
+                record_id: None,
+                payload,
+                client_context: serde_json::json!({}),
+                origin: CommandOrigin::TrustedLocal,
+            };
+            let input = outbound_research_scrape_test_input(&command, &adapter, "fixture.example")?;
+            assert_eq!(input["company"], company);
+            assert_eq!(input["country"], country);
+            assert_eq!(input["source_id"], "fixture.example");
+            assert_eq!(input["adapter_test"], true);
+        }
         Ok(())
     }
 
