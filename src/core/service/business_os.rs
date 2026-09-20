@@ -7061,6 +7061,11 @@ mod tests {
             Some("michael.welsch@metric-space.ai")
         );
 
+        // Admission already consumed the command's one direct QueueTask spawn.
+        // This adapter fixture descends from that task; keep the metadata-only
+        // command reference and forged owner assertions on the child.
+        let parent = channels::load_queue_task_for_business_os_command(root.path(), command_id)?
+            .context("queue task created by command admission")?;
         let generated = channels::create_queue_task(
             root.path(),
             channels::QueueTaskCreateRequest {
@@ -7070,11 +7075,14 @@ mod tests {
                 workspace_root: None,
                 priority: "low".into(),
                 suggested_skill: None,
-                parent_message_key: None,
+                parent_message_key: Some(parent.message_key.clone()),
                 extra_metadata: Some(serde_json::json!({"business_os_command_id":command_id,
                 "owner_user_id":"forged", "actor":{"id":"forged"}})),
             },
         )?;
+        assert_eq!(generated.metadata["parent_message_key"], parent.message_key);
+        assert_eq!(generated.metadata["business_os_command_id"], command_id);
+        assert_eq!(generated.metadata["owner_user_id"], "forged");
         assert_eq!(
             resolve_web_stack_auth_owner_user_id_with_env(
                 root.path(),
