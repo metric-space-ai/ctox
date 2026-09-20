@@ -1067,13 +1067,7 @@ async fn transfer_base_objects(
         isolation,
         source,
         Some(&pack),
-        &[
-            "--git-dir",
-            target_git,
-            "index-pack",
-            "--strict",
-            "--stdin",
-        ],
+        &["--git-dir", target_git, "index-pack", "--strict", "--stdin"],
         4096,
     )
     .await?;
