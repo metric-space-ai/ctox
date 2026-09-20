@@ -215,7 +215,7 @@ pub fn read_only_state_diagnostic(
             let haystack = format!("{target} {message}").to_lowercase();
             let categories = ["state_db", "rollout", "backfill", "thread"]
                 .iter()
-                .filter(|needle| haystack.contains(needle))
+                .filter(|needle| haystack.contains(**needle))
                 .copied()
                 .collect::<Vec<_>>();
             Ok(format!(
