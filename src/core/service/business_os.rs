@@ -3698,6 +3698,14 @@ fn business_os_web_stack_workspace(root: &Path, args: &[String]) -> Option<PathB
 }
 
 fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    handle_business_os_web_stack_with_reader(root, args, std::io::stdin())
+}
+
+pub(super) fn handle_business_os_web_stack_with_reader(
+    root: &Path,
+    args: &[String],
+    reader: impl Read,
+) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("person-research") => {
             let payload = run_business_os_web_stack_cli_json(root, args)?;
@@ -3720,7 +3728,7 @@ fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<
             print_json(&capture)
         }
         Some("authenticated-automation") => {
-            let output = run_business_os_web_stack_cli_json(root, args)?;
+            let output = run_business_os_web_stack_cli_json_with_reader(root, args, reader)?;
             print_json(&output)
         }
         Some("auth-assist-status") => {

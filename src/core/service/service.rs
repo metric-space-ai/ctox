@@ -23910,6 +23910,17 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn authenticated_automation_cli_reader_forwards_source_to_daemon_socket() {
+        assert_authenticated_automation_socket_forwarding(false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authenticated_automation_public_dispatcher_forwards_source_to_daemon_socket() {
+        assert_authenticated_automation_socket_forwarding(true);
+    }
+
+    #[cfg(unix)]
+    fn assert_authenticated_automation_socket_forwarding(public_dispatcher: bool) {
         let root = temp_root("aa-ipc");
         std::fs::create_dir_all(root.join("runtime")).unwrap();
         let listener = UnixListener::bind(service_socket_path(&root)).unwrap();
@@ -23954,14 +23965,25 @@ mod tests {
             };
             writeln!(stream, "{}", serde_json::to_string(&response).unwrap()).unwrap();
         });
-        let result = crate::service::business_os::run_business_os_web_stack_cli_json_with_reader(
-            &root,
-            &["authenticated-automation".into()],
-            source.as_bytes(),
-        )
-        .unwrap();
+        let args = ["authenticated-automation".into()];
+        if public_dispatcher {
+            crate::service::business_os::handle_business_os_web_stack_with_reader(
+                &root,
+                &args,
+                source.as_bytes(),
+            )
+            .unwrap();
+        } else {
+            let result =
+                crate::service::business_os::run_business_os_web_stack_cli_json_with_reader(
+                    &root,
+                    &args,
+                    source.as_bytes(),
+                )
+                .unwrap();
+            assert_eq!(result["receipt"], "daemon");
+        }
         server.join().unwrap();
-        assert_eq!(result["receipt"], "daemon");
         std::fs::remove_dir_all(root).unwrap();
     }
 
