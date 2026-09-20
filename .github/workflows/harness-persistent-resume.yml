@@ -43,6 +43,28 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3
+      - name: Verify rollout writer materialization and failure contracts
+        timeout-minutes: 45
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo_args=(--locked --manifest-path src/core/harness/Cargo.toml -p ctox-core --lib --jobs 2)
+          for test_name in \
+            rollout::recorder::tests::recorder_flush_propagates_writer_failure \
+            rollout::recorder::tests::recorder_materializes_only_after_explicit_persist \
+            rollout::recorder::tests::concurrent_reader_never_sees_partially_materialized_rollout \
+            rollout::recorder::tests::owned_preparation_files_are_unique_and_leave_stale_files_alone \
+            rollout::recorder::tests::state_visibility_waits_until_public_rollout_publication \
+            rollout::recorder::tests::cancelled_persist_caller_does_not_leave_recorder_pending \
+            rollout::recorder::tests::failed_creation_preserves_exact_staging_path \
+            rollout::recorder::tests::final_path_collision_preserves_owner_and_cleans_own_staging; do
+            cargo test "${cargo_args[@]}" "$test_name" -- --exact --test-threads=2 | tee "$TMPDIR/flush-test-result.txt"
+            python3 - "$TMPDIR/flush-test-result.txt" <<'PYCODE'
+          import pathlib, sys
+          result = pathlib.Path(sys.argv[1]).read_text()
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in result, result
+          PYCODE
+          done
       - name: Verify persistent restart and missing resume
         timeout-minutes: 45
         shell: bash

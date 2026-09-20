@@ -14,6 +14,20 @@ Fork policy:
 - Local modifications inside this subtree belong to the CTOX fork state unless explicitly documented otherwise.
 - CTOX must not auto-clone, auto-fetch, or auto-update this subtree from upstream.
 
+## 2026-09 Rollout Flush Error Propagation
+
+The rollout writer's flush acknowledgement carries its I/O result. A failed
+file flush reaches both the waiting caller and the terminating writer task;
+it cannot acknowledge success before reporting the writer failure. Deferred
+threads without a materialized file retain their successful no-op flush.
+This is a write-error propagation boundary, not a new fsync guarantee or a
+durable replica receipt. A checkpoint adapter still needs quiescence, verified
+copy publication and strict import before claiming portability.
+
+The recorder regression uses an actual read-only file handle with a buffered
+write and checks that caller and writer receive the same error without hanging.
+The existing deferred-materialization test covers successful flush behavior.
+
 ## 2026-08 Required Plan and Stable Activity Events
 
 CTOX service-owned queue turns use the upstream-compatible
