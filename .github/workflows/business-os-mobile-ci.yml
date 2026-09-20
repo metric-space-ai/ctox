@@ -169,6 +169,12 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
+      - name: Enable and verify emulator KVM access
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm
+          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
       - name: Install pinned Android SDK
         run: |
           yes | sdkmanager --licenses >/dev/null || true
@@ -178,6 +184,8 @@ jobs:
       - name: Unit tests and unsigned debug build
         working-directory: ${{ env.MOBILE_ROOT }}/android
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - name: Verify Android hardware acceleration
+        run: '"$ANDROID_SDK_ROOT/emulator/emulator" -accel-check'
       - name: Emulator launch smoke
         id: phone
         uses: reactivecircus/android-emulator-runner@v2
@@ -187,6 +195,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
+          disable-linux-hw-accel: false
           script: |
             adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity
@@ -206,6 +215,7 @@ jobs:
           arch: x86_64
           profile: "Nexus 9"
           disable-animations: true
+          disable-linux-hw-accel: false
           script: |
             adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk
             adb shell settings put system accelerometer_rotation 0
