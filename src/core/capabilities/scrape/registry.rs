@@ -61,6 +61,37 @@ pub(super) fn show_target(root: &Path, target_key: &str) -> Result<Option<Value>
     })))
 }
 
+/// Report the activated library revision without importing a source-tree script
+/// or changing target configuration. Files are checked execution materializations.
+pub(crate) fn target_script_registration(root: &Path, target_key: &str) -> Result<Option<Value>> {
+    let conn = open_db(root)?;
+    let Some(target) = load_target_view(&conn, target_key)? else {
+        return Ok(None);
+    };
+    let active = target.latest_script_revision_no.map(|revision| {
+        conn.query_row(
+            "SELECT script_path, script_sha256, script_body FROM scrape_script_revision WHERE target_id=?1 AND revision_no=?2",
+            params![target.target_id, revision],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+        ).optional()
+    }).transpose()?.flatten();
+    let usable = active.as_ref().is_some_and(|(path, hash, body)| {
+        !body.trim().is_empty()
+            && target.latest_script_sha256.as_deref() == Some(hash.as_str())
+            && compute_sha256(body.trim()) == *hash
+            && registered_script_matches(&resolve_input_path(root, path), hash)
+    });
+    Ok(Some(json!({
+        "ok": true,
+        "target_key": target.target_key,
+        "registered_from": "runtime_sqlite",
+        "workspace_dir": resolve_registered_workspace(root, &target),
+        "script_registered": usable,
+        "revision_no": target.latest_script_revision_no,
+        "script_sha256": target.latest_script_sha256,
+    })))
+}
+
 pub(super) fn show_api(root: &Path, target_key: &str) -> Result<Option<Value>> {
     let conn = open_db(root)?;
     let Some(target) = load_target_view(&conn, target_key)? else {

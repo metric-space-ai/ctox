@@ -2666,7 +2666,7 @@ fn outbound_apply_research_adapter_scrape_effect(
         .get("script_registered")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if command_type == "outbound.research_source.generate_adapter" {
+    if command_type == "outbound.research_source.generate_adapter" || !has_script {
         if !has_script {
             match outbound_queue_research_scraper_generation(
                 root,
@@ -2676,11 +2676,20 @@ fn outbound_apply_research_adapter_scrape_effect(
                 &target_key,
             ) {
                 Ok(task_effect) => {
+                    let runnable = matches!(
+                        task_effect.get("task_status").and_then(Value::as_str),
+                        Some("pending" | "leased" | "running" | "review_rework")
+                    );
                     if let Some(object) = effect.as_object_mut() {
                         object.insert("generation_task".to_string(), task_effect);
                     }
-                    outbound_put_string(record, "status", "generation_queued");
-                    outbound_put_string(record, "scrape_status", "generation_queued");
+                    let status = if runnable {
+                        "generation_queued"
+                    } else {
+                        "generation_blocked"
+                    };
+                    outbound_put_string(record, "status", status);
+                    outbound_put_string(record, "scrape_status", status);
                     return Some(effect);
                 }
                 Err(err) => {
@@ -3170,6 +3179,12 @@ fn outbound_queue_research_scraper_generation(
         .or_else(|| command.payload.get("scrape_contract"))
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
+    let registration = scrape::target_script_registration(root, target_key)?
+        .context("generation requires a registered scrape target")?;
+    let workspace = registration
+        .get("workspace_dir")
+        .and_then(Value::as_str)
+        .context("registered scrape target has no workspace")?;
     let command_id = command.id.clone().unwrap_or_default();
     let task_idempotency_key = if command_id.is_empty() {
         format!("outbound-research-adapter:{target_key}:legacy:{}", now_ms())
@@ -3185,21 +3200,23 @@ fn outbound_queue_research_scraper_generation(
          - target_key: {target_key}\n\n\
          Anforderungen:\n\
          - Nutze den universal-scraping Skill.\n\
-         - Lege den ausfuehrbaren Scraper als JavaScript unter runtime/scraping/targets/{target_key}/scripts/ ab.\n\
-         - Registriere das Target mit `ctox scrape upsert-target` und den Script-Stand mit `ctox scrape register-script`.\n\
+         - Arbeite ausschliesslich im isolierten Target-Workspace {workspace}; bearbeite scripts/ und sources/. Aendere keine Datenbank, Elternverzeichnisse oder Runtime-Symlinks. Pruefe vorhandene registrierte Revisionen vor einer Neuerstellung.\n\
+         - Das Target ist nativ registriert. Registriere den Script-Stand mit `ctox scrape register-script --target-key {target_key} --script-file <absoluter Pfad unter {workspace}/scripts/>`. Registrierung und Execute laufen ueber den bestehenden Daemon-Relay; keine direkten Runtime-Datenbankschreibzugriffe.\n\
          - Der Scraper muss `prospect.v1` Records ausgeben: field, value, confidence, source_url, note.\n\
          - Verwende keine Credential-Werte im Prompt, Code oder Log. Nur Secret-Referenzen sind erlaubt.\n\
          - Fuehre danach `ctox scrape execute --target-key {target_key} --allow-heal` mit einem kleinen Testinput aus und dokumentiere Run-ID, Quellen und Felder.\n\n\
          target_manifest:\n{manifest}\n\n\
          scrape_contract:\n{contract}\n"
     );
-    let task = channels::create_queue_task(
+    let task = channels::create_scrape_repair_queue_task(
         root,
+        "scrape",
+        target_key,
         channels::QueueTaskCreateRequest {
             title: format!("Outbound Scraper Adapter erzeugen: {label}"),
             prompt,
             thread_key: format!("business-os/outbound/research-adapter/{target_key}"),
-            workspace_root: Some(root.display().to_string()),
+            workspace_root: Some(workspace.to_string()),
             // Adapter generation is background maintenance; it must not
             // outrank the research that needs the adapter (thesen 07.09.2026).
             priority: "low".to_string(),
@@ -3210,6 +3227,7 @@ fn outbound_queue_research_scraper_generation(
                 "source": "outbound.research_source.generate_adapter",
                 "adapter_source_id": source_id,
                 "target_key": target_key,
+                "scrape_repair": {"workspace_root": workspace},
                 "idempotency_key": task_idempotency_key,
             })),
         },
@@ -3288,7 +3306,7 @@ fn outbound_register_research_scrape_target(
     root: &Path,
     adapter_payload: &Value,
     record: &Value,
-    adapter_id: &str,
+    _adapter_id: &str,
     source_id: &str,
     target_key: &str,
 ) -> anyhow::Result<Value> {
@@ -3296,42 +3314,8 @@ fn outbound_register_research_scrape_target(
         outbound_string(record, &["url"]),
         outbound_string(adapter_payload, &["url"]),
     ]);
-    if let Some((target_dir, script_path)) =
-        outbound_find_bundled_scrape_target_dir(root, source_id, target_key, url.as_deref())
-    {
-        let manifest_path = target_dir.join("target.json");
-        scrape::handle_scrape_command(
-            root,
-            &[
-                "upsert-target".to_string(),
-                "--input".to_string(),
-                manifest_path.to_string_lossy().to_string(),
-            ],
-        )?;
-        scrape::handle_scrape_command(
-            root,
-            &[
-                "register-script".to_string(),
-                "--target-key".to_string(),
-                target_key.to_string(),
-                "--script-file".to_string(),
-                script_path.to_string_lossy().to_string(),
-                "--language".to_string(),
-                "javascript".to_string(),
-                "--change-reason".to_string(),
-                "outbound_adapter_registration".to_string(),
-                "--notes".to_string(),
-                format!("Registered from Outbound adapter {adapter_id} for {source_id}"),
-            ],
-        )?;
-        return Ok(serde_json::json!({
-            "ok": true,
-            "target_key": target_key,
-            "registered_from": "source_tree",
-            "target_manifest": manifest_path,
-            "script_file": script_path,
-            "script_registered": true,
-        }));
+    if let Some(registration) = scrape::target_script_registration(root, target_key)? {
+        return Ok(registration);
     }
 
     let manifest = adapter_payload
@@ -3441,6 +3425,7 @@ fn outbound_execute_research_scrape_target(
     )
 }
 
+#[cfg(test)]
 fn outbound_find_bundled_scrape_target_dir(
     root: &Path,
     source_id: &str,
@@ -3487,6 +3472,7 @@ fn outbound_find_bundled_scrape_target_dir(
     None
 }
 
+#[cfg(test)]
 fn outbound_scrape_target_roots(root: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     let mut seen = BTreeSet::new();
@@ -3512,6 +3498,7 @@ fn outbound_scrape_target_roots(root: &Path) -> Vec<PathBuf> {
     roots
 }
 
+#[cfg(test)]
 fn outbound_host_from_url(url: Option<&str>) -> Option<String> {
     let raw = url?.trim();
     if raw.is_empty() {
@@ -7291,6 +7278,188 @@ mod tests {
     }
 
     #[test]
+    fn outbound_runtime_library_preserves_activated_revision_over_bundle() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let body = "process.stdout.write(JSON.stringify({records: []}));";
+        write_outbound_scrape_test_fixture(root, body)?;
+        let source = root.join("src/tools/web-stack/scrape-targets/fixture.example/scripts/v1.js");
+        fs::write(&source, "// newer revision\nprocess.stdout.write('{}');")?;
+        let register = vec![
+            "register-script".into(),
+            "--target-key".into(),
+            "fixture-example".into(),
+            "--script-file".into(),
+            source.to_string_lossy().into_owned(),
+        ];
+        scrape::dispatch_capturing(root, &register)?;
+        // Deliberately reactivate the older revision. MAX(revision_no) is not authority.
+        fs::write(&source, body)?;
+        scrape::dispatch_capturing(root, &register)?;
+        let show = vec![
+            "show-target".into(),
+            "--target-key".into(),
+            "fixture-example".into(),
+        ];
+        let before = scrape::dispatch_capturing(root, &show)?;
+        assert_eq!(before["target"]["latest_script_revision_no"], 1);
+        fs::write(
+            &source,
+            "throw new Error('bundled code must not replace runtime library');",
+        )?;
+        let registration = outbound_register_research_scrape_target(
+            root,
+            &serde_json::json!({"target_manifest": {"config": {"replace": true}}}),
+            &serde_json::json!({"url":"https://fixture.example/"}),
+            "adapter_fixture",
+            "fixture.example",
+            "fixture-example",
+        )?;
+        assert_eq!(registration["registered_from"], "runtime_sqlite");
+        assert_eq!(registration["script_registered"], true);
+        assert_eq!(registration["revision_no"], 1);
+        assert_eq!(before, scrape::dispatch_capturing(root, &show)?);
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_runtime_library_invalid_materialization_does_not_import_bundle(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_outbound_scrape_test_fixture(root, "process.stdout.write('{}');")?;
+        let show = vec![
+            "show-target".into(),
+            "--target-key".into(),
+            "fixture-example".into(),
+        ];
+        let before = scrape::dispatch_capturing(root, &show)?;
+        let stored = before
+            .pointer("/target/revisions/0/script_path")
+            .and_then(Value::as_str)
+            .context("revision path")?;
+        let path = if Path::new(stored).is_absolute() {
+            PathBuf::from(stored)
+        } else {
+            root.join(stored)
+        };
+        fs::write(path, "tampered execution materialization")?;
+        let registration = outbound_register_research_scrape_target(
+            root,
+            &serde_json::json!({}),
+            &serde_json::json!({}),
+            "adapter_fixture",
+            "fixture.example",
+            "fixture-example",
+        )?;
+        assert_eq!(registration["script_registered"], false);
+        assert_eq!(registration["registered_from"], "runtime_sqlite");
+        assert_eq!(before, scrape::dispatch_capturing(root, &show)?);
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_runtime_library_novel_first_use_generates_then_executes_registered_script(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let adapter = serde_json::json!({
+            "source_id":"novel.example", "label":"Novel", "url":"https://novel.example/",
+            "adapter_kind":"scrape_target", "target_key":"novel-example", "field_keys":["company_name"],
+            "target_manifest": {"target_key":"novel-example", "display_name":"Novel",
+                "start_url":"https://novel.example/", "target_kind":"prospect-research", "status":"active",
+                "config":{"skip_probe":true,"expected_min_records":0,"record_key_fields":["field","source_url"]},
+                "output_schema":{"schema_key":"prospect.v1","record_key_fields":["field","source_url"]}}
+        });
+        let command = BusinessCommand {
+            id: Some("cmd_novel_first_use".into()),
+            module: "outbound".into(),
+            command_type: "outbound.research_source.test".into(),
+            record_id: Some("adapter_novel".into()),
+            payload: serde_json::json!({"test_input":{"company":"Novel GmbH","country":"DE"}}),
+            client_context: serde_json::json!({}),
+            origin: CommandOrigin::TrustedLocal,
+        };
+        let mut record = adapter.clone();
+        record["id"] = serde_json::json!("adapter_novel");
+        record["payload"] = serde_json::json!({});
+        let first = outbound_apply_research_adapter_scrape_effect(
+            root,
+            &command,
+            &adapter,
+            "adapter_novel",
+            "novel.example",
+            &mut record,
+        )
+        .context("first use")?;
+        let task_id = first
+            .pointer("/generation_task/task_id")
+            .and_then(Value::as_str)
+            .context("generation task")?;
+        let task = channels::load_queue_task(root, task_id)?.context("task exists")?;
+        let workspace = root.join("runtime/scraping/targets/novel-example");
+        assert_eq!(
+            task.workspace_root.as_deref(),
+            Some(workspace.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            task.metadata
+                .pointer("/scrape_repair/target_key")
+                .and_then(Value::as_str),
+            Some("novel-example")
+        );
+        let second = outbound_apply_research_adapter_scrape_effect(
+            root,
+            &command,
+            &adapter,
+            "adapter_novel",
+            "novel.example",
+            &mut record,
+        )
+        .context("second first-use request")?;
+        assert_eq!(
+            first["generation_task"]["task_id"],
+            second["generation_task"]["task_id"]
+        );
+        // Stand in for the bounded harness's generated artifact; register through
+        // the same native scrape command that the existing daemon relay dispatches.
+        let script = workspace.join("scripts/generated.js");
+        fs::write(
+            &script,
+            r#"process.stdout.write(JSON.stringify({records:[{field:"company_name",value:"Novel GmbH",source_url:"https://novel.example/"}]}));"#,
+        )?;
+        let registered = scrape::dispatch_capturing(
+            root,
+            &[
+                "register-script".into(),
+                "--target-key".into(),
+                "novel-example".into(),
+                "--script-file".into(),
+                script.to_string_lossy().into_owned(),
+            ],
+        )?;
+        let result = outbound_apply_research_adapter_scrape_effect(
+            root,
+            &command,
+            &adapter,
+            "adapter_novel",
+            "novel.example",
+            &mut record,
+        )
+        .context("registered execution")?;
+        assert_eq!(result["registered_from"], "runtime_sqlite");
+        assert!(result.get("generation_task").is_none());
+        assert_eq!(result["test"]["status"], "succeeded");
+        assert_eq!(result["test"]["records_found"], 1);
+        assert_eq!(
+            result["script_sha256"],
+            registered["script"]["script_sha256"]
+        );
+        assert_eq!(result["test"]["evidence"]["valid"], true);
+        Ok(())
+    }
+
+    #[test]
     fn outbound_custom_research_adapter_queues_universal_scraping_generation() -> anyhow::Result<()>
     {
         let temp = tempdir()?;
@@ -7452,6 +7621,27 @@ mod tests {
             }))?,
         )?;
         fs::write(&script_path, script_body)?;
+        scrape::handle_scrape_command(
+            root,
+            &[
+                "upsert-target".into(),
+                "--input".into(),
+                target_dir
+                    .join("target.json")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+        )?;
+        scrape::handle_scrape_command(
+            root,
+            &[
+                "register-script".into(),
+                "--target-key".into(),
+                "fixture-example".into(),
+                "--script-file".into(),
+                script_path.to_string_lossy().into_owned(),
+            ],
+        )?;
         Ok(())
     }
 
