@@ -13,6 +13,7 @@ use std::{collections::HashSet, future::Future, io, pin::Pin, sync::Arc};
 use tokio::sync::mpsc;
 
 const MAX_IN_FLIGHT: usize = 4;
+const MAX_PENDING_WRITES: usize = 8;
 /// Serializes watch invalidation with the first accepted frame byte. A pending
 /// write has not published anything and must remain cancellable. Once any byte
 /// is accepted, finish that frame to preserve the connection's framing.
@@ -186,6 +187,11 @@ pub type BusinessDataConnectionFactory = Arc<
         + Sync,
 >;
 
+enum OutboundBusinessDataFrame {
+    Frame(Frame),
+    Event(QueuedBusinessDataEvent),
+}
+
 pub struct BusinessDataIpc {
     factory: BusinessDataConnectionFactory,
 }
@@ -207,6 +213,9 @@ impl BusinessDataIpc {
         let dispatcher = (self.factory)(requester, events)?;
         let connection_dispatcher = dispatcher.clone();
         let (incoming, mut received) = mpsc::channel(8);
+        let (outgoing, mut to_write) =
+            mpsc::channel::<OutboundBusinessDataFrame>(MAX_PENDING_WRITES);
+        let (written, mut completed_writes) = mpsc::channel::<Option<Response>>(MAX_PENDING_WRITES);
         // Separate futures, not spawned tasks. A partial read is never cancelled
         // merely because a response/event wins a select branch.
         let read = async {
@@ -217,13 +226,52 @@ impl BusinessDataIpc {
                 }
             }
         };
+        // One owned writer future preserves frames without blocking request,
+        // authority or credential progress. Every admitted frame has one ack;
+        // the dispatcher caps queued + writing + unconsumed acks together.
+        let write = async {
+            while let Some(outbound) = to_write.recv().await {
+                let response = match outbound {
+                    OutboundBusinessDataFrame::Frame(frame) => {
+                        write_host_frame(&mut writer, &frame).await?;
+                        match frame {
+                            Frame::Response { response } => Some(response),
+                            _ => None,
+                        }
+                    }
+                    OutboundBusinessDataFrame::Event(queued) => {
+                        let mut guarded = WatchFrameWriter {
+                            writer: &mut writer,
+                            lifetime: &queued.alive,
+                            started: false,
+                            cancelled: false,
+                        };
+                        let result = write_host_frame(
+                            &mut guarded,
+                            &Frame::Event {
+                                event: queued.event,
+                            },
+                        )
+                        .await;
+                        if !guarded.cancelled {
+                            result?;
+                        }
+                        None
+                    }
+                };
+                written.send(response).await.map_err(|_| invalid())?;
+            }
+            Ok::<(), io::Error>(())
+        };
         let dispatch = async {
             let mut work = FuturesUnordered::new();
+            let mut responses = std::collections::VecDeque::new();
             let mut releases = FuturesUnordered::new();
             let mut event_checks = FuturesUnordered::new();
             let mut ids = HashSet::new();
             let mut has_events = true;
             let mut has_credentials = true;
+            let mut pending_writes = 0usize;
             loop {
                 tokio::select! {
                     frame = received.recv() => {
@@ -234,7 +282,7 @@ impl BusinessDataIpc {
                             // Reuse canonical semantic and resource validation.
                             let bytes = serde_json::to_vec(&request).map_err(|_| invalid())?;
                             let request = crate::business_data::decode_request(&bytes).map_err(|_| invalid())?;
-                            if work.len() + releases.len() >= MAX_IN_FLIGHT || !ids.insert(request.request_id.clone()) {
+                            if ids.len() + releases.len() >= MAX_IN_FLIGHT || !ids.insert(request.request_id.clone()) {
                                 return Err(invalid());
                             }
                             let expected = request.request_id.clone();
@@ -248,36 +296,44 @@ impl BusinessDataIpc {
                         _ => return Err(invalid()),
                       }
                     },
-                    challenge = credentials.next_challenge(), if has_credentials => {
+                    challenge = credentials.next_challenge(), if has_credentials && pending_writes < MAX_PENDING_WRITES => {
                         if let Some(challenge) = challenge {
-                            write_host_frame(&mut writer, &Frame::CredentialChallenge { challenge }).await?;
+                            outgoing.try_send(OutboundBusinessDataFrame::Frame(Frame::CredentialChallenge { challenge })).map_err(|_| invalid())?;
+                            pending_writes += 1;
                         } else { has_credentials = false; }
                     },
-                    event = event_receiver.recv(), if has_events && event_checks.is_empty() => {
+                    event = event_receiver.recv(), if has_events && event_checks.is_empty() && pending_writes == 0 => {
                         if let Some(event) = event {
                             // Poll authority alongside requests/credential replies,
                             // retaining FIFO with at most one pending event check.
                             event_checks.push(event.revalidate());
                         } else { has_events = false; }
                     },
-                    checked = event_checks.next(), if !event_checks.is_empty() => {
+                    checked = event_checks.next(), if !event_checks.is_empty() && pending_writes == 0 => {
                         if let Some(Some(queued)) = checked {
-                            let mut guarded = WatchFrameWriter {
-                                writer: &mut writer,
-                                lifetime: &queued.alive,
-                                started: false,
-                                cancelled: false,
-                            };
-                            let result = write_host_frame(&mut guarded, &Frame::Event { event: queued.event }).await;
-                            if !guarded.cancelled { result?; }
+                            // Never park an authorized event behind older frame
+                            // writes; retain FIFO and check only at writer idle.
+                            outgoing.try_send(OutboundBusinessDataFrame::Event(queued)).map_err(|_| invalid())?;
+                            pending_writes += 1;
                         }
                     },
                     result = work.next(), if !work.is_empty() => {
                         let response = result.ok_or_else(invalid)??;
-                        ids.remove(&response.request_id);
-                        let frame = Frame::Response { response };
-                        write_host_frame(&mut writer, &frame).await?;
-                        if let Frame::Response { response } = frame {
+                        // IDs remain reserved until write acknowledgement, so
+                        // completed responses are bounded by MAX_IN_FLIGHT.
+                        // Poll operations even when the output queue is full.
+                        responses.push_back(response);
+                    },
+                    _ = async {}, if !responses.is_empty() && pending_writes < MAX_PENDING_WRITES => {
+                        let response = responses.pop_front().ok_or_else(invalid)?;
+                        outgoing.try_send(OutboundBusinessDataFrame::Frame(Frame::Response { response })).map_err(|_| invalid())?;
+                        pending_writes += 1;
+                    },
+                    completed = completed_writes.recv(), if pending_writes > 0 => {
+                        let completed = completed.ok_or_else(invalid)?;
+                        pending_writes -= 1;
+                        if let Some(response) = completed {
+                            ids.remove(&response.request_id);
                             let owner = dispatcher.clone();
                             // Keep host/authority awaits out of the writer path.
                             // Credential replies and other requests must progress
@@ -292,9 +348,9 @@ impl BusinessDataIpc {
             }
         };
         let dispatcher = connection_dispatcher;
-        // Error/EOF/cancellation drops both futures and the credential owner.
+        // Error/EOF/cancellation drops all futures and the credential owner.
         // Connection-owned cleanup is awaited even when a future failed.
-        let result = tokio::try_join!(read, dispatch);
+        let result = tokio::try_join!(read, dispatch, write);
         let cleanup = dispatcher.shutdown().await;
         result.and(cleanup)
     }

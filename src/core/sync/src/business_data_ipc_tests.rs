@@ -364,6 +364,212 @@ async fn invalidation_cancels_same_event_before_first_byte_and_wakes_writer() {
     assert!(result.is_err());
 }
 
+#[tokio::test]
+async fn same_connection_unwatch_progresses_while_event_writer_accepts_no_bytes() {
+    struct UnwatchDispatcher {
+        alive: Arc<WatchLifetime>,
+        handled: Arc<tokio::sync::Notify>,
+    }
+    impl BusinessDataDispatcher for UnwatchDispatcher {
+        fn dispatch(&self, request: Request) -> BusinessDataDispatchFuture {
+            let alive = self.alive.clone();
+            let handled = self.handled.clone();
+            Box::pin(async move {
+                let NativeBusinessDataOperation::Unwatch {
+                    session,
+                    subscription_id,
+                } = request.operation
+                else {
+                    panic!("expected real Unwatch operation");
+                };
+                alive.invalidate();
+                handled.notify_one();
+                Ok(Response {
+                    version: 1,
+                    request_id: request.request_id,
+                    result: NativeBusinessDataResult::Unwatched {
+                        session,
+                        subscription_id,
+                    },
+                })
+            })
+        }
+    }
+    let alive = Arc::new(WatchLifetime::new());
+    let handled = Arc::new(tokio::sync::Notify::new());
+    let blocked = Arc::new(tokio::sync::Notify::new());
+    let allow_write = Arc::new(AtomicBool::new(false));
+    let writer_waker = Arc::new(futures_util::task::AtomicWaker::new());
+    let event = reset_event(1);
+    let request = Frame::Request {
+        request: Request {
+            version: 1,
+            request_id: "unwatch".into(),
+            operation: NativeBusinessDataOperation::Unwatch {
+                session: event.session.clone(),
+                subscription_id: event.subscription_id.clone(),
+            },
+        },
+    };
+    let service = BusinessDataIpc::new(Arc::new({
+        let alive = alive.clone();
+        let handled = handled.clone();
+        move |_, events| {
+            assert!(events
+                .try_send(QueuedBusinessDataEvent {
+                    event: event.clone(),
+                    alive: alive.clone(),
+                    failed: Arc::new(AtomicBool::new(false)),
+                    authority: Arc::new(|| Box::pin(async { true })),
+                })
+                .is_ok());
+            Ok(Arc::new(UnwatchDispatcher {
+                alive: alive.clone(),
+                handled: handled.clone(),
+            }))
+        }
+    }));
+    let (native, mut client) = tokio::io::duplex(64);
+    let native = FirstByteBlockedStream {
+        inner: native,
+        allow_write: allow_write.clone(),
+        blocked: blocked.clone(),
+        writer_waker: writer_waker.clone(),
+    };
+    let exchange = async {
+        blocked.notified().await;
+        write_host_frame(&mut client, &request).await.unwrap();
+        // The command must run before the client makes the writer writable.
+        handled.notified().await;
+        assert!(!alive.is_alive());
+        allow_write.store(true, Ordering::SeqCst);
+        writer_waker.wake();
+        assert!(
+            matches!(read_host_frame(&mut client).await.unwrap(),
+            Frame::Response { response } if response.request_id == "unwatch"
+                && matches!(response.result, NativeBusinessDataResult::Unwatched { .. })),
+            "cancelled event must not precede the unwatch response"
+        );
+        drop(client);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(service.serve(Box::new(native)), exchange)
+    })
+    .await
+    .expect("Unwatch must progress independently of pending output");
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn credential_reply_progresses_while_event_write_is_blocked() {
+    struct CredentialDispatcher {
+        credentials: CredentialRequester,
+        received: Arc<tokio::sync::Notify>,
+    }
+    impl BusinessDataDispatcher for CredentialDispatcher {
+        fn dispatch(&self, request: Request) -> BusinessDataDispatchFuture {
+            let credentials = self.credentials.clone();
+            let received = self.received.clone();
+            Box::pin(async move {
+                credentials.request("target", "connection", 0, None).await?;
+                received.notify_one();
+                Ok(Response {
+                    version: 1,
+                    request_id: request.request_id,
+                    result: NativeBusinessDataResult::Rejected {
+                        code: NativeBusinessDataErrorCode::Unsupported,
+                        message: "fixture".into(),
+                        retryable: false,
+                    },
+                })
+            })
+        }
+    }
+    let received = Arc::new(tokio::sync::Notify::new());
+    let start_event = Arc::new(tokio::sync::Notify::new());
+    let blocked = Arc::new(tokio::sync::Notify::new());
+    let allow_write = Arc::new(AtomicBool::new(true));
+    let writer_waker = Arc::new(futures_util::task::AtomicWaker::new());
+    let service = BusinessDataIpc::new(Arc::new({
+        let received = received.clone();
+        let start_event = start_event.clone();
+        move |credentials, events| {
+            let start_event = start_event.clone();
+            assert!(events
+                .try_send(QueuedBusinessDataEvent {
+                    event: reset_event(1),
+                    alive: Arc::new(WatchLifetime::new()),
+                    failed: Arc::new(AtomicBool::new(false)),
+                    authority: Arc::new(move || {
+                        let start_event = start_event.clone();
+                        Box::pin(async move {
+                            start_event.notified().await;
+                            true
+                        })
+                    }),
+                })
+                .is_ok());
+            Ok(Arc::new(CredentialDispatcher {
+                credentials,
+                received: received.clone(),
+            }))
+        }
+    }));
+    let (native, mut client) = tokio::io::duplex(64);
+    let native = FirstByteBlockedStream {
+        inner: native,
+        allow_write: allow_write.clone(),
+        blocked: blocked.clone(),
+        writer_waker: writer_waker.clone(),
+    };
+    let exchange = async {
+        write_host_frame(&mut client, &open_request())
+            .await
+            .unwrap();
+        let Frame::CredentialChallenge { challenge } = read_host_frame(&mut client).await.unwrap()
+        else {
+            panic!("expected challenge");
+        };
+        allow_write.store(false, Ordering::SeqCst);
+        start_event.notify_one();
+        blocked.notified().await;
+        write_host_frame(
+            &mut client,
+            &Frame::CredentialReply {
+                reply: NativeBusinessDataCredentialReply {
+                    version: 1,
+                    request_id: challenge.request_id,
+                    connection_id: challenge.connection_id,
+                    session_epoch: 0,
+                    capability_token: Some("fixture-token".into()),
+                    device_proof: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
+        received.notified().await;
+        // Receipt proves the dispatcher accepted the reply while output was
+        // blocked; only now permit the old event and response to drain.
+        allow_write.store(true, Ordering::SeqCst);
+        writer_waker.wake();
+        assert!(matches!(
+            read_host_frame(&mut client).await.unwrap(),
+            Frame::Event { .. }
+        ));
+        assert!(
+            matches!(read_host_frame(&mut client).await.unwrap(), Frame::Response { response } if response.request_id == "open")
+        );
+        drop(client);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(service.serve(Box::new(native)), exchange)
+    })
+    .await
+    .expect("credential replies must progress independently of output");
+    assert!(result.is_err());
+}
+
 struct BackpressuredStream {
     inner: tokio::io::DuplexStream,
     blocked: Arc<tokio::sync::Notify>,
