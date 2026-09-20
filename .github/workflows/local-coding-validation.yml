@@ -31,3 +31,7 @@ jobs:
         run: |
           node src/apps/business-os/scripts/module-semantic-isolation.test.mjs
           node src/apps/business-os/scripts/validate-app-module.test.mjs
+      - name: Bounded macOS sandbox startup diagnostics
+        if: failure() && runner.os == 'macOS'
+        run: |
+          sudo /usr/bin/log show --last 1m --style compact --predicate 'eventMessage CONTAINS "deny" AND eventMessage CONTAINS "node"' | head -100

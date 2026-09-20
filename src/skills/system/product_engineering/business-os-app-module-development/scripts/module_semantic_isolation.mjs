@@ -19,12 +19,19 @@ export function runModuleSemanticCheck(moduleDir, request) {
     const literal = (value) => JSON.stringify(value);
     const reads = [moduleRoot, scripts, ...runtimeRoots]
       .map((path) => `(subpath ${literal(path)})`).join(' ');
+    // The existing harness restricted-read platform policy distinguishes dylib
+    // mapping and dyld's Sandbox syscall from ordinary file reads.
+    const executableReads = runtimeRoots.map((path) => `(subpath ${literal(path)})`).join(' ');
     const profile = `(version 1)
+
 (deny default)
 (allow process-exec (literal ${literal(node)}))
 (allow process-info* (target self))
 (allow signal (target self))
 (allow sysctl-read)
+(allow file-map-executable ${executableReads})
+(allow system-mac-syscall (require-all (mac-policy-name "Sandbox") (mac-syscall-number 67)))
+
 (allow file-read-metadata)
 (allow file-read* ${reads} (literal "/dev/null") (literal "/dev/urandom"))
 (allow file-write-data (literal "/dev/null"))`;
