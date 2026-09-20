@@ -127,6 +127,74 @@ fn owned_command_projection(
 mod owner_receipt_tests {
     use super::*;
 
+    #[tokio::test]
+    async fn signed_queue_admission_preserves_exact_observation_owner() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        store::tests::seed_business_user(root.path(), "alice", "chef")?;
+        store::tests::seed_business_user(root.path(), "bob", "chef")?;
+        let issue = |user| {
+            store::issue_business_os_capability_token_for_managed_user(
+                root.path(),
+                user,
+                user,
+                "chef",
+                chrono::Utc::now().timestamp_millis(),
+            )
+        };
+        let (alice_token, _) = issue("alice")?;
+        let (bob_token, _) = issue("bob")?;
+        let policy = NativeBusinessDataPolicy::new(root.path().to_path_buf());
+        let alice = policy
+            .identity(&alice_token)
+            .await
+            .expect("current signed Alice identity");
+        let bob = policy
+            .identity(&bob_token)
+            .await
+            .expect("current signed Bob identity");
+        let command = Command {
+            command_id: "native-owned-queue".into(),
+            command_type: "business_os.command".into(),
+            payload: json!({"instruction":"Record a bounded fixture task"}),
+        };
+        let admitted = policy
+            .submit_command(&alice, &alice_token, &command)
+            .await?;
+        assert_eq!(admitted.command_id, command.command_id);
+        let before = crate::mission::channels::business_command_projection(
+            root.path(),
+            &command.command_id,
+        )?;
+        assert_eq!(before["native_authorization"]["actor"]["id"], "alice");
+        assert_eq!(before["native_authorization"]["actor"]["trusted"], true);
+
+        // Even a forged replicated owner/result must not replace native state.
+        let forged = json!({"id":command.command_id, "native_owner":{
+            "contract":"ctox-business-command-owner-v1", "user_id":"bob"
+        }, "status":"completed", "result":{"forged":true}});
+        assert_eq!(policy.command_state(&alice, &forged).await?, admitted);
+        assert!(policy.command_state(&bob, &forged).await.is_err());
+        assert!(policy
+            .command_state(&alice, &json!({"id":"missing-command"}))
+            .await
+            .is_err());
+        assert!(policy
+            .submit_command(&bob, &bob_token, &command)
+            .await
+            .is_err());
+        let after = crate::mission::channels::business_command_projection(
+            root.path(),
+            &command.command_id,
+        )?;
+        assert_eq!(
+            after["native_authorization"],
+            before["native_authorization"]
+        );
+        assert_eq!(policy.command_state(&alice, &forged).await?, admitted);
+        assert!(policy.command_state(&bob, &forged).await.is_err());
+        Ok(())
+    }
+
     #[test]
     fn canonical_owner_binding_requires_exact_owner() {
         let mut stored = json!({"id":"command-a", "native_owner": {

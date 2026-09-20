@@ -325,6 +325,7 @@ jobs:
             business_os::rxdb_peer_business_data_source::owner_receipt_tests::canonical_owner_binding_requires_exact_owner
             business_os::rxdb_peer_business_data_source::owner_receipt_tests::claimed_owner_and_client_context_cannot_replace_native_receipt
             business_os::rxdb_peer_business_data_source::owner_receipt_tests::native_receipt_binds_exact_command_and_owner
+            business_os::rxdb_peer_business_data_source::owner_receipt_tests::signed_queue_admission_preserves_exact_observation_owner
             business_os::store::tests::control_claim_owner_binding_rejects_cross_owner_replay
           )
           for test in "${tests[@]}"; do
