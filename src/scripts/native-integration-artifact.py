@@ -21,7 +21,9 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'business_chat', 'repair_queue_projections',
            'mcp_app_authority', 'app_source_', 'gateway_managed_',
            'replicated_queue_command_persists_and_revalidates_native_authorization',
-           'capability_epoch_revokes_tokens_after_role_or_grant_change']
+           'capability_epoch_revokes_tokens_after_role_or_grant_change',
+           'person_research_binding_runtime_leads_preserve_identity_and_scope',
+           'person_research_record_binding_accepts_nested_lead_data']
 RECORD = {'stages': [], 'complete': False}
 
 
@@ -149,6 +151,22 @@ def main():
     run('browser-dependencies', ['npm', '--prefix', 'src/apps/business-os', 'ci'])
     run('browser-runtime', ['npm', '--prefix', 'src/apps/business-os', 'exec',
                             'playwright', 'install', '--with-deps', 'chromium'])
+    run('shell-contract', ['node', 'src/apps/business-os/scripts/assert-shell-v2-contract.mjs'])
+    startup = run('shell-startup-cache', ['node', '--test',
+                  'src/apps/business-os/scripts/test-shell-window-cache-startup.mjs'])
+    if not re.search(r'^# tests 2$', startup, re.MULTILINE) or not re.search(
+            r'^# pass 2$', startup, re.MULTILINE):
+        raise RuntimeError('Shell startup cache regressions did not both pass')
+    geometry_dir = EVIDENCE / 'shell-geometry'
+    run('shell-geometry', ['node', 'src/apps/business-os/scripts/shell-v2-geometry-lab.mjs',
+                          '--apps', 'mail', '--widths', '1180,720',
+                          '--output-dir', str(geometry_dir)])
+    geometry = json.loads((geometry_dir / 'report.json').read_text())
+    if len(geometry) != 2 or {(item['app'], item['width']) for item in geometry} != {
+            ('mail', 1180), ('mail', 720)} or not all(item['ok'] for item in geometry):
+        raise RuntimeError('Required Mail shell geometry cases did not all pass')
+    RECORD['shell_geometry'] = geometry
+    save()
     run('rxdb-wire-fixture', ['cargo', 'build', '--locked', '--manifest-path',
                              'src/core/rxdb/Cargo.toml', '--example',
                              'v15_wire_daemon', '--target-dir', str(target_dir),
