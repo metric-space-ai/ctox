@@ -42,6 +42,11 @@ Pro Quelle entscheidet die Trait-Implementierung, welcher Pfad gilt:
    `auth_mode` = `authenticated_browser`).
    Do not send a current key as `Authorization: Token token=...`, default
    account `me`, or call credit-consuming retrieve/enrichment endpoints.
+   Native API fetch uses `fetch_direct_with_resolver` and reads
+   `LEADFEEDER_API_KEY` / `LEADFEEDER_LEGACY_API_TOKEN` only from the injected
+   credentials resolver (`scope=credentials`). Account id and auth scheme stay
+   non-secret runtime config. An absent resolver is unavailable, not missing,
+   and never falls back to `runtime_env_kv` or browser capture.
    Native identity requires exact significant-name equality after punctuation
    and case normalization and legal-form stripping; Unicode/short names are
    kept, and high match scores do not accept subsidiaries, supersets, or

@@ -58,6 +58,7 @@ use super::{
     BrowserSourceRecipe, Confidence, Country, FieldEvidence, FieldKey, ShapedQuery, SourceCtx,
     SourceError, SourceHit, SourceModule, SourceReadResult, Tier,
 };
+use crate::credentials::{resolve_credential, CredentialReference, CredentialResolver};
 use crate::runtime_config;
 
 const API_BASE: &str = "https://api.leadfeeder.com";
@@ -201,7 +202,16 @@ impl SourceModule for Leadfeeder {
         ctx: &SourceCtx<'_>,
         company: &str,
     ) -> Option<Result<Vec<SourceHit>, SourceError>> {
-        fetch_direct_with(ctx, company, &Transport::production())
+        self.fetch_direct_with_resolver(ctx, company, None)
+    }
+
+    fn fetch_direct_with_resolver(
+        &self,
+        ctx: &SourceCtx<'_>,
+        company: &str,
+        resolver: Option<&dyn CredentialResolver>,
+    ) -> Option<Result<Vec<SourceHit>, SourceError>> {
+        fetch_direct_with(ctx, company, &Transport::production(), resolver)
     }
 
     fn extract_fields(&self, page: &SourceReadResult) -> Vec<(FieldKey, FieldEvidence)> {
@@ -247,6 +257,7 @@ fn fetch_direct_with(
     ctx: &SourceCtx<'_>,
     company: &str,
     transport: &Transport,
+    resolver: Option<&dyn CredentialResolver>,
 ) -> Option<Result<Vec<SourceHit>, SourceError>> {
     if matches!(ctx.country, Some(country) if !matches!(country, Country::De | Country::At | Country::Ch))
     {
@@ -258,7 +269,7 @@ fn fetch_direct_with(
         return Some(Err(SourceError::NoMatch));
     }
 
-    let auth = match resolve_auth(ctx) {
+    let auth = match resolve_auth(ctx, resolver) {
         Ok(auth) => auth,
         Err(err) => return Some(Err(err)),
     };
@@ -274,35 +285,66 @@ fn fetch_direct_with(
     })
 }
 
-fn resolve_auth(ctx: &SourceCtx<'_>) -> Result<AuthScheme, SourceError> {
-    let api_key = nonempty_config(ctx.root, SECRET_NAME);
-    let legacy_token = nonempty_config(ctx.root, LEGACY_SECRET_NAME);
-    let scheme = nonempty_config(ctx.root, AUTH_SCHEME_KEY).map(|value| value.to_ascii_lowercase());
+fn credential_reference(name: &'static str) -> CredentialReference {
+    CredentialReference {
+        scope: "credentials".to_string(),
+        name: name.to_string(),
+    }
+}
 
+fn resolve_secret(
+    resolver: Option<&dyn CredentialResolver>,
+    name: &'static str,
+) -> Result<Option<String>, SourceError> {
+    match resolve_credential(resolver, &credential_reference(name)) {
+        Ok(Some(value)) => {
+            let trimmed = value.expose_secret().trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                Ok(Some(trimmed.to_string()))
+            }
+        }
+        Ok(None) => Ok(None),
+        Err(error) => Err(SourceError::Other(error.into())),
+    }
+}
+
+fn resolve_auth(
+    ctx: &SourceCtx<'_>,
+    resolver: Option<&dyn CredentialResolver>,
+) -> Result<AuthScheme, SourceError> {
+    let scheme = nonempty_config(ctx.root, AUTH_SCHEME_KEY).map(|value| value.to_ascii_lowercase());
     match scheme.as_deref() {
-        Some("api_key") | Some("x-api-key") | Some("current") => api_key
+        Some("api_key") | Some("x-api-key") | Some("current") => resolve_secret(resolver, SECRET_NAME)?
             .map(AuthScheme::ApiKey)
             .ok_or(SourceError::CredentialMissing {
                 secret_name: SECRET_NAME,
             }),
-        Some("legacy") | Some("legacy_token") | Some("token") => legacy_token
-            .map(AuthScheme::LegacyToken)
-            .ok_or(SourceError::CredentialMissing {
-                secret_name: LEGACY_SECRET_NAME,
-            }),
+        Some("legacy") | Some("legacy_token") | Some("token") => {
+            resolve_secret(resolver, LEGACY_SECRET_NAME)?
+                .map(AuthScheme::LegacyToken)
+                .ok_or(SourceError::CredentialMissing {
+                    secret_name: LEGACY_SECRET_NAME,
+                })
+        }
         Some(_) => Err(SourceError::Other(anyhow!(
             "invalid {AUTH_SCHEME_KEY}; expected api_key or legacy"
         ))),
-        None => match (api_key, legacy_token) {
-            (Some(key), None) => Ok(AuthScheme::ApiKey(key)),
-            (None, Some(token)) => Ok(AuthScheme::LegacyToken(token)),
-            (Some(_), Some(_)) => Err(SourceError::Other(anyhow!(
-                "ambiguous Leadfeeder credentials; set {AUTH_SCHEME_KEY} to api_key or legacy"
-            ))),
-            (None, None) => Err(SourceError::CredentialMissing {
-                secret_name: SECRET_NAME,
-            }),
-        },
+        None => {
+            let api_key = resolve_secret(resolver, SECRET_NAME)?;
+            let legacy_token = resolve_secret(resolver, LEGACY_SECRET_NAME)?;
+            match (api_key, legacy_token) {
+                (Some(key), None) => Ok(AuthScheme::ApiKey(key)),
+                (None, Some(token)) => Ok(AuthScheme::LegacyToken(token)),
+                (Some(_), Some(_)) => Err(SourceError::Other(anyhow!(
+                    "ambiguous Leadfeeder credentials; set {AUTH_SCHEME_KEY} to api_key or legacy"
+                ))),
+                (None, None) => Err(SourceError::CredentialMissing {
+                    secret_name: SECRET_NAME,
+                }),
+            }
+        }
     }
 }
 
@@ -1189,8 +1231,25 @@ pub fn module() -> &'static dyn SourceModule {
 }
 
 #[cfg(test)]
+pub(crate) fn fixture_current_match_hits(
+    response: &serde_json::Value,
+    account_id: &str,
+    company: &str,
+    country_iso: Option<&str>,
+) -> Result<Vec<SourceHit>, SourceError> {
+    let hits = current_records_to_hits(response, account_id, company, true, country_iso);
+    if hits.is_empty() {
+        return Err(SourceError::NoMatch);
+    }
+    unique_identity_hits(hits)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::credentials::{
+        CredentialReference, CredentialResolveError, CredentialResolver, SecretValue,
+    };
     use crate::sources::{ResearchMode, SourceCtx};
     use std::io::Read;
     use std::io::Write;
@@ -1294,6 +1353,61 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.path);
         }
+    }
+
+    struct InjectedResolver {
+        outcomes: Vec<(
+            &'static str,
+            Result<Option<&'static str>, CredentialResolveError>,
+        )>,
+    }
+
+    impl InjectedResolver {
+        fn present(pairs: &[(&'static str, &'static str)]) -> Self {
+            Self {
+                outcomes: pairs
+                    .iter()
+                    .map(|(name, value)| (*name, Ok(Some(*value))))
+                    .collect(),
+            }
+        }
+
+        fn current_key() -> Self {
+            Self::present(&[(SECRET_NAME, "fixture-current-key")])
+        }
+
+        fn outcome(name: &'static str, outcome: Result<Option<&'static str>, CredentialResolveError>) -> Self {
+            Self {
+                outcomes: vec![(name, outcome)],
+            }
+        }
+    }
+
+    impl CredentialResolver for InjectedResolver {
+        fn resolve(
+            &self,
+            reference: &CredentialReference,
+        ) -> Result<Option<SecretValue>, CredentialResolveError> {
+            assert_eq!(reference.scope, "credentials");
+            for (name, outcome) in &self.outcomes {
+                if reference.name == *name {
+                    return match outcome {
+                        Ok(Some(value)) => Ok(Some(SecretValue::new((*value).to_string()))),
+                        Ok(None) => Ok(None),
+                        Err(error) => Err(*error),
+                    };
+                }
+            }
+            Ok(None)
+        }
+    }
+
+    fn fetch_current(
+        ctx: &SourceCtx<'_>,
+        company: &str,
+        transport: &Transport,
+    ) -> Option<Result<Vec<SourceHit>, SourceError>> {
+        fetch_direct_with(ctx, company, transport, Some(&InjectedResolver::current_key()))
     }
 
     #[derive(Clone, Debug)]
@@ -1525,15 +1639,20 @@ mod tests {
             };
             let r = module().fetch_direct(&ctx, "Example Manufacturing AG");
             assert!(r.is_some(), "{country:?} must engage");
-            assert!(matches!(
-                r.unwrap(),
-                Err(SourceError::CredentialMissing { .. })
-            ));
+            match r.unwrap() {
+                Err(SourceError::Other(inner)) => {
+                    assert_eq!(
+                        inner.to_string(),
+                        CredentialResolveError::Unavailable.to_string()
+                    );
+                }
+                other => panic!("expected unavailable resolver, got: {other:?}"),
+            }
         }
     }
 
     #[test]
-    fn fetch_direct_missing_credential_returns_credential_missing() {
+    fn fetch_direct_without_resolver_is_unavailable() {
         let ctx = SourceCtx {
             root: Path::new("/tmp/ctox-nonexistent-leadfeeder"),
             country: Some(Country::De),
@@ -1543,10 +1662,13 @@ mod tests {
             .fetch_direct(&ctx, "Example Manufacturing AG")
             .expect("DACH engages");
         match result {
-            Err(SourceError::CredentialMissing { secret_name }) => {
-                assert_eq!(secret_name, "LEADFEEDER_API_KEY");
+            Err(SourceError::Other(inner)) => {
+                assert_eq!(
+                    inner.to_string(),
+                    CredentialResolveError::Unavailable.to_string()
+                );
             }
-            other => panic!("expected CredentialMissing, got: {other:?}"),
+            other => panic!("expected unavailable resolver, got: {other:?}"),
         }
     }
 
@@ -1700,11 +1822,8 @@ mod tests {
             (200, MATCH_FIXTURE.to_string())
         });
         let root = TestRoot::new();
-        root.write_env(&[
-            (SECRET_NAME, "fixture-current-key"),
-            (ACCOUNT_ID_KEY, "acct-fixture-1"),
-        ]);
-        let hits = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+        root.write_env(&[(ACCOUNT_ID_KEY, "acct-fixture-1")]);
+        let hits = fetch_current(&root.ctx(), "Example Manufacturing AG", &mock.transport())
             .expect("engages")
             .expect("match hits");
         assert_eq!(hits[0].title, "Example Manufacturing AG");
@@ -1728,8 +1847,8 @@ mod tests {
             (200, MATCH_FIXTURE.to_string())
         });
         let root = TestRoot::new();
-        root.write_env(&[(SECRET_NAME, "fixture-current-key")]);
-        let hits = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+        root.write_env(&[]);
+        let hits = fetch_current(&root.ctx(), "Example Manufacturing AG", &mock.transport())
             .expect("engages")
             .expect("hits");
         assert_eq!(hits[0].title, "Example Manufacturing AG");
@@ -1743,8 +1862,8 @@ mod tests {
             (200, ACCOUNTS_MULTIPLE.to_string())
         });
         let root = TestRoot::new();
-        root.write_env(&[(SECRET_NAME, "fixture-current-key")]);
-        let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+        root.write_env(&[]);
+        let err = fetch_current(&root.ctx(), "Example Manufacturing AG", &mock.transport())
             .expect("engages")
             .expect_err("multiple accounts");
         match err {
@@ -1764,11 +1883,8 @@ mod tests {
             panic!("must not call the API with account alias me");
         });
         let root = TestRoot::new();
-        root.write_env(&[
-            (SECRET_NAME, "fixture-current-key"),
-            (ACCOUNT_ID_KEY, "me"),
-        ]);
-        let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+        root.write_env(&[(ACCOUNT_ID_KEY, "me")]);
+        let err = fetch_current(&root.ctx(), "Example Manufacturing AG", &mock.transport())
             .expect("engages")
             .expect_err("rejected me");
         match err {
@@ -1792,15 +1908,12 @@ mod tests {
             panic!("unexpected {}", req.path);
         });
         let root = TestRoot::new();
-        root.write_env(&[
-            (SECRET_NAME, "fixture-current-key"),
-            (ACCOUNT_ID_KEY, "acct-fixture-1"),
-        ]);
-        let hits = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+        root.write_env(&[(ACCOUNT_ID_KEY, "acct-fixture-1")]);
+        let hits = fetch_current(&root.ctx(), "Example Manufacturing AG", &mock.transport())
             .expect("engages")
             .expect("search fallback");
         assert_eq!(hits[0].title, "Example Manufacturing AG");
-        let unrelated = fetch_direct_with(&root.ctx(), "Completely Different GmbH", &mock.transport())
+        let unrelated = fetch_current(&root.ctx(), "Completely Different GmbH", &mock.transport())
             .expect("engages");
         assert!(matches!(unrelated, Err(SourceError::NoMatch)));
         assert_read_only(&mock.recorded());
@@ -1838,11 +1951,14 @@ mod tests {
             let body = body.to_string();
             let mock = MockApi::spawn(move |_req| (status, body.clone()));
             let root = TestRoot::new();
-            root.write_env(&[
-                (SECRET_NAME, "fixture-current-key"),
-                (ACCOUNT_ID_KEY, "acct-fixture-1"),
-            ]);
-            let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+            root.write_env(&[(ACCOUNT_ID_KEY, "acct-fixture-1")]);
+            let resolver = InjectedResolver::present(&[(SECRET_NAME, SECRET_CANARY)]);
+            let err = fetch_direct_with(
+                &root.ctx(),
+                "Example Manufacturing AG",
+                &mock.transport(),
+                Some(&resolver),
+            )
                 .expect("engages")
                 .expect_err("classified error");
             assert!(predicate(&err), "status {status} classified as {err:?}");
@@ -1920,11 +2036,8 @@ mod tests {
         for (status, body) in bodies {
             let mock = MockApi::spawn(move |_req| (status, body.clone()));
             let root = TestRoot::new();
-            root.write_env(&[
-                (SECRET_NAME, SECRET_CANARY),
-                (ACCOUNT_ID_KEY, "acct-fixture-1"),
-            ]);
-            let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+            root.write_env(&[(ACCOUNT_ID_KEY, "acct-fixture-1")]);
+            let err = fetch_current(&root.ctx(), "Example Manufacturing AG", &mock.transport())
                 .expect("engages")
                 .expect_err("classified error");
             let display = err.to_string();
@@ -1946,11 +2059,10 @@ mod tests {
         let mock = MockApi::spawn(|_req| panic!("must not call API with invalid scheme"));
         let root = TestRoot::new();
         root.write_env(&[
-            (SECRET_NAME, SECRET_CANARY),
             (AUTH_SCHEME_KEY, SECRET_CANARY),
             (ACCOUNT_ID_KEY, "acct-fixture-1"),
         ]);
-        let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+        let err = fetch_current(&root.ctx(), "Example Manufacturing AG", &mock.transport())
             .expect("engages")
             .expect_err("invalid scheme");
         let display = err.to_string();
@@ -1972,11 +2084,10 @@ mod tests {
         });
         let root = TestRoot::new();
         root.write_env(&[
-            (SECRET_NAME, "fixture-current-key"),
             (AUTH_SCHEME_KEY, "api_key"),
             (ACCOUNT_ID_KEY, "acct-fixture-1"),
         ]);
-        let _ = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport());
+        let _ = fetch_current(&root.ctx(), "Example Manufacturing AG", &mock.transport());
         assert!(mock.recorded()[0].path.starts_with("/v1/companies/match"));
     }
 
@@ -1998,11 +2109,16 @@ mod tests {
         });
         let root = TestRoot::new();
         root.write_env(&[
-            (LEGACY_SECRET_NAME, "fixture-legacy-token"),
             (AUTH_SCHEME_KEY, "legacy"),
             (ACCOUNT_ID_KEY, "acct-fixture-1"),
         ]);
-        let hits = fetch_direct_with(&root.ctx(), "WITTENSTEIN SE", &mock.transport())
+        let resolver = InjectedResolver::present(&[(LEGACY_SECRET_NAME, "fixture-legacy-token")]);
+        let hits = fetch_direct_with(
+            &root.ctx(),
+            "WITTENSTEIN SE",
+            &mock.transport(),
+            Some(&resolver),
+        )
             .expect("engages")
             .expect("legacy hits");
         assert!(hits.iter().any(|hit| hit.title.contains("WITTENSTEIN")));
@@ -2013,11 +2129,17 @@ mod tests {
     fn ambiguous_secrets_without_scheme_are_not_guessed() {
         let mock = MockApi::spawn(|_req| panic!("must not guess auth scheme"));
         let root = TestRoot::new();
-        root.write_env(&[
+        root.write_env(&[]);
+        let resolver = InjectedResolver::present(&[
             (SECRET_NAME, "fixture-current-key"),
             (LEGACY_SECRET_NAME, "fixture-legacy-token"),
         ]);
-        let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+        let err = fetch_direct_with(
+            &root.ctx(),
+            "Example Manufacturing AG",
+            &mock.transport(),
+            Some(&resolver),
+        )
             .expect("engages")
             .expect_err("ambiguous");
         match err {
@@ -2027,6 +2149,120 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         assert!(mock.recorded().is_empty());
+    }
+
+    #[test]
+    fn resolver_absent_key_is_credential_missing() {
+        let mock = MockApi::spawn(|_req| panic!("absent key must not call API"));
+        let root = TestRoot::new();
+        root.write_env(&[(ACCOUNT_ID_KEY, "acct-fixture-1")]);
+        let resolver = InjectedResolver::outcome(SECRET_NAME, Ok(None));
+        let err = fetch_direct_with(
+            &root.ctx(),
+            "Example Manufacturing AG",
+            &mock.transport(),
+            Some(&resolver),
+        )
+        .expect("engages")
+        .expect_err("missing");
+        match err {
+            SourceError::CredentialMissing { secret_name } => {
+                assert_eq!(secret_name, SECRET_NAME);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(mock.recorded().is_empty());
+    }
+
+    #[test]
+    fn resolver_denied_unavailable_decrypt_and_encoding_are_sanitized() {
+        for outcome in [
+            Err(CredentialResolveError::Denied),
+            Err(CredentialResolveError::Unavailable),
+            Err(CredentialResolveError::DecryptionFailed),
+            Err(CredentialResolveError::InvalidEncoding),
+        ] {
+            let mock = MockApi::spawn(|_req| panic!("resolver error must not call API"));
+            let root = TestRoot::new();
+            root.write_env(&[(ACCOUNT_ID_KEY, "acct-fixture-1")]);
+            let resolver = InjectedResolver::outcome(SECRET_NAME, outcome);
+            let err = fetch_direct_with(
+                &root.ctx(),
+                "Example Manufacturing AG",
+                &mock.transport(),
+                Some(&resolver),
+            )
+            .expect("engages")
+            .expect_err("resolver error");
+            let display = err.to_string();
+            let debug = format!("{err:?}");
+            assert_eq!(display, outcome.unwrap_err().to_string());
+            assert_no_secret_canary(&display);
+            assert_no_secret_canary(&debug);
+            assert_no_secret_canary(&serialized_source_failure(&err));
+            assert!(mock.recorded().is_empty());
+        }
+    }
+
+    #[test]
+    fn runtime_config_secret_is_not_a_credential_fallback() {
+        let mock = MockApi::spawn(|_req| panic!("must not use runtime_env secret"));
+        let root = TestRoot::new();
+        root.write_env(&[
+            (SECRET_NAME, "fixture-current-key"),
+            (ACCOUNT_ID_KEY, "acct-fixture-1"),
+        ]);
+        let err = fetch_direct_with(
+            &root.ctx(),
+            "Example Manufacturing AG",
+            &mock.transport(),
+            None,
+        )
+        .expect("engages")
+        .expect_err("no resolver");
+        match err {
+            SourceError::Other(inner) => {
+                assert_eq!(
+                    inner.to_string(),
+                    CredentialResolveError::Unavailable.to_string()
+                );
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(mock.recorded().is_empty());
+    }
+
+    #[test]
+    fn auth_header_uses_resolver_secret() {
+        let mock = MockApi::spawn(|req| {
+            assert_eq!(req.header("X-Api-Key"), Some("fixture-current-key"));
+            assert!(req.header("Authorization").is_none());
+            (200, MATCH_FIXTURE.to_string())
+        });
+        let root = TestRoot::new();
+        root.write_env(&[
+            (SECRET_NAME, "runtime-env-must-not-win"),
+            (ACCOUNT_ID_KEY, "acct-fixture-1"),
+        ]);
+        let _hits = fetch_current(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+            .expect("engages")
+            .expect("hits");
+        assert_eq!(mock.recorded()[0].header("X-Api-Key"), Some("fixture-current-key"));
+    }
+
+    #[test]
+    fn fixture_current_match_hits_uses_production_identity_path() {
+        let value: Value = serde_json::from_str(MATCH_FIXTURE).unwrap();
+        let hits = fixture_current_match_hits(
+            &value,
+            "acct-fixture-1",
+            "Example Manufacturing AG",
+            Some("DE"),
+        )
+        .expect("unique identity");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "Example Manufacturing AG");
+        assert!(hits[0].url.contains("co-fixture-1"));
     }
 
     #[test]
@@ -2314,11 +2550,8 @@ mod tests {
             panic!("unexpected {}", req.path);
         });
         let root = TestRoot::new();
-        root.write_env(&[
-            (SECRET_NAME, "fixture-current-key"),
-            (ACCOUNT_ID_KEY, "acct-fixture-1"),
-        ]);
-        let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+        root.write_env(&[(ACCOUNT_ID_KEY, "acct-fixture-1")]);
+        let err = fetch_current(&root.ctx(), "Example Manufacturing AG", &mock.transport())
             .expect("engages")
             .expect_err("country mismatch");
         assert!(matches!(err, SourceError::NoMatch));
@@ -2353,11 +2586,8 @@ mod tests {
             panic!("must not fall through after ambiguous match {}", req.path);
         });
         let root = TestRoot::new();
-        root.write_env(&[
-            (SECRET_NAME, "fixture-current-key"),
-            (ACCOUNT_ID_KEY, "acct-fixture-1"),
-        ]);
-        let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+        root.write_env(&[(ACCOUNT_ID_KEY, "acct-fixture-1")]);
+        let err = fetch_current(&root.ctx(), "Example Manufacturing AG", &mock.transport())
             .expect("engages")
             .expect_err("ambiguous");
         match err {
@@ -2405,13 +2635,13 @@ mod tests {
             .fetch_direct(&ctx, "Example Manufacturing AG")
             .expect("DACH context engages");
         match result {
-            Err(SourceError::CredentialMissing { secret_name }) => {
-                assert_eq!(secret_name, "LEADFEEDER_API_KEY");
+            Err(SourceError::Other(inner)) => {
+                assert_eq!(
+                    inner.to_string(),
+                    CredentialResolveError::Unavailable.to_string()
+                );
             }
-            Ok(hits) => {
-                assert!(!hits.is_empty(), "live response must contain at least one hit");
-            }
-            Err(other) => panic!("unexpected live error: {other:?}"),
+            other => panic!("live path without resolver must be unavailable, got: {other:?}"),
         }
     }
 }
