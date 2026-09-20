@@ -32,6 +32,7 @@ pub mod northdata;
 pub mod person_discovery;
 pub mod runtime_targets;
 pub mod scrape_bridge;
+pub mod shab;
 pub mod xing;
 pub mod zefix;
 
@@ -664,7 +665,7 @@ pub static REGISTRY: &[fn() -> &'static dyn SourceModule] = &[
     runtime_targets::evi,
     runtime_targets::justizonline,
     runtime_targets::mailtester,
-    runtime_targets::shab,
+    shab::module,
     leadfeeder::module,
     linkedin::module,
     directory::moneyhouse,

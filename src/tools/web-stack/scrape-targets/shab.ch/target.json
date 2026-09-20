@@ -1,0 +1,15 @@
+{
+  "target_key": "shab-ch",
+  "display_name": "SHAB published commercial-register notices",
+  "start_url": "https://www.shab.ch/",
+  "target_kind": "prospect-research",
+  "status": "active",
+  "config": {
+    "expected_provider": "shab.ch", "country_hints": ["CH"], "tier": "P",
+    "expected_min_records": 1, "record_key_fields": ["field", "source_url"],
+    "adapter_version": "v1", "access_mode": "public_native_api",
+    "provider_owned_only": true, "allowed_domains": ["shab.ch", "amtsblattportal.ch"],
+    "heal_mode": "versioned_script"
+  },
+  "output_schema": { "schema_key": "prospect.v1", "primary_artifact_kind": "field_records_json", "record_key_fields": ["field", "source_url"] }
+}

@@ -78,6 +78,7 @@ const SOURCE_CONFIG = Object.freeze({
   "northdata.de": { native: true, domains: ["northdata.de"] },
   "xing.com": { native: true, native_only: true, domains: ["xing.com", "api.xing.com"] },
   "zefix.ch": { native: true, native_only: true, domains: ["zefix.ch", "zefix.admin.ch"] },
+  "shab.ch": { native: true, native_only: true, domains: ["shab.ch", "amtsblattportal.ch"] },
   "google.de": { native: true, native_only: true, domains: [] },
   "maps.google.com": { native: false, domains: ["google.com", "google.de"] },
   "rocketreach.com": { native: false, domains: ["rocketreach.com", "rocketreach.co"] },
