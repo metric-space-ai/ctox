@@ -2298,6 +2298,10 @@ pub fn spawn_remote_event_pump(
     let release = Arc::new(AtomicBool::new(false));
     let notify = Arc::new(Notify::new());
     let accepted_subscription = Arc::new(Mutex::new(None::<String>));
+    // Subscribe before returning to the caller that starts the remote request.
+    // The spawned task may not be polled before the source publishes its first
+    // snapshot event; registering inside it would silently lose that event.
+    let mut messages = pool.connection_handler.message_stream();
     let task = {
         let alive = alive.clone();
         let failed = failed.clone();
@@ -2307,7 +2311,6 @@ pub fn spawn_remote_event_pump(
         tokio::spawn(async move {
             let mut queue = VecDeque::<Event>::new();
             let mut overflowed = false;
-            let mut messages = pool.connection_handler.message_stream();
             loop {
                 // A notification only wakes this loop. The atomic release flag
                 // is authoritative, including when notification preceded polling.

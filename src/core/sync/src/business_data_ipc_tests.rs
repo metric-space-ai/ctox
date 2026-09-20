@@ -5,6 +5,90 @@ use crate::business_data_contract::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[tokio::test]
+async fn response_release_waits_for_complete_private_frame_write() {
+    use tokio::io::AsyncReadExt;
+    struct ReleaseDispatcher {
+        dispatched: Arc<tokio::sync::Notify>,
+        released: Arc<tokio::sync::Notify>,
+        release_called: Arc<AtomicBool>,
+    }
+    impl BusinessDataDispatcher for ReleaseDispatcher {
+        fn dispatch(&self, request: Request) -> BusinessDataDispatchFuture {
+            let dispatched = self.dispatched.clone();
+            Box::pin(async move {
+                dispatched.notify_one();
+                Ok(Response {
+                    version: 1,
+                    request_id: request.request_id,
+                    result: NativeBusinessDataResult::Rejected {
+                        code: NativeBusinessDataErrorCode::Unsupported,
+                        message: "fixture response".into(),
+                        retryable: false,
+                    },
+                })
+            })
+        }
+        fn response_sent<'a>(&'a self, response: &'a Response) -> BusinessDataShutdownFuture<'a> {
+            // Record invocation as well as future completion: neither may
+            // precede the complete frame write.
+            assert_eq!(response.request_id, "open");
+            self.release_called.store(true, Ordering::SeqCst);
+            Box::pin(async move {
+                self.released.notify_one();
+                Ok(())
+            })
+        }
+    }
+    let dispatched = Arc::new(tokio::sync::Notify::new());
+    let released = Arc::new(tokio::sync::Notify::new());
+    let release_called = Arc::new(AtomicBool::new(false));
+    let service = BusinessDataIpc::new(Arc::new({
+        let dispatched = dispatched.clone();
+        let released = released.clone();
+        let release_called = release_called.clone();
+        move |_, _| {
+            Ok(Arc::new(ReleaseDispatcher {
+                dispatched: dispatched.clone(),
+                released: released.clone(),
+                release_called: release_called.clone(),
+            }))
+        }
+    }));
+    // The response cannot fit even its header without the client reading.
+    let (native, mut client) = tokio::io::duplex(1);
+    let exchange = async {
+        write_host_frame(&mut client, &open_request())
+            .await
+            .unwrap();
+        dispatched.notified().await;
+        tokio::task::yield_now().await;
+        assert!(!release_called.load(Ordering::SeqCst));
+        let mut header = [0u8; 4];
+        client.read_exact(&mut header).await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(
+            !release_called.load(Ordering::SeqCst),
+            "header alone must not release events"
+        );
+        let size = u32::from_be_bytes(header) as usize;
+        assert!(size > 1 && size < 4096);
+        let mut body = vec![0; size];
+        client.read_exact(&mut body).await.unwrap();
+        assert!(matches!(serde_json::from_slice::<Frame>(&body).unwrap(),
+            Frame::Response { response } if response.request_id == "open"));
+        released.notified().await;
+        assert!(release_called.load(Ordering::SeqCst));
+        drop(client);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(service.serve(Box::new(native)), exchange)
+    })
+    .await
+    .expect("bounded response release regression");
+    assert!(result.is_err());
+}
+
 struct TestDispatcher {
     credentials: CredentialRequester,
 }
