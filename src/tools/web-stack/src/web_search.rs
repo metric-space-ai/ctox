@@ -305,6 +305,10 @@ struct SearchQuery {
 #[path = "web_search_credentials_tests.rs"]
 mod credential_bridge_tests;
 
+#[cfg(test)]
+#[path = "web_search_leadfeeder_tests.rs"]
+mod leadfeeder_serializer_tests;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SearchHit {
     title: String,
