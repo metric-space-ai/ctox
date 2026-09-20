@@ -35,3 +35,25 @@ jobs:
         if: failure() && runner.os == 'macOS'
         run: |
           sudo /usr/bin/log show --last 1m --style compact --predicate 'eventMessage CONTAINS "deny" AND eventMessage CONTAINS "node"' | head -100
+      - name: Bounded Linux sandbox startup diagnostics
+        if: failure() && runner.os == 'Linux'
+        timeout-minutes: 1
+        run: |
+          # Read-only diagnostics: retain the failing test and every isolation rule.
+          id
+          uname -r
+          /usr/bin/bwrap --version
+          dpkg-query -W bubblewrap apparmor || true
+          stat -c '%a %U %G %n' /usr/bin/bwrap
+          cat /proc/self/attr/current
+          grep -E '^(Cap|NoNewPrivs|Seccomp)' /proc/self/status
+          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined kernel.unprivileged_userns_clone user.max_user_namespaces || true
+          for profile in /etc/apparmor.d/bwrap*; do
+            if [ -f "$profile" ]; then
+              printf 'PROFILE %s\n' "$profile"
+              sed -n '1,160p' "$profile"
+            fi
+          done
+          # Trusted probe only: creation is distinct from configuring loopback.
+          timeout 5s unshare --user --map-root-user --net /usr/bin/true && echo 'user+network namespace creation succeeded' || echo "user+network namespace creation failed: $?"
+          sudo -n journalctl -k --since '-5 minutes' --no-pager -n 400 | grep -Ei 'apparmor|audit|bwrap|userns' || true
