@@ -1,0 +1,29 @@
+{
+  "data": [
+    {
+      "id": "co-fixture-1",
+      "type": "company_summary",
+      "attributes": {
+        "name": "Example Manufacturing AG",
+        "url": "https://www.example-manufacturing.test",
+        "employee_range": "101-500",
+        "industries": {
+          "industry": [
+            { "code": "28.15", "name": "Manufacture of bearings" }
+          ]
+        },
+        "address": {
+          "city": "Fixturestadt",
+          "country_code": "DE",
+          "postal_code": "12345",
+          "street_address": "Musterweg 1"
+        }
+      }
+    }
+  ],
+  "meta": {
+    "credits": { "charged": 0 },
+    "pagination": { "total_count": 1 },
+    "request_id": "fixture-search-example"
+  }
+}

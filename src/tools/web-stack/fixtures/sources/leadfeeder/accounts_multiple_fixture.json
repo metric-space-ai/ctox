@@ -1,0 +1,17 @@
+{
+  "data": [
+    {
+      "id": "acct-fixture-1",
+      "type": "account_summary",
+      "attributes": { "name": "Fixture Account One" },
+      "relationships": {}
+    },
+    {
+      "id": "acct-fixture-2",
+      "type": "account_summary",
+      "attributes": { "name": "Fixture Account Two" },
+      "relationships": {}
+    }
+  ],
+  "meta": { "request_id": "fixture-accounts-multiple" }
+}

@@ -296,3 +296,93 @@ test("blocked public adapters record Web-Unlock evidence and stay non-green", as
     });
   }
 });
+
+test("Leadfeeder native API adapter uses registry search from minimal scrape input", () => {
+  const fixturePath = path.join(fixturesDir, "leadfeeder.com.native-api.json");
+  const fixture = loadJson(fixturePath);
+  const minimalInput = {
+    source_id: "leadfeeder.com",
+    company: fixture.input.company,
+    country: fixture.input.country,
+  };
+  const { result, calls } = executeFixture("leadfeeder.com", fixturePath, "success", minimalInput);
+  for (const [field, expectedValue] of Object.entries(fixture.expected)) {
+    assert.ok(
+      result.records.some((record) => record.field === field && record.value === expectedValue),
+      `minimal input missing ${field}=${expectedValue}: ${JSON.stringify(result.records)}`,
+    );
+  }
+  const search = calls.find((args) => args[0] === "web" && args[1] === "search");
+  assert.ok(search, "minimal scrape input did not reach native web search");
+  assert.equal(flagValue(search, "--source"), "leadfeeder.com");
+  assert.ok(!calls.some((args) => args[0] === "business-os" && args.includes("source-capture")));
+});
+
+test("Leadfeeder native API adapter dispatches search without browser capture", () => {
+  const fixturePath = path.join(fixturesDir, "leadfeeder.com.native-api.json");
+  const fixture = loadJson(fixturePath);
+  assert.equal(fixture.extracted_fields_fixture, "synthetic_pending_serializer_regression");
+  const nativeFields = fixture.search?.results?.[0]?.extracted_fields;
+  assert.ok(Array.isArray(nativeFields), "native extracted_fields must be an array");
+  assert.ok(nativeFields.every((field) => field.field && field.value && field.source_url));
+  const { result, calls } = executeFixture("leadfeeder.com", fixturePath, "success", fixture.input);
+  for (const [field, expectedValue] of Object.entries(fixture.expected)) {
+    assert.ok(
+      result.records.some((record) => record.field === field && record.value === expectedValue),
+      `missing ${field}=${expectedValue}: ${JSON.stringify(result.records)}`,
+    );
+  }
+  assert.ok(result.records.every((record) => record.source_url.includes("api.leadfeeder.com/v1/companies/")));
+  assert.ok(result.records.every((record) => record.source_id === "leadfeeder.com"));
+  const search = calls.find((args) => args[0] === "web" && args[1] === "search");
+  assert.ok(search, "native API path did not call ctox web search");
+  assert.equal(flagValue(search, "--source"), "leadfeeder.com");
+  assert.ok(!calls.some((args) => args[0] === "business-os" && args.includes("source-capture")));
+  assert.ok(!calls.some((args) => args[0] === "business-os" && args.includes("auth-assist")));
+  assert.notEqual(result.browser_assist_requested, true);
+});
+
+test("Leadfeeder native API adapter preserves deliberate browser mode", () => {
+  const browserFixture = path.join(fixturesDir, "leadfeeder.com.json");
+  const fixture = loadJson(browserFixture);
+  const browserInput = {
+    ...fixture.input,
+    access_mode: "authenticated_browser",
+    credential_ref: "ctox-secret://credentials/LEADFEEDER_API_KEY",
+  };
+  const { result, calls } = executeFixture("leadfeeder.com", browserFixture, "success", browserInput);
+  assert.ok(result.records.some((record) => record.field === "firma_name"
+    && record.value === fixture.expected.firma_name));
+  assert.ok(calls.some((args) => args[0] === "business-os" && args.includes("source-capture")));
+  assert.ok(!calls.some((args) => args[0] === "web" && args[1] === "search"));
+});
+
+test("Leadfeeder native API failures stay distinguishable and skip browser assist", async (t) => {
+  const fixturePath = path.join(fixturesDir, "leadfeeder.com.native-api.json");
+  const fixture = loadJson(fixturePath);
+  const expected = {
+    credential_missing: "credential_missing",
+    no_match: "no_match",
+    rate_limited: "rate_limited",
+    parse_failed: "parse_failed",
+    account_selection_required: "account_selection_required",
+    entitlement: "entitlement",
+    identity_mismatch: "no_match",
+    echoed_secret: "entitlement",
+  };
+  for (const [mode, failureMode] of Object.entries(expected)) {
+    await t.test(mode, () => {
+      const { result, calls } = executeFixture("leadfeeder.com", fixturePath, mode, fixture.input);
+      assert.deepEqual(result.records, []);
+      assert.equal(result.failure_mode, failureMode, `${mode} => ${JSON.stringify(result)}`);
+      assert.equal(result.browser_assist_requested, false);
+      assert.ok(!calls.some((args) => args[0] === "business-os"));
+      assert.equal(containsForbiddenSecretKey(result), false);
+      assert.equal(
+        JSON.stringify(result).includes("FIXTURE_LEADFEEDER_KEY_DO_NOT_LEAK"),
+        false,
+        `${mode} leaked provider/config secret material: ${JSON.stringify(result)}`,
+      );
+    });
+  }
+});

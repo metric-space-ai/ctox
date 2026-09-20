@@ -218,6 +218,96 @@ function protectedSourceConfig(sourceId) {
   return PROTECTED_SOURCE_CONFIG[sourceId] || null;
 }
 
+function requestedAccessMode(input) {
+  const raw = String(input?.access_mode || input?.auth_mode || "").trim().toLowerCase();
+  if (["native_api", "api_key", "api"].includes(raw)) return "native_api";
+  if (["authenticated_browser", "browser_session", "browser"].includes(raw)) {
+    return "authenticated_browser";
+  }
+  return "";
+}
+
+function useNativeApiPath(sourceId, input, credentialRef) {
+  if (sourceId !== "leadfeeder.com") return false;
+  const mode = requestedAccessMode(input);
+  if (mode === "authenticated_browser") return false;
+  if (mode === "native_api") return true;
+  // Real scrape execute currently forwards only company/country/source_id.
+  // Native registry search is the supported default; browser capture is opt-in
+  // via access_mode/auth_mode=authenticated_browser (must be forwarded from the
+  // adapter/target manifest). A browser credential_ref without that mode still
+  // prefers the API so a secret-store API key can take effect.
+  return true;
+}
+
+function nativeApiFailure(payload) {
+  const failures = Array.isArray(payload?.source_failures) ? payload.source_failures : [];
+  const first = failures[0];
+  if (!first) return null;
+  const kind = String(first.kind || "");
+  const error = String(first.error || "");
+  const secretName = String(first.secret_name || "").trim();
+  if (kind === "credential_missing") {
+    return { mode: "credential_missing", detail: secretName || "LEADFEEDER_API_KEY" };
+  }
+  if (kind === "no_match") return { mode: "no_match", detail: "no matching company" };
+  if (kind === "rate_limited") return { mode: "rate_limited", detail: "rate_limited" };
+  if (kind === "parse_failed") return { mode: "parse_failed", detail: "parse_failed" };
+  if (kind === "blocked") return { mode: "entitlement", detail: "blocked" };
+  if (kind === "other" && /account_selection_required/i.test(error)) {
+    return { mode: "account_selection_required", detail: "account_selection_required" };
+  }
+  if (kind === "other" && /entitlement/i.test(error)) {
+    return { mode: "entitlement", detail: "entitlement" };
+  }
+  if (kind) return { mode: "temporary_unreachable", detail: kind };
+  return null;
+}
+
+function emitNativeApiResult(sourceId, company, country, queryValue) {
+  const payload = search(sourceId, queryValue, country);
+  const nativeFailure = nativeApiFailure(payload);
+  if (nativeFailure) {
+    process.stdout.write(JSON.stringify({
+      records: [],
+      failure_mode: nativeFailure.mode,
+      detail: nativeFailure.detail,
+      browser_assist_requested: false,
+    }));
+    return;
+  }
+  if (!payload) {
+    process.stdout.write(JSON.stringify({
+      records: [],
+      failure_mode: COMMAND_ERRORS.some((error) => /rate.?limit/i.test(error))
+        ? "rate_limited"
+        : "temporary_unreachable",
+      detail: COMMAND_ERRORS.join(" | ") || `${sourceId} native search failed`,
+      browser_assist_requested: false,
+    }));
+    return;
+  }
+  const records = [];
+  const hits = Array.isArray(payload.results) ? payload.results.slice(0, 5) : [];
+  for (const hit of hits) {
+    if (!hit?.url || !isAllowedSourceUrl(sourceId, hit.url)) continue;
+    if (!pageMatchesCompany(company, hit, null)) continue;
+    appendSearchHitEvidence(records, sourceId, hit, company);
+    for (const field of extractedFields(hit)) appendRecord(records, field, hit.url);
+  }
+  const clean = finalizeRecords(records, sourceId);
+  if (!recordsMatchCompany(company, clean)) {
+    process.stdout.write(JSON.stringify({
+      records: [],
+      failure_mode: "no_match",
+      detail: `${sourceId} API returned no company-matched records`,
+      browser_assist_requested: false,
+    }));
+    return;
+  }
+  process.stdout.write(JSON.stringify({ records: clean }));
+}
+
 function validCredentialReference(value) {
   const raw = String(value || "").trim();
   if (!raw || /\s/.test(raw)) return "";
@@ -631,8 +721,13 @@ function acceptedProviderRecords(sourceId, company, records) {
 }
 
 function extractedFields(page) {
-  const fields = page?.extracted_fields?.fields;
-  return Array.isArray(fields) ? fields : [];
+  const raw = page?.extracted_fields;
+  // Native search contract: results[].extracted_fields is an array of
+  // {field,value,confidence,source_url,note}. Empty array means no fields.
+  // Web-read and other scrape sources still use { fields: [...] }.
+  if (Array.isArray(raw)) return raw;
+  const nested = raw?.fields;
+  return Array.isArray(nested) ? nested : [];
 }
 
 function pageText(page) {
@@ -866,6 +961,10 @@ function appendSearchHitEvidence(records, sourceId, hit, company) {
 
   const protectedConfig = protectedSourceConfig(sourceId);
   const credentialRef = credentialReference(input, protectedConfig);
+  if (useNativeApiPath(sourceId, input, credentialRef)) {
+    emitNativeApiResult(sourceId, company, country, queryValue);
+    return;
+  }
   let protectedCaptureStatus = "";
   let browserAssist = null;
   if (protectedConfig?.capture_supported) {

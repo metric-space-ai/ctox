@@ -1,0 +1,25 @@
+{
+  "data": [
+    [
+      {
+        "id": "co-fixture-other",
+        "type": "company_match",
+        "attributes": { "match_score": 0.41 },
+        "relationships": {
+          "company_summary": {
+            "id": "co-fixture-other",
+            "type": "company_summary",
+            "attributes": {
+              "name": "Other Holdings GmbH",
+              "url": "https://other-holdings.test"
+            }
+          }
+        }
+      }
+    ]
+  ],
+  "meta": {
+    "credits": { "charged": 0 },
+    "request_id": "fixture-match-unrelated"
+  }
+}

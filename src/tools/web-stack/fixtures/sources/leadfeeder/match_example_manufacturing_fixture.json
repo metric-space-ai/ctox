@@ -1,0 +1,48 @@
+{
+  "data": [
+    [
+      {
+        "id": "co-fixture-1",
+        "type": "company_match",
+        "attributes": { "match_score": 0.96 },
+        "relationships": {
+          "company_summary": {
+            "id": "co-fixture-1",
+            "type": "company_summary",
+            "attributes": {
+              "name": "Example Manufacturing AG",
+              "url": "https://www.example-manufacturing.test",
+              "employee_range": "101-500",
+              "industries": {
+                "industry": [
+                  { "code": "28.15", "name": "Manufacture of bearings" }
+                ]
+              },
+              "address": {
+                "city": "Fixturestadt",
+                "country": "Germany",
+                "country_code": "DE",
+                "postal_code": "12345",
+                "street_address": "Musterweg 1"
+              },
+              "revenue": {
+                "currency": "EUR",
+                "estimated": false,
+                "value": 12000000,
+                "year": 2022
+              },
+              "meta": {
+                "do_not_contact": false,
+                "has_mail": true
+              }
+            }
+          }
+        }
+      }
+    ]
+  ],
+  "meta": {
+    "credits": { "charged": 0 },
+    "request_id": "fixture-match-example"
+  }
+}

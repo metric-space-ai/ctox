@@ -1,51 +1,57 @@
 //! `leadfeeder.com` — Tier C, DACH.
 //!
-//! Leadfeeder (heute Dealfront Leadfeeder) ist ein Visitor-Identification-
-//! Werkzeug, das B2B-Webseitenbesucher zu Firmen und Kontakten zuordnet.
-//! Im CTOX-Webstack ist Leadfeeder die einzige Quelle, die die
-//! DACH-Quellenmatrix (`EXCEL_MATRIX.md`) für `person_email` in
-//! Deutschland, Österreich und der Schweiz listet, und sie taucht als
-//! Sekundär-Quelle für `firma_email` und `firma_domain` auf.
+//! Leadfeeder (Dealfront Leadfeeder) maps B2B website visitors to companies
+//! and contacts. In the CTOX web stack it is the DACH matrix source for
+//! `person_email` and a secondary source for `firma_email` / `firma_domain`.
 //!
-//! ## Endpoints
+//! ## Supported current API
 //!
-//! Leadfeeder exponiert eine versionierte REST-API unter
-//! `https://api.leadfeeder.com/`. Authentifizierung ist ein API-Token im
-//! `Authorization`-Header (Format: `Token token=<key>`). Beide Endpoints,
-//! die wir hier benutzen, hängen am gewählten Account:
+//! Official current docs (not the legacy Token API):
 //!
-//! * `GET https://api.leadfeeder.com/accounts/<account_id>/leads?company_name=<firma>`
-//!   liefert Firmen-Stammdaten (`website_url`, `email`, `industry`,
-//!   `employee_count`).
-//! * `GET https://api.leadfeeder.com/accounts/<account_id>/contacts?search=<firma>`
-//!   liefert Kontakte (`name`, `email`, `title`).
+//! * Authentication: `https://docs.leadfeeder.com/api/public/authentication-354547m0`
+//!   — send `X-Api-Key` on every request. Do not send a current key as
+//!   `Authorization: Token token=...`.
+//! * Getting started / account selection:
+//!   `https://docs.leadfeeder.com/api/public/getting-started-363633m0`
+//!   — most endpoints require an explicit `account_id`. List accounts with
+//!   `GET /v1/accounts` (`https://docs.leadfeeder.com/api/public/list-accounts-4008950e0`).
+//! * Identity (no credits): `POST /v1/companies/match`
+//!   (`https://docs.leadfeeder.com/api/public/match-companies-4008956e0`)
+//!   and `POST /v1/companies/search`
+//!   (`https://docs.leadfeeder.com/api/public/search-companies-4008955e0`).
 //!
-//! Beide Antworten folgen lose dem JSON:API-Format: eine Liste unter
-//! `data[]`, jedes Element mit `id`, `type`, und einem `attributes`-Block.
+//! This module never calls credit-consuming retrieve/detail endpoints
+//! (`GET /v1/companies/{id}`, `GET /v1/contacts?ids=`), never creates
+//! enrichment or find-contact jobs, and never writes CRM/list/tag state.
+//! `person_email` therefore remains a remaining live dependency: contact
+//! summaries from search/match do not include deep emails unless a later
+//! credit-consuming retrieve is explicitly authorized elsewhere.
 //!
 //! ## Credentials
 //!
-//! Der API-Key wird über die SQLite-Runtime-Config gelesen
-//! (`runtime_env_kv`-Tabelle, Key `LEADFEEDER_API_KEY`). Der Account-Id
-//! kommt aus derselben Tabelle unter `LEADFEEDER_ACCOUNT_ID`; fehlt sie,
-//! verwenden wir das dokumentierte `me` (das die API auf den eigenen
-//! Default-Account auflöst), damit ein Single-Account-Tenant out-of-the-box
-//! funktioniert. Ohne Token gibt `fetch_direct` ein
-//! `CredentialMissing { secret_name: "LEADFEEDER_API_KEY" }` zurück und der
-//! Orchestrator probiert die nächste Quelle in der Priority-Liste.
+//! Values come from the runtime config/secret store (`runtime_env_kv`), not
+//! process environment:
 //!
-//! ## Confidence
+//! * `LEADFEEDER_API_KEY` — current API key, sent only as `X-Api-Key`.
+//! * `LEADFEEDER_LEGACY_API_TOKEN` — legacy Token API only.
+//! * `LEADFEEDER_AUTH_SCHEME` — `api_key` or `legacy`. Required when both
+//!   secrets are present. Never inferred from key shape. Invalid values are
+//!   rejected without echoing the raw config string.
+//! * `LEADFEEDER_ACCOUNT_ID` — explicit account. The unsupported alias `me`
+//!   is rejected. If unset, `GET /v1/accounts` may use a single authorized
+//!   account; multiple accounts fail with `account_selection_required`.
 //!
-//! * `firma_email`, `firma_domain` — `High`. Beides sind strukturierte
-//!   Pflicht-/Schlüsselfelder eines Leadfeeder-Leads und werden nicht
-//!   heuristisch hergeleitet.
-//! * `person_email` — `Medium`. Leadfeeder kombiniert verifizierte Mails
-//!   mit „guessed"-Mails (z. B. aus dem Domain-Muster); für die
-//!   Aussenwelt bleibt das eine Medium-Confidence-Aussage.
+//! Legacy compatibility (`https://docs.leadfeeder.com/api/`): existing Token
+//! integrations keep working only when the legacy scheme and token are
+//! selected explicitly. New keys are not sent through Token auth.
+//!
+//! Browser capture remains available via `LEADFEEDER_BROWSER_LOGIN` when the
+//! scrape adapter deliberately selects authenticated browser mode.
 
 use std::time::Duration;
 
 use anyhow::anyhow;
+use serde_json::json;
 use serde_json::Value;
 
 use super::{
@@ -56,6 +62,9 @@ use crate::runtime_config;
 
 const API_BASE: &str = "https://api.leadfeeder.com";
 const SECRET_NAME: &str = "LEADFEEDER_API_KEY";
+const LEGACY_SECRET_NAME: &str = "LEADFEEDER_LEGACY_API_TOKEN";
+const AUTH_SCHEME_KEY: &str = "LEADFEEDER_AUTH_SCHEME";
+const ACCOUNT_ID_KEY: &str = "LEADFEEDER_ACCOUNT_ID";
 const BROWSER_SECRET_NAME: &str = "LEADFEEDER_BROWSER_LOGIN";
 const LOGIN_URL: &str = "https://app.leadfeeder.com/login";
 const VERIFY_SELECTOR: &str =
@@ -63,12 +72,64 @@ const VERIFY_SELECTOR: &str =
 const CREDENTIAL_SELECTOR: &str =
     "input[name=\"password\"], input#password, input[type=\"password\"]";
 const CAPTURE_SCRIPT: &str = "leadfeeder.lead_capture.v1";
-const ACCOUNT_DEFAULT: &str = "me";
 const TIMEOUT_MS: u64 = 12_000;
 const MAX_HITS: usize = 8;
+const MIN_MATCH_SCORE: f64 = 0.75;
 const USER_AGENT: &str = "ctox-web-stack/0.1 (+https://ctox.local)";
 
 struct Leadfeeder;
+
+#[derive(Clone)]
+enum AuthScheme {
+    ApiKey(String),
+    LegacyToken(String),
+}
+
+impl std::fmt::Debug for AuthScheme {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthScheme::ApiKey(_) => f.debug_tuple("ApiKey").field(&"<redacted>").finish(),
+            AuthScheme::LegacyToken(_) => {
+                f.debug_tuple("LegacyToken").field(&"<redacted>").finish()
+            }
+        }
+    }
+}
+
+impl AuthScheme {
+    fn secret_name(&self) -> &'static str {
+        match self {
+            AuthScheme::ApiKey(_) => SECRET_NAME,
+            AuthScheme::LegacyToken(_) => LEGACY_SECRET_NAME,
+        }
+    }
+
+    fn is_legacy(&self) -> bool {
+        matches!(self, AuthScheme::LegacyToken(_))
+    }
+}
+
+struct Transport {
+    base: String,
+    allow_hosts: Vec<String>,
+}
+
+impl Transport {
+    fn production() -> Self {
+        Self {
+            base: API_BASE.to_string(),
+            allow_hosts: Vec::new(),
+        }
+    }
+
+    fn agent(&self) -> ureq::Agent {
+        ureq::AgentBuilder::new()
+            .user_agent(USER_AGENT)
+            .timeout(Duration::from_millis(TIMEOUT_MS))
+            .resolver(crate::egress::SsrfResolver::new(self.allow_hosts.clone()))
+            .build()
+    }
+}
 
 impl SourceModule for Leadfeeder {
     fn id(&self) -> &'static str {
@@ -124,7 +185,6 @@ impl SourceModule for Leadfeeder {
     }
 
     fn shape_query(&self, _query: &str, _ctx: &SourceCtx<'_>) -> Option<ShapedQuery> {
-        // API-Quelle: keine Search-Engine-Variante.
         None
     }
 
@@ -133,30 +193,7 @@ impl SourceModule for Leadfeeder {
         ctx: &SourceCtx<'_>,
         company: &str,
     ) -> Option<Result<Vec<SourceHit>, SourceError>> {
-        // DACH-only. Andere Länder still überspringen.
-        if matches!(ctx.country, Some(country) if !matches!(country, Country::De | Country::At | Country::Ch))
-        {
-            return None;
-        }
-
-        let trimmed = company.trim();
-        if trimmed.is_empty() {
-            return Some(Err(SourceError::NoMatch));
-        }
-
-        let token = match runtime_config::get(ctx.root, SECRET_NAME) {
-            Some(t) => t,
-            None => {
-                return Some(Err(SourceError::CredentialMissing {
-                    secret_name: SECRET_NAME,
-                }));
-            }
-        };
-        let account_id = runtime_config::get(ctx.root, "LEADFEEDER_ACCOUNT_ID")
-            .unwrap_or_else(|| ACCOUNT_DEFAULT.to_string());
-
-        let agent = build_agent();
-        Some(perform_search(&agent, &token, &account_id, trimmed))
+        fetch_direct_with(ctx, company, &Transport::production())
     }
 
     fn extract_fields(&self, page: &SourceReadResult) -> Vec<(FieldKey, FieldEvidence)> {
@@ -166,44 +203,176 @@ impl SourceModule for Leadfeeder {
         };
         extract_from_json(&value, &page.url)
     }
+
+    fn extract_from_hits(
+        &self,
+        _ctx: &SourceCtx<'_>,
+        company: &str,
+        hits: &[SourceHit],
+    ) -> Vec<(FieldKey, FieldEvidence)> {
+        let mut out = Vec::new();
+        for hit in hits {
+            if !company_identity_matches(company, &hit.title, None) {
+                continue;
+            }
+            push(
+                &mut out,
+                FieldKey::FirmaName,
+                &hit.title,
+                &hit.url,
+                Confidence::High,
+            );
+            extract_snippet_fields(&hit.snippet, &hit.url, &mut out);
+        }
+        out
+    }
 }
 
-// ---------------------------------------------------------------------------
-// HTTP
-// ---------------------------------------------------------------------------
+fn fetch_direct_with(
+    ctx: &SourceCtx<'_>,
+    company: &str,
+    transport: &Transport,
+) -> Option<Result<Vec<SourceHit>, SourceError>> {
+    if matches!(ctx.country, Some(country) if !matches!(country, Country::De | Country::At | Country::Ch))
+    {
+        return None;
+    }
 
-fn build_agent() -> ureq::Agent {
-    ureq::AgentBuilder::new()
-        .user_agent(USER_AGENT)
-        .timeout(Duration::from_millis(TIMEOUT_MS))
-        // SSRF guard: a resolved or redirected host must never reach an
-        // internal/loopback/metadata address.
-        .resolver(crate::egress::SsrfResolver::new(Vec::new()))
-        .build()
+    let trimmed = company.trim();
+    if trimmed.is_empty() {
+        return Some(Err(SourceError::NoMatch));
+    }
+
+    let auth = match resolve_auth(ctx) {
+        Ok(auth) => auth,
+        Err(err) => return Some(Err(err)),
+    };
+    let account_id = match resolve_account_id(ctx, transport, &auth) {
+        Ok(id) => id,
+        Err(err) => return Some(Err(err)),
+    };
+    let iso = ctx.country.map(|c| c.as_iso());
+    Some(if auth.is_legacy() {
+        perform_legacy_search(transport, &auth, &account_id, trimmed)
+    } else {
+        perform_current_search(transport, &auth, &account_id, trimmed, iso)
+    })
 }
 
-fn auth_header(token: &str) -> String {
-    format!("Token token={token}")
+fn resolve_auth(ctx: &SourceCtx<'_>) -> Result<AuthScheme, SourceError> {
+    let api_key = nonempty_config(ctx.root, SECRET_NAME);
+    let legacy_token = nonempty_config(ctx.root, LEGACY_SECRET_NAME);
+    let scheme = nonempty_config(ctx.root, AUTH_SCHEME_KEY).map(|value| value.to_ascii_lowercase());
+
+    match scheme.as_deref() {
+        Some("api_key") | Some("x-api-key") | Some("current") => api_key
+            .map(AuthScheme::ApiKey)
+            .ok_or(SourceError::CredentialMissing {
+                secret_name: SECRET_NAME,
+            }),
+        Some("legacy") | Some("legacy_token") | Some("token") => legacy_token
+            .map(AuthScheme::LegacyToken)
+            .ok_or(SourceError::CredentialMissing {
+                secret_name: LEGACY_SECRET_NAME,
+            }),
+        Some(_) => Err(SourceError::Other(anyhow!(
+            "invalid {AUTH_SCHEME_KEY}; expected api_key or legacy"
+        ))),
+        None => match (api_key, legacy_token) {
+            (Some(key), None) => Ok(AuthScheme::ApiKey(key)),
+            (None, Some(token)) => Ok(AuthScheme::LegacyToken(token)),
+            (Some(_), Some(_)) => Err(SourceError::Other(anyhow!(
+                "ambiguous Leadfeeder credentials; set {AUTH_SCHEME_KEY} to api_key or legacy"
+            ))),
+            (None, None) => Err(SourceError::CredentialMissing {
+                secret_name: SECRET_NAME,
+            }),
+        },
+    }
 }
 
-fn perform_search(
-    agent: &ureq::Agent,
-    token: &str,
+fn resolve_account_id(
+    ctx: &SourceCtx<'_>,
+    transport: &Transport,
+    auth: &AuthScheme,
+) -> Result<String, SourceError> {
+    if let Some(configured) = nonempty_config(ctx.root, ACCOUNT_ID_KEY) {
+        return validate_account_id(&configured);
+    }
+    let ids = list_account_ids(transport, auth)?;
+    match ids.as_slice() {
+        [] => Err(SourceError::Other(anyhow!(
+            "entitlement: no authorized Leadfeeder account for this API key"
+        ))),
+        [one] => Ok(one.clone()),
+        _ => Err(SourceError::Other(anyhow!(
+            "account_selection_required: {} authorized accounts; set {ACCOUNT_ID_KEY}",
+            ids.len()
+        ))),
+    }
+}
+
+fn validate_account_id(raw: &str) -> Result<String, SourceError> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("me") {
+        return Err(SourceError::Other(anyhow!(
+            "{ACCOUNT_ID_KEY} must be an explicit authorized account id, not empty or 'me'"
+        )));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn nonempty_config(root: &std::path::Path, key: &str) -> Option<String> {
+    runtime_config::get(root, key).and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn apply_auth<'a>(request: ureq::Request, auth: &'a AuthScheme) -> ureq::Request {
+    let request = request
+        .set("accept", "application/json")
+        .set("user-agent", USER_AGENT);
+    match auth {
+        AuthScheme::ApiKey(key) => request.set("X-Api-Key", key),
+        AuthScheme::LegacyToken(token) => request.set("Authorization", &format!("Token token={token}")),
+    }
+}
+
+fn list_account_ids(transport: &Transport, auth: &AuthScheme) -> Result<Vec<String>, SourceError> {
+    let path = if auth.is_legacy() {
+        format!("{}/accounts", transport.base)
+    } else {
+        format!("{}/v1/accounts", transport.base)
+    };
+    let agent = transport.agent();
+    let response = apply_auth(agent.get(&path), auth).call();
+    let value = decode_json_response(response, auth)?;
+    Ok(flatten_records(&value)
+        .into_iter()
+        .filter_map(|record| record.get("id").and_then(Value::as_str).map(str::to_string))
+        .filter(|id| validate_account_id(id).is_ok())
+        .collect())
+}
+
+fn perform_current_search(
+    transport: &Transport,
+    auth: &AuthScheme,
     account_id: &str,
     company: &str,
+    country_iso: Option<&str>,
 ) -> Result<Vec<SourceHit>, SourceError> {
-    let leads = fetch_leads(agent, token, account_id, company)?;
-    let contacts = match fetch_contacts(agent, token, account_id, company) {
-        Ok(c) => c,
-        // Contacts-Endpoint ist optional je nach Subscription-Stufe;
-        // ein 403/blocked dort darf den Lead-Pfad nicht killen.
-        Err(SourceError::Blocked { .. }) => Value::Null,
-        Err(other) => return Err(other),
-    };
-
-    let mut hits = leads_to_hits(&leads, account_id);
-    hits.extend(contacts_to_hits(&contacts, account_id));
-
+    let agent = transport.agent();
+    let matches = current_match(&agent, transport, auth, account_id, company, country_iso)?;
+    let mut hits = current_records_to_hits(&matches, account_id, company, true);
+    if hits.is_empty() {
+        let search = current_search(&agent, transport, auth, account_id, company, country_iso)?;
+        hits = current_records_to_hits(&search, account_id, company, false);
+    }
     if hits.is_empty() {
         return Err(SourceError::NoMatch);
     }
@@ -211,116 +380,289 @@ fn perform_search(
     Ok(hits)
 }
 
-fn fetch_leads(
+fn current_match(
     agent: &ureq::Agent,
-    token: &str,
+    transport: &Transport,
+    auth: &AuthScheme,
     account_id: &str,
     company: &str,
+    country_iso: Option<&str>,
 ) -> Result<Value, SourceError> {
-    let url = format!("{API_BASE}/accounts/{account_id}/leads");
-    let response = agent
-        .get(&url)
-        .set("Authorization", &auth_header(token))
-        .set("accept", "application/json")
-        .query("company_name", company)
-        .call();
-    decode_json_response(response)
+    let url = format!("{}/v1/companies/match", transport.base);
+    let mut company_obj = json!({ "company_name": company });
+    if let Some(code) = country_iso {
+        company_obj["country_code"] = json!(code);
+    }
+    let body = json!({ "companies": [company_obj] }).to_string();
+    let response = apply_auth(agent.post(&url), auth)
+        .set("content-type", "application/json")
+        .query("account_id", account_id)
+        .query("max_results_per_company", "5")
+        .send_string(&body);
+    decode_json_response(response, auth)
 }
 
-fn fetch_contacts(
+fn current_search(
     agent: &ureq::Agent,
-    token: &str,
+    transport: &Transport,
+    auth: &AuthScheme,
     account_id: &str,
     company: &str,
+    country_iso: Option<&str>,
 ) -> Result<Value, SourceError> {
-    let url = format!("{API_BASE}/accounts/{account_id}/contacts");
-    let response = agent
-        .get(&url)
-        .set("Authorization", &auth_header(token))
-        .set("accept", "application/json")
-        .query("search", company)
-        .call();
-    decode_json_response(response)
+    let url = format!("{}/v1/companies/search", transport.base);
+    let mut body = json!({
+        "search_terms": [company],
+    });
+    if let Some(code) = country_iso {
+        body["locations"] = json!([{ "country_code": code }]);
+    }
+    let response = apply_auth(agent.post(&url), auth)
+        .set("content-type", "application/json")
+        .query("account_id", account_id)
+        .query("page[size]", &MAX_HITS.to_string())
+        .send_string(&body.to_string());
+    decode_json_response(response, auth)
+}
+
+fn perform_legacy_search(
+    transport: &Transport,
+    auth: &AuthScheme,
+    account_id: &str,
+    company: &str,
+) -> Result<Vec<SourceHit>, SourceError> {
+    let agent = transport.agent();
+    let leads = fetch_legacy(
+        &agent,
+        transport,
+        auth,
+        &format!("/accounts/{account_id}/leads"),
+        &[("company_name", company)],
+    )?;
+    let contacts = match fetch_legacy(
+        &agent,
+        transport,
+        auth,
+        &format!("/accounts/{account_id}/contacts"),
+        &[("search", company)],
+    ) {
+        Ok(value) => value,
+        Err(SourceError::Blocked { .. }) => Value::Null,
+        Err(other) => return Err(other),
+    };
+    let mut hits = leads_to_hits(&leads, account_id, company);
+    hits.extend(contacts_to_hits(&contacts, account_id));
+    if hits.is_empty() {
+        return Err(SourceError::NoMatch);
+    }
+    hits.truncate(MAX_HITS);
+    Ok(hits)
+}
+
+fn fetch_legacy(
+    agent: &ureq::Agent,
+    transport: &Transport,
+    auth: &AuthScheme,
+    path: &str,
+    query: &[(&str, &str)],
+) -> Result<Value, SourceError> {
+    let url = format!("{}{path}", transport.base);
+    let mut request = apply_auth(agent.get(&url), auth);
+    for (key, value) in query {
+        request = request.query(key, value);
+    }
+    decode_json_response(request.call(), auth)
 }
 
 fn decode_json_response(
     response: Result<ureq::Response, ureq::Error>,
+    auth: &AuthScheme,
 ) -> Result<Value, SourceError> {
     let response = match response {
         Ok(r) => r,
         Err(ureq::Error::Status(status, resp)) => {
-            return Err(classify_status(status, resp));
+            return Err(classify_status(status, resp, auth));
         }
         Err(err) => return Err(SourceError::Network(anyhow!(err))),
     };
     let text = response
         .into_string()
         .map_err(|err| SourceError::Network(anyhow!(err)))?;
-    serde_json::from_str::<Value>(&text).map_err(|err| SourceError::ParseFailed {
-        detail: err.to_string(),
+    serde_json::from_str::<Value>(&text).map_err(|_| SourceError::ParseFailed {
+        detail: "invalid json".to_string(),
     })
 }
 
-fn classify_status(status: u16, resp: ureq::Response) -> SourceError {
-    match status {
-        429 => {
-            let retry = resp
-                .header("retry-after")
-                .and_then(|v| v.parse::<u64>().ok())
-                .map(|secs| secs.saturating_mul(1_000));
-            SourceError::RateLimited {
-                retry_after_ms: retry,
+fn classify_status(status: u16, resp: ureq::Response, auth: &AuthScheme) -> SourceError {
+    let retry = resp
+        .header("retry-after")
+        .and_then(|v| v.parse::<u64>().ok())
+        .map(|secs| secs.saturating_mul(1_000));
+    let body = resp.into_string().unwrap_or_default();
+    let code = allowlisted_error_code(&body);
+    match (status, code) {
+        (429, _) => SourceError::RateLimited {
+            retry_after_ms: retry,
+        },
+        (401, _)
+        | (403, Some("missing_token" | "invalid_api_key" | "invalid_token")) => {
+            SourceError::CredentialMissing {
+                secret_name: auth.secret_name(),
             }
         }
-        401 => SourceError::CredentialMissing {
-            secret_name: SECRET_NAME,
-        },
-        403 => SourceError::Blocked {
+        (403, Some(code @ ("insufficient_scope" | "forbidden"))) => {
+            SourceError::Other(anyhow!("entitlement: {code}"))
+        }
+        (403, _) if auth.is_legacy() => SourceError::Blocked {
             reason: format!("http {status}"),
         },
-        404 => SourceError::NoMatch,
-        _ => {
-            let detail = resp
-                .into_string()
-                .unwrap_or_else(|_| format!("http {status}"));
-            SourceError::Other(anyhow!("leadfeeder http {status}: {detail}"))
-        }
+        (403, _) => SourceError::Other(anyhow!("entitlement: http {status}")),
+        (404, _) => SourceError::NoMatch,
+        _ => SourceError::Other(anyhow!("leadfeeder http {status}")),
     }
 }
 
-// ---------------------------------------------------------------------------
-// Hit construction
-// ---------------------------------------------------------------------------
+const ALLOWED_ERROR_CODES: &[&str] = &[
+    "missing_token",
+    "invalid_api_key",
+    "invalid_token",
+    "insufficient_scope",
+    "forbidden",
+];
 
-fn lead_records(value: &Value) -> &[Value] {
-    value
-        .get("data")
-        .and_then(Value::as_array)
-        .map(|v| v.as_slice())
-        .unwrap_or(&[])
+fn allowlisted_error_code(body: &str) -> Option<&'static str> {
+    let parsed = error_code(body)?;
+    ALLOWED_ERROR_CODES
+        .iter()
+        .copied()
+        .find(|code| *code == parsed)
 }
 
-fn leads_to_hits(value: &Value, account_id: &str) -> Vec<SourceHit> {
-    let mut hits = Vec::new();
-    for record in lead_records(value) {
-        if let Some(hit) = lead_to_hit(record, account_id) {
-            hits.push(hit);
+fn error_code(body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    if let Some(code) = value.get("code").and_then(Value::as_str) {
+        return Some(code.to_string());
+    }
+    value
+        .get("errors")
+        .and_then(Value::as_array)
+        .and_then(|arr| arr.first())
+        .and_then(|err| err.get("code").or_else(|| err.get("title")))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
+fn flatten_records(value: &Value) -> Vec<&Value> {
+    match value.get("data") {
+        Some(Value::Array(arr)) => {
+            let mut out = Vec::new();
+            for item in arr {
+                match item {
+                    Value::Array(inner) => out.extend(inner.iter()),
+                    other => out.push(other),
+                }
+            }
+            out
         }
+        Some(obj @ Value::Object(_)) => vec![obj],
+        _ => Vec::new(),
+    }
+}
+
+fn current_records_to_hits(
+    value: &Value,
+    account_id: &str,
+    company: &str,
+    require_score: bool,
+) -> Vec<SourceHit> {
+    let mut hits = Vec::new();
+    for record in flatten_records(value) {
+        let score = record
+            .pointer("/attributes/match_score")
+            .and_then(Value::as_f64);
+        if require_score && score.unwrap_or(0.0) < MIN_MATCH_SCORE {
+            continue;
+        }
+        let Some(summary) = company_summary(record) else {
+            continue;
+        };
+        let Some(hit) = summary_to_hit(summary, account_id, company, score) else {
+            continue;
+        };
+        hits.push(hit);
     }
     hits
+}
+
+fn company_summary(record: &Value) -> Option<&Value> {
+    let record_type = record.get("type").and_then(Value::as_str).unwrap_or("");
+    if matches!(
+        record_type,
+        "company_summary" | "companies" | "company" | "leads" | "lead"
+    ) {
+        return Some(record);
+    }
+    match record.pointer("/relationships/company_summary") {
+        Some(summary) if summary.get("attributes").is_some() => Some(summary),
+        _ => None,
+    }
+}
+
+fn summary_to_hit(
+    summary: &Value,
+    account_id: &str,
+    company: &str,
+    score: Option<f64>,
+) -> Option<SourceHit> {
+    let id = summary.get("id").and_then(Value::as_str).unwrap_or("");
+    let attrs = summary.get("attributes")?;
+    let name = attrs
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    if name.is_empty() || !company_identity_matches(company, name, score) {
+        return None;
+    }
+    let domain = attrs
+        .get("url")
+        .or_else(|| attrs.get("website_url"))
+        .and_then(Value::as_str)
+        .map(domain_from_url)
+        .unwrap_or_default();
+    let employees = attrs
+        .get("employee_range")
+        .or_else(|| attrs.get("employee_count"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let industry = first_industry_name(attrs).unwrap_or("");
+    let snippet = [domain.as_str(), employees, industry]
+        .into_iter()
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join(" · ");
+    Some(SourceHit {
+        title: name.to_string(),
+        url: format!("{API_BASE}/v1/companies/{id}?account_id={account_id}"),
+        snippet,
+    })
+}
+
+fn leads_to_hits(value: &Value, account_id: &str, company: &str) -> Vec<SourceHit> {
+    flatten_records(value)
+        .into_iter()
+        .filter_map(|record| lead_to_hit(record, account_id, company))
+        .collect()
 }
 
 fn contacts_to_hits(value: &Value, account_id: &str) -> Vec<SourceHit> {
-    let mut hits = Vec::new();
-    for record in lead_records(value) {
-        if let Some(hit) = contact_to_hit(record, account_id) {
-            hits.push(hit);
-        }
-    }
-    hits
+    flatten_records(value)
+        .into_iter()
+        .filter_map(|record| contact_to_hit(record, account_id))
+        .collect()
 }
 
-fn lead_to_hit(record: &Value, account_id: &str) -> Option<SourceHit> {
+fn lead_to_hit(record: &Value, account_id: &str, company: &str) -> Option<SourceHit> {
     let id = record.get("id").and_then(Value::as_str).unwrap_or("");
     let attrs = record.get("attributes")?;
     let name = attrs
@@ -328,7 +670,7 @@ fn lead_to_hit(record: &Value, account_id: &str) -> Option<SourceHit> {
         .and_then(Value::as_str)
         .unwrap_or("")
         .trim();
-    if name.is_empty() {
+    if name.is_empty() || !company_identity_matches(company, name, None) {
         return None;
     }
     let domain = attrs
@@ -338,8 +680,8 @@ fn lead_to_hit(record: &Value, account_id: &str) -> Option<SourceHit> {
         .unwrap_or_default();
     let industry = attrs.get("industry").and_then(Value::as_str).unwrap_or("");
     let snippet = [domain.as_str(), industry]
-        .iter()
-        .filter(|s| !s.is_empty())
+        .into_iter()
+        .filter(|part| !part.is_empty())
         .copied()
         .collect::<Vec<_>>()
         .join(" · ");
@@ -373,7 +715,7 @@ fn contact_to_hit(record: &Value, account_id: &str) -> Option<SourceHit> {
         .trim();
     let snippet_parts: Vec<&str> = [title, email]
         .into_iter()
-        .filter(|s| !s.is_empty())
+        .filter(|part| !part.is_empty())
         .collect();
     Some(SourceHit {
         title: name.to_string(),
@@ -382,37 +724,27 @@ fn contact_to_hit(record: &Value, account_id: &str) -> Option<SourceHit> {
     })
 }
 
-// ---------------------------------------------------------------------------
-// Field extraction
-// ---------------------------------------------------------------------------
-
 fn extract_from_json(value: &Value, source_url: &str) -> Vec<(FieldKey, FieldEvidence)> {
-    // Beide Antwortformen — Listenantwort (`{"data":[...]}`) und
-    // Einzelantwort (`{"data":{...}}`) — auf eine gemeinsame Schleife
-    // reduzieren.
-    let records: Vec<&Value> = match value.get("data") {
-        Some(Value::Array(arr)) => arr.iter().collect(),
-        Some(obj @ Value::Object(_)) => vec![obj],
-        _ => Vec::new(),
-    };
-
     let mut out = Vec::new();
     let url = source_url.to_string();
-    for record in records {
+    for record in flatten_records(value) {
         let record_type = record.get("type").and_then(Value::as_str).unwrap_or("");
+        if let Some(summary) = company_summary(record) {
+            if let Some(attrs) = summary.get("attributes") {
+                extract_company_fields(attrs, &url, &mut out);
+            }
+        }
         let attrs = match record.get("attributes") {
-            Some(a) => a,
+            Some(attrs) => attrs,
             None => continue,
         };
         match record_type {
-            "leads" | "lead" | "companies" | "company" => {
-                extract_lead_fields(attrs, &url, &mut out);
-            }
+            "leads" | "lead" => extract_lead_fields(attrs, &url, &mut out),
             "contacts" | "contact" | "people" | "person" => {
-                extract_contact_fields(attrs, &url, &mut out);
+                extract_contact_fields(attrs, &url, &mut out)
             }
+            "company_summary" | "companies" | "company" | "company_match" => {}
             _ => {
-                // Unbekannter Typ: bestmöglich beide Pfade probieren.
                 extract_lead_fields(attrs, &url, &mut out);
                 extract_contact_fields(attrs, &url, &mut out);
             }
@@ -421,23 +753,97 @@ fn extract_from_json(value: &Value, source_url: &str) -> Vec<(FieldKey, FieldEvi
     out
 }
 
-fn extract_lead_fields(attrs: &Value, url: &str, out: &mut Vec<(FieldKey, FieldEvidence)>) {
-    if let Some(email) = attrs.get("email").and_then(Value::as_str) {
-        let clean = email.trim();
-        if looks_like_email(clean) {
-            push(out, FieldKey::FirmaEmail, clean, url, Confidence::High);
-        }
+fn extract_company_fields(attrs: &Value, url: &str, out: &mut Vec<(FieldKey, FieldEvidence)>) {
+    if let Some(name) = attrs.get("name").and_then(Value::as_str) {
+        push(out, FieldKey::FirmaName, name, url, Confidence::High);
     }
-    if let Some(website) = attrs.get("website_url").and_then(Value::as_str) {
+    if let Some(website) = attrs
+        .get("url")
+        .or_else(|| attrs.get("website_url"))
+        .and_then(Value::as_str)
+    {
         let domain = domain_from_url(website);
         if !domain.is_empty() {
             push(out, FieldKey::FirmaDomain, &domain, url, Confidence::High);
+            push(
+                out,
+                FieldKey::FirmaHomepageFactSheet,
+                website,
+                url,
+                Confidence::High,
+            );
         }
     } else if let Some(domain) = attrs.get("domain").and_then(Value::as_str) {
         let clean = domain.trim().trim_start_matches("www.");
         if !clean.is_empty() {
             push(out, FieldKey::FirmaDomain, clean, url, Confidence::High);
         }
+    }
+    if let Some(email) = attrs.get("email").and_then(Value::as_str) {
+        let clean = email.trim();
+        if looks_like_email(clean) {
+            push(out, FieldKey::FirmaEmail, clean, url, Confidence::High);
+        }
+    }
+    if let Some(employees) = attrs
+        .get("employee_range")
+        .or_else(|| attrs.get("employee_count"))
+        .and_then(Value::as_str)
+    {
+        push(out, FieldKey::Mitarbeiter, employees, url, Confidence::High);
+    }
+    if let Some(industry) = first_industry_name(attrs) {
+        push(
+            out,
+            FieldKey::FirmaGeschaeftstaetigkeit,
+            industry,
+            url,
+            Confidence::High,
+        );
+    }
+    if let Some(code) = first_industry_code(attrs) {
+        push(out, FieldKey::WzCode, code, url, Confidence::Medium);
+    }
+    if let Some(address) = attrs.get("address") {
+        if let Some(street) = address
+            .get("street_address")
+            .and_then(Value::as_str)
+        {
+            push(out, FieldKey::FirmaAnschrift, street, url, Confidence::High);
+        }
+        if let Some(plz) = address.get("postal_code").and_then(Value::as_str) {
+            push(out, FieldKey::FirmaPlz, plz, url, Confidence::High);
+        }
+        if let Some(city) = address.get("city").and_then(Value::as_str) {
+            push(out, FieldKey::FirmaOrt, city, url, Confidence::High);
+        }
+    }
+    if let Some(revenue) = attrs.get("revenue") {
+        if let Some(amount) = revenue.get("value").and_then(Value::as_f64) {
+            let currency = revenue
+                .get("currency")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let rendered = if currency.is_empty() {
+                amount.to_string()
+            } else {
+                format!("{amount} {currency}")
+            };
+            push(out, FieldKey::Umsatz, &rendered, url, Confidence::Medium);
+        }
+    }
+}
+
+fn extract_lead_fields(attrs: &Value, url: &str, out: &mut Vec<(FieldKey, FieldEvidence)>) {
+    extract_company_fields(attrs, url, out);
+    if let Some(industry) = attrs.get("industry").and_then(Value::as_str) {
+        push(
+            out,
+            FieldKey::FirmaGeschaeftstaetigkeit,
+            industry,
+            url,
+            Confidence::High,
+        );
     }
 }
 
@@ -450,11 +856,68 @@ fn extract_contact_fields(attrs: &Value, url: &str, out: &mut Vec<(FieldKey, Fie
     }
 }
 
+fn extract_snippet_fields(snippet: &str, url: &str, out: &mut Vec<(FieldKey, FieldEvidence)>) {
+    let parts = snippet
+        .split('·')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if let Some(domain) = parts.first().filter(|part| part.contains('.')) {
+        push(out, FieldKey::FirmaDomain, domain, url, Confidence::High);
+    }
+    if let Some(employees) = parts.iter().find(|part| part.contains('-') && part.chars().any(|c| c.is_ascii_digit())) {
+        push(out, FieldKey::Mitarbeiter, employees, url, Confidence::High);
+    }
+}
+
+fn first_industry_name(attrs: &Value) -> Option<&str> {
+    attrs
+        .pointer("/industries/industry/0/name")
+        .and_then(Value::as_str)
+        .or_else(|| attrs.get("industry").and_then(Value::as_str))
+}
+
+fn first_industry_code(attrs: &Value) -> Option<&str> {
+    attrs
+        .pointer("/industries/industry/0/code")
+        .and_then(Value::as_str)
+}
+
+fn company_identity_matches(query: &str, candidate: &str, score: Option<f64>) -> bool {
+    if let Some(score) = score {
+        if score < MIN_MATCH_SCORE {
+            return false;
+        }
+    }
+    let tokens = company_tokens(query);
+    if tokens.is_empty() {
+        return false;
+    }
+    let haystack = normalize_identity(candidate);
+    tokens.iter().all(|token| haystack.contains(token))
+}
+
+fn company_tokens(company: &str) -> Vec<String> {
+    const LEGAL: &[&str] = &[
+        "ag", "gmbh", "mbh", "se", "kg", "kgaa", "ohg", "ug", "ltd", "inc", "sa", "sarl", "nv",
+        "bv", "co", "company", "holding", "gruppe",
+    ];
+    normalize_identity(company)
+        .split_whitespace()
+        .filter(|token| token.len() >= 3 && !LEGAL.contains(token))
+        .map(str::to_string)
+        .collect()
+}
+
+fn normalize_identity(value: &str) -> String {
+    value
+        .to_lowercase()
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+}
+
 fn domain_from_url(raw: &str) -> String {
-    // Leadfeeder liefert `website_url` mal mit Schema, mal ohne. Wir
-    // ziehen die nackte registrable Domain heraus, ohne `www.`-Prefix und
-    // ohne Trailing-Slash/Path. URL-Crate ist nicht überall verlässlich,
-    // wenn das Schema fehlt — kleine, robuste Heuristik tut es hier.
     let s = raw.trim();
     if s.is_empty() {
         return String::new();
@@ -468,14 +931,10 @@ fn domain_from_url(raw: &str) -> String {
         .split(|c: char| c == '/' || c == '?' || c == '#')
         .next()
         .unwrap_or("");
-    let host = host.trim_start_matches("www.");
-    host.trim().to_ascii_lowercase()
+    host.trim_start_matches("www.").trim().to_ascii_lowercase()
 }
 
 fn looks_like_email(value: &str) -> bool {
-    // Sehr kleine Validierung: enthält genau ein '@', mindestens ein '.'
-    // im Domain-Teil, keine Whitespaces. Reicht, um leere Strings,
-    // `"unknown"` oder Telefon-Nummern auszusortieren.
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed.contains(' ') {
         return false;
@@ -497,6 +956,12 @@ fn push(
     if trimmed.is_empty() {
         return;
     }
+    if out
+        .iter()
+        .any(|(existing, evidence)| existing == &key && evidence.value == trimmed)
+    {
+        return;
+    }
     out.push((
         key,
         FieldEvidence {
@@ -508,30 +973,245 @@ fn push(
     ));
 }
 
-// ---------------------------------------------------------------------------
-// Registry hook
-// ---------------------------------------------------------------------------
-
 static MODULE: Leadfeeder = Leadfeeder;
 
 pub fn module() -> &'static dyn SourceModule {
     &MODULE
 }
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::sources::{ResearchMode, SourceCtx};
+    use std::io::Read;
+    use std::io::Write;
+    use std::net::TcpListener;
     use std::path::Path;
+    use std::path::PathBuf;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::thread;
+    use std::time::Duration as StdDuration;
 
     const LEADS_FIXTURE: &str =
         include_str!("../../fixtures/sources/leadfeeder/leads_wittenstein.json");
     const CONTACTS_FIXTURE: &str =
         include_str!("../../fixtures/sources/leadfeeder/contacts_wittenstein.json");
+    const ACCOUNTS_SINGLE: &str =
+        include_str!("../../fixtures/sources/leadfeeder/accounts_single_fixture.json");
+    const ACCOUNTS_MULTIPLE: &str =
+        include_str!("../../fixtures/sources/leadfeeder/accounts_multiple_fixture.json");
+    const MATCH_FIXTURE: &str =
+        include_str!("../../fixtures/sources/leadfeeder/match_example_manufacturing_fixture.json");
+    const SEARCH_FIXTURE: &str =
+        include_str!("../../fixtures/sources/leadfeeder/search_example_manufacturing_fixture.json");
+    const MATCH_UNRELATED: &str =
+        include_str!("../../fixtures/sources/leadfeeder/match_unrelated_fixture.json");
+
+    static TEST_ROOT_SEQ: AtomicU64 = AtomicU64::new(1);
+
+    struct TestRoot {
+        path: PathBuf,
+    }
+
+    impl TestRoot {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "ctox-leadfeeder-test-root-{}-{}",
+                std::process::id(),
+                TEST_ROOT_SEQ.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(path.join("runtime")).expect("test root");
+            Self { path }
+        }
+
+        fn write_env(&self, pairs: &[(&str, &str)]) {
+            let db = self.path.join("runtime/ctox.sqlite3");
+            let conn = rusqlite::Connection::open(&db).expect("open runtime sqlite");
+            conn.execute_batch(
+                "CREATE TABLE IF NOT EXISTS runtime_env_kv (
+                    env_key TEXT PRIMARY KEY,
+                    env_value TEXT NOT NULL
+                );",
+            )
+            .expect("create runtime_env_kv");
+            for (key, value) in pairs {
+                conn.execute(
+                    "INSERT OR REPLACE INTO runtime_env_kv(env_key, env_value) VALUES (?1, ?2)",
+                    [*key, *value],
+                )
+                .expect("insert runtime env");
+            }
+        }
+
+        fn ctx(&self) -> SourceCtx<'_> {
+            SourceCtx {
+                root: &self.path,
+                country: Some(Country::De),
+                mode: ResearchMode::NewRecord,
+            }
+        }
+    }
+
+    impl Drop for TestRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    struct RecordedRequest {
+        method: String,
+        path: String,
+        headers: Vec<(String, String)>,
+        body: String,
+    }
+
+    impl RecordedRequest {
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers.iter().find_map(|(key, value)| {
+                if key.eq_ignore_ascii_case(name) {
+                    Some(value.as_str())
+                } else {
+                    None
+                }
+            })
+        }
+    }
+
+    struct MockApi {
+        base: String,
+        requests: Arc<Mutex<Vec<RecordedRequest>>>,
+        stop: Arc<AtomicBool>,
+        join: Option<thread::JoinHandle<()>>,
+    }
+
+    impl MockApi {
+        fn spawn(handler: impl Fn(&RecordedRequest) -> (u16, String) + Send + 'static) -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
+            let addr = listener.local_addr().expect("local addr");
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let stop = Arc::new(AtomicBool::new(false));
+            let reqs = Arc::clone(&requests);
+            let stop_flag = Arc::clone(&stop);
+            listener.set_nonblocking(true).expect("nonblocking");
+            let join = thread::spawn(move || {
+                while !stop_flag.load(Ordering::Relaxed) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            stream
+                                .set_read_timeout(Some(StdDuration::from_millis(500)))
+                                .ok();
+                            if let Some(recorded) = read_http_request(&mut stream) {
+                                reqs.lock().expect("lock requests").push(recorded.clone());
+                                let (status, body) = handler(&recorded);
+                                let reason = match status {
+                                    200 => "OK",
+                                    401 => "Unauthorized",
+                                    403 => "Forbidden",
+                                    404 => "Not Found",
+                                    429 => "Too Many Requests",
+                                    _ => "Error",
+                                };
+                                let response = format!(
+                                    "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                    body.len()
+                                );
+                                let _ = stream.write_all(response.as_bytes());
+                            }
+                        }
+                        Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(StdDuration::from_millis(10));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            Self {
+                base: format!("http://{addr}"),
+                requests,
+                stop,
+                join: Some(join),
+            }
+        }
+
+        fn transport(&self) -> Transport {
+            Transport {
+                base: self.base.clone(),
+                allow_hosts: vec!["127.0.0.1".to_string()],
+            }
+        }
+
+        fn recorded(&self) -> Vec<RecordedRequest> {
+            self.requests.lock().expect("lock").clone()
+        }
+    }
+
+    impl Drop for MockApi {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            if let Some(join) = self.join.take() {
+                let _ = join.join();
+            }
+        }
+    }
+
+    fn read_http_request(stream: &mut std::net::TcpStream) -> Option<RecordedRequest> {
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 1024];
+        loop {
+            match stream.read(&mut tmp) {
+                Ok(0) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&tmp[..n]);
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                    if buf.len() > 64 * 1024 {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let text = String::from_utf8_lossy(&buf);
+        let (head, rest) = text.split_once("\r\n\r\n")?;
+        let mut lines = head.split("\r\n");
+        let request_line = lines.next()?;
+        let mut parts = request_line.split_whitespace();
+        let method = parts.next()?.to_string();
+        let path = parts.next()?.to_string();
+        let mut headers = Vec::new();
+        let mut content_length = 0usize;
+        for line in lines {
+            if let Some((name, value)) = line.split_once(':') {
+                let name = name.trim().to_string();
+                let value = value.trim().to_string();
+                if name.eq_ignore_ascii_case("content-length") {
+                    content_length = value.parse().unwrap_or(0);
+                }
+                headers.push((name, value));
+            }
+        }
+        let mut body = rest.as_bytes().to_vec();
+        while body.len() < content_length {
+            let n = stream.read(&mut tmp).ok()?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&tmp[..n]);
+        }
+        body.truncate(content_length);
+        Some(RecordedRequest {
+            method,
+            path,
+            headers,
+            body: String::from_utf8_lossy(&body).into_owned(),
+        })
+    }
 
     fn dummy_page(text: &str, url: &str) -> SourceReadResult {
         SourceReadResult {
@@ -543,6 +1223,36 @@ mod tests {
             excerpts: Vec::new(),
             find_results: Vec::new(),
             raw_html: None,
+        }
+    }
+
+    fn assert_read_only(requests: &[RecordedRequest]) {
+        for request in requests {
+            assert!(
+                !request.path.contains("/enrichment"),
+                "must not create enrichment jobs: {}",
+                request.path
+            );
+            assert!(
+                !request.path.contains("/find"),
+                "must not create find-contact jobs: {}",
+                request.path
+            );
+            if request.method == "GET" {
+                assert!(
+                    !request.path.starts_with("/v1/companies/")
+                        || request.path.starts_with("/v1/companies/match")
+                        || request.path.starts_with("/v1/companies/search"),
+                    "must not retrieve company deep data: {} {}",
+                    request.method,
+                    request.path
+                );
+                assert!(
+                    !request.path.starts_with("/v1/contacts"),
+                    "must not retrieve contact deep data: {}",
+                    request.path
+                );
+            }
         }
     }
 
@@ -568,24 +1278,18 @@ mod tests {
             country: Some(Country::De),
             mode: ResearchMode::NewRecord,
         };
-        assert!(module().shape_query("Wittenstein", &ctx).is_none());
+        assert!(module().shape_query("Example Manufacturing AG", &ctx).is_none());
     }
 
     #[test]
     fn fetch_direct_engages_for_each_dach_country() {
-        // The Country enum currently only covers DACH, so there is no
-        // negative variant we could feed in. We instead assert the
-        // happy-path: for every DACH country, the module engages
-        // (does not return None). With no credential, that engagement
-        // surfaces as CredentialMissing — which is the correct contract
-        // for the orchestrator to act on.
         for country in [Country::De, Country::At, Country::Ch] {
             let ctx = SourceCtx {
                 root: Path::new("/tmp/ctox-nonexistent-leadfeeder"),
                 country: Some(country),
                 mode: ResearchMode::NewRecord,
             };
-            let r = module().fetch_direct(&ctx, "Wittenstein SE");
+            let r = module().fetch_direct(&ctx, "Example Manufacturing AG");
             assert!(r.is_some(), "{country:?} must engage");
             assert!(matches!(
                 r.unwrap(),
@@ -596,16 +1300,13 @@ mod tests {
 
     #[test]
     fn fetch_direct_missing_credential_returns_credential_missing() {
-        // Point root at a directory that definitely has no runtime config
-        // SQLite — runtime_config::get returns None, fetch_direct must
-        // map this to CredentialMissing for the orchestrator.
         let ctx = SourceCtx {
             root: Path::new("/tmp/ctox-nonexistent-leadfeeder"),
             country: Some(Country::De),
             mode: ResearchMode::NewRecord,
         };
         let result = module()
-            .fetch_direct(&ctx, "Wittenstein SE")
+            .fetch_direct(&ctx, "Example Manufacturing AG")
             .expect("DACH engages");
         match result {
             Err(SourceError::CredentialMissing { secret_name }) => {
@@ -633,14 +1334,12 @@ mod tests {
             "https://api.leadfeeder.com/accounts/me/leads",
         );
         let fields = module().extract_fields(&page);
-
         let firma_email = fields
             .iter()
             .find(|(k, _)| matches!(k, FieldKey::FirmaEmail))
             .expect("firma_email present");
         assert_eq!(firma_email.1.value, "info@wittenstein.de");
         assert!(matches!(firma_email.1.confidence, Confidence::High));
-
         let firma_domain = fields
             .iter()
             .find(|(k, _)| matches!(k, FieldKey::FirmaDomain))
@@ -656,7 +1355,6 @@ mod tests {
             "https://api.leadfeeder.com/accounts/me/contacts",
         );
         let fields = module().extract_fields(&page);
-
         let person_emails: Vec<_> = fields
             .iter()
             .filter(|(k, _)| matches!(k, FieldKey::PersonEmail))
@@ -671,6 +1369,32 @@ mod tests {
         for (_, conf) in &person_emails {
             assert!(matches!(conf, Confidence::Medium));
         }
+    }
+
+    #[test]
+    fn current_match_fixture_yields_identity_and_provenance() {
+        let page = dummy_page(
+            MATCH_FIXTURE,
+            "https://api.leadfeeder.com/v1/companies/match?account_id=acct-fixture-1",
+        );
+        let fields = module().extract_fields(&page);
+        let name = fields
+            .iter()
+            .find(|(k, _)| matches!(k, FieldKey::FirmaName))
+            .expect("firma_name");
+        assert_eq!(name.1.value, "Example Manufacturing AG");
+        assert_eq!(
+            name.1.source_url,
+            "https://api.leadfeeder.com/v1/companies/match?account_id=acct-fixture-1"
+        );
+        let domain = fields
+            .iter()
+            .find(|(k, _)| matches!(k, FieldKey::FirmaDomain))
+            .expect("firma_domain");
+        assert_eq!(domain.1.value, "example-manufacturing.test");
+        assert!(fields
+            .iter()
+            .any(|(k, ev)| matches!(k, FieldKey::Mitarbeiter) && ev.value == "101-500"));
     }
 
     #[test]
@@ -710,8 +1434,8 @@ mod tests {
     #[test]
     fn domain_from_url_strips_scheme_and_www() {
         assert_eq!(
-            domain_from_url("https://www.Wittenstein.de/de"),
-            "wittenstein.de"
+            domain_from_url("https://www.example-manufacturing.test/de"),
+            "example-manufacturing.test"
         );
         assert_eq!(domain_from_url("http://example.com"), "example.com");
         assert_eq!(domain_from_url("example.com/foo"), "example.com");
@@ -730,29 +1454,388 @@ mod tests {
     }
 
     #[test]
+    fn current_api_match_uses_x_api_key_and_explicit_account() {
+        let mock = MockApi::spawn(|req| {
+            if req.method == "GET" && req.path.starts_with("/v1/accounts") {
+                panic!("explicit account must not list accounts");
+            }
+            assert_eq!(req.method, "POST");
+            assert!(req.path.starts_with("/v1/companies/match?account_id=acct-fixture-1"));
+            assert_eq!(req.header("X-Api-Key"), Some("fixture-current-key"));
+            assert!(req.header("Authorization").is_none());
+            (200, MATCH_FIXTURE.to_string())
+        });
+        let root = TestRoot::new();
+        root.write_env(&[
+            (SECRET_NAME, "fixture-current-key"),
+            (ACCOUNT_ID_KEY, "acct-fixture-1"),
+        ]);
+        let hits = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+            .expect("engages")
+            .expect("match hits");
+        assert_eq!(hits[0].title, "Example Manufacturing AG");
+        assert!(hits[0].url.contains("/v1/companies/co-fixture-1?account_id=acct-fixture-1"));
+        assert!(hits[0].snippet.contains("example-manufacturing.test"));
+        let recorded = mock.recorded();
+        assert_eq!(recorded.len(), 1);
+        assert_read_only(&recorded);
+        assert!(recorded[0].body.contains("Example Manufacturing AG"));
+        assert!(recorded[0].body.contains("\"country_code\":\"DE\""));
+    }
+
+    #[test]
+    fn current_api_resolves_single_authorized_account() {
+        let mock = MockApi::spawn(|req| {
+            if req.method == "GET" && req.path == "/v1/accounts" {
+                assert_eq!(req.header("X-Api-Key"), Some("fixture-current-key"));
+                return (200, ACCOUNTS_SINGLE.to_string());
+            }
+            assert!(req.path.contains("account_id=acct-fixture-1"));
+            (200, MATCH_FIXTURE.to_string())
+        });
+        let root = TestRoot::new();
+        root.write_env(&[(SECRET_NAME, "fixture-current-key")]);
+        let hits = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+            .expect("engages")
+            .expect("hits");
+        assert_eq!(hits[0].title, "Example Manufacturing AG");
+        assert_read_only(&mock.recorded());
+    }
+
+    #[test]
+    fn current_api_requires_explicit_account_when_multiple() {
+        let mock = MockApi::spawn(|req| {
+            assert_eq!(req.path, "/v1/accounts");
+            (200, ACCOUNTS_MULTIPLE.to_string())
+        });
+        let root = TestRoot::new();
+        root.write_env(&[(SECRET_NAME, "fixture-current-key")]);
+        let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+            .expect("engages")
+            .expect_err("multiple accounts");
+        match err {
+            SourceError::Other(inner) => {
+                let text = inner.to_string();
+                assert!(text.contains("account_selection_required"), "{text}");
+            }
+            other => panic!("expected account selection error, got {other:?}"),
+        }
+        assert_eq!(mock.recorded().len(), 1);
+        assert_read_only(&mock.recorded());
+    }
+
+    #[test]
+    fn rejects_me_as_account_id() {
+        let mock = MockApi::spawn(|_req| {
+            panic!("must not call the API with account alias me");
+        });
+        let root = TestRoot::new();
+        root.write_env(&[
+            (SECRET_NAME, "fixture-current-key"),
+            (ACCOUNT_ID_KEY, "me"),
+        ]);
+        let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+            .expect("engages")
+            .expect_err("rejected me");
+        match err {
+            SourceError::Other(inner) => {
+                assert!(inner.to_string().contains("explicit authorized account"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(mock.recorded().is_empty());
+    }
+
+    #[test]
+    fn current_api_search_fallback_and_identity_reject_unrelated() {
+        let mock = MockApi::spawn(|req| {
+            if req.path.starts_with("/v1/companies/match") {
+                return (200, MATCH_UNRELATED.to_string());
+            }
+            if req.path.starts_with("/v1/companies/search") {
+                return (200, SEARCH_FIXTURE.to_string());
+            }
+            panic!("unexpected {}", req.path);
+        });
+        let root = TestRoot::new();
+        root.write_env(&[
+            (SECRET_NAME, "fixture-current-key"),
+            (ACCOUNT_ID_KEY, "acct-fixture-1"),
+        ]);
+        let hits = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+            .expect("engages")
+            .expect("search fallback");
+        assert_eq!(hits[0].title, "Example Manufacturing AG");
+        let unrelated = fetch_direct_with(&root.ctx(), "Completely Different GmbH", &mock.transport())
+            .expect("engages");
+        assert!(matches!(unrelated, Err(SourceError::NoMatch)));
+        assert_read_only(&mock.recorded());
+    }
+
+    #[test]
+    fn distinguishable_error_classes() {
+        let cases: Vec<(u16, &str, fn(&SourceError) -> bool)> = vec![
+            (429, "{}", |err| matches!(err, SourceError::RateLimited { .. })),
+            (
+                403,
+                r#"{"code":"invalid_api_key","message":"fixture invalid key"}"#,
+                |err| matches!(err, SourceError::CredentialMissing { secret_name: SECRET_NAME }),
+            ),
+            (
+                403,
+                r#"{"code":"forbidden","message":"fixture entitlement"}"#,
+                |err| match err {
+                    SourceError::Other(inner) => inner.to_string().contains("entitlement"),
+                    _ => false,
+                },
+            ),
+            (
+                200,
+                "{not-json",
+                |err| matches!(err, SourceError::ParseFailed { .. }),
+            ),
+            (
+                200,
+                r#"{"data":[]}"#,
+                |err| matches!(err, SourceError::NoMatch),
+            ),
+        ];
+        for (status, body, predicate) in cases {
+            let body = body.to_string();
+            let mock = MockApi::spawn(move |_req| (status, body.clone()));
+            let root = TestRoot::new();
+            root.write_env(&[
+                (SECRET_NAME, "fixture-current-key"),
+                (ACCOUNT_ID_KEY, "acct-fixture-1"),
+            ]);
+            let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+                .expect("engages")
+                .expect_err("classified error");
+            assert!(predicate(&err), "status {status} classified as {err:?}");
+        }
+    }
+
+    const SECRET_CANARY: &str = "FIXTURE_LEADFEEDER_KEY_DO_NOT_LEAK";
+
+    fn serialized_source_failure(err: &SourceError) -> String {
+        serde_json::json!({
+            "kind": err.as_str(),
+            "error": err.to_string(),
+            "secret_name": match err {
+                SourceError::CredentialMissing { secret_name } => Some(*secret_name),
+                _ => None,
+            },
+            "secret_value_in_payload": false,
+        })
+        .to_string()
+    }
+
+    fn assert_no_secret_canary(haystack: &str) {
+        assert!(
+            !haystack.contains(SECRET_CANARY),
+            "secret canary leaked: {haystack}"
+        );
+    }
+
+    #[test]
+    fn test_root_uses_process_temp_dir() {
+        let first = TestRoot::new();
+        let second = TestRoot::new();
+        let temp = std::env::temp_dir();
+        assert_eq!(first.path.parent(), Some(temp.as_path()));
+        assert_eq!(second.path.parent(), Some(temp.as_path()));
+        let first_name = first.path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        let second_name = second.path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        assert!(
+            first_name.starts_with("ctox-leadfeeder-test-root-"),
+            "{first_name}"
+        );
+        assert!(
+            second_name.starts_with("ctox-leadfeeder-test-root-"),
+            "{second_name}"
+        );
+        assert_ne!(first.path, second.path);
+    }
+
+    #[test]
+    fn auth_scheme_debug_redacts_secret_material() {
+        let api = AuthScheme::ApiKey(SECRET_CANARY.to_string());
+        let legacy = AuthScheme::LegacyToken(SECRET_CANARY.to_string());
+        assert_no_secret_canary(&format!("{api:?}"));
+        assert_no_secret_canary(&format!("{legacy:?}"));
+        assert!(format!("{api:?}").contains("<redacted>"));
+        assert!(format!("{legacy:?}").contains("<redacted>"));
+    }
+
+    #[test]
+    fn provider_and_config_errors_do_not_echo_secret_material() {
+        let bodies = [
+            (
+                403,
+                format!(r#"{{"code":"forbidden","message":"supplied key {SECRET_CANARY}"}}"#),
+            ),
+            (
+                403,
+                format!(r#"{{"code":"{SECRET_CANARY}","message":"echo"}}"#),
+            ),
+            (
+                500,
+                format!(r#"{{"error":"upstream","key":"{SECRET_CANARY}"}}"#),
+            ),
+        ];
+        for (status, body) in bodies {
+            let mock = MockApi::spawn(move |_req| (status, body.clone()));
+            let root = TestRoot::new();
+            root.write_env(&[
+                (SECRET_NAME, SECRET_CANARY),
+                (ACCOUNT_ID_KEY, "acct-fixture-1"),
+            ]);
+            let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+                .expect("engages")
+                .expect_err("classified error");
+            let display = err.to_string();
+            let debug = format!("{err:?}");
+            let serialized = serialized_source_failure(&err);
+            assert_no_secret_canary(&display);
+            assert_no_secret_canary(&debug);
+            assert_no_secret_canary(&serialized);
+            match status {
+                403 => assert!(display.contains("entitlement"), "{display}"),
+                500 => assert!(display.contains("leadfeeder http 500"), "{display}"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_auth_scheme_does_not_echo_raw_config() {
+        let mock = MockApi::spawn(|_req| panic!("must not call API with invalid scheme"));
+        let root = TestRoot::new();
+        root.write_env(&[
+            (SECRET_NAME, SECRET_CANARY),
+            (AUTH_SCHEME_KEY, SECRET_CANARY),
+            (ACCOUNT_ID_KEY, "acct-fixture-1"),
+        ]);
+        let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+            .expect("engages")
+            .expect_err("invalid scheme");
+        let display = err.to_string();
+        assert!(
+            display.contains("invalid LEADFEEDER_AUTH_SCHEME"),
+            "{display}"
+        );
+        assert!(!display.contains(SECRET_CANARY), "{display}");
+        assert_no_secret_canary(&serialized_source_failure(&err));
+        assert!(mock.recorded().is_empty());
+    }
+
+    #[test]
+    fn never_sends_current_key_as_legacy_token() {
+        let mock = MockApi::spawn(|req| {
+            assert_eq!(req.header("X-Api-Key"), Some("fixture-current-key"));
+            assert!(req.header("Authorization").is_none());
+            (200, MATCH_FIXTURE.to_string())
+        });
+        let root = TestRoot::new();
+        root.write_env(&[
+            (SECRET_NAME, "fixture-current-key"),
+            (AUTH_SCHEME_KEY, "api_key"),
+            (ACCOUNT_ID_KEY, "acct-fixture-1"),
+        ]);
+        let _ = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport());
+        assert!(mock.recorded()[0].path.starts_with("/v1/companies/match"));
+    }
+
+    #[test]
+    fn legacy_scheme_uses_token_auth_and_legacy_paths() {
+        let mock = MockApi::spawn(|req| {
+            assert_eq!(
+                req.header("Authorization"),
+                Some("Token token=fixture-legacy-token")
+            );
+            assert!(req.header("X-Api-Key").is_none());
+            if req.path.starts_with("/accounts/acct-fixture-1/leads") {
+                return (200, LEADS_FIXTURE.to_string());
+            }
+            if req.path.starts_with("/accounts/acct-fixture-1/contacts") {
+                return (200, CONTACTS_FIXTURE.to_string());
+            }
+            panic!("unexpected legacy path {}", req.path);
+        });
+        let root = TestRoot::new();
+        root.write_env(&[
+            (LEGACY_SECRET_NAME, "fixture-legacy-token"),
+            (AUTH_SCHEME_KEY, "legacy"),
+            (ACCOUNT_ID_KEY, "acct-fixture-1"),
+        ]);
+        let hits = fetch_direct_with(&root.ctx(), "WITTENSTEIN SE", &mock.transport())
+            .expect("engages")
+            .expect("legacy hits");
+        assert!(hits.iter().any(|hit| hit.title.contains("WITTENSTEIN")));
+        assert!(mock.recorded().iter().all(|req| req.path.starts_with("/accounts/")));
+    }
+
+    #[test]
+    fn ambiguous_secrets_without_scheme_are_not_guessed() {
+        let mock = MockApi::spawn(|_req| panic!("must not guess auth scheme"));
+        let root = TestRoot::new();
+        root.write_env(&[
+            (SECRET_NAME, "fixture-current-key"),
+            (LEGACY_SECRET_NAME, "fixture-legacy-token"),
+        ]);
+        let err = fetch_direct_with(&root.ctx(), "Example Manufacturing AG", &mock.transport())
+            .expect("engages")
+            .expect_err("ambiguous");
+        match err {
+            SourceError::Other(inner) => {
+                assert!(inner.to_string().contains("ambiguous"));
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+        assert!(mock.recorded().is_empty());
+    }
+
+    #[test]
+    fn extract_from_hits_requires_identity_and_keeps_source_url() {
+        let ctx = SourceCtx {
+            root: Path::new("/tmp/ctox-nonexistent-leadfeeder"),
+            country: Some(Country::De),
+            mode: ResearchMode::NewRecord,
+        };
+        let hits = vec![SourceHit {
+            title: "Example Manufacturing AG".to_string(),
+            url: "https://api.leadfeeder.com/v1/companies/co-fixture-1?account_id=acct-fixture-1"
+                .to_string(),
+            snippet: "example-manufacturing.test · 101-500 · Manufacture of bearings".to_string(),
+        }];
+        let fields = module().extract_from_hits(&ctx, "Example Manufacturing AG", &hits);
+        assert!(fields
+            .iter()
+            .any(|(k, ev)| matches!(k, FieldKey::FirmaName) && ev.value == "Example Manufacturing AG"));
+        assert!(fields.iter().any(|(k, ev)| matches!(k, FieldKey::FirmaDomain)
+            && ev.value == "example-manufacturing.test"
+            && ev.source_url.contains("/v1/companies/co-fixture-1")));
+        let rejected = module().extract_from_hits(&ctx, "Completely Different GmbH", &hits);
+        assert!(rejected.is_empty());
+    }
+
+    #[test]
     #[ignore = "live network; run with: cargo test -p ctox-web-stack -- --ignored sources::leadfeeder"]
     fn live_credential_missing_or_smoke() {
-        // The repo has no Leadfeeder token by default; the live test
-        // therefore *documents* the credential-missing path. If an
-        // operator wires LEADFEEDER_API_KEY into runtime_env_kv, the test
-        // becomes a real smoke check against the API.
         let ctx = SourceCtx {
             root: Path::new("/tmp/ctox-leadfeeder-live"),
             country: Some(Country::De),
             mode: ResearchMode::NewRecord,
         };
         let result = module()
-            .fetch_direct(&ctx, "Wittenstein SE")
+            .fetch_direct(&ctx, "Example Manufacturing AG")
             .expect("DACH context engages");
         match result {
             Err(SourceError::CredentialMissing { secret_name }) => {
                 assert_eq!(secret_name, "LEADFEEDER_API_KEY");
             }
             Ok(hits) => {
-                assert!(
-                    !hits.is_empty(),
-                    "live response must contain at least one hit"
-                );
+                assert!(!hits.is_empty(), "live response must contain at least one hit");
             }
             Err(other) => panic!("unexpected live error: {other:?}"),
         }

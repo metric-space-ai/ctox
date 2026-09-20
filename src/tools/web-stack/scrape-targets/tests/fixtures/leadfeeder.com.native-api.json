@@ -1,0 +1,116 @@
+{
+  "input": {
+    "source_id": "leadfeeder.com",
+    "company": "Example Manufacturing AG",
+    "country": "DE",
+    "task_id": "fixture-leadfeeder-native-api",
+    "access_mode": "native_api",
+    "credential_ref": "ctox-secret://credentials/LEADFEEDER_API_KEY"
+  },
+  "expected": {
+    "firma_name": "Example Manufacturing AG",
+    "firma_domain": "example-manufacturing.test"
+  },
+  "browser_allowed_domains": [
+    "leadfeeder.com",
+    "app.leadfeeder.com",
+    "api.leadfeeder.com"
+  ],
+  "login_url": "https://app.leadfeeder.com/f/sign/in",
+  "search": {
+    "results": [
+      {
+        "title": "Example Manufacturing AG",
+        "url": "https://api.leadfeeder.com/v1/companies/co-fixture-1?account_id=acct-fixture-1",
+        "snippet": "example-manufacturing.test \u00b7 101-500",
+        "source": "leadfeeder.com",
+        "rank": 1,
+        "extracted_fields": [
+          {
+            "field": "firma_name",
+            "value": "Example Manufacturing AG",
+            "confidence": "high",
+            "source_url": "https://api.leadfeeder.com/v1/companies/co-fixture-1?account_id=acct-fixture-1",
+            "note": null
+          },
+          {
+            "field": "firma_domain",
+            "value": "example-manufacturing.test",
+            "confidence": "high",
+            "source_url": "https://api.leadfeeder.com/v1/companies/co-fixture-1?account_id=acct-fixture-1",
+            "note": null
+          }
+        ]
+      }
+    ]
+  },
+  "api_search_modes": {
+    "credential_missing": {
+      "results": [],
+      "source_failures": [
+        {
+          "kind": "credential_missing",
+          "secret_name": "LEADFEEDER_API_KEY",
+          "error": "credential_missing: LEADFEEDER_API_KEY"
+        }
+      ]
+    },
+    "no_match": {
+      "results": [],
+      "source_failures": [
+        {
+          "kind": "no_match",
+          "error": "no_match"
+        }
+      ]
+    },
+    "rate_limited": {
+      "results": [],
+      "source_failures": [
+        {
+          "kind": "rate_limited",
+          "error": "rate_limited"
+        }
+      ]
+    },
+    "parse_failed": {
+      "results": [],
+      "source_failures": [
+        {
+          "kind": "parse_failed",
+          "error": "parse_failed: fixture"
+        }
+      ]
+    },
+    "account_selection_required": {
+      "results": [],
+      "source_failures": [
+        {
+          "kind": "other",
+          "error": "account_selection_required: 2 authorized accounts; set LEADFEEDER_ACCOUNT_ID"
+        }
+      ]
+    },
+    "entitlement": {
+      "results": [],
+      "source_failures": [
+        {
+          "kind": "other",
+          "error": "entitlement: forbidden"
+        }
+      ]
+    },
+    "echoed_secret": {
+      "results": [],
+      "source_failures": [
+        {
+          "kind": "other",
+          "error": "entitlement: http 403: supplied key FIXTURE_LEADFEEDER_KEY_DO_NOT_LEAK",
+          "secret_name": "LEADFEEDER_API_KEY",
+          "secret_value_in_payload": false
+        }
+      ]
+    }
+  },
+  "extracted_fields_fixture": "synthetic_pending_serializer_regression"
+}

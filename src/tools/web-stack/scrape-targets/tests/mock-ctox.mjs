@@ -111,7 +111,9 @@ if (args[0] === "business-os" && args.includes("source-capture")) {
     ? { ok: false, result: null, detection: { markers: ["fixture-access-challenge"] } }
     : modeResponse(fixture.browser || { ok: false, result: null });
 } else if (args[0] === "web" && args[1] === "search") {
-  response = mode === "blocked"
+  response = fixture.api_search_modes?.[mode]
+    ? modeResponse(fixture.api_search_modes[mode])
+    : mode === "blocked"
     ? { results: [], source_failures: [{ kind: "blocked" }] }
     : mode === "auth_required"
       ? { results: [], source_failures: [{ kind: "auth_required" }] }

@@ -31,6 +31,25 @@ Pro Quelle entscheidet die Trait-Implementierung, welcher Pfad gilt:
    (`ctox secret get --scope credentials --name <NAME>`); welchen Namen
    das Modul erwartet, deklariert es über `requires_credential()`.
    Beispiele: Zefix, D&B Hoovers, Leadfeeder, LinkedIn, XING.
+
+   Leadfeeder current API keys use `LEADFEEDER_API_KEY` as `X-Api-Key` against
+   `https://api.leadfeeder.com/v1` (`account_id` required). Explicit account
+   selection is `LEADFEEDER_ACCOUNT_ID`; if unset, `GET /v1/accounts` may
+   resolve a single authorized account and must fail closed when several exist.
+   Legacy Token auth is `LEADFEEDER_LEGACY_API_TOKEN` plus
+   `LEADFEEDER_AUTH_SCHEME=legacy` only. Browser capture stays a separate
+   deliberate mode (`LEADFEEDER_BROWSER_LOGIN`, scrape `access_mode` /
+   `auth_mode` = `authenticated_browser`).
+   Do not send a current key as `Authorization: Token token=...`, default
+   account `me`, or call credit-consuming retrieve/enrichment endpoints.
+
+   Scrape-execute currently forwards company/country/source_id (and optional
+   adapter_test). That is enough for the supported API path: the script calls
+   `ctox web search --source leadfeeder.com`, and `fetch_direct` reads the
+   runtime/secret selectors above. `target.json` `access_mode` is **not**
+   consulted unless the native command forwards `access_mode` or `auth_mode`
+   into script input. Forward `authenticated_browser` only when browser
+   capture is deliberately selected; forward `native_api` to pin API mode.
 3. **Browser-Pfad** — Crawl wie (1), aber `extract_fields` weiß, dass die
    Roh-Antwort aus `ctox web browser-automation` kommt (JS-Wall).
    Handelsregister nutzt diesen Pfad direkt.

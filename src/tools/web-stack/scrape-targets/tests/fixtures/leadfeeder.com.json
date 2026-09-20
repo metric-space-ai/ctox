@@ -1,5 +1,5 @@
 {
-  "input": { "source_id": "leadfeeder.com", "company": "Example Manufacturing AG", "country": "DE", "task_id": "fixture-leadfeeder", "credential_ref": "ctox-secret://credentials/LEADFEEDER_BROWSER_LOGIN" },
+  "input": { "source_id": "leadfeeder.com", "company": "Example Manufacturing AG", "country": "DE", "task_id": "fixture-leadfeeder", "access_mode": "authenticated_browser", "credential_ref": "ctox-secret://credentials/LEADFEEDER_BROWSER_LOGIN" },
   "expected": { "firma_name": "Example Manufacturing AG", "firma_domain": "example-manufacturing.test" },
   "browser_allowed_domains": ["leadfeeder.com", "app.leadfeeder.com", "api.leadfeeder.com"],
   "login_url": "https://app.leadfeeder.com/f/sign/in",
