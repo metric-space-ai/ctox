@@ -667,6 +667,122 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn mcp_app_authority_served_source_controls_read_pi_write_and_version() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let installed = installed_fixture(root)?;
+        let bundled = root.join("src/apps/business-os/modules").join(MODULE);
+        fs::create_dir_all(&bundled)?;
+        let installed_manifest = fs::read(installed.join("module.json"))?;
+        let mut manifest: Value = serde_json::from_slice(&installed_manifest)?;
+        manifest["install_scope"] = serde_json::json!("internal");
+        manifest["entry"] = serde_json::json!(format!("modules/{MODULE}/index.html"));
+        fs::write(bundled.join("module.json"), serde_json::to_vec(&manifest)?)?;
+        fs::write(
+            bundled.join("schema.js"),
+            "export const schema = 'bundled';",
+        )?;
+        fs::write(
+            bundled.join("bundled-only.js"),
+            "export const stale = true;",
+        )?;
+        fs::write(
+            installed.join("schema.js"),
+            "export const schema = 'installed';",
+        )?;
+        for index in 0..19 {
+            fs::write(
+                installed.join(format!("untouched-{index}.js")),
+                format!("// installed {index}"),
+            )?;
+        }
+        // Simulate the previous authoritative projection, including a file that
+        // does not exist in the now-served installed app.
+        store::load_module_source_records(
+            root,
+            &store::ModuleSourceLoadMutation {
+                module_id: MODULE.into(),
+            },
+        )?;
+        manifest["install_scope"] = serde_json::json!("store");
+        let bundled_manifest = serde_json::to_vec(&manifest)?;
+        fs::write(bundled.join("module.json"), &bundled_manifest)?;
+        let module = gateway_call(
+            root,
+            "admin",
+            "business_os.get_module",
+            serde_json::json!({"module_id": MODULE}),
+        )?;
+        assert_eq!(module["source"], "installed");
+        let read = gateway_call(
+            root,
+            "admin",
+            "business_os.read_app_file",
+            serde_json::json!({"module_id": MODULE, "path": "schema.js"}),
+        )?;
+        assert_eq!(read["content"], "export const schema = 'installed';");
+        let projected =
+            crate::coding_agents::pi_sidecar::refresh_and_project_module_source(root, MODULE)?;
+        assert_eq!(projected["schema.js"], "export const schema = 'installed';");
+        assert!(!projected.contains_key("bundled-only.js"));
+        assert!(gateway_call(
+            root,
+            "user",
+            "business_os.write_app_file",
+            serde_json::json!({"module_id": MODULE, "path": "schema.js", "content": "denied"})
+        )
+        .is_err());
+        let changed = "import { a } from './a.js';\nimport { b } from './b.js';\nimport { c } from './c.js';\nimport { d } from './d.js';\nexport const schema = 'installed';";
+        let written = gateway_call(
+            root,
+            "admin",
+            "business_os.write_app_file",
+            serde_json::json!({"module_id": MODULE, "path": "schema.js", "content": changed}),
+        )?;
+        assert_eq!(
+            written["app_directory"],
+            format!("runtime/business-os/installed-modules/{MODULE}")
+        );
+        assert_eq!(fs::read_to_string(installed.join("schema.js"))?, changed);
+        let pi_changed = format!("{changed}\n// pi snapshot");
+        let baseline =
+            crate::coding_agents::pi_sidecar::refresh_and_project_module_source(root, MODULE)?;
+        crate::coding_agents::pi_sidecar::apply_changed_turn_snapshot(
+            root,
+            MODULE,
+            &baseline,
+            &[
+                serde_json::json!({"kind": "file", "path": "/workspace/schema.js", "content": pi_changed}),
+            ],
+        )?;
+        assert_eq!(fs::read_to_string(installed.join("schema.js"))?, pi_changed);
+        assert_eq!(
+            fs::read_to_string(bundled.join("schema.js"))?,
+            "export const schema = 'bundled';"
+        );
+        assert_eq!(fs::read(installed.join("module.json"))?, installed_manifest);
+        assert_eq!(fs::read(bundled.join("module.json"))?, bundled_manifest);
+        for index in 0..19 {
+            assert_eq!(
+                fs::read_to_string(installed.join(format!("untouched-{index}.js")))?,
+                format!("// installed {index}")
+            );
+        }
+        let conn = store::open_store(root)?;
+        let version: String = conn.query_row("SELECT files_json FROM business_module_versions WHERE module_id=?1 ORDER BY seq DESC LIMIT 1", params![MODULE], |row| row.get(0))?;
+        let files: Vec<Value> = serde_json::from_str(&version)?;
+        assert_eq!(
+            files
+                .iter()
+                .find(|file| file["path"] == "schema.js")
+                .context("version schema")?["content"],
+            pi_changed
+        );
+        assert!(!files.iter().any(|file| file["path"] == "bundled-only.js"));
+        Ok(())
+    }
+
     #[cfg(unix)]
     #[test]
     fn mcp_app_authority_source_load_skips_absent_module_in_symlinked_namespace(

@@ -2414,7 +2414,8 @@ pub fn write_app_file(
         store::runtime_app_delivery_evidence(root, &module_id)?;
     Ok(BusinessOsAppSourceWrite {
         ok: outcome.get("ok").and_then(Value::as_bool).unwrap_or(false),
-        app_directory: format!("runtime/business-os/installed-modules/{module_id}"),
+        app_directory: string_field(&outcome, "app_directory")
+            .context("source write did not report its actual directory")?,
         module_id,
         path,
         source_file_id: string_field(&outcome, "source_file_id").unwrap_or_default(),
