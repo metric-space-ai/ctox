@@ -298,8 +298,8 @@ async fn writer_backpressure_drops_stale_events_without_truncating_started_frame
                                 handle: "session".into(), generation: 1,
                             },
                             subscription_id: "reused-id".into(), sequence,
-                            payload: crate::business_data_contract::NativeBusinessDataEventPayload::Reset {
-                                code: NativeBusinessDataErrorCode::ResetRequired,
+                            payload: crate::business_data_contract::NativeBusinessDataEventPayload::CaughtUp {
+                                cursor: format!("cursor-{sequence}"),
                             },
                         },
                         alive: if sequence == 2 { alive.clone() } else { Arc::new(AtomicBool::new(true)) },
@@ -332,7 +332,27 @@ async fn writer_backpressure_drops_stale_events_without_truncating_started_frame
                 vec![1, 2, 3]
             } {
                 match read_host_frame(&mut main).await.unwrap() {
-                    Frame::Event { event } => assert_eq!(event.sequence, expected),
+                    Frame::Event { event } => {
+                        use crate::business_data_contract::NativeBusinessDataEventPayload as Payload;
+                        assert_eq!(event.sequence, expected);
+                        if expected == 2 {
+                            assert!(
+                                matches!(
+                                    event.payload,
+                                    Payload::Reset {
+                                        code: NativeBusinessDataErrorCode::ResetRequired,
+                                    }
+                                ),
+                                "revoked authority must replace queued completion with Reset"
+                            );
+                        } else {
+                            assert!(
+                                matches!(event.payload, Payload::CaughtUp { ref cursor }
+                                if cursor == &format!("cursor-{expected}")),
+                                "authorized events must retain their original payload"
+                            );
+                        }
+                    }
                     _ => panic!("expected complete event frame"),
                 }
             }
