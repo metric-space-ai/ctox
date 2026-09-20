@@ -1003,7 +1003,7 @@ pub fn read_secret_value_optional(
         return Ok(None);
     };
     let (key_bytes, _) =
-        ensure_secret_master_key(root).map_err(|_| SecretReadError::Unavailable)?;
+        load_existing_secret_master_key(root).map_err(|_| SecretReadError::Unavailable)?;
     let value = decrypt_secret_value(&key_bytes, &nonce_b64, &ciphertext_b64)
         .map_err(|_| SecretReadError::DecryptionFailed)?;
     std::str::from_utf8(&value)
@@ -1167,6 +1167,19 @@ fn load_legacy_master_key(root: &Path) -> Result<Option<String>> {
 }
 
 fn ensure_secret_master_key(root: &Path) -> Result<(SecretMaterial, &'static str)> {
+    resolve_secret_master_key(root, true)
+}
+
+/// Reading existing ciphertext must never generate a replacement key. Legacy
+/// keys may still migrate through the same guarded conflict checks as writes.
+fn load_existing_secret_master_key(root: &Path) -> Result<(SecretMaterial, &'static str)> {
+    resolve_secret_master_key(root, false)
+}
+
+fn resolve_secret_master_key(
+    root: &Path,
+    create_if_missing: bool,
+) -> Result<(SecretMaterial, &'static str)> {
     static MASTER_KEY_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
     let _guard = MASTER_KEY_GUARD
         .get_or_init(|| Mutex::new(()))
@@ -1239,6 +1252,7 @@ fn ensure_secret_master_key(root: &Path) -> Result<(SecretMaterial, &'static str
         return Ok((key, "migrated_protected_file"));
     }
 
+    anyhow::ensure!(create_if_missing, "secret master key unavailable");
     let mut key = Zeroizing::new(vec![0u8; 32]);
     SystemRandom::new()
         .fill(&mut key)
@@ -1683,6 +1697,48 @@ mod tests {
         path.push(format!("ctox-secret-test-{}-{}", label, std::process::id()));
         let _ = fs::remove_dir_all(&path);
         path
+    }
+
+    #[test]
+    fn optional_read_never_replaces_a_lost_key_and_can_migrate_an_existing_key() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let scope = "credentials";
+        let name = "FIXTURE_OPTIONAL_READ";
+        let canary = "synthetic-lost-key-canary";
+        put_secret(root.path(), scope, name, canary, None, json!({}))?;
+        let key_path = master_key_path(root.path());
+        let original_key = fs::read_to_string(&key_path)?;
+        let conn = open_secret_db(root.path())?;
+        let ciphertext = || -> rusqlite::Result<(String, String)> {
+            conn.query_row("SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2", params![scope, name], |row| Ok((row.get(0)?, row.get(1)?)))
+        };
+        let original_ciphertext = ciphertext()?;
+        fs::remove_file(&key_path)?;
+        assert_eq!(
+            read_secret_value_optional(root.path(), scope, name),
+            Err(SecretReadError::Unavailable)
+        );
+        assert!(
+            !key_path.exists(),
+            "read must not generate a replacement master key"
+        );
+        assert_eq!(ciphertext()?, original_ciphertext);
+        assert!(read_secret_value(root.path(), scope, name).is_err());
+        assert!(
+            !key_path.exists(),
+            "required-value wrapper must also remain read-only for key creation"
+        );
+        conn.execute(
+            &format!("INSERT INTO {SECRET_KV_TABLE} (key, value) VALUES (?1, ?2)"),
+            params![MASTER_KEY_STORAGE_KEY, original_key.trim()],
+        )?;
+        assert_eq!(
+            read_secret_value_optional(root.path(), scope, name)?,
+            Some(canary.to_string())
+        );
+        assert_eq!(fs::read_to_string(&key_path)?.trim(), original_key.trim());
+        assert_eq!(ciphertext()?, original_ciphertext);
+        Ok(())
     }
 
     #[test]
