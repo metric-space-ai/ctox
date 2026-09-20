@@ -1708,6 +1708,7 @@ pub fn rollback_module_to_version(
     let module_parent = module_root
         .parent()
         .context("module source root has no parent")?;
+    let _local_write_lease = super::store::local_source_write_lease(&module_root)?;
     let staging = module_parent.join(format!(".rollback-stage-{module_id}-{}", Uuid::new_v4()));
     let backup = module_parent.join(format!(".rollback-backup-{module_id}-{}", Uuid::new_v4()));
 

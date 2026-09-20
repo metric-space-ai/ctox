@@ -1,6 +1,8 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+#[path = "store_coding_staging.rs"]
+mod coding_staging;
 #[path = "store_peer_revocations.rs"]
 mod peer_revocations;
 #[path = "store_security_projections.rs"]
@@ -105,6 +107,8 @@ use crate::capabilities::scrape;
 use crate::mission::channels;
 use anyhow::Context;
 use base64::Engine;
+pub(crate) use coding_staging::apply_local_coding_changes;
+pub(super) use coding_staging::local_source_write_lease;
 use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 pub use peer_revocations::is_business_peer_revoked;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -3946,6 +3950,7 @@ fn save_module_source_record_inner(
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
     let (module_root, source_app_root) =
         resolve_module_source_root_for_root(root, &app_root, &module_id)?;
+    let _local_write_lease = local_source_write_lease(&module_root)?;
     let rel = normalize_source_relative_path(&mutation.path)?;
     anyhow::ensure!(
         is_allowed_source_path(&rel),
@@ -14046,13 +14051,32 @@ pub(super) fn handle_workspace_control_command(
                                 root, preset_id,
                             )?;
                         let dist = crate::coding_agents::pi_sidecar::resolve_sidecar_dist(root)?;
-                        crate::coding_agents::pi_sidecar::run_module_coding_turn(
+                        crate::coding_agents::pi_sidecar::run_module_coding_turn_authorized(
                             root,
                             &dist,
                             &module_id,
                             prompt,
                             faux,
                             model_override,
+                            &|| {
+                                let current_session = rxdb_authenticated_session(root, &command)?;
+                                anyhow::ensure!(
+                                    session_user_id(&current_session) == session_user_id(_session),
+                                    "coding actor changed before source publication"
+                                );
+                                let decision = module_policy_decision(
+                                    root,
+                                    &current_session,
+                                    BusinessOsPermission::AppsModify,
+                                    &module_id,
+                                )?;
+                                anyhow::ensure!(
+                                    decision.allowed,
+                                    "coding source permission revoked: {}",
+                                    decision.display_reason
+                                );
+                                Ok(())
+                            },
                         )
                     })();
                     return match outcome {

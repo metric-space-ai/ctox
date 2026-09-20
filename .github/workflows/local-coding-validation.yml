@@ -1,0 +1,59 @@
+name: Local coding validation isolation
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/local-coding-validation.yml'
+      - 'src/apps/business-os/scripts/*semantic*'
+      - 'src/apps/business-os/scripts/validate-app-module*'
+      - 'src/skills/system/product_engineering/business-os-app-module-development/scripts/module_*'
+      - 'src/core/business_os/store_coding_staging.rs'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-validation:
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        os: [macos-14, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '22'
+      - name: Install Linux semantic isolation
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - name: Verify semantic isolation and preserved contract validation
+        run: |
+          node src/apps/business-os/scripts/module-semantic-isolation.test.mjs
+          node src/apps/business-os/scripts/validate-app-module.test.mjs
+      - name: Bounded macOS sandbox startup diagnostics
+        if: failure() && runner.os == 'macOS'
+        run: |
+          sudo /usr/bin/log show --last 1m --style compact --predicate 'eventMessage CONTAINS "deny" AND eventMessage CONTAINS "node"' | head -100
+      - name: Bounded Linux sandbox startup diagnostics
+        if: failure() && runner.os == 'Linux'
+        timeout-minutes: 1
+        run: |
+          # Read-only diagnostics: retain the failing test and every isolation rule.
+          id
+          uname -r
+          /usr/bin/bwrap --version
+          dpkg-query -W bubblewrap apparmor || true
+          stat -c '%a %U %G %n' /usr/bin/bwrap
+          cat /proc/self/attr/current
+          grep -E '^(Cap|NoNewPrivs|Seccomp)' /proc/self/status
+          sysctl kernel.apparmor_restrict_unprivileged_userns kernel.apparmor_restrict_unprivileged_unconfined kernel.unprivileged_userns_clone user.max_user_namespaces || true
+          for profile in /etc/apparmor.d/bwrap*; do
+            if [ -f "$profile" ]; then
+              printf 'PROFILE %s\n' "$profile"
+              sed -n '1,160p' "$profile"
+            fi
+          done
+          # Trusted probe only: creation is distinct from configuring loopback.
+          timeout 5s unshare --user --map-root-user --net /usr/bin/true && echo 'user+network namespace creation succeeded' || echo "user+network namespace creation failed: $?"
+          sudo -n journalctl -k --since '-5 minutes' --no-pager -n 400 | grep -Ei 'apparmor|audit|bwrap|userns' || true

@@ -10243,6 +10243,169 @@ mod tests {
         Ok(())
     }
 
+    fn write_local_source_read_fixture(root: &Path) -> anyhow::Result<std::path::PathBuf> {
+        let app = root.join("business-os");
+        std::fs::create_dir_all(&app)?;
+        std::fs::write(app.join("index.html"), "")?;
+        let module = root.join("runtime/business-os/local-modules/outbound-lead-generation");
+        std::fs::create_dir_all(&module)?;
+        std::fs::write(
+            module.join("module.json"),
+            serde_json::to_string(&serde_json::json!({
+                "id": "outbound-lead-generation", "title": "Outbound fixture", "version": "1.0.0",
+                "description": "Local source read regression", "source": "local", "install_scope": "local",
+                "entry": "local-modules/outbound-lead-generation/index.html", "collections": []
+            }))?,
+        )?;
+        std::fs::write(
+            module.join("index.html"),
+            "<script src=\"app.js\"></script>",
+        )?;
+        std::fs::write(module.join("app.js"), "const enabled = true;\n")?;
+        seed_default_mcp_admin(root)?;
+        Ok(module)
+    }
+
+    #[test]
+    fn local_module_catalog_list_read_and_search_resolve_the_same_source() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_local_source_read_fixture(root)?;
+        let context = serde_json::json!({ "actor": "chatgpt:test-user", "workspace": "test" });
+        let catalog = call_tool(
+            root,
+            "business_os.list_modules",
+            serde_json::json!({ "_context": context }),
+        )?;
+        let module = catalog["items"]
+            .as_array()
+            .context("catalog items")?
+            .iter()
+            .find(|module| {
+                module["module_id"] == "outbound-lead-generation"
+                    || module["id"] == "outbound-lead-generation"
+            })
+            .context("local module advertised")?;
+        assert_eq!(module["source"], "local");
+        assert_eq!(
+            module["entry"],
+            "local-modules/outbound-lead-generation/index.html"
+        );
+        let files = call_tool(
+            root,
+            "business_os.list_app_files",
+            serde_json::json!({ "module_id": "outbound-lead-generation", "_context": context }),
+        )?;
+        assert!(files["items"]
+            .as_array()
+            .context("file items")?
+            .iter()
+            .any(|file| file["path"] == "app.js"));
+        let read = call_tool(
+            root,
+            "business_os.read_app_file",
+            serde_json::json!({ "module_id": "outbound-lead-generation", "path": "app.js", "_context": context }),
+        )?;
+        assert_eq!(read["content"], "const enabled = true;\n");
+        let search = call_tool(
+            root,
+            "business_os.search_app_source",
+            serde_json::json!({ "module_id": "outbound-lead-generation", "query": "enabled", "limit": 10, "_context": context }),
+        )?;
+        assert_eq!(search["count"], 1);
+        assert_eq!(search["items"][0]["path"], "app.js");
+        assert_eq!(search["items"][0]["line"], 1);
+        assert_eq!(search["items"][0]["preview"], "const enabled = true;");
+        assert!(!root
+            .join("runtime/business-os/installed-modules/outbound-lead-generation")
+            .exists());
+        Ok(())
+    }
+
+    #[test]
+    fn local_module_source_reads_preserve_actor_policy_and_path_validation() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_local_source_read_fixture(root)?;
+        seed_business_user(root, "chatgpt:source-denied", "user")?;
+        for tool in [
+            "business_os.list_app_files",
+            "business_os.read_app_file",
+            "business_os.search_app_source",
+        ] {
+            let error = call_tool(
+                root,
+                tool,
+                serde_json::json!({
+                    "module_id": "outbound-lead-generation", "path": "app.js", "query": "enabled",
+                    "_context": { "actor": "chatgpt:source-denied", "workspace": "test" }
+                }),
+            )
+            .expect_err("local source access needs native source-view permission");
+            assert_eq!(
+                error
+                    .downcast_ref::<BusinessOsMcpError>()
+                    .context("typed policy denial")?
+                    .code,
+                BusinessOsMcpErrorCode::PermissionDenied
+            );
+        }
+        for path in ["../outside.js", "/outside.js"] {
+            let error = call_tool(
+                root,
+                "business_os.read_app_file",
+                serde_json::json!({
+                    "module_id": "outbound-lead-generation", "path": path,
+                    "_context": { "actor": "chatgpt:test-user", "workspace": "test" }
+                }),
+            )
+            .expect_err("source reads must reject unsafe paths");
+            assert_eq!(
+                error
+                    .downcast_ref::<BusinessOsMcpError>()
+                    .context("typed path denial")?
+                    .code,
+                BusinessOsMcpErrorCode::ValidationFailed
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn local_module_source_reads_do_not_follow_external_file_or_directory_symlinks(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let module = write_local_source_read_fixture(root)?;
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&outside)?;
+        std::fs::write(
+            outside.join("secret.js"),
+            "const OUTSIDE_SOURCE_CANARY = true;",
+        )?;
+        std::os::unix::fs::symlink(outside.join("secret.js"), module.join("escaped.js"))?;
+        std::os::unix::fs::symlink(&outside, module.join("linked"))?;
+        let context = serde_json::json!({ "actor": "chatgpt:test-user", "workspace": "test" });
+        let files = call_tool(
+            root,
+            "business_os.list_app_files",
+            serde_json::json!({ "module_id": "outbound-lead-generation", "_context": context }),
+        )?;
+        assert!(!files.to_string().contains("escaped.js"));
+        assert!(!files.to_string().contains("secret.js"));
+        for path in ["escaped.js", "linked/secret.js"] {
+            assert!(call_tool(root, "business_os.read_app_file", serde_json::json!({ "module_id": "outbound-lead-generation", "path": path, "_context": context })).is_err());
+        }
+        let search = call_tool(
+            root,
+            "business_os.search_app_source",
+            serde_json::json!({ "module_id": "outbound-lead-generation", "query": "OUTSIDE_SOURCE_CANARY", "_context": context }),
+        )?;
+        assert_eq!(search["count"], 0);
+        Ok(())
+    }
+
     #[test]
     fn app_source_tools_write_read_and_search_runtime_files() -> anyhow::Result<()> {
         let temp = tempdir()?;

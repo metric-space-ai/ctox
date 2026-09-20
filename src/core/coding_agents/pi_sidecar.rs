@@ -885,6 +885,48 @@ fn run_module_coding_turn_inner(
     model_override: Option<Value>,
     coding_plan_upstream_override: Option<&str>,
 ) -> anyhow::Result<Value> {
+    run_module_coding_turn_authorized_inner(
+        root,
+        dist,
+        module_id,
+        prompt,
+        faux,
+        model_override,
+        (coding_plan_upstream_override, &|| Ok(())),
+    )
+}
+
+pub(crate) fn run_module_coding_turn_authorized(
+    root: &Path,
+    dist: &Path,
+    module_id: &str,
+    prompt: &str,
+    faux: bool,
+    model_override: Option<Value>,
+    revalidate: &dyn Fn() -> anyhow::Result<()>,
+) -> anyhow::Result<Value> {
+    revalidate()?;
+    run_module_coding_turn_authorized_inner(
+        root,
+        dist,
+        module_id,
+        prompt,
+        faux,
+        model_override,
+        (None, revalidate),
+    )
+}
+
+fn run_module_coding_turn_authorized_inner(
+    root: &Path,
+    dist: &Path,
+    module_id: &str,
+    prompt: &str,
+    faux: bool,
+    model_override: Option<Value>,
+    authority: (Option<&str>, &dyn Fn() -> anyhow::Result<()>),
+) -> anyhow::Result<Value> {
+    let (coding_plan_upstream_override, revalidate) = authority;
     let files = project_module_source(root, module_id)?;
     let mut request = serde_json::json!({
         "id": module_id,
@@ -916,7 +958,9 @@ fn run_module_coding_turn_inner(
         .get("snapshot")
         .and_then(Value::as_array)
         .unwrap_or(&empty);
-    let applied = apply_changed_turn_snapshot(root, module_id, &files, snapshot)?;
+    revalidate()?;
+    let applied =
+        apply_changed_turn_snapshot_authorized(root, module_id, &files, snapshot, revalidate)?;
     let message_count = response
         .get("messages")
         .and_then(Value::as_array)
@@ -991,11 +1035,22 @@ fn pi_turn_failure_detail(response: &Value) -> String {
     format!("{error}; diagnostics={}", Value::Object(safe))
 }
 
+#[cfg(test)]
 fn apply_changed_turn_snapshot(
     root: &Path,
     module_id: &str,
     baseline: &serde_json::Map<String, Value>,
     snapshot: &[Value],
+) -> anyhow::Result<Vec<String>> {
+    apply_changed_turn_snapshot_authorized(root, module_id, baseline, snapshot, &|| Ok(()))
+}
+
+fn apply_changed_turn_snapshot_authorized(
+    root: &Path,
+    module_id: &str,
+    baseline: &serde_json::Map<String, Value>,
+    snapshot: &[Value],
+    revalidate: &dyn Fn() -> anyhow::Result<()>,
 ) -> anyhow::Result<Vec<String>> {
     let mut changed = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -1024,8 +1079,14 @@ fn apply_changed_turn_snapshot(
         )?;
         changed.push((path, content, before));
     }
+    if let Some(applied) = crate::business_os::store::apply_local_coding_changes(
+        root, module_id, baseline, &changed, revalidate,
+    )? {
+        return Ok(applied);
+    }
     let mut applied = Vec::new();
     for (path, content, before) in changed {
+        revalidate()?;
         crate::business_os::store::save_module_source_record_if_current(
             root,
             crate::business_os::store::ModuleSourceSaveMutation {
