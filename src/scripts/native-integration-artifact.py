@@ -25,6 +25,11 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'person_research_binding_runtime_leads_preserve_identity_and_scope',
            'person_research_record_binding_accepts_nested_lead_data',
            'authenticated_automation_', 'outbound_runtime_library_',
+           'outbound_scrape_test_',
+           'research_control_revalidation_uses_native_actor_and_original_permission',
+           'web_stack_auth_owner_resolution_',
+           'web_stack_auth_assist_reuses_active_task_across_request_ids',
+           'web_stack_generated_research_control_task_revalidates_persisted_native_owner',
            'outbound_custom_research_adapter_queues_universal_scraping_generation']
 REQUIRED_RUNTIME_TESTS = {
     'authenticated_automation_stdin_is_bounded_and_command_specific',
@@ -36,6 +41,14 @@ REQUIRED_RUNTIME_TESTS = {
     'outbound_runtime_library_preserves_activated_revision_over_bundle',
     'outbound_runtime_library_invalid_materialization_does_not_import_bundle',
     'outbound_runtime_library_novel_first_use_generates_then_executes_registered_script',
+    'outbound_scrape_test_missing_identity_has_no_scrape_or_repair_effects',
+    'outbound_scrape_test_uses_explicit_identity_instead_of_adapter_metadata',
+    'outbound_scrape_test_contract_rejects_invalid_budget_and_drops_claimed_authority',
+    'research_control_revalidation_uses_native_actor_and_original_permission',
+    'web_stack_auth_owner_resolution_prefers_verified_task_over_flag_and_env',
+    'web_stack_auth_owner_resolution_uses_command_authorization_chat_and_session',
+    'web_stack_auth_assist_reuses_active_task_across_request_ids',
+    'web_stack_generated_research_control_task_revalidates_persisted_native_owner',
 }
 RECORD = {'stages': [], 'complete': False}
 
