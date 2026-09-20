@@ -13,17 +13,130 @@ use std::{collections::HashSet, future::Future, io, pin::Pin, sync::Arc};
 use tokio::sync::mpsc;
 
 const MAX_IN_FLIGHT: usize = 4;
+/// Serializes watch invalidation with the first accepted frame byte. A pending
+/// write has not published anything and must remain cancellable. Once any byte
+/// is accepted, finish that frame to preserve the connection's framing.
+pub(crate) struct WatchLifetime {
+    state: std::sync::Mutex<WatchLifetimeState>,
+}
+
+struct WatchLifetimeState {
+    alive: bool,
+    pending_writer: Option<std::task::Waker>,
+}
+
+impl WatchLifetime {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: std::sync::Mutex::new(WatchLifetimeState {
+                alive: true,
+                pending_writer: None,
+            }),
+        }
+    }
+
+    pub(crate) fn is_alive(&self) -> bool {
+        self.state.lock().is_ok_and(|state| state.alive)
+    }
+
+    pub(crate) fn invalidate(&self) {
+        let wake = {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            state.alive = false;
+            state.pending_writer.take()
+        };
+        if let Some(wake) = wake {
+            wake.wake();
+        }
+    }
+}
+
+struct WatchFrameWriter<'a, W> {
+    writer: &'a mut W,
+    lifetime: &'a WatchLifetime,
+    started: bool,
+    cancelled: bool,
+}
+
+impl<W> Drop for WatchFrameWriter<'_, W> {
+    fn drop(&mut self) {
+        // A timeout/connection error must not leave a task waker retained by
+        // the watch. Only one frame writer can own this connection at a time.
+        self.lifetime
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .pending_writer = None;
+    }
+}
+
+impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for WatchFrameWriter<'_, W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        bytes: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        if this.started {
+            return Pin::new(&mut *this.writer).poll_write(cx, bytes);
+        }
+        let mut state = match this.lifetime.state.lock() {
+            Ok(state) => state,
+            Err(_) => {
+                this.cancelled = true;
+                return std::task::Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "watch publication state unavailable",
+                )));
+            }
+        };
+        if !state.alive {
+            this.cancelled = true;
+            return std::task::Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "watch invalidated before frame publication",
+            )));
+        }
+        // Hold the same lock used by invalidate through the nonblocking write
+        // poll. Merely checking an AtomicBool before write_all leaves a race.
+        let result = Pin::new(&mut *this.writer).poll_write(cx, bytes);
+        if result.is_pending() {
+            state.pending_writer = Some(cx.waker().clone());
+        } else {
+            state.pending_writer = None;
+            if matches!(&result, std::task::Poll::Ready(Ok(count)) if *count > 0) {
+                this.started = true;
+            }
+        }
+        result
+    }
+
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        Pin::new(&mut *self.get_mut().writer).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        Pin::new(&mut *self.get_mut().writer).poll_shutdown(cx)
+    }
+}
+
 /// Private delivery metadata; never serialized onto the wire.
 pub struct QueuedBusinessDataEvent {
     pub(crate) event: Event,
-    pub(crate) alive: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) alive: Arc<WatchLifetime>,
     pub(crate) failed: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) authority: crate::business_data_remote::EventAuthorityCheck,
 }
 
 impl QueuedBusinessDataEvent {
     fn is_alive(&self) -> bool {
-        self.alive.load(std::sync::atomic::Ordering::SeqCst)
+        self.alive.is_alive()
     }
 
     async fn revalidate(mut self) -> Option<Self> {
@@ -149,9 +262,14 @@ impl BusinessDataIpc {
                     },
                     checked = event_checks.next(), if !event_checks.is_empty() => {
                         if let Some(Some(queued)) = checked {
-                            if queued.is_alive() {
-                                write_host_frame(&mut writer, &Frame::Event { event: queued.event }).await?;
-                            }
+                            let mut guarded = WatchFrameWriter {
+                                writer: &mut writer,
+                                lifetime: &queued.alive,
+                                started: false,
+                                cancelled: false,
+                            };
+                            let result = write_host_frame(&mut guarded, &Frame::Event { event: queued.event }).await;
+                            if !guarded.cancelled { result?; }
                         }
                     },
                     result = work.next(), if !work.is_empty() => {

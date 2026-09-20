@@ -159,7 +159,7 @@ async fn service_reads_credentials_while_a_dispatch_is_waiting() {
 
 #[tokio::test]
 async fn queued_event_rechecks_exact_watch_lifetime_before_writing() {
-    let old_alive = Arc::new(AtomicBool::new(true));
+    let old_alive = Arc::new(WatchLifetime::new());
     let entered = Arc::new(tokio::sync::Notify::new());
     let release = Arc::new(tokio::sync::Notify::new());
     let service = BusinessDataIpc::new(Arc::new({
@@ -198,7 +198,7 @@ async fn queued_event_rechecks_exact_watch_lifetime_before_writing() {
                     alive: if sequence == 1 {
                         old_alive.clone()
                     } else {
-                        Arc::new(AtomicBool::new(true))
+                        Arc::new(WatchLifetime::new())
                     },
                     failed: Arc::new(AtomicBool::new(false)),
                     authority: if sequence == 1 {
@@ -215,7 +215,7 @@ async fn queued_event_rechecks_exact_watch_lifetime_before_writing() {
     let (native, mut main) = tokio::io::duplex(64);
     let client = async {
         entered.notified().await;
-        old_alive.store(false, Ordering::SeqCst);
+        old_alive.invalidate();
         release.notify_one();
         match read_host_frame(&mut main).await.unwrap() {
             Frame::Event { event } => {
@@ -234,6 +234,133 @@ async fn queued_event_rechecks_exact_watch_lifetime_before_writing() {
     })
     .await
     .expect("bounded IPC lifetime regression");
+    assert!(result.is_err());
+}
+
+struct FirstByteBlockedStream {
+    inner: tokio::io::DuplexStream,
+    allow_write: Arc<AtomicBool>,
+    blocked: Arc<tokio::sync::Notify>,
+    writer_waker: Arc<futures_util::task::AtomicWaker>,
+}
+
+impl tokio::io::AsyncRead for FirstByteBlockedStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        tokio::io::AsyncRead::poll_read(Pin::new(&mut self.inner), cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for FirstByteBlockedStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        self.writer_waker.register(cx.waker());
+        if !self.allow_write.load(Ordering::SeqCst) {
+            // Deliberately accept zero bytes, unlike a full duplex buffer that
+            // has already accepted part of the frame's header.
+            self.blocked.notify_one();
+            return std::task::Poll::Pending;
+        }
+        tokio::io::AsyncWrite::poll_write(Pin::new(&mut self.inner), cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        tokio::io::AsyncWrite::poll_flush(Pin::new(&mut self.inner), cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        tokio::io::AsyncWrite::poll_shutdown(Pin::new(&mut self.inner), cx)
+    }
+}
+
+#[tokio::test]
+async fn invalidation_cancels_same_event_before_first_byte_and_wakes_writer() {
+    let alive = Arc::new(WatchLifetime::new());
+    let blocked = Arc::new(tokio::sync::Notify::new());
+    let next_checked = Arc::new(tokio::sync::Notify::new());
+    let allow_write = Arc::new(AtomicBool::new(false));
+    let writer_waker = Arc::new(futures_util::task::AtomicWaker::new());
+    let service = BusinessDataIpc::new(Arc::new({
+        let alive = alive.clone();
+        let next_checked = next_checked.clone();
+        move |credentials, events| {
+            for sequence in [1, 2] {
+                let mut event = reset_event(sequence);
+                event.payload =
+                    crate::business_data_contract::NativeBusinessDataEventPayload::CaughtUp {
+                        cursor: format!("cursor-{sequence}"),
+                    };
+                let next_checked = next_checked.clone();
+                assert!(events
+                    .try_send(QueuedBusinessDataEvent {
+                        event,
+                        alive: if sequence == 1 {
+                            alive.clone()
+                        } else {
+                            Arc::new(WatchLifetime::new())
+                        },
+                        failed: Arc::new(AtomicBool::new(false)),
+                        authority: Arc::new(move || {
+                            let next_checked = next_checked.clone();
+                            Box::pin(async move {
+                                if sequence == 2 {
+                                    next_checked.notify_one();
+                                }
+                                true
+                            })
+                        }),
+                    })
+                    .is_ok());
+            }
+            Ok(Arc::new(TestDispatcher { credentials }))
+        }
+    }));
+    let (native, mut main) = tokio::io::duplex(64);
+    let native = FirstByteBlockedStream {
+        inner: native,
+        allow_write: allow_write.clone(),
+        blocked: blocked.clone(),
+        writer_waker: writer_waker.clone(),
+    };
+    let client = async {
+        blocked.notified().await;
+        alive.invalidate();
+        // Invalidation itself must wake the blocked writer and discard event1.
+        // Do not release the transport until the independent next watch runs.
+        next_checked.notified().await;
+        allow_write.store(true, Ordering::SeqCst);
+        writer_waker.wake();
+        match read_host_frame(&mut main).await.unwrap() {
+            Frame::Event { event } => {
+                assert_eq!(
+                    event.sequence, 2,
+                    "invalidated event must publish zero bytes"
+                );
+                assert!(matches!(event.payload,
+                    crate::business_data_contract::NativeBusinessDataEventPayload::CaughtUp { ref cursor }
+                    if cursor == "cursor-2"));
+            }
+            _ => panic!("expected intact event from independent watch"),
+        }
+        drop(main);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(service.serve(Box::new(native)), client)
+    })
+    .await
+    .expect("same-event first-byte cancellation must make progress");
     assert!(result.is_err());
 }
 
@@ -282,7 +409,7 @@ impl tokio::io::AsyncWrite for BackpressuredStream {
 async fn writer_backpressure_drops_stale_events_without_truncating_started_frame() {
     // Exercise lifetime invalidation and a current-authority denial separately.
     for revoke_lifetime in [true, false] {
-        let alive = Arc::new(AtomicBool::new(true));
+        let alive = Arc::new(WatchLifetime::new());
         let authorized = Arc::new(AtomicBool::new(true));
         let blocked = Arc::new(tokio::sync::Notify::new());
         let service = BusinessDataIpc::new(Arc::new({
@@ -302,7 +429,7 @@ async fn writer_backpressure_drops_stale_events_without_truncating_started_frame
                                 cursor: format!("cursor-{sequence}"),
                             },
                         },
-                        alive: if sequence == 2 { alive.clone() } else { Arc::new(AtomicBool::new(true)) },
+                        alive: if sequence != 3 { alive.clone() } else { Arc::new(WatchLifetime::new()) },
                         failed: Arc::new(AtomicBool::new(false)),
                     authority: Arc::new(move || {
                             let current = current.clone();
@@ -322,7 +449,7 @@ async fn writer_backpressure_drops_stale_events_without_truncating_started_frame
             // Observe actual Poll::Pending from the frame writer, not a timer.
             blocked.notified().await;
             if revoke_lifetime {
-                alive.store(false, Ordering::SeqCst);
+                alive.invalidate();
             } else {
                 authorized.store(false, Ordering::SeqCst);
             }
@@ -372,7 +499,7 @@ async fn authority_failure_resets_once_and_cannot_later_complete_snapshot() {
     use crate::business_data_contract::NativeBusinessDataEventPayload as Payload;
     let service = BusinessDataIpc::new(Arc::new(|credentials, events| {
         let failed = Arc::new(AtomicBool::new(false));
-        let alive = Arc::new(AtomicBool::new(true));
+        let alive = Arc::new(WatchLifetime::new());
         for sequence in [1, 2, 3, 4] {
             let mut event = reset_event(sequence);
             event.payload = if sequence == 2 {
@@ -441,7 +568,7 @@ async fn event_authority_can_exchange_credentials_without_blocking_ipc() {
         assert!(events
             .try_send(QueuedBusinessDataEvent {
                 event: reset_event(1),
-                alive: Arc::new(AtomicBool::new(true)),
+                alive: Arc::new(WatchLifetime::new()),
                 failed: Arc::new(AtomicBool::new(false)),
                 authority: Arc::new(move || {
                     let requester = requester.clone();
@@ -503,7 +630,7 @@ async fn closing_ipc_cancels_pending_event_authority() {
             assert!(events
                 .try_send(QueuedBusinessDataEvent {
                     event: reset_event(1),
-                    alive: Arc::new(AtomicBool::new(true)),
+                    alive: Arc::new(WatchLifetime::new()),
                     failed: Arc::new(AtomicBool::new(false)),
                     authority: Arc::new(move || {
                         let entered = entered.clone();

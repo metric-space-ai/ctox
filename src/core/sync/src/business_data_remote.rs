@@ -2129,7 +2129,7 @@ pub async fn remote_request(
 /// Owned bounded pump. Starting it before Watch/Observe guarantees the private
 /// consumer sees the response before any event; Release forwards buffered data.
 pub struct OwnedEventPump {
-    alive: Arc<AtomicBool>,
+    alive: Arc<crate::business_data_ipc::WatchLifetime>,
     task: tokio::task::JoinHandle<()>,
     release: Arc<AtomicBool>,
     notify: Arc<Notify>,
@@ -2138,7 +2138,7 @@ pub struct OwnedEventPump {
 
 impl OwnedEventPump {
     pub fn invalidate(&self) {
-        self.alive.store(false, Ordering::SeqCst);
+        self.alive.invalidate();
     }
 
     pub fn accept(&self, subscription_id: &str) {
@@ -2153,7 +2153,7 @@ impl OwnedEventPump {
     }
 
     pub async fn shutdown(mut self) {
-        self.alive.store(false, Ordering::SeqCst);
+        self.alive.invalidate();
         self.task.abort();
         let _ = (&mut self.task).await;
     }
@@ -2161,7 +2161,7 @@ impl OwnedEventPump {
 
 impl Drop for OwnedEventPump {
     fn drop(&mut self) {
-        self.alive.store(false, Ordering::SeqCst);
+        self.alive.invalidate();
         self.task.abort();
     }
 }
@@ -2188,7 +2188,7 @@ mod event_publication_tests {
     #[tokio::test]
     async fn backpressure_revalidates_authority_before_publication() {
         let (sender, mut receiver) = mpsc::channel(1);
-        let alive = Arc::new(AtomicBool::new(true));
+        let alive = Arc::new(crate::business_data_ipc::WatchLifetime::new());
         let failed = Arc::new(AtomicBool::new(false));
         let initial_authority: EventAuthorityCheck = Arc::new(|| Box::pin(async { true }));
         assert!(
@@ -2241,7 +2241,7 @@ mod event_publication_tests {
     async fn authorized_publication_preserves_event_identity() {
         let (sender, mut receiver) = mpsc::channel(1);
         let authority: EventAuthorityCheck = Arc::new(|| Box::pin(async { true }));
-        let alive = Arc::new(AtomicBool::new(true));
+        let alive = Arc::new(crate::business_data_ipc::WatchLifetime::new());
         let failed = Arc::new(AtomicBool::new(false));
         assert!(publish_authorized_event(&sender, &authority, &alive, &failed, event(3)).await);
         let delivered = receiver.recv().await.unwrap().event;
@@ -2259,18 +2259,18 @@ pub type EventAuthorityCheck = Arc<
 async fn publish_authorized_event(
     events: &mpsc::Sender<crate::business_data_ipc::QueuedBusinessDataEvent>,
     authority: &EventAuthorityCheck,
-    alive: &Arc<AtomicBool>,
+    alive: &Arc<crate::business_data_ipc::WatchLifetime>,
     failed: &Arc<AtomicBool>,
     mut event: Event,
 ) -> bool {
     let Ok(permit) = events.reserve().await else {
         return false;
     };
-    if failed.load(Ordering::SeqCst) || !alive.load(Ordering::SeqCst) {
+    if failed.load(Ordering::SeqCst) || !alive.is_alive() {
         return false;
     }
     let authorized = authority().await;
-    if failed.load(Ordering::SeqCst) || !alive.load(Ordering::SeqCst) {
+    if failed.load(Ordering::SeqCst) || !alive.is_alive() {
         return false;
     }
     let delivery_authority: EventAuthorityCheck = if authorized {
@@ -2301,7 +2301,7 @@ pub fn spawn_remote_event_pump(
     events: mpsc::Sender<crate::business_data_ipc::QueuedBusinessDataEvent>,
     authority: EventAuthorityCheck,
 ) -> OwnedEventPump {
-    let alive = Arc::new(AtomicBool::new(true));
+    let alive = Arc::new(crate::business_data_ipc::WatchLifetime::new());
     let failed = Arc::new(AtomicBool::new(false));
     let release = Arc::new(AtomicBool::new(false));
     let notify = Arc::new(Notify::new());
