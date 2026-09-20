@@ -20,19 +20,23 @@ use super::rxdb_peer::{
 };
 use super::store::{now_ms, rxdb_store_path, RXDB_STORE_FILE};
 use anyhow::{anyhow, Context};
+use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(test)]
-use std::sync::Mutex;
+use std::cell::RefCell;
 
 #[cfg(test)]
-static AFTER_SQLITE_RELEASE: Mutex<Option<Box<dyn Fn() + Send>>> = Mutex::new(None);
+thread_local! {
+    static AFTER_SQLITE_RELEASE: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
+}
 
 pub const POPULATED_STORE_FIXTURE_SCHEMA: &str = "ctox.populated_store_recovery.fixture.v1";
 pub const NATIVE_RXDB_CUTOVER_RECEIPT_SCHEMA: &str = "ctox.native_rxdb.cutover_receipt.v1";
@@ -375,11 +379,16 @@ fn inventory_rows(conn: &Connection, table: &str) -> anyhow::Result<Vec<Value>> 
     for row in rows {
         let (id, revision, deleted, last_write_time, data) = row?;
         let parsed: Value = serde_json::from_str(&data).unwrap_or(Value::String(data.clone()));
+        let collection =
+            logical_collection_from_rxdb_table(table).unwrap_or_else(|| table.to_string());
         documents.push(json!({
             "id": id,
+            "collection": collection,
+            "table": table,
             "revision": revision,
             "deleted": deleted,
             "lastWriteTime": last_write_time,
+            "data": parsed,
             "data_sha256": hex_sha256(data.as_bytes()),
             "command_id": parsed.get("command_id"),
             "task_id": parsed.get("task_id"),
@@ -411,28 +420,27 @@ fn sqlite_column_exists(conn: &Connection, table: &str, column: &str) -> anyhow:
 }
 
 pub fn compare_populated_store_inventories(before: &Value, after: &Value) -> anyhow::Result<Value> {
-    let before_docs = flatten_inventory_docs(before);
-    let after_docs = flatten_inventory_docs(after);
+    let before_docs = flatten_inventory_docs(before)?;
+    let after_docs = flatten_inventory_docs(after)?;
+    let before_attachments = verify_reassembled_desktop_file_bytes(before)?;
+    let after_attachments = verify_reassembled_desktop_file_bytes(after)?;
     let mut missing = Vec::new();
     let mut changed = Vec::new();
     let mut preserved = Vec::new();
-    for (id, before_row) in &before_docs {
-        match after_docs.get(id) {
-            None => missing.push(id.clone()),
+    for (key, before_row) in &before_docs {
+        match after_docs.get(key) {
+            None => missing.push(key.clone()),
             Some(after_row) => {
-                let same_deleted = before_row.get("deleted") == after_row.get("deleted");
-                let same_history = before_row.get("history") == after_row.get("history");
-                let same_hashes = before_row.get("content_hash") == after_row.get("content_hash")
-                    && before_row.get("chunk_hash") == after_row.get("chunk_hash");
-                let same_refs = before_row.get("command_id") == after_row.get("command_id")
-                    && before_row.get("task_id") == after_row.get("task_id")
-                    && before_row.get("file_id") == after_row.get("file_id")
-                    && before_row.get("linked_record_id") == after_row.get("linked_record_id");
-                if same_deleted && same_history && same_hashes && same_refs {
-                    preserved.push(id.clone());
+                let collection = before_row
+                    .get("collection")
+                    .and_then(Value::as_str)
+                    .or_else(|| key.split_once('/').map(|(collection, _)| collection))
+                    .unwrap_or_default();
+                if payloads_preserved(collection, before_row, after_row)? {
+                    preserved.push(key.clone());
                 } else {
                     changed.push(json!({
-                        "id": id,
+                        "id": key,
                         "before": before_row,
                         "after": after_row
                     }));
@@ -453,28 +461,246 @@ pub fn compare_populated_store_inventories(before: &Value, after: &Value) -> any
         "ok": true,
         "preserved_ids": preserved,
         "before_inventory_sha256": before.get("inventory_sha256"),
-        "after_inventory_sha256": after.get("inventory_sha256")
+        "after_inventory_sha256": after.get("inventory_sha256"),
+        "before_attachments": before_attachments,
+        "after_attachments": after_attachments
     }))
 }
 
-fn flatten_inventory_docs(inventory: &Value) -> BTreeMap<String, Value> {
+fn logical_collection_from_rxdb_table(table: &str) -> Option<String> {
+    let rest = table.strip_prefix("ctox_business_os__")?;
+    let (collection, version) = rest.rsplit_once("__v")?;
+    if collection.is_empty()
+        || collection.starts_with('_')
+        || !version.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    Some(collection.to_string())
+}
+
+fn inventory_doc_key(collection: &str, id: &str) -> String {
+    format!("{collection}/{id}")
+}
+
+fn flatten_inventory_docs(inventory: &Value) -> anyhow::Result<BTreeMap<String, Value>> {
     let mut docs = BTreeMap::new();
     let Some(tables) = inventory.get("tables").and_then(Value::as_object) else {
-        return docs;
+        return Ok(docs);
     };
-    for table in tables.values() {
+    for (table_name, table) in tables {
         let Some(documents) = table.get("documents").and_then(Value::as_array) else {
             continue;
         };
+        let collection =
+            logical_collection_from_rxdb_table(table_name).unwrap_or_else(|| table_name.clone());
         for document in documents {
-            if let Some(id) = document.get("id").and_then(Value::as_str) {
-                docs.insert(id.to_string(), document.clone());
+            let Some(id) = document.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let key = inventory_doc_key(&collection, id);
+            let mut row = document.clone();
+            if row.get("collection").is_none() {
+                row["collection"] = json!(collection.clone());
+            }
+            if row.get("table").is_none() {
+                row["table"] = json!(table_name);
+            }
+            if docs.insert(key.clone(), row).is_some() {
+                anyhow::bail!(
+                    "duplicate populated-store inventory key {key} in table {table_name}"
+                );
             }
         }
     }
-    docs
+    Ok(docs)
 }
 
+fn document_payload(row: &Value) -> Value {
+    row.get("data").cloned().unwrap_or_else(|| {
+        json!({
+            "command_id": row.get("command_id"),
+            "task_id": row.get("task_id"),
+            "file_id": row.get("file_id"),
+            "linked_record_id": row.get("linked_record_id"),
+            "status": row.get("status"),
+            "inbound_channel": row.get("inbound_channel"),
+            "history": row.get("history"),
+            "content_hash": row.get("content_hash"),
+            "chunk_hash": row.get("chunk_hash"),
+            "_deleted": row.get("_deleted")
+        })
+    })
+}
+
+fn strip_rxdb_ephemeral_payload(payload: &Value) -> Value {
+    let mut value = payload.clone();
+    if let Some(object) = value.as_object_mut() {
+        object.remove("_rev");
+        object.remove("_meta");
+    }
+    value
+}
+
+fn declared_payload_transform_fields(collection: &str) -> anyhow::Result<BTreeSet<String>> {
+    let spec = populated_store_fixture_spec()?;
+    let mut fields = BTreeSet::new();
+    let Some(steps) = spec
+        .pointer(&format!("/supported_historical/{collection}/steps"))
+        .and_then(Value::as_array)
+    else {
+        return Ok(fields);
+    };
+    for step in steps {
+        let text = step.as_str().unwrap_or_default();
+        if text.contains("inbound_channel") {
+            fields.insert("inbound_channel".to_string());
+        }
+    }
+    Ok(fields)
+}
+
+fn payloads_preserved(
+    collection: &str,
+    before_row: &Value,
+    after_row: &Value,
+) -> anyhow::Result<bool> {
+    if before_row.get("deleted") != after_row.get("deleted") {
+        return Ok(false);
+    }
+    let transforms = declared_payload_transform_fields(collection)?;
+    let mut before_payload = strip_rxdb_ephemeral_payload(&document_payload(before_row));
+    let mut after_payload = strip_rxdb_ephemeral_payload(&document_payload(after_row));
+    for field in &transforms {
+        let before_value = before_payload
+            .as_object()
+            .and_then(|object| object.get(field))
+            .cloned();
+        let after_value = after_payload
+            .as_object_mut()
+            .and_then(|object| object.remove(field));
+        if let Some(object) = before_payload.as_object_mut() {
+            object.remove(field);
+        }
+        if field == "inbound_channel" {
+            let expected = before_value
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .or_else(|| {
+                    document_payload(before_row)
+                        .get("module")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                });
+            let actual = after_value
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            if actual != expected {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(before_payload == after_payload)
+}
+
+fn verify_reassembled_desktop_file_bytes(inventory: &Value) -> anyhow::Result<Value> {
+    let docs = flatten_inventory_docs(inventory)?;
+    let mut files = Vec::new();
+    let mut chunks_by_file: BTreeMap<String, Vec<Value>> = BTreeMap::new();
+    for (_key, doc) in docs {
+        let collection = doc
+            .get("collection")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if collection == "desktop_files" {
+            files.push(doc);
+        } else if collection == "desktop_file_chunks" {
+            let file_id = document_payload(&doc)
+                .get("file_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            chunks_by_file.entry(file_id).or_default().push(doc);
+        }
+    }
+    let mut verified = Vec::new();
+    for file in files {
+        let file_id = file
+            .get("id")
+            .and_then(Value::as_str)
+            .context("desktop_files row missing id")?
+            .to_string();
+        let payload = document_payload(&file);
+        let declared = payload
+            .get("content_hash")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let expected_bytes = payload.get("size_bytes").and_then(Value::as_u64);
+        let mut chunks = chunks_by_file.remove(&file_id).unwrap_or_default();
+        chunks.sort_by_key(|chunk| {
+            document_payload(chunk)
+                .get("idx")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+        });
+        anyhow::ensure!(
+            !chunks.is_empty(),
+            "desktop file {file_id} has no chunks to reassemble"
+        );
+        let mut bytes = Vec::new();
+        for chunk in &chunks {
+            let chunk_payload = document_payload(chunk);
+            let encoding = chunk_payload
+                .get("encoding")
+                .and_then(Value::as_str)
+                .unwrap_or("base64");
+            anyhow::ensure!(
+                encoding == "base64",
+                "desktop file chunk encoding {encoding} is unsupported"
+            );
+            let encoded = chunk_payload
+                .get("data")
+                .and_then(Value::as_str)
+                .with_context(|| format!("desktop file chunk for {file_id} missing bytes"))?;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .with_context(|| format!("decode desktop file chunk bytes for {file_id}"))?;
+            let actual_chunk_hash = hex_sha256(&decoded);
+            if let Some(declared_chunk_hash) =
+                chunk_payload.get("chunk_hash").and_then(Value::as_str)
+            {
+                anyhow::ensure!(
+                    actual_chunk_hash == declared_chunk_hash,
+                    "desktop file chunk hash does not match decoded bytes for {file_id}: {actual_chunk_hash} vs {declared_chunk_hash}"
+                );
+            }
+            bytes.extend_from_slice(&decoded);
+        }
+        let actual = hex_sha256(&bytes);
+        anyhow::ensure!(
+            actual == declared,
+            "reassembled desktop file bytes do not match content_hash for {file_id}: {actual} vs {declared}"
+        );
+        if let Some(expected_bytes) = expected_bytes {
+            anyhow::ensure!(
+                bytes.len() as u64 == expected_bytes,
+                "reassembled desktop file size mismatch for {file_id}: {} vs {expected_bytes}",
+                bytes.len()
+            );
+        }
+        verified.push(json!({
+            "file_id": file_id,
+            "bytes": bytes.len(),
+            "sha256": actual
+        }));
+    }
+    Ok(json!({ "ok": true, "files": verified }))
+}
 pub fn backup_native_rxdb_immutable_store(
     root: &Path,
     output: Option<&Path>,
@@ -488,6 +714,7 @@ pub fn backup_native_rxdb_immutable_store(
     let output = output
         .map(PathBuf::from)
         .unwrap_or_else(|| default_native_rxdb_immutable_backup_path(root));
+    let _peer_lock = acquire_native_rxdb_peer_lock(root)?;
     anyhow::ensure!(
         !output.exists(),
         "refusing to overwrite existing immutable RxDB backup {}",
@@ -515,6 +742,9 @@ pub fn backup_native_rxdb_immutable_store(
         .with_context(|| format!("write immutable RxDB backup {}", output.display()))?;
     drop(conn);
     fsync_file(&output)?;
+    if let Some(parent) = output.parent() {
+        fsync_dir(parent)?;
+    }
     let (bytes, sha256) = file_sha256(&output)?;
     let inventory = sqlite_store_inventory(&output)?;
     let provenance = json!({
@@ -530,8 +760,20 @@ pub fn backup_native_rxdb_immutable_store(
     if let Some(parent) = provenance_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&provenance_path, serde_json::to_vec_pretty(&provenance)?)
-        .with_context(|| format!("write backup provenance {}", provenance_path.display()))?;
+    publish_exclusive_file(
+        &provenance_path,
+        &serde_json::to_vec_pretty(&provenance)?,
+    )
+    .with_context(|| {
+        format!(
+            "pin immutable RxDB backup provenance {}; backup bytes at {} were left in place and must be recovered explicitly",
+            provenance_path.display(),
+            output.display()
+        )
+    })?;
+    if let Some(parent) = provenance_path.parent() {
+        fsync_dir(parent)?;
+    }
     Ok(json!({
         "ok": true,
         "kind": NATIVE_RXDB_IMMUTABLE_BACKUP_KIND,
@@ -543,7 +785,6 @@ pub fn backup_native_rxdb_immutable_store(
         "provenance_path": provenance_path.display().to_string()
     }))
 }
-
 const CUTOVER_STATE_TABLE: &str = "ctox_native_rxdb_cutover_state";
 const CUTOVER_PHASE_IN_PROGRESS: &str = "in_progress";
 const CUTOVER_PHASE_ACCEPTED: &str = "accepted";
@@ -834,7 +1075,19 @@ pub fn restore_native_rxdb_immutable_backup(root: &Path, backup: &Path) -> anyho
     let live_path = rxdb_store_path(root);
     let (backup_bytes, backup_sha256) = file_sha256(backup)?;
     if let Some(conn) = guard.exclusive.as_ref() {
-        checkpoint_live_store(conn, &live_path)?;
+        // wal_checkpoint cannot run inside BEGIN EXCLUSIVE; end the transaction
+        // first. locking_mode=EXCLUSIVE keeps other connections out until drop.
+        conn.execute_batch("ROLLBACK;")
+            .context("end exclusive restore transaction before WAL checkpoint")?;
+        let live_already_matches_backup = live_path.is_file()
+            && file_sha256(&live_path)
+                .ok()
+                .is_some_and(|(_, sha)| sha == backup_sha256);
+        // Leftover live-named WAL must not be merged into an already-published
+        // backup image; replace_sqlite_store detaches those sidecars.
+        if !live_already_matches_backup {
+            checkpoint_live_store(conn, &live_path)?;
+        }
     }
     // SQLite must release the live inode before rename, but the peer lock stays
     // held. Native peer bring-up and this restore/cutover path are the production
@@ -1195,8 +1448,19 @@ fn remove_existing_files(paths: &[PathBuf]) -> anyhow::Result<()> {
 }
 
 fn checkpoint_live_store(conn: &Connection, live_path: &Path) -> anyhow::Result<()> {
-    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+    let (busy, log, checkpointed): (i64, i64, i64) = conn
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })
         .context("checkpoint native RxDB WAL before restore exchange")?;
+    anyhow::ensure!(
+        busy == 0,
+        "refusing native RxDB restore: WAL checkpoint is busy (busy={busy}, log={log}, checkpointed={checkpointed})"
+    );
+    anyhow::ensure!(
+        checkpointed == log,
+        "refusing native RxDB restore: WAL checkpoint discarded frames (busy={busy}, log={log}, checkpointed={checkpointed})"
+    );
     fsync_file(live_path)?;
     if let Some(parent) = live_path.parent() {
         fsync_dir(parent)?;
@@ -1207,11 +1471,11 @@ fn checkpoint_live_store(conn: &Connection, live_path: &Path) -> anyhow::Result<
 fn invoke_after_sqlite_release_hook() {
     #[cfg(test)]
     {
-        if let Ok(mut hook) = AFTER_SQLITE_RELEASE.lock() {
-            if let Some(cb) = hook.take() {
+        AFTER_SQLITE_RELEASE.with(|slot| {
+            if let Some(cb) = slot.borrow_mut().take() {
                 cb();
             }
-        }
+        });
     }
 }
 
@@ -1262,6 +1526,32 @@ fn fsync_file(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn publish_exclusive_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .map_err(|err| {
+            if err.kind() == io::ErrorKind::AlreadyExists {
+                anyhow!(
+                    "refusing to replace pinned immutable RxDB backup provenance {}",
+                    path.display()
+                )
+            } else {
+                anyhow::Error::from(err)
+                    .context(format!("create exclusive file {}", path.display()))
+            }
+        })?;
+    file.write_all(bytes).with_context(|| {
+        format!(
+            "write {}; partial file was left in place and must be recovered explicitly",
+            path.display()
+        )
+    })?;
+    file.sync_all()
+        .with_context(|| format!("fsync {}", path.display()))?;
+    Ok(())
+}
 pub fn prepare_current_rxdb_targets_for_cutover(root: &Path) -> anyhow::Result<Value> {
     let spec = populated_store_fixture_spec()?;
     let database_path = rxdb_store_path(root);
@@ -1427,6 +1717,155 @@ mod tests {
     }
 
     #[test]
+    fn backup_refuses_second_output_after_provenance_is_pinned() -> anyhow::Result<()> {
+        let root = fixture_root()?;
+        materialize_supported_historical_rxdb_fixture(root.path())?;
+        let first = root.path().join("runtime/backup-first.sqlite3");
+        let second = root.path().join("runtime/backup-second.sqlite3");
+        let first_backup = backup_native_rxdb_immutable_store(root.path(), Some(&first))?;
+        let error = backup_native_rxdb_immutable_store(root.path(), Some(&second))
+            .expect_err("second destination must not replace pinned provenance");
+        assert!(
+            error
+                .to_string()
+                .contains("pinned immutable RxDB backup provenance"),
+            "unexpected second-destination error: {error:#}"
+        );
+        let provenance = native_rxdb_backup_provenance(root.path())?.expect("provenance");
+        assert_eq!(provenance["sha256"], first_backup["sha256"]);
+        assert!(!second.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_backups_cannot_replace_pinned_provenance() -> anyhow::Result<()> {
+        let root = fixture_root()?;
+        materialize_supported_historical_rxdb_fixture(root.path())?;
+        let dest_a = root.path().join("runtime/backup-a.sqlite3");
+        let dest_b = root.path().join("runtime/backup-b.sqlite3");
+        let root_a = root.path().to_path_buf();
+        let root_b = root.path().to_path_buf();
+        let path_a = dest_a.clone();
+        let path_b = dest_b.clone();
+        let first =
+            std::thread::spawn(move || backup_native_rxdb_immutable_store(&root_a, Some(&path_a)));
+        let second =
+            std::thread::spawn(move || backup_native_rxdb_immutable_store(&root_b, Some(&path_b)));
+        let first = first.join().expect("first backup thread");
+        let second = second.join().expect("second backup thread");
+        let successes = [&first, &second]
+            .into_iter()
+            .filter_map(|result| result.as_ref().ok())
+            .collect::<Vec<_>>();
+        let failures = [&first, &second]
+            .into_iter()
+            .filter_map(|result| result.as_ref().err())
+            .collect::<Vec<_>>();
+        assert_eq!(successes.len(), 1, "exactly one backup must pin provenance");
+        assert_eq!(
+            failures.len(),
+            1,
+            "the other backup must fail closed: {failures:?}"
+        );
+        let provenance = native_rxdb_backup_provenance(root.path())?.expect("provenance");
+        assert_eq!(provenance["sha256"], successes[0]["sha256"]);
+        let failure = failures[0].to_string();
+        assert!(
+            failure.contains("pinned immutable RxDB backup provenance")
+                || failure.contains("active native peer holds")
+                || failure.contains("overwrite existing immutable"),
+            "unexpected concurrent backup failure: {failure}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn inventory_compare_keeps_same_id_in_distinct_collections() -> anyhow::Result<()> {
+        let shared_command = json!({
+            "id": "shared-id",
+            "deleted": 0,
+            "data": {
+                "id": "shared-id",
+                "module": "ctox",
+                "history": [{"phase": "accepted"}]
+            }
+        });
+        let shared_task = json!({
+            "id": "shared-id",
+            "deleted": 0,
+            "data": {
+                "id": "shared-id",
+                "command_id": "cmd-x",
+                "status": "queued"
+            }
+        });
+        let before = json!({
+            "tables": {
+                "ctox_business_os__business_commands__v0": {
+                    "documents": [shared_command.clone()]
+                },
+                "ctox_business_os__ctox_queue_tasks__v0": {
+                    "documents": [shared_task.clone()]
+                }
+            }
+        });
+        let after = json!({
+            "tables": {
+                "ctox_business_os__business_commands__v2": {
+                    "documents": [{
+                        "id": "shared-id",
+                        "deleted": 0,
+                        "data": {
+                            "id": "shared-id",
+                            "module": "ctox",
+                            "inbound_channel": "ctox",
+                            "history": [{"phase": "accepted"}]
+                        }
+                    }]
+                },
+                "ctox_business_os__ctox_queue_tasks__v3": {
+                    "documents": [shared_task]
+                }
+            }
+        });
+        let compared = compare_populated_store_inventories(&before, &after)?;
+        let preserved = compared["preserved_ids"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(preserved
+            .iter()
+            .any(|value| value == "business_commands/shared-id"));
+        assert!(preserved
+            .iter()
+            .any(|value| value == "ctox_queue_tasks/shared-id"));
+
+        let dropped_task = json!({
+            "tables": {
+                "ctox_business_os__business_commands__v2": {
+                    "documents": [{
+                        "id": "shared-id",
+                        "deleted": 0,
+                        "data": {
+                            "id": "shared-id",
+                            "module": "ctox",
+                            "inbound_channel": "ctox",
+                            "history": [{"phase": "accepted"}]
+                        }
+                    }]
+                }
+            }
+        });
+        let error = compare_populated_store_inventories(&before, &dropped_task)
+            .expect_err("dropped same-id record in another collection must be visible");
+        assert!(
+            error.to_string().contains("ctox_queue_tasks/shared-id"),
+            "unexpected dropped-id error: {error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn restore_without_provenance_fails_closed() -> anyhow::Result<()> {
         let root = fixture_root()?;
         materialize_supported_historical_rxdb_fixture(root.path())?;
@@ -1521,6 +1960,14 @@ mod tests {
             hash,
             "70b24f43af4f6268646054f87b87b2509adfd9c7e4f7198bd03bf6c281fb01b0"
         );
+        let attachments = verify_reassembled_desktop_file_bytes(&after)?;
+        assert_eq!(
+            attachments.pointer("/files/0/sha256"),
+            Some(&json!(
+                "70b24f43af4f6268646054f87b87b2509adfd9c7e4f7198bd03bf6c281fb01b0"
+            ))
+        );
+        assert_eq!(attachments.pointer("/files/0/bytes"), Some(&json!(39)));
         Ok(())
     }
 
@@ -1782,8 +2229,10 @@ mod tests {
         Ok(())
     }
 
-    fn enable_populated_wal(root: &Path) -> anyhow::Result<PathBuf> {
+    fn leave_stale_populated_wal(root: &Path) -> anyhow::Result<PathBuf> {
         let live = rxdb_store_path(root);
+        let wal = PathBuf::from(format!("{}-wal", live.display()));
+        let shm = PathBuf::from(format!("{}-shm", live.display()));
         let conn = Connection::open(&live)?;
         let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
         anyhow::ensure!(
@@ -1798,10 +2247,55 @@ mod tests {
             ),
             [],
         )?;
+        anyhow::ensure!(
+            wal.is_file() && wal.metadata()?.len() > 0,
+            "writer must populate WAL before snapshot {}",
+            wal.display()
+        );
+        let snapshot = PathBuf::from(format!("{}-stale-snapshot", live.display()));
+        let snapshot_wal = PathBuf::from(format!("{}-stale-snapshot-wal", live.display()));
+        let snapshot_shm = PathBuf::from(format!("{}-stale-snapshot-shm", live.display()));
+        fs::copy(&live, &snapshot)?;
+        fs::copy(&wal, &snapshot_wal)?;
+        if shm.exists() {
+            fs::copy(&shm, &snapshot_shm)?;
+        }
         drop(conn);
-        let wal = PathBuf::from(format!("{}-wal", live.display()));
-        anyhow::ensure!(wal.is_file(), "expected populated WAL {}", wal.display());
+        fs::copy(&snapshot, &live)?;
+        fs::copy(&snapshot_wal, &wal)?;
+        if snapshot_shm.exists() {
+            fs::copy(&snapshot_shm, &shm)?;
+            fs::remove_file(&snapshot_shm)?;
+        }
+        fs::remove_file(&snapshot)?;
+        fs::remove_file(&snapshot_wal)?;
+        anyhow::ensure!(
+            wal.is_file() && wal.metadata()?.len() > 0,
+            "stale WAL fixture vanished or was empty at {}",
+            wal.display()
+        );
         Ok(wal)
+    }
+
+    #[test]
+    fn wal_checkpoint_is_refused_inside_exclusive_transaction() -> anyhow::Result<()> {
+        let root = fixture_root()?;
+        materialize_supported_historical_rxdb_fixture(root.path())?;
+        leave_stale_populated_wal(root.path())?;
+        let live = rxdb_store_path(root.path());
+        let mut guard = acquire_exclusive_native_rxdb_writer(root.path())?;
+        let conn = guard.exclusive.as_ref().expect("live exclusive writer");
+        let inside = checkpoint_live_store(conn, &live);
+        let error = inside.expect_err("checkpoint inside BEGIN EXCLUSIVE must fail");
+        assert!(
+            format!("{error:#}").contains("locked")
+                || format!("{error:#}").contains("checkpoint native RxDB WAL"),
+            "unexpected in-transaction checkpoint error: {error:#}"
+        );
+        conn.execute_batch("ROLLBACK;")?;
+        checkpoint_live_store(conn, &live)?;
+        guard.release_sqlite();
+        Ok(())
     }
 
     #[test]
@@ -1811,19 +2305,21 @@ mod tests {
         let backup_path = default_native_rxdb_immutable_backup_path(root.path());
         backup_native_rxdb_immutable_store(root.path(), Some(&backup_path))?;
         let root_for_hook = root.path().to_path_buf();
-        *AFTER_SQLITE_RELEASE.lock().expect("hook lock") = Some(Box::new(move || {
-            let peer = acquire_native_peer_process_lock(&root_for_hook)
-                .expect("peer lock check during exchange");
-            assert!(
-                peer.is_none(),
-                "legitimate native peer writer must honor the retained peer lock after sqlite release"
-            );
-            let exclusive = acquire_exclusive_native_rxdb_writer(&root_for_hook);
-            assert!(
-                exclusive.is_err(),
-                "exclusive restore writer must fail while peer lock is held after sqlite release: {exclusive:?}"
-            );
-        }));
+        AFTER_SQLITE_RELEASE.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move || {
+                let peer = acquire_native_peer_process_lock(&root_for_hook)
+                    .expect("peer lock check during exchange");
+                assert!(
+                    peer.is_none(),
+                    "legitimate native peer writer must honor the retained peer lock after sqlite release"
+                );
+                let exclusive = acquire_exclusive_native_rxdb_writer(&root_for_hook);
+                assert!(
+                    exclusive.is_err(),
+                    "exclusive restore writer must fail while peer lock is held after sqlite release: {exclusive:?}"
+                );
+            }));
+        });
         restore_native_rxdb_immutable_backup(root.path(), &backup_path)?;
         Ok(())
     }
@@ -1835,13 +2331,16 @@ mod tests {
         let backup_path = default_native_rxdb_immutable_backup_path(root.path());
         let backup = backup_native_rxdb_immutable_store(root.path(), Some(&backup_path))?;
         mark_cutover_in_progress(root.path())?;
-        let wal = enable_populated_wal(root.path())?;
+        let wal = leave_stale_populated_wal(root.path())?;
         let live = rxdb_store_path(root.path());
         let staging = live.with_extension("sqlite3.restore-staging");
         let preserved = live.with_extension("sqlite3.pre-restore");
         fs::copy(&backup_path, &staging)?;
         fs::rename(&live, &preserved)?;
-        anyhow::ensure!(wal.is_file(), "crash left live-named WAL in place");
+        anyhow::ensure!(
+            wal.is_file() && wal.metadata()?.len() > 0,
+            "crash left live-named WAL in place"
+        );
         restore_native_rxdb_immutable_backup(root.path(), &backup_path)?;
         assert!(live.is_file());
         assert!(
@@ -1861,12 +2360,15 @@ mod tests {
         let backup_path = default_native_rxdb_immutable_backup_path(root.path());
         let backup = backup_native_rxdb_immutable_store(root.path(), Some(&backup_path))?;
         mark_cutover_in_progress(root.path())?;
-        let wal = enable_populated_wal(root.path())?;
+        let wal = leave_stale_populated_wal(root.path())?;
         let live = rxdb_store_path(root.path());
         let preserved = live.with_extension("sqlite3.pre-restore");
         fs::copy(&live, &preserved)?;
         fs::copy(&backup_path, &live)?;
-        anyhow::ensure!(wal.is_file(), "matching-backup crash left live-named WAL");
+        anyhow::ensure!(
+            wal.is_file() && wal.metadata()?.len() > 0,
+            "matching-backup crash left live-named WAL"
+        );
         restore_native_rxdb_immutable_backup(root.path(), &backup_path)?;
         assert!(
             !wal.exists(),

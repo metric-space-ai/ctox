@@ -9,9 +9,29 @@ const path = require('node:path');
 
 const root = path.resolve(__dirname, '../../../..');
 const ctoxBin = process.env.CTOX_BIN || path.join(root, 'target/debug/ctox');
-const scratchBase = fs.existsSync('/Volumes/tmp/dev-artifacts')
-  ? '/Volumes/tmp/dev-artifacts/ctox/populated-store-recovery'
-  : os.tmpdir();
+const POST_CUTOVER_COMMAND_ID = 'cmd-post-cutover-001';
+const ATTACHMENT_SHA256 = '70b24f43af4f6268646054f87b87b2509adfd9c7e4f7198bd03bf6c281fb01b0';
+const ATTACHMENT_BYTES = 39;
+const CTOX_COMMAND_TIMEOUT_MS = 30000;
+const SQLITE_COMMAND_TIMEOUT_MS = 15000;
+const RESTORE_COMMAND_TIMEOUT_MS = 60000;
+const GIT_COMMAND_TIMEOUT_MS = 15000;
+
+function populatedStoreScratchBase() {
+  if (process.platform === 'darwin') {
+    if (!fs.existsSync('/Volumes/tmp')) {
+      throw new Error(
+        'macOS populated-store acceptance requires mounted /Volumes/tmp; refusing os.tmpdir() fallback'
+      );
+    }
+    return '/Volumes/tmp/dev-artifacts/ctox/populated-store-recovery';
+  }
+  return fs.existsSync('/Volumes/tmp/dev-artifacts')
+    ? '/Volumes/tmp/dev-artifacts/ctox/populated-store-recovery'
+    : os.tmpdir();
+}
+
+const scratchBase = populatedStoreScratchBase();
 const evidenceDir = process.env.POPULATED_STORE_EVIDENCE_DIR
   || path.join(scratchBase, 'evidence');
 const workRoot = process.env.POPULATED_STORE_ROOT
@@ -23,6 +43,62 @@ const startedAt = Date.now();
 function mkdirp(dir) {
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function childHasExited(child) {
+  return Boolean(child) && (child.exitCode !== null || child.signalCode !== null);
+}
+
+async function waitForChildClose(child, timeoutMs, label) {
+  if (!child || childHasExited(child)) return;
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      cleanup();
+      if (childHasExited(child)) {
+        resolve();
+        return;
+      }
+      reject(new Error(
+        `${label} drain deadline expired after ${timeoutMs}ms (exitCode=${child.exitCode}, signalCode=${child.signalCode})`
+      ));
+    }, timeoutMs);
+    const onClose = () => {
+      cleanup();
+      resolve();
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      child.off('close', onClose);
+    };
+    child.once('close', onClose);
+    if (childHasExited(child)) {
+      cleanup();
+      resolve();
+    }
+  });
+}
+
+function timedSpawnSync(command, args, options = {}) {
+  const timeout = options.timeout ?? CTOX_COMMAND_TIMEOUT_MS;
+  const result = spawnSync(command, args, {
+    maxBuffer: 16 * 1024 * 1024,
+    killSignal: 'SIGKILL',
+    ...options,
+    timeout,
+  });
+  if (result.error) {
+    const timedOut = result.error.code === 'ETIMEDOUT';
+    const err = new Error(
+      `${command} ${args.join(' ')} ${timedOut ? `timed out after ${timeout}ms` : `failed: ${result.error.message}`}`
+    );
+    err.result = result;
+    throw err;
+  }
+  return result;
 }
 
 function sha256File(filePath) {
@@ -56,11 +132,11 @@ function prepareWorkRoot(targetRoot) {
 }
 
 function runCtox(args, options = {}) {
-  const result = spawnSync(ctoxBin, args, {
+  const result = timedSpawnSync(ctoxBin, args, {
     cwd: root,
     encoding: 'utf8',
     env: { ...process.env, CTOX_ROOT: workRoot, ...options.env },
-    maxBuffer: 16 * 1024 * 1024,
+    timeout: options.timeout ?? CTOX_COMMAND_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     const err = new Error(`ctox ${args.join(' ')} failed: ${result.stderr || result.stdout}`);
@@ -72,10 +148,10 @@ function runCtox(args, options = {}) {
 }
 
 function sqlite(statement, dbPath = path.join(workRoot, 'runtime/business-os-rxdb.sqlite3')) {
-  const result = spawnSync('sqlite3', ['-cmd', '.timeout 10000', dbPath], {
+  const result = timedSpawnSync('sqlite3', ['-cmd', '.timeout 10000', dbPath], {
     encoding: 'utf8',
     input: statement,
-    maxBuffer: 16 * 1024 * 1024,
+    timeout: SQLITE_COMMAND_TIMEOUT_MS,
   });
   if (result.status !== 0) {
     throw new Error(`sqlite failed: ${result.stderr || result.stdout}`);
@@ -83,8 +159,10 @@ function sqlite(statement, dbPath = path.join(workRoot, 'runtime/business-os-rxd
   return result.stdout;
 }
 
-function wait(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+function sqliteRows(statement, dbPath) {
+  const raw = sqlite(statement, dbPath).trim();
+  if (!raw) return [];
+  return raw.split('\n').map((line) => JSON.parse(line));
 }
 
 function startServe() {
@@ -104,28 +182,42 @@ function startServe() {
   return child;
 }
 
-function stopServe(child) {
-  if (!child || child.exitCode !== null) return;
-  child.kill('SIGTERM');
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline && child.exitCode === null) wait(100);
-  if (child.exitCode === null) child.kill('SIGKILL');
+async function stopServe(child) {
+  if (!child) return;
+  if (!childHasExited(child)) {
+    child.kill('SIGTERM');
+  }
+  try {
+    await waitForChildClose(child, 15000, 'ctox serve SIGTERM');
+    return;
+  } catch (termError) {
+    if (!childHasExited(child)) {
+      child.kill('SIGKILL');
+    }
+    try {
+      await waitForChildClose(child, 5000, 'ctox serve SIGKILL');
+    } catch (killError) {
+      throw new Error(
+        `ctox serve drain deadline expired after SIGTERM (${termError.message}) and SIGKILL (${killError.message})`
+      );
+    }
+  }
 }
 
-function waitForServe(child, timeoutMs = 90000) {
+async function waitForServe(child, timeoutMs = 90000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (child.exitCode !== null) {
+    if (childHasExited(child)) {
       throw new Error(`ctox serve exited: ${fs.readFileSync(child.__logPath, 'utf8').slice(-8000)}`);
     }
     const log = fs.existsSync(child.__logPath) ? fs.readFileSync(child.__logPath, 'utf8') : '';
     if (log.includes('CTOX Business OS listening')) return;
-    wait(250);
+    await delay(250);
   }
   throw new Error(`ctox serve did not listen: ${fs.readFileSync(child.__logPath, 'utf8').slice(-8000)}`);
 }
 
-function waitForCutover(timeoutMs = 90000) {
+async function waitForCutover(timeoutMs = 90000) {
   const deadline = Date.now() + timeoutMs;
   let lastError = '';
   while (Date.now() < deadline) {
@@ -138,12 +230,12 @@ function waitForCutover(timeoutMs = 90000) {
     } catch (error) {
       lastError = String(error.message || error);
     }
-    wait(250);
+    await delay(250);
   }
   throw new Error(`production cutover did not finish: ${lastError}`);
 }
 
-function waitForAcceptedWrites(receiptHash, timeoutMs = 60000) {
+async function waitForAcceptedWrites(timeoutMs = 60000) {
   const deadline = Date.now() + timeoutMs;
   let dispatched = false;
   let lastError = '';
@@ -151,8 +243,8 @@ function waitForAcceptedWrites(receiptHash, timeoutMs = 60000) {
     try {
       if (!dispatched) {
         runCtox(['business-os', 'commands', 'dispatch', '--json', JSON.stringify({
-          id: 'cmd-post-cutover-001',
-          command_id: 'cmd-post-cutover-001',
+          id: POST_CUTOVER_COMMAND_ID,
+          command_id: POST_CUTOVER_COMMAND_ID,
           module: 'ctox',
           command_type: 'business_os.test',
           status: 'accepted',
@@ -163,24 +255,93 @@ function waitForAcceptedWrites(receiptHash, timeoutMs = 60000) {
         })]);
         dispatched = true;
       }
-      const inventory = runCtox(['business-os', 'rxdb', 'inventory']);
-      if (inventory.inventory_sha256 && inventory.inventory_sha256 !== receiptHash) {
-        return inventory;
+      const commands = sqliteRows(`SELECT json_object(
+        'id', id,
+        'deleted', deleted,
+        'status', json_extract(data, '$.status'),
+        'command_id', COALESCE(NULLIF(json_extract(data, '$.command_id'), ''), id)
+      ) FROM ${table('business_commands', 2)}
+       WHERE id='${POST_CUTOVER_COMMAND_ID}'
+          OR json_extract(data, '$.command_id')='${POST_CUTOVER_COMMAND_ID}';`);
+      const command = commands.find((row) => (
+        (row.id === POST_CUTOVER_COMMAND_ID || row.command_id === POST_CUTOVER_COMMAND_ID)
+        && Number(row.deleted) === 0
+        && row.status === 'accepted'
+      ));
+      const tasks = sqliteRows(`SELECT json_object(
+        'id', id,
+        'deleted', deleted,
+        'status', json_extract(data, '$.status'),
+        'command_id', json_extract(data, '$.command_id')
+      ) FROM ${table('ctox_queue_tasks', 3)}
+       WHERE json_extract(data, '$.command_id')='${POST_CUTOVER_COMMAND_ID}'
+          OR json_extract(data, '$.business_os_command_id')='${POST_CUTOVER_COMMAND_ID}';`);
+      const task = tasks.find((row) => (
+        Number(row.deleted) === 0
+        && row.command_id === POST_CUTOVER_COMMAND_ID
+      ));
+      if (command && task) {
+        return { command, task };
       }
-      lastError = `inventory still ${inventory.inventory_sha256}`;
+      lastError = `command=${JSON.stringify(command || null)} task=${JSON.stringify(task || null)}`;
     } catch (error) {
       lastError = String(error.message || error);
     }
-    wait(500);
+    await delay(500);
   }
-  throw new Error(`serve did not accept post-cutover writes before restore probe: ${lastError}`);
+  throw new Error(
+    `serve did not persist accepted command/queue identity for ${POST_CUTOVER_COMMAND_ID}: ${lastError}`
+  );
 }
 
 function table(collection, version) {
   return `ctox_business_os__${collection}__v${version}`;
 }
 
-function assertDuplicatePeerRejected() {
+function verifyAttachmentBytes() {
+  const fileRows = sqliteRows(`SELECT json_object(
+    'id', id,
+    'content_hash', json_extract(data, '$.content_hash'),
+    'size_bytes', json_extract(data, '$.size_bytes')
+  ) FROM ${table('desktop_files', 0)} WHERE id='file-attachment-001';`);
+  if (fileRows.length !== 1) {
+    throw new Error(`expected one desktop file attachment, got ${fileRows.length}`);
+  }
+  const chunks = sqliteRows(`SELECT json_object(
+    'idx', json_extract(data, '$.idx'),
+    'data', json_extract(data, '$.data'),
+    'chunk_hash', json_extract(data, '$.chunk_hash'),
+    'size_bytes', json_extract(data, '$.size_bytes')
+  ) FROM ${table('desktop_file_chunks', 0)}
+   WHERE json_extract(data, '$.file_id')='file-attachment-001'
+   ORDER BY json_extract(data, '$.idx');`);
+  if (!chunks.length) {
+    throw new Error('attachment chunks missing after cutover');
+  }
+  const parts = [];
+  for (const chunk of chunks) {
+    const bytes = Buffer.from(chunk.data, 'base64');
+    const chunkHash = crypto.createHash('sha256').update(bytes).digest('hex');
+    if (chunkHash !== chunk.chunk_hash) {
+      throw new Error(`chunk hash does not match decoded bytes: ${chunkHash} vs ${chunk.chunk_hash}`);
+    }
+    parts.push(bytes);
+  }
+  const assembled = Buffer.concat(parts);
+  const actual = crypto.createHash('sha256').update(assembled).digest('hex');
+  if (actual !== fileRows[0].content_hash) {
+    throw new Error(`reassembled attachment bytes do not match content_hash: ${actual} vs ${fileRows[0].content_hash}`);
+  }
+  if (actual !== ATTACHMENT_SHA256) {
+    throw new Error(`attachment hash lost: ${actual}`);
+  }
+  if (assembled.length !== ATTACHMENT_BYTES) {
+    throw new Error(`attachment byte length lost: ${assembled.length}`);
+  }
+  return { hash: actual, bytes: assembled.length };
+}
+
+async function assertDuplicatePeerRejected() {
   const logPath = path.join(workRoot, 'duplicate-serve.log');
   const log = fs.openSync(logPath, 'w');
   const child = spawn(ctoxBin, ['business-os', 'serve', '--addr', `127.0.0.1:${businessPort + 1}`], {
@@ -190,19 +351,36 @@ function assertDuplicatePeerRejected() {
   });
   const deadline = Date.now() + 15000;
   let found = false;
-  while (Date.now() < deadline) {
-    const text = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
-    if (/native rxdb peer already runs in another process|lock held by another process/i.test(text)) {
-      found = true;
-      break;
+  let drainError = null;
+  try {
+    while (Date.now() < deadline) {
+      const text = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
+      if (/native rxdb peer already runs in another process|lock held by another process/i.test(text)) {
+        found = true;
+        break;
+      }
+      if (childHasExited(child)) break;
+      await delay(200);
     }
-    wait(200);
+  } finally {
+    try {
+      if (!childHasExited(child)) {
+        child.kill('SIGTERM');
+        try {
+          await waitForChildClose(child, 5000, 'duplicate serve SIGTERM');
+        } catch {
+          child.kill('SIGKILL');
+          await waitForChildClose(child, 5000, 'duplicate serve SIGKILL');
+        }
+      } else {
+        await waitForChildClose(child, 5000, 'duplicate serve close');
+      }
+    } catch (error) {
+      drainError = error;
+    }
   }
-  if (child.exitCode === null) {
-    child.kill('SIGTERM');
-    const stopBy = Date.now() + 5000;
-    while (Date.now() < stopBy && child.exitCode === null) wait(100);
-    if (child.exitCode === null) child.kill('SIGKILL');
+  if (drainError) {
+    throw new Error(`duplicate peer drain deadline expired: ${drainError.message}`);
   }
   if (!found) {
     throw new Error(`stale writer was not rejected: ${fs.readFileSync(logPath, 'utf8').slice(-4000)}`);
@@ -210,19 +388,24 @@ function assertDuplicatePeerRejected() {
 }
 
 function restoreClosed(fromPath, extraArgs = []) {
-  return spawnSync(ctoxBin, [
+  return timedSpawnSync(ctoxBin, [
     'business-os', 'rxdb', 'restore-immutable-backup', '--confirm-restore', '--from', fromPath, ...extraArgs,
   ], {
     cwd: root,
     encoding: 'utf8',
     env: { ...process.env, CTOX_ROOT: workRoot },
+    timeout: RESTORE_COMMAND_TIMEOUT_MS,
   });
 }
 
-function main() {
+async function main() {
   mkdirp(evidenceDir);
   prepareWorkRoot(workRoot);
-  const sourceSha = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).stdout.trim();
+  const sourceSha = timedSpawnSync('git', ['rev-parse', 'HEAD'], {
+    cwd: root,
+    encoding: 'utf8',
+    timeout: GIT_COMMAND_TIMEOUT_MS,
+  }).stdout.trim();
   const binarySha = sha256File(ctoxBin);
   const fixturePath = path.join(root, 'tests/fixtures/populated-store-recovery/supported-historical-inventory.json');
   const fixtureSha = sha256File(fixturePath);
@@ -240,23 +423,21 @@ function main() {
 
   const serveStarted = Date.now();
   const serve = startServe();
+  let runError;
   try {
-    waitForServe(serve);
-    const liveReceipt = waitForCutover();
+    await waitForServe(serve);
+    const liveReceipt = await waitForCutover();
     const serveMs = Date.now() - serveStarted;
     const after = runCtox(['business-os', 'rxdb', 'inventory']);
     const inbound = sqlite(`SELECT json_extract(data, '$.inbound_channel') FROM ${table('business_commands', 2)} WHERE id='cmd-history-001';`).trim();
     if (inbound !== 'ctox') throw new Error(`inbound_channel not migrated: ${inbound}`);
     const deleted = sqlite(`SELECT deleted FROM ${table('business_commands', 2)} WHERE id='cmd-deleted-001';`).trim();
     if (deleted !== '1') throw new Error(`deletion marker lost: ${deleted}`);
-    const attachment = sqlite(`SELECT json_extract(data, '$.content_hash') FROM ${table('desktop_files', 0)} WHERE id='file-attachment-001';`).trim();
-    if (attachment !== '70b24f43af4f6268646054f87b87b2509adfd9c7e4f7198bd03bf6c281fb01b0') {
-      throw new Error(`attachment hash lost: ${attachment}`);
-    }
+    const attachment = verifyAttachmentBytes();
     const pendingTasks = Number(sqlite(`SELECT COUNT(*) FROM ${table('ctox_queue_tasks', 3)} WHERE json_extract(data, '$.command_id')='cmd-pending-001';`).trim());
     if (pendingTasks > 1) throw new Error(`pending command duplicated: ${pendingTasks} tasks`);
 
-    assertDuplicatePeerRejected();
+    await assertDuplicatePeerRejected();
 
     const restoreWhileRunning = restoreClosed(backupPath);
     const restoreWhileRunningClosed = restoreWhileRunning.status !== 0
@@ -265,10 +446,9 @@ function main() {
       throw new Error(`unsafe rollback while peer held lock was not fail-closed: ${restoreWhileRunning.stderr || restoreWhileRunning.stdout}`);
     }
 
-    const receiptHash = liveReceipt.receipt?.inventory_sha256;
-    waitForAcceptedWrites(receiptHash);
-    stopServe(serve);
-    wait(500);
+    const acceptedWrite = await waitForAcceptedWrites();
+    await stopServe(serve);
+    await delay(500);
 
     const restoreAfterStop = restoreClosed(backupPath);
     const restoreAfterStopClosed = restoreAfterStop.status !== 0
@@ -281,7 +461,7 @@ function main() {
     if (!skipBrowser) {
       const smokeRoot = fs.mkdtempSync(path.join(mkdirp(scratchBase), 'ctox-populated-store-smoke-'));
       fs.cpSync(workRoot, smokeRoot, { recursive: true });
-      const smoke = spawnSync(process.execPath, [path.join(root, 'src/core/rxdb/tools/browser_rust_smoke.js')], {
+      const smoke = timedSpawnSync(process.execPath, [path.join(root, 'src/core/rxdb/tools/browser_rust_smoke.js')], {
         cwd: root,
         encoding: 'utf8',
         env: {
@@ -294,7 +474,6 @@ function main() {
           SIGNALING_PORT: String(businessPort + 102),
         },
         timeout: 180000,
-        maxBuffer: 16 * 1024 * 1024,
       });
       fs.writeFileSync(path.join(evidenceDir, 'browser-command.log'), `${smoke.stdout || ''}\n${smoke.stderr || ''}`);
       if (smoke.status !== 0) {
@@ -319,8 +498,12 @@ function main() {
       after_inventory_sha256: after.inventory_sha256,
       inbound_channel: inbound,
       deletion_marker: deleted,
-      attachment_hash: attachment,
+      attachment_hash: attachment.hash,
+      attachment_bytes: attachment.bytes,
       pending_task_count: pendingTasks,
+      post_cutover_command_id: acceptedWrite.command.command_id,
+      post_cutover_command_status: acceptedWrite.command.status,
+      post_cutover_task_id: acceptedWrite.task.id,
       stale_writer_rejected: true,
       unsafe_rollback_fail_closed: true,
       serve_ms: serveMs,
@@ -336,14 +519,21 @@ function main() {
     };
     fs.writeFileSync(path.join(evidenceDir, 'populated-store-recovery.json'), `${JSON.stringify(evidence, null, 2)}\n`);
     process.stdout.write(`${JSON.stringify(evidence)}\n`);
+  } catch (error) {
+    runError = error;
   } finally {
-    stopServe(serve);
+    try {
+      await stopServe(serve);
+    } catch (drainError) {
+      runError = runError
+        ? new Error(`${runError.message}; also ${drainError.message}`)
+        : drainError;
+    }
   }
+  if (runError) throw runError;
 }
 
-try {
-  main();
-} catch (error) {
+main().catch((error) => {
   console.error(error.stack || String(error));
   process.exit(1);
-}
+});
