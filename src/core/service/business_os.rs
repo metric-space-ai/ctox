@@ -6965,6 +6965,52 @@ mod tests {
             )
             .expect_err("deactivated admitted actor must not regain access through claims");
             assert!(error.to_string().contains("no longer active"), "{error:#}");
+            conn.execute(
+                "UPDATE business_users SET active=1 WHERE user_id=?1",
+                rusqlite::params![owner],
+            )?;
+            assert_eq!(
+                resolve_web_stack_auth_owner_user_id_with_env(
+                    root.path(),
+                    &claimed_args,
+                    task_id,
+                    Some("forged-env"),
+                    false,
+                )?
+                .as_deref(),
+                Some(owner),
+            );
+            // Exercise the supported queue cancel command, not a raw state edit.
+            crate::mission::queue::handle_queue_command(
+                root.path(),
+                &[
+                    "cancel".into(),
+                    "--message-key".into(),
+                    task_id.into(),
+                    "--reason".into(),
+                    "fixture cancellation".into(),
+                ],
+            )?;
+            assert_eq!(
+                channels::load_queue_task(root.path(), task_id)?
+                    .context("cancelled generated task")?
+                    .route_status,
+                "cancelled"
+            );
+            let error = resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &claimed_args,
+                task_id,
+                Some("forged-env"),
+                false,
+            )
+            .expect_err("cancelled requesting task must not regain actor authority");
+            assert!(
+                error
+                    .to_string()
+                    .contains("requesting queue task is terminal"),
+                "{error:#}"
+            );
         }
         Ok(())
     }
