@@ -225,7 +225,7 @@ test('legacy, runtime, and imported app records cannot opt back into full-worksp
   }
 });
 
-test('the shared shell keeps v1 chrome while v2 exposes icon drag, four corners and close only', () => {
+test('the shared shell keeps v1 chrome while v2 exposes icon drag, layout menu and close', () => {
   assert.deepEqual([...SHELL_WINDOW_CONTROL_ACTIONS].sort(), ['close', 'maximize', 'minimize']);
   assert.equal(SHELL_WINDOW_CHROME_VERSION, 'shared-v1');
   assert.equal(SHELL_WINDOW_V2_CHROME_VERSION, 'shared-v2');
@@ -241,7 +241,10 @@ test('the shared shell keeps v1 chrome while v2 exposes icon drag, four corners 
   assert.match(windowManagerSource, /macos: \['close', 'minimize', 'maximize'\]/);
   assert.match(windowManagerSource, /assertShellWindowChrome\(winEl, shellContract\)/);
   assert.match(windowManagerSource, /assertShellWindowChrome\(win\.element, win\.shellContract\)/);
-  assert.match(windowManagerSource, /shellContract === 'v2'\s*\? \['close'\]/);
+  assert.match(windowManagerSource, /shellContract === 'v2'\s*\? \['layout', 'close'\]/);
+  assert.match(windowManagerSource, /data-window-layout-menu/);
+  assert.match(windowManagerSource, /V2_LAYOUT_OPTIONS/);
+  assert.match(windowManagerSource, /allowWorkspaceSnap: false/);
   assert.match(windowManagerSource, /V2_RESIZE_HANDLES = \['nw', 'ne', 'sw', 'se'\]/);
   assert.match(windowManagerSource, /const finishDestroy = \(\) => \{[\s\S]*?focusNextAfter\(id\);[\s\S]*?window:closed/);
   assert.match(windowManagerSource, /btn\.type = 'button'/);

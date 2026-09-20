@@ -74,6 +74,16 @@ const CONTROL_GLYPHS = {
   close: '×',
 };
 
+const V2_LAYOUT_OPTIONS = Object.freeze([
+  { id: 'free', icon: 'free', labelKey: 'windowFree', fallback: 'Freies Fenster' },
+  { id: 'maximize', icon: 'maximize', labelKey: 'windowMaximize', fallback: 'Maximieren' },
+  { id: 'minimize', icon: 'minimize', labelKey: 'windowMinimize', fallback: 'Minimieren' },
+  { id: 'left', icon: 'left', labelKey: 'windowSnapLeft', fallback: 'Links anheften' },
+  { id: 'right', icon: 'right', labelKey: 'windowSnapRight', fallback: 'Rechts anheften' },
+  { id: 'top', icon: 'top', labelKey: 'windowSnapTop', fallback: 'Oben anheften' },
+  { id: 'bottom', icon: 'bottom', labelKey: 'windowSnapBottom', fallback: 'Unten anheften' },
+]);
+
 const RESIZE_HANDLES = ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se'];
 const V2_RESIZE_HANDLES = ['nw', 'ne', 'sw', 'se'];
 
@@ -1299,13 +1309,64 @@ export function createWindowManager({
   function bindControls(win) {
     win.element.querySelector('[data-window-controls]').addEventListener('click', (event) => {
       const btn = event.target.closest('[data-window-control]');
-      if (!btn) return;
+      const layoutBtn = event.target.closest('[data-window-layout-control]');
+      if (!btn && !layoutBtn) return;
       event.stopPropagation();
+      if (layoutBtn) {
+        event.preventDefault();
+        if (layoutBtn.dataset.windowLayoutControl === 'toggle') {
+          const menu = win.element.querySelector('[data-window-layout-menu]');
+          if (menu) {
+            menu.hidden = !menu.hidden;
+            layoutBtn.setAttribute('aria-expanded', String(!menu.hidden));
+          }
+          return;
+        }
+        applyLayoutControl(win, layoutBtn.dataset.windowLayoutControl);
+        return;
+      }
       const action = btn.dataset.windowControl;
       if (action === 'close') destroy(win.id);
       else if (action === 'minimize') minimize(win.id);
       else if (action === 'maximize') toggleMaximize(win.id);
     });
+    const layoutMenu = win.element.querySelector('[data-window-layout-menu]');
+    if (!layoutMenu) return;
+    document.addEventListener('click', (event) => {
+      if (!win.element.contains(event.target)) layoutMenu.hidden = true;
+    });
+    win.element.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !layoutMenu.hidden) {
+        layoutMenu.hidden = true;
+        win.element.querySelector('[data-window-layout-trigger]')?.focus();
+      }
+    });
+  }
+
+  function applyLayoutControl(win, action) {
+    const menu = win.element.querySelector('[data-window-layout-menu]');
+    if (menu) menu.hidden = true;
+    if (action === 'free') {
+      if (win.state === 'maximized' || win.element.classList.contains('is-snapped')) restoreSize(win);
+    } else if (action === 'maximize') {
+      if (win.state === 'maximized') restoreSize(win);
+      else toggleMaximize(win.id);
+    } else if (action === 'minimize') {
+      minimize(win.id);
+    } else if (SNAP_ZONES.includes(action)) {
+      snapTo(win.id, action);
+    }
+    updateLayoutControlState(win);
+  }
+
+  function updateLayoutControlState(win) {
+    const trigger = win.element.querySelector('[data-window-layout-trigger]');
+    if (!trigger) return;
+    const state = win.state === 'maximized'
+      ? 'maximize'
+      : (win.element.dataset.snapZone || 'free');
+    trigger.dataset.state = state;
+    trigger.setAttribute('aria-expanded', String(!win.element.querySelector('[data-window-layout-menu]')?.hidden));
   }
 
   function bindHeaderActions(win) {
@@ -1886,6 +1947,7 @@ export function createWindowManager({
       targetRects,
       pointerType,
       previousCandidate,
+      allowWorkspaceSnap: false,
     });
   }
 
@@ -2128,7 +2190,7 @@ function assertShellWindowChrome(winEl, shellContract = 'v1') {
   const dragRegion = winEl?.querySelector('[data-window-drag-region]');
   const controls = winEl?.querySelectorAll('[data-window-control]') || [];
   const actions = new Set(Array.from(controls).map((control) => control.dataset.windowControl));
-  const expected = shellContract === 'v2' ? ['close'] : SHELL_WINDOW_CONTROL_ACTIONS;
+  const expected = shellContract === 'v2' ? ['layout', 'close'] : SHELL_WINDOW_CONTROL_ACTIONS;
   const complete = controls.length === expected.length
     && expected.every((action) => actions.has(action));
   const operable = Array.from(controls).every((control) => (
@@ -2145,9 +2207,41 @@ function renderControls(controlsEl, layout, translate, shellContract = 'v1') {
   if (!controlsEl) return;
   controlsEl.innerHTML = '';
   const kinds = shellContract === 'v2'
-    ? ['close']
+    ? ['layout', 'close']
     : (CONTROL_KINDS_BY_STYLE[layout] || CONTROL_KINDS_BY_STYLE.windows);
   for (const kind of kinds) {
+    if (kind === 'layout') {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'shell-window-layout-control';
+      const trigger = document.createElement('button');
+      trigger.type = 'button';
+      trigger.className = 'shell-window-control shell-window-control--layout';
+      trigger.dataset.windowControl = 'layout';
+      trigger.dataset.windowLayoutControl = 'toggle';
+      trigger.dataset.windowLayoutTrigger = 'true';
+      trigger.setAttribute('aria-label', translate('windowLayout', 'Fensteranordnung'));
+      trigger.setAttribute('aria-haspopup', 'menu');
+      trigger.setAttribute('aria-expanded', 'false');
+      trigger.innerHTML = '<span class="shell-window-layout-glyph shell-window-layout-glyph--free" aria-hidden="true"></span>';
+      const menu = document.createElement('div');
+      menu.className = 'shell-window-layout-menu';
+      menu.dataset.windowLayoutMenu = 'true';
+      menu.hidden = true;
+      menu.setAttribute('role', 'menu');
+      for (const option of V2_LAYOUT_OPTIONS) {
+        const optionButton = document.createElement('button');
+        optionButton.type = 'button';
+        optionButton.dataset.windowLayoutControl = option.id;
+        optionButton.setAttribute('role', 'menuitem');
+        optionButton.setAttribute('aria-label', translate(option.labelKey, option.fallback));
+        optionButton.title = translate(option.labelKey, option.fallback);
+        optionButton.innerHTML = `<span class="shell-window-layout-glyph shell-window-layout-glyph--${option.icon}" aria-hidden="true"></span>`;
+        menu.appendChild(optionButton);
+      }
+      wrapper.append(trigger, menu);
+      controlsEl.appendChild(wrapper);
+      continue;
+    }
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.dataset.action = kind;
