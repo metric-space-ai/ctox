@@ -169,12 +169,6 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
-      - name: Enable and verify emulator KVM access
-        run: |
-          set -euo pipefail
-          test -c /dev/kvm
-          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
-          test -r /dev/kvm && test -w /dev/kvm
       - name: Install pinned Android SDK
         run: |
           yes | sdkmanager --licenses >/dev/null || true
@@ -184,8 +178,17 @@ jobs:
       - name: Unit tests and unsigned debug build
         working-directory: ${{ env.MOBILE_ROOT }}/android
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
-      - name: Verify Android hardware acceleration
-        run: '"$ANDROID_SDK_ROOT/emulator/emulator" -accel-check'
+      - name: Grant and verify phone KVM access
+        run: |
+          set -euo pipefail
+          id
+          test -c /dev/kvm
+          stat -Lc 'device=%t:%T inode=%i owner=%U group=%G mode=%a' /dev/kvm
+          getfacl -p /dev/kvm
+          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          getfacl -p /dev/kvm
+          "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check
       - name: Emulator launch smoke
         id: phone
         uses: reactivecircus/android-emulator-runner@v2
@@ -200,6 +203,17 @@ jobs:
             adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity
             adb exec-out screencap -p > "$RUNNER_TEMP/android-phone.png"
+      - name: Grant and verify tablet KVM access after phone shutdown
+        run: |
+          set -euo pipefail
+          id
+          test -c /dev/kvm
+          stat -Lc 'device=%t:%T inode=%i owner=%U group=%G mode=%a' /dev/kvm
+          getfacl -p /dev/kvm
+          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          getfacl -p /dev/kvm
+          "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check
       - name: Start bounded tablet framework diagnostics
         run: |
           python3 src/scripts/android-framework-diagnostics.py start \

@@ -23,7 +23,20 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'replicated_queue_command_persists_and_revalidates_native_authorization',
            'capability_epoch_revokes_tokens_after_role_or_grant_change',
            'person_research_binding_runtime_leads_preserve_identity_and_scope',
-           'person_research_record_binding_accepts_nested_lead_data']
+           'person_research_record_binding_accepts_nested_lead_data',
+           'authenticated_automation_', 'outbound_runtime_library_',
+           'outbound_custom_research_adapter_queues_universal_scraping_generation']
+REQUIRED_RUNTIME_TESTS = {
+    'authenticated_automation_stdin_is_bounded_and_command_specific',
+    'authenticated_automation_ipc_preserves_source_and_auth_gate',
+    'authenticated_automation_ipc_does_not_bypass_command_session_validation',
+    'authenticated_automation_ipc_rejects_missing_oversize_and_misrouted_source',
+    'authenticated_automation_cli_reader_forwards_source_to_daemon_socket',
+    'authenticated_automation_public_dispatcher_forwards_source_to_daemon_socket',
+    'outbound_runtime_library_preserves_activated_revision_over_bundle',
+    'outbound_runtime_library_invalid_materialization_does_not_import_bundle',
+    'outbound_runtime_library_novel_first_use_generates_then_executes_registered_script',
+}
 RECORD = {'stages': [], 'complete': False}
 
 
@@ -165,7 +178,12 @@ def main():
     missing = required - set(names)
     if missing:
         raise RuntimeError(f'Required native Pi regressions are absent: {sorted(missing)}')
-    RECORD.update(discovered_tests=names, group_counts=counts)
+    runtime_counts = {test: sum(name.rsplit('::', 1)[-1] == test for name in names)
+                      for test in REQUIRED_RUNTIME_TESTS}
+    if any(count != 1 for count in runtime_counts.values()):
+        raise RuntimeError(f'Required runtime regressions absent or ambiguous: {runtime_counts}')
+    RECORD.update(discovered_tests=names, group_counts=counts,
+                  required_runtime_tests=runtime_counts)
     save()
     output = run('native-tests', command + ['--test-threads=2'])
     summaries = re.findall(r'test result: ok\. (\d+) passed; 0 failed; 0 ignored;', output)
