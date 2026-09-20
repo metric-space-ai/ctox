@@ -316,11 +316,13 @@ fn resolve_auth(
 ) -> Result<AuthScheme, SourceError> {
     let scheme = nonempty_config(ctx.root, AUTH_SCHEME_KEY).map(|value| value.to_ascii_lowercase());
     match scheme.as_deref() {
-        Some("api_key") | Some("x-api-key") | Some("current") => resolve_secret(resolver, SECRET_NAME)?
-            .map(AuthScheme::ApiKey)
-            .ok_or(SourceError::CredentialMissing {
-                secret_name: SECRET_NAME,
-            }),
+        Some("api_key") | Some("x-api-key") | Some("current") => {
+            resolve_secret(resolver, SECRET_NAME)?
+                .map(AuthScheme::ApiKey)
+                .ok_or(SourceError::CredentialMissing {
+                    secret_name: SECRET_NAME,
+                })
+        }
         Some("legacy") | Some("legacy_token") | Some("token") => {
             resolve_secret(resolver, LEGACY_SECRET_NAME)?
                 .map(AuthScheme::LegacyToken)
@@ -396,7 +398,9 @@ fn apply_auth<'a>(request: ureq::Request, auth: &'a AuthScheme) -> ureq::Request
         .set("user-agent", USER_AGENT);
     match auth {
         AuthScheme::ApiKey(key) => request.set("X-Api-Key", key),
-        AuthScheme::LegacyToken(token) => request.set("Authorization", &format!("Token token={token}")),
+        AuthScheme::LegacyToken(token) => {
+            request.set("Authorization", &format!("Token token={token}"))
+        }
     }
 }
 
@@ -562,8 +566,7 @@ fn classify_status(status: u16, resp: ureq::Response, auth: &AuthScheme) -> Sour
         (429, _) => SourceError::RateLimited {
             retry_after_ms: retry,
         },
-        (401, _)
-        | (403, Some("missing_token" | "invalid_api_key" | "invalid_token")) => {
+        (401, _) | (403, Some("missing_token" | "invalid_api_key" | "invalid_token")) => {
             SourceError::CredentialMissing {
                 secret_name: auth.secret_name(),
             }
@@ -645,7 +648,8 @@ fn current_records_to_hits(
         let Some(summary) = company_summary(record) else {
             continue;
         };
-        let Some(hit) = summary_to_hit(summary, account_id, company, score, requested_country) else {
+        let Some(hit) = summary_to_hit(summary, account_id, company, score, requested_country)
+        else {
             continue;
         };
         hits.push(hit);
@@ -839,7 +843,13 @@ fn extract_company_fields(attrs: &Value, url: &str, out: &mut Vec<(FieldKey, Fie
         }
     }
     if let Some(employees) = employee_display_value(attrs) {
-        push(out, FieldKey::Mitarbeiter, &employees, url, Confidence::High);
+        push(
+            out,
+            FieldKey::Mitarbeiter,
+            &employees,
+            url,
+            Confidence::High,
+        );
     }
     if let Some(industry) = first_industry_name(attrs) {
         push(
@@ -854,10 +864,7 @@ fn extract_company_fields(attrs: &Value, url: &str, out: &mut Vec<(FieldKey, Fie
         push(out, FieldKey::WzCode, code, url, Confidence::Medium);
     }
     if let Some(address) = attrs.get("address") {
-        if let Some(street) = address
-            .get("street_address")
-            .and_then(Value::as_str)
-        {
+        if let Some(street) = address.get("street_address").and_then(Value::as_str) {
             push(out, FieldKey::FirmaAnschrift, street, url, Confidence::High);
         }
         if let Some(plz) = address.get("postal_code").and_then(Value::as_str) {
@@ -1025,7 +1032,8 @@ fn country_code_matches(requested: Option<&str>, response: Option<&str>) -> bool
 }
 
 fn employee_display_value(attrs: &Value) -> Option<String> {
-    display_scalar(attrs.get("employee_range")).or_else(|| display_scalar(attrs.get("employee_count")))
+    display_scalar(attrs.get("employee_range"))
+        .or_else(|| display_scalar(attrs.get("employee_count")))
 }
 
 fn display_scalar(value: Option<&Value>) -> Option<String> {
@@ -1061,7 +1069,10 @@ fn encode_hit_fields(
         obj.insert("domain".to_string(), Value::String(domain.to_string()));
     }
     if !employees.is_empty() {
-        obj.insert("employees".to_string(), Value::String(employees.to_string()));
+        obj.insert(
+            "employees".to_string(),
+            Value::String(employees.to_string()),
+        );
     }
     if !industry.is_empty() {
         obj.insert("industry".to_string(), Value::String(industry.to_string()));
@@ -1112,7 +1123,9 @@ fn hit_field_str<'a>(fields: &'a Value, key: &str) -> Option<&'a str> {
 
 fn hit_country_allowed(snippet: &str, requested: Option<&str>) -> bool {
     let fields = parse_hit_fields(snippet);
-    let response = fields.as_ref().and_then(|fields| hit_field_str(fields, "country"));
+    let response = fields
+        .as_ref()
+        .and_then(|fields| hit_field_str(fields, "country"));
     country_code_matches(requested, response)
 }
 
@@ -1376,7 +1389,10 @@ mod tests {
             Self::present(&[(SECRET_NAME, "fixture-current-key")])
         }
 
-        fn outcome(name: &'static str, outcome: Result<Option<&'static str>, CredentialResolveError>) -> Self {
+        fn outcome(
+            name: &'static str,
+            outcome: Result<Option<&'static str>, CredentialResolveError>,
+        ) -> Self {
             Self {
                 outcomes: vec![(name, outcome)],
             }
@@ -1407,7 +1423,12 @@ mod tests {
         company: &str,
         transport: &Transport,
     ) -> Option<Result<Vec<SourceHit>, SourceError>> {
-        fetch_direct_with(ctx, company, transport, Some(&InjectedResolver::current_key()))
+        fetch_direct_with(
+            ctx,
+            company,
+            transport,
+            Some(&InjectedResolver::current_key()),
+        )
     }
 
     #[derive(Clone, Debug)]
@@ -1626,7 +1647,9 @@ mod tests {
             country: Some(Country::De),
             mode: ResearchMode::NewRecord,
         };
-        assert!(module().shape_query("Example Manufacturing AG", &ctx).is_none());
+        assert!(module()
+            .shape_query("Example Manufacturing AG", &ctx)
+            .is_none());
     }
 
     #[test]
@@ -1816,7 +1839,9 @@ mod tests {
                 panic!("explicit account must not list accounts");
             }
             assert_eq!(req.method, "POST");
-            assert!(req.path.starts_with("/v1/companies/match?account_id=acct-fixture-1"));
+            assert!(req
+                .path
+                .starts_with("/v1/companies/match?account_id=acct-fixture-1"));
             assert_eq!(req.header("X-Api-Key"), Some("fixture-current-key"));
             assert!(req.header("Authorization").is_none());
             (200, MATCH_FIXTURE.to_string())
@@ -1827,7 +1852,9 @@ mod tests {
             .expect("engages")
             .expect("match hits");
         assert_eq!(hits[0].title, "Example Manufacturing AG");
-        assert!(hits[0].url.contains("/v1/companies/co-fixture-1?account_id=acct-fixture-1"));
+        assert!(hits[0]
+            .url
+            .contains("/v1/companies/co-fixture-1?account_id=acct-fixture-1"));
         assert!(hits[0].snippet.contains("example-manufacturing.test"));
         let recorded = mock.recorded();
         assert_eq!(recorded.len(), 1);
@@ -1922,11 +1949,20 @@ mod tests {
     #[test]
     fn distinguishable_error_classes() {
         let cases: Vec<(u16, &str, fn(&SourceError) -> bool)> = vec![
-            (429, "{}", |err| matches!(err, SourceError::RateLimited { .. })),
+            (429, "{}", |err| {
+                matches!(err, SourceError::RateLimited { .. })
+            }),
             (
                 403,
                 r#"{"code":"invalid_api_key","message":"fixture invalid key"}"#,
-                |err| matches!(err, SourceError::CredentialMissing { secret_name: SECRET_NAME }),
+                |err| {
+                    matches!(
+                        err,
+                        SourceError::CredentialMissing {
+                            secret_name: SECRET_NAME
+                        }
+                    )
+                },
             ),
             (
                 403,
@@ -1936,16 +1972,12 @@ mod tests {
                     _ => false,
                 },
             ),
-            (
-                200,
-                "{not-json",
-                |err| matches!(err, SourceError::ParseFailed { .. }),
-            ),
-            (
-                200,
-                r#"{"data":[]}"#,
-                |err| matches!(err, SourceError::NoMatch),
-            ),
+            (200, "{not-json", |err| {
+                matches!(err, SourceError::ParseFailed { .. })
+            }),
+            (200, r#"{"data":[]}"#, |err| {
+                matches!(err, SourceError::NoMatch)
+            }),
         ];
         for (status, body, predicate) in cases {
             let body = body.to_string();
@@ -1959,8 +1991,8 @@ mod tests {
                 &mock.transport(),
                 Some(&resolver),
             )
-                .expect("engages")
-                .expect_err("classified error");
+            .expect("engages")
+            .expect_err("classified error");
             assert!(predicate(&err), "status {status} classified as {err:?}");
         }
     }
@@ -1994,8 +2026,16 @@ mod tests {
         let temp = std::env::temp_dir();
         assert_eq!(first.path.parent(), Some(temp.as_path()));
         assert_eq!(second.path.parent(), Some(temp.as_path()));
-        let first_name = first.path.file_name().and_then(|name| name.to_str()).unwrap_or("");
-        let second_name = second.path.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        let first_name = first
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        let second_name = second
+            .path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
         assert!(
             first_name.starts_with("ctox-leadfeeder-test-root-"),
             "{first_name}"
@@ -2119,10 +2159,13 @@ mod tests {
             &mock.transport(),
             Some(&resolver),
         )
-            .expect("engages")
-            .expect("legacy hits");
+        .expect("engages")
+        .expect("legacy hits");
         assert!(hits.iter().any(|hit| hit.title.contains("WITTENSTEIN")));
-        assert!(mock.recorded().iter().all(|req| req.path.starts_with("/accounts/")));
+        assert!(mock
+            .recorded()
+            .iter()
+            .all(|req| req.path.starts_with("/accounts/")));
     }
 
     #[test]
@@ -2140,8 +2183,8 @@ mod tests {
             &mock.transport(),
             Some(&resolver),
         )
-            .expect("engages")
-            .expect_err("ambiguous");
+        .expect("engages")
+        .expect_err("ambiguous");
         match err {
             SourceError::Other(inner) => {
                 assert!(inner.to_string().contains("ambiguous"));
@@ -2247,7 +2290,10 @@ mod tests {
         let _hits = fetch_current(&root.ctx(), "Example Manufacturing AG", &mock.transport())
             .expect("engages")
             .expect("hits");
-        assert_eq!(mock.recorded()[0].header("X-Api-Key"), Some("fixture-current-key"));
+        assert_eq!(
+            mock.recorded()[0].header("X-Api-Key"),
+            Some("fixture-current-key")
+        );
     }
 
     #[test]
@@ -2287,15 +2333,22 @@ mod tests {
         let fields = module().extract_from_hits(&ctx, "Example Manufacturing AG", &hits);
         assert!(fields
             .iter()
-            .any(|(k, ev)| matches!(k, FieldKey::FirmaName) && ev.value == "Example Manufacturing AG"));
-        assert!(fields.iter().any(|(k, ev)| matches!(k, FieldKey::FirmaDomain)
-            && ev.value == "example-manufacturing.test"
-            && ev.source_url.contains("/v1/companies/co-fixture-1")));
-        assert!(fields.iter().any(|(k, ev)| matches!(k, FieldKey::Mitarbeiter)
-            && ev.value == "101-500"
-            && ev.source_url.contains("/v1/companies/co-fixture-1")));
-        assert!(fields.iter().any(|(k, ev)| matches!(k, FieldKey::FirmaGeschaeftstaetigkeit)
-            && ev.value == "Manufacture of bearings"));
+            .any(|(k, ev)| matches!(k, FieldKey::FirmaName)
+                && ev.value == "Example Manufacturing AG"));
+        assert!(fields
+            .iter()
+            .any(|(k, ev)| matches!(k, FieldKey::FirmaDomain)
+                && ev.value == "example-manufacturing.test"
+                && ev.source_url.contains("/v1/companies/co-fixture-1")));
+        assert!(fields
+            .iter()
+            .any(|(k, ev)| matches!(k, FieldKey::Mitarbeiter)
+                && ev.value == "101-500"
+                && ev.source_url.contains("/v1/companies/co-fixture-1")));
+        assert!(fields
+            .iter()
+            .any(|(k, ev)| matches!(k, FieldKey::FirmaGeschaeftstaetigkeit)
+                && ev.value == "Manufacture of bearings"));
         let rejected = module().extract_from_hits(&ctx, "Completely Different GmbH", &hits);
         assert!(rejected.is_empty());
     }
@@ -2312,7 +2365,11 @@ mod tests {
             "example manufacturing",
             None
         ));
-        assert!(company_identity_matches("Müller Technik AG", "Müller Technik", None));
+        assert!(company_identity_matches(
+            "Müller Technik AG",
+            "Müller Technik",
+            None
+        ));
         assert!(company_identity_matches("AB AG", "AB", None));
         assert!(company_identity_matches("3M", "3M AG", None));
         assert!(!company_identity_matches(
@@ -2335,8 +2392,16 @@ mod tests {
             "Completely Different GmbH",
             Some(0.99)
         ));
-        assert!(!company_identity_matches("Müller Technik AG", "Muller Technik AG", None));
-        assert!(!company_identity_matches("AG", "Example Manufacturing AG", None));
+        assert!(!company_identity_matches(
+            "Müller Technik AG",
+            "Muller Technik AG",
+            None
+        ));
+        assert!(!company_identity_matches(
+            "AG",
+            "Example Manufacturing AG",
+            None
+        ));
         assert!(company_identity_matches(
             "Example Company AG",
             "Example Company",
@@ -2352,7 +2417,11 @@ mod tests {
             "Example GmbH & Co. KG",
             None
         ));
-        assert!(!company_identity_matches("Example AG", "Example GmbH", None));
+        assert!(!company_identity_matches(
+            "Example AG",
+            "Example GmbH",
+            None
+        ));
         assert!(!company_identity_matches(
             "Example Manufacturing AG",
             "Example Manufacturing GmbH",
@@ -2363,7 +2432,11 @@ mod tests {
             "Example GmbH",
             None
         ));
-        assert!(!company_identity_matches("Example Company", "Example AG", None));
+        assert!(!company_identity_matches(
+            "Example Company",
+            "Example AG",
+            None
+        ));
     }
 
     #[test]
@@ -2406,7 +2479,8 @@ mod tests {
         let hits = vec![
             SourceHit {
                 title: "Example Manufacturing AG".to_string(),
-                url: "https://api.leadfeeder.com/v1/companies/?account_id=acct-fixture-1".to_string(),
+                url: "https://api.leadfeeder.com/v1/companies/?account_id=acct-fixture-1"
+                    .to_string(),
                 snippet: String::new(),
             },
             SourceHit {
@@ -2451,10 +2525,15 @@ mod tests {
         let fields = module().extract_from_hits(&ctx, "Example Manufacturing AG", &hits);
         assert!(fields
             .iter()
-            .any(|(k, ev)| matches!(k, FieldKey::FirmaName) && ev.value == "Example Manufacturing AG"));
-        assert!(!fields.iter().any(|(k, _)| matches!(k, FieldKey::FirmaDomain)));
-        assert!(!fields.iter().any(|(k, ev)| matches!(k, FieldKey::Mitarbeiter)
-            && (ev.value.contains("factory-24.test") || ev.value.contains("101-500"))));
+            .any(|(k, ev)| matches!(k, FieldKey::FirmaName)
+                && ev.value == "Example Manufacturing AG"));
+        assert!(!fields
+            .iter()
+            .any(|(k, _)| matches!(k, FieldKey::FirmaDomain)));
+        assert!(!fields
+            .iter()
+            .any(|(k, ev)| matches!(k, FieldKey::Mitarbeiter)
+                && (ev.value.contains("factory-24.test") || ev.value.contains("101-500"))));
         assert!(!fields
             .iter()
             .any(|(k, _)| matches!(k, FieldKey::FirmaGeschaeftstaetigkeit)));
@@ -2478,14 +2557,20 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert!(hits[0].snippet.starts_with(HIT_FIELDS_PREFIX));
         let fields = module().extract_from_hits(&ctx, "Example Manufacturing AG", &hits);
-        assert!(fields.iter().any(|(k, ev)| matches!(k, FieldKey::FirmaDomain)
-            && ev.value == "factory-24.test"
-            && ev.source_url.contains("co-fixture-fields-1")));
-        assert!(fields.iter().any(|(k, ev)| matches!(k, FieldKey::Mitarbeiter)
-            && ev.value == "120"
-            && ev.source_url.contains("co-fixture-fields-1")));
-        assert!(fields.iter().any(|(k, ev)| matches!(k, FieldKey::FirmaGeschaeftstaetigkeit)
-            && ev.value == "Manufacture of bearings"));
+        assert!(fields
+            .iter()
+            .any(|(k, ev)| matches!(k, FieldKey::FirmaDomain)
+                && ev.value == "factory-24.test"
+                && ev.source_url.contains("co-fixture-fields-1")));
+        assert!(fields
+            .iter()
+            .any(|(k, ev)| matches!(k, FieldKey::Mitarbeiter)
+                && ev.value == "120"
+                && ev.source_url.contains("co-fixture-fields-1")));
+        assert!(fields
+            .iter()
+            .any(|(k, ev)| matches!(k, FieldKey::FirmaGeschaeftstaetigkeit)
+                && ev.value == "Manufacture of bearings"));
         assert!(!fields
             .iter()
             .any(|(k, ev)| matches!(k, FieldKey::Mitarbeiter) && ev.value.contains("factory-24")));
@@ -2510,10 +2595,16 @@ mod tests {
         let parsed = parse_hit_fields(&hits[0].snippet).expect("structured snippet");
         assert!(hit_field_str(&parsed, "domain").is_none());
         let fields = module().extract_from_hits(&ctx, "Example Manufacturing AG", &hits);
-        assert!(!fields.iter().any(|(k, _)| matches!(k, FieldKey::FirmaDomain)));
-        assert!(fields.iter().any(|(k, ev)| matches!(k, FieldKey::Mitarbeiter) && ev.value == "51-200"));
-        assert!(fields.iter().any(|(k, ev)| matches!(k, FieldKey::FirmaGeschaeftstaetigkeit)
-            && ev.value == "Industrial machinery"));
+        assert!(!fields
+            .iter()
+            .any(|(k, _)| matches!(k, FieldKey::FirmaDomain)));
+        assert!(fields
+            .iter()
+            .any(|(k, ev)| matches!(k, FieldKey::Mitarbeiter) && ev.value == "51-200"));
+        assert!(fields
+            .iter()
+            .any(|(k, ev)| matches!(k, FieldKey::FirmaGeschaeftstaetigkeit)
+                && ev.value == "Industrial machinery"));
     }
 
     #[test]
@@ -2608,15 +2699,29 @@ mod tests {
         let hits = vec![
             SourceHit {
                 title: "Example Manufacturing AG".to_string(),
-                url: "https://api.leadfeeder.com/v1/companies/co-fixture-1?account_id=acct-fixture-1"
-                    .to_string(),
-                snippet: encode_hit_fields("co-fixture-1", Some("DE"), "example-manufacturing.test", "101-500", ""),
+                url:
+                    "https://api.leadfeeder.com/v1/companies/co-fixture-1?account_id=acct-fixture-1"
+                        .to_string(),
+                snippet: encode_hit_fields(
+                    "co-fixture-1",
+                    Some("DE"),
+                    "example-manufacturing.test",
+                    "101-500",
+                    "",
+                ),
             },
             SourceHit {
                 title: "Example Manufacturing AG".to_string(),
-                url: "https://api.leadfeeder.com/v1/companies/co-fixture-2?account_id=acct-fixture-1"
-                    .to_string(),
-                snippet: encode_hit_fields("co-fixture-2", Some("DE"), "example-manufacturing-alt.test", "51-200", ""),
+                url:
+                    "https://api.leadfeeder.com/v1/companies/co-fixture-2?account_id=acct-fixture-1"
+                        .to_string(),
+                snippet: encode_hit_fields(
+                    "co-fixture-2",
+                    Some("DE"),
+                    "example-manufacturing-alt.test",
+                    "51-200",
+                    "",
+                ),
             },
         ];
         let fields = module().extract_from_hits(&ctx, "Example Manufacturing AG", &hits);
