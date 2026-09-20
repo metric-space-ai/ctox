@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createSyncRuntime } from './sync.js';
 
-function fixture({ leader = false, readError = null, changeGeneration = false } = {}) {
+function fixture({ leader = false, readError = null, changeGeneration = false, startup = null } = {}) {
   const browserToken = 'native-read-browser-token';
   const previousWindow = globalThis.window;
   globalThis.window = {
@@ -50,7 +50,7 @@ function fixture({ leader = false, readError = null, changeGeneration = false } 
       rxdb: {
         getMultiTabSyncCoordinator() { return coordinator; },
         getConnectionHandlerSimplePeer(options) { return options; },
-        async replicateWebRTC() { calls.starts++; return state; },
+        async replicateWebRTC() { calls.starts++; if (startup) await startup; return state; },
       },
     },
     config: {
@@ -104,4 +104,24 @@ test('authoritative read rejects a changed native generation', async () => {
     await assert.rejects(f.runtime.readCollectionNativeDocument('desktop_layout', 'layout-1'), /generation.*changed/);
     assert.equal(f.calls.cancels, 1);
   } finally { await f.close(); }
+});
+
+test('a timed-out native read releases a late lease without cancelling another owner', async () => {
+  let finishStartup;
+  const startup = new Promise((resolve) => { finishStartup = resolve; });
+  const f = fixture({ startup });
+  try {
+    const ordinary = await f.runtime.leaseCollection('desktop_layout', 'open-window');
+    await assert.rejects(
+      f.runtime.readCollectionNativeDocument('desktop_layout', 'layout-1', { timeoutMs: 250 }),
+      /Native read lease.*exceeded 250ms/,
+    );
+    finishStartup();
+    await f.runtime.startCollection('desktop_layout', { pin: false, forceDirect: true });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(f.calls.cancels, 0, 'late reader cleanup must preserve the window lease');
+    assert.equal(f.calls.queries.length, 0, 'expired reader must not issue a query');
+    await ordinary.release();
+    assert.equal(f.calls.cancels, 1, 'no late reader lease may retain the bridge');
+  } finally { finishStartup(); await f.close(); }
 });

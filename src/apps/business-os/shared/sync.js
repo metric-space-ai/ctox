@@ -1072,15 +1072,17 @@ export function createSyncRuntime({
       const remainingMs = () => Math.max(1, budgetMs - (Date.now() - startedAt));
       const controller = typeof AbortController === 'function' ? new AbortController() : null;
       nativeReadSequence = (nativeReadSequence + 1) % Number.MAX_SAFE_INTEGER;
-      const lease = await withRejectingTimeout(
-        // Follower stubs only forward writes; an authoritative query needs a
-        // leased native bridge, just like requestNativeDirectly().
-        () => this.leaseCollection(normalized, 'authoritative-native-read', { forceDirect: true }),
-        remainingMs(),
-        `Native read lease for ${normalized} exceeded ${budgetMs}ms.`,
-      );
+      // Follower stubs only forward writes; an authoritative query needs a
+      // leased native bridge, just like requestNativeDirectly().
+      const acquisition = this.leaseCollection(normalized, 'authoritative-native-read', { forceDirect: true });
+      let lease = null;
       let timer = null;
       try {
+        lease = await withRejectingTimeout(
+          () => acquisition,
+          remainingMs(),
+          `Native read lease for ${normalized} exceeded ${budgetMs}ms.`,
+        );
         let bridge = lease.bridge;
         if (!bridge?.state && bridge?.ready) {
           bridge = await withRejectingTimeout(
@@ -1118,7 +1120,10 @@ export function createSyncRuntime({
       } finally {
         if (timer) clearTimeout(timer);
         controller?.abort?.();
-        await lease.release().catch(() => {});
+        if (lease) await lease.release().catch(() => {});
+        // A deadline can win while startup is still acquiring the lease.
+        // Release that late ownership without stopping other consumers.
+        else acquisition.then((lateLease) => lateLease.release()).catch(() => {});
       }
     },
 
