@@ -388,6 +388,29 @@ struct CommandTimingProbe {
     native_dispatch_entered: i64,
     native_handler_completed: Option<i64>,
     native_rxdb_projection_committed: Option<i64>,
+    command_id: String,
+    started: std::time::Instant,
+    native_phases_ms: [Option<f64>; 4],
+}
+
+#[derive(Clone, Copy)]
+enum CommandTimingPhase {
+    ClaimCompleted,
+    StoreOpened,
+    DispatchStarted,
+    DispatchCompleted,
+}
+
+impl CommandTimingProbe {
+    fn native_phase_report(&self) -> Value {
+        serde_json::json!({
+            "command_id": self.command_id,
+            "claim_completed_ms": self.native_phases_ms[0],
+            "store_opened_ms": self.native_phases_ms[1],
+            "dispatch_started_ms": self.native_phases_ms[2],
+            "dispatch_completed_ms": self.native_phases_ms[3],
+        })
+    }
 }
 
 struct CommandTimingProbeGuard;
@@ -395,7 +418,15 @@ struct CommandTimingProbeGuard;
 impl Drop for CommandTimingProbeGuard {
     fn drop(&mut self) {
         COMMAND_TIMING_PROBE.with(|slot| {
-            *slot.borrow_mut() = None;
+            if let Some(probe) = slot.borrow_mut().take() {
+                // One bounded structural report, including partial/error exits.
+                // Values are monotonic elapsed milliseconds, not extra budget
+                // marks. Never log command payloads or private error contents.
+                eprintln!(
+                    "command_native_phases_sample={}",
+                    probe.native_phase_report()
+                );
+            }
         });
     }
 }
@@ -417,9 +448,30 @@ fn install_command_timing_probe(command: &BusinessCommand) -> Option<CommandTimi
             native_dispatch_entered: now_ms() as i64,
             native_handler_completed: None,
             native_rxdb_projection_committed: None,
+            command_id: command
+                .id
+                .as_deref()
+                .unwrap_or_default()
+                .chars()
+                .take(120)
+                .collect(),
+            started: std::time::Instant::now(),
+            native_phases_ms: [None; 4],
         });
     });
     Some(CommandTimingProbeGuard)
+}
+
+fn mark_command_timing_native_phase(phase: CommandTimingPhase) {
+    COMMAND_TIMING_PROBE.with(|slot| {
+        if let Some(probe) = slot.borrow_mut().as_mut() {
+            let index = phase as usize;
+            if probe.native_phases_ms[index].is_none() {
+                probe.native_phases_ms[index] =
+                    Some(probe.started.elapsed().as_secs_f64() * 1_000.0);
+            }
+        }
+    });
 }
 
 fn mark_command_timing_handler_completed() {
@@ -695,6 +747,7 @@ pub fn accept_rxdb_business_command_with_origin(
     let control_claim = control_intent
         .map(|claim| channels::claim_business_control_command(root, claim))
         .transpose()?;
+    mark_command_timing_native_phase(CommandTimingPhase::ClaimCompleted);
     let _external_sql_execution_guard =
         if super::external_sql_sync::is_external_sql_command(&command.command_type) {
             match ActiveExternalSqlControlCommand::try_acquire(&command_id) {
@@ -708,6 +761,7 @@ pub fn accept_rxdb_business_command_with_origin(
         .as_ref()
         .is_some_and(|claim| claim.disposition == "new");
     let conn = open_store(root)?;
+    mark_command_timing_native_phase(CommandTimingPhase::StoreOpened);
     // Only proof-bearing domain commands bypass the uncertain replay shortcut.
     // Authentication and central policy still run before reading their result.
     let resumes_domain_effect =
@@ -1307,8 +1361,10 @@ fn dispatch_business_command_with_outcome(
     } else {
         None
     };
+    mark_command_timing_native_phase(CommandTimingPhase::DispatchStarted);
     let dispatched =
         dispatch_business_command(root, command_id, command, prepared, authorized_session);
+    mark_command_timing_native_phase(CommandTimingPhase::DispatchCompleted);
     // A handler error after COMMIT must never become terminal failure. Recover
     // the durable result first; publication errors leave the claim recoverable.
     if let Some((hash, actor)) = domain_identity {
@@ -3887,6 +3943,9 @@ mod tests {
             payload: serde_json::json!({}),
             client_context: serde_json::json!({ "actor": { "id": "local-dev" } }),
         };
+        assert!(install_command_timing_probe(&command).is_none());
+        mark_command_timing_native_phase(CommandTimingPhase::ClaimCompleted);
+        COMMAND_TIMING_PROBE.with(|slot| assert!(slot.borrow().is_none()));
         channels::claim_business_control_command(
             root.path(),
             business_command_core_claim(command_id, &command)?,
@@ -3929,8 +3988,48 @@ mod tests {
             root.path(),
             business_command_core_claim(command_id, &command)?,
         )?;
-        let _guard = install_command_timing_probe(&command);
+        let guard = install_command_timing_probe(&command);
+        let partial =
+            COMMAND_TIMING_PROBE.with(|slot| slot.borrow().as_ref().unwrap().native_phase_report());
+        assert_eq!(partial.as_object().unwrap().len(), 5);
+        assert_eq!(partial["command_id"], command_id);
+        for phase in [
+            "claim_completed_ms",
+            "store_opened_ms",
+            "dispatch_started_ms",
+            "dispatch_completed_ms",
+        ] {
+            assert!(
+                partial[phase].is_null(),
+                "unvisited phase must stay unknown"
+            );
+        }
+        for phase in [
+            CommandTimingPhase::ClaimCompleted,
+            CommandTimingPhase::StoreOpened,
+            CommandTimingPhase::DispatchStarted,
+            CommandTimingPhase::DispatchCompleted,
+        ] {
+            mark_command_timing_native_phase(phase);
+        }
+        let phases =
+            COMMAND_TIMING_PROBE.with(|slot| slot.borrow().as_ref().unwrap().native_phase_report());
+        let elapsed: Vec<f64> = [
+            "claim_completed_ms",
+            "store_opened_ms",
+            "dispatch_started_ms",
+            "dispatch_completed_ms",
+        ]
+        .iter()
+        .map(|phase| phases[*phase].as_f64().unwrap())
+        .collect();
+        assert!(elapsed.iter().all(|ms| ms.is_finite() && *ms >= 0.0));
+        assert!(elapsed.windows(2).all(|pair| pair[0] <= pair[1]));
         std::thread::sleep(std::time::Duration::from_millis(2));
+        mark_command_timing_native_phase(CommandTimingPhase::ClaimCompleted);
+        let unchanged =
+            COMMAND_TIMING_PROBE.with(|slot| slot.borrow().as_ref().unwrap().native_phase_report());
+        assert_eq!(phases, unchanged, "phase timestamps are first-write-wins");
         let outcome = write_rxdb_control_command_outcome(
             root.path(),
             &command,
@@ -3953,6 +4052,11 @@ mod tests {
         assert!(timing.get("capability_token").is_none());
         assert!(timing.get("payload").is_none());
         assert_eq!(
+            timing.as_object().unwrap().len(),
+            3,
+            "budget marks stay unchanged",
+        );
+        assert_eq!(
             super::super::store::rxdb_collection_writer_open_count(
                 root.path(),
                 "business_commands"
@@ -3968,6 +4072,8 @@ mod tests {
         let persisted: Value = serde_json::from_str(&persisted)?;
         assert_eq!(persisted["execution_phase"], "terminal");
         assert_eq!(persisted["terminal_status"], "completed");
+        drop(guard);
+        COMMAND_TIMING_PROBE.with(|slot| assert!(slot.borrow().is_none()));
         Ok(())
     }
 
