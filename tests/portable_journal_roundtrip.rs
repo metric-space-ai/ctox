@@ -1,15 +1,16 @@
 use ctox_core::config::ConfigBuilder;
 use ctox_core::{EventPersistenceMode, RolloutRecorder, RolloutRecorderParams};
+use ctox_protocol::models::BaseInstructions;
 use ctox_protocol::portable_journal::{
     artifact_ref_for, validate_portable_journal, ExternalEffectState, PortableJournalExpectation,
     PortableJournalLimits, ProviderContinuationState,
 };
 use ctox_protocol::protocol::{EventMsg, RolloutItem, SessionSource, UserMessageEvent};
-use ctox_protocol::BaseInstructions;
 use ctox_protocol::ThreadId;
 use ctox_sync::capture::{CaptureEntry, CaptureRequest};
 use ctox_sync::checkpoint::CheckpointStore;
 use ctox_sync::contracts::{PendingEffect, SessionManifest, WorkspaceEntryKind};
+use serde_json::json;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
@@ -89,17 +90,19 @@ async fn harness_journal_roundtrips_through_strict_checkpoint_capture_and_restor
     .await
     .expect("create harness recorder");
 
-    recorder
-        .record_items(&[RolloutItem::EventMsg(EventMsg::UserMessage(
+    ctox_core::rollout_test_support::record_items(
+        &recorder,
+        &[RolloutItem::EventMsg(EventMsg::UserMessage(
             UserMessageEvent {
                 message: "private-journal-payload".into(),
                 images: None,
                 local_images: Vec::new(),
                 text_elements: Vec::new(),
             },
-        ))])
-        .await
-        .expect("record harness turn");
+        ))],
+    )
+    .await
+    .expect("record harness turn");
     tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     recorder.persist().await.expect("materialize journal");
     recorder.flush().await.expect("quiesce journal");
@@ -221,8 +224,38 @@ async fn corrupt_journal_and_pending_external_effects_fail_import_closed() {
         .capture(capture_request(&source, corrupt))
         .await
         .is_err());
-
-    let valid = b"{\"timestamp\":\"2026-09-20T12:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"11111111-1111-1111-1111-111111111111\",\"timestamp\":\"2026-09-20T12:00:00Z\",\"cwd\":\"/original\",\"originator\":\"codex_cli_rs\",\"cli_version\":\"1.0.0\",\"source\":\"exec\",\"model_provider\":\"test-provider\",\"base_instructions\":{},\"capability_profile\":\"workspace_worker\"}}\n{\"timestamp\":\"2026-09-20T12:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"ready\",\"kind\":\"plain\"}}\n".to_vec();
+    let valid = [
+        json!({
+            "timestamp": "2026-09-20T12:00:00Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "timestamp": "2026-09-20T12:00:00Z",
+                "cwd": "/original",
+                "originator": "codex_cli_rs",
+                "cli_version": "1.0.0",
+                "source": "exec",
+                "model_provider": "test-provider",
+                "base_instructions": {"text": "test"},
+                "capability_profile": "workspace_worker",
+            },
+        }),
+        json!({
+            "timestamp": "2026-09-20T12:00:02Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "user_message",
+                "message": "ready",
+            },
+        }),
+    ]
+    .iter()
+    .flat_map(|line| {
+        let mut bytes = serde_json::to_vec(line).expect("serialize pending journal line");
+        bytes.push(b'\n');
+        bytes
+    })
+    .collect();
     let mut pending = capture_request(&source, valid);
     pending.pending_effects.push(PendingEffect {
         effect_id: "external-publish".into(),

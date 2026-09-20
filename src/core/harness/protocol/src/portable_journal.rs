@@ -573,6 +573,9 @@ impl<'a> JsonDuplicateKeyScanner<'a> {
                     }
                     self.offset += 1;
                     let low = self.parse_hex4()?;
+                    if !matches!(low, 0xdc00..=0xdfff) {
+                        return Err(PortableJournalError::InvalidLine);
+                    }
                     let combined =
                         0x10000 + ((u32::from(value) - 0xd800) << 10) + (u32::from(low) - 0xdc00);
                     char::from_u32(combined).ok_or(PortableJournalError::InvalidLine)?

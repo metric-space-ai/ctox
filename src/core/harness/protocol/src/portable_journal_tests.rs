@@ -252,6 +252,43 @@ fn rejects_duplicate_json_keys_before_value_collapsing() {
 }
 
 #[test]
+fn validates_surrogate_escapes_and_normalized_duplicate_keys() {
+    let metadata = metadata_line().to_string();
+    let event = |payload: &str| {
+        format!(r#"{{"timestamp":"{EVENT_TIMESTAMP}","type":"event_msg","payload":{{{payload}}}}}"#)
+    };
+    let malformed = [
+        r#""type":"user_message","message":"\ud83d\u0000""#,
+        r#""type":"user_message","message":"\ud83d\ud83d""#,
+        r#""type":"user_message","message":"\ud83d\u0041""#,
+        r#""type":"user_message","message":"\ude00""#,
+        r#""type":"user_message","message":"\ud83d""#,
+        r#""type":"user_message","message":"\ud83d\uZZZZ""#,
+    ];
+    for payload in malformed {
+        let event = event(payload);
+        let (raw, artifact) = raw_journal(&[&metadata, &event]);
+        assert_portable_error(
+            validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
+            Err(PortableJournalError::InvalidLine),
+        );
+    }
+
+    let supplementary = event(r#""type":"user_message","message":"\ud83d\ude00""#);
+    let (raw, artifact) = raw_journal(&[&metadata, &supplementary]);
+    let validated = validate_portable_journal(&raw, &artifact, &expected(), &default_limits())
+        .expect("valid supplementary scalar");
+    assert_eq!(validated.record_count, 2);
+
+    let duplicate = event(r#""type":"user_message","\u006dessage":"first","message":"second""#);
+    let (raw, artifact) = raw_journal(&[&metadata, &duplicate]);
+    assert_portable_error(
+        validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
+        Err(PortableJournalError::DuplicateJsonKey),
+    );
+}
+
+#[test]
 fn rejects_empty_history_and_identity_mismatch() {
     let (raw, artifact) = journal(&[metadata_line()]);
     assert_portable_error(
