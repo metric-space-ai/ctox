@@ -34,6 +34,7 @@ const COMMAND_CAPABILITY_REFRESH_RETRY_BACKOFF_MS = 125;
 const MAX_COMMAND_DOCUMENT_BYTES = 6 * 1024 * 1024;
 const MAX_SIMULTANEOUS_COMMAND_WATCHERS = 128;
 const MAX_COMMAND_TIMING_PROBES = 64;
+const MAX_COMMAND_RETURN_PATH_EVENTS = 24;
 const COMMAND_ROUNDTRIP_MARK_NAMES = Object.freeze([
   'browser_dispatch_started',
   'browser_local_inserted',
@@ -1247,6 +1248,7 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
       }
       if (command?.id !== commandId || command?._deleted
         || command?.replication_phase !== 'native_observed') return null;
+      if (commandIsTerminal(command)) recordCommandReturnPath(commandId, 'terminal_observed', 'local_fallback');
       if (commandIsTerminal(command)) forgetActiveCommandId(commandId);
       if (commandIsFailed(command)) throw nativeCommandFailure(command, commandId);
       if (!commandHasReached(command, until)) return null;
@@ -1268,6 +1270,8 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
       let settled = false;
       let rebindInFlight = false;
       let authoritativeRebindPending = false;
+      let pendingBindTrigger = null;
+      let activeBindId = null;
       let authoritativeRevision = 0;
       let revalidationTimer = null;
       // A reactive RxDB stream may synchronously emit the current command from
@@ -1295,9 +1299,12 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
         }
         noteCommandDataPlaneProgress(sync, progressCollection, token);
       };
-      const inspect = (value) => {
+      const inspect = (value, source = 'reactive', bindId = null, trigger = null) => {
         if (settled || !value) return;
         lastCommand = value?.toJSON?.() || value;
+        if (commandIsTerminal(lastCommand)) {
+          recordCommandReturnPath(commandId, 'terminal_observed', source, { bind_id: bindId, trigger });
+        }
         observeProgress(lastCommand);
         if (commandIsFailed(lastCommand)) {
           settle(reject, nativeCommandFailure(lastCommand, commandId));
@@ -1307,13 +1314,18 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
         recordObservedCommandMetrics(sync, commandId, lastCommand);
         settle(resolve, commandReceipt(lastCommand, commandId));
       };
-      const bind = async ({ authoritative = false } = {}) => {
+      const bind = async ({ authoritative = false, trigger = 'initial', coalesced = false } = {}) => {
         if (settled) return;
+        recordCommandReturnPath(commandId, 'bind_requested', trigger, { authoritative, coalesced });
         if (rebindInFlight) {
+          recordCommandReturnPath(commandId, 'bind_coalesced', trigger, { bind_id: activeBindId, authoritative });
+          if (authoritative && !authoritativeRebindPending) pendingBindTrigger = trigger;
           authoritativeRebindPending ||= authoritative;
           return;
         }
         rebindInFlight = true;
+        const bindId = recordCommandReturnPath(commandId, 'bind_started', trigger, { authoritative, coalesced });
+        activeBindId = bindId;
         try {
           currentDb = await resolveCommandDb(db);
           const commands = currentDb?.raw?.business_commands;
@@ -1334,14 +1346,16 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
           const requireRevision = authoritative
             ? `command-terminal:${commandId}:${++authoritativeRevision}`
             : '';
-          inspect(await findDoc(commands, commandId, {
+          const result = await findDoc(commands, commandId, {
             swallowErrors: false,
             requireRevision,
-          }));
+          });
+          recordCommandReturnPath(commandId, 'bind_result', trigger, { bind_id: bindId });
+          inspect(result, 'bind_result', bindId, trigger);
         } catch (error) {
           if (isLocalFallbackCommandTrackingQueryError(error)) {
             try {
-              inspect(await findLocalDoc(currentDb?.raw?.business_commands, commandId));
+              inspect(await findLocalDoc(currentDb?.raw?.business_commands, commandId), 'local_fallback', bindId, trigger);
             } catch {}
             return;
           }
@@ -1350,7 +1364,9 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
           rebindInFlight = false;
           if (!settled && authoritativeRebindPending) {
             authoritativeRebindPending = false;
-            void bind({ authoritative: true });
+            const pendingTrigger = pendingBindTrigger;
+            pendingBindTrigger = null;
+            void bind({ authoritative: true, trigger: pendingTrigger || 'coalesced', coalesced: true });
           }
         }
       };
@@ -1380,7 +1396,7 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
           // collection-wide pull first is both redundant and expensive: it
           // serializes the command query behind every bridge's pull cycle.
           // The broader pull remains part of the AP3 stall-repair path below.
-          bind({ authoritative: true })
+          bind({ authoritative: true, trigger: 'timer' })
             .finally(() => scheduleTerminalRevalidation(index + 1));
         }, COMMAND_TERMINAL_REVALIDATE_DELAYS_MS[index]);
       };
@@ -1394,11 +1410,14 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
           if (cleanContextText(state?.collection?.name) !== 'business_commands') return;
           masterChangeSubscription = state?.masterChange$?.subscribe?.((hint) => {
             const hinted = commandFromMasterChangeHint(hint, commandId);
+            recordCommandReturnPath(commandId, 'hint_received', hinted.detailed ? 'detailed_hint' : 'generic_hint', {
+              matched: Boolean(hinted.command), terminal: Boolean(hinted.command && commandIsTerminal(hinted.command)),
+            });
             if (hinted.detailed) {
-              if (hinted.command) inspect(hinted.command);
+              if (hinted.command) inspect(hinted.command, 'detailed_hint');
               return;
             }
-            void bind({ authoritative: true });
+            void bind({ authoritative: true, trigger: 'generic_hint' });
           });
         };
         if (typeof bridge?.subscribeBridge === 'function') {
@@ -1416,7 +1435,7 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
         recordCommandMetric(sync, DATA_PLANE_NO_PROGRESS_CODE, commandId, evaluation.stalledMs);
         repairCommandDataPlaneStall(sync, evaluation.collection, async () => {
           await refreshProjectionBridges(syncPlan?.afterCommand);
-          await bind();
+          await bind({ trigger: 'stall_repair' });
         }).catch(() => {});
       }, 250);
       bind();
@@ -1916,6 +1935,34 @@ function recordCommandTimingMark(commandId, markName, atMs = Date.now()) {
   }
 }
 
+// Probe-only structural evidence: no documents, payloads or error text. Keep
+// the first terminal winner even if unrelated hints filled the event budget.
+function recordCommandReturnPath(commandId, kind, source, fields = {}) {
+  const sample = commandTimingProbes.get(String(commandId || ''));
+  if (!sample) return null;
+  const trace = sample.return_path ||= { events: [], dropped_events: 0 };
+  if (trace.terminal_source) return null;
+  const event = { kind, source, elapsed_ms: Math.max(0, Date.now() - sample.started_at_ms) };
+  if (kind === 'bind_started') {
+    sample.return_path_bind_count = (sample.return_path_bind_count || 0) + 1;
+    event.bind_id = sample.return_path_bind_count;
+  } else if (Number.isInteger(fields.bind_id) && fields.bind_id > 0) {
+    event.bind_id = fields.bind_id;
+  }
+  if (fields.trigger) event.trigger = fields.trigger;
+  for (const key of ['matched', 'terminal', 'authoritative', 'coalesced']) {
+    if (typeof fields[key] === 'boolean') event[key] = fields[key];
+  }
+  if (kind === 'terminal_observed') {
+    trace.terminal_source = source;
+    if (event.bind_id) trace.terminal_bind_id = event.bind_id;
+    if (event.trigger) trace.terminal_bind_trigger = event.trigger;
+  }
+  if (trace.events.length < MAX_COMMAND_RETURN_PATH_EVENTS) trace.events.push(event);
+  else trace.dropped_events += 1;
+  return event.bind_id || null;
+}
+
 function recordCommandTimingFromLifecycle(commandId, phase) {
   const markName = COMMAND_LIFECYCLE_TIMING_MARKS[String(phase || '')];
   if (!markName) return;
@@ -1967,5 +2014,9 @@ function cloneCommandTimingSample(sample) {
     command_id: String(sample.command_id || ''),
     started_at_ms: Number(sample.started_at_ms) || 0,
     marks: { ...sample.marks },
+    ...(sample.return_path ? { return_path: {
+      ...sample.return_path,
+      events: sample.return_path.events.map((event) => ({ ...event })),
+    } } : {}),
   };
 }
