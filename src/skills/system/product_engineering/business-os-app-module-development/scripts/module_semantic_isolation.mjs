@@ -10,6 +10,12 @@ export function runModuleSemanticCheck(moduleDir, request) {
   const moduleRoot = realpathSync(moduleDir);
   const node = realpathSync(process.execPath);
   const worker = join(scripts, 'module_semantic_worker.mjs');
+  // Avoid ambient OpenSSL configuration; newer Node versions detect ESM without this flag.
+  const nodeArgs = ['--openssl-config=/dev/null'];
+  if (process.allowedNodeEnvironmentFlags.has('--experimental-default-type')) {
+    nodeArgs.push('--experimental-default-type=module');
+  }
+  nodeArgs.push(worker);
   const runtimeRoots = [dirname(node), '/usr/lib', '/usr/share', '/System',
     '/opt/homebrew/Cellar', '/opt/homebrew/opt'].filter(existsSync);
   let executable;
@@ -33,9 +39,11 @@ export function runModuleSemanticCheck(moduleDir, request) {
 (allow system-mac-syscall (require-all (mac-policy-name "Sandbox") (mac-syscall-number 67)))
 
 (allow file-read-metadata)
+; dyld inspects the root directory before initializing Node; this grants no descendants.
+(allow file-read-data (literal "/"))
 (allow file-read* ${reads} (literal "/dev/null") (literal "/dev/urandom"))
 (allow file-write-data (literal "/dev/null"))`;
-    args = ['-p', profile, node, '--experimental-default-type=module', worker];
+    args = ['-p', profile, node, ...nodeArgs];
   } else if (process.platform === 'linux') {
     executable = '/usr/bin/bwrap';
     args = ['--die-with-parent', '--new-session', '--unshare-all', '--cap-drop', 'ALL',
@@ -43,7 +51,7 @@ export function runModuleSemanticCheck(moduleDir, request) {
     for (const path of [...new Set(['/usr', '/lib', '/lib64', '/bin', dirname(node), scripts, moduleRoot])]) {
       if (existsSync(path)) args.push('--ro-bind', path, path);
     }
-    args.push('--chdir', moduleRoot, '--', node, '--experimental-default-type=module', worker);
+    args.push('--chdir', moduleRoot, '--', node, ...nodeArgs);
   } else {
     throw new Error('OS-isolated module semantic validation is unavailable on this platform');
   }
