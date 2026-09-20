@@ -2,6 +2,11 @@ name: Native integration artifact
 
 on:
   workflow_dispatch:
+    inputs:
+      focused_runtime:
+        description: Execute only the 17 reviewed runtime regressions (not release acceptance)
+        type: boolean
+        default: false
   pull_request:
     paths:
       - .github/workflows/native-integration-artifact.yml
@@ -25,8 +30,8 @@ jobs:
       RAYON_NUM_THREADS: '2'
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: never
-      # Reviewed integration: PR142 d7c592ba + PR185 2cb16df3a and CI corrections.
-      REVIEWED_SOURCE_REVISION: '4c6c725ff534002b6477b77d777a026e994bff12'
+      # Independently reviewed integration, including PR200/201 runtime corrections.
+      REVIEWED_SOURCE_REVISION: '76d25e1f8a63f869dc455774287412b773c43a24'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
@@ -60,7 +65,12 @@ jobs:
           sudo apt-get install -y libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev libcap-dev libpcap-dev ripgrep
       - name: Verify reviewed source, test, and package
         timeout-minutes: 85
-        run: python3 src/scripts/native-integration-artifact.py
+        env:
+          FOCUSED_RUNTIME: ${{ github.event_name == 'workflow_dispatch' && inputs.focused_runtime || false }}
+        run: |
+          args=()
+          if [[ "$FOCUSED_RUNTIME" == "true" ]]; then args+=(--focused-runtime); fi
+          python3 src/scripts/native-integration-artifact.py "${args[@]}"
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -70,6 +80,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Upload verified runtime candidate
+        if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.focused_runtime) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ctox-linux-x64-${{ github.event.pull_request.head.sha || github.sha }}
