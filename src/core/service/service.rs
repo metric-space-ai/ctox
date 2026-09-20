@@ -23907,6 +23907,64 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn authenticated_automation_cli_reader_forwards_source_to_daemon_socket() {
+        let root = temp_root("aa-ipc");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let listener = UnixListener::bind(service_socket_path(&root)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let source = "return { text: 'Grüße\n世界' };";
+        let server = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "CLI never contacted daemon"
+                        );
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("socket accept failed: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let request: ServiceIpcRequest = serde_json::from_str(&line).unwrap();
+            match request {
+                ServiceIpcRequest::BusinessOsWebStack {
+                    argv,
+                    source: Some(actual),
+                } => {
+                    assert_eq!(argv, vec!["authenticated-automation"]);
+                    assert_eq!(actual, source);
+                }
+                other => panic!("unexpected request: {other:?}"),
+            }
+            let response = ServiceIpcResponse::Json {
+                status: 200,
+                payload: serde_json::json!({"receipt": "daemon"}),
+            };
+            writeln!(stream, "{}", serde_json::to_string(&response).unwrap()).unwrap();
+        });
+        let result = crate::service::business_os::run_business_os_web_stack_cli_json_with_reader(
+            &root,
+            &["authenticated-automation".into()],
+            source.as_bytes(),
+        )
+        .unwrap();
+        server.join().unwrap();
+        assert_eq!(result["receipt"], "daemon");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn authenticated_automation_ipc_preserves_source_and_auth_gate() {
         let source = "return { text: 'Grüße\n世界' };";

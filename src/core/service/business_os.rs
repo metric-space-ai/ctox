@@ -3320,7 +3320,15 @@ pub(crate) fn run_business_os_web_stack_cli_json(
     root: &Path,
     args: &[String],
 ) -> anyhow::Result<serde_json::Value> {
-    let source = read_web_stack_cli_source(args, std::io::stdin())?;
+    run_business_os_web_stack_cli_json_with_reader(root, args, std::io::stdin())
+}
+
+pub(super) fn run_business_os_web_stack_cli_json_with_reader(
+    root: &Path,
+    args: &[String],
+    reader: impl Read,
+) -> anyhow::Result<serde_json::Value> {
+    let source = read_web_stack_cli_source(args, reader)?;
     if let Some(payload) =
         crate::service::run_business_os_web_stack_via_service(root, args, source.as_deref())?
     {
@@ -3712,11 +3720,7 @@ fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<
             print_json(&capture)
         }
         Some("authenticated-automation") => {
-            let mut source = String::new();
-            std::io::stdin()
-                .read_to_string(&mut source)
-                .context("failed to read authenticated-automation source from stdin")?;
-            let output = run_business_os_web_stack_authenticated_automation(root, args, &source)?;
+            let output = run_business_os_web_stack_cli_json(root, args)?;
             print_json(&output)
         }
         Some("auth-assist-status") => {
