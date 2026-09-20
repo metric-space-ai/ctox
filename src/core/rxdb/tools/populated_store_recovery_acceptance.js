@@ -298,6 +298,23 @@ function table(collection, version) {
   return `ctox_business_os__${collection}__v${version}`;
 }
 
+function acceptedWriteSnapshot(acceptedWrite) {
+  return [
+    ['business_commands', 2, acceptedWrite.command.id],
+    ['ctox_queue_tasks', 3, acceptedWrite.task.id],
+  ].map(([collection, version, id]) => {
+    if (typeof id !== 'string' || !id) throw new Error(`missing ${collection} identity`);
+    const escapedId = id.replace(/'/g, "''");
+    const rows = sqliteRows(`SELECT json_object(
+      'id', id, 'revision', revision, 'deleted', deleted, 'data', data
+    ) FROM ${table(collection, version)} WHERE id='${escapedId}';`);
+    if (rows.length !== 1 || Number(rows[0].deleted) !== 0) {
+      throw new Error(`accepted ${collection} record was lost: ${id}`);
+    }
+    return { collection, ...rows[0] };
+  });
+}
+
 function verifyAttachmentBytes() {
   const fileRows = sqliteRows(`SELECT json_object(
     'id', id,
@@ -450,11 +467,16 @@ async function main() {
     await stopServe(serve);
     await delay(500);
 
+    const beforeDeniedRestore = acceptedWriteSnapshot(acceptedWrite);
     const restoreAfterStop = restoreClosed(backupPath);
     const restoreAfterStopClosed = restoreAfterStop.status !== 0
       && /post-cutover writes were accepted/i.test(`${restoreAfterStop.stderr}${restoreAfterStop.stdout}`);
     if (!restoreAfterStopClosed) {
       throw new Error(`unsafe rollback after stop was not fail-closed: ${restoreAfterStop.stderr || restoreAfterStop.stdout}`);
+    }
+    const afterDeniedRestore = acceptedWriteSnapshot(acceptedWrite);
+    if (JSON.stringify(afterDeniedRestore) !== JSON.stringify(beforeDeniedRestore)) {
+      throw new Error('denied restore changed the accepted command or queue task');
     }
 
     let browser = { skipped: skipBrowser };
@@ -504,6 +526,7 @@ async function main() {
       post_cutover_command_id: acceptedWrite.command.command_id,
       post_cutover_command_status: acceptedWrite.command.status,
       post_cutover_task_id: acceptedWrite.task.id,
+      post_cutover_command_and_task_preserved: true,
       stale_writer_rejected: true,
       unsafe_rollback_fail_closed: true,
       serve_ms: serveMs,

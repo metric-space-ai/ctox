@@ -2205,25 +2205,58 @@ mod tests {
         let backup_path = default_native_rxdb_immutable_backup_path(root.path());
         backup_native_rxdb_immutable_store(root.path(), Some(&backup_path))?;
         run_production_native_rxdb_cutover(root.path())?;
-        let conn = Connection::open(rxdb_store_path(root.path()))?;
-        let table = rxdb_collection_version_table_name("business_commands", 2);
-        conn.execute(
-            &format!(
-                "INSERT INTO {} (id, revision, deleted, lastWriteTime, data)
-                 VALUES ('cmd-post-cutover-001', '1-new', 0, 1800000000000, ?1)",
-                sqlite_quote_identifier(&table)
-            ),
-            [json!({
-                "id": "cmd-post-cutover-001",
-                "command_id": "cmd-post-cutover-001",
-                "module": "ctox",
-                "command_type": "business_os.test",
-                "status": "accepted",
-                "updated_at_ms": 1800000000000u64
-            })
-            .to_string()],
+        crate::business_os::store::tests::seed_business_user(
+            root.path(),
+            "recovery-owner",
+            "chef",
         )?;
-        drop(conn);
+        let command_id = "cmd-post-cutover-001";
+        let accepted = crate::business_os::store::record_command(
+            root.path(),
+            crate::business_os::store::BusinessCommand {
+                origin: crate::business_os::store::CommandOrigin::TrustedLocal,
+                id: Some(command_id.to_string()),
+                module: "research".to_string(),
+                command_type: "business_os.chat.task".to_string(),
+                record_id: None,
+                payload: json!({
+                    "title": "Post-cutover recovery proof",
+                    "instruction": "Preserve this admitted task across a denied restore",
+                    "writeback_contract": { "allowed_collections": [] }
+                }),
+                client_context: json!({"actor": {"id": "recovery-owner"}}),
+            },
+        )?;
+        assert!(accepted.ok);
+        assert_eq!(accepted.status, "accepted");
+        assert_eq!(accepted.command_id, command_id);
+        let task_id = accepted
+            .task_id
+            .context("admission must create a real queue task")?;
+        let task_before = crate::mission::channels::load_queue_task(root.path(), &task_id)?
+            .context("admitted task must exist in the core queue")?;
+        assert_eq!(task_before.metadata["business_os_command_id"], command_id);
+        let command_before =
+            crate::mission::channels::business_command_projection(root.path(), command_id)?;
+        // Verify actual admission reached both native RxDB projections before
+        // testing the rollback fence; no direct INSERT can stand in for it.
+        let read_projection = |collection: &str, version: i64, id: &str| -> anyhow::Result<Value> {
+            let conn = Connection::open(rxdb_store_path(root.path()))?;
+            let table = rxdb_collection_version_table_name(collection, version);
+            let data: String = conn.query_row(
+                &format!(
+                    "SELECT data FROM {} WHERE id=?1 AND deleted=0",
+                    sqlite_quote_identifier(&table)
+                ),
+                [id],
+                |row| row.get(0),
+            )?;
+            Ok(serde_json::from_str(&data)?)
+        };
+        let command_projection = read_projection("business_commands", 2, command_id)?;
+        let task_projection = read_projection("ctox_queue_tasks", 3, &task_id)?;
+        assert_eq!(command_projection["status"], "accepted");
+        assert_eq!(task_projection["command_id"], command_id);
         let error = restore_native_rxdb_immutable_backup(root.path(), &backup_path)
             .expect_err("post-cutover restore must fail closed");
         assert!(
@@ -2232,16 +2265,23 @@ mod tests {
                 .contains("post-cutover writes were accepted"),
             "unexpected restore error: {error:#}"
         );
-        let conn = Connection::open(rxdb_store_path(root.path()))?;
-        let count: i64 = conn.query_row(
-            &format!(
-                "SELECT COUNT(*) FROM {} WHERE id = 'cmd-post-cutover-001'",
-                sqlite_quote_identifier(&table)
-            ),
-            [],
-            |row| row.get(0),
-        )?;
-        assert_eq!(count, 1);
+        assert_eq!(
+            read_projection("business_commands", 2, command_id)?,
+            command_projection
+        );
+        assert_eq!(
+            read_projection("ctox_queue_tasks", 3, &task_id)?,
+            task_projection
+        );
+        assert_eq!(
+            crate::mission::channels::business_command_projection(root.path(), command_id)?,
+            command_before
+        );
+        let task_after = crate::mission::channels::load_queue_task(root.path(), &task_id)?
+            .context("denied restore must preserve the admitted queue task")?;
+        assert_eq!(task_after.message_key, task_before.message_key);
+        assert_eq!(task_after.route_status, task_before.route_status);
+        assert_eq!(task_after.metadata, task_before.metadata);
         Ok(())
     }
 
