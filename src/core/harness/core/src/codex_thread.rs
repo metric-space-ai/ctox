@@ -70,6 +70,10 @@ impl CodexThread {
         self.codex.submit(op).await
     }
 
+    pub async fn interrupt_turn(&self, turn_id: String) -> CodexResult<bool> {
+        self.codex.interrupt_turn(turn_id).await
+    }
+
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {
         self.codex.shutdown_and_wait().await
     }

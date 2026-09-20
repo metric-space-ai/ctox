@@ -158,6 +158,7 @@ use ctox_app_server_protocol::ThreadUnsubscribeResponse;
 use ctox_app_server_protocol::ThreadUnsubscribeStatus;
 use ctox_app_server_protocol::Turn;
 use ctox_app_server_protocol::TurnInterruptParams;
+use ctox_app_server_protocol::TurnInterruptResponse;
 use ctox_app_server_protocol::TurnStartParams;
 use ctox_app_server_protocol::TurnStartResponse;
 use ctox_app_server_protocol::TurnStatus;
@@ -6007,31 +6008,45 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: TurnInterruptParams,
     ) {
-        let TurnInterruptParams { thread_id, .. } = params;
-
-        let (thread_uuid, thread) = match self.load_thread(&thread_id).await {
+        let TurnInterruptParams { thread_id, turn_id } = params;
+        let (_, thread) = match self.load_thread(&thread_id).await {
             Ok(v) => v,
             Err(error) => {
                 self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
-
-        let request = request_id.clone();
-
-        // Record the pending interrupt so we can reply when TurnAborted arrives.
-        {
-            let thread_state = self.thread_state_manager.thread_state(thread_uuid).await;
-            let mut thread_state = thread_state.lock().await;
-            thread_state
-                .pending_interrupts
-                .push((request, ApiVersion::V2));
+        match thread.interrupt_turn(turn_id).await {
+            Ok(true) => {
+                self.outgoing
+                    .send_response(request_id, TurnInterruptResponse {})
+                    .await
+            }
+            Ok(false) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: "requested turn is not active".to_string(),
+                            data: None,
+                        },
+                    )
+                    .await
+            }
+            Err(error) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("turn interrupt failed: {error}"),
+                            data: None,
+                        },
+                    )
+                    .await
+            }
         }
-
-        // Submit the interrupt; we'll respond upon TurnAborted.
-        let _ = self
-            .submit_core_op(&request_id, thread.as_ref(), Op::Interrupt)
-            .await;
     }
 
     async fn ensure_conversation_listener(

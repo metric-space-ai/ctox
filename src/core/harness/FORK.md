@@ -14,6 +14,29 @@ Fork policy:
 - Local modifications inside this subtree belong to the CTOX fork state unless explicitly documented otherwise.
 - CTOX must not auto-clone, auto-fetch, or auto-update this subtree from upstream.
 
+
+## 2026-09 Exact-turn interrupt receipts
+
+The V2 `turn/interrupt` handler preserves the supplied turn ID and submits
+`Op::InterruptTurn` through the existing serial core submission loop. Core
+compares and takes the named active task under the same lock; stale, unknown,
+completed, or already-cancelled identities return a rejected receipt without
+interrupting another turn or cancelling session startup. Successful stops keep
+the existing task cleanup, durable abort marker, `TurnAborted` event, and inline
+interrupt compaction before the next queued operation.
+
+Each request has its own internal one-shot receipt, resolved only by its core
+submission after that task's abort handling. The app-server no longer resolves
+interrupt RPCs from the thread-wide broadcast abort stream. Dropped callers,
+failed enqueueing, and session-loop termination remove pending receipts.
+Legacy unscoped `Op::Interrupt` remains available to existing internal callers.
+
+`core/src/codex_interrupt_tests.rs` exercises the public core request method and
+its production dispatch handler with controlled task replacement and abort
+cleanup. These are source-added regressions; compiler/test execution and full
+app-server transport acceptance must be recorded separately before promotion.
+This change does not implement queue-claim cancellation or publication fencing.
+
 ## 2026-08 Required Plan and Stable Activity Events
 
 CTOX service-owned queue turns use the upstream-compatible

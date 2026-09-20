@@ -346,6 +346,22 @@ pub struct Codex {
 
 pub(crate) type SessionLoopTermination = Shared<BoxFuture<'static, ()>>;
 
+// Remove receipts when a caller is cancelled, including while enqueueing.
+struct PendingTurnInterrupt {
+    session: Arc<Session>,
+    id: String,
+}
+
+impl Drop for PendingTurnInterrupt {
+    fn drop(&mut self) {
+        self.session
+            .interrupt_receipts
+            .lock()
+            .expect("interrupt receipts poisoned")
+            .remove(&self.id);
+    }
+}
+
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
 /// the submission id for the initial `ConfigureSession` request and the
 /// unique session id.
@@ -691,6 +707,34 @@ impl Codex {
         Ok(event)
     }
 
+    /// Return true only after this submission stopped the named active turn.
+    pub async fn interrupt_turn(&self, turn_id: String) -> CodexResult<bool> {
+        let id = Uuid::now_v7().to_string();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let receipt = PendingTurnInterrupt {
+            session: Arc::clone(&self.session),
+            id: id.clone(),
+        };
+        self.session
+            .interrupt_receipts
+            .lock()
+            .expect("interrupt receipts poisoned")
+            .insert(id.clone(), tx);
+        self.submit_with_id(Submission {
+            id,
+            op: Op::InterruptTurn { turn_id },
+            trace: None,
+        })
+        .await?;
+        let result = tokio::select! {
+            biased;
+            result = rx => result.map_err(|_| CodexErr::InternalAgentDied),
+            () = self.session_loop_termination.clone() => Err(CodexErr::InternalAgentDied),
+        };
+        drop(receipt);
+        result
+    }
+
     pub async fn steer_input(
         &self,
         input: Vec<UserInput>,
@@ -759,6 +803,7 @@ pub(crate) struct Session {
     pending_mcp_server_refresh_config: Mutex<Option<McpServerRefreshConfig>>,
     pub(crate) conversation: Arc<RealtimeConversationManager>,
     pub(crate) active_turn: Mutex<Option<ActiveTurn>>,
+    interrupt_receipts: std::sync::Mutex<HashMap<String, tokio::sync::oneshot::Sender<bool>>>,
     pub(crate) guardian_review_session: GuardianReviewSessionManager,
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
@@ -1859,6 +1904,7 @@ impl Session {
             pending_mcp_server_refresh_config: Mutex::new(None),
             conversation: Arc::new(RealtimeConversationManager::new()),
             active_turn: Mutex::new(None),
+            interrupt_receipts: std::sync::Mutex::new(HashMap::new()),
             guardian_review_session: GuardianReviewSessionManager::default(),
             services,
             js_repl,
@@ -4154,6 +4200,12 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
                     handlers::interrupt(&sess, sub.id.clone()).await;
                     false
                 }
+                Op::InterruptTurn { turn_id } => {
+                    if handlers::interrupt_turn(&sess, &sub.id, &turn_id).await {
+                        handlers::compact_after_interrupt(&sess, sub.id.clone()).await;
+                    }
+                    false
+                }
                 Op::CleanBackgroundTerminals => {
                     handlers::clean_background_terminals(&sess).await;
                     false
@@ -4446,6 +4498,10 @@ mod handlers {
 
     pub async fn interrupt(sess: &Arc<Session>, sub_id: String) {
         sess.interrupt_task().await;
+        compact_after_interrupt(sess, sub_id).await;
+    }
+
+    pub async fn compact_after_interrupt(sess: &Arc<Session>, sub_id: String) {
         let turn_context = sess.new_default_turn_with_sub_id(sub_id).await;
         let _ = run_inline_interrupt_compact_task(
             Arc::clone(sess),
@@ -4457,6 +4513,20 @@ mod handlers {
 
     pub async fn clean_background_terminals(sess: &Arc<Session>) {
         sess.close_unified_exec_processes().await;
+    }
+
+    pub async fn interrupt_turn(sess: &Arc<Session>, sub_id: &str, turn_id: &str) -> bool {
+        let interrupted = sess.abort_turn(turn_id).await;
+        // Only this submission can resolve its receipt; broadcast events cannot.
+        if let Some(receipt) = sess
+            .interrupt_receipts
+            .lock()
+            .expect("interrupt receipts poisoned")
+            .remove(sub_id)
+        {
+            let _ = receipt.send(interrupted);
+        }
+        interrupted
     }
 
     pub async fn override_turn_context(
