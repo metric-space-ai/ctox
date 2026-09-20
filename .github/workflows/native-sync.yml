@@ -308,6 +308,8 @@ jobs:
             business_os::rxdb_peer::tests::runtime_empty_legacy_table \
             business_os::rxdb_peer::tests::rxdb_schema_drift_repair \
             --test-threads=2 | tee "$RUNNER_TEMP/ctox-host-proof/schema-migration-tests.log"
+          # build-pi-sidecar is the existing compile prerequisite for the
+          # include_bytes! sidecar bundle. Do not invent a stub dist/ctox-pi-sidecar.mjs.
           cargo test --locked --bin ctox -- business_os::populated_store_recovery --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/populated-store-recovery-tests.log"
       - name: Prove populated historical store migration and recovery

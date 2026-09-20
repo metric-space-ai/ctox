@@ -10,6 +10,11 @@
 //! fixture, an immutable backup with pinned provenance, a write-once
 //! cutover receipt, and a fail-closed restore after accepted post-cutover
 //! writes.
+//!
+//! `cargo test --bin ctox` compiles the same `include_bytes!` sidecar bundle
+//! as `cargo build --bin ctox`. Build it first with `npm run build` in
+//! `src/core/coding_agents/pi-sidecar` (CI: `.github/actions/build-pi-sidecar`).
+//! Do not invent a stub `dist/ctox-pi-sidecar.mjs`.
 
 use super::backup_restore::file_sha256;
 use super::hashing::hex_sha256;
@@ -21,6 +26,7 @@ use super::rxdb_peer::{
 use super::store::{now_ms, rxdb_store_path, RXDB_STORE_FILE};
 use anyhow::{anyhow, Context};
 use base64::Engine;
+use rusqlite::config::DbConfig;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -28,7 +34,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 use std::cell::RefCell;
@@ -36,6 +43,7 @@ use std::cell::RefCell;
 #[cfg(test)]
 thread_local! {
     static AFTER_SQLITE_RELEASE: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
+    static AFTER_STAGED_SYNC: RefCell<Option<Box<dyn Fn(&Path, &Path)>>> = RefCell::new(None);
 }
 
 pub const POPULATED_STORE_FIXTURE_SCHEMA: &str = "ctox.populated_store_recovery.fixture.v1";
@@ -1084,9 +1092,14 @@ pub fn restore_native_rxdb_immutable_backup(root: &Path, backup: &Path) -> anyho
                 .ok()
                 .is_some_and(|(_, sha)| sha == backup_sha256);
         // Leftover live-named WAL must not be merged into an already-published
-        // backup image; replace_sqlite_store detaches those sidecars.
+        // backup image. Skipping PRAGMA wal_checkpoint is not enough: bundled
+        // SQLite may still checkpoint on last-connection close. Enable
+        // SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE (disables automatic checkpoint on
+        // close), then replace_sqlite_store detaches the sidecars.
         if !live_already_matches_backup {
             checkpoint_live_store(conn, &live_path)?;
+        } else {
+            disable_wal_checkpoint_on_close(conn)?;
         }
     }
     // SQLite must release the live inode before rename, but the peer lock stays
@@ -1468,6 +1481,12 @@ fn checkpoint_live_store(conn: &Connection, live_path: &Path) -> anyhow::Result<
     Ok(())
 }
 
+fn disable_wal_checkpoint_on_close(conn: &Connection) -> anyhow::Result<()> {
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+        .context("disable WAL checkpoint on last SQLite close")?;
+    Ok(())
+}
+
 fn invoke_after_sqlite_release_hook() {
     #[cfg(test)]
     {
@@ -1527,30 +1546,99 @@ fn fsync_file(path: &Path) -> anyhow::Result<()> {
 }
 
 fn publish_exclusive_file(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|err| {
+    let parent = path.parent().ok_or_else(|| {
+        anyhow!(
+            "exclusive publish path {} has no parent directory",
+            path.display()
+        )
+    })?;
+    fs::create_dir_all(parent)?;
+    let staged = unique_owned_staging_path(path)?;
+    let published = (|| -> anyhow::Result<()> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged)
+            .with_context(|| format!("create owned staging file {}", staged.display()))?;
+        file.write_all(bytes).with_context(|| {
+            format!(
+                "write owned staging file {}; partial staging was left in place and must be recovered explicitly",
+                staged.display()
+            )
+        })?;
+        file.sync_all()
+            .with_context(|| format!("fsync owned staging file {}", staged.display()))?;
+        invoke_after_staged_sync_hook(&staged, path);
+        fs::hard_link(&staged, path).map_err(|err| {
             if err.kind() == io::ErrorKind::AlreadyExists {
                 anyhow!(
                     "refusing to replace pinned immutable RxDB backup provenance {}",
                     path.display()
                 )
             } else {
-                anyhow::Error::from(err)
-                    .context(format!("create exclusive file {}", path.display()))
+                anyhow::Error::from(err).context(format!(
+                    "publish complete staging {} onto {}",
+                    staged.display(),
+                    path.display()
+                ))
             }
         })?;
-    file.write_all(bytes).with_context(|| {
-        format!(
-            "write {}; partial file was left in place and must be recovered explicitly",
-            path.display()
+        fsync_dir(parent)?;
+        Ok(())
+    })();
+    match &published {
+        Ok(()) => {
+            let _ = fs::remove_file(&staged);
+        }
+        Err(err)
+            if err
+                .to_string()
+                .contains("refusing to replace pinned immutable RxDB backup provenance") =>
+        {
+            let _ = fs::remove_file(&staged);
+        }
+        Err(_) => {}
+    }
+    published
+}
+
+fn unique_owned_staging_path(final_path: &Path) -> anyhow::Result<PathBuf> {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let parent = final_path.parent().ok_or_else(|| {
+        anyhow!(
+            "exclusive publish path {} has no parent directory",
+            final_path.display()
         )
     })?;
-    file.sync_all()
-        .with_context(|| format!("fsync {}", path.display()))?;
-    Ok(())
+    let name = final_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("published");
+    let token = format!(
+        "{}-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0)
+    );
+    Ok(parent.join(format!(".{name}.staging-{token}.tmp")))
+}
+
+fn invoke_after_staged_sync_hook(staged: &Path, dest: &Path) {
+    #[cfg(test)]
+    {
+        AFTER_STAGED_SYNC.with(|slot| {
+            if let Some(cb) = slot.borrow_mut().take() {
+                cb(staged, dest);
+            }
+        });
+    }
+    #[cfg(not(test))]
+    {
+        let _ = (staged, dest);
+    }
 }
 pub fn prepare_current_rxdb_targets_for_cutover(root: &Path) -> anyhow::Result<Value> {
     let spec = populated_store_fixture_spec()?;
@@ -1862,6 +1950,73 @@ mod tests {
             error.to_string().contains("ctox_queue_tasks/shared-id"),
             "unexpected dropped-id error: {error:#}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn exclusive_publish_does_not_pin_partial_provenance_if_interrupted_after_staging(
+    ) -> anyhow::Result<()> {
+        let root = fixture_root()?;
+        let path = native_rxdb_immutable_backup_provenance_path(root.path());
+        let payload = br#"{"schema":"complete","ok":true}"#;
+        AFTER_STAGED_SYNC.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(|staged, dest| {
+                assert!(
+                    staged.is_file(),
+                    "interrupt hook must observe a complete staging file"
+                );
+                assert!(
+                    !dest.exists(),
+                    "final provenance must not exist before no-replace publish"
+                );
+                panic!("interrupt after staged sync");
+            }));
+        });
+        let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            publish_exclusive_file(&path, payload)
+        }));
+        match interrupted {
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<&str>()
+                    .copied()
+                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                    .unwrap_or("");
+                assert!(
+                    message.contains("interrupt after staged sync"),
+                    "unexpected panic during exclusive publish: {message}"
+                );
+            }
+            Ok(Ok(())) => panic!("exclusive publish must not succeed after interrupt hook"),
+            Ok(Err(err)) => {
+                panic!("exclusive publish returned error instead of panicking: {err:#}")
+            }
+        }
+        assert!(
+            !path.exists(),
+            "interrupted exclusive publish must not pin provenance"
+        );
+        publish_exclusive_file(&path, payload)?;
+        assert_eq!(fs::read(&path)?, payload);
+        Ok(())
+    }
+
+    #[test]
+    fn exclusive_publish_collision_leaves_existing_provenance_unchanged() -> anyhow::Result<()> {
+        let root = fixture_root()?;
+        let path = native_rxdb_immutable_backup_provenance_path(root.path());
+        let original = br#"{"schema":"original","ok":true}"#;
+        let replacement = br#"{"schema":"replacement","ok":false}"#;
+        publish_exclusive_file(&path, original)?;
+        let error = publish_exclusive_file(&path, replacement)
+            .expect_err("second exclusive publish must refuse replace");
+        assert!(
+            error
+                .to_string()
+                .contains("refusing to replace pinned immutable RxDB backup provenance"),
+            "unexpected collision error: {error:#}"
+        );
+        assert_eq!(fs::read(&path)?, original);
         Ok(())
     }
 
@@ -2316,7 +2471,7 @@ mod tests {
                 let exclusive = acquire_exclusive_native_rxdb_writer(&root_for_hook);
                 assert!(
                     exclusive.is_err(),
-                    "exclusive restore writer must fail while peer lock is held after sqlite release: {exclusive:?}"
+                    "exclusive restore writer must fail while peer lock is held after sqlite release"
                 );
             }));
         });
@@ -2376,6 +2531,99 @@ mod tests {
         );
         let restored = native_rxdb_store_inventory(root.path())?;
         assert_eq!(restored["file_sha256"], backup["sha256"]);
+        let table = rxdb_collection_version_table_name("desktop_files", 0);
+        let conn = Connection::open(&live)?;
+        let last_write: f64 = conn.query_row(
+            &format!(
+                "SELECT lastWriteTime FROM {} WHERE id = 'file-attachment-001'",
+                sqlite_quote_identifier(&table)
+            ),
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            last_write, 1_700_000_001_600.0,
+            "matching-backup restore must keep published lastWriteTime 1700000001600, not leftover WAL +1"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn matching_backup_no_ckpt_close_keeps_live_hash_and_nonempty_wal() -> anyhow::Result<()> {
+        let root = fixture_root()?;
+        materialize_supported_historical_rxdb_fixture(root.path())?;
+        let backup_path = default_native_rxdb_immutable_backup_path(root.path());
+        let backup = backup_native_rxdb_immutable_store(root.path(), Some(&backup_path))?;
+        mark_cutover_in_progress(root.path())?;
+        let wal = leave_stale_populated_wal(root.path())?;
+        let live = rxdb_store_path(root.path());
+        fs::copy(&backup_path, &live)?;
+        anyhow::ensure!(
+            wal.is_file() && wal.metadata()?.len() > 0,
+            "matching live/backup fixture must keep leftover WAL"
+        );
+        let (_, live_sha_before) = file_sha256(&live)?;
+        assert_eq!(
+            json!(live_sha_before),
+            backup["sha256"],
+            "copied live file must match the published backup before close"
+        );
+        let mut guard = acquire_exclusive_native_rxdb_writer(root.path())?;
+        let conn = guard.exclusive.as_ref().expect("live exclusive writer");
+        conn.execute_batch("ROLLBACK;")?;
+        disable_wal_checkpoint_on_close(conn)?;
+        guard.release_sqlite();
+        let (_, live_sha_after) = file_sha256(&live)?;
+        assert_eq!(
+            live_sha_after, live_sha_before,
+            "NO_CKPT_ON_CLOSE must leave matching live bytes unchanged"
+        );
+        assert!(
+            wal.is_file() && wal.metadata()?.len() > 0,
+            "NO_CKPT_ON_CLOSE must leave leftover WAL attached by name"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn matching_backup_close_without_no_ckpt_is_measured() -> anyhow::Result<()> {
+        let root = fixture_root()?;
+        materialize_supported_historical_rxdb_fixture(root.path())?;
+        let backup_path = default_native_rxdb_immutable_backup_path(root.path());
+        backup_native_rxdb_immutable_store(root.path(), Some(&backup_path))?;
+        mark_cutover_in_progress(root.path())?;
+        let wal = leave_stale_populated_wal(root.path())?;
+        let live = rxdb_store_path(root.path());
+        fs::copy(&backup_path, &live)?;
+        anyhow::ensure!(
+            wal.is_file() && wal.metadata()?.len() > 0,
+            "control fixture must keep leftover WAL"
+        );
+        let (_, live_sha_before) = file_sha256(&live)?;
+        let wal_len_before = wal.metadata()?.len();
+        let mut guard = acquire_exclusive_native_rxdb_writer(root.path())?;
+        let conn = guard.exclusive.as_ref().expect("live exclusive writer");
+        conn.execute_batch("ROLLBACK;")?;
+        // Hypothesis, not a production invariant: bundled SQLite may merge leftover
+        // WAL frames into the live file on last-connection close unless
+        // SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE is set. This control only measures that
+        // close path. Proven matching-backup behavior is
+        // matching_backup_no_ckpt_close_keeps_live_hash_and_nonempty_wal plus
+        // public_restore_strips_wal_when_live_already_matches_backup.
+        guard.release_sqlite();
+        let (_, live_sha_after) = file_sha256(&live)?;
+        let wal_len_after = if wal.is_file() {
+            wal.metadata()?.len()
+        } else {
+            0
+        };
+        eprintln!(
+            "matching_backup_close_without_no_ckpt observation: live_hash_changed={} wal_exists_after={} wal_len_before={} wal_len_after={}",
+            live_sha_after != live_sha_before,
+            wal.exists(),
+            wal_len_before,
+            wal_len_after
+        );
         Ok(())
     }
 }
