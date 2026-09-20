@@ -818,7 +818,7 @@ class WorkflowIntegrationTest(unittest.TestCase):
             'profile: "Nexus 9"',
             "adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk",
             "adb shell settings put system accelerometer_rotation 0",
-            "adb shell settings put system user_rotation 1",
+            "adb shell settings put system user_rotation 0",
             "python3 src/scripts/assert_android_tablet_screenshot.py \"$RUNNER_TEMP/android-tablet-4x3.png\"",
         ):
             self.assertIn(expected, self.workflow)
