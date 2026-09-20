@@ -727,6 +727,10 @@ impl Codex {
     pub(crate) fn enabled(&self, feature: Feature) -> bool {
         self.session.enabled(feature)
     }
+
+    pub(crate) async fn rollout_materialization_pending(&self) -> bool {
+        self.session.rollout_materialization_pending().await
+    }
 }
 
 #[cfg(test)]
@@ -2005,6 +2009,14 @@ impl Session {
 
     pub(crate) fn state_db(&self) -> Option<state_db::StateDbHandle> {
         self.services.state_db.clone()
+    }
+
+    pub(crate) async fn rollout_materialization_pending(&self) -> bool {
+        let recorder = {
+            let guard = self.services.rollout.lock().await;
+            guard.clone()
+        };
+        recorder.is_some_and(|recorder| recorder.materialization_pending())
     }
 
     /// Ensure rollout file writes are durably flushed.

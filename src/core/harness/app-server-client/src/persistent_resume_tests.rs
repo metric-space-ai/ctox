@@ -229,7 +229,12 @@ fn failed_turn_error(thread: &ctox_app_server_protocol::Thread) -> Option<String
 
 fn is_transient_read_error(err: &TypedRequestError) -> bool {
     let message = err.to_string();
-    message.contains("not materialized yet") || message.contains("includeTurns is unavailable")
+    message.contains("is not materialized yet")
+}
+
+fn is_lost_rollout_error(err: &TypedRequestError) -> bool {
+    let message = err.to_string();
+    message.contains("is missing at")
 }
 
 async fn wait_for_turn_completed(client: &mut IsolatedClient, thread_id: &str) {
@@ -604,6 +609,37 @@ async fn run_named_persistent_thread_restart(
         vec![thread_id.clone()],
         "missing-id resume rejection must keep exactly the original loaded thread"
     );
+
+    // A resumed recorder is explicitly not deferred. Deleting its published
+    // rollout is lost persistence, not a first-materialization race.
+    std::fs::remove_file(&rollout_path).expect("remove published rollout");
+    let lost_err = client
+        .request_err::<ThreadReadResponse>(
+            ClientRequest::ThreadRead {
+                request_id: RequestId::Integer(14),
+                params: ThreadReadParams {
+                    thread_id: thread_id.clone(),
+                    include_turns: true,
+                },
+            },
+            "loaded thread with lost rollout must fail closed",
+        )
+        .await;
+    match &lost_err {
+        TypedRequestError::Server { method, source } => {
+            assert_eq!(method, "thread/read");
+            assert!(
+                is_lost_rollout_error(&lost_err),
+                "expected a hard lost-rollout error, got: {}",
+                source.message
+            );
+            assert!(
+                !is_transient_read_error(&lost_err),
+                "lost persisted rollout must not be reported as deferred"
+            );
+        }
+        other => panic!("expected JSON-RPC server error for lost rollout, got {other}"),
+    }
 
     client.shutdown().await;
 }
