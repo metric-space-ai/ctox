@@ -8299,7 +8299,14 @@ fn revalidate_queue_native_authorization(
         authorization.get("allowed").and_then(Value::as_bool) == Some(true),
         "Business OS command was not authorized at admission"
     );
-    let (permission, module_id, _) = queue_command_policy_target(command);
+    let control_permission = recoverable_background_control_permission(&command.command_type);
+    let (permission, module_id) = match control_permission {
+        Some(permission) => (permission, command.module.clone()),
+        None => {
+            let (permission, module_id, _) = queue_command_policy_target(command);
+            (permission, module_id)
+        }
+    };
     anyhow::ensure!(
         authorization.get("permission").and_then(Value::as_str) == Some(permission.as_str()),
         "Business OS command authorization permission changed"
@@ -8336,7 +8343,11 @@ fn revalidate_queue_native_authorization(
             user.id == actor_id && user.role == authorized_role,
             "native managed MCP authorization actor changed"
         );
-        let decision = queue_command_policy_decision(root, &session, command)?;
+        let decision = if control_permission.is_some() {
+            module_policy_decision(root, &session, permission, &module_id)?
+        } else {
+            queue_command_policy_decision(root, &session, command)?
+        };
         anyhow::ensure!(
             decision.allowed,
             "Business OS execution permission was revoked: {}",
@@ -8365,7 +8376,11 @@ fn revalidate_queue_native_authorization(
         login_url: None,
         reason: None,
     };
-    let decision = queue_command_policy_decision(root, &session, command)?;
+    let decision = if control_permission.is_some() {
+        module_policy_decision(root, &session, permission, &module_id)?
+    } else {
+        queue_command_policy_decision(root, &session, command)?
+    };
     anyhow::ensure!(
         decision.allowed,
         "Business OS execution permission was revoked: {}",
@@ -39832,6 +39847,53 @@ pub(super) mod tests {
         assert!(!is_recoverable_background_control_command_type(
             "office.document.create"
         ));
+    }
+
+    #[test]
+    fn research_control_revalidation_uses_native_actor_and_original_permission(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "operator", "chef")?;
+        let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+        for command_type in [
+            "outbound.research_source.generate_adapter",
+            "outbound.research_source.test",
+        ] {
+            let mut command = BusinessCommand {
+                origin: CommandOrigin::ReplicatedPeer,
+                id: Some(format!("cmd_{command_type}")),
+                module: "outbound".into(),
+                command_type: command_type.into(),
+                record_id: None,
+                payload: serde_json::json!({"company":"Fixture GmbH"}),
+                client_context: serde_json::json!({"capability_token":token}),
+            };
+            let receipt =
+                recoverable_background_control_authorization(root, &command).context("receipt")?;
+            command.client_context = serde_json::json!({"actor":{"id":"forged","role":"admin"}, "owner_user_id":"forged"});
+            let (session, decision) =
+                revalidate_queue_native_authorization(root, &command, &receipt)?;
+            assert_eq!(session.user.as_ref().unwrap().id, "operator");
+            assert_eq!(decision.permission, receipt["permission"].as_str().unwrap());
+            let mut wrong = receipt.clone();
+            wrong["permission"] = Value::String("data.read".into());
+            assert!(revalidate_queue_native_authorization(root, &command, &wrong).is_err());
+            wrong = receipt.clone();
+            wrong["actor"]["role"] = Value::String("user".into());
+            assert!(revalidate_queue_native_authorization(root, &command, &wrong).is_err());
+            let conn = open_store(root)?;
+            conn.execute(
+                "UPDATE business_users SET active=0 WHERE user_id='operator'",
+                [],
+            )?;
+            assert!(revalidate_queue_native_authorization(root, &command, &receipt).is_err());
+            conn.execute(
+                "UPDATE business_users SET active=1 WHERE user_id='operator'",
+                [],
+            )?;
+        }
+        Ok(())
     }
 
     #[test]
