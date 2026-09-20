@@ -22,7 +22,7 @@
       {
         "title": "Example Manufacturing AG",
         "url": "https://api.leadfeeder.com/v1/companies/co-fixture-1?account_id=acct-fixture-1",
-        "snippet": "example-manufacturing.test \u00b7 101-500",
+        "snippet": "leadfeeder_fields:{\"id\":\"co-fixture-1\",\"country\":\"DE\",\"domain\":\"example-manufacturing.test\",\"employees\":\"101-500\",\"industry\":\"Manufacture of bearings\"}",
         "source": "leadfeeder.com",
         "rank": 1,
         "extracted_fields": [

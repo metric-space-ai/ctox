@@ -1,0 +1,44 @@
+{
+  "data": [
+    [
+      {
+        "id": "co-fixture-1",
+        "type": "company_match",
+        "attributes": { "match_score": 0.96 },
+        "relationships": {
+          "company_summary": {
+            "id": "co-fixture-1",
+            "type": "company_summary",
+            "attributes": {
+              "name": "Example Manufacturing AG",
+              "url": "https://www.example-manufacturing.test",
+              "employee_range": "101-500",
+              "address": { "country_code": "DE" }
+            }
+          }
+        }
+      },
+      {
+        "id": "co-fixture-2",
+        "type": "company_match",
+        "attributes": { "match_score": 0.95 },
+        "relationships": {
+          "company_summary": {
+            "id": "co-fixture-2",
+            "type": "company_summary",
+            "attributes": {
+              "name": "Example Manufacturing AG",
+              "url": "https://www.example-manufacturing-alt.test",
+              "employee_range": "51-200",
+              "address": { "country_code": "DE" }
+            }
+          }
+        }
+      }
+    ]
+  ],
+  "meta": {
+    "credits": { "charged": 0 },
+    "request_id": "fixture-match-ambiguous-ids"
+  }
+}

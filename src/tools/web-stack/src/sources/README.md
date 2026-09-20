@@ -42,6 +42,13 @@ Pro Quelle entscheidet die Trait-Implementierung, welcher Pfad gilt:
    `auth_mode` = `authenticated_browser`).
    Do not send a current key as `Authorization: Token token=...`, default
    account `me`, or call credit-consuming retrieve/enrichment endpoints.
+   Native identity requires exact significant-name equality after punctuation
+   and case normalization and legal-form stripping; Unicode/short names are
+   kept, and high match scores do not accept subsidiaries, supersets, or
+   aliases. Explicit `address.country_code` mismatches are rejected, and
+   multiple distinct IDs for the same name fail closed. Provider fields travel
+   through a local `leadfeeder_fields:` snippet object so domains, employee
+   counts/ranges, and industry are not inferred from display position.
 
    Scrape-execute currently forwards company/country/source_id (and optional
    adapter_test). That is enough for the supported API path: the script calls

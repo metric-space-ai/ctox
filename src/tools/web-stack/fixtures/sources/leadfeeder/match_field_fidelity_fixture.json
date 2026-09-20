@@ -1,0 +1,32 @@
+{
+  "data": [
+    [
+      {
+        "id": "co-fixture-fields-1",
+        "type": "company_match",
+        "attributes": { "match_score": 0.97 },
+        "relationships": {
+          "company_summary": {
+            "id": "co-fixture-fields-1",
+            "type": "company_summary",
+            "attributes": {
+              "name": "Example Manufacturing AG",
+              "url": "https://factory-24.test",
+              "employee_count": 120,
+              "industries": {
+                "industry": [
+                  { "code": "28.15", "name": "Manufacture of bearings" }
+                ]
+              },
+              "address": { "country_code": "DE" }
+            }
+          }
+        }
+      }
+    ]
+  ],
+  "meta": {
+    "credits": { "charged": 0 },
+    "request_id": "fixture-match-field-fidelity"
+  }
+}

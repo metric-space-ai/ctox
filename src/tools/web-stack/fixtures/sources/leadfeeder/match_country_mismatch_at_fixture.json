@@ -1,0 +1,38 @@
+{
+  "data": [
+    [
+      {
+        "id": "co-fixture-at-1",
+        "type": "company_match",
+        "attributes": { "match_score": 0.98 },
+        "relationships": {
+          "company_summary": {
+            "id": "co-fixture-at-1",
+            "type": "company_summary",
+            "attributes": {
+              "name": "Example Manufacturing AG",
+              "url": "https://www.example-manufacturing.test",
+              "employee_range": "101-500",
+              "industries": {
+                "industry": [
+                  { "code": "28.15", "name": "Manufacture of bearings" }
+                ]
+              },
+              "address": {
+                "city": "Wien",
+                "country": "Austria",
+                "country_code": "AT",
+                "postal_code": "1010",
+                "street_address": "Musterplatz 1"
+              }
+            }
+          }
+        }
+      }
+    ]
+  ],
+  "meta": {
+    "credits": { "charged": 0 },
+    "request_id": "fixture-match-country-mismatch-at"
+  }
+}
