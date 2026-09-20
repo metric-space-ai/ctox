@@ -18,7 +18,10 @@ EVIDENCE.mkdir(parents=True, exist_ok=True)
 DEADLINE = time.monotonic() + 7200
 TARGET = 'x86_64-unknown-linux-gnu'
 FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
-           'business_chat', 'repair_queue_projections']
+           'business_chat', 'repair_queue_projections',
+           'mcp_app_authority', 'app_source_', 'gateway_managed_',
+           'replicated_queue_command_persists_and_revalidates_native_authorization',
+           'capability_epoch_revokes_tokens_after_role_or_grant_change']
 RECORD = {'stages': [], 'complete': False}
 
 
@@ -114,6 +117,8 @@ def main():
     counts = {selector: sum(selector in name for name in names) for selector in FILTERS}
     if not all(counts.values()):
         raise RuntimeError(f'A required test group is absent: {counts}')
+    if counts['mcp_app_authority'] < 14:
+        raise RuntimeError(f"Missing THESEN managed-authority regressions: {counts}")
     required = {
         'coding_agents::pi_sidecar::tests::inherited_minimax_route_drives_real_pi_tools_through_native_bridge',
         'coding_agents::pi_sidecar::tests::responses_edit_owner_applies_only_complete_source_and_session',
