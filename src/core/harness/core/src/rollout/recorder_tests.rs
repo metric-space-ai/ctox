@@ -268,6 +268,8 @@ async fn owned_preparation_files_are_unique_and_leave_stale_files_alone() {
     let stale_path = config
         .codex_home
         .join("sessions/.rollout-materializing-stale.jsonl");
+    fs::create_dir_all(stale_path.parent().expect("stale file parent"))
+        .expect("create stale file directory");
     fs::write(&stale_path, b"unrelated").expect("write stale file");
 
     let first = precompute_log_file_info(&config, thread_id).expect("first info");
