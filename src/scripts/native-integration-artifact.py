@@ -107,6 +107,9 @@ def main():
                   sidecar_lock_sha256=digest(sidecar.parent.parent / 'package-lock.json'),
                   workflow_run=os.environ.get('GITHUB_RUN_ID'))
     save()
+    run('customer-identity', ['node',
+        'src/apps/business-os/rxdb/tests/customer-identifier-inventory-smoke.mjs'])
+    run('content-guard', ['node', 'src/apps/business-os/scripts/audit-business-os-content.mjs'])
     sync_tests = [
         'sync-native-read.test.mjs',
         'sync-collection-registry.test.mjs',
