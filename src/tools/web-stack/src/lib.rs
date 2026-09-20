@@ -5,6 +5,7 @@
 //! adapters for those capabilities.
 
 pub mod browser;
+pub mod credentials;
 #[cfg(feature = "full")]
 pub mod deep_research;
 #[cfg(feature = "full")]

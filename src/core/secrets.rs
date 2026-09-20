@@ -955,9 +955,38 @@ fn load_secret_record(root: &Path, scope: &str, name: &str) -> Result<Option<Sec
 }
 
 fn get_secret_value(root: &Path, scope: &str, name: &str) -> Result<String> {
-    let conn = open_secret_db(root)?;
-    ensure_secret_schema(&conn)?;
-    let (nonce_b64, ciphertext_b64): (String, String) = conn
+    read_secret_value_optional(root, scope, name)?.context("secret not found")
+}
+
+/// Sanitized failure categories for native capability adapters. Missing rows
+/// remain distinct from unavailable stores, keys and corrupt ciphertext.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretReadError {
+    Unavailable,
+    DecryptionFailed,
+    InvalidEncoding,
+}
+
+impl std::fmt::Display for SecretReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unavailable => "secret store or key unavailable",
+            Self::DecryptionFailed => "secret decryption failed",
+            Self::InvalidEncoding => "secret value is not valid UTF-8",
+        })
+    }
+}
+impl std::error::Error for SecretReadError {}
+
+/// Read an exact encrypted reference. Only an absent row returns `None`.
+pub fn read_secret_value_optional(
+    root: &Path,
+    scope: &str,
+    name: &str,
+) -> std::result::Result<Option<String>, SecretReadError> {
+    let conn = open_secret_db(root).map_err(|_| SecretReadError::Unavailable)?;
+    ensure_secret_schema(&conn).map_err(|_| SecretReadError::Unavailable)?;
+    let record: Option<(String, String)> = conn
         .query_row(
             r#"
             SELECT nonce_b64, ciphertext_b64
@@ -968,13 +997,18 @@ fn get_secret_value(root: &Path, scope: &str, name: &str) -> Result<String> {
             params![scope, name],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .optional()?
-        .context("secret not found")?;
-    let (key_bytes, _) = ensure_secret_master_key(root)?;
-    let value = decrypt_secret_value(&key_bytes, &nonce_b64, &ciphertext_b64)?;
+        .optional()
+        .map_err(|_| SecretReadError::Unavailable)?;
+    let Some((nonce_b64, ciphertext_b64)) = record else {
+        return Ok(None);
+    };
+    let (key_bytes, _) =
+        ensure_secret_master_key(root).map_err(|_| SecretReadError::Unavailable)?;
+    let value = decrypt_secret_value(&key_bytes, &nonce_b64, &ciphertext_b64)
+        .map_err(|_| SecretReadError::DecryptionFailed)?;
     std::str::from_utf8(&value)
-        .map(str::to_owned)
-        .context("secret value is not valid UTF-8")
+        .map(|value| Some(value.to_owned()))
+        .map_err(|_| SecretReadError::InvalidEncoding)
 }
 
 fn delete_secret(root: &Path, scope: &str, name: &str) -> Result<()> {
