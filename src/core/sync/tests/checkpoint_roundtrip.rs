@@ -121,7 +121,7 @@ fn full_session_is_verified_and_restored_without_touching_existing_work() {
     );
     assert_eq!(
         fs::read(target.join("history").join(&m.history[0].sha256)).unwrap(),
-        b"complete journal"
+        journal()
     );
     assert_eq!(
         fs::read(target.join("attachments").join(&m.attachments[0].sha256)).unwrap(),
