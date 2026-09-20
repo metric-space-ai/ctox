@@ -688,7 +688,7 @@ export function createSyncRuntime({
         },
       };
     },
-    async leaseCollection(collection, reason = 'scoped-collection-lease') {
+    async leaseCollection(collection, reason = 'scoped-collection-lease', options = {}) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       const normalized = normalizeCollectionName(collection);
       if (!normalized) throw new Error('collection is required.');
@@ -711,7 +711,7 @@ export function createSyncRuntime({
       });
       publishResourceBudget();
       try {
-        await this.startCollection(normalized, { pin: false });
+        await this.startCollection(normalized, { pin: false, forceDirect: options.forceDirect === true });
         return lease;
       } catch (error) {
         await lease.release();
@@ -1073,7 +1073,9 @@ export function createSyncRuntime({
       const controller = typeof AbortController === 'function' ? new AbortController() : null;
       nativeReadSequence = (nativeReadSequence + 1) % Number.MAX_SAFE_INTEGER;
       const lease = await withRejectingTimeout(
-        () => this.leaseCollection(normalized, 'authoritative-native-read'),
+        // Follower stubs only forward writes; an authoritative query needs a
+        // leased native bridge, just like requestNativeDirectly().
+        () => this.leaseCollection(normalized, 'authoritative-native-read', { forceDirect: true }),
         remainingMs(),
         `Native read lease for ${normalized} exceeded ${budgetMs}ms.`,
       );
