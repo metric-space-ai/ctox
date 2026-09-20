@@ -47,10 +47,12 @@ Pro Quelle entscheidet die Trait-Implementierung, welcher Pfad gilt:
    credentials resolver (`scope=credentials`). Account id and auth scheme stay
    non-secret runtime config. An absent resolver is unavailable, not missing,
    and never falls back to `runtime_env_kv` or browser capture.
-   Native identity requires exact significant-name equality after punctuation
-   and case normalization and legal-form stripping; Unicode/short names are
-   kept, and high match scores do not accept subsidiaries, supersets, or
-   aliases. Explicit `address.country_code` mismatches are rejected, and
+   Native identity requires equal name bodies after punctuation and case
+   normalization. Only trailing legal suffixes are separated; explicitly
+   different suffixes are rejected, while an omitted suffix is tolerated.
+   Unicode, short names and meaningful body words are preserved. High match
+   scores do not accept subsidiaries, supersets, or aliases. Blank provider
+   IDs and explicit `address.country_code` mismatches are rejected, and
    multiple distinct IDs for the same name fail closed. Provider fields travel
    through a local `leadfeeder_fields:` snippet object so domains, employee
    counts/ranges, and industry are not inferred from display position.
