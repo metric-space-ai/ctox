@@ -31,14 +31,14 @@ fn journal() -> Vec<u8> {
             "cli_version": "1.0.0",
             "source": "exec",
             "model_provider": "test-provider",
-            "base_instructions": {},
+            "base_instructions": {"text": "test"},
             "capability_profile": "workspace_worker",
         },
     });
     let event = serde_json::json!({
         "timestamp": "2026-09-20T12:00:00Z",
         "type": "event_msg",
-        "payload": {"type": "user_message", "message": "ready", "kind": "plain"},
+        "payload": {"type": "user_message", "message": "ready"},
     });
     format!("{meta}\n{event}\n").into_bytes()
 }

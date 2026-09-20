@@ -30,18 +30,18 @@ pub fn copy_receipt(
             "cli_version": "1.0.0",
             "source": "exec",
             "model_provider": "test-provider",
-            "base_instructions": {},
+            "base_instructions": {"text": "test"},
             "capability_profile": "workspace_worker",
         },
     });
     let event = serde_json::json!({
         "timestamp": "2026-09-20T12:00:00Z",
         "type": "event_msg",
-        "payload": {"type": "user_message", "message": "ready", "kind": "plain"},
+        "payload": {"type": "user_message", "message": "ready"},
     });
     let data = format!("{meta}\n{event}\n").into_bytes();
     let journal = ArtifactRef {
-        sha256: format!("{:x}", Sha256::digest(data)),
+        sha256: format!("{:x}", Sha256::digest(&data)),
         size_bytes: data.len() as u64,
     };
     store.ingest_blob(&journal, Cursor::new(data)).unwrap();
