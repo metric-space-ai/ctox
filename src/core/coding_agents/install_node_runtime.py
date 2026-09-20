@@ -10,6 +10,8 @@ import platform
 import re
 import shutil
 import signal
+import selectors
+import time
 import subprocess
 import tarfile
 import tempfile
@@ -76,35 +78,75 @@ def unpack(archive, destination, name):
                 target.chmod(0o755 if member.mode & 0o111 else 0o644)
 
 
-def bounded(node, arguments, scratch, capture=False):
+def bounded(node, arguments, scratch, capture=False, diagnostics=None):
     # No inherited secrets, NODE_OPTIONS, preload hooks or user package paths.
     env = {"PATH": str(node.parent) + os.pathsep + os.defpath,
            "HOME": str(scratch), "TMPDIR": str(scratch), "LANG": "C"}
-    with subprocess.Popen([str(node), *arguments], cwd=scratch, env=env,
-                          stdin=subprocess.DEVNULL,
-                          stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL, start_new_session=True) as child:
-        try:
-            output, _ = child.communicate(timeout=15)
-        except subprocess.TimeoutExpired:
-            os.killpg(child.pid, signal.SIGKILL)
-            child.wait()
-            raise ValueError("Node preflight timed out") from None
-        require(child.returncode == 0, "Node preflight failed (diagnostics suppressed)")
-        return output
+    diagnostics = diagnostics or scratch
+    fd, log_name = tempfile.mkstemp(prefix="node-preflight-", suffix=".stderr", dir=diagnostics)
+    log_path = Path(log_name)
+    output = bytearray()
+    retained, observed, timed_out = 0, 0, False
+    with os.fdopen(fd, "wb") as log, subprocess.Popen(
+            [str(node), *arguments], cwd=scratch, env=env, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE if capture else subprocess.DEVNULL,
+            stderr=subprocess.PIPE, start_new_session=True) as child:
+        with selectors.DefaultSelector() as selected:
+            selected.register(child.stderr, selectors.EVENT_READ, "stderr")
+            if capture:
+                selected.register(child.stdout, selectors.EVENT_READ, "stdout")
+            deadline = time.monotonic() + 15
+            while selected.get_map():
+                if time.monotonic() >= deadline:
+                    timed_out = True
+                    break
+                for key, _ in selected.select(min(0.1, max(0, deadline - time.monotonic()))):
+                    block = os.read(key.fileobj.fileno(), 8192)
+                    if not block:
+                        selected.unregister(key.fileobj)
+                    elif key.data == "stderr":
+                        observed += len(block)
+                        kept = block[:max(0, 65536 - retained)]
+                        log.write(kept)
+                        retained += len(kept)
+                    else:
+                        output.extend(block[:max(0, 4097 - len(output))])
+            try:
+                if timed_out:
+                    raise subprocess.TimeoutExpired(str(node), 15)
+                child.wait(timeout=max(0.001, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                child.wait()
+    if timed_out or child.returncode != 0 or len(output) > 4096:
+        receipt = {"phase": "version" if arguments == ["--version"] else "library_import",
+                   "exit_code": child.returncode, "timed_out": timed_out,
+                   "stderr_path": str(log_path), "stderr_sha256": digest(log_path),
+                   "stderr_retained_bytes": retained, "stderr_observed_bytes": observed,
+                   "stderr_truncated": observed > retained, "stdout_limit_exceeded": len(output) > 4096}
+        receipt_path = log_path.with_suffix(".json")
+        with open(receipt_path, "x", opener=lambda p, f: os.open(p, f, 0o600)) as record:
+            json.dump(receipt, record)
+        raise ValueError("Node preflight failed; private diagnostic receipt: " + str(receipt_path))
+    log_path.unlink()
+    return bytes(output)
 
 
-def preflight(node, bundle, expected_bundle, scratch):
+def preflight(node, bundle, expected_bundle, scratch, diagnostics=None):
     require(node.is_file() and not node.is_symlink(), "Node executable missing or symlinked")
     require(digest(bundle) == expected_bundle, "sidecar bundle checksum mismatch")
-    version = bounded(node, ["--version"], scratch, capture=True).decode().strip()
+    version = bounded(node, ["--version"], scratch, capture=True, diagnostics=diagnostics).decode().strip()
     require(version == "v" + VERSION, "unexpected Node version")
     # Passing the bundle as argv[1] directly would activate its daemon guard.
     # Capture that path then clear argv[1] before the library import.
     code = ("import {pathToFileURL} from 'node:url';"
             "const url=pathToFileURL(process.argv[1]);process.argv[1]=undefined;"
             "await import(url.href);")
-    bounded(node, ["--input-type=module", "-e", code, str(bundle)], scratch)
+    bounded(node, ["--input-type=module", "-e", code, str(bundle)], scratch, diagnostics=diagnostics)
     require(digest(bundle) == expected_bundle, "sidecar bundle changed during preflight")
     return version
 
@@ -122,7 +164,7 @@ def provision(root, archive, bundle, bundle_sha, machine):
         node = target / "bin/node"
         require(digest(node) == receipt.get("node_sha256"), "installed Node checksum mismatch")
         with tempfile.TemporaryDirectory(prefix=".node-check-", dir=root) as scratch:
-            preflight(node, bundle, bundle_sha, Path(scratch))
+            preflight(node, bundle, bundle_sha, Path(scratch), root)
         return node
     require(archive is not None, "runtime missing; supply the pinned --archive to install")
     require(archive.is_file() and archive.stat().st_size <= MAX_ARCHIVE, "archive missing or too large")
@@ -143,7 +185,7 @@ def provision(root, archive, bundle, bundle_sha, machine):
         unpack(copy, staging, name)
         tree = staging / name
         node = tree / "bin/node"
-        preflight(node, bundle, bundle_sha, staging)
+        preflight(node, bundle, bundle_sha, staging, root)
         receipt = {"version": VERSION, "architecture": arch, "archive_sha256": archive_sha,
                    "node_sha256": digest(node), "checked_bundle_sha256": bundle_sha}
         (tree / "ctox-runtime-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")

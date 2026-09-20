@@ -119,6 +119,35 @@ class RuntimeInstallTests(unittest.TestCase):
         with patch.dict(os.environ, {"CTOX_TEST_SECRET": "fixture", "NODE_OPTIONS": "--bad"}):
             runtime.bounded(script, [], self.root)
 
+    def test_failed_import_retains_private_bounded_diagnostics(self):
+        script = self.root / "import-failure"
+        script.write_text('#!/bin/sh\nprintf "fixture import failure" >&2\nhead -c 70000 /dev/zero >&2\nexit 7\n')
+        script.chmod(0o755)
+        with self.assertRaisesRegex(ValueError, "private diagnostic receipt") as caught:
+            runtime.bounded(script, ["--input-type=module"], self.root)
+        self.assertNotIn("fixture import failure", str(caught.exception))
+        receipt_path = next(self.root.glob("node-preflight-*.json"))
+        receipt = json.loads(receipt_path.read_text())
+        log = Path(receipt["stderr_path"])
+        self.assertEqual(receipt["phase"], "library_import")
+        self.assertEqual(receipt["exit_code"], 7)
+        self.assertEqual(log.stat().st_size, 65536)
+        self.assertTrue(receipt["stderr_truncated"])
+        self.assertEqual(receipt["stderr_sha256"], runtime.digest(log))
+        self.assertEqual(log.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(receipt_path.stat().st_mode & 0o777, 0o600)
+
+    def test_timeout_kills_owned_process_group_and_records_phase(self):
+        script = self.root / "blocked-import"
+        script.write_text('#!/bin/sh\nsleep 30\n')
+        script.chmod(0o755)
+        with patch.object(runtime.time, "monotonic", side_effect=[0, 16]):
+            with self.assertRaisesRegex(ValueError, "private diagnostic receipt"):
+                runtime.bounded(script, ["--input-type=module"], self.root)
+        receipt = json.loads(next(self.root.glob("node-preflight-*.json")).read_text())
+        self.assertTrue(receipt["timed_out"])
+        self.assertEqual(receipt["exit_code"], -9)
+
 
 if __name__ == "__main__":
     unittest.main()

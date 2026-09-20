@@ -46,9 +46,14 @@ selection remains a separate reviewed service deployment action.
 
 The preflight verifies Node version and bundle hash before and after import,
 clears inherited environment/credentials/NODE_OPTIONS, uses a scratch HOME and
-TMPDIR under the chosen root, discards bundle output, and kills its process
+TMPDIR under the chosen root, discards stdout, and kills its process
 group after15seconds. Clearing argv[1] before import keeps Pi's direct-entry
-socket server inactive. Version and import are separate bounded subprocesses.
+socket server inactive. Version and import are separate bounded subprocesses. Failure retains at most
+64 KiB of stderr in an owner-only 0600 file under the install root, outside
+transient staging. A separate 0600 JSON receipt records phase, exit code,
+timeout, truncation and the retained log hash. Only its path is printed;
+raw bundle errors are private and must be redacted before sharing. Successful
+preflights remove their temporary diagnostic file.
 An import result proves only loading, not model access, a successful turn,
 provider acceptance or application correctness. The bundle must be trusted;
 this helper is not a sandbox for arbitrary JavaScript.
