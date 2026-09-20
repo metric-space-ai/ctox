@@ -237,12 +237,12 @@ async function waitForCutover(timeoutMs = 90000) {
 
 async function waitForAcceptedWrites(timeoutMs = 60000) {
   const deadline = Date.now() + timeoutMs;
-  let dispatched = false;
+  let admission;
   let lastError = '';
   while (Date.now() < deadline) {
     try {
-      if (!dispatched) {
-        runCtox(['business-os', 'commands', 'dispatch', '--json', JSON.stringify({
+      if (!admission) {
+        const response = runCtox(['business-os', 'commands', 'dispatch', '--json', JSON.stringify({
           id: POST_CUTOVER_COMMAND_ID,
           command_id: POST_CUTOVER_COMMAND_ID,
           module: 'ctox',
@@ -253,7 +253,14 @@ async function waitForAcceptedWrites(timeoutMs = 60000) {
           client_context: { source: 'populated-store-recovery' },
           updated_at_ms: Date.now(),
         })]);
-        dispatched = true;
+        if (!response || response.ok !== true || response.status !== 'accepted'
+            || response.command_id !== POST_CUTOVER_COMMAND_ID
+            || typeof response.task_id !== 'string' || !response.task_id) {
+          const error = new Error(`native command admission failed: ${JSON.stringify(response)}`);
+          error.admissionRejected = true;
+          throw error;
+        }
+        admission = response;
       }
       const commands = sqliteRows(`SELECT json_object(
         'id', id,
@@ -279,12 +286,14 @@ async function waitForAcceptedWrites(timeoutMs = 60000) {
       const task = tasks.find((row) => (
         Number(row.deleted) === 0
         && row.command_id === POST_CUTOVER_COMMAND_ID
+        && row.id === admission.task_id
       ));
       if (command && task) {
-        return { command, task };
+        return { command, task, admission };
       }
-      lastError = `command=${JSON.stringify(command || null)} task=${JSON.stringify(task || null)}`;
+      lastError = `admission=${JSON.stringify(admission)} command=${JSON.stringify(command || null)} task=${JSON.stringify(task || null)}`;
     } catch (error) {
+      if (error.admissionRejected) throw error;
       lastError = String(error.message || error);
     }
     await delay(500);
@@ -526,6 +535,7 @@ async function main() {
       post_cutover_command_id: acceptedWrite.command.command_id,
       post_cutover_command_status: acceptedWrite.command.status,
       post_cutover_task_id: acceptedWrite.task.id,
+      post_cutover_native_admission: acceptedWrite.admission,
       post_cutover_command_and_task_preserved: true,
       stale_writer_rejected: true,
       unsafe_rollback_fail_closed: true,

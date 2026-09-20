@@ -339,6 +339,8 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          node --test src/core/rxdb/tools/populated_store_recovery_acceptance.test.js \
+            | tee "$RUNNER_TEMP/ctox-host-proof/populated-store-admission-oracle.log"
           POPULATED_STORE_EVIDENCE_DIR="$RUNNER_TEMP/ctox-host-proof" \
             POPULATED_STORE_ROOT="$RUNNER_TEMP/ctox-host-fixtures/populated-store" \
             CTOX_BIN="$CARGO_TARGET_DIR/debug/ctox" \
