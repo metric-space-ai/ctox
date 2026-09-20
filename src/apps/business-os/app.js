@@ -4851,9 +4851,8 @@ async function openDesktopApp(appId, options = {}) {
     renderWindowAppRecovery(win.container, {
       title: options.title || entry.title,
       onRetry: async () => {
-        state.windowManager?.destroy?.(win.id);
-        await delay(220);
-        openDesktopApp(appId, options);
+        await closeWindowForRecovery(win.id);
+        return openDesktopApp(appId, options);
       },
     });
   }
@@ -4994,10 +4993,9 @@ async function openWindowedModule(mod, options = {}) {
     renderWindowAppRecovery(content, {
       title: moduleDisplayTitle(mod),
       onRetry: async () => {
-        state.windowManager?.destroy?.(win.id);
-        await delay(220);
+        await closeWindowForRecovery(win.id);
         const refreshed = state.modules.find((item) => item.id === mod.id) || mod;
-        openWindowedModule(refreshed, options);
+        return openWindowedModule(refreshed, options);
       },
     });
   } finally {
@@ -5008,6 +5006,29 @@ async function openWindowedModule(mod, options = {}) {
   }
   moduleSyncLeasePromise?.catch?.(() => {});
   return win.id;
+}
+
+async function closeWindowForRecovery(id) {
+  const manager = state.windowManager;
+  const bus = state.eventBus;
+  if (!manager || !bus) throw new Error("Window recovery is unavailable");
+  if (!manager.listWindows().some((win) => win.id === id)) return;
+  // Subscribe before destroy: reduced-motion closes may complete immediately.
+  let token;
+  const closed = new Promise((resolve) => {
+    token = bus.on("window:closed", (event) => {
+      if (event?.id === id) resolve();
+    });
+  });
+  try {
+    if (await manager.destroy(id) === false) {
+      throw new Error("Window close was cancelled");
+    }
+    // destroy can resolve after a close guard while animation is still running.
+    await closed;
+  } finally {
+    bus.off("window:closed", token);
+  }
 }
 
 function renderWindowAppRecovery(host, { title, onRetry }) {
