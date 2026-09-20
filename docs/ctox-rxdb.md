@@ -10,6 +10,10 @@ disagree, the code wins — and this document should be fixed.
 
 ### Session handoff policy candidate — not production acceptance
 
+The [production integration boundary](dev/ctox-sync-handoff-integration.md)
+traces the existing Workjet context handoff and native library seams, identifies
+their missing callers, and defines the required native lifecycle and evidence.
+
 The source work for [native handoff authorization (#183)](https://github.com/metric-space-ai/ctox/issues/183)
 introduces separate disclose, receive and execute permissions. Roles alone do
 not grant them. The explicit-grant evaluator requires a named actor and an exact,
