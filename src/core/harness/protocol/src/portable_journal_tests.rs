@@ -25,7 +25,7 @@ fn metadata_line() -> serde_json::Value {
             "cli_version": "1.0.0",
             "source": "exec",
             "model_provider": "test-provider",
-            "base_instructions": {},
+            "base_instructions": {"text": "test"},
             "capability_profile": "workspace_worker",
         },
     })
@@ -38,7 +38,6 @@ fn message_line() -> serde_json::Value {
         "payload": {
             "type": "user_message",
             "message": SECRET_PAYLOAD,
-            "kind": "plain",
         },
     })
 }
@@ -65,6 +64,19 @@ fn raw_journal(lines: &[&str]) -> (Vec<u8>, PortableArtifactRef) {
 
 fn default_limits() -> PortableJournalLimits {
     PortableJournalLimits::default()
+}
+fn assert_portable_error(
+    actual: Result<ValidatedPortableJournal, PortableJournalError>,
+    expected: Result<ValidatedPortableJournal, PortableJournalError>,
+) {
+    let expected = match expected {
+        Err(error) => error,
+        Ok(_) => panic!("expected a validation error"),
+    };
+    assert_eq!(actual.err(), Some(expected));
+}
+fn json_string(value: impl Into<String>) -> serde_json::Value {
+    serde_json::Value::String(value.into())
 }
 
 #[test]
@@ -96,9 +108,9 @@ fn requires_explicit_supported_input_format_and_version() {
         session_id: expected().session_id,
     };
     let (raw, artifact) = journal(&[metadata_line(), message_line()]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &unsupported, &default_limits()),
-        Err(PortableJournalError::UnsupportedInputFormat)
+        Err(PortableJournalError::UnsupportedInputFormat),
     );
 
     let old_version = PortableJournalExpectation {
@@ -108,9 +120,9 @@ fn requires_explicit_supported_input_format_and_version() {
         },
         session_id: expected().session_id,
     };
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &old_version, &default_limits()),
-        Err(PortableJournalError::UnsupportedInputFormat)
+        Err(PortableJournalError::UnsupportedInputFormat),
     );
 }
 
@@ -118,30 +130,31 @@ fn requires_explicit_supported_input_format_and_version() {
 fn binds_validation_to_exact_size_and_hash() {
     let (mut raw, artifact) = journal(&[metadata_line(), message_line()]);
     raw.push(b'x');
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::ArtifactSizeMismatch)
+        Err(PortableJournalError::ArtifactSizeMismatch),
     );
     raw.pop();
-    raw[raw.len() - 2] = raw[raw.len() - 2].wrapping_add(1);
-    assert_eq!(
+    let index = raw.len() - 2;
+    raw[index] = raw[index].wrapping_add(1);
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::ArtifactHashMismatch)
+        Err(PortableJournalError::ArtifactHashMismatch),
     );
 }
 
 #[test]
 fn requires_metadata_as_the_initial_record() {
     let (raw, artifact) = journal(&[message_line(), metadata_line()]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::MissingInitialMetadata)
+        Err(PortableJournalError::MissingInitialMetadata),
     );
 
     let (raw, artifact) = journal(&[metadata_line(), metadata_line(), message_line()]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::DuplicateSessionMetadata)
+        Err(PortableJournalError::DuplicateSessionMetadata),
     );
 }
 
@@ -151,19 +164,19 @@ fn validates_each_line_timestamp_independently() {
     assert!(validate_portable_journal(&raw, &artifact, &expected(), &default_limits()).is_ok());
 
     let mut bad_event = message_line();
-    bad_event["timestamp"] = "not-a-timestamp";
+    bad_event["timestamp"] = json_string("not-a-timestamp");
     let (raw, artifact) = journal(&[metadata_line(), bad_event]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::InvalidMetadata)
+        Err(PortableJournalError::InvalidMetadata),
     );
 
     let mut bad_metadata = metadata_line();
-    bad_metadata["payload"]["timestamp"] = "2026-09-20T99:00:00Z";
+    bad_metadata["payload"]["timestamp"] = json_string("2026-09-20T99:00:00Z");
     let (raw, artifact) = journal(&[bad_metadata, message_line()]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::InvalidMetadata)
+        Err(PortableJournalError::InvalidMetadata),
     );
 }
 
@@ -172,9 +185,9 @@ fn rejects_corrupt_interior_and_final_records_without_payload_leakage() {
     let corrupt_interior =
         json!({"timestamp": EVENT_TIMESTAMP, "type": "event_msg", "payload": SECRET_PAYLOAD});
     let (raw, artifact) = journal(&[metadata_line(), corrupt_interior, message_line()]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::InvalidLine)
+        Err(PortableJournalError::InvalidLine),
     );
     assert!(
         !PortableJournalError::InvalidLine
@@ -182,11 +195,12 @@ fn rejects_corrupt_interior_and_final_records_without_payload_leakage() {
             .contains(SECRET_PAYLOAD)
     );
 
-    let (mut final_raw, final_artifact) = journal(&[metadata_line(), message_line()]);
+    let (mut final_raw, _) = journal(&[metadata_line(), message_line()]);
     final_raw.pop();
-    assert_eq!(
+    let final_artifact = artifact_ref_for(&final_raw);
+    assert_portable_error(
         validate_portable_journal(&final_raw, &final_artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::UnterminatedFinalRecord)
+        Err(PortableJournalError::UnterminatedFinalRecord),
     );
 }
 
@@ -194,33 +208,33 @@ fn rejects_corrupt_interior_and_final_records_without_payload_leakage() {
 fn rejects_unknown_records_and_unknown_fields() {
     let unknown = json!({"timestamp": EVENT_TIMESTAMP, "type": "future_record", "payload": {}});
     let (raw, artifact) = journal(&[metadata_line(), unknown, message_line()]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::UnsupportedRecord)
+        Err(PortableJournalError::UnsupportedRecord),
     );
 
     let mut top_level_unknown = metadata_line();
-    top_level_unknown["transport_hint"] = "unsupported";
+    top_level_unknown["transport_hint"] = json_string("unsupported");
     let (raw, artifact) = journal(&[top_level_unknown, message_line()]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::UnsupportedRecordField)
+        Err(PortableJournalError::UnsupportedRecordField),
     );
 
     let mut metadata_unknown = metadata_line();
-    metadata_unknown["payload"]["resume_hint"] = "unsupported";
+    metadata_unknown["payload"]["resume_hint"] = json_string("unsupported");
     let (raw, artifact) = journal(&[metadata_unknown, message_line()]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::UnsupportedRecordField)
+        Err(PortableJournalError::UnsupportedRecordField),
     );
 
     let mut event_unknown = message_line();
-    event_unknown["payload"]["provider_resume_hint"] = "unsupported";
+    event_unknown["payload"]["provider_resume_hint"] = json_string("unsupported");
     let (raw, artifact) = journal(&[metadata_line(), event_unknown]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::UnsupportedRecordField)
+        Err(PortableJournalError::UnsupportedRecordField),
     );
 }
 
@@ -231,18 +245,18 @@ fn rejects_duplicate_json_keys_before_value_collapsing() {
     );
     let event = message_line().to_string();
     let (raw, artifact) = raw_journal(&[&metadata, &event]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::DuplicateJsonKey)
+        Err(PortableJournalError::DuplicateJsonKey),
     );
 }
 
 #[test]
 fn rejects_empty_history_and_identity_mismatch() {
     let (raw, artifact) = journal(&[metadata_line()]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::EmptyHistory)
+        Err(PortableJournalError::EmptyHistory),
     );
 
     let other = PortableJournalExpectation {
@@ -251,9 +265,9 @@ fn rejects_empty_history_and_identity_mismatch() {
             .expect("valid other id"),
     };
     let (raw, artifact) = journal(&[metadata_line(), message_line()]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &other, &default_limits()),
-        Err(PortableJournalError::IdentityMismatch)
+        Err(PortableJournalError::IdentityMismatch),
     );
 }
 
@@ -262,18 +276,44 @@ fn rejects_missing_or_conflicting_required_metadata() {
     let mut missing = metadata_line();
     missing["payload"]["capability_profile"] = serde_json::Value::Null;
     let (raw, artifact) = journal(&[missing, message_line()]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::MissingMetadataField)
+        Err(PortableJournalError::MissingMetadataField),
     );
 
     let mut conflicting = metadata_line();
-    conflicting["payload"]["timestamp"] = "2026-09-20T12:00:01Z";
-    conflicting["payload"]["id"] = "22222222-2222-2222-2222-222222222222";
+    conflicting["payload"]["timestamp"] = json_string("2026-09-20T12:00:01Z");
+    conflicting["payload"]["id"] = json_string("22222222-2222-2222-2222-222222222222");
     let (raw, artifact) = journal(&[conflicting, message_line()]);
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &default_limits()),
-        Err(PortableJournalError::IdentityMismatch)
+        Err(PortableJournalError::IdentityMismatch),
+    );
+}
+
+#[test]
+fn preserves_absolute_offsets_across_unequal_and_many_records() {
+    let mut lines = vec![metadata_line()];
+    for index in 0..250 {
+        let mut message = message_line();
+        message["payload"]["message"] = json_string(format!("payload-{index}"));
+        lines.push(message);
+    }
+    let (raw, artifact) = journal(&lines);
+    let validated = validate_portable_journal(&raw, &artifact, &expected(), &default_limits())
+        .expect("unequal multi-record journal");
+    assert_eq!(validated.record_count, 251);
+    assert_eq!(validated.items.len(), 250);
+
+    // The second record is much shorter than the metadata line; the former
+    // relative-offset bug could slice `end < start` before reaching this error.
+    let mut malformed = metadata_line().to_string().into_bytes();
+    malformed.push(b'\n');
+    malformed.extend_from_slice(b"bad\n");
+    let artifact = artifact_ref_for(&malformed);
+    assert_portable_error(
+        validate_portable_journal(&malformed, &artifact, &expected(), &default_limits()),
+        Err(PortableJournalError::InvalidLine),
     );
 }
 
@@ -285,9 +325,9 @@ fn enforces_line_and_record_budgets() {
         max_line_bytes: 1,
         max_records: 100_000,
     };
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &limits),
-        Err(PortableJournalError::OversizedLine)
+        Err(PortableJournalError::OversizedLine),
     );
 
     let limits = PortableJournalLimits {
@@ -295,8 +335,8 @@ fn enforces_line_and_record_budgets() {
         max_line_bytes: 16 * 1024 * 1024,
         max_records: 1,
     };
-    assert_eq!(
+    assert_portable_error(
         validate_portable_journal(&raw, &artifact, &expected(), &limits),
-        Err(PortableJournalError::TooManyRecords)
+        Err(PortableJournalError::TooManyRecords),
     );
 }

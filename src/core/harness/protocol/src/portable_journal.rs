@@ -15,7 +15,7 @@ use crate::ThreadId;
 use crate::protocol::RolloutItem;
 use crate::protocol::RolloutLine;
 use crate::protocol::SessionMetaLine;
-use serde_json::{Map, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fmt;
@@ -170,7 +170,7 @@ fn safe_hex(hash: &str) -> bool {
     hash.len() == 64
         && hash
             .bytes()
-            .all(|byte| byte.is_ascii_digit() || ('a'..='f').contains(&byte))
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
 }
 
 fn validate_input_format(format: &PortableJournalFormat) -> Result<(), PortableJournalError> {
@@ -217,10 +217,11 @@ pub fn validate_portable_journal(
         if record_count == limits.max_records {
             return Err(PortableJournalError::TooManyRecords);
         }
-        let line_end = raw[offset..]
-            .iter()
-            .position(|byte| *byte == b'\n')
-            .ok_or(PortableJournalError::UnterminatedFinalRecord)?;
+        let line_end = offset
+            + raw[offset..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .ok_or(PortableJournalError::UnterminatedFinalRecord)?;
         let line = &raw[offset..line_end];
         offset = line_end + 1;
         if line.len() as u64 > limits.max_line_bytes {
@@ -270,6 +271,8 @@ pub fn validate_portable_journal(
         deserializer
             .end()
             .map_err(|_| PortableJournalError::InvalidLine)?;
+        let modeled = serde_json::to_value(&line).map_err(|_| PortableJournalError::InvalidLine)?;
+        ensure_modeled_fields(&value, &modeled)?;
         validate_line_timestamp(&line.timestamp)?;
 
         match line.item {
@@ -329,6 +332,27 @@ fn require_exact_keys<const COUNT: usize>(
 
 /// Strict required-field check is separate from typed decoding so an omitted
 /// `Option` cannot silently become `None` and pass portable validation.
+fn ensure_modeled_fields(original: &Value, modeled: &Value) -> Result<(), PortableJournalError> {
+    match (original, modeled) {
+        (Value::Object(original), Value::Object(modeled)) => {
+            for (key, original_value) in original {
+                let modeled_value = modeled
+                    .get(key)
+                    .ok_or(PortableJournalError::UnsupportedRecordField)?;
+                ensure_modeled_fields(original_value, modeled_value)?;
+            }
+            Ok(())
+        }
+        (Value::Array(original), Value::Array(modeled)) if original.len() == modeled.len() => {
+            for (original_value, modeled_value) in original.iter().zip(modeled) {
+                ensure_modeled_fields(original_value, modeled_value)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
 fn validate_required_metadata_shape(line: &Value) -> Result<(), PortableJournalError> {
     let object = line.as_object().ok_or(PortableJournalError::InvalidLine)?;
     let payload = object
@@ -360,8 +384,10 @@ fn validate_metadata(
     expected: &PortableJournalExpectation,
 ) -> Result<(), PortableJournalError> {
     validate_line_timestamp(&session_meta.meta.timestamp)?;
-    if session_meta.meta.id != expected.session_id
-        || session_meta.meta.id.to_string() == "00000000-0000-0000-0000-000000000000"
+    if session_meta.meta.id != expected.session_id {
+        return Err(PortableJournalError::IdentityMismatch);
+    }
+    if session_meta.meta.id.to_string() == "00000000-0000-0000-0000-000000000000"
         || session_meta.meta.cwd.as_os_str().is_empty()
         || session_meta.meta.originator.is_empty()
         || session_meta.meta.cli_version.is_empty()
