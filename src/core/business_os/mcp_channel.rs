@@ -35,6 +35,8 @@ use super::policy::{
 use super::store;
 #[path = "mcp_writeback.rs"]
 mod command_writeback;
+#[path = "mcp_metadata_read.rs"]
+mod metadata_read;
 pub(crate) use command_writeback::supports_command_writeback;
 
 const DEFAULT_LIMIT: usize = 25;
@@ -506,6 +508,8 @@ struct BusinessOsMcpInternalSessionClaims {
     allowed_actions: Vec<BusinessOsMcpAllowedAction>,
     #[serde(default)]
     allowed_collections: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metadata_read_contract: Option<metadata_read::ReadContract>,
     issued_at_ms: i64,
     expires_at_ms: i64,
 }
@@ -651,6 +655,19 @@ pub(crate) fn issue_internal_command_session_token(
         !workspace.is_empty(),
         "Business OS command workspace is empty"
     );
+    let metadata_read_contract = writeback_contract
+        .get("metadata_read_contract")
+        .map(metadata_read::ReadContract::parse)
+        .transpose()?;
+    if let Some(contract) = &metadata_read_contract {
+        anyhow::ensure!(
+            allowed_actions_from_writeback_contract(writeback_contract)?.is_empty()
+                && normalized_string_array(writeback_contract.get("allowed_collections"))
+                    .is_empty(),
+            "metadata-only sessions cannot also carry action or collection grants"
+        );
+        metadata_read::validate_admission(root, command_id, payload_hash, actor, &role, contract)?;
+    }
     let issued_at_ms = now_ms();
     let claims = BusinessOsMcpInternalSessionClaims {
         schema: "ctox.business_os.mcp_command_session.v1".to_string(),
@@ -661,6 +678,7 @@ pub(crate) fn issue_internal_command_session_token(
         payload_hash: payload_hash.to_string(),
         allowed_actions: allowed_actions_from_writeback_contract(writeback_contract)?,
         allowed_collections: normalized_string_array(writeback_contract.get("allowed_collections")),
+        metadata_read_contract,
         issued_at_ms,
         expires_at_ms: issued_at_ms.saturating_add(MCP_INTERNAL_SESSION_TTL_MS),
     };
@@ -712,6 +730,7 @@ fn verify_internal_command_session_token(root: &Path, token: &str) -> anyhow::Re
         "payload_hash": claims.payload_hash,
         "allowed_actions": claims.allowed_actions,
         "allowed_collections": claims.allowed_collections,
+        "metadata_read_contract": claims.metadata_read_contract,
         "expires_at_ms": claims.expires_at_ms,
     }))
 }
@@ -1144,6 +1163,11 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 required_string("meeting_id"),
                 optional_string("reason"),
             ]),
+        ),
+        read_tool(
+            metadata_read::TOOL,
+            "Read only exact credential row-presence selectors granted by the current signed delegated-command session. No values, account IDs or provider readiness; no caller-selected arguments.",
+            object_schema(vec![]),
         ),
         read_tool(
             "business_os.list_modules",
@@ -2738,6 +2762,7 @@ fn call_tool_inner(
     enforce_argument_scope_policy(root, &context, tool_name, &arguments)?;
     enforce_rate_limit(root, &context)?;
     let result = match tool_name {
+        metadata_read::TOOL => metadata_read::read(root, trusted_gateway_context, &arguments)?,
         "business_os.execute_writeback" => {
             command_writeback::execute(root, &context, &arguments, trusted_gateway_context)?
         }
@@ -6651,6 +6676,17 @@ fn enforce_internal_command_session_scope(
     }) else {
         return Ok(());
     };
+    if let Some(contract) = context
+        .get("metadata_read_contract")
+        .filter(|value| !value.is_null())
+    {
+        metadata_read::ReadContract::parse(contract)?;
+        anyhow::ensure!(
+            tool_name == metadata_read::TOOL,
+            "metadata-only command session cannot invoke other tools"
+        );
+        return Ok(());
+    }
     let allowed_actions = context
         .get("allowed_actions")
         .and_then(Value::as_array)

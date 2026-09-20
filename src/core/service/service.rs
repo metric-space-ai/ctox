@@ -11088,7 +11088,8 @@ fn configure_business_os_mcp_session_for_queue_job(
         return Ok(false);
     };
     let command = channels::business_command_projection(root, &command_id)?;
-    // Only business chat tasks get a bound MCP command session here. Person-
+    // Business chat tasks and explicitly scoped delegated metadata reads get
+    // a bound MCP command session here. Person-
     // research gap-closure tasks also carry `business_os_command_id`, but that
     // command is a `web_stack.person_research` control command: its native
     // authorization receipt is not a queue-command receipt, so the revalidation
@@ -11096,14 +11097,30 @@ fn configure_business_os_mcp_session_for_queue_job(
     // before the first turn (observed on thesen, B5). They run without a bound
     // session; owner resolution for their auth sessions follows the task
     // metadata instead.
-    if command.get("command_type").and_then(Value::as_str) != Some("business_os.chat.task") {
+    let metadata_contract =
+        if command.get("command_type").and_then(Value::as_str) == Some("ctox.delegate_task") {
+            command
+                .pointer("/payload/input/metadata_read_contract")
+                .map(|contract| serde_json::json!({"metadata_read_contract": contract}))
+        } else {
+            None
+        };
+    if command.get("command_type").and_then(Value::as_str) != Some("business_os.chat.task")
+        && metadata_contract.is_none()
+    {
         return Ok(false);
     }
-    let Some(writeback_contract) = command.pointer("/payload/writeback_contract") else {
+    let Some(writeback_contract) = metadata_contract
+        .as_ref()
+        .or_else(|| command.pointer("/payload/writeback_contract"))
+    else {
         return Ok(false);
     };
-    validate_command_writeback_contract(&command, writeback_contract)?;
-    if !crate::business_os::mcp_channel::supports_command_writeback(writeback_contract)
+    if metadata_contract.is_none() {
+        validate_command_writeback_contract(&command, writeback_contract)?;
+    }
+    if metadata_contract.is_none()
+        && !crate::business_os::mcp_channel::supports_command_writeback(writeback_contract)
         && !writeback_contract
             .get("allowed_actions")
             .and_then(Value::as_array)
