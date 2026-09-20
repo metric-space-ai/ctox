@@ -65,7 +65,27 @@ jobs:
           assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in result, result
           PYCODE
           done
+      - name: Verify persisted rollout reader failure contract
+        timeout-minutes: 45
+        shell: bash
+        run: |
+          set -euo pipefail
+          test_name='codex_message_processor::tests::read_summary_from_rollout_fails_closed_when_persisted_rollout_is_invalid'
+          cargo_args=(--locked --manifest-path src/core/harness/Cargo.toml -p ctox-app-server --lib --jobs 2)
+          cargo test "${cargo_args[@]}" "$test_name" -- --exact --list | tee "$TMPDIR/reader-contract-list.txt"
+          python3 - "$TMPDIR/reader-contract-list.txt" "$test_name" <<'PYCODE'
+          import pathlib, sys
+          lines = pathlib.Path(sys.argv[1]).read_text().splitlines()
+          assert lines.count(sys.argv[2] + ": test") == 1, lines
+          PYCODE
+          cargo test "${cargo_args[@]}" "$test_name" -- --exact --test-threads=2 | tee "$TMPDIR/reader-contract-result.txt"
+          python3 - "$TMPDIR/reader-contract-result.txt" <<'PYCODE'
+          import pathlib, sys
+          result = pathlib.Path(sys.argv[1]).read_text()
+          assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in result, result
+          PYCODE
       - name: Verify persistent restart and missing resume
+
         timeout-minutes: 45
         shell: bash
         run: |
