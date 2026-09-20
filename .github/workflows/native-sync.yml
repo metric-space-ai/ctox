@@ -111,7 +111,7 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
           repository: metric-space-ai/workjet
-          ref: 92aa3140ac2912720c5f33271df2920e36bf881c
+          ref: f0ad31f297b921d7f96c054abf118840d0939789
           path: workjet
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
