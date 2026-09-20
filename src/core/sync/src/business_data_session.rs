@@ -10,10 +10,10 @@ use crate::business_data_remote::{remote_request, spawn_remote_event_pump, Owned
 use crate::{
     business_data_contract::{
         NativeBusinessDataBinding as Binding, NativeBusinessDataErrorCode as ErrorCode,
-        NativeBusinessDataEvent as Event, NativeBusinessDataOperation as Operation,
-        NativeBusinessDataPrincipal as Principal, NativeBusinessDataRequest as Request,
-        NativeBusinessDataResponse as Response, NativeBusinessDataResult as Result,
-        NativeBusinessDataSessionRef as SessionRef, NativeBusinessDataSessionState as State,
+        NativeBusinessDataOperation as Operation, NativeBusinessDataPrincipal as Principal,
+        NativeBusinessDataRequest as Request, NativeBusinessDataResponse as Response,
+        NativeBusinessDataResult as Result, NativeBusinessDataSessionRef as SessionRef,
+        NativeBusinessDataSessionState as State,
     },
     business_data_ipc::{
         BusinessDataDispatchFuture, BusinessDataDispatcher, BusinessDataShutdownFuture,
@@ -142,6 +142,7 @@ impl OwnedStartup {
 /// with the session or explicit Unwatch.
 struct OwnedWatch {
     subscription_id: String,
+    request_id: String,
     pump: OwnedEventPump,
 }
 
@@ -179,6 +180,7 @@ struct SessionEntry {
 pub struct BusinessDataService {
     host: Arc<dyn BusinessDataSessionHost>,
     sessions: Mutex<HashMap<String, SessionEntry>>,
+    stopped: std::sync::atomic::AtomicBool,
 }
 
 impl BusinessDataService {
@@ -186,6 +188,7 @@ impl BusinessDataService {
         Self {
             host,
             sessions: Mutex::new(HashMap::new()),
+            stopped: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -204,7 +207,7 @@ impl BusinessDataService {
     pub fn dispatcher(
         self: &Arc<Self>,
         credentials: CredentialRequester,
-        events: mpsc::Sender<Event>,
+        events: mpsc::Sender<crate::business_data_ipc::QueuedBusinessDataEvent>,
     ) -> BusinessDataServiceDispatcher {
         BusinessDataServiceDispatcher {
             service: self.clone(),
@@ -217,21 +220,26 @@ impl BusinessDataService {
     /// deliberately represented by mutually exclusive slots so a successful
     /// startup cannot be drained twice.
     pub async fn shutdown(&self) -> io::Result<()> {
-        let watches: Vec<_> = self
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        // Remove authority before any asynchronous cleanup. In-flight request
+        // and event revalidation must fail while transports are draining.
+        let mut entries: Vec<_> = self
             .sessions
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .values()
+            .drain()
+            .map(|(_, entry)| entry)
+            .collect();
+        let watches: Vec<_> = entries
+            .iter()
             .filter_map(|entry| entry.session.as_ref().map(|owned| owned.watches.clone()))
             .collect();
         for watches in watches {
             Self::stop_watches(watches).await;
         }
-        let cleanups: Vec<_> = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .values_mut()
+        let cleanups: Vec<_> = entries
+            .iter_mut()
             .filter_map(|entry| {
                 if let Some(startup) = entry.startup.take() {
                     entry.transport.take();
@@ -251,10 +259,6 @@ impl BusinessDataService {
                 failure.get_or_insert(error);
             }
         }
-        self.sessions
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clear();
         failure.map_or(Ok(()), Err)
     }
 
@@ -265,6 +269,9 @@ impl BusinessDataService {
             .drain()
             .map(|(_, watch)| watch)
             .collect();
+        for watch in &owned {
+            watch.pump.invalidate();
+        }
         for watch in owned {
             watch.pump.shutdown().await;
         }
@@ -276,6 +283,9 @@ impl BusinessDataService {
         credentials: CredentialRequester,
         target_id: &str,
     ) -> io::Result<Response> {
+        if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(unknown("BusinessData service is shut down"));
+        }
         let handle = fresh_handle()?;
         let saved = self
             .host
@@ -300,19 +310,26 @@ impl BusinessDataService {
         // Bring-up is spawned only after this handle owns a Connecting slot.
         // Dropping the IPC request therefore cannot drop a native startup that
         // shutdown still needs to await and drain.
-        let startup = OwnedStartup::start(options);
-        let entry = SessionEntry {
-            lifecycle: Lifecycle::Connecting,
-            target_id: target_id.to_owned(),
-            startup: Some(startup.clone()),
-            transport: None,
-            session: None,
-            revocation: None,
+        let startup = {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if self.stopped.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(unknown("BusinessData service is shut down"));
+            }
+            let startup = OwnedStartup::start(options);
+            let entry = SessionEntry {
+                lifecycle: Lifecycle::Connecting,
+                target_id: target_id.to_owned(),
+                startup: Some(startup.clone()),
+                transport: None,
+                session: None,
+                revocation: None,
+            };
+            sessions.insert(handle.clone(), entry);
+            startup
         };
-        self.sessions
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .insert(handle.clone(), entry);
         let session = match startup.take_session().await {
             Ok(session) => session,
             Err(error) => {
@@ -650,7 +667,7 @@ impl BusinessDataService {
             }
             return Err(unknown("BusinessData session is still resolving"));
         };
-        Self::stop_watches(owned.watches.clone()).await;
+        // Fence new responses before asynchronous watch shutdown begins.
         let native = self
             .sessions
             .lock()
@@ -660,6 +677,7 @@ impl BusinessDataService {
         let Some(native) = native else {
             return Err(invalid("BusinessData session has no owned transport"));
         };
+        Self::stop_watches(owned.watches.clone()).await;
         shutdown_bounded(&native).await?;
         Ok(response_session(
             request_id,
@@ -673,6 +691,56 @@ impl BusinessDataService {
     async fn revalidate(&self, owned: &OwnedSession) -> io::Result<()> {
         self.assert_current(&owned.target_id, &owned.saved, &owned.principal)
             .await
+    }
+
+    async fn ensure_owned_is_current(
+        &self,
+        session: &crate::business_data_contract::NativeBusinessDataSessionRef,
+        owned: &OwnedSession,
+    ) -> io::Result<()> {
+        self.revalidate(owned).await?;
+        // Resolve only after the final authority await: close/revoke may have
+        // removed or replaced this owned session while host validation ran.
+        let (_, _, current, lifecycle, revocation) = self.resolve(session)?;
+        let same_session = lifecycle == Lifecycle::Ready
+            && revocation.is_none()
+            && current.is_some_and(|current| {
+                current.generation == owned.generation
+                    && Arc::ptr_eq(&current.watches, &owned.watches)
+            });
+        if !same_session {
+            return Err(unauthorized("BusinessData session changed after await"));
+        }
+        Ok(())
+    }
+
+    fn event_authority(
+        self: &Arc<Self>,
+        session: SessionRef,
+        owned: &OwnedSession,
+    ) -> crate::business_data_remote::EventAuthorityCheck {
+        let service = Arc::downgrade(self);
+        let expected_watches = Arc::downgrade(&owned.watches);
+        Arc::new(move || {
+            let service = service.upgrade();
+            let expected_watches = expected_watches.upgrade();
+            let session = session.clone();
+            Box::pin(async move {
+                let (Some(service), Some(expected_watches)) = (service, expected_watches) else {
+                    return false;
+                };
+                let Ok((_, _, Some(owned), _, _)) = service.resolve(&session) else {
+                    return false;
+                };
+                if !Arc::ptr_eq(&owned.watches, &expected_watches) {
+                    return false;
+                }
+                service
+                    .ensure_owned_is_current(&session, &owned)
+                    .await
+                    .is_ok()
+            })
+        })
     }
 
     async fn remote(owned: &OwnedSession, request: Request) -> io::Result<Response> {
@@ -704,8 +772,14 @@ impl BusinessDataService {
             },
         };
         let response = Self::remote(&owned, request).await?;
-        match response.result {
-            Result::Page { .. } => Ok(response),
+        match &response.result {
+            Result::Page {
+                session: returned, ..
+            } if returned == session => {
+                // Authority can change while the source awaits snapshot pages.
+                self.ensure_owned_is_current(session, &owned).await?;
+                Ok(response)
+            }
             Result::Rejected { .. } => rejected_response(response),
             _ => Err(invalid(
                 "BusinessData source returned an unexpected query result",
@@ -714,12 +788,12 @@ impl BusinessDataService {
     }
 
     async fn watch(
-        &self,
+        self: &Arc<Self>,
         request_id: &str,
         session: &SessionRef,
         query: &crate::business_data_contract::NativeBusinessDataQuery,
         resume_cursor: Option<&str>,
-        events: mpsc::Sender<Event>,
+        events: mpsc::Sender<crate::business_data_ipc::QueuedBusinessDataEvent>,
     ) -> io::Result<Response> {
         let (_, _, owned, _, _) = self.resolve(session)?;
         let owned = owned.ok_or_else(|| unknown("BusinessData session is not ready"))?;
@@ -729,6 +803,7 @@ impl BusinessDataService {
             owned.connection.clone(),
             session.clone(),
             events,
+            self.event_authority(session.clone(), &owned),
         );
         let request = Request {
             version: crate::business_data_contract::CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
@@ -754,18 +829,32 @@ impl BusinessDataService {
             pump.shutdown().await;
             return rejected_response(response);
         };
-        if *returned != *session {
+        if returned != *session {
             pump.shutdown().await;
             return Err(invalid("BusinessData source returned a foreign session"));
         }
-        pump.release();
-        owned.watches.lock().await.insert(
+        // Serialize installation with close/revoke draining the watch map.
+        let mut watches = owned.watches.lock().await;
+        if let Err(error) = self.ensure_owned_is_current(session, &owned).await {
+            drop(watches);
+            pump.shutdown().await;
+            return Err(error);
+        }
+        pump.accept(&subscription_id);
+
+        let previous = watches.insert(
             subscription_id.clone(),
             OwnedWatch {
+                request_id: request_id.to_owned(),
                 subscription_id,
                 pump,
             },
         );
+        drop(watches);
+        if let Some(previous) = previous {
+            previous.pump.shutdown().await;
+        }
+        self.ensure_owned_is_current(session, &owned).await?;
         Ok(response)
     }
 
@@ -779,6 +868,9 @@ impl BusinessDataService {
         let owned = owned.ok_or_else(|| unknown("BusinessData session is not ready"))?;
         self.revalidate(&owned).await?;
         let local_watch = owned.watches.lock().await.remove(subscription_id);
+        if let Some(watch) = &local_watch {
+            watch.pump.invalidate();
+        }
         let request = Request {
             version: crate::business_data_contract::CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
             request_id: request_id.to_owned(),
@@ -796,8 +888,17 @@ impl BusinessDataService {
                 return Err(error);
             }
         };
-        match response.result {
-            Result::Unwatched { .. } => {
+        match &response.result {
+            Result::Unwatched {
+                session: returned,
+                subscription_id: returned_id,
+            } if returned == session && returned_id == subscription_id => {
+                if let Err(error) = self.ensure_owned_is_current(session, &owned).await {
+                    if let Some(watch) = local_watch {
+                        watch.pump.shutdown().await;
+                    }
+                    return Err(error);
+                }
                 if let Some(watch) = local_watch {
                     watch.pump.shutdown().await;
                 }
@@ -809,9 +910,14 @@ impl BusinessDataService {
                 }
                 rejected_response(response)
             }
-            _ => Err(invalid(
-                "BusinessData source returned an unexpected unwatch result",
-            )),
+            _ => {
+                if let Some(watch) = local_watch {
+                    watch.pump.shutdown().await;
+                }
+                Err(invalid(
+                    "BusinessData source returned an unexpected unwatch result",
+                ))
+            }
         }
     }
 
@@ -833,8 +939,14 @@ impl BusinessDataService {
             },
         };
         let response = Self::remote(&owned, request).await?;
-        match response.result {
-            Result::Command { .. } => Ok(response),
+        match &response.result {
+            Result::Command {
+                session: returned,
+                state,
+            } if returned == session && state.command_id == command.command_id => {
+                self.ensure_owned_is_current(session, &owned).await?;
+                Ok(response)
+            }
             Result::Rejected { .. } => rejected_response(response),
             _ => Err(invalid(
                 "BusinessData source returned an unexpected command result",
@@ -843,11 +955,11 @@ impl BusinessDataService {
     }
 
     async fn observe_command(
-        &self,
+        self: &Arc<Self>,
         request_id: &str,
         session: &SessionRef,
         command_id: &str,
-        events: mpsc::Sender<Event>,
+        events: mpsc::Sender<crate::business_data_ipc::QueuedBusinessDataEvent>,
     ) -> io::Result<Response> {
         let (_, _, owned, _, _) = self.resolve(session)?;
         let owned = owned.ok_or_else(|| unknown("BusinessData session is not ready"))?;
@@ -858,6 +970,7 @@ impl BusinessDataService {
             owned.connection.clone(),
             session.clone(),
             events,
+            self.event_authority(session.clone(), &owned),
         );
         let request = Request {
             version: crate::business_data_contract::CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
@@ -874,16 +987,32 @@ impl BusinessDataService {
                 return Err(error);
             }
         };
-        match response.result {
-            Result::Command { .. } => {
-                pump.release();
-                owned.watches.lock().await.insert(
-                    format!("command:{}", command_id),
+        match &response.result {
+            Result::Command {
+                session: returned,
+                state,
+            } if returned == session && state.command_id == command_id => {
+                let mut watches = owned.watches.lock().await;
+                if let Err(error) = self.ensure_owned_is_current(session, &owned).await {
+                    drop(watches);
+                    pump.shutdown().await;
+                    return Err(error);
+                }
+                pump.accept(&format!("command:{command_id}"));
+
+                let previous = watches.insert(
+                    format!("command:{command_id}"),
                     OwnedWatch {
-                        subscription_id: String::new(),
+                        request_id: request_id.to_owned(),
+                        subscription_id: format!("command:{command_id}"),
                         pump,
                     },
                 );
+                drop(watches);
+                if let Some(previous) = previous {
+                    previous.pump.shutdown().await;
+                }
+                self.ensure_owned_is_current(session, &owned).await?;
                 Ok(response)
             }
             Result::Rejected { .. } => {
@@ -903,6 +1032,42 @@ impl BusinessDataService {
 /// The first dispatcher intentionally owns lifecycle only. Every data-bearing
 /// operation fails closed until policy-scoped transport operations land.
 impl BusinessDataDispatcher for BusinessDataServiceDispatcher {
+    fn response_sent<'a>(
+        &'a self,
+        response: &'a Response,
+    ) -> crate::business_data_ipc::BusinessDataShutdownFuture<'a> {
+        Box::pin(async move {
+            let (session, subscription_id) = match &response.result {
+                Result::Subscribed {
+                    session,
+                    subscription_id,
+                } => (session, subscription_id.clone()),
+                Result::Command { session, state } => {
+                    (session, format!("command:{}", state.command_id))
+                }
+                _ => return Ok(()),
+            };
+            let Ok((_, _, Some(owned), _, _)) = self.service.resolve(session) else {
+                return Ok(());
+            };
+            let watches = owned.watches.lock().await;
+            if self
+                .service
+                .ensure_owned_is_current(session, &owned)
+                .await
+                .is_err()
+            {
+                return Ok(());
+            }
+            if let Some(watch) = watches.get(&subscription_id) {
+                if watch.request_id == response.request_id {
+                    watch.pump.release();
+                }
+            }
+            Ok(())
+        })
+    }
+
     fn dispatch(&self, request: Request) -> BusinessDataDispatchFuture {
         let service = self.service.clone();
         let credentials = self.credentials.clone();
@@ -976,7 +1141,7 @@ impl BusinessDataDispatcher for BusinessDataServiceDispatcher {
 pub struct BusinessDataServiceDispatcher {
     service: Arc<BusinessDataService>,
     credentials: CredentialRequester,
-    events: mpsc::Sender<Event>,
+    events: mpsc::Sender<crate::business_data_ipc::QueuedBusinessDataEvent>,
 }
 
 fn owned_session_pool(owned: &OwnedSession) -> crate::native::NativePool {

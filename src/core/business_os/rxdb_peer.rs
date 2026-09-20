@@ -2558,13 +2558,6 @@ pub(crate) fn sync_business_record_projections(root: &Path) -> anyhow::Result<us
     )
 }
 
-pub(super) async fn enqueue_business_command_document_with_database_public(
-    database: &Arc<RxDatabase>,
-    document: Value,
-) -> anyhow::Result<Value> {
-    enqueue_business_command_document_with_database(database, document).await
-}
-
 pub fn enqueue_business_command_document(root: &Path, document: Value) -> anyhow::Result<Value> {
     with_business_os_database(
         root,
@@ -2959,7 +2952,6 @@ async fn run_native_peer(
                     Arc::new(
                         super::rxdb_peer_business_data_source::NativeBusinessDataPolicy::new(
                             root.clone(),
-                            Arc::clone(&database),
                         ),
                     ),
                     pool.connection_handler.clone(),

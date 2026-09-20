@@ -316,6 +316,22 @@ jobs:
           cargo test --locked --bin ctox -- persistence::tests secrets::tests business_os::domain_effect::tests business_os::rxdb_peer_domain_recovery::tests business_os::rxdb_peer_intake::tests business_os::store::peer_revocations::tests business_os::store::tests::peer_revocation_registry_round_trips business_os::rxdb_peer::peer_admission_tests business_os::rxdb_peer_business_data::tests \
             --nocapture --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/secret-reader-tests.log"
+      - name: Verify native BusinessData command ownership
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tests=(
+            business_os::rxdb_peer_business_data_source::owner_receipt_tests::canonical_owner_binding_requires_exact_owner
+            business_os::rxdb_peer_business_data_source::owner_receipt_tests::claimed_owner_and_client_context_cannot_replace_native_receipt
+            business_os::rxdb_peer_business_data_source::owner_receipt_tests::native_receipt_binds_exact_command_and_owner
+            business_os::store::tests::control_claim_owner_binding_rejects_cross_owner_replay
+          )
+          for test in "${tests[@]}"; do
+            log="$RUNNER_TEMP/ctox-host-proof/${test##*::}.log"
+            cargo test --locked --bin ctox "$test" -- --exact --test-threads=2 | tee "$log"
+            python3 -c 'import pathlib,re,sys; text=pathlib.Path(sys.argv[1]).read_text(); assert re.search(r"test result: ok\. 1 passed; 0 failed; 0 ignored;", text), "required exact test did not run"' "$log"
+          done
       - name: Context prompt first paint and authorized native command
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         timeout-minutes: 10

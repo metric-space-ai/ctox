@@ -318,7 +318,7 @@ pub type WebRTCPeerSessionValidator =
 /// Per-peer document visibility predicate shared by replication and query fetch.
 pub type WebRTCDocumentFilter = Arc<dyn Fn(&Value) -> bool + Send + Sync>;
 
-pub(crate) fn retain_readable_fields(document: &mut Value, fields: &[String]) {
+pub fn retain_readable_fields(document: &mut Value, fields: &[String]) {
     if let Some(object) = document.as_object_mut() {
         object.retain(|key, _| {
             fields.contains(key)
@@ -342,7 +342,7 @@ pub(crate) fn mask_master_response(response: &mut Value, fields: &[String]) {
     }
 }
 
-pub(crate) fn readable_query_fields(query: &Value, fields: &[String]) -> bool {
+pub fn readable_query_fields(query: &Value, fields: &[String]) -> bool {
     fn selector(value: &Value, fields: &[String]) -> bool {
         match value {
             Value::Object(object) => object.iter().all(|(key, value)| {

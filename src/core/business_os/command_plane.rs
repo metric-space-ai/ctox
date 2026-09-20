@@ -653,9 +653,16 @@ pub fn accept_rxdb_business_command_with_origin(
     // the claim intent, business_commands, business_records, process events
     // and the RxDB projection all store this command.
     super::store::detach_secret_intake_value(&command_id, &mut command);
+    let mut verified_command_owner = None;
     if matches!(command.origin, CommandOrigin::ReplicatedPeer) {
         let intake_started = command_timing_probe_requested(&command).then(std::time::Instant::now);
         let session = rxdb_authenticated_session(root, &command)?;
+        verified_command_owner = Some(
+            session_user_id(&session)
+                .filter(|owner| !owner.trim().is_empty())
+                .context("replicated command requires an authenticated owner")?
+                .to_owned(),
+        );
         let authentication_ms =
             intake_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
         stamp_verified_session_identity(root, &mut command, &session);
@@ -677,11 +684,19 @@ pub fn accept_rxdb_business_command_with_origin(
     let _command_timing_probe = install_command_timing_probe(&command);
     let native_authorization = recoverable_background_control_claim_authorization(root, &command);
     let control_intent = if is_rxdb_control_command_type(&command.command_type) {
-        Some(business_command_core_claim_with_authorization(
+        let mut claim = business_command_core_claim_with_authorization(
             &command_id,
             &command,
             native_authorization.as_ref(),
-        )?)
+        )?;
+        // Existing authorization receipts already bind the owner and are
+        // replayed by background recovery without the original capability.
+        if native_authorization.is_none() {
+            if let Some(owner) = verified_command_owner.as_deref() {
+                super::store::bind_business_command_claim_owner(&mut claim, owner)?;
+            }
+        }
+        Some(claim)
     } else {
         None
     };

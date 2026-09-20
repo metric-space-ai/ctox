@@ -43,7 +43,19 @@ const AUTHORIZATION_EPOCH: u64 = 12;
 const ACCOUNT_EPOCH: u64 = 34;
 const DATA_TIMEOUT: Duration = Duration::from_secs(5);
 
-struct FixtureSourcePolicy;
+#[derive(Default)]
+struct QueryGate {
+    armed: AtomicBool,
+    reject_queries: AtomicBool,
+    reject_documents: AtomicBool,
+    command_owner_checks: std::sync::atomic::AtomicUsize,
+    entered: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+struct FixtureSourcePolicy {
+    query_gate: Arc<QueryGate>,
+}
 
 const FIXTURE_CAPABILITY: &str = "fixture-private-read";
 
@@ -67,16 +79,48 @@ impl ctox_sync::business_data_remote::BusinessDataAccessPolicy for FixtureSource
         identity: &ctox_sync::business_data_remote::RemoteIdentity,
         capability_token: &str,
         collection: &str,
-        _access: ctox_sync::business_data_remote::Access,
-        _scope: &NativeBusinessDataScope,
+        access: ctox_sync::business_data_remote::Access,
+        scope: &NativeBusinessDataScope,
     ) -> std::io::Result<()> {
-        if capability_token != FIXTURE_CAPABILITY
-            || identity.user_id != "fixture-user"
-            || collection != "records"
+        let allowed = matches!(scope, NativeBusinessDataScope::Instance {})
+            && ((collection == "records"
+                && access == ctox_sync::business_data_remote::Access::Read)
+                || collection == "business_commands");
+        if capability_token != FIXTURE_CAPABILITY || identity.user_id != "fixture-user" || !allowed
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
                 "fixture authorization denied",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn authorize_query(
+        &self,
+        identity: &ctox_sync::business_data_remote::RemoteIdentity,
+        capability_token: &str,
+        collection: &str,
+        scope: &NativeBusinessDataScope,
+        query: &Value,
+    ) -> std::io::Result<()> {
+        self.authorize(
+            identity,
+            capability_token,
+            collection,
+            ctox_sync::business_data_remote::Access::Read,
+            scope,
+        )
+        .await?;
+        if self.query_gate.reject_queries.load(Ordering::SeqCst)
+            || !rxdb::plugins::replication_webrtc::webrtc_types::readable_query_fields(
+                query,
+                &["id".into()],
+            )
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "fixture query field policy denied",
             ));
         }
         Ok(())
@@ -100,9 +144,27 @@ impl ctox_sync::business_data_remote::BusinessDataAccessPolicy for FixtureSource
 
     async fn command_state(
         &self,
-        _identity: &ctox_sync::business_data_remote::RemoteIdentity,
+        identity: &ctox_sync::business_data_remote::RemoteIdentity,
         document: &Value,
     ) -> std::io::Result<ctox_sync::business_data_contract::NativeBusinessDataCommandState> {
+        self.query_gate
+            .command_owner_checks
+            .fetch_add(1, Ordering::SeqCst);
+        let owner = document
+            .get("owner_user_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "fixture command has no owner",
+                )
+            })?;
+        if owner != identity.user_id {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "fixture command owner mismatch",
+            ));
+        }
         Ok(
             ctox_sync::business_data_contract::NativeBusinessDataCommandState {
                 command_id: document["id"].as_str().unwrap_or_default().into(),
@@ -111,6 +173,48 @@ impl ctox_sync::business_data_remote::BusinessDataAccessPolicy for FixtureSource
                 error: None,
             },
         )
+    }
+
+    async fn document_view(
+        &self,
+        identity: &ctox_sync::business_data_remote::RemoteIdentity,
+        capability_token: &str,
+        collection: &str,
+        document: &Value,
+    ) -> std::io::Result<Option<Value>> {
+        self.authorize(
+            identity,
+            capability_token,
+            collection,
+            ctox_sync::business_data_remote::Access::Read,
+            &NativeBusinessDataScope::Instance {},
+        )
+        .await?;
+        if self.query_gate.armed.swap(false, Ordering::SeqCst) {
+            self.query_gate.entered.notify_one();
+            self.query_gate.release.notified().await;
+        }
+        if self.query_gate.reject_documents.load(Ordering::SeqCst) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "fixture document policy unavailable",
+            ));
+        }
+        Ok(Some(document.clone()))
+    }
+
+    async fn command_event(
+        &self,
+        identity: &ctox_sync::business_data_remote::RemoteIdentity,
+        capability_token: &str,
+        expected_command_id: &str,
+        document: &Value,
+    ) -> std::io::Result<Option<ctox_sync::business_data_contract::NativeBusinessDataCommandState>>
+    {
+        if document.get("id").and_then(Value::as_str) != Some(expected_command_id) {
+            return Ok(None);
+        }
+        self.command_state(identity, document).await.map(Some)
     }
 }
 
@@ -370,10 +474,13 @@ async fn exercise_session(
             PrincipalFault::Missing => None,
         };
         let responder_principal = signed_principal.clone();
+        let query_gate = Arc::new(QueryGate::default());
         let server = NativeSyncSession::start_with_pool_setup(server_options, |pool| {
             let source = ctox_sync::business_data_remote::BusinessDataSource::new(
                 server_db.clone(),
-                Arc::new(FixtureSourcePolicy),
+                Arc::new(FixtureSourcePolicy {
+                    query_gate: query_gate.clone(),
+                }),
                 pool.connection_handler.clone(),
             );
             source.register(pool).unwrap();
@@ -508,6 +615,27 @@ async fn exercise_session(
                 } else {
                     *host.current_principal.lock().await = None;
                 }
+                // A data request must also observe the same authority fence,
+                // not merely the lifecycle-only Status path.
+                send_request(
+                    &mut client,
+                    "invalidated-query",
+                    NativeBusinessDataOperation::Query {
+                        session: ready.clone().unwrap(),
+                        query: ctox_sync::business_data_contract::NativeBusinessDataQuery {
+                            collection: "records".into(),
+                            scope: NativeBusinessDataScope::Instance {},
+                            query: fixture_query(),
+                            page_size: 2,
+                        },
+                        page_cursor: None,
+                    },
+                )
+                .await;
+                assert_rejected(
+                    read_frame(&mut client).await,
+                    NativeBusinessDataErrorCode::Unauthorized,
+                );
                 send_request(
                     &mut client,
                     "invalidated-status",
@@ -560,7 +688,43 @@ async fn exercise_session(
         if principal_fault == PrincipalFault::None
             && invalidation == AuthorizationInvalidation::None
         {
-            send_request(&mut client, "query-page-1", query_request()).await;
+            for forbidden_query in [
+                json!({"selector":{"secret":"probe"},"sort":[{"id":"asc"}]}),
+                json!({"selector":{},"sort":[{"secret":"asc"}]}),
+                json!({"selector":{},"sort":[{"id":"asc"}],"index":["secret"]}),
+            ] {
+                let query = ctox_sync::business_data_contract::NativeBusinessDataQuery {
+                    collection: "records".into(),
+                    scope: NativeBusinessDataScope::Instance {},
+                    query: forbidden_query,
+                    page_size: 2,
+                };
+                for operation in [
+                    NativeBusinessDataOperation::Query {
+                        session: ready.clone().unwrap(),
+                        query: query.clone(),
+                        page_cursor: None,
+                    },
+                    NativeBusinessDataOperation::Watch {
+                        session: ready.clone().unwrap(),
+                        query,
+                        resume_cursor: None,
+                    },
+                ] {
+                    send_request(&mut client, "unreadable-query-field", operation).await;
+                    assert_rejected(
+                        read_frame(&mut client).await,
+                        NativeBusinessDataErrorCode::Unauthorized,
+                    );
+                }
+            }
+
+            send_request(
+                &mut client,
+                "query-page-1",
+                query_request_with_cursor(ready.as_ref().unwrap(), None),
+            )
+            .await;
             let page_cursor = match read_frame(&mut client).await {
                 Frame::Response { response } if response.request_id == "query-page-1" => {
                     let NativeBusinessDataResult::Page {
@@ -588,10 +752,46 @@ async fn exercise_session(
                 _ => panic!("expected query response"),
             };
 
+            query_gate.reject_queries.store(true, Ordering::SeqCst);
+            send_request(
+                &mut client,
+                "query-page-policy-revoked",
+                query_request_with_cursor(ready.as_ref().unwrap(), Some(page_cursor.clone())),
+            )
+            .await;
+            assert_rejected(
+                read_frame(&mut client).await,
+                NativeBusinessDataErrorCode::Unauthorized,
+            );
+            query_gate.reject_queries.store(false, Ordering::SeqCst);
+
+            // An unknown page cursor must fail closed with ResetRequired; the
+            // following valid cursor proves recovery uses the same snapshot only
+            // when it is still valid.
+            send_request(
+                &mut client,
+                "invalid-query-cursor",
+                NativeBusinessDataOperation::Query {
+                    session: ready.clone().unwrap(),
+                    query: ctox_sync::business_data_contract::NativeBusinessDataQuery {
+                        collection: "records".into(),
+                        scope: NativeBusinessDataScope::Instance {},
+                        query: fixture_query(),
+                        page_size: 2,
+                    },
+                    page_cursor: Some("business-data-expired-cursor".into()),
+                },
+            )
+            .await;
+            assert_rejected(
+                read_frame(&mut client).await,
+                NativeBusinessDataErrorCode::ResetRequired,
+            );
+
             send_request(
                 &mut client,
                 "query-page-2",
-                query_request_with_cursor(page_cursor),
+                query_request_with_cursor(ready.as_ref().unwrap(), Some(page_cursor)),
             )
             .await;
             match read_frame(&mut client).await {
@@ -620,6 +820,131 @@ async fn exercise_session(
                 _ => panic!("expected query response"),
             }
 
+            // Replay a consumed cursor while the snapshot is still live. A
+            // stale cursor must not consume the following page.
+            let mut next_cursor = None;
+            let mut consumed_cursor = None;
+            for index in 0..3 {
+                let mut operation =
+                    query_request_with_cursor(ready.as_ref().unwrap(), next_cursor.take());
+                if let NativeBusinessDataOperation::Query { query, .. } = &mut operation {
+                    query.page_size = 1;
+                }
+                send_request(&mut client, "single-record-page", operation).await;
+                let Frame::Response { response } = read_frame(&mut client).await else {
+                    panic!("expected single-record query response");
+                };
+                let NativeBusinessDataResult::Page {
+                    records,
+                    next_page_cursor,
+                    snapshot_complete,
+                    ..
+                } = response.result
+                else {
+                    panic!("expected single-record page");
+                };
+                assert_eq!(records.len(), 1);
+                assert_eq!(records[0].document_id, format!("native-{index}"));
+                assert_eq!(snapshot_complete, index == 2);
+                if index == 0 {
+                    consumed_cursor = next_page_cursor.clone();
+                    assert!(consumed_cursor.is_some());
+                }
+                next_cursor = next_page_cursor;
+                if index == 1 {
+                    let mut replay =
+                        query_request_with_cursor(ready.as_ref().unwrap(), consumed_cursor.take());
+                    if let NativeBusinessDataOperation::Query { query, .. } = &mut replay {
+                        query.page_size = 1;
+                    }
+                    send_request(&mut client, "consumed-page-cursor", replay).await;
+                    assert_rejected(
+                        read_frame(&mut client).await,
+                        NativeBusinessDataErrorCode::ResetRequired,
+                    );
+                }
+            }
+            assert!(next_cursor.is_none());
+
+            send_request(
+                &mut client,
+                "watch-invalid-resume",
+                watch_request(
+                    ready.as_ref().unwrap(),
+                    Some("business-data-expired-cursor"),
+                ),
+            )
+            .await;
+            assert_rejected(
+                read_frame(&mut client).await,
+                NativeBusinessDataErrorCode::ResetRequired,
+            );
+
+            query_gate.reject_documents.store(true, Ordering::SeqCst);
+            send_request(
+                &mut client,
+                "watch-failed-snapshot",
+                watch_request(ready.as_ref().unwrap(), None),
+            )
+            .await;
+            let Frame::Response { response } = read_frame(&mut client).await else {
+                panic!("failed snapshot watch must first respond");
+            };
+            let NativeBusinessDataResult::Subscribed {
+                subscription_id: failed_id,
+                ..
+            } = response.result
+            else {
+                panic!("expected accepted watch before snapshot failure");
+            };
+            loop {
+                let event = read_event(&mut client, "failed snapshot").await;
+                assert_eq!(event.subscription_id, failed_id);
+                match event.payload {
+                    NativeBusinessDataEventPayload::SnapshotStart { .. } => {}
+                    NativeBusinessDataEventPayload::Error { .. }
+                    | NativeBusinessDataEventPayload::Reset { .. } => break,
+                    other => panic!("failed snapshot must not publish success or data: {other:?}"),
+                }
+            }
+            send_request(
+                &mut client,
+                "unwatch-failed-snapshot",
+                NativeBusinessDataOperation::Unwatch {
+                    session: ready.clone().unwrap(),
+                    subscription_id: failed_id.clone(),
+                },
+            )
+            .await;
+            loop {
+                match read_frame(&mut client).await {
+                    Frame::Event { event } => {
+                        assert_eq!(event.subscription_id, failed_id);
+                        assert!(matches!(
+                            event.payload,
+                            NativeBusinessDataEventPayload::Error { .. }
+                                | NativeBusinessDataEventPayload::Reset { .. }
+                        ));
+                    }
+                    Frame::Response { response } => {
+                        assert_eq!(response.request_id, "unwatch-failed-snapshot");
+                        let NativeBusinessDataResult::Unwatched {
+                            subscription_id, ..
+                        } = response.result
+                        else {
+                            panic!("failed snapshot subscription must remain cleanable");
+                        };
+                        assert_eq!(subscription_id, failed_id);
+                        break;
+                    }
+                    _ => panic!("unexpected frame during failed snapshot cleanup"),
+                }
+            }
+            query_gate.reject_documents.store(false, Ordering::SeqCst);
+
+            // Reset cannot stand in for a snapshot: start without a cursor and
+            // require the full snapshot sequence before declaring caught up.
+            query_gate.armed.store(true, Ordering::SeqCst);
             send_request(
                 &mut client,
                 "watch",
@@ -641,8 +966,21 @@ async fn exercise_session(
                 _ => panic!("expected watch response"),
             };
 
+            timeout(Duration::from_secs(5), query_gate.entered.notified())
+                .await
+                .expect("watch must pause while projecting its snapshot");
+            server_db
+                .collection("records")
+                .unwrap()
+                .insert(json!({"id": "native-during-snapshot"}))
+                .await
+                .unwrap();
+            query_gate.release.notify_one();
+
             let mut saw_start = false;
             let mut saw_page = false;
+            let mut saw_buffered_change = false;
+            let mut saw_end = false;
             let mut last_sequence = 0;
             loop {
                 let event = read_event(&mut client, "watch snapshot").await;
@@ -676,10 +1014,22 @@ async fn exercise_session(
                         cursor,
                     } => {
                         assert!(saw_page);
+                        assert!(!saw_end);
                         assert_eq!(snapshot_id, subscription_id);
                         assert!(!cursor.is_empty());
+                        saw_end = true;
+                    }
+                    NativeBusinessDataEventPayload::Upsert {
+                        record, recovery, ..
+                    } => {
+                        assert!(saw_page);
+                        assert!(!saw_end);
+                        assert!(!recovery);
+                        assert_eq!(record.document_id, "native-during-snapshot");
+                        saw_buffered_change = true;
                     }
                     NativeBusinessDataEventPayload::CaughtUp { cursor } => {
+                        assert!(saw_start && saw_page && saw_end && saw_buffered_change);
                         assert!(!cursor.is_empty());
                         break;
                     }
@@ -687,6 +1037,14 @@ async fn exercise_session(
                 }
             }
 
+            // A collection-wide event outside the watch selector must produce
+            // neither an Upsert nor a Remove leaking its document ID.
+            server_db
+                .collection("records")
+                .unwrap()
+                .insert(json!({"id": "outside-watch-selector"}))
+                .await
+                .unwrap();
             server_db
                 .collection("records")
                 .unwrap()
@@ -733,8 +1091,39 @@ async fn exercise_session(
             assert_eq!(caught_up.session, ready.clone().unwrap());
             assert_eq!(caught_up.subscription_id, subscription_id);
             assert!(caught_up.sequence > live.sequence);
+            let NativeBusinessDataEventPayload::CaughtUp {
+                cursor: resume_cursor,
+            } = caught_up.payload
+            else {
+                panic!("expected resume caught-up");
+            };
+            // Repeat without any write: Notify must wake every resume, not only
+            // the first one or a later collection change.
+            send_request(
+                &mut client,
+                "watch-resume-again",
+                watch_request(ready.as_ref().unwrap(), Some(&resume_cursor)),
+            )
+            .await;
+            match read_frame(&mut client).await {
+                Frame::Response { response } if response.request_id == "watch-resume-again" => {
+                    let NativeBusinessDataResult::Subscribed {
+                        subscription_id: resumed,
+                        ..
+                    } = response.result
+                    else {
+                        panic!("expected second resumed subscription");
+                    };
+                    assert_eq!(resumed, subscription_id);
+                }
+                _ => panic!("expected second resume response before events"),
+            }
+            let resumed_again = read_event(&mut client, "second resume caught-up").await;
+            assert_eq!(resumed_again.session, ready.clone().unwrap());
+            assert_eq!(resumed_again.subscription_id, subscription_id);
+            assert!(resumed_again.sequence > caught_up.sequence);
             assert!(matches!(
-                caught_up.payload,
+                resumed_again.payload,
                 NativeBusinessDataEventPayload::CaughtUp { .. }
             ));
 
@@ -769,6 +1158,46 @@ async fn exercise_session(
                 _ => panic!("expected command response"),
             }
 
+            // The fixture has no durable owned command projection, so an
+            // observation must reject before creating an event pump.
+            let owner_checks_before = query_gate.command_owner_checks.load(Ordering::SeqCst);
+            send_request(
+                &mut client,
+                "observe-foreign-command",
+                NativeBusinessDataOperation::ObserveCommand {
+                    session: ready.clone().unwrap(),
+                    command_id: "foreign-command".into(),
+                },
+            )
+            .await;
+            assert_rejected(
+                read_frame(&mut client).await,
+                NativeBusinessDataErrorCode::Unauthorized,
+            );
+
+            assert_eq!(
+                query_gate.command_owner_checks.load(Ordering::SeqCst),
+                owner_checks_before + 1,
+                "observation must reach the owner gate before rejection",
+            );
+            query_gate.reject_documents.store(true, Ordering::SeqCst);
+            server_db
+                .collection("records")
+                .unwrap()
+                .insert(json!({"id":"native-policy-failure"}))
+                .await
+                .unwrap();
+            let failed_watch = read_event(&mut client, "live policy failure reset").await;
+            assert_eq!(failed_watch.session, ready.clone().unwrap());
+            assert_eq!(failed_watch.subscription_id, subscription_id);
+            assert!(matches!(
+                failed_watch.payload,
+                NativeBusinessDataEventPayload::Reset {
+                    code: NativeBusinessDataErrorCode::ResetRequired,
+                }
+            ));
+            query_gate.reject_documents.store(false, Ordering::SeqCst);
+
             send_request(
                 &mut client,
                 "unwatch",
@@ -792,6 +1221,51 @@ async fn exercise_session(
                 }
                 _ => panic!("expected unwatch response"),
             }
+
+            query_gate.armed.store(true, Ordering::SeqCst);
+            send_request(
+                &mut client,
+                "query-source-policy-revoked-during-snapshot",
+                query_request_with_cursor(ready.as_ref().unwrap(), None),
+            )
+            .await;
+            timeout(Duration::from_secs(5), query_gate.entered.notified())
+                .await
+                .expect("query must enter source document policy");
+            query_gate.reject_queries.store(true, Ordering::SeqCst);
+            query_gate.release.notify_one();
+            assert_rejected(
+                read_frame(&mut client).await,
+                NativeBusinessDataErrorCode::Unauthorized,
+            );
+            query_gate.reject_queries.store(false, Ordering::SeqCst);
+
+            query_gate.armed.store(true, Ordering::SeqCst);
+            send_request(
+                &mut client,
+                "query-revoked-during-snapshot",
+                NativeBusinessDataOperation::Query {
+                    session: ready.clone().unwrap(),
+                    query: ctox_sync::business_data_contract::NativeBusinessDataQuery {
+                        collection: "records".into(),
+                        scope: NativeBusinessDataScope::Instance {},
+                        query: fixture_query(),
+                        page_size: 2,
+                    },
+                    page_cursor: None,
+                },
+            )
+            .await;
+            timeout(Duration::from_secs(5), query_gate.entered.notified())
+                .await
+                .expect("query must enter the blocked document policy");
+            let previous_principal = host.current_principal.lock().await.take();
+            query_gate.release.notify_one();
+            assert_rejected(
+                read_frame(&mut client).await,
+                NativeBusinessDataErrorCode::Unauthorized,
+            );
+            *host.current_principal.lock().await = previous_principal;
         }
 
         // Close drops the response path after bounded native transport drain.
@@ -829,6 +1303,25 @@ async fn exercise_session(
         service.shutdown().await.unwrap();
         assert!(cleanup_started.elapsed() < Duration::from_secs(6));
         assert_eq!(service.owned_cleanup_count(), 0);
+        // Reusing a stopped service must reject Open before asking the host
+        // for another transport or requesting credentials.
+        let requests_before = credential_requests.load(Ordering::SeqCst);
+        let stopped_service = service.clone();
+        let stopped_ipc = BusinessDataIpc::new(Arc::new(move |credentials, events| {
+            Ok(Arc::new(stopped_service.dispatcher(credentials, events)))
+        }));
+        let (mut stopped_client, stopped_native) = tokio::io::duplex(64 * 1024);
+        let stopped_serve =
+            tokio::spawn(async move { stopped_ipc.serve(Box::new(stopped_native)).await });
+        send_request(&mut stopped_client, "open-after-shutdown", open_request()).await;
+        assert_rejected(
+            read_frame(&mut stopped_client).await,
+            NativeBusinessDataErrorCode::UnknownSession,
+        );
+        assert_eq!(credential_requests.load(Ordering::SeqCst), requests_before);
+        assert_eq!(service.owned_cleanup_count(), 0);
+        drop(stopped_client);
+        assert!(stopped_serve.await.unwrap().is_err());
         revoked.store(true, Ordering::SeqCst);
         assert!(credential_requests.load(Ordering::SeqCst) > 0);
         server.shutdown().await;
@@ -908,19 +1401,32 @@ fn open_request() -> NativeBusinessDataOperation {
 }
 
 fn query_request() -> NativeBusinessDataOperation {
-    query_request_with_cursor(None)
-}
-
-fn query_request_with_cursor(page_cursor: Option<String>) -> NativeBusinessDataOperation {
-    NativeBusinessDataOperation::Query {
-        session: ctox_sync::business_data_contract::NativeBusinessDataSessionRef {
+    query_request_with_cursor(
+        &NativeBusinessDataSessionRef {
             handle: "unknown".into(),
             generation: 1,
         },
+        None,
+    )
+}
+
+fn fixture_query() -> Value {
+    json!({
+        "selector": {"id": {"$gte": "native-", "$lt": "native."}},
+        "sort": [{"id": "asc"}]
+    })
+}
+
+fn query_request_with_cursor(
+    session: &NativeBusinessDataSessionRef,
+    page_cursor: Option<String>,
+) -> NativeBusinessDataOperation {
+    NativeBusinessDataOperation::Query {
+        session: session.clone(),
         query: ctox_sync::business_data_contract::NativeBusinessDataQuery {
             collection: "records".into(),
             scope: NativeBusinessDataScope::Instance {},
-            query: json!({}),
+            query: fixture_query(),
             page_size: 2,
         },
         page_cursor,
@@ -936,7 +1442,7 @@ fn watch_request(
         query: ctox_sync::business_data_contract::NativeBusinessDataQuery {
             collection: "records".into(),
             scope: NativeBusinessDataScope::Instance {},
-            query: json!({}),
+            query: fixture_query(),
             page_size: 10,
         },
         resume_cursor: resume_cursor.map(str::to_owned),

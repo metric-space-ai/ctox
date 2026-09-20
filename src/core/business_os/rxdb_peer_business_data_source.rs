@@ -2,12 +2,13 @@
 //! Every request is revalidated against the current signed WebRTC capability.
 //! Scope is narrowed server-side, and commands reuse ReplicatedPeer intake.
 
+use super::store;
 use ctox_sync::business_data_contract::{
     NativeBusinessDataCommand as Command, NativeBusinessDataCommandState as CommandState,
     NativeBusinessDataCommandStatus, NativeBusinessDataScope as Scope,
 };
 use ctox_sync::business_data_remote::{Access, BusinessDataAccessPolicy, RemoteIdentity};
-use rxdb::rx_database::RxDatabase;
+
 use serde_json::{json, Value};
 use std::{io, path::PathBuf, sync::Arc};
 use tokio::sync::Mutex;
@@ -30,15 +31,15 @@ const READABLE_COLLECTIONS: &[&str] = &[
 
 pub struct NativeBusinessDataPolicy {
     root: PathBuf,
-    database: Arc<RxDatabase>,
+
     command_lock: Arc<Mutex<()>>,
 }
 
 impl NativeBusinessDataPolicy {
-    pub fn new(root: PathBuf, database: Arc<RxDatabase>) -> Self {
+    pub fn new(root: PathBuf) -> Self {
         Self {
             root,
-            database,
+
             command_lock: Arc::default(),
         }
     }
@@ -60,19 +61,6 @@ impl NativeBusinessDataPolicy {
                 "scope is not eligible",
             ))
         }
-    }
-
-    async fn command_document(&self, command_id: &str) -> Option<Value> {
-        let commands = self.database.collection("business_commands")?;
-        commands
-            .find_one(Some(rxdb::types::MangoQuery {
-                selector: Some(json!({ "id": { "$eq": command_id } })),
-                ..Default::default()
-            }))
-            .ok()?
-            .exec(false)
-            .await
-            .ok()
     }
 }
 
@@ -100,6 +88,84 @@ fn command_projection(document: &Value) -> CommandState {
             .or_else(|| document.get("error"))
             .and_then(Value::as_str)
             .map(str::to_owned),
+    }
+}
+
+// Only call with a projection read from the canonical native command store.
+fn owned_command_projection(
+    stored: &Value,
+    command_id: &str,
+    user_id: &str,
+) -> io::Result<CommandState> {
+    let receipt = &stored["native_authorization"];
+    let matches_owner = if let Some(owner) = stored.get("native_owner") {
+        owner["contract"].as_str() == Some("ctox-business-command-owner-v1")
+            && owner["user_id"].as_str() == Some(user_id)
+    } else {
+        receipt["contract"].as_str() == Some("ctox-business-command-authorization-v1")
+            && receipt["allowed"].as_bool() == Some(true)
+            && receipt["actor"]["trusted"].as_bool() == Some(true)
+            && receipt["actor"]["id"].as_str() == Some(user_id)
+    };
+    if user_id.is_empty() || !matches_owner {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "command has no matching trusted owner receipt",
+        ));
+    }
+    let state = command_projection(stored);
+    if state.command_id != command_id || command_id.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "command identity changed",
+        ));
+    }
+    Ok(state)
+}
+
+#[cfg(test)]
+mod owner_receipt_tests {
+    use super::*;
+
+    #[test]
+    fn canonical_owner_binding_requires_exact_owner() {
+        let mut stored = json!({"id":"command-a", "native_owner": {
+            "contract":"ctox-business-command-owner-v1", "user_id":"alice"
+        }});
+        assert!(owned_command_projection(&stored, "command-a", "alice").is_ok());
+        assert!(owned_command_projection(&stored, "command-a", "bob").is_err());
+        stored["native_owner"]["contract"] = json!("untrusted");
+        assert!(owned_command_projection(&stored, "command-a", "alice").is_err());
+    }
+
+    #[test]
+    fn claimed_owner_and_client_context_cannot_replace_native_receipt() {
+        let forged = json!({"id":"command-a", "owner_user_id":"alice",
+            "client_context":{"actor":{"id":"alice","trusted":true}}});
+        assert!(owned_command_projection(&forged, "command-a", "alice").is_err());
+    }
+
+    #[test]
+    fn native_receipt_binds_exact_command_and_owner() {
+        let valid = json!({"id":"command-a", "status":"completed", "result":{"ok":true},
+            "native_authorization":{"contract":"ctox-business-command-authorization-v1",
+                "allowed":true,"actor":{"id":"alice","trusted":true}}});
+        let state = owned_command_projection(&valid, "command-a", "alice").unwrap();
+        assert_eq!(state.command_id, "command-a");
+        assert_eq!(state.result, Some(json!({"ok":true})));
+        assert!(owned_command_projection(&valid, "command-a", "bob").is_err());
+        assert!(owned_command_projection(&valid, "command-b", "alice").is_err());
+        for pointer in [
+            "/native_authorization/allowed",
+            "/native_authorization/actor/trusted",
+        ] {
+            let mut denied = valid.clone();
+            *denied.pointer_mut(pointer).unwrap() = json!(false);
+            assert!(owned_command_projection(&denied, "command-a", "alice").is_err());
+        }
+        let mut conflicting = valid;
+        conflicting["command_id"] = json!("command-b");
+        assert!(owned_command_projection(&conflicting, "command-a", "alice").is_err());
     }
 }
 
@@ -135,13 +201,16 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
         let token = capability_token.to_owned();
         let collection = collection.to_owned();
         let user_id = identity.user_id.clone();
+        let authorization_epoch = identity.authorization_epoch;
         let read = access == Access::Read;
         tokio::task::spawn_blocking(move || {
             let claims =
                 store::verified_webrtc_capability_claims(&root, &token).ok_or_else(|| {
                     io::Error::new(io::ErrorKind::PermissionDenied, "capability expired")
                 })?;
-            if claims.user_id != user_id {
+            if claims.user_id != user_id
+                || u64::try_from(claims.actor_epoch).ok() != Some(authorization_epoch)
+            {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     "actor changed",
@@ -187,17 +256,14 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
             }
         });
         let _guard = self.command_lock.lock().await;
-        let queued = super::rxdb_peer::enqueue_business_command_document_with_database_public(
-            &self.database,
-            document,
-        )
-        .await
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
+        // Canonical admission must authorize and check idempotency before any
+        // replicated projection can be changed. Never stage a caller's command
+        // over an existing RxDB command while admission may still reject it.
         let root = self.root.clone();
         let accepted = tokio::task::spawn_blocking(move || {
             store::accept_rxdb_business_command_with_origin(
                 &root,
-                queued,
+                document,
                 store::CommandOrigin::ReplicatedPeer,
             )
         })
@@ -209,10 +275,16 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
             .or_else(|| accepted.get("id"))
             .and_then(Value::as_str)
             .unwrap_or(command.command_id.as_str());
-        let stored = self.command_document(command_id).await.unwrap_or_else(|| {
-            json!({ "id": command.command_id, "command_id": command.command_id, "status": "unknown" })
-        });
-        Ok(command_projection(&stored))
+        if command_id != command.command_id {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "command admission returned a different identity",
+            ));
+        }
+        // Admission results must come from the canonical owned command, not
+        // from a potentially delayed or stale replicated projection.
+        self.command_state(identity, &json!({"id": command_id}))
+            .await
     }
 
     async fn command_state(
@@ -224,19 +296,134 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
             .get("id")
             .and_then(Value::as_str)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "command ID is required"))?;
-        let stored = self.command_document(command_id).await.unwrap_or_else(
-            || json!({ "id": command_id, "command_id": command_id, "status": "unknown" }),
-        );
-        if stored
-            .get("owner_user_id")
-            .and_then(Value::as_str)
-            .is_some_and(|owner| owner != identity.user_id)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "command owner changed",
-            ));
+        let root = self.root.clone();
+        let command_id = command_id.to_owned();
+        let user_id = identity.user_id.clone();
+        tokio::task::spawn_blocking(move || {
+            // Ownership comes from the server-persisted admission receipt,
+            // never from a peer-writable RxDB owner or client_context field.
+            let stored = crate::mission::channels::business_command_projection(&root, &command_id)
+                .map_err(|_| {
+                    io::Error::new(io::ErrorKind::PermissionDenied, "command is unavailable")
+                })?;
+            owned_command_projection(&stored, &command_id, &user_id)
+        })
+        .await
+        .map_err(|_| io::Error::other("BusinessData command owner policy task failed"))?
+    }
+
+    async fn authorize_query(
+        &self,
+        identity: &RemoteIdentity,
+        capability_token: &str,
+        collection: &str,
+        scope: &Scope,
+        query: &Value,
+    ) -> io::Result<()> {
+        self.authorize(identity, capability_token, collection, Access::Read, scope)
+            .await?;
+        if collection != "ctox_crew_members" {
+            return Ok(());
         }
-        Ok(command_projection(&stored))
+        let root = self.root.clone();
+        let token = capability_token.to_owned();
+        let query = query.clone();
+        tokio::task::spawn_blocking(move || {
+            let (_, role) =
+                store::verify_webrtc_capability_actor(&root, &token).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::PermissionDenied, "capability expired")
+                })?;
+            if let Some(fields) = super::policy::crew_fields_for_role(&role) {
+                if !rxdb::plugins::replication_webrtc::webrtc_types::readable_query_fields(
+                    &query, &fields,
+                ) {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "BusinessData query references unreadable fields",
+                    ));
+                }
+            }
+            Ok(())
+        })
+        .await
+        .map_err(|_| io::Error::other("BusinessData query policy task failed"))?
+    }
+
+    async fn document_view(
+        &self,
+        identity: &RemoteIdentity,
+        capability_token: &str,
+        collection: &str,
+        document: &Value,
+    ) -> io::Result<Option<Value>> {
+        self.authorize(
+            identity,
+            capability_token,
+            collection,
+            Access::Read,
+            &Scope::Instance {},
+        )
+        .await?;
+        let root = self.root.clone();
+        let token = capability_token.to_owned();
+        let requested_collection = collection.to_owned();
+        let mut visible = document.clone();
+        tokio::task::spawn_blocking(move || {
+            let filter =
+                super::threads::replication_document_filter(&root, &token, &requested_collection);
+            if !filter(&visible) {
+                return Ok(None);
+            }
+            let fields = if requested_collection == "ctox_crew_members" {
+                store::verify_webrtc_capability_actor(&root, &token)
+                    .map(|(_, role)| role)
+                    .ok_or_else(|| {
+                        io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "BusinessData capability is no longer valid",
+                        )
+                    })?
+            } else {
+                String::new()
+            };
+            if requested_collection == "ctox_crew_members" {
+                if let Some(allowed) = super::policy::crew_fields_for_role(&fields) {
+                    rxdb::plugins::replication_webrtc::webrtc_types::retain_readable_fields(
+                        &mut visible,
+                        &allowed,
+                    );
+                }
+            }
+            Ok(Some(visible))
+        })
+        .await
+        .map_err(|_| io::Error::other("BusinessData document policy task failed"))?
+    }
+
+    async fn command_event(
+        &self,
+        identity: &RemoteIdentity,
+        capability_token: &str,
+        expected_command_id: &str,
+        document: &Value,
+    ) -> io::Result<Option<CommandState>> {
+        let actual = document
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if actual != expected_command_id {
+            return Ok(None);
+        }
+        self.authorize(
+            identity,
+            capability_token,
+            "business_commands",
+            Access::Read,
+            &Scope::Instance {},
+        )
+        .await?;
+        self.command_state(identity, &json!({"id": expected_command_id}))
+            .await
+            .map(Some)
     }
 }
