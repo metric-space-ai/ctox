@@ -912,6 +912,8 @@ enum ServiceIpcRequest {
     /// daemon process that owns the persistent browser runtime.
     BusinessOsWebStack {
         argv: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
     },
     /// Validate and persist a typed Business OS command inside the daemon.
     /// Sandboxed workers may connect to the service socket, but cannot write
@@ -3307,6 +3309,7 @@ pub fn dispatch_business_command(
 pub(crate) fn run_business_os_web_stack_via_service(
     root: &Path,
     argv: &[String],
+    source: Option<&str>,
 ) -> Result<Option<Value>> {
     let socket_path = service_socket_path(root);
     if !socket_path.exists() {
@@ -3323,6 +3326,7 @@ pub(crate) fn run_business_os_web_stack_via_service(
         root,
         ServiceIpcRequest::BusinessOsWebStack {
             argv: argv.to_vec(),
+            source: source.map(str::to_owned),
         },
         timeout,
     ) {
@@ -3347,6 +3351,7 @@ pub(crate) fn run_business_os_web_stack_via_service(
 pub(crate) fn run_business_os_web_stack_via_service(
     _root: &Path,
     _argv: &[String],
+    _source: Option<&str>,
 ) -> Result<Option<Value>> {
     Ok(None)
 }
@@ -3960,9 +3965,12 @@ fn handle_service_ipc_request(
                 payload: dispatch_sandboxed_cli_capturing(root, &argv),
             })
         }
-        ServiceIpcRequest::BusinessOsWebStack { argv } => {
-            match crate::service::business_os::run_business_os_web_stack_cli_json_local(root, &argv)
-            {
+        ServiceIpcRequest::BusinessOsWebStack { argv, source } => {
+            match crate::service::business_os::run_business_os_web_stack_cli_json_local(
+                root,
+                &argv,
+                source.as_deref(),
+            ) {
                 Ok(payload) => Ok(ServiceIpcResponse::Json {
                     status: 200,
                     payload,
@@ -4672,7 +4680,7 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
         // cancel the daemon-side work and therefore only produces a false
         // failure. Keep the client wait bounded, but long enough for a complete
         // command run.
-        ServiceIpcRequest::BusinessOsWebStack { argv } => {
+        ServiceIpcRequest::BusinessOsWebStack { argv, .. } => {
             let timeout_ms = argv
                 .windows(2)
                 .find(|pair| pair[0] == "--timeout-ms")
@@ -23896,6 +23904,128 @@ mod tests {
                 !sandboxed_cli_command_allowed(&argv),
                 "unexpected allowlisted command: {argv:?}"
             );
+        }
+    }
+
+    #[test]
+    fn authenticated_automation_ipc_preserves_source_and_auth_gate() {
+        let source = "return { text: 'Grüße\n世界' };";
+        let request = ServiceIpcRequest::BusinessOsWebStack {
+            argv: vec![
+                "authenticated-automation".into(),
+                "--source-id".into(),
+                "example.test".into(),
+            ],
+            source: Some(source.to_owned()),
+        };
+        let wire = serde_json::to_vec(&request).unwrap();
+        let decoded: ServiceIpcRequest = serde_json::from_slice(&wire).unwrap();
+        match &decoded {
+            ServiceIpcRequest::BusinessOsWebStack {
+                source: Some(actual),
+                ..
+            } => assert_eq!(actual, source),
+            other => panic!("unexpected request: {other:?}"),
+        }
+        // The forwarded script reaches the existing login authorization path;
+        // it cannot execute without the required credential reference.
+        let root = temp_root("authenticated-automation-auth-gate");
+        let response = handle_service_ipc_request(
+            decoded,
+            &root,
+            Arc::new(Mutex::new(SharedState::default())),
+        )
+        .unwrap();
+        match response {
+            ServiceIpcResponse::Error { message } => {
+                assert!(message.contains("auth-assist-login requires --credential-ref"))
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn authenticated_automation_ipc_does_not_bypass_command_session_validation() {
+        let root = temp_root("authenticated-automation-command-session");
+        let response = handle_service_ipc_request(
+            ServiceIpcRequest::BusinessOsWebStack {
+                argv: vec![
+                    "authenticated-automation".into(),
+                    "--source-id".into(),
+                    "example.test".into(),
+                    "--credential-ref".into(),
+                    "ctox-secret://credentials/TEST_ONLY".into(),
+                    "--command-session".into(),
+                    "malformed-token".into(),
+                ],
+                source: Some("throw new Error('must never execute');".into()),
+            },
+            &root,
+            Arc::new(Mutex::new(SharedState::default())),
+        )
+        .unwrap();
+        match response {
+            ServiceIpcResponse::Error { message } => {
+                assert!(message.contains("malformed Business OS internal command-session token"))
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn authenticated_automation_ipc_rejects_missing_oversize_and_misrouted_source() {
+        let root = temp_root("authenticated-automation-source-rejection");
+        let missing: ServiceIpcRequest = serde_json::from_value(serde_json::json!({
+            "kind": "business_os_web_stack", "argv": ["authenticated-automation"]
+        }))
+        .unwrap();
+        let cases = [
+            (missing, "requires forwarded script source"),
+            (
+                ServiceIpcRequest::BusinessOsWebStack {
+                    argv: vec!["authenticated-automation".into()],
+                    source: Some("x".repeat(
+                        crate::service::business_os::AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES + 1,
+                    )),
+                },
+                "exceeds 1 MiB",
+            ),
+            (
+                ServiceIpcRequest::BusinessOsWebStack {
+                    argv: vec!["auth-assist-status".into()],
+                    source: Some("return {};".into()),
+                },
+                "only allowed for authenticated-automation",
+            ),
+        ];
+        for (request, expected) in cases {
+            let response = handle_service_ipc_request(
+                request,
+                &root,
+                Arc::new(Mutex::new(SharedState::default())),
+            )
+            .unwrap();
+            match response {
+                ServiceIpcResponse::Error { message } => {
+                    assert!(message.contains(expected), "{message}")
+                }
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+        // Legacy requests for other commands still deserialize without source.
+        let request: ServiceIpcRequest = serde_json::from_value(serde_json::json!({
+            "kind": "business_os_web_stack", "argv": ["auth-assist-status"]
+        }))
+        .unwrap();
+        let response = handle_service_ipc_request(
+            request,
+            &root,
+            Arc::new(Mutex::new(SharedState::default())),
+        )
+        .unwrap();
+        match response {
+            ServiceIpcResponse::Error { message } => assert!(message.contains("--session-id")),
+            other => panic!("unexpected response: {other:?}"),
         }
     }
 

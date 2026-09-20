@@ -3226,23 +3226,66 @@ pub(crate) fn run_business_os_web_stack_context_extract(
     }))
 }
 
+// Bound the custom script at both the CLI reader and the daemon boundary.
+// Other web-stack commands must never read stdin, including when it is a pipe.
+pub(crate) const AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES: usize = 1024 * 1024;
+
+fn read_web_stack_cli_source(args: &[String], reader: impl Read) -> anyhow::Result<Option<String>> {
+    if args.first().map(String::as_str) != Some("authenticated-automation") {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    reader
+        .take(AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .context("failed to read authenticated-automation source from stdin")?;
+    anyhow::ensure!(
+        bytes.len() <= AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES,
+        "authenticated-automation source exceeds 1 MiB"
+    );
+    let source =
+        String::from_utf8(bytes).context("authenticated-automation source must be UTF-8")?;
+    validate_web_stack_cli_source(args, Some(&source))?;
+    Ok(Some(source))
+}
+
+fn validate_web_stack_cli_source(args: &[String], source: Option<&str>) -> anyhow::Result<()> {
+    if args.first().map(String::as_str) == Some("authenticated-automation") {
+        let source = source.context("authenticated-automation requires forwarded script source")?;
+        anyhow::ensure!(
+            source.len() <= AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES,
+            "authenticated-automation source exceeds 1 MiB"
+        );
+        anyhow::ensure!(
+            !source.trim().is_empty(),
+            "authenticated-automation requires a non-empty browser automation source"
+        );
+    } else {
+        anyhow::ensure!(
+            source.is_none(),
+            "script source is only allowed for authenticated-automation"
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn run_business_os_web_stack_cli_json_local(
     root: &Path,
     args: &[String],
+    source: Option<&str>,
 ) -> anyhow::Result<serde_json::Value> {
+    validate_web_stack_cli_source(args, source)?;
     match args.first().map(String::as_str) {
         Some("person-research") => run_business_os_web_stack_person_research(root, args),
         Some("auth-assist-request") => run_business_os_web_stack_auth_assist_request(root, args),
         Some("auth-assist-signup") => run_business_os_web_stack_auth_assist_signup(root, args),
         Some("auth-assist-login") => run_business_os_web_stack_auth_assist_login(root, args),
         Some("source-capture") => run_business_os_web_stack_source_capture(root, args),
-        Some("authenticated-automation") => {
-            let mut source = String::new();
-            std::io::stdin()
-                .read_to_string(&mut source)
-                .context("failed to read authenticated-automation source from stdin")?;
-            run_business_os_web_stack_authenticated_automation(root, args, &source)
-        }
+        Some("authenticated-automation") => run_business_os_web_stack_authenticated_automation(
+            root,
+            args,
+            source.context("authenticated-automation requires forwarded script source")?,
+        ),
         Some("auth-assist-status") => {
             let session_id = flag_value(args, "--session-id").context(
                 "usage: ctox business-os web-stack auth-assist-status --session-id <id>",
@@ -3277,10 +3320,13 @@ pub(crate) fn run_business_os_web_stack_cli_json(
     root: &Path,
     args: &[String],
 ) -> anyhow::Result<serde_json::Value> {
-    if let Some(payload) = crate::service::run_business_os_web_stack_via_service(root, args)? {
+    let source = read_web_stack_cli_source(args, std::io::stdin())?;
+    if let Some(payload) =
+        crate::service::run_business_os_web_stack_via_service(root, args, source.as_deref())?
+    {
         return Ok(payload);
     }
-    run_business_os_web_stack_cli_json_local(root, args)
+    run_business_os_web_stack_cli_json_local(root, args, source.as_deref())
 }
 
 fn run_business_os_web_stack_person_research(
@@ -7508,6 +7554,44 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_automation_stdin_is_bounded_and_command_specific() {
+        struct NoRead;
+        impl std::io::Read for NoRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                panic!("unrelated commands must not read stdin");
+            }
+        }
+        assert!(
+            read_web_stack_cli_source(&["auth-assist-status".into()], NoRead)
+                .unwrap()
+                .is_none()
+        );
+        let args = vec!["authenticated-automation".into()];
+        let source = "return { text: 'Grüße\n世界' };";
+        assert_eq!(
+            read_web_stack_cli_source(&args, source.as_bytes())
+                .unwrap()
+                .as_deref(),
+            Some(source)
+        );
+        let at_limit = vec![b'x'; AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES];
+        assert_eq!(
+            read_web_stack_cli_source(&args, at_limit.as_slice())
+                .unwrap()
+                .unwrap()
+                .len(),
+            at_limit.len()
+        );
+        let over_limit = vec![b'x'; AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES + 1];
+        assert!(read_web_stack_cli_source(&args, over_limit.as_slice())
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds 1 MiB"));
+        assert!(read_web_stack_cli_source(&args, &[0xff][..]).is_err());
+        assert!(read_web_stack_cli_source(&args, b" \n".as_slice()).is_err());
+    }
+
+    #[test]
     fn web_stack_source_capture_command_is_registered() {
         let root = tempfile::tempdir().expect("temp root");
         let args = vec![
@@ -7517,7 +7601,7 @@ mod tests {
             "--company".to_string(),
             "Example AG".to_string(),
         ];
-        let error = run_business_os_web_stack_cli_json_local(root.path(), &args)
+        let error = run_business_os_web_stack_cli_json_local(root.path(), &args, None)
             .expect_err("unsupported source must be rejected")
             .to_string();
 
