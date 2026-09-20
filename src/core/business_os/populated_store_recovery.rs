@@ -38,12 +38,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 #[cfg(test)]
 thread_local! {
     static AFTER_SQLITE_RELEASE: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
     static AFTER_STAGED_SYNC: RefCell<Option<Box<dyn Fn(&Path, &Path)>>> = RefCell::new(None);
+    static SKIPPED_WAL_CHECKPOINT: Cell<bool> = Cell::new(false);
 }
 
 pub const POPULATED_STORE_FIXTURE_SCHEMA: &str = "ctox.populated_store_recovery.fixture.v1";
@@ -199,12 +200,15 @@ pub fn materialize_supported_historical_rxdb_fixture(root: &Path) -> anyhow::Res
 
 fn assert_fresh_isolated_rxdb_fixture_root(root: &Path) -> anyhow::Result<()> {
     let database_path = rxdb_store_path(root);
+    // CLI startup (`db_migration::run_if_needed`) creates runtime/ctox.sqlite3
+    // before any `ctox business-os rxdb …` subcommand runs. That core ledger is
+    // not a populated RxDB store; refusing it makes synthetic fixture creation
+    // impossible from the CLI. Refuse actual pre-existing RxDB/business stores.
     let mut blocked = vec![
         database_path.clone(),
         native_rxdb_cutover_receipt_path(root),
         native_rxdb_immutable_backup_provenance_path(root),
         default_native_rxdb_immutable_backup_path(root),
-        crate::paths::runtime_dir(root).join("ctox.sqlite3"),
         crate::paths::runtime_dir(root).join("business-os.sqlite3"),
     ];
     blocked.extend(sqlite_sidecar_paths(&database_path));
@@ -1099,6 +1103,7 @@ pub fn restore_native_rxdb_immutable_backup(root: &Path, backup: &Path) -> anyho
         if !live_already_matches_backup {
             checkpoint_live_store(conn, &live_path)?;
         } else {
+            record_skipped_wal_checkpoint();
             disable_wal_checkpoint_on_close(conn)?;
         }
     }
@@ -1487,6 +1492,18 @@ fn disable_wal_checkpoint_on_close(conn: &Connection) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn record_skipped_wal_checkpoint() {
+    #[cfg(test)]
+    {
+        SKIPPED_WAL_CHECKPOINT.with(|flag| flag.set(true));
+    }
+}
+
+#[cfg(test)]
+fn take_skipped_wal_checkpoint() -> bool {
+    SKIPPED_WAL_CHECKPOINT.with(|flag| flag.replace(false))
+}
+
 fn invoke_after_sqlite_release_hook() {
     #[cfg(test)]
     {
@@ -1723,7 +1740,8 @@ pub fn run_production_native_rxdb_cutover(root: &Path) -> anyhow::Result<Value> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::Connection;
+    use anyhow::Context;
+    use rusqlite::{params, Connection};
 
     fn fixture_root() -> anyhow::Result<tempfile::TempDir> {
         let root = tempfile::tempdir()?;
@@ -1774,6 +1792,29 @@ mod tests {
         materialize_supported_historical_rxdb_fixture(root.path())?;
         let error = materialize_supported_historical_rxdb_fixture(root.path())
             .expect_err("second materialize must refuse");
+        assert!(
+            error.to_string().contains("fresh isolated root"),
+            "unexpected error: {error:#}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn materialize_allows_cli_core_ledger_but_refuses_existing_business_store() -> anyhow::Result<()>
+    {
+        let root = fixture_root()?;
+        let core_ledger = crate::paths::runtime_dir(root.path()).join("ctox.sqlite3");
+        Connection::open(&core_ledger)?;
+        anyhow::ensure!(core_ledger.is_file(), "CLI core ledger fixture missing");
+        materialize_supported_historical_rxdb_fixture(root.path())?;
+
+        let other = fixture_root()?;
+        fs::write(
+            crate::paths::runtime_dir(other.path()).join("business-os.sqlite3"),
+            b"pre-existing-business-store",
+        )?;
+        let error = materialize_supported_historical_rxdb_fixture(other.path())
+            .expect_err("pre-existing business store must refuse");
         assert!(
             error.to_string().contains("fresh isolated root"),
             "unexpected error: {error:#}"
@@ -2258,10 +2299,14 @@ mod tests {
         conn.execute(
             &format!(
                 "INSERT INTO {} (id, revision, deleted, lastWriteTime, data)
-                 VALUES (cmd-lost-receipt-001, 1-new, 0, 1800000000002, ?1)",
+                 VALUES (?1, ?2, 0, 1800000000002, ?3)",
                 sqlite_quote_identifier(&table)
             ),
-            [json!({"id": "cmd-lost-receipt-001", "status": "accepted"}).to_string()],
+            params![
+                "cmd-lost-receipt-001",
+                "1-new",
+                json!({"id": "cmd-lost-receipt-001", "status": "accepted"}).to_string()
+            ],
         )?;
         drop(conn);
         fs::remove_file(native_rxdb_cutover_receipt_path(root.path()))?;
@@ -2432,6 +2477,87 @@ mod tests {
         Ok(wal)
     }
 
+    fn install_backup_with_uncheckpointed_in_progress_wal(
+        root: &Path,
+        backup_path: &Path,
+        backup_sha256: &str,
+    ) -> anyhow::Result<PathBuf> {
+        // VACUUM INTO writes a DELETE-mode file that is not byte-identical to a
+        // WAL-mode live database. PRAGMA journal_mode=WAL on that installed
+        // backup changes the main-file hash before any WAL frames exist, so a
+        // nonempty same-generation WAL cannot coexist with a main file that
+        // still matches the published backup bytes. The skip-checkpoint branch
+        // compares those exact backup bytes. This fixture therefore writes
+        // in_progress + lastWriteTime+1 into WAL, snapshots, then installs the
+        // backup over the main file while keeping that leftover WAL. Linux
+        // applies those frames; sqlite in_progress is visible; the main file
+        // remains byte-identical to the backup.
+        let live = rxdb_store_path(root);
+        let wal = PathBuf::from(format!("{}-wal", live.display()));
+        let shm = PathBuf::from(format!("{}-shm", live.display()));
+        let provenance =
+            native_rxdb_backup_provenance(root)?.context("matching-backup provenance")?;
+        let payload = json!({
+            "schema": NATIVE_RXDB_CUTOVER_RECEIPT_SCHEMA,
+            "phase": CUTOVER_PHASE_IN_PROGRESS,
+            "recorded_at_ms": now_ms() as u64,
+            "store": RXDB_STORE_FILE,
+            "backup_sha256": provenance.get("sha256"),
+            "backup_path": provenance.get("backup_path"),
+            "pre_cutover_inventory_sha256": provenance.get("inventory_sha256")
+        });
+        let conn = Connection::open(&live)?;
+        let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+        anyhow::ensure!(
+            mode.eq_ignore_ascii_case("wal"),
+            "expected WAL journal, got {mode}"
+        );
+        persist_cutover_state_on_connection(&conn, &payload)?;
+        write_cutover_json(root, &payload)?;
+        let table = rxdb_collection_version_table_name("desktop_files", 0);
+        conn.execute(
+            &format!(
+                "UPDATE {} SET lastWriteTime = lastWriteTime + 1",
+                sqlite_quote_identifier(&table)
+            ),
+            [],
+        )?;
+        anyhow::ensure!(
+            wal.is_file() && wal.metadata()?.len() > 0,
+            "writer must populate WAL before snapshot {}",
+            wal.display()
+        );
+        let snapshot = PathBuf::from(format!("{}-matching-snapshot", live.display()));
+        let snapshot_wal = PathBuf::from(format!("{}-matching-snapshot-wal", live.display()));
+        let snapshot_shm = PathBuf::from(format!("{}-matching-snapshot-shm", live.display()));
+        fs::copy(&live, &snapshot)?;
+        fs::copy(&wal, &snapshot_wal)?;
+        if shm.exists() {
+            fs::copy(&shm, &snapshot_shm)?;
+        }
+        drop(conn);
+        fs::copy(&snapshot, &live)?;
+        fs::copy(&snapshot_wal, &wal)?;
+        if snapshot_shm.exists() {
+            fs::copy(&snapshot_shm, &shm)?;
+            fs::remove_file(&snapshot_shm)?;
+        }
+        fs::remove_file(&snapshot)?;
+        fs::remove_file(&snapshot_wal)?;
+        fs::copy(backup_path, &live)?;
+        let (_, live_sha) = file_sha256(&live)?;
+        anyhow::ensure!(
+            live_sha == backup_sha256,
+            "matching-backup main file must be byte-identical to the published backup before restore"
+        );
+        anyhow::ensure!(
+            wal.is_file() && wal.metadata()?.len() > 0,
+            "matching-backup leftover WAL vanished or was empty at {}",
+            wal.display()
+        );
+        Ok(wal)
+    }
+
     #[test]
     fn wal_checkpoint_is_refused_inside_exclusive_transaction() -> anyhow::Result<()> {
         let root = fixture_root()?;
@@ -2514,20 +2640,40 @@ mod tests {
         materialize_supported_historical_rxdb_fixture(root.path())?;
         let backup_path = default_native_rxdb_immutable_backup_path(root.path());
         let backup = backup_native_rxdb_immutable_store(root.path(), Some(&backup_path))?;
-        mark_cutover_in_progress(root.path())?;
-        let wal = leave_stale_populated_wal(root.path())?;
+        let backup_sha = backup["sha256"]
+            .as_str()
+            .context("backup sha256")?
+            .to_string();
+        let wal = install_backup_with_uncheckpointed_in_progress_wal(
+            root.path(),
+            &backup_path,
+            &backup_sha,
+        )?;
         let live = rxdb_store_path(root.path());
+        let (_, live_sha) = file_sha256(&live)?;
+        assert_eq!(
+            live_sha, backup_sha,
+            "skip-checkpoint branch requires byte-identical live and backup files"
+        );
         let preserved = live.with_extension("sqlite3.pre-restore");
         fs::copy(&live, &preserved)?;
-        fs::copy(&backup_path, &live)?;
         anyhow::ensure!(
             wal.is_file() && wal.metadata()?.len() > 0,
             "matching-backup crash left live-named WAL"
         );
+        let _ = take_skipped_wal_checkpoint();
         restore_native_rxdb_immutable_backup(root.path(), &backup_path)?;
+        assert!(
+            take_skipped_wal_checkpoint(),
+            "matching-backup restore must take the skip-checkpoint branch"
+        );
         assert!(
             !wal.exists(),
             "matching-backup restore must detach leftover WAL"
+        );
+        assert!(
+            !preserved.exists(),
+            "matching-backup restore must not leave pre-restore evidence"
         );
         let restored = native_rxdb_store_inventory(root.path())?;
         assert_eq!(restored["file_sha256"], backup["sha256"]);
