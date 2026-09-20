@@ -1,11 +1,23 @@
-# Reviewed Linux design matrix
+# Linux design matrix: reference policy and current draft
 
 These 24 PNGs were captured on Linux, then imported with the existing
 `qa:visual-baseline` updater (`--platform linux --actual <downloaded matrix>`).
 No macOS-rendered pixels are included. Pixel threshold 0.08 and maximum mismatch
 ratio 0.005 remain unchanged.
 
+## Permanent reference policy
+
+Regenerate references only after human visual review, using
+`npm run qa:visual-baseline` with Linux-generated captures. Ordinary QA must
+compare the immutable committed references and must never update them implicitly.
+A passing pixel comparison does not substitute for human visual approval.
+
+The current draft captures have agent review only. They were imported before
+human approval, which is still pending; this chronology is not an exception to
+the permanent policy and does not authorize adopting or merging this draft.
+
 ## Provenance and review (issue #178)
+
 
 - Source PR head: b86610b9d7e8748347518750f2d8c6a0a7958974.
 - Actual CI checkout: af5fc14 (merge into main 9dab76e73d2949bf011914e38a3becdb3db24267).
