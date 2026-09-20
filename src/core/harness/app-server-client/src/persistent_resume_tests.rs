@@ -45,6 +45,8 @@ use futures::FutureExt;
 use pretty_assertions::assert_eq;
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::Read;
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 use std::sync::Arc;
@@ -60,6 +62,10 @@ const START_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const TURN_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const SESSION_INDEX_TIMEOUT: Duration = Duration::from_secs(5);
+const INTERNAL_ERROR_CODE: i64 = -32603;
+const DIAGNOSTIC_BYTE_LIMIT: u64 = 64 * 1024;
+const DIAGNOSTIC_RECORD_LIMIT: usize = 128;
+const DIAGNOSTIC_DIRECTORY_ENTRY_LIMIT: usize = 16;
 
 struct IsolatedClient {
     client: Option<InProcessAppServerClient>,
@@ -232,9 +238,74 @@ fn is_transient_read_error(err: &TypedRequestError) -> bool {
     message.contains("is not materialized yet")
 }
 
-fn is_lost_rollout_error(err: &TypedRequestError) -> bool {
-    let message = err.to_string();
-    message.contains("is missing at")
+fn server_error(method: &str, code: i64, message: &str) -> TypedRequestError {
+    TypedRequestError::Server {
+        method: method.to_owned(),
+        source: ctox_app_server_protocol::JSONRPCErrorError {
+            code,
+            data: None,
+            message: message.to_owned(),
+        },
+    }
+}
+
+fn is_lost_rollout_error(err: &TypedRequestError, thread_id: &str) -> bool {
+    let TypedRequestError::Server { method, source } = err else {
+        return false;
+    };
+    if method != "thread/read" || source.code != INTERNAL_ERROR_CODE {
+        return false;
+    }
+    let message = source.message.as_str();
+    message == format!("failed to locate rollout for thread {thread_id}")
+        || (message.starts_with(&format!("rollout for thread {thread_id} is missing at `"))
+            && message.ends_with('`'))
+}
+
+fn assert_lost_rollout_classifier_cases(thread_id: &str) {
+    assert!(is_lost_rollout_error(
+        &server_error(
+            "thread/read",
+            INTERNAL_ERROR_CODE,
+            &format!("failed to locate rollout for thread {thread_id}"),
+        ),
+        thread_id,
+    ));
+    assert!(is_lost_rollout_error(
+        &server_error(
+            "thread/read",
+            INTERNAL_ERROR_CODE,
+            &format!("rollout for thread {thread_id} is missing at `/tmp/rollout.jsonl`"),
+        ),
+        thread_id,
+    ));
+
+    let deferred = server_error(
+        "thread/read",
+        -32600,
+        &format!("thread {thread_id} is not materialized yet"),
+    );
+    assert!(!is_lost_rollout_error(&deferred, thread_id));
+    assert!(!is_lost_rollout_error(
+        &server_error(
+            "thread/resume",
+            INTERNAL_ERROR_CODE,
+            &format!("failed to locate rollout for thread {thread_id}"),
+        ),
+        thread_id,
+    ));
+    assert!(!is_lost_rollout_error(
+        &server_error(
+            "thread/read",
+            INTERNAL_ERROR_CODE,
+            &format!("failed to load rollout `/tmp/rollout.jsonl` for thread {thread_id}: boom"),
+        ),
+        thread_id,
+    ));
+    assert!(!is_lost_rollout_error(
+        &server_error("thread/read", INTERNAL_ERROR_CODE, "unrelated failure"),
+        thread_id,
+    ));
 }
 
 async fn wait_for_turn_completed(client: &mut IsolatedClient, thread_id: &str) {
@@ -366,6 +437,129 @@ async fn manager_thread_ids(client: &IsolatedClient) -> Vec<String> {
         .collect::<Vec<_>>();
     ids.sort();
     ids
+}
+
+fn inspect_rollout(rollout_path: &Path, thread_id: &str) -> String {
+    if !rollout_path.is_file() {
+        return "exists=false".to_string();
+    }
+    let file = match File::open(rollout_path) {
+        Ok(file) => file,
+        Err(err) => return format!("exists=true open_error={err}"),
+    };
+    let file_len = file.metadata().ok().map(|metadata| metadata.len());
+    let mut bytes = Vec::new();
+    let read_error = file
+        .take(DIAGNOSTIC_BYTE_LIMIT)
+        .read_to_end(&mut bytes)
+        .err()
+        .map(|err| err.to_string());
+    let contents = String::from_utf8_lossy(&bytes);
+    let mut record_count = 0;
+    let mut parse_errors = 0;
+    let mut has_session_meta = false;
+    let mut session_id_matches = false;
+    let mut source = None;
+    let mut provider = None;
+    let mut has_user_event = false;
+    let mut user_record = None;
+    let mut user_len = None;
+    let mut user_marker = false;
+
+    for line in contents.lines().take(DIAGNOSTIC_RECORD_LIMIT) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        record_count += 1;
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            parse_errors += 1;
+            continue;
+        };
+        match value["type"].as_str() {
+            Some("session_meta") => {
+                has_session_meta = true;
+                session_id_matches = value["payload"]["id"].as_str() == Some(thread_id);
+                source = value["payload"]["source"].as_str().map(str::to_string);
+                provider = value["payload"]["model_provider"]
+                    .as_str()
+                    .map(str::to_string);
+            }
+            Some("event_msg") if value["payload"]["type"].as_str() == Some("user_message") => {
+                if !has_user_event {
+                    user_record = Some(record_count);
+                    user_len = value["payload"]["message"].as_str().map(str::len);
+                    user_marker = value["payload"]["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains(USER_MARKER));
+                }
+                has_user_event = true;
+            }
+            _ => {}
+        }
+    }
+
+    format!(
+        "exists=true file_len={file_len:?} bytes_truncated={} records={} record_limit_reached={} session_meta={has_session_meta} session_id_matches={session_id_matches} source={source:?} provider={provider:?} user_event={has_user_event} user_record={user_record:?} user_len={user_len:?} user_marker={user_marker} parse_errors={parse_errors} read_error={read_error:?}",
+        file_len.is_some_and(|len| len > DIAGNOSTIC_BYTE_LIMIT),
+        record_count,
+        record_count >= DIAGNOSTIC_RECORD_LIMIT,
+    )
+}
+
+fn inspect_raw_rollout_directory(rollout_path: &Path) -> String {
+    let Some(parent) = rollout_path.parent() else {
+        return "parent=missing".to_string();
+    };
+    let entries = match std::fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(err) => return format!("parent={} read_error={err}", parent.display()),
+    };
+    let rollout_name = rollout_path.file_name().unwrap_or_default().to_os_string();
+    let mut names = Vec::new();
+    let mut count = 0;
+    let mut limited = false;
+    let mut rollout_present = false;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => return format!("parent={} entry_error={err}", parent.display()),
+        };
+        count += 1;
+        let name = entry.file_name();
+        if name == rollout_name {
+            rollout_present = true;
+        }
+        if names.len() < 8 {
+            names.push(name.to_string_lossy().chars().take(160).collect::<String>());
+        }
+        if count >= DIAGNOSTIC_DIRECTORY_ENTRY_LIMIT {
+            limited = true;
+            break;
+        }
+    }
+    format!(
+        "parent={} count={count} count_limit_reached={limited} rollout_present={rollout_present} names={names:?}",
+        parent.display(),
+    )
+}
+
+fn collect_failure_diagnostics(
+    sqlite_home: std::path::PathBuf,
+    thread_id: String,
+    rollout_path: std::path::PathBuf,
+) -> String {
+    let state = ctox_core::state_db::read_only_state_diagnostic(
+        &sqlite_home,
+        &thread_id,
+        &rollout_path,
+        THREAD_NAME,
+        USER_MARKER,
+    );
+    format!(
+        "state_db=[{state}]\nrollout=[{}]\nraw_directory=[{}]",
+        inspect_rollout(&rollout_path, &thread_id),
+        inspect_raw_rollout_directory(&rollout_path),
+    )
 }
 
 async fn run_named_persistent_thread_restart(
@@ -519,10 +713,21 @@ async fn run_named_persistent_thread_restart(
     let listed_thread = listed
         .data
         .iter()
-        .find(|thread| !thread.ephemeral && thread.name.as_deref() == Some(THREAD_NAME))
-        .unwrap_or_else(|| {
-            panic!("named persistent thread should be listed after restart: {listed:?}")
-        });
+        .find(|thread| !thread.ephemeral && thread.name.as_deref() == Some(THREAD_NAME));
+    let listed_thread = match listed_thread {
+        Some(listed_thread) => listed_thread,
+        None => {
+            let diagnostics = collect_failure_diagnostics(
+                restarted_config.sqlite_home.clone(),
+                thread_id.clone(),
+                rollout_path.clone(),
+            );
+            panic!(
+                "named persistent thread should be listed after restart: {listed:?}\n\
+                 bounded synthetic failure diagnostics:\n{diagnostics}"
+            );
+        }
+    };
     assert_eq!(listed_thread.id, thread_id);
     assert_eq!(listed_thread.path.as_ref(), Some(&rollout_path));
 
@@ -628,8 +833,9 @@ async fn run_named_persistent_thread_restart(
     match &lost_err {
         TypedRequestError::Server { method, source } => {
             assert_eq!(method, "thread/read");
+            assert_lost_rollout_classifier_cases(&thread_id);
             assert!(
-                is_lost_rollout_error(&lost_err),
+                is_lost_rollout_error(&lost_err, &thread_id),
                 "expected a hard lost-rollout error, got: {}",
                 source.message
             );
