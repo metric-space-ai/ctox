@@ -41,8 +41,8 @@ use crate::sources::{
     self, scrape_bridge, Country, FieldKey, ResearchMode, SourceCtx, SourceHit, SourceModule, Tier,
 };
 use crate::web_search::{
-    run_ctox_web_read_tool, run_ctox_web_search_tool, CanonicalWebSearchRequest, ContextSize,
-    DirectWebReadRequest, SearchUserLocation,
+    run_ctox_web_read_tool, CanonicalWebSearchRequest, ContextSize, DirectWebReadRequest,
+    SearchUserLocation,
 };
 
 const MAX_HITS_PER_SOURCE: usize = 4;
@@ -119,6 +119,14 @@ struct PersonResearchPlan {
 pub fn run_ctox_person_research_tool(
     root: &Path,
     request: &PersonResearchRequest,
+) -> Result<Value> {
+    run_ctox_person_research_tool_with_resolver(root, request, None)
+}
+
+pub fn run_ctox_person_research_tool_with_resolver(
+    root: &Path,
+    request: &PersonResearchRequest,
+    resolver: Option<&dyn crate::credentials::CredentialResolver>,
 ) -> Result<Value> {
     let company = normalize_required_company(&request.company)?;
     if matches!(
@@ -223,7 +231,7 @@ pub fn run_ctox_person_research_tool(
             })
             .unwrap_or_else(|| company.clone());
 
-        let search_payload = run_ctox_web_search_tool(
+        let search_payload = crate::web_search::run_ctox_web_search_tool_with_resolver(
             root,
             &CanonicalWebSearchRequest {
                 query: effective_query,
@@ -238,6 +246,7 @@ pub fn run_ctox_person_research_tool(
                 include_sources: true,
                 pinned_sources: vec![plan.source_id.to_string()],
             },
+            resolver,
         );
 
         let search_payload = match search_payload {

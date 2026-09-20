@@ -3320,7 +3320,7 @@ fn run_business_os_web_stack_person_research(
         workspace,
         persist_workspace,
     };
-    let mut payload = ctox_web_stack::run_ctox_person_research_tool(root, &request)?;
+    let mut payload = crate::web_stack::run_ctox_person_research_tool(root, &request)?;
     if args.iter().any(|arg| arg == "--auto-auth-assist") {
         let requesting_task_id = flag_value(args, "--task-id")
             .map(str::trim)

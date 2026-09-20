@@ -2038,7 +2038,7 @@ fn execute(
         workspace: Some(workspace),
         persist_workspace: true,
     };
-    let mut result = ctox_web_stack::run_ctox_person_research_tool(root, &research_request)?;
+    let mut result = crate::web_stack::run_ctox_person_research_tool(root, &research_request)?;
     result["research_instructions_len"] = serde_json::json!(research_instructions_len);
     result["workspace_root"] = Value::String(
         research_request
