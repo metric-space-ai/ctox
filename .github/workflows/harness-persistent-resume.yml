@@ -1,6 +1,7 @@
 name: Harness persistent resume
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - "src/core/harness/**"
@@ -104,3 +105,10 @@ jobs:
           result = pathlib.Path(sys.argv[1]).read_text()
           assert "test result: ok. 1 passed; 0 failed; 0 ignored;" in result, result
           PYCODE
+      - name: Preserve persistent resume evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: persistent-resume-${{ github.sha }}
+          path: ${{ runner.temp }}/ctox-persistent-resume/tmp/*.txt
+          if-no-files-found: warn
