@@ -166,8 +166,8 @@ async fn dropped_stream_awaits_owned_open_startup_cleanup() {
         });
         let service = Arc::new(BusinessDataService::new(host.clone()));
         let service_factory = service.clone();
-        let ipc = BusinessDataIpc::new(Arc::new(move |credentials, _events| {
-            Ok(Arc::new(service_factory.dispatcher(credentials)))
+        let ipc = BusinessDataIpc::new(Arc::new(move |credentials, events| {
+            Ok(Arc::new(service_factory.dispatcher(credentials, events)))
         }));
         let (mut client, native) = tokio::io::duplex(64 * 1024);
         let serve = tokio::spawn(async move { ipc.serve(Box::new(native)).await });
@@ -367,8 +367,8 @@ async fn exercise_session(
         });
         let service = Arc::new(BusinessDataService::new(host.clone()));
         let service_factory = service.clone();
-        let ipc = BusinessDataIpc::new(Arc::new(move |credentials, _events| {
-            Ok(Arc::new(service_factory.dispatcher(credentials)))
+        let ipc = BusinessDataIpc::new(Arc::new(move |credentials, events| {
+            Ok(Arc::new(service_factory.dispatcher(credentials, events)))
         }));
         let (mut client, native) = tokio::io::duplex(64 * 1024);
         let serve = tokio::spawn(async move { ipc.serve(Box::new(native)).await });
@@ -376,7 +376,7 @@ async fn exercise_session(
         send_request(&mut client, "unsupported-query", query_request()).await;
         assert_rejected(
             read_frame(&mut client).await,
-            NativeBusinessDataErrorCode::Unsupported,
+            NativeBusinessDataErrorCode::UnknownSession,
         );
 
         send_request(&mut client, "open", open_request()).await;

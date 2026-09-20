@@ -2558,6 +2558,13 @@ pub(crate) fn sync_business_record_projections(root: &Path) -> anyhow::Result<us
     )
 }
 
+pub(super) async fn enqueue_business_command_document_with_database_public(
+    database: &Arc<RxDatabase>,
+    document: Value,
+) -> anyhow::Result<Value> {
+    enqueue_business_command_document_with_database(database, document).await
+}
+
 pub fn enqueue_business_command_document(root: &Path, document: Value) -> anyhow::Result<Value> {
     with_business_os_database(
         root,
@@ -2946,6 +2953,26 @@ async fn run_native_peer(
                 )?;
                 let workjet_device_root = root.clone();
                 let business_data_root = root.clone();
+                let business_data_database = Arc::clone(&database);
+                let business_data_source = ctox_sync::business_data_remote::BusinessDataSource::new(
+                    business_data_database,
+                    Arc::new(super::rxdb_peer_business_data_source::NativeBusinessDataPolicy::new(
+                        root.clone(),
+                        Arc::clone(&database),
+                    )),
+                    pool.connection_handler.clone(),
+                );
+                business_data_source.register(pool)?;
+                {
+                    let source = business_data_source.clone();
+                    let cancelled = pool.cancelled();
+                    pool.spawn_auxiliary_tracked(async move {
+                        cancelled.await;
+                        if let Err(error) = source.shutdown().await {
+                            eprintln!("[business-os] BusinessData source cleanup failed: {error}");
+                        }
+                    });
+                }
                 let identity_transport = pool.connection_handler.clone();
                 pool.register_identity_request_handler(
                     ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
