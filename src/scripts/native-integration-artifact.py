@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Bounded Linux integration proof and installer-compatible candidate bundle."""
+import argparse
 import hashlib
 import json
 import os
@@ -18,7 +19,38 @@ EVIDENCE.mkdir(parents=True, exist_ok=True)
 DEADLINE = time.monotonic() + 7200
 TARGET = 'x86_64-unknown-linux-gnu'
 FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
-           'business_chat', 'repair_queue_projections']
+           'business_chat', 'repair_queue_projections',
+           'mcp_app_authority', 'app_source_', 'gateway_managed_',
+           'replicated_queue_command_persists_and_revalidates_native_authorization',
+           'capability_epoch_revokes_tokens_after_role_or_grant_change',
+           'person_research_binding_runtime_leads_preserve_identity_and_scope',
+           'person_research_record_binding_accepts_nested_lead_data',
+           'authenticated_automation_', 'outbound_runtime_library_',
+           'outbound_scrape_test_',
+           'research_control_revalidation_uses_native_actor_and_original_permission',
+           'web_stack_auth_owner_resolution_',
+           'web_stack_auth_assist_reuses_active_task_across_request_ids',
+           'web_stack_generated_research_control_task_revalidates_persisted_native_owner',
+           'outbound_custom_research_adapter_queues_universal_scraping_generation']
+REQUIRED_RUNTIME_TESTS = {
+    'authenticated_automation_stdin_is_bounded_and_command_specific',
+    'authenticated_automation_ipc_preserves_source_and_auth_gate',
+    'authenticated_automation_ipc_does_not_bypass_command_session_validation',
+    'authenticated_automation_ipc_rejects_missing_oversize_and_misrouted_source',
+    'authenticated_automation_cli_reader_forwards_source_to_daemon_socket',
+    'authenticated_automation_public_dispatcher_forwards_source_to_daemon_socket',
+    'outbound_runtime_library_preserves_activated_revision_over_bundle',
+    'outbound_runtime_library_invalid_materialization_does_not_import_bundle',
+    'outbound_runtime_library_novel_first_use_generates_then_executes_registered_script',
+    'outbound_scrape_test_missing_identity_has_no_scrape_or_repair_effects',
+    'outbound_scrape_test_uses_explicit_identity_instead_of_adapter_metadata',
+    'outbound_scrape_test_contract_rejects_invalid_budget_and_drops_claimed_authority',
+    'research_control_revalidation_uses_native_actor_and_original_permission',
+    'web_stack_auth_owner_resolution_prefers_verified_task_over_flag_and_env',
+    'web_stack_auth_owner_resolution_uses_command_authorization_chat_and_session',
+    'web_stack_auth_assist_reuses_active_task_across_request_ids',
+    'web_stack_generated_research_control_task_revalidates_persisted_native_owner',
+}
 RECORD = {'stages': [], 'complete': False}
 
 
@@ -35,11 +67,23 @@ def run(name, args):
     remaining = int(DEADLINE - time.monotonic())
     if remaining <= 0:
         raise TimeoutError('Shared validation deadline exceeded')
+    print(f'[stage] {name} started', flush=True)
     with log.open('w') as output:
         process = subprocess.Popen(args, cwd=ROOT, stdout=output,
                                    stderr=subprocess.STDOUT, start_new_session=True)
         try:
-            process.wait(timeout=remaining)
+            while True:
+                try:
+                    process.wait(timeout=min(30, max(1, DEADLINE - time.monotonic())))
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= DEADLINE:
+                        raise
+                    stat = log.stat()
+                    print(json.dumps({'stage': name, 'pid': process.pid,
+                                      'log_bytes': stat.st_size,
+                                      'log_idle_seconds': int(time.time() - stat.st_mtime)}),
+                          flush=True)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGTERM)
             try:
@@ -48,6 +92,7 @@ def run(name, args):
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
             raise
+    print(f'[stage] {name} completed exit={process.returncode}', flush=True)
     RECORD['stages'].append({'name': name, 'command': args, 'exit': process.returncode})
     save()
     if process.returncode:
@@ -64,6 +109,12 @@ def digest(path):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--focused-runtime", action="store_true",
+                        help="Prove only the required runtime regressions; no release package")
+    focused = parser.parse_args().focused_runtime
+    RECORD.update(mode="focused-runtime" if focused else "full-release",
+                  full_release_acceptance=False)
     revision = capture(['git', 'rev-parse', 'HEAD'])
     reviewed = os.environ['REVIEWED_SOURCE_REVISION']
     ancestors = {'reviewed_pi': reviewed,
@@ -89,6 +140,27 @@ def main():
                   sidecar_lock_sha256=digest(sidecar.parent.parent / 'package-lock.json'),
                   workflow_run=os.environ.get('GITHUB_RUN_ID'))
     save()
+    run('customer-identity', ['node',
+        'src/apps/business-os/rxdb/tests/customer-identifier-inventory-smoke.mjs'])
+    run('content-guard', ['node', 'src/apps/business-os/scripts/audit-business-os-content.mjs'])
+    if not focused:
+        # This candidate preserves main shell assets: its four existing suites
+        # define 26 tests. The five PR185 native-read tests are not on this tree.
+        sync_tests = [
+            'sync-collection-registry.test.mjs',
+            'sync-contract.test.mjs',
+            'sync-desktop-icon-replication.test.mjs',
+            'sync-room-circuit.test.mjs',
+        ]
+        sync_output = run('shell-native-read-regressions', [
+            'node', '--test', '--test-concurrency=1',
+            *['src/apps/business-os/shared/' + name for name in sync_tests],
+        ])
+        for metric, expected in [('tests', 26), ('pass', 26), ('fail', 0), ('skipped', 0)]:
+            if re.findall(r'^# ' + metric + r' (\d+)$', sync_output, re.MULTILINE) != [str(expected)]:
+                raise RuntimeError(f'Unexpected shell native-read regression {metric} count')
+        RECORD['shell_native_read_tests'] = 26
+        save()
     compiled = run('test-compile', ['cargo', 'test', '--locked', '--release',
                    '--bin', 'ctox', '--target', TARGET, '--jobs', '2',
                    '--no-run', '--message-format=json'])
@@ -108,30 +180,49 @@ def main():
     executable = executables.pop()
     RECORD['test_executable'] = executable
     RECORD['test_executable_sha256'] = digest(Path(executable))
-    command = [executable, *FILTERS]
+    command = [executable] if focused else [executable, *FILTERS]
     listing = run('test-list', command + ['--list'])
     names = re.findall(r'^(.+): test$', listing, re.MULTILINE)
-    counts = {selector: sum(selector in name for name in names) for selector in FILTERS}
-    if not all(counts.values()):
-        raise RuntimeError(f'A required test group is absent: {counts}')
-    required = {
-        'coding_agents::pi_sidecar::tests::inherited_minimax_route_drives_real_pi_tools_through_native_bridge',
-        'coding_agents::pi_sidecar::tests::responses_edit_owner_applies_only_complete_source_and_session',
-        'coding_agents::pi_sidecar::tests::incomplete_failure_detail_only_preserves_allowlisted_enum_and_counts',
-        'coding_agents::pi_sidecar::tests::module_source_is_complete_beyond_collection_and_module_page_limits',
-        'coding_agents::pi_sidecar::tests::module_source_preserves_native_and_rxdb_version_precedence',
-        'coding_agents::pi_sidecar::tests::module_source_rejects_invalid_or_ambiguous_snapshots_without_content',
-        'coding_agents::pi_sidecar::tests::missing_module_source_stops_before_model_or_sidecar_and_session_write',
-    }
-    missing = required - set(names)
-    if missing:
-        raise RuntimeError(f'Required native Pi regressions are absent: {sorted(missing)}')
-    RECORD.update(discovered_tests=names, group_counts=counts)
+    counts = {}
+    if not focused:
+        counts = {selector: sum(selector in name for name in names) for selector in FILTERS}
+        if not all(counts.values()):
+            raise RuntimeError(f'A required test group is absent: {counts}')
+        if counts['mcp_app_authority'] < 14:
+            raise RuntimeError(f"Missing managed-authority regressions: {counts}")
+        required = {
+            'coding_agents::pi_sidecar::tests::inherited_minimax_route_drives_real_pi_tools_through_native_bridge',
+            'coding_agents::pi_sidecar::tests::responses_edit_owner_applies_only_complete_source_and_session',
+            'coding_agents::pi_sidecar::tests::incomplete_failure_detail_only_preserves_allowlisted_enum_and_counts',
+            'coding_agents::pi_sidecar::tests::module_source_is_complete_beyond_collection_and_module_page_limits',
+            'coding_agents::pi_sidecar::tests::module_source_preserves_native_and_rxdb_version_precedence',
+            'coding_agents::pi_sidecar::tests::module_source_rejects_invalid_or_ambiguous_snapshots_without_content',
+            'coding_agents::pi_sidecar::tests::missing_module_source_stops_before_model_or_sidecar_and_session_write',
+        }
+        missing = required - set(names)
+        if missing:
+            raise RuntimeError(f'Required native Pi regressions are absent: {sorted(missing)}')
+    runtime_counts = {test: sum(name.rsplit('::', 1)[-1] == test for name in names)
+                      for test in REQUIRED_RUNTIME_TESTS}
+    if any(count != 1 for count in runtime_counts.values()):
+        raise RuntimeError(f'Required runtime regressions absent or ambiguous: {runtime_counts}')
+    if focused:
+        if len(REQUIRED_RUNTIME_TESTS) != 17:
+            raise RuntimeError('Focused proof requires exactly 17 runtime cases')
+        names = sorted(name for name in names
+                       if name.rsplit('::', 1)[-1] in REQUIRED_RUNTIME_TESTS)
+        command = [executable, *names, '--exact']
+    RECORD.update(discovered_tests=names, group_counts=counts,
+                  required_runtime_tests=runtime_counts)
     save()
     output = run('native-tests', command + ['--test-threads=2'])
     summaries = re.findall(r'test result: ok\. (\d+) passed; 0 failed; 0 ignored;', output)
     if len(summaries) != 1 or int(summaries[0]) != len(names):
         raise RuntimeError('Test execution does not prove every discovered case passed')
+    if focused:
+        RECORD.update(complete=True, focused_runtime_passed=len(names))
+        save()
+        return
     metadata = json.loads(capture(['cargo', 'metadata', '--locked', '--no-deps',
                                    '--format-version', '1']))
     target_dir = Path(metadata['target_directory'])
@@ -144,6 +235,24 @@ def main():
     run('browser-dependencies', ['npm', '--prefix', 'src/apps/business-os', 'ci'])
     run('browser-runtime', ['npm', '--prefix', 'src/apps/business-os', 'exec',
                             'playwright', 'install', '--with-deps', 'chromium'])
+    run('business-os-js-tests', ['npm', '--prefix', 'src/apps/business-os', 'test'])
+    run('business-os-module-bundles', ['npm', '--prefix', 'src/apps/business-os', 'run', 'test:module-bundles'])
+    run('shell-contract', ['node', 'src/apps/business-os/scripts/assert-shell-v2-contract.mjs'])
+    startup = run('shell-startup-cache', ['node', '--test',
+                  'src/apps/business-os/scripts/test-shell-window-cache-startup.mjs'])
+    if not re.search(r'^# tests 2$', startup, re.MULTILINE) or not re.search(
+            r'^# pass 2$', startup, re.MULTILINE):
+        raise RuntimeError('Shell startup cache regressions did not both pass')
+    geometry_dir = EVIDENCE / 'shell-geometry'
+    run('shell-geometry', ['node', 'src/apps/business-os/scripts/shell-v2-geometry-lab.mjs',
+                          '--apps', 'mail', '--widths', '1180,720',
+                          '--output-dir', str(geometry_dir)])
+    geometry = json.loads((geometry_dir / 'report.json').read_text())
+    if len(geometry) != 2 or {(item['app'], item['width']) for item in geometry} != {
+            ('mail', 1180), ('mail', 720)} or not all(item['ok'] for item in geometry):
+        raise RuntimeError('Required Mail shell geometry cases did not all pass')
+    RECORD['shell_geometry'] = geometry
+    save()
     run('rxdb-wire-fixture', ['cargo', 'build', '--locked', '--manifest-path',
                              'src/core/rxdb/Cargo.toml', '--example',
                              'v15_wire_daemon', '--target-dir', str(target_dir),
@@ -178,7 +287,7 @@ def main():
         path = line.strip()
         if path and not path.startswith('#') and not (bundle / path).exists():
             raise RuntimeError(f'Installer bundle manifest path missing: {path}')
-    RECORD['complete'] = True
+    RECORD.update(complete=True, full_release_acceptance=True)
     save()
     (bundle / 'build-provenance.json').write_text(json.dumps(RECORD, indent=2) + '\n')
     artifacts = OUT / 'artifacts'
