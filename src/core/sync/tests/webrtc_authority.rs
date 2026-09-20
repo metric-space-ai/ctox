@@ -773,7 +773,7 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             ipc_call(nodes[&2].clone(), "foreign-protect", protect.clone()).await,
             SyncIpcResult::Rejected { .. }
         ));
-        let mut tampered = receipts;
+        let mut tampered = receipts.clone();
         tampered[1].signature.push('0');
         assert!(matches!(
             ipc_call(
