@@ -300,6 +300,74 @@ mod tests {
     }
 
     #[test]
+    fn mcp_app_authority_admission_rejects_restricted_actors_and_forged_tool_role(
+    ) -> anyhow::Result<()> {
+        for restriction in [
+            "gateway-user",
+            "inactive-native",
+            "downgraded-native",
+            "module-scope",
+        ] {
+            let temp = tempdir()?;
+            let root = temp.path();
+            installed_fixture(root)?;
+            let conn = store::open_store(root)?;
+            let gateway_role = if restriction == "gateway-user" {
+                "user"
+            } else {
+                "chef"
+            };
+            match restriction {
+                "inactive-native" => {
+                    conn.execute("INSERT INTO business_users (user_id, display_name, role, active, created_at_ms, updated_at_ms) VALUES (?1, 'Restricted', 'chef', 0, 1, 1)", params![ACTOR])?;
+                }
+                "downgraded-native" => {
+                    conn.execute("INSERT INTO business_users (user_id, display_name, role, active, created_at_ms, updated_at_ms) VALUES (?1, 'Restricted', 'user', 1, 1, 1)", params![ACTOR])?;
+                }
+                "module-scope" => {
+                    let mut policy = mcp_policy(root);
+                    policy.allowed_modules = vec!["another-app".into()];
+                    save_mcp_policy(root, &policy)?;
+                }
+                _ => {}
+            }
+            let outcome = call_tool_with_trusted_gateway_context(
+                root,
+                "business_os.modify_app",
+                serde_json::json!({
+                    "module_id": MODULE,
+                    "instruction": "Attempt a restricted modification",
+                    "_context": {
+                        "actor": "native-owner", "role": "chef", "trusted_role": "chef",
+                        "trusted_role_source": "ctox_dev_managed_mcp_token",
+                        "auth_source": "ctox_dev_managed_mcp_token"
+                    }
+                }),
+                Some(&gateway_context(gateway_role)),
+            );
+            assert!(
+                outcome.is_err(),
+                "{restriction} must deny before admission: {outcome:?}"
+            );
+            let commands: i64 =
+                conn.query_row("SELECT COUNT(*) FROM business_commands", [], |row| {
+                    row.get(0)
+                })?;
+            let tasks: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM business_records WHERE collection = 'ctox_queue_tasks'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(
+                (commands, tasks),
+                (0, 0),
+                "{restriction} must not enqueue work"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn mcp_app_authority_local_modify_rejects_redirects_without_queue_or_shadow(
     ) -> anyhow::Result<()> {
         let temp = tempdir()?;
