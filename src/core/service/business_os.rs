@@ -6917,6 +6917,117 @@ mod tests {
     }
 
     #[test]
+    fn web_stack_generated_research_control_task_revalidates_persisted_native_owner(
+    ) -> anyhow::Result<()> {
+        for command_type in [
+            "outbound.research_source.generate_adapter",
+            "outbound.research_source.test",
+        ] {
+            let root = tempfile::tempdir()?;
+            let owner = "adapter-owner@example.test";
+            let command_id = "cmd_generated_adapter_owner";
+            let (capability_token, _) =
+                crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                    root.path(),
+                    owner,
+                    "Adapter fixture owner",
+                    "admin",
+                    chrono::Utc::now().timestamp_millis(),
+                )?;
+            let accepted = crate::business_os::store::accept_rxdb_business_command_with_origin(
+                root.path(),
+                serde_json::json!({
+                    "id": command_id, "command_id": command_id,
+                    "module":"outbound", "command_type":command_type,
+                    "record_id":"adapter_fixture", "status":"pending_sync",
+                    "payload": {
+                        "adapter_id":"adapter_fixture", "campaign_id":"fixture-campaign",
+                        "source_id":"research.fixture.example",
+                        "test_input":{"company":"Fixture Research GmbH", "country":"AT"},
+                        "adapter":{
+                            "id":"adapter_fixture", "campaign_id":"fixture-campaign",
+                            "source_id":"research.fixture.example", "label":"Fixture provider",
+                            "url":"https://research.fixture.example/", "adapter_kind":"custom_url",
+                            "target_key":"research-fixture-example", "requires_credential":false
+                        }
+                    },
+                    "client_context":{"capability_token":capability_token,
+                        "actor":{"id":"forged"}, "owner_user_id":"forged"}
+                }),
+                crate::business_os::store::CommandOrigin::ReplicatedPeer,
+            )?;
+            assert_eq!(accepted["status"], "completed", "{accepted}");
+            assert_eq!(
+                accepted
+                    .pointer("/result/adapter/status")
+                    .and_then(serde_json::Value::as_str),
+                Some("generation_queued")
+            );
+            let task_id = accepted
+                .pointer("/result/adapter/payload/scrape_registry_effect/generation_task/task_id")
+                .and_then(serde_json::Value::as_str)
+                .context("actual generated task")?;
+            let task = channels::load_queue_task(root.path(), task_id)?
+                .context("persisted generated task")?;
+            assert_eq!(task.metadata["business_os_command_id"], command_id);
+            assert!(task.prompt.contains("Fixture Research GmbH"));
+            assert!(task.prompt.contains("\"country\":\"AT\""));
+            let canonical = channels::business_command_projection(root.path(), command_id)?;
+            assert_eq!(
+                canonical
+                    .pointer("/native_authorization/permission")
+                    .and_then(serde_json::Value::as_str),
+                Some("data.write")
+            );
+            assert_eq!(
+                canonical
+                    .pointer("/native_authorization/actor/id")
+                    .and_then(serde_json::Value::as_str),
+                Some(owner)
+            );
+            assert_eq!(
+                canonical
+                    .pointer("/payload/test_input/company")
+                    .and_then(serde_json::Value::as_str),
+                Some("Fixture Research GmbH")
+            );
+            assert_eq!(
+                canonical
+                    .pointer("/payload/test_input/country")
+                    .and_then(serde_json::Value::as_str),
+                Some("AT")
+            );
+            let claimed_args = vec!["--owner-user-id".into(), "forged".into()];
+            assert_eq!(
+                resolve_web_stack_auth_owner_user_id_with_env(
+                    root.path(),
+                    &claimed_args,
+                    task_id,
+                    Some("forged-env"),
+                    false,
+                )?
+                .as_deref(),
+                Some(owner)
+            );
+            let conn = crate::business_os::store::open_store(root.path())?;
+            conn.execute(
+                "UPDATE business_users SET active=0 WHERE user_id=?1",
+                rusqlite::params![owner],
+            )?;
+            let error = resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &claimed_args,
+                task_id,
+                Some("forged-env"),
+                false,
+            )
+            .expect_err("deactivated admitted actor must not regain access through claims");
+            assert!(error.to_string().contains("no longer active"), "{error:#}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn web_stack_auth_owner_resolution_uses_command_authorization_chat_and_session(
     ) -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
