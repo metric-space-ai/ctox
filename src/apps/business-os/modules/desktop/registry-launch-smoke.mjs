@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ensureDesktopLayoutWithAuthority } from './layout-authority.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const businessOsRoot = resolve(here, '../..');
@@ -136,10 +137,41 @@ assert.ok(
   desktopSource.includes('icon read skipped during database restart'),
   'Desktop initial icon rendering must tolerate transient IndexedDB connection shutdown'
 );
-assert.ok(
-  desktopSource.includes('layout read skipped during database restart'),
-  'Desktop initial layout loading must tolerate transient IndexedDB connection shutdown'
+// Execute the actual Desktop wrapper: its authority helper owns restart
+// handling now, so a log message in index.js is no longer the contract.
+const ensureLayoutBody = desktopSource.match(
+  /async function ensureLayout\(collection, launcherRef\) \{([\s\S]*?)\n  \}/
 );
+assert.ok(ensureLayoutBody, 'Desktop must expose its layout authority wrapper');
+for (const failure of [
+  new Error("Failed to execute 'transaction' on 'IDBDatabase': The database connection is closing."),
+  { message: 'database connection is closing' },
+]) {
+  const defaults = { taskbar_pins: ['ctox'], wallpaper_url: '' };
+  let authorityReads = 0;
+  const ensureLayout = new Function(
+    'ensureDesktopLayoutWithAuthority', 'ctx', 'defaultLayout', 'LAYOUT_DOC_ID', 'insertMissingSeed',
+    `return async function ensureLayout(collection, launcherRef) {${ensureLayoutBody[1]}\n};`
+  )(
+    ensureDesktopLayoutWithAuthority,
+    { readNativeCollectionDocument: async (collection, id, options) => {
+      authorityReads += 1;
+      assert.equal(collection, 'desktop_layout');
+      assert.equal(id, 'layout');
+      assert.deepEqual(options, { timeoutMs: 5000 });
+      throw failure;
+    } },
+    () => defaults,
+    'layout',
+    async () => assert.fail('unknown native layout must never publish defaults')
+  );
+  const result = await ensureLayout({
+    findOne: () => assert.fail('failed authority must not fall back to local database reads'),
+  }, {});
+  assert.equal(authorityReads, 1);
+  assert.deepEqual(result, defaults, 'database restart must allow local default rendering');
+  assert.equal(result.updated_at_ms, undefined, 'fallback must not create an authoritative edit timestamp');
+}
 assert.ok(
   desktopSource.includes('icon seed skipped during database restart'),
   'Desktop initial icon seeding must tolerate transient IndexedDB connection shutdown'
