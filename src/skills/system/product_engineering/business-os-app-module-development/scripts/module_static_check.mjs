@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { runModuleSemanticCheck } from './module_semantic_isolation.mjs';
 
 const moduleId = process.argv[2];
 const modeArg = process.argv[3] || '';
@@ -122,11 +122,6 @@ function schemaTypes(schema) {
   return [];
 }
 
-function actualJsonType(value) {
-  if (value === null) return 'null';
-  if (Array.isArray(value)) return 'array';
-  return typeof value;
-}
 
 function normalizeRequired(value) {
   return Array.isArray(value) ? value.map(String).sort() : [];
@@ -326,15 +321,10 @@ function allowedTypesByProperty(schemas) {
   return out;
 }
 
-async function importEsmModule(path) {
-  const url = pathToFileURL(path);
-  url.searchParams.set('ctox_static_check', `${Date.now()}_${Math.random().toString(36).slice(2)}`);
-  return import(url.href);
-}
-
+// Semantic checks run in a separate OS-isolated worker, never in this checker.
 async function loadSchemaJsCollections(path) {
   try {
-    const module = await importEsmModule(path);
+    const module = { collections: runModuleSemanticCheck(moduleDir, { kind: 'schema', path }) };
     if (!module.collections || typeof module.collections !== 'object' || Array.isArray(module.collections)) {
       fail('schema.js must export a collections object');
       return null;
@@ -353,27 +343,25 @@ async function collectRecordHelperSchemaFailures(moduleDir, schemaDoc) {
   if (!existsSync(recordsPath) || schemas.length === 0) return messages;
   let module;
   try {
-    module = await importEsmModule(recordsPath);
+    module = runModuleSemanticCheck(moduleDir, { kind: 'records', path: recordsPath, sample: sampleRecordForSchemas(schemas) });
   } catch (error) {
     messages.push(`core/records.mjs could not be imported as browser ESM: ${error.message}`);
     return messages;
   }
-  const sample = sampleRecordForSchemas(schemas);
+
   const allowedByProperty = allowedTypesByProperty(schemas);
-  for (const [name, value] of Object.entries(module)) {
-    if (!/^normalize[A-Z]/.test(name) || typeof value !== 'function') continue;
-    let record;
-    try {
-      record = value(sample, { nowMs: 1781990000000 });
-    } catch (error) {
-      messages.push(`core/records.mjs ${name} threw when called with schema-shaped sample input: ${error.message}`);
+  for (const { name, types, error } of module) {
+
+    if (error) {
+      messages.push(`core/records.mjs ${name} threw when called with schema-shaped sample input: ${error}`);
       continue;
     }
-    if (!record || typeof record !== 'object' || Array.isArray(record)) continue;
-    for (const [field, fieldValue] of Object.entries(record)) {
+    if (!types) continue;
+    for (const [field, actual] of Object.entries(types)) {
+
       const allowed = allowedByProperty.get(field);
       if (!allowed || allowed.size === 0) continue;
-      const actual = actualJsonType(fieldValue);
+
       if (!allowed.has(actual)) {
         messages.push(`core/records.mjs ${name} returns ${field} as ${actual}, but collections.schema.json declares ${Array.from(allowed).sort().join('|')}`);
       }
