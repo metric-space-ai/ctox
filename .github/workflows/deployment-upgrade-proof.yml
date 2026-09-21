@@ -39,14 +39,33 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/recorder-release-diagnostic"
+          exec > >(tee -a "$RUNNER_TEMP/recorder-release-diagnostic/setup.log") 2>&1
+          trap 'rc=$?; printf "setup_exit=%s line=%s\n" "$rc" "$LINENO" > "$RUNNER_TEMP/recorder-release-diagnostic/setup-result.txt"' EXIT
           df -h "$RUNNER_TEMP"
           uptime
           ps -eo pid,ppid,comm
           test -x /usr/bin/google-chrome
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends linux-tools-generic
-          perf_executable=$(find /usr/lib/linux-tools -type f -name perf -executable | sort | tail -n1)
-          test -n "$perf_executable"
+          dpkg-query -W -f='${db:Status-Abbrev} ${binary:Package}\n' 'linux-tools-*' > "$RUNNER_TEMP/recorder-release-diagnostic/tool-packages.txt"
+          mapfile -t tool_packages < <(awk '$1 == "ii" { print $2 }' "$RUNNER_TEMP/recorder-release-diagnostic/tool-packages.txt")
+          test "${#tool_packages[@]}" -gt 0
+          dpkg -L "${tool_packages[@]}" > "$RUNNER_TEMP/recorder-release-diagnostic/tool-paths.txt"
+          perf_executable=''
+          while IFS= read -r candidate; do
+            case "$candidate" in /usr/lib/*/perf) ;; *) continue ;; esac
+            test -x "$candidate" || continue
+            resolved=$(readlink -f "$candidate")
+            printf 'perf_candidate=%s resolved=%s\n' "$candidate" "$resolved"
+            if "$resolved" --version; then
+              perf_executable=$resolved
+              break
+            fi
+          done < "$RUNNER_TEMP/recorder-release-diagnostic/tool-paths.txt"
+          if test -z "$perf_executable"; then
+            echo 'No executable perf found in installed linux-tools package manifests' >&2
+            exit 1
+          fi
           "$perf_executable" --version
           printf 'DIAGNOSTIC_PERF=%s\nTMPDIR=%s\n' "$perf_executable" "$RUNNER_TEMP" >> "$GITHUB_ENV"
           sudo sysctl -w kernel.perf_event_paranoid=1
