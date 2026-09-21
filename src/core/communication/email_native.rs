@@ -567,17 +567,45 @@ fn execute_test(options: &EmailOptions) -> Result<Value> {
     }))
 }
 
+fn sync_account_profile(
+    conn: &Connection,
+    account_key: &str,
+    options: &EmailOptions,
+) -> Result<Value> {
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT profile_json FROM communication_accounts WHERE account_key = ?1",
+            [account_key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let mut profile = match existing {
+        Some(raw) => {
+            serde_json::from_str::<Value>(&raw).context("invalid email account profile")?
+        }
+        None => json!({}),
+    };
+    let target = profile
+        .as_object_mut()
+        .context("email account profile must be an object")?;
+    if let Value::Object(connection) = build_profile_json(options) {
+        target.extend(connection);
+    }
+    Ok(profile)
+}
+
 fn execute_sync(options: &EmailOptions) -> Result<Value> {
     require_provider_credentials(options)?;
     let mut conn = open_channel_db(&options.db_path)?;
     let account_key = account_key_from_email(&options.email);
+    let profile = sync_account_profile(&conn, &account_key, options)?;
     ensure_account(
         &mut conn,
         &account_key,
         "email",
         &options.email,
         &options.provider,
-        build_profile_json(options),
+        profile,
     )?;
     let started_at = now_iso_string();
     let mut fetched_count = 0i64;
@@ -4070,6 +4098,50 @@ mod tests {
         assert!(accounts[0]["error"].is_string());
         assert_eq!(accounts[1]["account"], "lena@example.test");
         assert!(accounts[1]["error"].is_string());
+        Ok(())
+    }
+
+    #[test]
+    fn sync_keeps_account_assignment_when_connection_fails() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut options = empty_options();
+        options.db_path = dir.path().join("channels.sqlite3");
+        options.raw_dir = dir.path().join("raw");
+        options.email = "lena@example.test".into();
+        options.provider = "owa".into();
+        options.password = "fixture-password".into();
+        options.ews_auth_type = "basic".into();
+        // Invalid URL fails inside the transport without contacting a server,
+        // after execute_sync has refreshed the account connection profile.
+        options.ews_url = "not-a-url".into();
+        let mut conn = open_channel_db(&options.db_path)?;
+        super::ensure_account(
+            &mut conn,
+            "email:lena@example.test",
+            "email",
+            &options.email,
+            "owa",
+            serde_json::json!({
+                "ownerUserId": "lena-owner",
+                "shared_user_ids": ["delegate"],
+                "displayName": "Lena",
+                "ewsUrl": "old-endpoint"
+            }),
+        )?;
+        drop(conn);
+        assert!(super::execute_sync(&options).is_err());
+        let conn = open_channel_db(&options.db_path)?;
+        let raw: String = conn.query_row(
+            "SELECT profile_json FROM communication_accounts WHERE account_key = ?1",
+            ["email:lena@example.test"],
+            |row| row.get(0),
+        )?;
+        let profile: serde_json::Value = serde_json::from_str(&raw)?;
+        assert_eq!(profile["ownerUserId"], "lena-owner");
+        assert_eq!(profile["shared_user_ids"], serde_json::json!(["delegate"]));
+        assert_eq!(profile["displayName"], "Lena");
+        assert_eq!(profile["ewsUrl"], "not-a-url");
+        assert!(!raw.contains("fixture-password"));
         Ok(())
     }
 

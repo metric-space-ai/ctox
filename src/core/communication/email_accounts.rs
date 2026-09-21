@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use rusqlite::Connection;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -131,7 +131,8 @@ pub(crate) fn upsert_account(
 
     // Konto sofort in communication_accounts sichtbar machen (Mail-App-Liste).
     let db_path = root.join("runtime/ctox.sqlite3");
-    if let Ok(mut conn) = Connection::open(&db_path) {
+    {
+        let mut conn = crate::communication_store::open_channel_db(&db_path)?;
         let profile_json = json!({
             "imapHost": config.imap_host,
             "imapPort": config.imap_port,
@@ -145,14 +146,14 @@ pub(crate) fn upsert_account(
             "displayName": config.display_name,
             "source": "mail-app-account",
         });
-        let _ = crate::mission::channels::upsert_communication_account(
+        crate::mission::channels::upsert_communication_account(
             &mut conn,
             &format!("email:{}", config.address),
             "email",
             &config.address,
             &config.provider,
             profile_json,
-        );
+        )?;
     }
     Ok(config)
 }
@@ -332,6 +333,18 @@ mod tests {
         assert_eq!(public["owa_url"], lena.owa_url);
         assert!(!public.to_string().contains("lena-fixture"));
         assert!(!serde_json::to_string(&accounts)?.contains("lena-fixture"));
+        // A fresh runtime must expose the assigned account immediately, not
+        // silently skip projection because the channel schema did not exist.
+        let conn = crate::communication_store::open_channel_db(&root.join("runtime/ctox.sqlite3"))?;
+        let profile: String = conn.query_row(
+            "SELECT profile_json FROM communication_accounts WHERE account_key = ?1",
+            ["email:lena@example.test"],
+            |row| row.get(0),
+        )?;
+        let profile: Value = serde_json::from_str(&profile)?;
+        assert_eq!(profile["ownerUserId"], "lena-owner");
+        assert_eq!(profile["displayName"], "");
+        assert_eq!(profile["owaUrl"], "https://lena.example.test/owa/");
         Ok(())
     }
 
