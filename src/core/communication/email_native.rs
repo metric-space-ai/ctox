@@ -181,15 +181,21 @@ pub(crate) fn service_sync(
     settings: &BTreeMap<String, String>,
 ) -> Result<Option<Value>> {
     // Instanz-Konto (CTO_EMAIL_*) plus persönliche Konten aus der Mail-App.
-    let instance = service_sync_single(root, settings)?;
-    let accounts = super::email_accounts::load_accounts(root).unwrap_or_default();
+    let instance = service_sync_single(root, settings);
+    let accounts = super::email_accounts::load_accounts(root)?;
     if accounts.is_empty() {
-        return Ok(instance);
+        return instance;
     }
     let instance_address = setting(settings, "CTO_EMAIL_ADDRESS").to_ascii_lowercase();
     let mut results = Vec::new();
-    if let Some(value) = instance {
-        results.push(json!({ "account": instance_address, "scope": "instance", "result": value }));
+    match instance {
+        Ok(Some(value)) => results.push(json!({
+            "account": instance_address, "scope": "instance", "result": value
+        })),
+        Ok(None) => {}
+        Err(error) => results.push(json!({
+            "account": instance_address, "scope": "instance", "error": error.to_string()
+        })),
     }
     for account in accounts {
         if account.address == instance_address {
@@ -214,6 +220,33 @@ pub(crate) fn service_sync(
         return Ok(None);
     }
     Ok(Some(json!({ "accounts": results })))
+}
+
+/// Fetch only the persisted account selected by the operator. Do not first
+/// synchronize the instance account or inherit its credentials/endpoints.
+pub(crate) fn sync_registered_account(root: &Path, address: &str, limit: usize) -> Result<Value> {
+    let settings = registered_account_settings(root, address, limit)?;
+    service_sync_single(root, &settings)?.context("registered email account has no address")
+}
+
+fn registered_account_settings(
+    root: &Path,
+    address: &str,
+    limit: usize,
+) -> Result<BTreeMap<String, String>> {
+    anyhow::ensure!(
+        (1..=100).contains(&limit),
+        "email sync limit must be 1..100"
+    );
+    let address = super::email_accounts::normalize_address(address);
+    let account = super::email_accounts::load_accounts(root)?
+        .into_iter()
+        .find(|account| account.address == address)
+        .context("registered email account not found")?;
+    let mut settings = super::email_accounts::account_runtime_overrides(root, &account);
+    settings.insert("CTO_EMAIL_FOLDER".into(), "INBOX".into());
+    settings.insert("CTO_EMAIL_LIMIT".into(), limit.to_string());
+    Ok(settings)
 }
 
 fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Result<Option<Value>> {
@@ -3948,6 +3981,97 @@ mod tests {
     };
     use std::io::Write;
     use std::path::PathBuf;
+
+    #[test]
+    fn registered_exchange_account_builds_isolated_client_options() -> anyhow::Result<()> {
+        use crate::communication::email_accounts::{upsert_account, EmailAccountConfig};
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("runtime"))?;
+        let global = std::collections::BTreeMap::from([
+            ("CTO_EMAIL_ADDRESS".into(), "crew@example.test".into()),
+            ("CTO_EMAIL_PASSWORD".into(), "crew-fixture".into()),
+            (
+                "CTO_EMAIL_EWS_URL".into(),
+                "https://crew.example.test/EWS/Exchange.asmx".into(),
+            ),
+            ("CTO_EMAIL_EWS_USERNAME".into(), "DOMAIN\\crew".into()),
+            ("CTO_EMAIL_EWS_AUTH_TYPE".into(), "bearer".into()),
+            (
+                "CTO_EMAIL_EWS_BEARER_TOKEN".into(),
+                "crew-token-fixture".into(),
+            ),
+            ("CTO_EMAIL_FOLDER".into(), "sent".into()),
+        ]);
+        crate::inference::runtime_env::save_runtime_env_map(root, &global)?;
+        upsert_account(
+            root,
+            EmailAccountConfig {
+                address: "lena@example.test".into(),
+                provider: "owa".into(),
+                username: "DOMAIN\\lena".into(),
+                owa_url: "https://lena.example.test/owa/".into(),
+                owner_user_id: "lena-owner".into(),
+                ..Default::default()
+            },
+            Some("lena-fixture"),
+        )?;
+        let settings = super::registered_account_settings(root, "LENA@example.test", 3)?;
+        let runtime = super::runtime_from_settings(root, &settings);
+        let db_path = root.join("runtime/ctox.sqlite3");
+        let request = super::AdapterSyncCommandRequest {
+            db_path: &db_path,
+            passthrough_args: &[],
+            skip_flags: &[],
+        };
+        let options = super::sync_options_from_args(root, &runtime, &request)?;
+        assert_eq!(options.email, "lena@example.test");
+        assert_eq!(options.folder, "INBOX");
+        assert_eq!(options.limit, 3);
+        let client = super::EwsClient::from_options(&options)?;
+        assert_eq!(client.url, "https://lena.example.test/EWS/Exchange.asmx");
+        assert_eq!(client.username, "DOMAIN\\lena");
+        assert_eq!(client.password, "lena-fixture");
+        assert_eq!(client.auth_type, "basic");
+        assert!(client.bearer_token.is_empty());
+        assert!(super::registered_account_settings(root, "missing@example.test", 3).is_err());
+        assert!(super::registered_account_settings(root, "lena@example.test", 0).is_err());
+        assert!(super::registered_account_settings(root, "lena@example.test", 101).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn instance_failure_does_not_skip_registered_accounts() -> anyhow::Result<()> {
+        use crate::communication::email_accounts::{upsert_account, EmailAccountConfig};
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("runtime"))?;
+        upsert_account(
+            root,
+            EmailAccountConfig {
+                address: "lena@example.test".into(),
+                provider: "owa".into(),
+                owa_url: "https://lena.example.test/owa/".into(),
+                ..Default::default()
+            },
+            None,
+        )?;
+        // Both lack credentials and fail before any network access. The
+        // instance error must not prevent the personal account's own attempt.
+        let settings = std::collections::BTreeMap::from([
+            ("CTO_EMAIL_ADDRESS".into(), "crew@example.test".into()),
+            ("CTO_EMAIL_PROVIDER".into(), "owa".into()),
+            ("CTO_EMAIL_PASSWORD".into(), String::new()),
+        ]);
+        let result = super::service_sync(root, &settings)?.unwrap();
+        let accounts = result["accounts"].as_array().unwrap();
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0]["account"], "crew@example.test");
+        assert!(accounts[0]["error"].is_string());
+        assert_eq!(accounts[1]["account"], "lena@example.test");
+        assert!(accounts[1]["error"].is_string());
+        Ok(())
+    }
 
     fn empty_options() -> EmailOptions {
         EmailOptions {

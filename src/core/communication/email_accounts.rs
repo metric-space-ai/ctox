@@ -45,6 +45,14 @@ pub(crate) struct EmailAccountConfig {
     /// SMTP/IMAP-Benutzername, falls abweichend von der Adresse.
     #[serde(default)]
     pub username: String,
+    #[serde(default)]
+    pub ews_url: String,
+    #[serde(default)]
+    pub owa_url: String,
+    #[serde(default)]
+    pub ews_auth_type: String,
+    #[serde(default)]
+    pub ews_version: String,
     /// Business-OS-Benutzer, dem dieses Konto gehört.
     #[serde(default)]
     pub owner_user_id: String,
@@ -130,6 +138,9 @@ pub(crate) fn upsert_account(
             "smtpHost": config.smtp_host,
             "smtpPort": config.smtp_port,
             "username": config.username,
+            "ewsUrl": config.ews_url,
+            "owaUrl": config.owa_url,
+            "ewsUsername": config.username,
             "ownerUserId": config.owner_user_id,
             "displayName": config.display_name,
             "source": "mail-app-account",
@@ -202,6 +213,8 @@ pub(crate) fn account_runtime_overrides(
     // Instanz-spezifische Graph/EWS/ActiveSync-Werte nicht erben.
     for key in [
         "CTO_EMAIL_GRAPH_ACCESS_TOKEN",
+        "CTO_EMAIL_GRAPH_BASE_URL",
+        "CTO_EMAIL_GRAPH_USER",
         "CTO_EMAIL_GRAPH_TENANT_ID",
         "CTO_EMAIL_GRAPH_CLIENT_ID",
         "CTO_EMAIL_GRAPH_CLIENT_SECRET",
@@ -213,9 +226,23 @@ pub(crate) fn account_runtime_overrides(
         "CTO_EMAIL_EWS_BEARER_TOKEN",
         "CTO_EMAIL_ACTIVESYNC_SERVER",
         "CTO_EMAIL_ACTIVESYNC_USERNAME",
+        "CTO_EMAIL_ACTIVESYNC_PATH",
+        "CTO_EMAIL_ACTIVESYNC_DEVICE_ID",
+        "CTO_EMAIL_ACTIVESYNC_DEVICE_TYPE",
+        "CTO_EMAIL_ACTIVESYNC_PROTOCOL_VERSION",
+        "CTO_EMAIL_ACTIVESYNC_POLICY_KEY",
     ] {
         overrides.insert(key.to_owned(), String::new());
     }
+    set(&mut overrides, "CTO_EMAIL_EWS_URL", &config.ews_url);
+    set(&mut overrides, "CTO_EMAIL_OWA_URL", &config.owa_url);
+    set(&mut overrides, "CTO_EMAIL_EWS_USERNAME", &config.username);
+    set(
+        &mut overrides,
+        "CTO_EMAIL_EWS_AUTH_TYPE",
+        &config.ews_auth_type,
+    );
+    set(&mut overrides, "CTO_EMAIL_EWS_VERSION", &config.ews_version);
     overrides
 }
 
@@ -233,6 +260,10 @@ pub(crate) fn public_json(root: &Path, config: &EmailAccountConfig) -> Value {
         "smtp_host": config.smtp_host,
         "smtp_port": config.smtp_port,
         "username": config.username,
+        "ews_url": config.ews_url,
+        "owa_url": config.owa_url,
+        "ews_auth_type": config.ews_auth_type,
+        "ews_version": config.ews_version,
         "owner_user_id": config.owner_user_id,
         "has_password": has_password,
     })
@@ -241,6 +272,68 @@ pub(crate) fn public_json(root: &Path, config: &EmailAccountConfig) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exchange_account_roundtrip_preserves_other_accounts_and_hides_password() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("runtime"))?;
+        let crew = upsert_account(
+            root,
+            EmailAccountConfig {
+                address: "crew@example.test".into(),
+                provider: "imap".into(),
+                imap_host: "crew.example.test".into(),
+                owner_user_id: "crew-owner".into(),
+                ..Default::default()
+            },
+            Some("crew-fixture"),
+        )?;
+        let lena = upsert_account(
+            root,
+            EmailAccountConfig {
+                address: "Lena@Example.test".into(),
+                provider: "owa".into(),
+                username: "DOMAIN\\lena".into(),
+                owa_url: "https://lena.example.test/owa/".into(),
+                ews_url: "https://lena.example.test/EWS/Exchange.asmx".into(),
+                ews_auth_type: "basic".into(),
+                ews_version: "Exchange2013".into(),
+                owner_user_id: "lena-owner".into(),
+                ..Default::default()
+            },
+            Some("lena-fixture"),
+        )?;
+        let accounts = load_accounts(root)?;
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(
+            serde_json::to_value(&accounts[0])?,
+            serde_json::to_value(&crew)?
+        );
+        assert_eq!(
+            serde_json::to_value(&accounts[1])?,
+            serde_json::to_value(&lena)?
+        );
+        let settings = account_runtime_overrides(root, &accounts[1]);
+        assert_eq!(settings["CTO_EMAIL_EWS_USERNAME"], "DOMAIN\\lena");
+        assert_eq!(settings["CTO_EMAIL_OWA_URL"], lena.owa_url);
+        assert_eq!(settings["CTO_EMAIL_EWS_URL"], lena.ews_url);
+        assert_eq!(settings["CTO_EMAIL_PASSWORD"], "lena-fixture");
+        assert_eq!(settings["CTO_EMAIL_IMAP_HOST"], "");
+        assert_eq!(settings["CTO_EMAIL_GRAPH_ACCESS_TOKEN"], "");
+        assert_eq!(settings["CTO_EMAIL_ACTIVESYNC_SERVER"], "");
+        assert_eq!(
+            account_runtime_overrides(root, &crew)["CTO_EMAIL_PASSWORD"],
+            "crew-fixture"
+        );
+        let public = public_json(root, &accounts[1]);
+        assert_eq!(public["has_password"], true);
+        assert_eq!(public["username"], "DOMAIN\\lena");
+        assert_eq!(public["owa_url"], lena.owa_url);
+        assert!(!public.to_string().contains("lena-fixture"));
+        assert!(!serde_json::to_string(&accounts)?.contains("lena-fixture"));
+        Ok(())
+    }
 
     #[test]
     fn upsert_normalizes_and_keeps_owner() -> Result<()> {

@@ -891,6 +891,10 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                     smtp_host: field("smtp_host"),
                     smtp_port: port("smtp_port"),
                     username: field("username"),
+                    ews_url: field("ews_url"),
+                    owa_url: field("owa_url"),
+                    ews_auth_type: field("ews_auth_type"),
+                    ews_version: field("ews_version"),
                     owner_user_id: owner,
                 };
                 let password = field("password");
