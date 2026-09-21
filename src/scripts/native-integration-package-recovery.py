@@ -12,6 +12,8 @@ import tarfile
 import time
 import sys
 import zipfile
+import stat
+from pathlib import PurePosixPath
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = Path(os.environ['RUNNER_TEMP']) / 'native-integration'
@@ -117,32 +119,58 @@ def validate_receipt(prior, logs):
         raise RuntimeError('Prior real wire/file-fetch JS evidence incomplete')
 
 
+def ingest_evidence(archive_path, destination):
+    logs = {}
+    seen = set()
+    with zipfile.ZipFile(archive_path) as archive:
+        if len(archive.infolist()) > 100 or sum(e.file_size for e in archive.infolist()) > 20 * 1024 * 1024:
+            raise RuntimeError('Prior evidence unexpectedly large')
+        for entry in archive.infolist():
+            path = PurePosixPath(entry.filename)
+            mode = entry.external_attr >> 16
+            kind = stat.S_IFMT(mode)
+            if (path.is_absolute() or '..' in path.parts or not path.parts
+                    or '\\' in entry.filename or entry.filename in seen
+                    or kind not in (0, stat.S_IFREG, stat.S_IFDIR)):
+                raise RuntimeError('Unsafe prior evidence path or type')
+            seen.add(entry.filename)
+            output = destination.joinpath(*path.parts)
+            if not output.resolve().is_relative_to(destination.resolve()):
+                raise RuntimeError('Prior evidence escapes destination')
+            if entry.is_dir():
+                output.mkdir(parents=True, exist_ok=True)
+                continue
+            if kind == stat.S_IFDIR:
+                raise RuntimeError('Inconsistent evidence entry type')
+            data = archive.read(entry)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(data)
+            # Geometry PNG/HTML files are retained verbatim, never decoded as logs.
+            if len(path.parts) == 1 and (path.name == 'result.json' or path.suffix == '.log'):
+                logs[path.name] = data.decode('utf-8')
+    return logs
+
+
 def main():
     revision = capture(['git', 'rev-parse', 'HEAD'])
     capture(['git', 'merge-base', '--is-ancestor', VERIFIED_REVISION, revision])
     changed = set(capture(['git', 'diff', '--no-ext-diff', '--name-only', VERIFIED_REVISION, revision]).splitlines())
     allowed = {'.github/workflows/native-integration-package-recovery.yml',
                'src/scripts/native-integration-package-recovery.py',
-               '.github/workflows/business-os-mobile-ci.yml'}
+               '.github/workflows/business-os-mobile-ci.yml',
+               '.github/workflows/native-integration-artifact.yml'}
     if changed - allowed or capture(['git', 'status', '--porcelain', '--untracked-files=no']):
         raise RuntimeError('Recovery changes verified product/build inputs')
     if digest(ROOT / '.github/workflows/business-os-mobile-ci.yml') != 'f1851a16337569a8a01aae398c8b9e4e85cf3b05ab89f37163522388b73f6f3d':
         raise RuntimeError('Android workflow differs from independently reviewed rotation fix')
+    if digest(ROOT / '.github/workflows/native-integration-artifact.yml') != '974b162747bbd67e1fa33abc6ecbc379851ab5b5a85e7bd24da273249c6bee03':
+        raise RuntimeError('Full-verification workflow differs from reviewed lane selection')
     archive_path = Path(os.environ['RUNNER_TEMP']) / 'prior-native-evidence.zip'
     if digest(archive_path) != EVIDENCE_DIGEST:
         raise RuntimeError('Prior evidence archive digest mismatch')
     prior_dir = EVIDENCE / 'prior-verification'
     prior_dir.mkdir()
-    logs = {}
-    with zipfile.ZipFile(archive_path) as archive:
-        if sum(entry.file_size for entry in archive.infolist()) > 20 * 1024 * 1024:
-            raise RuntimeError('Prior evidence unexpectedly large')
-        for entry in archive.infolist():
-            if entry.is_dir() or Path(entry.filename).name != entry.filename:
-                raise RuntimeError('Prior evidence must contain flat regular files')
-            data = archive.read(entry)
-            (prior_dir / entry.filename).write_bytes(data)
-            logs[entry.filename] = data.decode('utf-8')
+    logs = ingest_evidence(archive_path, prior_dir)
     prior = json.loads(logs['result.json'])
     validate_receipt(prior, logs)
     if (capture(['rustc', '-Vv']) != prior['rust']
@@ -157,6 +185,7 @@ def main():
     RECORD.update(complete=False, full_release_acceptance=False, verification_complete=True,
                   package_complete=False, revision=revision, workflow_run=os.environ['GITHUB_RUN_ID'],
                   verification_revision=VERIFIED_REVISION, reused_verification_run=PRIOR_RUN,
+                  verified_binary_sha256=prior['binary_sha256'],
                   reused_evidence_sha256=EVIDENCE_DIGEST,
                   recovery_budget_seconds=3600)
     metadata = json.loads(capture(['cargo', 'metadata', '--locked', '--no-deps', '--format-version', '1']))
