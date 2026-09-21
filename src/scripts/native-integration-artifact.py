@@ -36,7 +36,10 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'communication::email_account_cli::tests::',
            'registered_exchange_account_builds_isolated_client_options',
            'instance_failure_does_not_skip_registered_accounts',
-           'sync_keeps_account_assignment_when_connection_fails']
+           'sync_keeps_account_assignment_when_connection_fails',
+           'app_shared_read_grant_requires_review_and_preserves_write_boundary',
+           'app_access_grant_refreshes_catalog_governance_projection',
+           'communication::email_native::tests::ews_']
 REQUIRED_MAIL_TESTS = {
     'exchange_account_roundtrip_preserves_other_accounts_and_hides_password',
     'stdin_contract_is_bounded_and_does_not_echo_invalid_secret_values',
@@ -44,6 +47,18 @@ REQUIRED_MAIL_TESTS = {
     'registered_exchange_account_builds_isolated_client_options',
     'instance_failure_does_not_skip_registered_accounts',
     'sync_keeps_account_assignment_when_connection_fails',
+    'app_shared_read_grant_requires_review_and_preserves_write_boundary',
+    'app_access_grant_refreshes_catalog_governance_projection',
+    'ews_resync_recovers_persisted_empty_body_without_replaying_message_state',
+    'ews_resync_preserves_nonempty_content_and_other_provider_deduplication',
+    'ews_resync_preserves_custom_preview_while_hydrating_html',
+    'ews_hydrates_full_reply_body_and_preserves_ids_and_headers',
+    'ews_html_reply_and_sent_timestamp_are_hydrated',
+    'ews_html_hydration_preserves_literals_and_excludes_document_metadata',
+    'ews_batches_are_bounded_and_matched_by_id_in_discovery_order',
+    'ews_rejects_partial_or_invalid_hydration',
+    'ews_later_batch_transport_failure_returns_no_partial_poll',
+    'ews_empty_folder_limits_and_explicit_empty_body',
 }
 REQUIRED_RUNTIME_TESTS = {
     'authenticated_automation_stdin_is_bounded_and_command_specific',
