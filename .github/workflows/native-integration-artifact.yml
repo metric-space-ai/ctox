@@ -43,11 +43,14 @@ jobs:
         id: verification-mode
         run: python3 src/scripts/native-integration-package-recovery.py --select-mode
       - uses: ./.github/actions/build-pi-sidecar
+        if: steps.verification-mode.outputs.mode != 'published'
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        if: steps.verification-mode.outputs.mode != 'published'
         with:
           toolchain: '1.93.0'
           targets: x86_64-unknown-linux-gnu
       - name: Resolve Cargo output directory
+        if: steps.verification-mode.outputs.mode != 'published'
         id: cargo-layout
         run: |
           python3 - <<'PY'
@@ -59,12 +62,14 @@ jobs:
               output.write('target_relative_path=' + os.path.relpath(metadata['target_directory'], os.getcwd()) + '\n')
           PY
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        if: steps.verification-mode.outputs.mode != 'published'
         with:
           key: native-integration-linux-x64-release-metadata-v2
           workspaces: . -> ${{ steps.cargo-layout.outputs.target_relative_path }}
           cache-on-failure: true
           cache-workspace-crates: true
       - name: Install native dependencies
+        if: steps.verification-mode.outputs.mode != 'published'
         run: |
           sudo apt-get update
           sudo apt-get install -y libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev libcap-dev libpcap-dev ripgrep
@@ -87,6 +92,14 @@ jobs:
         if: steps.verification-mode.outputs.mode == 'recovery'
         timeout-minutes: 65
         run: python3 src/scripts/native-integration-package-recovery.py
+      - name: Verify immutable published package reuse
+        if: steps.verification-mode.outputs.mode == 'published'
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/metric-space-ai/ctox/actions/artifacts/10620560709/zip > "$RUNNER_TEMP/published-native-evidence.zip"
+          python3 src/scripts/native-integration-package-recovery.py --verify-published
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -96,7 +109,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
       - name: Upload verified runtime candidate
-        if: ${{ success() && !(github.event_name == 'workflow_dispatch' && inputs.focused_runtime) }}
+        if: ${{ success() && steps.verification-mode.outputs.mode != 'published' && !(github.event_name == 'workflow_dispatch' && inputs.focused_runtime) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ctox-linux-x64-${{ github.event.pull_request.head.sha || github.sha }}

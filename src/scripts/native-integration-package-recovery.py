@@ -165,13 +165,67 @@ def validate_source_reuse():
         raise RuntimeError('Recovery changes verified product/build inputs')
     if digest(ROOT / '.github/workflows/business-os-mobile-ci.yml') != 'f1851a16337569a8a01aae398c8b9e4e85cf3b05ab89f37163522388b73f6f3d':
         raise RuntimeError('Android workflow differs from independently reviewed rotation fix')
-    if digest(ROOT / '.github/workflows/native-integration-artifact.yml') != '50754dbfce007cb1c6cdee0edae1e8b84ed459ad702ce4c89d9908b4e2d9abdf':
+    if digest(ROOT / '.github/workflows/native-integration-artifact.yml') != '7fcaf21759778370e8badcf55a84456bce3c39eef2c95ea0e7723bbd30a45529':
         raise RuntimeError('Full-verification workflow differs from reviewed lane selection')
     if digest(ROOT / 'src/scripts/native-integration-artifact.py') != 'b8e9eafe653723615386532ad5a111faf12423aa1e5885e30303762f6267862c':
         raise RuntimeError('Full-verification helper differs from reviewed orchestration')
     if digest(ROOT / 'tests/test_android_framework_diagnostics.py') != '0b713d1de2e5894d35d48700d295b0bd1650e965a561f9a431db96318170f4f3':
         raise RuntimeError('Diagnostics test differs from reviewed rotation expectation')
     return revision
+
+
+PUBLISHED_REVISION = '8f369b2ef665e2f3f85fa5953f7af5206800abcf'
+PUBLISHED_RUN = 35554698322
+PUBLISHED_ARTIFACT = 10620151316
+PUBLISHED_ZIP_SHA = '153e75da321e2ad018fba344bb38afc580ec1a610da4b84ce34b1be0aea4926f'
+PUBLISHED_PROOF_SHA = 'd6a6e38908daff9a1c59c36677ef63a56058f6b320dde681d99772f378d4bbb0'
+
+
+def validate_published_receipt(proof, artifact):
+    if (proof.get('revision') != PUBLISHED_REVISION
+            or proof.get('workflow_run') != str(PUBLISHED_RUN)
+            or proof.get('verification_revision') != VERIFIED_REVISION
+            or proof.get('reused_verification_run') != PRIOR_RUN
+            or proof.get('reused_evidence_sha256') != EVIDENCE_DIGEST
+            or not all(proof.get(k) is True for k in ('complete', 'package_complete', 'verification_complete'))
+            or proof.get('artifact_sha256') != '1c2b4adff565fbfd84bfeaa68c76a34f3e0e782033b8934ff866ba2fc9ecc964'
+            or proof.get('artifact_bytes') != 270297941
+            or proof.get('binary_sha256') != 'e59a95337af6e5290f0564bc729099e2c3b1f6b4b3e0c7c6ca57f0482531f571'
+            or [s['name'] for s in proof['stages'][-3:]] != ['native-build', 'spawn-liveness', 'package-archive']
+            or any(s['exit'] != 0 for s in proof['stages'])):
+        raise RuntimeError('Published package proof mismatch')
+    if (artifact.get('id') != PUBLISHED_ARTIFACT or artifact.get('expired') is not False
+            or artifact.get('digest') != 'sha256:' + PUBLISHED_ZIP_SHA
+            or artifact.get('size_in_bytes') != 270325412
+            or artifact.get('name') != 'ctox-linux-x64-' + PUBLISHED_REVISION
+            or artifact.get('workflow_run', {}).get('id') != PUBLISHED_RUN
+            or artifact.get('workflow_run', {}).get('head_sha') != PUBLISHED_REVISION):
+        raise RuntimeError('Published immutable package unavailable or changed')
+
+
+def verify_published():
+    revision = validate_source_reuse()
+    capture(['git', 'merge-base', '--is-ancestor', PUBLISHED_REVISION, revision])
+    archive = Path(os.environ['RUNNER_TEMP']) / 'published-native-evidence.zip'
+    if digest(archive) != PUBLISHED_PROOF_SHA:
+        raise RuntimeError('Published proof archive digest mismatch')
+    logs = ingest_evidence(archive, EVIDENCE / 'published-verification')
+    proof = json.loads(logs['result.json'])
+    metadata = json.loads(capture(['gh', 'api',
+        'repos/metric-space-ai/ctox/actions/artifacts/' + str(PUBLISHED_ARTIFACT)]))
+    validate_published_receipt(proof, metadata)
+    # Keep original provenance intact. This head only verifies compatibility;
+    # it neither rebuilds nor republishes a package under a different revision.
+    RECORD.update(complete=True, mode='published-artifact-reuse',
+                  full_release_acceptance=False, compatibility_verified=True,
+                  revision=revision, workflow_run=os.environ.get('GITHUB_RUN_ID'),
+                  built_revision=PUBLISHED_REVISION, package_run=PUBLISHED_RUN,
+                  package_artifact=PUBLISHED_ARTIFACT, package_zip_sha256=PUBLISHED_ZIP_SHA,
+                  archive_sha256=proof['artifact_sha256'], binary_sha256=proof['binary_sha256'],
+                  verification_revision=VERIFIED_REVISION, verification_run=PRIOR_RUN,
+                  source_delta=capture(['git', 'diff', '--name-only', PUBLISHED_REVISION, revision]).splitlines())
+    save()
+    print(json.dumps(RECORD), flush=True)
 
 
 def main():
@@ -275,7 +329,8 @@ if __name__ == '__main__':
         # select the full lane, whose independent source guards still apply.
         try:
             validate_source_reuse()
-            mode = 'recovery' if os.environ.get('GITHUB_EVENT_NAME') == 'pull_request' else 'full'
+            capture(['git', 'merge-base', '--is-ancestor', PUBLISHED_REVISION, capture(['git', 'rev-parse', 'HEAD'])])
+            mode = 'published' if os.environ.get('GITHUB_EVENT_NAME') == 'pull_request' else 'full'
         except (RuntimeError, subprocess.CalledProcessError):
             mode = 'full'
         with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
@@ -283,7 +338,10 @@ if __name__ == '__main__':
         print('native_verification_mode=' + mode, flush=True)
     else:
         try:
-            main()
+            if sys.argv[1:] == ['--verify-published']:
+                verify_published()
+            else:
+                main()
         except Exception as error:
             RECORD.update(complete=False, full_release_acceptance=False, package_complete=False, error=str(error))
             save()
