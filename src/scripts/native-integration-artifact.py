@@ -31,7 +31,20 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'web_stack_auth_owner_resolution_',
            'web_stack_auth_assist_reuses_active_task_across_request_ids',
            'web_stack_generated_research_control_task_revalidates_persisted_native_owner',
-           'outbound_custom_research_adapter_queues_universal_scraping_generation']
+           'outbound_custom_research_adapter_queues_universal_scraping_generation',
+           'communication::email_accounts::tests::',
+           'communication::email_account_cli::tests::',
+           'registered_exchange_account_builds_isolated_client_options',
+           'instance_failure_does_not_skip_registered_accounts',
+           'sync_keeps_account_assignment_when_connection_fails']
+REQUIRED_MAIL_TESTS = {
+    'exchange_account_roundtrip_preserves_other_accounts_and_hides_password',
+    'stdin_contract_is_bounded_and_does_not_echo_invalid_secret_values',
+    'cli_rejects_secret_arguments_and_unknown_accounts',
+    'registered_exchange_account_builds_isolated_client_options',
+    'instance_failure_does_not_skip_registered_accounts',
+    'sync_keeps_account_assignment_when_connection_fails',
+}
 REQUIRED_RUNTIME_TESTS = {
     'authenticated_automation_stdin_is_bounded_and_command_specific',
     'authenticated_automation_ipc_preserves_source_and_auth_gate',
@@ -216,6 +229,12 @@ def main():
         names = sorted(name for name in names
                        if name.rsplit('::', 1)[-1] in REQUIRED_RUNTIME_TESTS)
         command = [executable, *names, '--exact']
+    else:
+        mail_counts = {test: sum(name.rsplit('::', 1)[-1] == test for name in names)
+                       for test in REQUIRED_MAIL_TESTS}
+        if any(count != 1 for count in mail_counts.values()):
+            raise RuntimeError(f'Required mail regressions absent or ambiguous: {mail_counts}')
+        RECORD['required_mail_tests'] = mail_counts
     RECORD.update(discovered_tests=names, group_counts=counts,
                   required_runtime_tests=runtime_counts)
     save()

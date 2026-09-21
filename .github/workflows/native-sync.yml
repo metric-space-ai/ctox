@@ -277,6 +277,8 @@ jobs:
           cargo build --locked --bin ctox
           git rev-parse HEAD > "$RUNNER_TEMP/ctox-host-proof/source-revision.txt"
           sha256sum "$CARGO_TARGET_DIR/debug/ctox" > "$RUNNER_TEMP/ctox-host-proof/binary.sha256"
+          rustc -vV > "$RUNNER_TEMP/ctox-host-proof/rustc-version.txt"
+          printf 'profile=dev\nCARGO_PROFILE_DEV_DEBUG=%s\nCARGO_INCREMENTAL=%s\n' "$CARGO_PROFILE_DEV_DEBUG" "$CARGO_INCREMENTAL" > "$RUNNER_TEMP/ctox-host-proof/build-profile.txt"
       - name: Four real host processes, recovery and control latency
         shell: bash
         run: |
@@ -413,13 +415,17 @@ jobs:
         timeout-minutes: 12
         shell: bash
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p "$RUNNER_TEMP/ctox-host-proof/symbol-profile"
-          sudo apt-get install -y linux-tools-generic
-          perf_candidates=(/usr/lib/linux-tools/*/perf)
-          perf_executable="${perf_candidates[${#perf_candidates[@]}-1]}"
+          sudo apt-get install -y 'linux-tools-6.8.0-1064-azure=6.8.0-1064.72~22.04.1'
+          perf_executable=$(readlink -f /usr/lib/linux-tools/6.8.0-1064-azure/perf)
           test -x "$perf_executable"
           "$perf_executable" version > "$RUNNER_TEMP/ctox-host-proof/symbol-profile/perf-version.txt"
+          grep -Fx 'perf version 6.8.12' "$RUNNER_TEMP/ctox-host-proof/symbol-profile/perf-version.txt"
+          sha256sum "$perf_executable" > "$RUNNER_TEMP/ctox-host-proof/symbol-profile/perf.sha256"
+          dpkg-query -W linux-tools-6.8.0-1064-azure > "$RUNNER_TEMP/ctox-host-proof/symbol-profile/perf-package.txt"
+          dpkg -S "$perf_executable" >> "$RUNNER_TEMP/ctox-host-proof/symbol-profile/perf-package.txt"
+          uname -a > "$RUNNER_TEMP/ctox-host-proof/symbol-profile/kernel.txt"
           # This disposable runner permits same-user process sampling only.
           sudo sysctl -w kernel.perf_event_paranoid=1
           node src/core/rxdb/tools/native_symbol_profile.test.js --require-perf "$perf_executable"
@@ -440,11 +446,27 @@ jobs:
           if (!profiles.length) throw new Error('No owned native symbol profile was produced');
           for (const name of profiles) {
             const profile = JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
+            const cpuPath = path.join(root, `context-processes.native-cpu-${profile.pid}.jsonl`);
+            const rows = fs.readFileSync(cpuPath, 'utf8').trim().split('\n').map(line => JSON.parse(line))
+              .filter(row => row.kind === 'sample' && row.pid === profile.pid && row.processStartedTicks === profile.processStartedTicks);
+            const before = rows.filter(row => row.atMs <= profile.startedAtMs).at(-1);
+            const after = rows.find(row => row.atMs >= profile.recordStoppedAtMs);
+            fs.writeFileSync(path.join(root, `aligned-threads-${profile.pid}.json`), JSON.stringify({ before, after }, null, 2));
+            if (!before || !after) throw new Error('Missing timing-aligned owned-process thread observations');
             if (!profile.available || profile.reason !== 'sampled') throw new Error(JSON.stringify(profile));
             console.log(JSON.stringify(profile));
           }
           NODE
           exit "$fixture_status"
+      - name: Retain the actual tested debug executable
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ctox-full-host-debug-${{ github.sha }}
+          path: ${{ runner.temp }}/ctox-full-host-target/debug/ctox
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
       - name: Retain host proof and binary provenance
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
