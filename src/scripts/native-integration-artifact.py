@@ -127,7 +127,8 @@ def main():
     RECORD['verified_ancestors'] = ancestors
     changed = capture(['git', 'diff', '--name-only', reviewed, revision]).splitlines()
     allowed = {'.github/workflows/native-integration-artifact.yml',
-               'src/scripts/native-integration-artifact.py'}
+               'src/scripts/native-integration-artifact.py',
+               'src/scripts/native-integration-package-recovery.py'}
     if set(changed) - allowed:
         raise RuntimeError('Product source differs from the reviewed revision')
     if capture(['git', 'status', '--porcelain', '--untracked-files=no']):

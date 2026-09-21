@@ -151,11 +151,12 @@ def ingest_evidence(archive_path, destination):
     return logs
 
 
-def main():
+def validate_source_reuse():
     revision = capture(['git', 'rev-parse', 'HEAD'])
     capture(['git', 'merge-base', '--is-ancestor', VERIFIED_REVISION, revision])
     changed = set(capture(['git', 'diff', '--no-ext-diff', '--name-only', VERIFIED_REVISION, revision]).splitlines())
-    allowed = {'.github/workflows/native-integration-package-recovery.yml',
+    allowed = {'.github/workflows/native-integration-artifact.yml',
+               'src/scripts/native-integration-artifact.py',
                'src/scripts/native-integration-package-recovery.py',
                '.github/workflows/business-os-mobile-ci.yml',
                '.github/workflows/native-integration-artifact.yml'}
@@ -163,8 +164,15 @@ def main():
         raise RuntimeError('Recovery changes verified product/build inputs')
     if digest(ROOT / '.github/workflows/business-os-mobile-ci.yml') != 'f1851a16337569a8a01aae398c8b9e4e85cf3b05ab89f37163522388b73f6f3d':
         raise RuntimeError('Android workflow differs from independently reviewed rotation fix')
-    if digest(ROOT / '.github/workflows/native-integration-artifact.yml') != '974b162747bbd67e1fa33abc6ecbc379851ab5b5a85e7bd24da273249c6bee03':
+    if digest(ROOT / '.github/workflows/native-integration-artifact.yml') != '1e10280d98945292319aeb4bba8b9ed06d02b8d52186e1f6f44d0707a495b00a':
         raise RuntimeError('Full-verification workflow differs from reviewed lane selection')
+    if digest(ROOT / 'src/scripts/native-integration-artifact.py') != 'b8e9eafe653723615386532ad5a111faf12423aa1e5885e30303762f6267862c':
+        raise RuntimeError('Full-verification helper differs from reviewed orchestration')
+    return revision
+
+
+def main():
+    revision = validate_source_reuse()
     archive_path = Path(os.environ['RUNNER_TEMP']) / 'prior-native-evidence.zip'
     if digest(archive_path) != EVIDENCE_DIGEST:
         raise RuntimeError('Prior evidence archive digest mismatch')
@@ -259,9 +267,21 @@ def package_bundle(bundle, artifacts):
 
 
 if __name__ == '__main__':
-    try:
-        main()
-    except Exception as error:
-        RECORD.update(complete=False, error=str(error))
-        save()
-        raise
+    if sys.argv[1:] == ['--select-mode']:
+        # Focused/manual verification stays available; changed product inputs
+        # select the full lane, whose independent source guards still apply.
+        try:
+            validate_source_reuse()
+            mode = 'recovery' if os.environ.get('GITHUB_EVENT_NAME') == 'pull_request' else 'full'
+        except (RuntimeError, subprocess.CalledProcessError):
+            mode = 'full'
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+            output.write('mode=' + mode + '\n')
+        print('native_verification_mode=' + mode, flush=True)
+    else:
+        try:
+            main()
+        except Exception as error:
+            RECORD.update(complete=False, full_release_acceptance=False, package_complete=False, error=str(error))
+            save()
+            raise

@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: native-integration-artifact-${{ github.event.pull_request.number || github.ref }}
@@ -21,9 +22,6 @@ concurrency:
 
 jobs:
   linux:
-    # PR205 reuses its pinned completed tests through the package-recovery lane.
-    # Manual full verification and all other PR branches remain available.
-    if: github.event_name == 'workflow_dispatch' || github.head_ref != 'codex/main-adapter-integration'
     runs-on: ubuntu-22.04
     timeout-minutes: 100
     env:
@@ -40,6 +38,9 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+      - name: Select verification mode before heavy work
+        id: verification-mode
+        run: python3 src/scripts/native-integration-package-recovery.py --select-mode
       - uses: ./.github/actions/build-pi-sidecar
       - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
@@ -67,6 +68,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev libcap-dev libpcap-dev ripgrep
       - name: Verify reviewed source, test, and package
+        if: steps.verification-mode.outputs.mode == 'full'
         timeout-minutes: 85
         env:
           FOCUSED_RUNTIME: ${{ github.event_name == 'workflow_dispatch' && inputs.focused_runtime || false }}
@@ -74,6 +76,16 @@ jobs:
           args=()
           if [[ "$FOCUSED_RUNTIME" == "true" ]]; then args+=(--focused-runtime); fi
           python3 src/scripts/native-integration-artifact.py "${args[@]}"
+      - name: Download pinned completed verification evidence
+        if: steps.verification-mode.outputs.mode == 'recovery'
+        timeout-minutes: 3
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api repos/metric-space-ai/ctox/actions/artifacts/10619043024/zip > "$RUNNER_TEMP/prior-native-evidence.zip"
+      - name: Recover verified runtime package
+        if: steps.verification-mode.outputs.mode == 'recovery'
+        timeout-minutes: 65
+        run: python3 src/scripts/native-integration-package-recovery.py
       - name: Upload verification evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -89,4 +101,5 @@ jobs:
           name: ctox-linux-x64-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/native-integration/artifacts/
           if-no-files-found: error
+          compression-level: 0
           retention-days: 14
