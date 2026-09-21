@@ -11,6 +11,7 @@ on:
     paths:
       - .github/workflows/native-integration-artifact.yml
       - src/scripts/native-integration-artifact.py
+      - src/scripts/native-integration-package-recovery.py
 
 permissions:
   contents: read

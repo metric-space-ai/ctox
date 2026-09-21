@@ -157,6 +157,7 @@ def validate_source_reuse():
     changed = set(capture(['git', 'diff', '--no-ext-diff', '--name-only', VERIFIED_REVISION, revision]).splitlines())
     allowed = {'.github/workflows/native-integration-artifact.yml',
                'src/scripts/native-integration-artifact.py',
+               'tests/test_android_framework_diagnostics.py',
                'src/scripts/native-integration-package-recovery.py',
                '.github/workflows/business-os-mobile-ci.yml',
                '.github/workflows/native-integration-artifact.yml'}
@@ -164,10 +165,12 @@ def validate_source_reuse():
         raise RuntimeError('Recovery changes verified product/build inputs')
     if digest(ROOT / '.github/workflows/business-os-mobile-ci.yml') != 'f1851a16337569a8a01aae398c8b9e4e85cf3b05ab89f37163522388b73f6f3d':
         raise RuntimeError('Android workflow differs from independently reviewed rotation fix')
-    if digest(ROOT / '.github/workflows/native-integration-artifact.yml') != '1e10280d98945292319aeb4bba8b9ed06d02b8d52186e1f6f44d0707a495b00a':
+    if digest(ROOT / '.github/workflows/native-integration-artifact.yml') != '50754dbfce007cb1c6cdee0edae1e8b84ed459ad702ce4c89d9908b4e2d9abdf':
         raise RuntimeError('Full-verification workflow differs from reviewed lane selection')
     if digest(ROOT / 'src/scripts/native-integration-artifact.py') != 'b8e9eafe653723615386532ad5a111faf12423aa1e5885e30303762f6267862c':
         raise RuntimeError('Full-verification helper differs from reviewed orchestration')
+    if digest(ROOT / 'tests/test_android_framework_diagnostics.py') != '0b713d1de2e5894d35d48700d295b0bd1650e965a561f9a431db96318170f4f3':
+        raise RuntimeError('Diagnostics test differs from reviewed rotation expectation')
     return revision
 
 
