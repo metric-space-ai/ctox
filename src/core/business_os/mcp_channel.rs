@@ -7724,7 +7724,9 @@ fn validate_person_research_record_binding(
     for value in [
         record_object.get("company"),
         record_object.get("company_name"),
-        record_object.get("title"),
+        record_object
+            .get("title")
+            .filter(|value| value.as_str().map(str::trim) != Some(record_id)),
         record_object.get("name"),
         record_object.get("firma_name"),
         record.pointer("/data/company"),
