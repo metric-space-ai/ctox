@@ -14367,10 +14367,32 @@ pub(super) fn handle_app_lifecycle_command(
                         "permission must be data.read or data.write"
                     );
                     let owned_prefix = format!("{}_", module_id.replace('-', "_"));
-                    anyhow::ensure!(
-                        !module_id.is_empty() && collection.starts_with(&owned_prefix),
-                        "collection must be owned by the target module"
-                    );
+                    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+                    if !collection.starts_with(&owned_prefix) {
+                        // Shared operational views (for example Mail) do not
+                        // own the canonical collections they display. Their
+                        // read grants need an explicit operator review; app
+                        // installation or a manifest declaration is not consent.
+                        anyhow::ensure!(
+                            permission == "data.read"
+                                && command.payload.get("reviewed_shared_read")
+                                    .and_then(Value::as_bool) == Some(true)
+                                && command.payload.get("reason")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|reason| !reason.trim().is_empty()),
+                            "shared collection access requires an explicit reviewed read grant and reason"
+                        );
+                        let decision = scoped_policy_decision(
+                            root,
+                            &session,
+                            BusinessOsPermission::DataRead,
+                            BusinessOsScope::collection(collection),
+                        )?;
+                        anyhow::ensure!(
+                            decision.allowed,
+                            "reviewing operator cannot read the requested shared collection"
+                        );
+                    }
                     let inspection = app_runtime::inspect_module(root, module_id)?;
                     anyhow::ensure!(
                         inspection
@@ -27620,6 +27642,138 @@ pub(super) mod tests {
                 == Some("app-access:grantrefreshapp:role:admin:data.read:grantrefreshapp_records")
                 && grant.get("active").and_then(Value::as_bool) == Some(true)
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn app_shared_read_grant_requires_review_and_preserves_write_boundary() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let module_id = "sharedreadapp";
+        fs::write(root.path().join("index.html"), "<main></main>\n")?;
+        write_minimal_runtime_app_artifacts(root.path(), module_id)?;
+        seed_business_user(root.path(), "admin1", "admin")?;
+        seed_business_user(root.path(), "user1", "user")?;
+        // The fixture declares business_commands, which is shared and remains
+        // server-owned. A read review must never authorize writes or other data.
+        for (id, actor, role, permission, collection, reviewed, reason) in [
+            (
+                "missing-review",
+                "admin1",
+                "admin",
+                "data.read",
+                "business_commands",
+                false,
+                "review",
+            ),
+            (
+                "missing-reason",
+                "admin1",
+                "admin",
+                "data.read",
+                "business_commands",
+                true,
+                "  ",
+            ),
+            (
+                "shared-write",
+                "admin1",
+                "admin",
+                "data.write",
+                "business_commands",
+                true,
+                "review",
+            ),
+            (
+                "undeclared",
+                "admin1",
+                "admin",
+                "data.read",
+                "business_users",
+                true,
+                "review",
+            ),
+            (
+                "unprivileged",
+                "user1",
+                "user",
+                "data.read",
+                "business_commands",
+                true,
+                "review",
+            ),
+        ] {
+            let outcome = accept_rxdb_business_command(
+                root.path(),
+                serde_json::json!({
+                    "id": id, "command_id": id, "module": module_id,
+                    "command_type": "ctox.app.access.grant",
+                    "payload": {
+                        "module_id": module_id, "subject_type": "user", "subject_id": "admin1",
+                        "permission": permission, "collection": collection,
+                        "reviewed_shared_read": reviewed, "reason": reason
+                    },
+                    "client_context": {"actor": {"id": actor, "role": role}}
+                }),
+            );
+            assert!(
+                outcome
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.get("status"))
+                    .and_then(Value::as_str)
+                    != Some("completed"),
+                "{id} must fail closed"
+            );
+        }
+        let conn = open_store(root.path())?;
+        let unexpected: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_permission_grants WHERE grant_id LIKE 'app-access:sharedreadapp:%' AND active=1",
+            [], |row| row.get(0),
+        )?;
+        assert_eq!(unexpected, 0);
+        for (id, action, active) in [
+            ("reviewed-read", "ctox.app.access.grant", true),
+            ("revoke-read", "ctox.app.access.revoke", false),
+        ] {
+            let outcome = accept_rxdb_business_command(
+                root.path(),
+                serde_json::json!({
+                    "id": id, "command_id": id, "module": module_id,
+                    "command_type": action,
+                    "payload": {
+                        "module_id": module_id, "subject_type": "user", "subject_id": "admin1",
+                        "permission": "data.read", "collection": "business_commands",
+                        "reviewed_shared_read": true, "reason": "Operator reviewed command-status display"
+                    },
+                    "client_context": {"actor": {"id": "admin1", "role": "admin"}}
+                }),
+            )?;
+            assert_eq!(
+                outcome.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
+            let stored: bool = conn.query_row(
+                "SELECT active FROM business_permission_grants WHERE grant_id='app-access:sharedreadapp:user:admin1:data.read:business_commands'",
+                [], |row| row.get(0),
+            )?;
+            assert_eq!(stored, active);
+            let catalog = load_rxdb_collection_record(
+                root.path(),
+                "business_module_catalog",
+                "module-catalog",
+            )?
+            .context("catalog missing")?;
+            let grants = catalog
+                .pointer("/governance/permission_model/explicit_grants")
+                .and_then(Value::as_array)
+                .context("governance grants missing")?;
+            let projected_active = grants.iter().any(|grant| {
+                grant.get("grant_id").and_then(Value::as_str)
+                    == Some("app-access:sharedreadapp:user:admin1:data.read:business_commands")
+                    && grant.get("active").and_then(Value::as_bool) == Some(true)
+            });
+            assert_eq!(projected_active, active);
+        }
         Ok(())
     }
 
