@@ -4339,6 +4339,7 @@ mod tests {
         options.provider = "owa".into();
         options.password = "fixture-password".into();
         options.ews_auth_type = "basic".into();
+        options.limit = 1;
         // Invalid URL fails inside the transport without contacting a server,
         // after execute_sync has refreshed the account connection profile.
         options.ews_url = "not-a-url".into();
