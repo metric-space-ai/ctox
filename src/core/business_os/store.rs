@@ -16179,6 +16179,8 @@ pub(super) fn is_outbound_active_command(command_type: &str) -> bool {
             // panel opens, and every read became a worker task that mostly
             // failed.
             | "outbound.research_source.registry_read"
+            // "Jetzt testen" of the Update-Verteiler: native, deterministic.
+            | "outbound.update_digest.send_now"
     )
 }
 
@@ -16749,6 +16751,98 @@ pub(super) fn ensure_legacy_collection_grants(
     }
     tx.commit()?;
     Ok(())
+}
+
+/// First-party catalog apps (Mail, Documents, Auth-Handoff) run as installed
+/// modules, and the browser shell gives installed apps only collections with
+/// an explicit, reviewed grant. Their shared collections (mail, commands) only
+/// ever had `migration.sync.*` grants for founder/user, which the shell
+/// deliberately ignores, so the Mail app could read nothing — not even for an
+/// admin (thesen 22.09.2026: "Mail konnte nicht geladen werden", then 0 mails).
+/// Server policy already lets admin/chef read and write all business data;
+/// this materialises exactly that for the collections the first-party apps
+/// declare. Third-party apps and ordinary roles are unchanged.
+pub(super) fn ensure_first_party_catalog_collection_grants(
+    root: &Path,
+    installed_app_root: &Path,
+) -> anyhow::Result<usize> {
+    let modules_dir = installed_app_root.join("installed-modules");
+    let Ok(entries) = fs::read_dir(&modules_dir) else {
+        return Ok(0);
+    };
+    let mut declared: Vec<(String, String)> = Vec::new();
+    for entry in entries.flatten() {
+        let manifest_path = entry.path().join("module.json");
+        let Ok(raw) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if manifest.get("source").and_then(Value::as_str) != Some("catalog") {
+            continue;
+        }
+        let Some(module_id) = manifest
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        for collection in manifest
+            .get("collections")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if collection == "ctox_queue_tasks" || policy::is_cockpit_projection(collection) {
+                continue;
+            }
+            declared.push((module_id.to_string(), collection.to_string()));
+        }
+    }
+    if declared.is_empty() {
+        return Ok(0);
+    }
+    let server_owned_collections =
+        super::external_sql_sync::server_owned_projection_collections(root)?;
+    let mut conn = open_store(root)?;
+    let tx = conn.transaction()?;
+    let now = now_ms() as i64;
+    let mut inserted = 0usize;
+    for (module_id, collection) in &declared {
+        let server_owned_write = super::threads::is_threads_owned_collection(collection)
+            || server_owned_collections.contains(collection.as_str());
+        for role in ["admin", "chef"] {
+            for permission in [
+                BusinessOsPermission::DataRead,
+                BusinessOsPermission::DataWrite,
+            ] {
+                if permission == BusinessOsPermission::DataWrite && server_owned_write {
+                    continue;
+                }
+                let grant_id = format!(
+                    "catalog.first_party.{module_id}.{role}.{}.{collection}",
+                    permission.as_str().replace('.', "_")
+                );
+                inserted += tx.execute(
+                    "INSERT OR IGNORE INTO business_permission_grants
+                        (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                         active, reason, created_by, created_at_ms, updated_at_ms)
+                     VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
+                             'First-party catalog app data access for administrators',
+                             'business-os-first-party-catalog', ?5, ?5)",
+                    params![grant_id, role, permission.as_str(), collection, now],
+                )?;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(inserted)
 }
 
 fn business_os_collection_names_for_legacy_grants() -> Vec<String> {
@@ -30398,6 +30492,58 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(founder_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn first_party_catalog_apps_get_admin_grants_for_declared_collections_only(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        drop(conn);
+        let installed = root.join("runtime/business-os");
+        let write_manifest = |id: &str, source: &str, collections: &[&str]| -> anyhow::Result<()> {
+            let dir = installed.join("installed-modules").join(id);
+            fs::create_dir_all(&dir)?;
+            fs::write(
+                dir.join("module.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "id": id, "source": source, "collections": collections
+                }))?,
+            )?;
+            Ok(())
+        };
+        write_manifest(
+            "mail",
+            "catalog",
+            &["communication_messages", "business_commands"],
+        )?;
+        write_manifest("thirdparty", "user", &["customer_accounts"])?;
+
+        let inserted = ensure_first_party_catalog_collection_grants(root, &installed)?;
+        assert!(inserted > 0);
+        let conn = open_store(root)?;
+        let count = |role: &str, permission: &str, collection: &str| -> anyhow::Result<i64> {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM business_permission_grants
+                 WHERE subject_type='role' AND subject_id=?1 AND permission=?2
+                   AND scope_type='collection' AND scope_id=?3 AND active=1
+                   AND grant_id NOT LIKE 'migration.sync.%'",
+                params![role, permission, collection],
+                |row| row.get(0),
+            )?)
+        };
+        let read = BusinessOsPermission::DataRead.as_str();
+        assert_eq!(count("admin", read, "communication_messages")?, 1);
+        assert_eq!(count("chef", read, "business_commands")?, 1);
+        assert_eq!(count("user", read, "communication_messages")?, 0);
+        assert_eq!(count("admin", read, "customer_accounts")?, 0);
+        // Idempotent across restarts.
+        assert_eq!(
+            ensure_first_party_catalog_collection_grants(root, &installed)?,
+            0
+        );
         Ok(())
     }
 

@@ -1178,6 +1178,9 @@ pub(super) fn handle_outbound_active_command(
             outbound_handle_research_source_adapter(root, &conn, command, now, "auth_requested")
         }
         "outbound.sellify.lookup" => outbound_handle_sellify_lookup(root, command),
+        "outbound.update_digest.send_now" => {
+            super::outbound_update_digest::send_now(root, &command.payload)
+        }
         "outbound.research_source.registry_read" => {
             outbound_handle_research_source_registry_read(root, command)
         }
@@ -2761,8 +2764,13 @@ fn outbound_apply_research_adapter_scrape_effect(
                 .filter(|field| !extracted_fields_lower.contains(&field.to_ascii_lowercase()))
                 .cloned()
                 .collect::<Vec<_>>();
-            let has_expected_fields =
-                !test_outcome.fields_extracted.is_empty() && missing_fields.is_empty();
+            // The test proves that the data access works for a probe company: at
+            // least one declared field with a real value. One company rarely
+            // carries every declared field (LinkedIn declares gender and title,
+            // Bundesanzeiger revenue and headcount), and demanding all of them
+            // reported working adapters as failed. Missing fields stay listed.
+            let has_expected_fields = !test_outcome.fields_extracted.is_empty()
+                && (expected_fields.is_empty() || missing_fields.len() < expected_fields.len());
             let mut test_effect = serde_json::to_value(&test_outcome).unwrap_or_else(|err| {
                 serde_json::json!({
                     "ok": false,
@@ -7456,6 +7464,13 @@ mod tests {
     }
 
     fn run_outbound_scrape_test_fixture(script_body: &str) -> anyhow::Result<(Value, Value)> {
+        run_outbound_scrape_test_fixture_with_fields(script_body, &["company_name"])
+    }
+
+    fn run_outbound_scrape_test_fixture_with_fields(
+        script_body: &str,
+        field_keys: &[&str],
+    ) -> anyhow::Result<(Value, Value)> {
         let temp = tempdir()?;
         let root = temp.path();
         write_outbound_scrape_test_fixture(root, script_body)?;
@@ -7466,7 +7481,7 @@ mod tests {
             "url": "https://fixture.example/",
             "adapter_kind": "scrape_target",
             "target_key": "fixture-example",
-            "field_keys": ["company_name"],
+            "field_keys": field_keys,
             "countries": ["DE"]
         });
         let command = BusinessCommand {
@@ -7486,7 +7501,7 @@ mod tests {
             "url": "https://fixture.example/",
             "adapter_kind": "scrape_target",
             "target_key": "fixture-example",
-            "field_keys": ["company_name"],
+            "field_keys": field_keys,
             "payload": {}
         });
         let effect = outbound_apply_research_adapter_scrape_effect(
@@ -7895,6 +7910,30 @@ process.stdout.write(JSON.stringify({records:[],query_completion:{
         assert_eq!(
             record.pointer("/evidence/valid").and_then(Value::as_bool),
             Some(false)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scrape_test_partial_field_coverage_passes_and_lists_missing() -> anyhow::Result<()>
+    {
+        let (record, effect) = run_outbound_scrape_test_fixture_with_fields(
+            r#"process.stdout.write(JSON.stringify({records: [{field: "company_name", value: "Fixture GmbH", source_url: "https://fixture.example/"}]}));"#,
+            &["company_name", "person_title"],
+        )?;
+        assert_eq!(
+            effect.pointer("/test/test_ok").and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            record.get("status").and_then(Value::as_str),
+            Some("test_ok")
+        );
+        assert_eq!(
+            effect
+                .pointer("/test/missing_fields/0")
+                .and_then(Value::as_str),
+            Some("person_title")
         );
         Ok(())
     }
