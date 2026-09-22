@@ -49,10 +49,11 @@ pub(crate) use outbound_review::{
     ensure_founder_reply_deliverables_present, is_reviewed_external_chat_channel,
     prepare_reviewed_external_chat_reply, prepare_reviewed_founder_reply,
     record_and_send_external_chat_escalation_reply, record_and_send_founder_escalation_reply,
-    record_external_chat_review_approval, record_founder_outbound_review_approval,
-    record_founder_reply_review_approval, required_founder_reply_deliverables,
-    reviewed_send_result_has_durable_outbound_artifact, send_reviewed_external_chat_action,
-    send_reviewed_founder_outbound_action, terminal_founder_outbound_artifact_count,
+    record_and_send_policy_report_email, record_external_chat_review_approval,
+    record_founder_outbound_review_approval, record_founder_reply_review_approval,
+    required_founder_reply_deliverables, reviewed_send_result_has_durable_outbound_artifact,
+    send_reviewed_external_chat_action, send_reviewed_founder_outbound_action,
+    terminal_founder_outbound_artifact_count, PolicyReportEmail,
 };
 pub(crate) use outbound_review::{ensure_open_routing_rows_once, ensure_schema_once};
 pub use outbound_review::{

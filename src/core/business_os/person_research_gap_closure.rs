@@ -1480,6 +1480,34 @@ fn sanitize_research_writeback(
         verworfene_felder.insert(field);
     }
 
+    // A value next to a non-verified status (action_required, no_match, …)
+    // must not be stored. It used to reject the whole writeback, so one
+    // disputed firma_name threw away every proven field of the lead
+    // (thesen 22.09.2026: three writebacks in a row failed on it). Drop the
+    // value, keep the status and its reason, accept the rest.
+    for (field, status) in request.field_status.iter_mut() {
+        if status.status == "verified" {
+            continue;
+        }
+        let mut dropped = false;
+        if research_value_is_populated(&status.value) {
+            status.value = Value::Null;
+            dropped = true;
+        }
+        if let Some(entry) = fields.get_mut(field).and_then(Value::as_object_mut) {
+            if entry.get("value").is_some_and(research_value_is_populated) {
+                entry.insert("value".to_string(), Value::Null);
+                dropped = true;
+            }
+        }
+        if dropped {
+            rejections.push(format!(
+                "result.fields.{field}: Wert ohne verifizierten Status verworfen ({})",
+                status.status
+            ));
+        }
+    }
+
     let vorher = request.result.person_records.len();
     request.result.person_records.retain(|person| {
         person

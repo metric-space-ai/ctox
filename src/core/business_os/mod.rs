@@ -30,6 +30,7 @@ mod module_manifest_loader;
 pub mod office_cli;
 pub mod office_engine;
 pub(crate) mod office_staging_repair;
+mod outbound_update_digest;
 mod person_research_command;
 mod person_research_gap_closure;
 mod populated_store_recovery;
@@ -97,6 +98,7 @@ pub use populated_store_recovery::{
     native_rxdb_store_inventory, restore_native_rxdb_immutable_backup,
     run_production_native_rxdb_cutover, supported_historical_rxdb_versions,
 };
+pub use outbound_update_digest::tick as outbound_update_digest_tick;
 pub use rxdb_peer::enqueue_business_command_document;
 pub use rxdb_peer::native_peer_status;
 pub use rxdb_peer::repair_optional_rxdb_collection_schema_drift;
