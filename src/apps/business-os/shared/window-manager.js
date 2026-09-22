@@ -963,6 +963,8 @@ export function createWindowManager({
       win.state = 'normal';
       win.element.classList.remove('is-snapped');
       win.element.classList.remove('is-maximized');
+      win.element.removeAttribute('data-snap-zone');
+      clearDockRelation(win);
       return;
     }
     win.element.style.width = win.stored.width || '520px';
@@ -995,6 +997,7 @@ export function createWindowManager({
     win.element.classList.add('is-snapped');
     win.element.dataset.snapZone = zone;
     win.state = 'normal';
+    updateMaximizeControl(win, translate);
     bus.emit('window:snapped', { id, ownerId: win.ownerId, zone });
     persistFor(win);
     reflowDockedDependents(win);
@@ -1117,6 +1120,7 @@ export function createWindowManager({
     clearTimeout(win._layoutSwitchTimer);
     win._v2ResizeObserver?.disconnect?.();
     win._v2MutationObserver?.disconnect?.();
+    win._layoutMenuClickCleanup?.();
     const stackIndex = stack.indexOf(id);
     if (stackIndex !== -1) stack.splice(stackIndex, 1);
     const finishDestroy = () => {
@@ -1332,13 +1336,20 @@ export function createWindowManager({
     });
     const layoutMenu = win.element.querySelector('[data-window-layout-menu]');
     if (!layoutMenu) return;
-    document.addEventListener('click', (event) => {
-      if (!win.element.contains(event.target)) layoutMenu.hidden = true;
-    });
+    const trigger = win.element.querySelector('[data-window-layout-trigger]');
+    const closeLayoutMenu = () => {
+      layoutMenu.hidden = true;
+      trigger?.setAttribute('aria-expanded', 'false');
+    };
+    const onDocumentClick = (event) => {
+      if (!win.element.contains(event.target)) closeLayoutMenu();
+    };
+    document.addEventListener('click', onDocumentClick);
+    win._layoutMenuClickCleanup = () => document.removeEventListener('click', onDocumentClick);
     win.element.addEventListener('keydown', (event) => {
       if (event.key === 'Escape' && !layoutMenu.hidden) {
-        layoutMenu.hidden = true;
-        win.element.querySelector('[data-window-layout-trigger]')?.focus();
+        closeLayoutMenu();
+        trigger?.focus();
       }
     });
   }
@@ -1349,8 +1360,7 @@ export function createWindowManager({
     if (action === 'free') {
       if (win.state === 'maximized' || win.element.classList.contains('is-snapped')) restoreSize(win);
     } else if (action === 'maximize') {
-      if (win.state === 'maximized') restoreSize(win);
-      else toggleMaximize(win.id);
+      if (win.state !== 'maximized') toggleMaximize(win.id);
     } else if (action === 'minimize') {
       minimize(win.id);
     } else if (SNAP_ZONES.includes(action)) {
