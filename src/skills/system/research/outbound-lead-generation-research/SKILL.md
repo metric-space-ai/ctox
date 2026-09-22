@@ -29,9 +29,11 @@ Before any open-web search, call `ctox_web_scrape` once for every entry of `sour
 - **Minimum set per lead** (skip only what `source_policy` does not list):
   - DE: `handelsregister-de`, `northdata-de`, `bundesanzeiger-de`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum` (with `"domain"` once known).
   - AT: `firmenabc-at`, `northdata-de`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum`. CH: `zefix-ch`, `moneyhouse-ch`, `shab-ch`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum`.
-  - Persons: for **each** person found in the register or Impressum, run `linkedin-com` (Bright Data, `timeout_seconds: 400`) and `xing-com` with `"person"`. Never open `linkedin.com` or `xing.com` pages with `ctox_web_read` — LinkedIn answers bots with HTTP 999 and XING with its login wall; only the adapters get through.
+  - Persons: run `linkedin-com` (Bright Data, `timeout_seconds: 400`) and `xing-com` with `"person"` for the **priority persons only** — at most one per category in the order of the research procedure (Geschäftsführung, Prokura, Finanzen, Einkauf, SCM, Operations, Technik, Entwicklung), **at most 6 LinkedIn searches per lead**. One name search costs about a minute; a lead with 17 register persons otherwise spends the whole turn there and never reaches the writeback. Never open `linkedin.com` or `xing.com` pages with `ctox_web_read` — LinkedIn answers bots with HTTP 999 and XING with its login wall; only the adapters get through.
   - E-mail: once an address pattern is known, `mailtester-com` with `"email"`.
 - Only then fill the remaining gaps with `ctox_web_search` / `ctox_web_read`. In `result`, list every adapter you ran with its status.
+- **Write back early.** As soon as the register/identity adapters have delivered, send a first writeback with what is proven, then continue and send the rest. A turn that ends after research but before the writeback loses everything (22.09.2026: the command failed with "no successful outbound.lead.research_writeback receipt").
+- Authenticated sources handle a second factor by e-mail themselves (D&B sends its code to the crew mailbox; CTOX reads it and finishes the login). Only `authorization_required` after that is a real stop.
 
 ## 1. Wie die App, der Harness und der Web-Stack zusammenspielen
 
