@@ -172,7 +172,7 @@
     },
     {
       "file": "src/core/business_os/store.rs",
-      "function": "record_command",
+      "function": "record_command_inner",
       "occurrence": 1,
       "semantics": "execution_link",
       "target_field": "execution_task_id"
