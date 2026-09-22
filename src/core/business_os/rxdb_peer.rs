@@ -2776,6 +2776,14 @@ async fn run_native_peer(
     {
         return Err(release_database_after_failed_bring_up(&database, err).await);
     }
+    if let Err(err) = store::ensure_first_party_catalog_collection_grants(
+        &root,
+        &resolve_business_os_installed_app_root_for_native_peer(&root),
+    ) {
+        // Optional: a missing grant only leaves a first-party app without
+        // data, it must not take the peer down.
+        eprintln!("[business-os] first-party catalog collection grants skipped: {err:#}");
+    }
     let collection_list: Vec<Arc<RxCollection>> = collections
         .into_iter()
         .map(|(_, collection)| collection)
