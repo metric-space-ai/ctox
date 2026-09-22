@@ -3018,10 +3018,10 @@ impl CodexMessageProcessor {
             let fallback_provider = self.config.model_provider_id.as_str();
             match read_summary_from_rollout(path, fallback_provider).await {
                 Ok(summary) => summary_to_thread(summary),
-                Err(err) if is_unreadable_empty_rollout(&err) => {
+                Err(err) if loaded_thread.is_some() && rollout_file_is_zero_bytes(path) => {
                     // A loaded thread can create its rollout before the first
                     // session-meta line is flushed. Prefer the in-memory snapshot
-                    // instead of treating that empty file as persisted history.
+                    // instead of treating a zero-byte file as persisted history.
                     let Some(thread) = loaded_thread.as_ref() else {
                         self.send_internal_error(
                             request_id,
@@ -3086,7 +3086,8 @@ impl CodexMessageProcessor {
                 }
                 Err(err)
                     if err.kind() == std::io::ErrorKind::NotFound
-                        || (loaded_thread.is_some() && is_unreadable_empty_rollout(&err)) =>
+                        || (loaded_thread.is_some()
+                            && rollout_file_is_zero_bytes(rollout_path)) =>
                 {
                     self.send_invalid_request_error(
                         request_id,
@@ -7522,13 +7523,14 @@ pub(crate) async fn read_rollout_items_from_rollout(
     Ok(items)
 }
 
-/// Newly created rollout files can exist before the first session-meta line is
-/// flushed. Those empty files are not persisted history. Unreadable persisted
-/// history (no loaded thread, or non-empty corrupt content) stays fail-closed.
-fn is_unreadable_empty_rollout(err: &IoError) -> bool {
-    let message = err.to_string();
-    (message.contains("rollout at ") && message.contains(" is empty"))
-        || message.contains("empty session file")
+/// Newly created rollout files can exist at zero bytes before the first
+/// session-meta line is flushed. Those files are not persisted history.
+/// Non-empty unreadable content, including corrupt JSON whose parser error
+/// mentions "empty", stays fail-closed.
+fn rollout_file_is_zero_bytes(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|meta| meta.len() == 0)
+        .unwrap_or(false)
 }
 
 fn extract_conversation_summary(
@@ -7764,26 +7766,29 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn empty_rollout_errors_are_detected_without_masking_corrupt_history() {
-        assert!(is_unreadable_empty_rollout(&IoError::other(
-            "rollout at /tmp/rollout.jsonl is empty"
-        )));
-        assert!(is_unreadable_empty_rollout(&IoError::other(
-            "empty session file"
-        )));
-        assert!(is_unreadable_empty_rollout(&IoError::other(
-            "empty session file: /tmp/rollout.jsonl"
-        )));
-        assert!(!is_unreadable_empty_rollout(&IoError::other(
-            "rollout at /tmp/rollout.jsonl does not start with session metadata"
-        )));
-        assert!(!is_unreadable_empty_rollout(&IoError::new(
-            std::io::ErrorKind::NotFound,
-            "no such file"
-        )));
-        assert!(!is_unreadable_empty_rollout(&IoError::other(
-            "failed to parse thread ID from rollout file"
-        )));
+    fn zero_byte_rollout_is_in_progress_empty_but_nonempty_corrupt_history_is_not() {
+        let dir = TempDir::new().expect("tempdir");
+        let empty = dir.path().join("empty.jsonl");
+        std::fs::write(&empty, b"").expect("write empty rollout");
+        assert!(rollout_file_is_zero_bytes(&empty));
+
+        let corrupt = dir.path().join("rollout at empty session file.jsonl");
+        std::fs::write(
+            &corrupt,
+            b"{not session metadata}\nempty session file\nrollout at this file is empty\n",
+        )
+        .expect("write corrupt rollout");
+        assert!(
+            corrupt.metadata().expect("corrupt metadata").len() > 0,
+            "negative case must be a non-empty file"
+        );
+        assert!(
+            !rollout_file_is_zero_bytes(&corrupt),
+            "non-empty corrupt history must stay fail-closed even if path/contents mention empty"
+        );
+        assert!(!rollout_file_is_zero_bytes(
+            &dir.path().join("missing-rollout.jsonl")
+        ));
     }
 
     #[test]
