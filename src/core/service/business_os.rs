@@ -5850,9 +5850,23 @@ const preAuthenticatedVerifyFound = configuredVerifySelector
 // signed in, and reports `credential-field-not-found` on a working session.
 // Landing somewhere other than the login URL with no credential field and no
 // error is the same evidence, and it does not rot when a class name changes.
+// "Elsewhere" means another page, not the same login page with a token in the
+// query: D&B Hoovers answers /login with /login?F1084…=_ and a username-only
+// first step. Comparing whole URLs read that as a landing, found no password
+// field (the password step comes later) and reported `already-authenticated`,
+// so the stored credential was never submitted.
+const samePage = (left, right) => {
+  try {
+    const a = new URL(left);
+    const b = new URL(right);
+    return a.origin === b.origin && a.pathname.replace(/\/+$/, "") === b.pathname.replace(/\/+$/, "");
+  } catch {
+    return left === right;
+  }
+};
 const preAuthenticatedByLanding = await (async () => {
   if (preAuthenticatedVerifyFound) return false;
-  const landedElsewhere = beforeSignals.url && beforeSignals.url !== targetUrl;
+  const landedElsewhere = beforeSignals.url && !samePage(beforeSignals.url, targetUrl);
   if (!landedElsewhere) return false;
   const signals = beforeSignals.auth_signals || emptyAuthSignals();
   if (signals.mfa_required === true || signals.login_error_detected === true) return false;
@@ -7210,6 +7224,10 @@ mod tests {
         assert!(source.contains("waitForLoginEntryTransition"));
         assert!(source.contains("waitForCredentialTransition"));
         assert!(source.contains("browserCandidateFields(\"credential\")"));
+        // A login page that only gained a query token (D&B: /login?F…=_) is not a
+        // landing elsewhere; otherwise a username-first step reads as signed in.
+        assert!(source.contains("!samePage(beforeSignals.url, targetUrl)"));
+        assert!(!source.contains("beforeSignals.url !== targetUrl"));
         assert!(source.contains("gotoTargetWithRetry"));
         assert!(source.contains("attempt <= 2"));
         assert!(source.contains("same-origin-link"));
