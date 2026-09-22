@@ -99,6 +99,53 @@ struct CtoxWebScrapeArgs {
     query: Option<String>,
     #[serde(default)]
     limit: Option<u64>,
+    /// Lead input for `mode = "execute"` (company, country, source_id, task_id, ...).
+    #[serde(default)]
+    input: Option<serde_json::Value>,
+    #[serde(default)]
+    timeout_seconds: Option<u64>,
+}
+
+/// The worker sandbox cannot open the CTOX state store, so `ctox scrape
+/// execute` from a worker shell fails with a permission error and research
+/// never reached the registered adapters (Northdata, D&B, Leadfeeder, XING,
+/// LinkedIn via Bright Data). The tool runs in the harness process instead.
+fn append_scrape_execute_args(
+    command: &mut Command,
+    target_key: &str,
+    input: Option<serde_json::Value>,
+    timeout_seconds: Option<u64>,
+) -> Result<(), FunctionCallError> {
+    let valid_key = !target_key.is_empty()
+        && target_key.len() <= 120
+        && target_key
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'));
+    if !valid_key {
+        return Err(FunctionCallError::RespondToModel(
+            "ctox_web_scrape execute needs a registered target_key (letters, digits, - _ .)"
+                .to_string(),
+        ));
+    }
+    let input = input.unwrap_or_else(|| serde_json::json!({}));
+    if !input.is_object() {
+        return Err(FunctionCallError::RespondToModel(
+            "ctox_web_scrape execute needs `input` as a JSON object".to_string(),
+        ));
+    }
+    let timeout = timeout_seconds.unwrap_or(180).clamp(30, 420);
+    command
+        .arg("scrape")
+        .arg("execute")
+        .arg("--target-key")
+        .arg(target_key)
+        .arg("--trigger-kind")
+        .arg("manual")
+        .arg("--timeout-seconds")
+        .arg(timeout.to_string())
+        .arg("--input-json")
+        .arg(input.to_string());
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -300,6 +347,15 @@ impl ToolHandler for CtoxWebHandler {
                     command.arg("--no-workspace");
                 }
             }
+            "ctox_web_scrape" if scrape_execute_requested(&arguments) => {
+                let args: CtoxWebScrapeArgs = parse_arguments(&arguments)?;
+                append_scrape_execute_args(
+                    &mut command,
+                    &args.target_key,
+                    args.input,
+                    args.timeout_seconds,
+                )?;
+            }
             "ctox_web_scrape" => {
                 let args: CtoxWebScrapeArgs = parse_arguments(&arguments)?;
                 command
@@ -379,6 +435,19 @@ impl ToolHandler for CtoxWebHandler {
             FunctionCallError::RespondToModel(format!("failed to run ctox: {err}"))
         })?;
 
+        // A scrape run that ends blocked/no-match exits non-zero but its JSON
+        // (status, failure_mode, detail, run manifest) is the evidence the
+        // worker needs; hand it over instead of a bare error.
+        if tool_name == "ctox_web_scrape" && scrape_execute_requested(&arguments) {
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let body = if stdout.is_empty() { stderr } else { stdout };
+            return Ok(FunctionToolOutput::from_text(
+                body,
+                Some(output.status.success()),
+            ));
+        }
+
         if !output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -439,6 +508,18 @@ fn append_auth_assist_request_args(
     if let Some(requesting_task_id) = args.requesting_task_id {
         command.arg("--login-hint").arg(requesting_task_id);
     }
+}
+
+fn scrape_execute_requested(arguments: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("mode")
+                .and_then(|mode| mode.as_str())
+                .map(str::to_string)
+        })
+        .is_some_and(|mode| mode.trim().eq_ignore_ascii_case("execute"))
 }
 
 fn default_true() -> bool {
@@ -703,5 +784,57 @@ mod tests {
             FunctionCallError::RespondToModel(message)
                 if message == "auth assist requires a bound business chat or queue task"
         ));
+    }
+
+    #[test]
+    fn scrape_execute_mode_runs_registered_target_with_lead_input() {
+        assert!(scrape_execute_requested(
+            r#"{"target_key":"northdata-de","mode":"execute","input":{"company":"X GmbH"}}"#
+        ));
+        assert!(!scrape_execute_requested(
+            r#"{"target_key":"northdata-de","mode":"latest"}"#
+        ));
+        let mut command = Command::new("ctox");
+        append_scrape_execute_args(
+            &mut command,
+            "northdata-de",
+            Some(serde_json::json!({"company": "X GmbH", "country": "DE", "task_id": "cmd-1"})),
+            Some(9999),
+        )
+        .expect("valid execute args");
+        let args = command
+            .as_std()
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            &args[..4],
+            ["scrape", "execute", "--target-key", "northdata-de"]
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--timeout-seconds", "420"])
+        );
+        let input_at = args
+            .iter()
+            .position(|arg| arg == "--input-json")
+            .expect("input flag");
+        let input: serde_json::Value = serde_json::from_str(&args[input_at + 1]).expect("json");
+        assert_eq!(input["task_id"], "cmd-1");
+    }
+
+    #[test]
+    fn scrape_execute_rejects_unsafe_target_and_non_object_input() {
+        let mut command = Command::new("ctox");
+        assert!(append_scrape_execute_args(&mut command, "../etc", None, None).is_err());
+        assert!(
+            append_scrape_execute_args(
+                &mut command,
+                "northdata-de",
+                Some(serde_json::json!("x")),
+                None
+            )
+            .is_err()
+        );
     }
 }
