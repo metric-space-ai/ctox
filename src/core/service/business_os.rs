@@ -5767,7 +5767,8 @@ const browserCandidateFieldsInFrame = async (frame, kind, relaxed) => frame.eval
     if (kind === "credential") {
       let score = type === "password" ? 100 : 0;
       if (/(password|passwort|passwd|pwd|kennwort|secret)/.test(tokens)) score += 80;
-      if (/(otp|totp|mfa|2fa|code|verification|confirm)/.test(tokens)) score -= 70;
+      // Same trap as above: `credentials.passcode` is Okta's password field.
+      if (type !== "password" && /(\botp\b|\btotp\b|\bmfa\b|\b2fa\b|\bcode\b|verification|confirm)/.test(tokens)) score -= 70;
       return score;
     }
     let score = 0;
@@ -6109,9 +6110,14 @@ const pageSignals = async () => {
         { term: "inloggegevens-onjuist", pattern: /inloggegevens\s+(onjuist|ongeldig)/ },
         { term: "nieprawidlowe-dane", pattern: /nieprawidlowe\s+dane|bledne\s+haslo/ },
       ]);
+      // A password field is never a one-time-code field: Okta names its
+      // password input `credentials.passcode`, whose "code" made every D&B
+      // sign-in look like a second factor, so the stored password was never
+      // typed (gemessen 22.09.2026). Match whole words, not substrings.
       const otpFieldCount = Array.from(document.querySelectorAll("input, textarea"))
         .filter(visible)
-        .filter((element) => /(otp|totp|mfa|2fa|code|verification|verifizierung|sicherheitscode|one[-\s]?time)/.test(tokensFor(element)))
+        .filter((element) => String(element.getAttribute("type") || "").toLowerCase() !== "password")
+        .filter((element) => /(\botp\b|\btotp\b|\bmfa\b|\b2fa\b|\bcode\b|one[-\s]?time|verification|verifizierung|sicherheitscode)/.test(tokensFor(element)))
         .length;
       const errorNodes = Array.from(document.querySelectorAll([
         "[role='alert']",
@@ -7658,6 +7664,12 @@ mod tests {
         // path must never count as an existing session.
         assert!(source.contains(
             "if (looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;"
+        ));
+        // Okta's password field is named `credentials.passcode`; counting it
+        // as a one-time-code field turned every D&B sign-in into "MFA".
+        assert!(source.contains("!== \"password\""));
+        assert!(!source.contains(
+            "/(otp|totp|mfa|2fa|code|verification|verifizierung|sicherheitscode|one[-\\s]?time)/"
         ));
         assert!(source.contains("gotoTargetWithRetry"));
         assert!(source.contains("attempt <= 2"));
