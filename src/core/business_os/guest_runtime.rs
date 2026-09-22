@@ -6,8 +6,10 @@
 //! scheduler or persistent state. A native authority must authorize each
 //! effect and publish observations through its revocation-aware delivery path.
 //! The channel is an owned local QEMU virtio-serial chardev, not a browser
-//! data path. There is intentionally no permissive default implementation and
-//! no registered browser/VM operation until that connector exists.
+//! data path. Observe/input reach this adapter only through the Business OS
+//! command connector in `guest_commands`, which fails closed until a native
+//! owner is injected. No model-facing tool or production VM provisioner is
+//! enabled by that connector; this channel registers no browser/VM operation.
 
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
@@ -200,8 +202,11 @@ pub(super) trait GuestAuthorization {
         Fut: Future<Output = Result<()>> + Send;
 }
 
-fn identifier(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+pub(super) fn identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.len() <= 256
+        && !value.chars().any(char::is_control)
 }
 
 impl GuestInput {
