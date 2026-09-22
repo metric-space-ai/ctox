@@ -5840,16 +5840,6 @@ const before = await gotoTargetWithRetry();
 await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
 const consentTransition = await dismissConsent();
 const beforeSignals = await pageSignals();
-const preAuthenticatedVerifyFound = configuredVerifySelector
-  ? await page.locator(configuredVerifySelector).first().isVisible().catch(() => false)
-  : false;
-// A stored session sends us straight past the login form: Leadfeeder answers
-// /login with its dashboard, XING with an in-app page. The verify selector is
-// the only thing that used to notice, and once its markup drifts the run walks
-// into the login path, finds no password field precisely because it is already
-// signed in, and reports `credential-field-not-found` on a working session.
-// Landing somewhere other than the login URL with no credential field and no
-// error is the same evidence, and it does not rot when a class name changes.
 // "Elsewhere" means another page, not the same login page with a token in the
 // query: D&B Hoovers answers /login with /login?F1084…=_ and a username-only
 // first step. Comparing whole URLs read that as a landing, found no password
@@ -5864,6 +5854,25 @@ const samePage = (left, right) => {
     return left === right;
   }
 };
+const verifySelectorVisible = configuredVerifySelector
+  ? await page.locator(configuredVerifySelector).first().isVisible().catch(() => false)
+  : false;
+// A verify selector only proves a session when we are not looking at the login
+// form itself. D&B's selector matches a search link on its login page, so the
+// username step read as signed in and the stored credential was never sent.
+const loginFormStillShown = samePage(beforeSignals.url, targetUrl) && (
+  Number(beforeSignals.form_state?.visible_password_fields || 0) > 0
+  || (await browserCandidateFields("login").catch(() => [])).some((field) => field.source === "heuristic")
+  || (await browserCandidateFields("credential").catch(() => [])).some((field) => field.source === "heuristic")
+);
+const preAuthenticatedVerifyFound = verifySelectorVisible && !loginFormStillShown;
+// A stored session sends us straight past the login form: Leadfeeder answers
+// /login with its dashboard, XING with an in-app page. The verify selector is
+// the only thing that used to notice, and once its markup drifts the run walks
+// into the login path, finds no password field precisely because it is already
+// signed in, and reports `credential-field-not-found` on a working session.
+// Landing somewhere other than the login URL with no credential field and no
+// error is the same evidence, and it does not rot when a class name changes.
 const preAuthenticatedByLanding = await (async () => {
   if (preAuthenticatedVerifyFound) return false;
   const landedElsewhere = beforeSignals.url && !samePage(beforeSignals.url, targetUrl);
@@ -7228,6 +7237,11 @@ mod tests {
         // landing elsewhere; otherwise a username-first step reads as signed in.
         assert!(source.contains("!samePage(beforeSignals.url, targetUrl)"));
         assert!(!source.contains("beforeSignals.url !== targetUrl"));
+        // A verify selector that also matches on the login page (D&B: a search
+        // link) must not count while the login form is still shown.
+        assert!(source.contains(
+            "const preAuthenticatedVerifyFound = verifySelectorVisible && !loginFormStillShown;"
+        ));
         assert!(source.contains("gotoTargetWithRetry"));
         assert!(source.contains("attempt <= 2"));
         assert!(source.contains("same-origin-link"));
