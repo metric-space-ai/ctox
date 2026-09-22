@@ -3014,16 +3014,39 @@ impl CodexMessageProcessor {
 
         let mut thread = if let Some(summary) = db_summary {
             summary_to_thread(summary)
-        } else if let Some(rollout_path) = rollout_path.as_ref() {
+        } else if let Some(path) = rollout_path.as_ref() {
             let fallback_provider = self.config.model_provider_id.as_str();
-            match read_summary_from_rollout(rollout_path, fallback_provider).await {
+            match read_summary_from_rollout(path, fallback_provider).await {
                 Ok(summary) => summary_to_thread(summary),
+                Err(err) if is_unreadable_empty_rollout(&err) => {
+                    // A loaded thread can create its rollout before the first
+                    // session-meta line is flushed. Prefer the in-memory snapshot
+                    // instead of treating that empty file as persisted history.
+                    let Some(thread) = loaded_thread.as_ref() else {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to load rollout `{}` for thread {thread_uuid}: {err}",
+                                path.display()
+                            ),
+                        )
+                        .await;
+                        return;
+                    };
+                    let config_snapshot = thread.config_snapshot().await;
+                    let loaded_rollout_path = thread.rollout_path();
+                    build_thread_from_snapshot(
+                        thread_uuid,
+                        &config_snapshot,
+                        loaded_rollout_path.or_else(|| Some(path.clone())),
+                    )
+                }
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
                         format!(
                             "failed to load rollout `{}` for thread {thread_uuid}: {err}",
-                            rollout_path.display()
+                            path.display()
                         ),
                     )
                     .await;
@@ -3061,7 +3084,10 @@ impl CodexMessageProcessor {
                 Ok(items) => {
                     thread.turns = build_turns_from_rollout_items(&items);
                 }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::NotFound
+                        || (loaded_thread.is_some() && is_unreadable_empty_rollout(&err)) =>
+                {
                     self.send_invalid_request_error(
                         request_id,
                         format!(
@@ -7496,6 +7522,15 @@ pub(crate) async fn read_rollout_items_from_rollout(
     Ok(items)
 }
 
+/// Newly created rollout files can exist before the first session-meta line is
+/// flushed. Those empty files are not persisted history. Unreadable persisted
+/// history (no loaded thread, or non-empty corrupt content) stays fail-closed.
+fn is_unreadable_empty_rollout(err: &IoError) -> bool {
+    let message = err.to_string();
+    (message.contains("rollout at ") && message.contains(" is empty"))
+        || message.contains("empty session file")
+}
+
 fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
@@ -7727,6 +7762,29 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn empty_rollout_errors_are_detected_without_masking_corrupt_history() {
+        assert!(is_unreadable_empty_rollout(&IoError::other(
+            "rollout at /tmp/rollout.jsonl is empty"
+        )));
+        assert!(is_unreadable_empty_rollout(&IoError::other(
+            "empty session file"
+        )));
+        assert!(is_unreadable_empty_rollout(&IoError::other(
+            "empty session file: /tmp/rollout.jsonl"
+        )));
+        assert!(!is_unreadable_empty_rollout(&IoError::other(
+            "rollout at /tmp/rollout.jsonl does not start with session metadata"
+        )));
+        assert!(!is_unreadable_empty_rollout(&IoError::new(
+            std::io::ErrorKind::NotFound,
+            "no such file"
+        )));
+        assert!(!is_unreadable_empty_rollout(&IoError::other(
+            "failed to parse thread ID from rollout file"
+        )));
+    }
 
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {
