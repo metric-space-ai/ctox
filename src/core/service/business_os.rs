@@ -5459,7 +5459,7 @@ fn find_fresh_email_otp(
     let mut statement = conn
         .prepare(
             "SELECT message_key, COALESCE(sender_address, ''), COALESCE(subject, ''),
-                    COALESCE(body_text, preview, '')
+                    COALESCE(NULLIF(body_text, ''), preview, '')
              FROM communication_messages
              WHERE channel = 'email' AND direction = 'inbound'
                AND CAST(strftime('%s', COALESCE(external_created_at, observed_at)) AS INTEGER) >= ?1
