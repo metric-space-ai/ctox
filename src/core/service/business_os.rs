@@ -2121,11 +2121,15 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
         verify_selector.trim(),
         continuation_source,
     )?;
+    let login_started_epoch_s = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs() as i64)
+        .unwrap_or(0);
     let mut automation = crate::business_os::run_browser_session_automation(
         root,
         crate::business_os::BrowserSessionAutomationRequest {
             session_id: session_id.clone(),
-            dir: browser_dir,
+            dir: browser_dir.clone(),
             timeout_ms: Some(timeout_ms),
             source: automation_source,
             profile_owner: auth_assist
@@ -2141,7 +2145,7 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
             redact_secret_value_from_json(&mut automation, login_hint);
         }
     }
-    let login_result = automation
+    let mut login_result = automation
         .get("result")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
@@ -2149,10 +2153,60 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
         .get("ok")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let login_ok = login_result
+    let mut login_ok = login_result
         .get("ok")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(automation_ok);
+    // Second factor by e-mail: when the provider sends a one-time code to a
+    // mailbox CTOX reads (D&B: no-reply@mail.dnb.com -> the crew mailbox),
+    // fetch it and finish the login in the same session instead of parking
+    // the research on a human (owner 22.09.2026: "der research agent soll
+    // moeglichst autonom arbeiten").
+    let mut email_otp = serde_json::Value::Null;
+    if automation_ok
+        && !login_ok
+        && login_result
+            .get("login_state")
+            .and_then(serde_json::Value::as_str)
+            == Some("mfa_required")
+    {
+        if let Some(recipe) = web_stack_email_otp_recipe(&source_id) {
+            email_otp = complete_web_stack_login_with_email_otp(
+                root,
+                &session_id,
+                browser_dir.clone(),
+                timeout_ms,
+                auth_assist
+                    .get("owner_user_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                &recipe,
+                login_started_epoch_s,
+                continuation_source,
+            );
+            if email_otp.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+                login_ok = true;
+                if let Some(object) = login_result.as_object_mut() {
+                    object.insert("ok".to_string(), serde_json::Value::Bool(true));
+                    object.insert(
+                        "login_state".to_string(),
+                        serde_json::Value::String("authenticated".to_string()),
+                    );
+                    object.insert("mfa_required".to_string(), serde_json::Value::Bool(false));
+                    object.insert(
+                        "reason".to_string(),
+                        serde_json::Value::String("email-otp-completed".to_string()),
+                    );
+                    if let Some(post_auth) = email_otp.get("post_auth_result") {
+                        object.insert("post_auth_result".to_string(), post_auth.clone());
+                    }
+                }
+                if let Some(object) = automation.as_object_mut() {
+                    object.insert("result".to_string(), login_result.clone());
+                }
+            }
+        }
+    }
     let login_state = login_result
         .get("login_state")
         .and_then(serde_json::Value::as_str)
@@ -2193,6 +2247,7 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
         "login_error_detected": login_error_detected,
         "verify_selector": verify_selector,
         "credential_selector": credential_selector,
+        "email_otp": email_otp,
         "secret_value_in_payload": false,
         "frame_data_in_payload": false,
         "browser_stream": "rxdb",
@@ -5257,6 +5312,277 @@ fn parse_local_ctox_secret_ref(value: &str) -> anyhow::Result<LocalCtoxSecretRef
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Providers that send their second factor by e-mail. The code is read from a
+/// mailbox CTOX already syncs (communication_messages); nothing is typed by a
+/// human and the code never leaves the host.
+struct WebStackEmailOtpRecipe {
+    sender_domains: &'static [&'static str],
+}
+
+fn web_stack_email_otp_recipe(source_id: &str) -> Option<WebStackEmailOtpRecipe> {
+    let sender_domains: &'static [&'static str] = match source_id.trim() {
+        "dnbhoovers.com" | "app.dnbhoovers.com" => &["mail.dnb.com", "dnb.com", "hoovers.com"],
+        "leadfeeder.com" | "app.leadfeeder.com" => &["leadfeeder.com", "dealfront.com"],
+        "xing.com" => &["xing.com"],
+        "linkedin.com" => &["linkedin.com"],
+        "rocketreach.com" | "rocketreach.co" => &["rocketreach.co", "rocketreach.com"],
+        _ => return None,
+    };
+    Some(WebStackEmailOtpRecipe { sender_domains })
+}
+
+/// Pull the one-time code out of a verification mail. Prefers a token that
+/// follows a code/PIN marker; falls back to "<code> is your …" and to a lone
+/// 6-digit number.
+fn extract_email_otp_code(subject: &str, body: &str) -> Option<String> {
+    let text = format!("{subject}\n{body}");
+    let has_digit = |value: &str| value.chars().any(|ch| ch.is_ascii_digit());
+    if let Ok(marker) = regex::Regex::new(
+        r"(?i)(?:code|pin|token|passcode|verifizierungscode|bestätigungscode|bestaetigungscode)\b[^A-Za-z0-9]{0,40}([A-Z0-9]{4,8})\b",
+    ) {
+        for captures in marker.captures_iter(&text) {
+            if let Some(candidate) = captures.get(1).map(|value| value.as_str()) {
+                if has_digit(candidate) {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+    }
+    if let Ok(leading) = regex::Regex::new(r"\b([A-Za-z0-9]{4,8}) is your\b") {
+        if let Some(candidate) = leading
+            .captures(&text)
+            .and_then(|captures| captures.get(1))
+            .map(|value| value.as_str())
+        {
+            if has_digit(candidate) {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    regex::Regex::new(r"\b(\d{6})\b")
+        .ok()?
+        .captures(&text)
+        .and_then(|captures| captures.get(1))
+        .map(|value| value.as_str().to_string())
+}
+
+fn email_otp_sender_matches(recipe: &WebStackEmailOtpRecipe, sender: &str) -> bool {
+    let sender = sender.trim().to_ascii_lowercase();
+    let sender_domain = sender.rsplit('@').next().unwrap_or("");
+    recipe
+        .sender_domains
+        .iter()
+        .any(|domain| sender_domain == *domain || sender_domain.ends_with(&format!(".{domain}")))
+}
+
+fn find_fresh_email_otp(
+    root: &Path,
+    recipe: &WebStackEmailOtpRecipe,
+    not_before_epoch_s: i64,
+) -> Option<(String, String)> {
+    let conn = rusqlite::Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    let mut statement = conn
+        .prepare(
+            "SELECT message_key, COALESCE(sender_address, ''), COALESCE(subject, ''),
+                    COALESCE(body_text, preview, '')
+             FROM communication_messages
+             WHERE channel = 'email' AND direction = 'inbound'
+               AND CAST(strftime('%s', COALESCE(external_created_at, observed_at)) AS INTEGER) >= ?1
+             ORDER BY CAST(strftime('%s', COALESCE(external_created_at, observed_at)) AS INTEGER) DESC
+             LIMIT 40",
+        )
+        .ok()?;
+    let rows = statement
+        .query_map(rusqlite::params![not_before_epoch_s], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .ok()?;
+    for (message_key, sender, subject, body) in rows.flatten() {
+        if !email_otp_sender_matches(recipe, &sender) {
+            continue;
+        }
+        if let Some(code) = extract_email_otp_code(&subject, &body) {
+            return Some((code, message_key));
+        }
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn complete_web_stack_login_with_email_otp(
+    root: &Path,
+    session_id: &str,
+    browser_dir: Option<PathBuf>,
+    timeout_ms: u64,
+    profile_owner: Option<String>,
+    recipe: &WebStackEmailOtpRecipe,
+    login_started_epoch_s: i64,
+    continuation_source: Option<&str>,
+) -> serde_json::Value {
+    // Tolerate some clock skew between the mail server and this host.
+    let not_before = login_started_epoch_s.saturating_sub(90);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(150);
+    let mut polls = 0usize;
+    let mut found = None;
+    while std::time::Instant::now() < deadline {
+        polls += 1;
+        if let Ok(settings) = crate::inference::runtime_env::effective_operator_env_map(root) {
+            let _ = crate::communication::email_native::service_sync(root, &settings);
+        }
+        if let Some(hit) = find_fresh_email_otp(root, recipe, not_before) {
+            found = Some(hit);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    }
+    let Some((code, message_key)) = found else {
+        return serde_json::json!({
+            "ok": false,
+            "status": "no_code_mail",
+            "polls": polls,
+            "detail": "no verification mail from the provider reached a synced mailbox within 150 s",
+        });
+    };
+    let mut source = format!("const otpCode = {};\n", serde_json::json!(code));
+    source.push_str(
+        r#"
+const marked = await page.evaluate(() => {
+  const visible = (el) => { const s = getComputedStyle(el); const r = el.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
+  const inputs = Array.from(document.querySelectorAll('input')).filter((el) => visible(el) && !['hidden','checkbox','radio','submit','button','password','email'].includes((el.type || '').toLowerCase()));
+  const tokens = (el) => [el.name, el.id, el.placeholder, el.getAttribute('aria-label'), el.getAttribute('autocomplete'), el.getAttribute('inputmode')].filter(Boolean).join(' ').toLowerCase();
+  const split = inputs.filter((el) => Number(el.maxLength) === 1);
+  if (split.length >= 4) { split.forEach((el, i) => el.setAttribute('data-ctox-otp-i', String(i))); return { kind: 'split', count: split.length }; }
+  const scored = inputs.map((el) => { const t = tokens(el); let score = 0; if (/one-time-code/.test(t)) score += 100; if (/(otp|code|verification|verif|token|pin|passcode)/.test(t)) score += 60; if (Number(el.maxLength) >= 4 && Number(el.maxLength) <= 10) score += 20; if (/numeric/.test(t)) score += 10; return { el, score }; }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+  const pick = scored[0] ? scored[0].el : (inputs.length === 1 ? inputs[0] : null);
+  if (!pick) return { kind: 'none', count: inputs.length };
+  pick.setAttribute('data-ctox-otp', '1');
+  return { kind: 'single', count: 1 };
+});
+if (marked.kind === 'none') {
+  return { ok: false, otp_field_found: false, url: page.url(), title: await page.title() };
+}
+if (marked.kind === 'split') {
+  for (let i = 0; i < Math.min(marked.count, otpCode.length); i += 1) {
+    await page.locator('[data-ctox-otp-i="' + i + '"]').first().fill(otpCode[i]);
+  }
+} else {
+  await page.locator('[data-ctox-otp="1"]').first().fill(otpCode);
+}
+const submit = page.locator('button[type="submit"], input[type="submit"], button').filter({ hasText: /(verify|continue|submit|confirm|sign in|log in|weiter|bestätigen|anmelden|absenden|fortfahren)/i }).first();
+if (await submit.count()) { await submit.click({ timeout: 5000 }).catch(() => null); } else { await page.keyboard.press('Enter').catch(() => null); }
+await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => null);
+await page.waitForTimeout(4000);
+const stillMfa = await page.evaluate(() => {
+  const text = (document.body ? document.body.innerText : '').toLowerCase();
+  const field = document.querySelector('[data-ctox-otp], [data-ctox-otp-i]');
+  return !!field && /(verification code|one[- ]time|otp|bestätigungscode|verifizierung|passcode)/.test(text);
+});
+const errorShown = await page.evaluate(() => /(invalid code|incorrect code|code (has )?expired|ungültig|abgelaufen)/i.test(document.body ? document.body.innerText : ''));
+const otpOutcome = { ok: !stillMfa && !errorShown, otp_field_found: true, still_mfa: stillMfa, error_shown: errorShown, url: page.url(), title: await page.title() };
+"#,
+    );
+    if let Some(continuation) = continuation_source {
+        source.push_str(
+            "if (!otpOutcome.ok) return otpOutcome;\nconst postAuthResult = await (async () => {\n",
+        );
+        source.push_str(continuation);
+        source.push_str("\n})();\nreturn { ...otpOutcome, post_auth_result: postAuthResult };\n");
+    } else {
+        source.push_str("return otpOutcome;\n");
+    }
+    match crate::business_os::run_browser_session_automation(
+        root,
+        crate::business_os::BrowserSessionAutomationRequest {
+            session_id: session_id.to_string(),
+            dir: browser_dir,
+            timeout_ms: Some(timeout_ms),
+            source,
+            profile_owner,
+        },
+    ) {
+        Ok(mut value) => {
+            redact_secret_value_from_json(&mut value, &code);
+            let result = value
+                .get("result")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let ok = value.get("ok").and_then(serde_json::Value::as_bool) == Some(true)
+                && result.get("ok").and_then(serde_json::Value::as_bool) == Some(true);
+            let field = |name: &str| result.get(name).cloned().unwrap_or(serde_json::Value::Null);
+            serde_json::json!({
+                "ok": ok,
+                "status": if ok { "completed" } else { "code_rejected_or_no_field" },
+                "polls": polls,
+                "code_message_key": message_key,
+                "otp_field_found": field("otp_field_found"),
+                "still_mfa": field("still_mfa"),
+                "error_shown": field("error_shown"),
+                "url": field("url"),
+                "post_auth_result": field("post_auth_result"),
+                "code_value_in_payload": false,
+            })
+        }
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "status": "otp_automation_failed",
+            "polls": polls,
+            "code_message_key": message_key,
+            "detail": error.to_string(),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod email_otp_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_codes_from_provider_verification_mails() {
+        assert_eq!(
+            extract_email_otp_code(
+                "One-time verification code",
+                "Your verification code is 482913."
+            )
+            .as_deref(),
+            Some("482913")
+        );
+        assert_eq!(
+            extract_email_otp_code("vSR358 is your Bright Data access code", "").as_deref(),
+            Some("vSR358")
+        );
+        assert_eq!(
+            extract_email_otp_code("Ihr Bestätigungscode", "Bestätigungscode: 7Q4K2P").as_deref(),
+            Some("7Q4K2P")
+        );
+        assert_eq!(
+            extract_email_otp_code("Welcome to D&B Hoovers!", "Hello there"),
+            None
+        );
+    }
+
+    #[test]
+    fn otp_recipe_only_trusts_the_providers_sender_domains() {
+        let recipe = web_stack_email_otp_recipe("dnbhoovers.com").expect("dnb recipe");
+        assert!(email_otp_sender_matches(&recipe, "no-reply@mail.dnb.com"));
+        assert!(email_otp_sender_matches(&recipe, "No-Reply@HOOVERS.com"));
+        assert!(!email_otp_sender_matches(
+            &recipe,
+            "attacker@dnb.com.evil.example"
+        ));
+        assert!(!email_otp_sender_matches(&recipe, "noreply@brightdata.com"));
+        assert!(web_stack_email_otp_recipe("northdata.de").is_none());
+    }
+}
+
 fn build_web_stack_auth_assist_login_source_with_continuation(
     target_url: &str,
     source_id: &str,
