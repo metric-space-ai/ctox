@@ -5338,6 +5338,13 @@ if (state.trigger_label && !state.otp_field_present) {
   await page.locator('[data-ctox-otp-trigger="1"]').first().click({ timeout: 5000 }).catch(() => null);
   await page.waitForTimeout(3000);
 }
+// Okta sends a link and a code; the code field only appears after
+// "Enter a code from the email instead".
+const codeInstead = page.locator('a, button').filter({ hasText: /(enter a (verification )?code|code (from the email )?instead|code eingeben)/i }).first();
+if (await codeInstead.count()) {
+  await codeInstead.click({ timeout: 5000 }).catch(() => null);
+  await page.waitForTimeout(1500);
+}
 return { ...state, url: page.url(), title: await page.title() };
 "#;
 
@@ -5376,7 +5383,14 @@ struct WebStackEmailOtpRecipe {
 
 fn web_stack_email_otp_recipe(source_id: &str) -> Option<WebStackEmailOtpRecipe> {
     let sender_domains: &'static [&'static str] = match source_id.trim() {
-        "dnbhoovers.com" | "app.dnbhoovers.com" => &["mail.dnb.com", "dnb.com", "hoovers.com"],
+        // D&B signs in through Okta (sso.dnb.com); the code mail comes from Okta.
+        "dnbhoovers.com" | "app.dnbhoovers.com" => &[
+            "mail.dnb.com",
+            "dnb.com",
+            "hoovers.com",
+            "okta.com",
+            "okta-emea.com",
+        ],
         "leadfeeder.com" | "app.leadfeeder.com" => &["leadfeeder.com", "dealfront.com"],
         "xing.com" => &["xing.com"],
         "linkedin.com" => &["linkedin.com"],
@@ -5615,6 +5629,18 @@ mod email_otp_tests {
     use super::*;
 
     #[test]
+    fn extracts_okta_email_factor_code() {
+        assert_eq!(
+            extract_email_otp_code(
+                "One-time verification code",
+                "Hi Lena, your verification code is 739104. Or click the link to sign in."
+            )
+            .as_deref(),
+            Some("739104")
+        );
+    }
+
+    #[test]
     fn extracts_codes_from_provider_verification_mails() {
         assert_eq!(
             extract_email_otp_code(
@@ -5643,6 +5669,7 @@ mod email_otp_tests {
         let recipe = web_stack_email_otp_recipe("dnbhoovers.com").expect("dnb recipe");
         assert!(email_otp_sender_matches(&recipe, "no-reply@mail.dnb.com"));
         assert!(email_otp_sender_matches(&recipe, "No-Reply@HOOVERS.com"));
+        assert!(email_otp_sender_matches(&recipe, "noreply@okta.com"));
         assert!(!email_otp_sender_matches(
             &recipe,
             "attacker@dnb.com.evil.example"
@@ -6086,6 +6113,11 @@ const pageSignals = async () => {
         { term: "sicherheitscode", pattern: /sicherheitscode/ },
         { term: "verifizierungscode", pattern: /verifizierungscode/ },
         { term: "zweifaktor", pattern: /zweifaktor|zwei[-\s]?faktor|zweistufig/ },
+        // Okta's e-mail factor (D&B): "Send a verification email to … by
+        // clicking on 'Send me an email'" — it has no code field yet, so
+        // without these terms the page read as signed in.
+        { term: "verification-email", pattern: /verification\s+e-?mail|send\s+me\s+an\s+e-?mail|verify\s+with\s+(your\s+)?e-?mail|enter\s+(a|the)\s+(verification\s+)?code/ },
+        { term: "bestaetigungsmail", pattern: /bestätigungs-?e-?mail|bestaetigungs-?e-?mail|code\s+per\s+e-?mail/ },
       ]);
       const errorTerms = matchingTerms([
         { term: "invalid", pattern: /\binvalid\b/ },
