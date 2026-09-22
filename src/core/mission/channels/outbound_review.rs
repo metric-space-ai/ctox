@@ -2267,6 +2267,113 @@ pub(crate) fn record_and_send_founder_escalation_reply(
     Ok(send_result)
 }
 
+/// A scheduled report whose recipients, sender mailbox and cadence an admin
+/// configured in a Business OS app (Outbound "Update-Verteiler"). The body is
+/// built deterministically from measured app records, so the configuration IS
+/// the review: record a policy-authored approval for the exact body and send it
+/// through the same gated sequence as every reviewed mail (send lock,
+/// exact-digest approval, body-clean gate, core transition, durable send
+/// artifact). `report_key` identifies the slot (e.g. `outbound-update:2026-09-23`);
+/// a consumed approval stays consumed, so a retry of the same slot and body
+/// cannot send twice.
+pub(crate) struct PolicyReportEmail<'a> {
+    pub sender_email: &'a str,
+    pub to: &'a [String],
+    pub subject: &'a str,
+    pub body: &'a str,
+    pub report_key: &'a str,
+    pub policy_summary: &'a str,
+}
+
+pub(crate) fn record_and_send_policy_report_email(
+    root: &Path,
+    report: &PolicyReportEmail<'_>,
+) -> Result<Value> {
+    let _send_guard = acquire_reviewed_founder_send_lock()?;
+    let sender = report.sender_email.trim().to_ascii_lowercase();
+    anyhow::ensure!(
+        sender.contains('@'),
+        "policy report needs a sender mailbox address"
+    );
+    let to = report
+        .to
+        .iter()
+        .map(|address| address.trim().to_ascii_lowercase())
+        .filter(|address| address.contains('@'))
+        .collect::<Vec<_>>();
+    anyhow::ensure!(!to.is_empty(), "policy report needs at least one recipient");
+    anyhow::ensure!(
+        !report.subject.trim().is_empty() && !report.body.trim().is_empty(),
+        "policy report needs subject and body"
+    );
+    let db_path = resolve_db_path(root, None);
+    let conn = open_channel_db(&db_path)?;
+    let request = ChannelSendRequest {
+        channel: "email".to_string(),
+        account_key: format!("email:{sender}"),
+        thread_key: format!("policy-report:{}", report.report_key),
+        body: report.body.trim().to_string(),
+        subject: report.subject.trim().to_string(),
+        to,
+        cc: Vec::new(),
+        attachments: Vec::new(),
+        sender_display: None,
+        sender_address: Some(sender.clone()),
+        send_voice: false,
+        reviewed_founder_send: true,
+    };
+    ensure_founder_outbound_body_clean(&request)?;
+    let action = FounderReplyAction {
+        account_key: request.account_key.clone(),
+        thread_key: request.thread_key.clone(),
+        subject: request.subject.clone(),
+        to: request.to.clone(),
+        cc: Vec::new(),
+        attachments: Vec::new(),
+    };
+    let (action_digest, action_json, body_sha256) =
+        founder_reply_review_digest(&action, &request.body);
+    let anchor_key = format!("policy-report:{}", report.report_key);
+    let approval_key = format!("policy-report:{}:{action_digest}", report.report_key);
+    conn.execute(
+        r#"
+        INSERT INTO communication_founder_reply_reviews (
+            approval_key, inbound_message_key, action_digest, action_json,
+            body_sha256, reviewer, review_summary, approved_at, sent_at, send_result_json
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5, 'policy-report', ?6, ?7, NULL, '{}')
+        ON CONFLICT(inbound_message_key, action_digest) DO UPDATE SET
+            review_summary=excluded.review_summary
+        "#,
+        params![
+            approval_key,
+            anchor_key,
+            action_digest,
+            action_json,
+            body_sha256,
+            report.policy_summary,
+            now_iso_string()
+        ],
+    )
+    .context("failed to record policy report approval")?;
+    let approval_key =
+        require_unconsumed_founder_reply_review(&conn, &anchor_key, &action, &request.body)?;
+    let entity_id = format!("policy-report:{}", report.report_key);
+    enforce_reviewed_founder_send_core_transition(&conn, &entity_id, &approval_key, &request)?;
+    let send_result = send_email_message(
+        root,
+        &conn,
+        &db_path,
+        &request,
+        Some(ReviewedFounderSendContext {
+            entity_id: &entity_id,
+            approval_key: &approval_key,
+        }),
+    )?;
+    mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
+    Ok(send_result)
+}
+
 /// Chat-channel counterpart of `record_and_send_founder_escalation_reply`:
 /// record a policy-authored approval for the exact escalation body against
 /// the stalled inbound chat message and deliver it through the reviewed

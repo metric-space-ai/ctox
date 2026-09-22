@@ -1178,6 +1178,9 @@ pub(super) fn handle_outbound_active_command(
             outbound_handle_research_source_adapter(root, &conn, command, now, "auth_requested")
         }
         "outbound.sellify.lookup" => outbound_handle_sellify_lookup(root, command),
+        "outbound.update_digest.send_now" => {
+            super::outbound_update_digest::send_now(root, &command.payload)
+        }
         "outbound.research_source.registry_read" => {
             outbound_handle_research_source_registry_read(root, command)
         }

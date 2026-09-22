@@ -15346,6 +15346,11 @@ fn start_mission_maintenance_loop(root: std::path::PathBuf, state: Arc<Mutex<Sha
             // memory in the LCM (anchors from the typed retrospective, then the
             // existing continuity refresh). Serial, bounded, after the gates.
             run_crew_learning_tick(&root, &state);
+            // Outbound Update-Verteiler: the admin-configured morning update
+            // (recipients, weekdays, local time) — at most once per day.
+            if let Some(event) = crate::business_os::outbound_update_digest_tick(&root) {
+                push_event(&state, event);
+            }
             thread::sleep(Duration::from_secs(MISSION_MAINTENANCE_POLL_SECS));
         }
     });

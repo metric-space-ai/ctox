@@ -163,8 +163,37 @@ pub(crate) fn send(
     runtime: &BTreeMap<String, String>,
     request: &EmailSendCommandRequest<'_>,
 ) -> Result<Value> {
-    let options = send_options_from_request(root, runtime, request)?;
+    let runtime = personal_account_send_runtime(root, runtime, request.sender_email);
+    let options = send_options_from_request(root, &runtime, request)?;
     execute_send(&options, request)
+}
+
+/// A send from a personal mailbox (Mail app account, e.g. an Exchange/OWA box)
+/// must log in with THAT account's server, user and secret. Before this, every
+/// send used the instance credentials (CTO_EMAIL_*) and only the From address
+/// changed, so a personal sender was rejected by its own server.
+fn personal_account_send_runtime(
+    root: &Path,
+    runtime: &BTreeMap<String, String>,
+    sender_email: &str,
+) -> BTreeMap<String, String> {
+    let sender = sender_email.trim().to_ascii_lowercase();
+    let instance = setting(runtime, "CTO_EMAIL_ADDRESS").to_ascii_lowercase();
+    if sender.is_empty() || sender == instance {
+        return runtime.clone();
+    }
+    let Some(account) = super::email_accounts::load_accounts(root)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|account| account.address.trim().eq_ignore_ascii_case(&sender))
+    else {
+        return runtime.clone();
+    };
+    let mut personal = runtime.clone();
+    personal.extend(super::email_accounts::account_runtime_overrides(
+        root, &account,
+    ));
+    personal
 }
 
 pub(crate) fn test(

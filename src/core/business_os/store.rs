@@ -16179,6 +16179,8 @@ pub(super) fn is_outbound_active_command(command_type: &str) -> bool {
             // panel opens, and every read became a worker task that mostly
             // failed.
             | "outbound.research_source.registry_read"
+            // "Jetzt testen" of the Update-Verteiler: native, deterministic.
+            | "outbound.update_digest.send_now"
     )
 }
 
