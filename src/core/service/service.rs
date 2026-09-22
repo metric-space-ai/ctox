@@ -3312,13 +3312,7 @@ pub(crate) fn run_business_os_web_stack_via_service(
     if !socket_path.exists() {
         return Ok(None);
     }
-    let timeout_ms = argv
-        .windows(2)
-        .find(|pair| pair[0] == "--timeout-ms")
-        .and_then(|pair| pair[1].parse::<u64>().ok())
-        .unwrap_or(60_000)
-        .clamp(1_000, 300_000);
-    let timeout = Duration::from_millis(timeout_ms.saturating_add(15_000));
+    let timeout = web_stack_ipc_timeout(argv);
     match send_service_ipc_request_with_timeout(
         root,
         ServiceIpcRequest::BusinessOsWebStack {
@@ -4686,27 +4680,51 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
         // cancel the daemon-side work and therefore only produces a false
         // failure. Keep the client wait bounded, but long enough for a complete
         // command run.
-        ServiceIpcRequest::BusinessOsWebStack { argv } => {
-            let timeout_ms = argv
-                .windows(2)
-                .find(|pair| pair[0] == "--timeout-ms")
-                .and_then(|pair| pair[1].parse::<u64>().ok())
-                .unwrap_or(60_000)
-                .clamp(1_000, 300_000);
-            // A login whose second factor arrives by e-mail waits for that mail
-            // (up to 150 s) on top of its browser budget; with the plain
-            // +15 s the client gave up with EAGAIN while the daemon was still
-            // signing in (thesen 22.09.2026, D&B).
-            let waits_for_email_otp = argv.iter().any(|value| {
-                matches!(
-                    value.as_str(),
-                    "auth-assist-login" | "source-capture" | "authenticated-automation"
-                )
-            });
-            let slack_ms = if waits_for_email_otp { 210_000 } else { 15_000 };
-            Duration::from_millis(timeout_ms.saturating_add(slack_ms))
-        }
+        ServiceIpcRequest::BusinessOsWebStack { argv } => web_stack_ipc_timeout(argv),
         ServiceIpcRequest::BusinessCommandDispatch { .. } => BUSINESS_COMMAND_IPC_TIMEOUT,
+    }
+}
+
+/// How long a client waits for a web-stack command. A login whose second
+/// factor arrives by e-mail waits for that mail (up to 150 s) on top of its
+/// browser budget; with the plain +15 s the client gave up with EAGAIN while
+/// the daemon was still signing in (thesen 22.09.2026, D&B).
+fn web_stack_ipc_timeout(argv: &[String]) -> Duration {
+    let timeout_ms = argv
+        .windows(2)
+        .find(|pair| pair[0] == "--timeout-ms")
+        .and_then(|pair| pair[1].parse::<u64>().ok())
+        .unwrap_or(60_000)
+        .clamp(1_000, 300_000);
+    let waits_for_email_otp = argv.iter().any(|value| {
+        matches!(
+            value.as_str(),
+            "auth-assist-login" | "source-capture" | "authenticated-automation"
+        )
+    });
+    let slack_ms = if waits_for_email_otp { 210_000 } else { 15_000 };
+    Duration::from_millis(timeout_ms.saturating_add(slack_ms))
+}
+
+#[cfg(test)]
+mod web_stack_ipc_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn login_waiting_for_an_email_code_gets_the_longer_client_budget() {
+        let argv = |items: &[&str]| items.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            web_stack_ipc_timeout(&argv(&["auth-assist-login", "--timeout-ms", "120000"])),
+            Duration::from_millis(330_000)
+        );
+        assert_eq!(
+            web_stack_ipc_timeout(&argv(&["source-capture", "--timeout-ms", "60000"])),
+            Duration::from_millis(270_000)
+        );
+        assert_eq!(
+            web_stack_ipc_timeout(&argv(&["auth-assist-status", "--timeout-ms", "60000"])),
+            Duration::from_millis(75_000)
+        );
     }
 }
 
