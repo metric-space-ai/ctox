@@ -5312,6 +5312,61 @@ fn parse_local_ctox_secret_ref(value: &str) -> anyhow::Result<LocalCtoxSecretRef
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Picks the e-mail delivery option on a challenge page and presses the
+/// "send code" control when the provider offers one, then reports what the
+/// page shows (controls, fields) so a missing code mail can be diagnosed.
+const EMAIL_OTP_TRIGGER_SOURCE: &str = r#"
+const state = await page.evaluate(() => {
+  const visible = (el) => { const s = getComputedStyle(el); const r = el.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
+  const controls = Array.from(document.querySelectorAll('button, a, input[type="submit"], input[type="radio"], [role="button"]')).filter(visible);
+  const label = (el) => ((el.innerText || el.value || el.getAttribute('aria-label') || '') + ' ' + (el.id || '') + ' ' + (el.name || '')).trim();
+  const wantsEmail = /(e-?mail|mail|send code|send a code|code senden|code anfordern|per e-?mail)/i;
+  const isOtpField = Array.from(document.querySelectorAll('input')).some((el) => visible(el) && /(otp|code|verification|passcode)/i.test((el.name || '') + (el.id || '') + (el.placeholder || '') + (el.getAttribute('autocomplete') || '')));
+  const radio = controls.find((el) => el.tagName === 'INPUT' && el.type === 'radio' && wantsEmail.test(label(el)));
+  if (radio) radio.click();
+  const trigger = controls.find((el) => el.tagName !== 'INPUT' && wantsEmail.test(label(el)));
+  if (trigger) trigger.setAttribute('data-ctox-otp-trigger', '1');
+  return {
+    otp_field_present: isOtpField,
+    email_option_selected: !!radio,
+    trigger_label: trigger ? label(trigger).slice(0, 60) : null,
+    controls: controls.map((el) => label(el).slice(0, 40)).filter(Boolean).slice(0, 12),
+    text: (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 400),
+  };
+});
+if (state.trigger_label && !state.otp_field_present) {
+  await page.locator('[data-ctox-otp-trigger="1"]').first().click({ timeout: 5000 }).catch(() => null);
+  await page.waitForTimeout(3000);
+}
+return { ...state, url: page.url(), title: await page.title() };
+"#;
+
+fn run_browser_session_automation_value(
+    root: &Path,
+    session_id: &str,
+    browser_dir: Option<PathBuf>,
+    timeout_ms: u64,
+    profile_owner: Option<String>,
+    source: String,
+) -> serde_json::Value {
+    match crate::business_os::run_browser_session_automation(
+        root,
+        crate::business_os::BrowserSessionAutomationRequest {
+            session_id: session_id.to_string(),
+            dir: browser_dir,
+            timeout_ms: Some(timeout_ms),
+            source,
+            profile_owner,
+        },
+    ) {
+        Ok(value) => value
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        Err(error) => serde_json::json!({ "error": error.to_string() }),
+    }
+}
+
 /// Providers that send their second factor by e-mail. The code is read from a
 /// mailbox CTOX already syncs (communication_messages); nothing is typed by a
 /// human and the code never leaves the host.
@@ -5428,6 +5483,18 @@ fn complete_web_stack_login_with_email_otp(
     login_started_epoch_s: i64,
     continuation_source: Option<&str>,
 ) -> serde_json::Value {
+    // Many providers only send the code once the user picks "e-mail" or
+    // presses "send code" on the challenge page, so trigger it first and note
+    // what the page offered — a silent 150 s wait for a mail nobody sent looks
+    // exactly like a broken mailbox.
+    let trigger = run_browser_session_automation_value(
+        root,
+        session_id,
+        browser_dir.clone(),
+        timeout_ms.min(60_000),
+        profile_owner.clone(),
+        EMAIL_OTP_TRIGGER_SOURCE.to_string(),
+    );
     // Tolerate some clock skew between the mail server and this host.
     let not_before = login_started_epoch_s.saturating_sub(90);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(150);
@@ -5449,6 +5516,7 @@ fn complete_web_stack_login_with_email_otp(
             "ok": false,
             "status": "no_code_mail",
             "polls": polls,
+            "challenge_page": trigger,
             "detail": "no verification mail from the provider reached a synced mailbox within 150 s",
         });
     };
@@ -5522,6 +5590,7 @@ const otpOutcome = { ok: !stillMfa && !errorShown, otp_field_found: true, still_
                 "ok": ok,
                 "status": if ok { "completed" } else { "code_rejected_or_no_field" },
                 "polls": polls,
+                "challenge_page": trigger,
                 "code_message_key": message_key,
                 "otp_field_found": field("otp_field_found"),
                 "still_mfa": field("still_mfa"),
