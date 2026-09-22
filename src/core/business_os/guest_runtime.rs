@@ -1,15 +1,14 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 
-//! Guest-side desktop effects and the private host-to-owned-guest channel that
-//! reaches them. This adapter owns no identity, VM provisioner, lease,
-//! scheduler or persistent state. A native authority must authorize each
-//! effect and publish observations through its revocation-aware delivery path.
-//! The channel is an owned local QEMU virtio-serial chardev, not a browser
-//! data path. Observe/input reach this adapter only through the Business OS
-//! command connector in `guest_commands`, which fails closed until a native
-//! owner is injected. No model-facing tool or production VM provisioner is
-//! enabled by that connector; this channel registers no browser/VM operation.
+//! Guest-side desktop effects. This adapter owns no identity, VM provisioner,
+//! lease, scheduler or persistent state. A native authority must authorize
+//! each effect and publish observations through its revocation-aware delivery path.
+//! An owned local QEMU virtio-serial channel may carry those effects, never
+//! browser business data. Observe/input enter through the Business OS command
+//! connector when installed; that connector fails closed until a native owner
+//! is injected. Neither path enables a model-facing tool or production VM
+//! provisioner, and there is no permissive default implementation.
 
 use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
