@@ -344,6 +344,7 @@ fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -
                 request.cc,
                 request.subject,
                 request.body,
+                request.body_html,
                 &message_id,
                 request.thread_key,
                 request.attachments,
@@ -355,6 +356,7 @@ fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -
             GraphClient::from_options(options)?.send_mail(
                 request.subject,
                 request.body,
+                request.body_html,
                 request.to,
                 request.cc,
                 &[],
@@ -365,6 +367,7 @@ fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -
             EwsClient::from_options(options)?.send_mail(
                 request.subject,
                 request.body,
+                request.body_html,
                 request.to,
                 request.cc,
                 &[],
@@ -378,6 +381,7 @@ fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -
                 request.cc,
                 request.subject,
                 request.body,
+                request.body_html,
                 &message_id,
                 request.thread_key,
                 request.attachments,
@@ -503,6 +507,7 @@ fn execute_test(options: &EmailOptions) -> Result<Value> {
                 &[],
                 &subject,
                 &body,
+                None,
                 &message_id,
                 "",
                 &[],
@@ -1684,6 +1689,7 @@ fn build_smtp_raw_message(
     cc: &[String],
     subject: &str,
     body: &str,
+    body_html: Option<&str>,
     message_id: &str,
     thread_key: &str,
     attachments: &[String],
@@ -1700,6 +1706,26 @@ fn build_smtp_raw_message(
     }
     lines.push(format!("Date: {}", smtp_date_header()));
     lines.push("MIME-Version: 1.0".to_string());
+    if let (true, Some(html)) = (attachments.is_empty(), body_html) {
+        // Text and HTML of the same message; clients show the richest part.
+        let boundary = format!("ctox-alt-{}", stable_digest(message_id));
+        lines.push(format!(
+            "Content-Type: multipart/alternative; boundary=\"{boundary}\""
+        ));
+        lines.push(String::new());
+        for (mime, content) in [("text/plain", body), ("text/html", html)] {
+            lines.push(format!("--{boundary}"));
+            lines.push(format!("Content-Type: {mime}; charset=utf-8"));
+            lines.push("Content-Transfer-Encoding: base64".to_string());
+            lines.push(String::new());
+            for chunk in BASE64_STANDARD.encode(content).as_bytes().chunks(76) {
+                lines.push(String::from_utf8_lossy(chunk).to_string());
+            }
+        }
+        lines.push(format!("--{boundary}--"));
+        lines.push(String::new());
+        return Ok(lines.join("\r\n"));
+    }
     if attachments.is_empty() {
         lines.push("Content-Type: text/plain; charset=utf-8".to_string());
         lines.push("Content-Transfer-Encoding: 8bit".to_string());
@@ -2686,6 +2712,7 @@ impl GraphClient {
         &self,
         subject: &str,
         body: &str,
+        body_html: Option<&str>,
         to: &[String],
         cc: &[String],
         bcc: &[String],
@@ -2718,7 +2745,10 @@ impl GraphClient {
             .collect::<Result<Vec<_>>>()?;
         let mut message = json!({
                 "subject": subject,
-                "body": {"contentType": "Text", "content": body},
+                "body": match body_html {
+                    Some(html) => json!({"contentType": "HTML", "content": html}),
+                    None => json!({"contentType": "Text", "content": body}),
+                },
                 "toRecipients": mk(to),
                 "ccRecipients": mk(cc),
                 "bccRecipients": mk(bcc),
@@ -2964,6 +2994,7 @@ impl EwsClient {
         &self,
         subject: &str,
         body: &str,
+        body_html: Option<&str>,
         to: &[String],
         cc: &[String],
         bcc: &[String],
@@ -2993,11 +3024,12 @@ impl EwsClient {
 <m:Items><t:Message>
 <t:ItemClass>IPM.Note</t:ItemClass>
 <t:Subject>{}</t:Subject>
-<t:Body BodyType="Text">{}</t:Body>{}{}{}{}
+<t:Body BodyType="{}">{}</t:Body>{}{}{}{}
 </t:Message></m:Items>"#,
             distinguished_folder_xml("sentitems"),
             xml_escape(subject),
-            xml_escape(body),
+            if body_html.is_some() { "HTML" } else { "Text" },
+            xml_escape(body_html.unwrap_or(body)),
             recipients("ToRecipients", to),
             recipients("CcRecipients", cc),
             recipients("BccRecipients", bcc),

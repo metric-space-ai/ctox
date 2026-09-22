@@ -718,6 +718,17 @@ pub(super) fn send_email_message(
     request: &ChannelSendRequest,
     reviewed_context: Option<ReviewedFounderSendContext<'_>>,
 ) -> Result<Value> {
+    send_email_message_with_html(root, conn, db_path, request, reviewed_context, None)
+}
+
+fn send_email_message_with_html(
+    root: &Path,
+    conn: &Connection,
+    db_path: &Path,
+    request: &ChannelSendRequest,
+    reviewed_context: Option<ReviewedFounderSendContext<'_>>,
+    body_html: Option<&str>,
+) -> Result<Value> {
     let adapter = communication_adapters::email();
     let sender_email = request
         .sender_address
@@ -790,6 +801,7 @@ pub(super) fn send_email_message(
             sender_display: request.sender_display.as_deref(),
             subject: &request.subject,
             body: &request.body,
+            body_html,
             attachments: &request.attachments,
         },
     ) {
@@ -2281,6 +2293,9 @@ pub(crate) struct PolicyReportEmail<'a> {
     pub to: &'a [String],
     pub subject: &'a str,
     pub body: &'a str,
+    /// Rich rendering of `body` built from the same data; `body` is the
+    /// approved text and stays the plain-text alternative.
+    pub body_html: Option<&'a str>,
     pub report_key: &'a str,
     pub policy_summary: &'a str,
 }
@@ -2360,7 +2375,10 @@ pub(crate) fn record_and_send_policy_report_email(
         require_unconsumed_founder_reply_review(&conn, &anchor_key, &action, &request.body)?;
     let entity_id = format!("policy-report:{}", report.report_key);
     enforce_reviewed_founder_send_core_transition(&conn, &entity_id, &approval_key, &request)?;
-    let send_result = send_email_message(
+    if let Some(html) = report.body_html {
+        ensure_founder_outbound_body_text_clean(html)?;
+    }
+    let send_result = send_email_message_with_html(
         root,
         &conn,
         &db_path,
@@ -2369,6 +2387,7 @@ pub(crate) fn record_and_send_policy_report_email(
             entity_id: &entity_id,
             approval_key: &approval_key,
         }),
+        report.body_html,
     )?;
     mark_founder_reply_review_sent(&conn, &approval_key, &send_result)?;
     Ok(send_result)

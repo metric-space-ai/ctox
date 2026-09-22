@@ -72,6 +72,7 @@ struct DigestState {
 pub(crate) struct DigestReport {
     pub subject: String,
     pub body: String,
+    pub html: String,
     pub stats: Value,
 }
 
@@ -343,67 +344,110 @@ fn local_label(tz: Tz, ms: i64, with_time: bool) -> String {
     }
 }
 
-fn push_limited(lines: &mut Vec<String>, items: &[String], indent: &str) {
-    for item in items.iter().take(LIST_LIMIT) {
-        lines.push(format!("{indent}· {item}"));
-    }
-    if items.len() > LIST_LIMIT {
-        lines.push(format!(
-            "{indent}· … und {} weitere",
-            items.len() - LIST_LIMIT
-        ));
-    }
-}
-
 fn plural(count: usize, one: &str, many: &str) -> String {
     format!("{count} {}", if count == 1 { one } else { many })
 }
 
-pub(crate) fn build_report(
+/// A source test older than this says nothing about today; such sources are
+/// named once as "not re-checked" instead of being counted as blockers.
+const SOURCE_TEST_FRESH_MS: i64 = 3 * 24 * 60 * 60 * 1000;
+const REVIEW_LIST_LIMIT: usize = 8;
+
+#[derive(Debug, Clone)]
+struct ResearchedRow {
+    name: String,
+    verified: usize,
+    fields: usize,
+    contacts: usize,
+    open: usize,
+}
+
+#[derive(Debug, Clone)]
+struct AttentionRow {
+    kind: &'static str,
+    subject: String,
+    detail: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DigestData {
+    period: String,
+    date_label: String,
+    researched: Vec<ResearchedRow>,
+    verified: usize,
+    contacts: usize,
+    sellify_done: Vec<String>,
+    attention: Vec<AttentionRow>,
+    stale_sources: Vec<String>,
+    review: Vec<(String, usize)>,
+    review_leads: usize,
+    review_fields: usize,
+    total: usize,
+    total_completed: usize,
+    total_new: usize,
+    running: usize,
+    total_sellify: usize,
+}
+
+fn collect_digest(
     leads: &[Value],
     sources: &[Value],
     adapters: &[Value],
     since_ms: i64,
     now_ms: i64,
     tz: Tz,
-) -> DigestReport {
+) -> DigestData {
     let in_window = |ms: i64| ms > since_ms && ms <= now_ms;
     let leads = leads
         .iter()
         .filter(|lead| !is_test_lead(lead))
         .collect::<Vec<_>>();
-
-    let mut researched = Vec::new();
+    let mut data = DigestData {
+        period: format!(
+            "{} bis {}",
+            local_label(tz, since_ms, true),
+            local_label(tz, now_ms, true)
+        ),
+        date_label: tz
+            .timestamp_millis_opt(now_ms)
+            .single()
+            .map(|stamp| {
+                const DAYS: [&str; 7] = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+                format!(
+                    "{} {}",
+                    DAYS[stamp.weekday().num_days_from_monday() as usize],
+                    stamp.format("%d.%m.%Y")
+                )
+            })
+            .unwrap_or_default(),
+        total: leads.len(),
+        ..DigestData::default()
+    };
     let mut failed = Vec::new();
     let mut stuck = Vec::new();
-    let mut sellify_done = Vec::new();
     let mut sellify_failed = Vec::new();
-    let mut review_leads = 0usize;
-    let mut review_fields = 0usize;
-    let mut running = 0usize;
-    let (mut total_completed, mut total_new, mut total_sellify) = (0usize, 0usize, 0usize);
-    let mut verified_in_window = 0usize;
-    let mut contacts_in_window = 0usize;
-
     for lead in &leads {
         let status = text(lead, "research_status");
         let (verified, open, fields) = field_counts(lead);
         match status {
-            "completed" => total_completed += 1,
+            "completed" => data.total_completed += 1,
             "needs_review" | "partially_completed" => {
-                review_leads += 1;
-                review_fields += open;
+                data.review_leads += 1;
+                data.review_fields += open;
+                if open > 0 {
+                    data.review.push((lead_name(lead), open));
+                }
             }
-            "" | "new" => total_new += 1,
+            "" | "new" => data.total_new += 1,
             "running" | "queued" | "requested" => {
-                running += 1;
+                data.running += 1;
                 let updated = millis(lead, "research_updated_at_ms");
                 if updated > 0 && now_ms - updated > STUCK_RESEARCH_MS {
-                    stuck.push(format!(
-                        "{} (seit {})",
-                        lead_name(lead),
-                        local_label(tz, updated, true)
-                    ));
+                    stuck.push(AttentionRow {
+                        kind: "Recherche hängt",
+                        subject: lead_name(lead),
+                        detail: format!("kein Fortschritt seit {}", local_label(tz, updated, true)),
+                    });
                 }
             }
             _ => {}
@@ -411,50 +455,48 @@ pub(crate) fn build_report(
         if matches!(status, "completed" | "needs_review" | "partially_completed")
             && in_window(research_finished_ms(lead))
         {
-            verified_in_window += verified;
             let contacts = contact_count(lead);
-            contacts_in_window += contacts;
-            let mut line = format!(
-                "{}: {verified} von {fields} Feldern belegt",
-                lead_name(lead)
-            );
-            if contacts > 0 {
-                line.push_str(&format!(
-                    ", {}",
-                    plural(contacts, "Ansprechpartner", "Ansprechpartner")
-                ));
-            }
-            if open > 0 {
-                line.push_str(&format!(", {} zu prüfen", plural(open, "Feld", "Felder")));
-            }
-            researched.push(line);
-        }
-        if status == "failed" && in_window(millis(lead, "research_updated_at_ms")) {
-            let reason = lead
-                .get("research_error")
-                .and_then(Value::as_str)
-                .and_then(short_reason);
-            failed.push(match reason {
-                Some(reason) => format!("{} ({reason})", lead_name(lead)),
-                None => lead_name(lead),
+            data.verified += verified;
+            data.contacts += contacts;
+            data.researched.push(ResearchedRow {
+                name: lead_name(lead),
+                verified,
+                fields,
+                contacts,
+                open,
             });
         }
-        let sellify_status = text(lead, "sellify_status");
-        if sellify_status == "completed" {
-            total_sellify += 1;
-            let finished = lead
-                .get("payload")
-                .map(|payload| millis(payload, "sellify_finished_at_ms"))
-                .unwrap_or(0);
-            if in_window(finished) {
-                sellify_done.push(lead_name(lead));
+        if status == "failed" && in_window(millis(lead, "research_updated_at_ms")) {
+            failed.push(AttentionRow {
+                kind: "Recherche fehlgeschlagen",
+                subject: lead_name(lead),
+                detail: lead
+                    .get("research_error")
+                    .and_then(Value::as_str)
+                    .and_then(short_reason)
+                    .unwrap_or_else(|| "Grund siehe App".to_string()),
+            });
+        }
+        match text(lead, "sellify_status") {
+            "completed" => {
+                data.total_sellify += 1;
+                let finished = lead
+                    .get("payload")
+                    .map(|payload| millis(payload, "sellify_finished_at_ms"))
+                    .unwrap_or(0);
+                if in_window(finished) {
+                    data.sellify_done.push(lead_name(lead));
+                }
             }
-        } else if sellify_status == "failed" {
-            sellify_failed.push(lead_name(lead));
+            "failed" => sellify_failed.push(AttentionRow {
+                kind: "Sellify-Übergabe fehlgeschlagen",
+                subject: lead_name(lead),
+                detail: "erneut übergeben oder in der App prüfen".to_string(),
+            }),
+            _ => {}
         }
     }
-
-    let mut source_problems = Vec::new();
+    let mut source_rows = Vec::new();
     for source in sources {
         if source.get("enabled").and_then(Value::as_bool) == Some(false) {
             continue;
@@ -467,144 +509,439 @@ pub(crate) fn build_report(
             .iter()
             .filter(|adapter| text(adapter, "source_id") == source_id)
             .max_by_key(|adapter| millis(adapter, "updated_at_ms"));
-        if let Some(problem) = source_problem(source, adapter) {
-            let label = match text(source, "label") {
-                "" => source_id,
-                label => label,
-            };
-            let checked = adapter
-                .map(|adapter| millis(adapter, "updated_at_ms"))
-                .filter(|ms| *ms > 0)
-                .map(|ms| format!(" (Stand {})", local_label(tz, ms, false)))
-                .unwrap_or_default();
-            source_problems.push(format!("{label}: {problem}{checked}"));
+        let Some(problem) = source_problem(source, adapter) else {
+            continue;
+        };
+        let label = match text(source, "label") {
+            "" => source_id.to_string(),
+            label => label.to_string(),
+        };
+        let checked = adapter
+            .map(|adapter| millis(adapter, "updated_at_ms"))
+            .unwrap_or(0);
+        if checked <= 0 || now_ms - checked > SOURCE_TEST_FRESH_MS {
+            data.stale_sources.push(label);
+            continue;
         }
+        source_rows.push(AttentionRow {
+            kind: "Quelle gestört",
+            subject: label,
+            detail: format!("{problem} (geprüft {})", local_label(tz, checked, false)),
+        });
     }
-    source_problems.sort();
+    source_rows.sort_by(|a, b| a.subject.cmp(&b.subject));
+    data.stale_sources.sort();
+    data.attention.extend(failed);
+    data.attention.extend(stuck);
+    data.attention.extend(sellify_failed);
+    data.attention.extend(source_rows);
+    data.researched
+        .sort_by(|a, b| b.verified.cmp(&a.verified).then(a.name.cmp(&b.name)));
+    data.review
+        .sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    data
+}
 
-    let now_local = tz.timestamp_millis_opt(now_ms).single();
-    let greeting = match now_local.map(|stamp| stamp.hour()).unwrap_or(8) {
-        0..=10 => "Guten Morgen,",
-        11..=17 => "Guten Tag,",
-        _ => "Guten Abend,",
-    };
-    let mut lines = vec![
-        greeting.to_string(),
-        String::new(),
-        format!(
-            "hier das Update aus der Outbound-Recherche für den Zeitraum {} bis {}.",
-            local_label(tz, since_ms, true),
-            local_label(tz, now_ms, true)
-        ),
-        String::new(),
-        "ERREICHT".to_string(),
-    ];
-    if researched.is_empty() {
-        lines.push("- Keine Recherche abgeschlossen.".to_string());
-    } else {
-        lines.push(format!(
-            "- {} abgeschlossen, {} belegt, {} gefunden:",
-            plural(researched.len(), "Recherche", "Recherchen"),
-            plural(verified_in_window, "Feld", "Felder"),
-            plural(contacts_in_window, "Ansprechpartner", "Ansprechpartner")
-        ));
-        push_limited(&mut lines, &researched, "  ");
-    }
-    if sellify_done.is_empty() {
-        lines.push("- Keine Übergabe an Sellify.".to_string());
-    } else {
-        lines.push(format!(
-            "- {} an Sellify übergeben:",
-            plural(sellify_done.len(), "Lead", "Leads")
-        ));
-        push_limited(&mut lines, &sellify_done, "  ");
-    }
-
-    lines.push(String::new());
-    lines.push("OFFEN UND BLOCKER".to_string());
-    let blocker_count = failed.len() + stuck.len() + sellify_failed.len() + source_problems.len();
-    if !failed.is_empty() {
-        lines.push(format!(
-            "- {} fehlgeschlagen:",
-            plural(failed.len(), "Recherche", "Recherchen")
-        ));
-        push_limited(&mut lines, &failed, "  ");
-    }
-    if !stuck.is_empty() {
-        lines.push(format!(
-            "- {} ohne Fortschritt seit über zwei Stunden:",
-            plural(stuck.len(), "Recherche", "Recherchen")
-        ));
-        push_limited(&mut lines, &stuck, "  ");
-    }
-    if !sellify_failed.is_empty() {
-        lines.push("- Sellify-Übergabe fehlgeschlagen:".to_string());
-        push_limited(&mut lines, &sellify_failed, "  ");
-    }
-    if !source_problems.is_empty() {
-        lines.push(format!(
-            "- {} mit Störung:",
-            plural(source_problems.len(), "Quelle", "Quellen")
-        ));
-        push_limited(&mut lines, &source_problems, "  ");
-    }
-    if review_leads > 0 {
-        lines.push(format!(
-            "- {} mit Prüfbedarf ({} offen).",
-            plural(review_leads, "Lead", "Leads"),
-            plural(review_fields, "Feld", "Felder")
-        ));
-    }
-    if blocker_count == 0 && review_leads == 0 {
-        lines.push("- Nichts offen.".to_string());
-    }
-
-    lines.push(String::new());
-    lines.push("GESAMTSTAND".to_string());
-    lines.push(format!(
-        "- {} in der Recherche: {total_completed} abgeschlossen, {review_leads} mit Prüfbedarf, {total_new} noch nicht begonnen, {running} in Arbeit.",
-        plural(leads.len(), "Lead", "Leads")
-    ));
-    lines.push(format!(
-        "- {} an Sellify übergeben.",
-        plural(total_sellify, "Lead", "Leads")
-    ));
-    lines.push(String::new());
-    lines.push(
-        "Automatisch erstellt aus der Outbound-App. Empfänger und Zeitplan: Outbound-App, Recherche-Einstellungen, Update-Verteiler."
-            .to_string(),
-    );
-
-    let date = now_local
-        .map(|stamp| stamp.format("%d.%m.%Y").to_string())
-        .unwrap_or_default();
+fn digest_subject(data: &DigestData) -> String {
     let mut subject = format!(
-        "Outbound-Update {date}: {} abgeschlossen, {} an Sellify",
-        plural(researched.len(), "Recherche", "Recherchen"),
-        sellify_done.len()
+        "Outbound-Update {}: {} abgeschlossen, {} an Sellify",
+        data.date_label,
+        plural(data.researched.len(), "Recherche", "Recherchen"),
+        data.sellify_done.len()
     );
-    if blocker_count > 0 {
+    if !data.attention.is_empty() {
         subject.push_str(&format!(
             ", {}",
-            plural(blocker_count, "Blocker", "Blocker")
+            plural(data.attention.len(), "Blocker", "Blocker")
         ));
     }
+    subject
+}
+
+const FOOTER_TEXT: &str = "Automatisch erstellt aus der Outbound-App. Empfänger und Zeitplan ändern: Outbound-App › Recherche-Einstellungen › Update-Verteiler.";
+
+fn stale_sources_text(data: &DigestData) -> Option<String> {
+    (!data.stale_sources.is_empty()).then(|| {
+        format!(
+            "{} seit über drei Tagen nicht neu geprüft (letzter Stand fehlerhaft): {}. Neu prüfen unter Recherche-Einstellungen › Quellen & Zugänge.",
+            plural(data.stale_sources.len(), "Quelle", "Quellen"),
+            data.stale_sources.join(", ")
+        )
+    })
+}
+
+fn render_text(data: &DigestData) -> String {
+    let mut out = vec![
+        format!("OUTBOUND-UPDATE · {}", data.date_label),
+        format!("Zeitraum: {}", data.period),
+        String::new(),
+        "AUF EINEN BLICK".to_string(),
+        format!("Recherchen abgeschlossen: {}", data.researched.len()),
+        format!("Felder belegt: {}", data.verified),
+        format!("Ansprechpartner gefunden: {}", data.contacts),
+        format!("An Sellify übergeben: {}", data.sellify_done.len()),
+        format!("Blocker: {}", data.attention.len()),
+        String::new(),
+        "ABGESCHLOSSENE RECHERCHEN".to_string(),
+    ];
+    if data.researched.is_empty() {
+        out.push("Keine Recherche in diesem Zeitraum abgeschlossen.".to_string());
+    }
+    for row in data.researched.iter().take(LIST_LIMIT) {
+        out.push(format!(
+            "- {}: {} von {} Feldern belegt, {}{}",
+            row.name,
+            row.verified,
+            row.fields,
+            plural(row.contacts, "Ansprechpartner", "Ansprechpartner"),
+            if row.open > 0 {
+                format!(", {} zu prüfen", plural(row.open, "Feld", "Felder"))
+            } else {
+                String::new()
+            }
+        ));
+    }
+    if data.researched.len() > LIST_LIMIT {
+        out.push(format!(
+            "- … und {} weitere",
+            data.researched.len() - LIST_LIMIT
+        ));
+    }
+    if !data.sellify_done.is_empty() {
+        out.push(String::new());
+        out.push("AN SELLIFY ÜBERGEBEN".to_string());
+        for name in data.sellify_done.iter().take(LIST_LIMIT) {
+            out.push(format!("- {name}"));
+        }
+    }
+    out.push(String::new());
+    out.push("BLOCKER".to_string());
+    if data.attention.is_empty() {
+        out.push("Keine.".to_string());
+    }
+    for row in data.attention.iter().take(LIST_LIMIT) {
+        out.push(format!("- {}: {} – {}", row.kind, row.subject, row.detail));
+    }
+    if data.attention.len() > LIST_LIMIT {
+        out.push(format!(
+            "- … und {} weitere",
+            data.attention.len() - LIST_LIMIT
+        ));
+    }
+    if let Some(note) = stale_sources_text(data) {
+        out.push(format!("Hinweis: {note}"));
+    }
+    if data.review_leads > 0 {
+        out.push(String::new());
+        out.push(format!(
+            "PRÜFBEDARF: {} warten auf Prüfung, {} offen",
+            plural(data.review_leads, "Lead", "Leads"),
+            plural(data.review_fields, "Feld", "Felder")
+        ));
+        for (name, open) in data.review.iter().take(REVIEW_LIST_LIMIT) {
+            out.push(format!("- {name}: {}", plural(*open, "Feld", "Felder")));
+        }
+        if data.review.len() > REVIEW_LIST_LIMIT {
+            out.push(format!(
+                "- … und {} weitere",
+                data.review.len() - REVIEW_LIST_LIMIT
+            ));
+        }
+    }
+    out.push(String::new());
+    out.push("GESAMTSTAND".to_string());
+    out.push(format!(
+        "{} gesamt: {} abgeschlossen, {} mit Prüfbedarf, {} nicht begonnen, {} in Arbeit, {} an Sellify übergeben.",
+        plural(data.total, "Lead", "Leads"),
+        data.total_completed,
+        data.review_leads,
+        data.total_new,
+        data.running,
+        data.total_sellify
+    ));
+    out.push(String::new());
+    out.push(FOOTER_TEXT.to_string());
+    out.join("\n")
+}
+
+fn esc(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+// Mail-client safe HTML: tables and inline styles only (Outlook ignores
+// <style> blocks and flexbox), explicit light colours so dark-mode clients
+// do not invert text onto the wrong ground.
+const INK: &str = "#1f2328";
+const MUTED: &str = "#656d76";
+const LINE: &str = "#d8dee4";
+const PANEL: &str = "#f6f8fa";
+const ACCENT: &str = "#c2410c";
+const DANGER: &str = "#b42318";
+const OK: &str = "#1a7f37";
+const FONT: &str = "-apple-system,'Segoe UI',Helvetica,Arial,sans-serif";
+
+fn html_section_title(title: &str, note: &str) -> String {
+    format!(
+        r#"<tr><td style="padding:22px 24px 8px;"><div style="font:600 13px/1.3 {FONT};color:{INK};text-transform:uppercase;letter-spacing:.06em;">{}</div>{}</td></tr>"#,
+        esc(title),
+        if note.is_empty() {
+            String::new()
+        } else {
+            format!(
+                r#"<div style="font:13px/1.4 {FONT};color:{MUTED};padding-top:2px;">{}</div>"#,
+                esc(note)
+            )
+        }
+    )
+}
+
+fn html_table(headers: &[(&str, &str)], rows: &[Vec<String>]) -> String {
+    let head = headers
+        .iter()
+        .map(|(label, align)| {
+            format!(
+                r#"<th align="{align}" style="font:600 12px/1.3 {FONT};color:{MUTED};padding:8px 10px;border-bottom:1px solid {LINE};text-align:{align};">{}</th>"#,
+                esc(label)
+            )
+        })
+        .collect::<String>();
+    let body = rows
+        .iter()
+        .map(|cells| {
+            let tds = cells
+                .iter()
+                .zip(headers.iter())
+                .map(|(cell, (_, align))| {
+                    format!(
+                        r#"<td align="{align}" style="font:14px/1.4 {FONT};color:{INK};padding:9px 10px;border-bottom:1px solid {LINE};text-align:{align};vertical-align:top;">{cell}</td>"#
+                    )
+                })
+                .collect::<String>();
+            format!("<tr>{tds}</tr>")
+        })
+        .collect::<String>();
+    format!(
+        r#"<tr><td style="padding:0 14px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;"><tr>{head}</tr>{body}</table></td></tr>"#
+    )
+}
+
+fn html_paragraph(text: &str, color: &str) -> String {
+    format!(
+        r#"<tr><td style="padding:2px 24px 4px;font:14px/1.5 {FONT};color:{color};">{}</td></tr>"#,
+        esc(text)
+    )
+}
+
+fn more_row(total: usize, shown: usize, columns: usize) -> Option<Vec<String>> {
+    (total > shown).then(|| {
+        let mut row = vec![format!(
+            r#"<span style="color:{MUTED};">… und {} weitere in der App</span>"#,
+            total - shown
+        )];
+        row.extend(std::iter::repeat_n(String::new(), columns - 1));
+        row
+    })
+}
+
+fn render_html(data: &DigestData) -> String {
+    let kpi = |value: usize, label: &str, color: &str| {
+        format!(
+            r#"<td width="25%" align="center" style="padding:14px 6px;border-right:1px solid {LINE};"><div style="font:700 26px/1.1 {FONT};color:{color};">{value}</div><div style="font:12px/1.3 {FONT};color:{MUTED};padding-top:4px;">{}</div></td>"#,
+            esc(label)
+        )
+    };
+    let blocker_color = if data.attention.is_empty() {
+        OK
+    } else {
+        DANGER
+    };
+    let mut rows = vec![
+        format!(
+            r#"<tr><td style="padding:22px 24px 16px;border-bottom:3px solid {ACCENT};"><div style="font:600 12px/1.3 {FONT};color:{ACCENT};text-transform:uppercase;letter-spacing:.08em;">Outbound-Update</div><div style="font:700 22px/1.25 {FONT};color:{INK};padding-top:4px;">{}</div><div style="font:13px/1.4 {FONT};color:{MUTED};padding-top:4px;">Zeitraum {}</div></td></tr>"#,
+            esc(&data.date_label),
+            esc(&data.period)
+        ),
+        format!(
+            r#"<tr><td style="padding:16px 14px 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;background:{PANEL};border:1px solid {LINE};"><tr>{}{}{}{}</tr></table></td></tr>"#,
+            kpi(data.researched.len(), "Recherchen abgeschlossen", INK),
+            kpi(data.verified, "Felder belegt", INK),
+            kpi(data.sellify_done.len(), "an Sellify übergeben", INK),
+            kpi(data.attention.len(), "Blocker", blocker_color)
+                .replace(&format!("border-right:1px solid {LINE};"), ""),
+        ),
+    ];
+
+    rows.push(html_section_title(
+        "Abgeschlossene Recherchen",
+        if data.researched.is_empty() {
+            ""
+        } else {
+            "seit dem letzten Update"
+        },
+    ));
+    if data.researched.is_empty() {
+        rows.push(html_paragraph(
+            "Keine Recherche in diesem Zeitraum abgeschlossen.",
+            MUTED,
+        ));
+    } else {
+        let mut table_rows = data
+            .researched
+            .iter()
+            .take(LIST_LIMIT)
+            .map(|row| {
+                vec![
+                    format!("<strong>{}</strong>", esc(&row.name)),
+                    format!("{} / {}", row.verified, row.fields),
+                    row.contacts.to_string(),
+                    if row.open > 0 {
+                        format!(r#"<span style="color:{DANGER};">{}</span>"#, row.open)
+                    } else {
+                        "–".to_string()
+                    },
+                ]
+            })
+            .collect::<Vec<_>>();
+        table_rows.extend(more_row(data.researched.len(), LIST_LIMIT, 4));
+        rows.push(html_table(
+            &[
+                ("Firma", "left"),
+                ("Felder belegt", "right"),
+                ("Ansprechpartner", "right"),
+                ("zu prüfen", "right"),
+            ],
+            &table_rows,
+        ));
+    }
+
+    if !data.sellify_done.is_empty() {
+        rows.push(html_section_title("An Sellify übergeben", ""));
+        let table_rows = data
+            .sellify_done
+            .iter()
+            .take(LIST_LIMIT)
+            .map(|name| vec![esc(name)])
+            .collect::<Vec<_>>();
+        rows.push(html_table(&[("Firma", "left")], &table_rows));
+    }
+
+    rows.push(html_section_title(
+        "Blocker",
+        if data.attention.is_empty() {
+            ""
+        } else {
+            "braucht eine Entscheidung oder einen Handgriff"
+        },
+    ));
+    if data.attention.is_empty() {
+        rows.push(html_paragraph("Keine Blocker.", OK));
+    } else {
+        let mut table_rows = data
+            .attention
+            .iter()
+            .take(LIST_LIMIT)
+            .map(|row| {
+                vec![
+                    format!(
+                        r#"<strong>{}</strong><div style="font:12px/1.3 {FONT};color:{DANGER};padding-top:2px;">{}</div>"#,
+                        esc(&row.subject),
+                        esc(row.kind)
+                    ),
+                    esc(&row.detail),
+                ]
+            })
+            .collect::<Vec<_>>();
+        table_rows.extend(more_row(data.attention.len(), LIST_LIMIT, 2));
+        rows.push(html_table(
+            &[("Betrifft", "left"), ("Was ist los", "left")],
+            &table_rows,
+        ));
+    }
+    if let Some(note) = stale_sources_text(data) {
+        rows.push(html_paragraph(&note, MUTED));
+    }
+
+    if data.review_leads > 0 {
+        rows.push(html_section_title(
+            "Prüfbedarf",
+            &format!(
+                "{} warten auf Prüfung und Freigabe, {} offen",
+                plural(data.review_leads, "Lead", "Leads"),
+                plural(data.review_fields, "Feld", "Felder")
+            ),
+        ));
+        if !data.review.is_empty() {
+            let mut table_rows = data
+                .review
+                .iter()
+                .take(REVIEW_LIST_LIMIT)
+                .map(|(name, open)| vec![esc(name), open.to_string()])
+                .collect::<Vec<_>>();
+            table_rows.extend(more_row(data.review.len(), REVIEW_LIST_LIMIT, 2));
+            rows.push(html_table(
+                &[("Firma", "left"), ("offene Felder", "right")],
+                &table_rows,
+            ));
+        }
+    }
+
+    rows.push(html_section_title("Gesamtstand", ""));
+    rows.push(html_table(
+        &[
+            ("Leads", "right"),
+            ("abgeschlossen", "right"),
+            ("Prüfbedarf", "right"),
+            ("nicht begonnen", "right"),
+            ("in Arbeit", "right"),
+            ("an Sellify", "right"),
+        ],
+        &[vec![
+            format!("<strong>{}</strong>", data.total),
+            data.total_completed.to_string(),
+            data.review_leads.to_string(),
+            data.total_new.to_string(),
+            data.running.to_string(),
+            data.total_sellify.to_string(),
+        ]],
+    ));
+    rows.push(format!(
+        r#"<tr><td style="padding:24px 24px 22px;font:12px/1.5 {FONT};color:{MUTED};">{}</td></tr>"#,
+        esc(FOOTER_TEXT)
+    ));
+    format!(
+        r#"<!DOCTYPE html><html lang="de"><head><meta charset="utf-8"><meta name="color-scheme" content="light"><meta name="supported-color-schemes" content="light"><title>Outbound-Update</title></head><body style="margin:0;padding:0;background:#eef1f4;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#eef1f4;"><tr><td align="center" style="padding:20px 10px;"><table role="presentation" width="640" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;background:#ffffff;border:1px solid {LINE};border-collapse:collapse;">{}</table></td></tr></table></body></html>"#,
+        rows.join("")
+    )
+}
+
+pub(crate) fn build_report(
+    leads: &[Value],
+    sources: &[Value],
+    adapters: &[Value],
+    since_ms: i64,
+    now_ms: i64,
+    tz: Tz,
+) -> DigestReport {
+    let data = collect_digest(leads, sources, adapters, since_ms, now_ms, tz);
     DigestReport {
-        subject,
-        body: lines.join("\n"),
+        subject: digest_subject(&data),
+        body: render_text(&data),
+        html: render_html(&data),
         stats: json!({
             "since_ms": since_ms,
             "until_ms": now_ms,
-            "researched": researched.len(),
-            "verified_fields": verified_in_window,
-            "contacts": contacts_in_window,
-            "sellify_handovers": sellify_done.len(),
-            "failed": failed.len(),
-            "stuck": stuck.len(),
-            "source_problems": source_problems.len(),
-            "needs_review": review_leads,
-            "blockers": blocker_count,
-            "leads_total": leads.len(),
+            "researched": data.researched.len(),
+            "verified_fields": data.verified,
+            "contacts": data.contacts,
+            "sellify_handovers": data.sellify_done.len(),
+            "blockers": data.attention.len(),
+            "stale_sources": data.stale_sources.len(),
+            "needs_review": data.review_leads,
+            "leads_total": data.total,
         }),
     }
 }
@@ -725,6 +1062,7 @@ fn send_report(
             to: recipients,
             subject: &report.subject,
             body: &report.body,
+            body_html: Some(&report.html),
             report_key: slot_key,
             policy_summary: "Outbound Update-Verteiler: Empfänger, Zeitplan und Absender vom Admin in der Outbound-App konfiguriert; Inhalt deterministisch aus den App-Datensätzen.",
         },
@@ -849,6 +1187,7 @@ pub(super) fn send_now(root: &Path, payload: &Value) -> Result<Value> {
             "dry_run": true,
             "subject": report.subject,
             "body": report.body,
+            "html": report.html,
             "recipients": recipients,
             "sender": resolve_sender(root, &config),
             "stats": report.stats,
@@ -1015,12 +1354,15 @@ mod tests {
         let sources = vec![
             json!({"id": "xing.com", "label": "XING", "enabled": true}),
             json!({"id": "northdata.de", "label": "North Data", "enabled": true}),
+            json!({"id": "moneyhouse.ch", "label": "Moneyhouse", "enabled": true}),
             json!({"id": "sellify", "label": "Sellify", "enabled": true}),
         ];
         let adapters = vec![
             json!({"source_id": "xing.com", "status": "test_temporary_unreachable", "updated_at_ms": inside}),
             json!({"source_id": "northdata.de", "status": "failed",
                    "last_error": "business command `cmd_outbound_adapter_reconcile_x` failed", "updated_at_ms": inside}),
+            json!({"source_id": "moneyhouse.ch", "status": "test_temporary_unreachable",
+                   "updated_at_ms": now - 5 * 24 * 3_600_000}),
         ];
         let report = build_report(
             &leads,
@@ -1034,31 +1376,59 @@ mod tests {
         assert_eq!(report.stats["verified_fields"], 2);
         assert_eq!(report.stats["contacts"], 2);
         assert_eq!(report.stats["sellify_handovers"], 1);
-        assert_eq!(report.stats["failed"], 1);
-        assert_eq!(report.stats["stuck"], 1);
-        assert_eq!(
-            report.stats["source_problems"], 1,
-            "reconcile noise is not an outage"
-        );
+        // failed research + stuck research + XING; reconcile noise and the
+        // five-day-old Moneyhouse test are not blockers.
+        assert_eq!(report.stats["blockers"], 3);
+        assert_eq!(report.stats["stale_sources"], 1);
         assert_eq!(
             report.stats["leads_total"], 4,
             "UITEST leads stay out of the report"
         );
+        assert!(report.body.contains(
+            "- Carbosulf Chemische Werke GmbH: 2 von 3 Feldern belegt, 2 Ansprechpartner"
+        ));
+        assert!(report.body.contains(
+            "- Recherche fehlgeschlagen: Kaputt GmbH – Quelle northdata.de nicht erreichbar"
+        ));
+        assert!(report.body.contains(
+            "- Quelle gestört: XING – bei der letzten Prüfung nicht erreichbar (geprüft 22.09.)"
+        ));
         assert!(report
             .body
-            .contains("Carbosulf Chemische Werke GmbH: 2 von 3 Feldern belegt, 2 Ansprechpartner"));
-        assert!(report
-            .body
-            .contains("Kaputt GmbH (Quelle northdata.de nicht erreichbar)"));
-        assert!(report
-            .body
-            .contains("XING: bei der letzten Prüfung nicht erreichbar"));
+            .contains("1 Quelle seit über drei Tagen nicht neu geprüft"));
         assert!(!report.body.contains("UITEST"));
+        assert_eq!(
+            report.subject,
+            "Outbound-Update Mi 23.09.2026: 1 Recherche abgeschlossen, 1 an Sellify, 3 Blocker"
+        );
         assert!(report
-            .subject
-            .starts_with("Outbound-Update 23.09.2026: 1 Recherche abgeschlossen, 1 an Sellify"));
+            .html
+            .contains("<strong>Carbosulf Chemische Werke GmbH</strong>"));
+        assert!(report.html.contains(">Blocker<"));
+        assert!(!report.html.contains("UITEST"));
         channels::ensure_founder_outbound_body_text_clean(&report.body)
             .expect("report body passes the outbound body gate");
+        channels::ensure_founder_outbound_body_text_clean(&report.html)
+            .expect("report html passes the outbound body gate");
+    }
+
+    #[test]
+    fn html_escapes_record_text() {
+        let now = utc("2026-09-23T05:00:00Z").timestamp_millis();
+        let leads = vec![json!({
+            "id": "x", "name": "A&B <script>", "research_status": "completed",
+            "payload": {"research_finished_at_ms": now - 1000}
+        })];
+        let report = build_report(
+            &leads,
+            &[],
+            &[],
+            now - 3_600_000,
+            now,
+            chrono_tz::Europe::Berlin,
+        );
+        assert!(report.html.contains("A&amp;B &lt;script&gt;"));
+        assert!(!report.html.contains("<script>"));
     }
 
     #[test]
