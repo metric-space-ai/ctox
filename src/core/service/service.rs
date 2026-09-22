@@ -4662,6 +4662,20 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
                     .unwrap_or(120)
                     .min(SANDBOXED_CLI_MAX_TIMEOUT_SECONDS);
                 Duration::from_secs(timeout_seconds.saturating_add(90))
+            } else if matches!(
+                argv.as_slice(),
+                [command, area, subcommand, ..]
+                    if command == "business-os"
+                        && area == "web-stack"
+                        && matches!(
+                            subcommand.as_str(),
+                            "auth-assist-login" | "source-capture" | "authenticated-automation"
+                        )
+            ) {
+                // A login that has to wait for an e-mail one-time code (up to
+                // 150 s) plus the post-login capture outlives 60 s; the client
+                // gave up with EAGAIN while the daemon was still signing in.
+                Duration::from_secs(420)
             } else {
                 Duration::from_secs(60)
             }

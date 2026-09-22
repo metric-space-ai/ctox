@@ -24,7 +24,7 @@ Before any open-web search, call `ctox_web_scrape` once for every entry of `sour
 ```
 
 - `linkedin-com` and `xing-com` need a person: add `"person": {"first_name": "…", "last_name": "…"}` (from the register/Impressum) and give LinkedIn `timeout_seconds: 400`. `mailtester-com` / `experte-de` need `"email"`.
-- Adapters with a credential (D&B Hoovers, Leadfeeder, XING) sign in with the stored login by themselves; `task_id` must be the command id.
+- Adapters with a credential (D&B Hoovers, Leadfeeder, XING) sign in with the stored login by themselves; `task_id` must be the command id and `timeout_seconds: 400` (a login may wait for an e-mail one-time code).
 - A record from an adapter is a source: `source_id` = the entry id, `url` = the record's `source_url`, `quote` = the record's value. `blocked`, `authorization_required` or `temporary_unreachable` prove nothing — note the status and continue with the next source.
 - **Minimum set per lead** (skip only what `source_policy` does not list):
   - DE: `handelsregister-de`, `northdata-de`, `bundesanzeiger-de`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum` (with `"domain"` once known).
