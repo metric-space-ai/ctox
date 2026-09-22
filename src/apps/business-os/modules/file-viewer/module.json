@@ -15,7 +15,7 @@
     "default_width": 760,
     "default_height": 560,
     "min_width": 520,
-    "min_height": 400
+    "min_height": 480
   },
   "category": "Workspace",
   "version": "1.0.0",
@@ -51,9 +51,9 @@
     },
     "minimum_size": {
       "width": 520,
-      "height": 400
+      "height": 480
     },
-    "multi_instance": true,
+    "multi_instance": false,
     "auto_restore": false
   },
   "source": "core",

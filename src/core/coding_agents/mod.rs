@@ -39,6 +39,10 @@ fn execute_cli(root: &Path, args: &[String]) -> anyhow::Result<Value> {
         None | Some("help") | Some("--help") | Some("-h") => Ok(help_outcome()),
         Some("turn") => run_coding_turn_cli(root, &args[1..]),
         Some("smoke") => run_coding_smoke_cli(root, &args[1..]),
+        Some("route") => {
+            anyhow::ensure!(args.len() == 1, "usage: ctox coding-agent route");
+            pi_sidecar::inherited_coding_route_status(root)
+        }
         Some(other) => bail!(
             "unknown coding-agent subcommand '{other}' (usage: ctox coding-agent turn \
 --module <id> --prompt <text> [--faux] [--preset <id> | --model <json>])"
@@ -145,7 +149,7 @@ fn help_outcome() -> Value {
     json!({
         "ok": true,
         "operation": "help",
-        "stdout": "ctox coding-agent turn --module <id> --prompt <text> [--faux] [--preset <id> | --model <json>]\nctox coding-agent smoke --preset <id> [--prompt <text>]\n",
+        "stdout": "ctox coding-agent turn --module <id> --prompt <text> [--faux] [--preset <id> | --model <json>]\nctox coding-agent smoke --preset <id> [--prompt <text>]\nctox coding-agent route  (nonsecret inherited provider, origin and wire API)\n",
         "stderr": "",
         "exit_code": 0,
     })

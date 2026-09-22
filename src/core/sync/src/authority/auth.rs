@@ -1,4 +1,6 @@
 //! Bind execution-control requests and replies to configured peer keys and fresh request nonces.
+#[path = "auth/business_data_identity.rs"]
+pub mod business_data_identity;
 #[cfg(all(feature = "webrtc", unix))]
 pub(crate) mod route;
 #[cfg(test)]

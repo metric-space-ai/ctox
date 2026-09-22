@@ -49,10 +49,11 @@ pub(crate) use outbound_review::{
     ensure_founder_reply_deliverables_present, is_reviewed_external_chat_channel,
     prepare_reviewed_external_chat_reply, prepare_reviewed_founder_reply,
     record_and_send_external_chat_escalation_reply, record_and_send_founder_escalation_reply,
-    record_external_chat_review_approval, record_founder_outbound_review_approval,
-    record_founder_reply_review_approval, required_founder_reply_deliverables,
-    reviewed_send_result_has_durable_outbound_artifact, send_reviewed_external_chat_action,
-    send_reviewed_founder_outbound_action, terminal_founder_outbound_artifact_count,
+    record_and_send_policy_report_email, record_external_chat_review_approval,
+    record_founder_outbound_review_approval, record_founder_reply_review_approval,
+    required_founder_reply_deliverables, reviewed_send_result_has_durable_outbound_artifact,
+    send_reviewed_external_chat_action, send_reviewed_founder_outbound_action,
+    terminal_founder_outbound_artifact_count, PolicyReportEmail,
 };
 pub(crate) use outbound_review::{ensure_open_routing_rows_once, ensure_schema_once};
 pub use outbound_review::{
@@ -67,20 +68,22 @@ use command_saga::transition_business_command_for_task_in_transaction;
 mod route_status;
 pub(crate) use command_saga::{
     audit_and_migrate_business_command_storage, business_command_core_diagnostics,
-    business_command_projection, business_command_retention_maintenance,
-    business_command_saga_pending_compensation_steps, business_command_saga_status,
-    business_command_saga_step_evidence, claim_business_command_saga_step,
-    claim_business_command_waiting_dependencies, claim_business_command_with_queue,
-    claim_business_control_command, complete_business_command_saga_step,
-    complete_business_control_command, fail_business_command_saga_step, inspect_business_command,
-    inspect_business_command_for_task, mark_business_command_outbox_delivered,
+    business_command_projection, business_command_projection_from_conn,
+    business_command_retention_maintenance, business_command_saga_pending_compensation_steps,
+    business_command_saga_status, business_command_saga_step_evidence,
+    claim_business_command_saga_step, claim_business_command_waiting_dependencies,
+    claim_business_command_with_queue, claim_business_control_command,
+    complete_business_command_saga_step, complete_business_control_command,
+    fail_business_command_saga_step, inspect_business_command, inspect_business_command_for_task,
+    inspect_business_command_for_task_from_conn, mark_business_command_outbox_delivered,
     mark_business_command_outbox_failed, pending_business_command_outbox,
     persist_business_command_worker_result, progress_business_control_command,
-    reconcile_business_command_invariants, record_business_command_intake_failure,
-    record_business_command_review, record_business_command_saga_step_evidence,
-    resolve_business_command_intake_failures, retry_failed_app_create_business_command,
-    runtime_business_command_action_snapshot, start_business_command_saga,
-    start_runtime_business_command_saga, transition_business_command_for_task,
+    reconcile_business_command_invariants, record_business_command_applied_effect_delivery_failure,
+    record_business_command_intake_failure, record_business_command_review,
+    record_business_command_saga_step_evidence, resolve_business_command_intake_failures,
+    retry_failed_app_create_business_command, runtime_business_command_action_snapshot,
+    start_business_command_saga, start_runtime_business_command_saga,
+    transition_business_command_for_task,
 };
 pub(crate) use route_status::QueueRouteStatus;
 
@@ -595,8 +598,17 @@ pub fn sync_prompt_identity(root: &Path, settings: &BTreeMap<String, String>) ->
             "smtpPort": settings.get("CTO_EMAIL_SMTP_PORT").map(|value| value.trim()).unwrap_or(""),
             "graphUser": settings.get("CTO_EMAIL_GRAPH_USER").map(|value| value.trim()).unwrap_or(""),
             "ewsUrl": settings.get("CTO_EMAIL_EWS_URL").map(|value| value.trim()).unwrap_or(""),
+            "owaUrl": settings.get("CTO_EMAIL_OWA_URL").map(|value| value.trim()).unwrap_or(""),
             "ewsAuthType": settings.get("CTO_EMAIL_EWS_AUTH_TYPE").map(|value| value.trim()).unwrap_or(""),
             "ewsUsername": settings.get("CTO_EMAIL_EWS_USERNAME").map(|value| value.trim()).unwrap_or(""),
+            "ewsVersion": settings.get("CTO_EMAIL_EWS_VERSION").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncServer": settings.get("CTO_EMAIL_ACTIVESYNC_SERVER").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncUsername": settings.get("CTO_EMAIL_ACTIVESYNC_USERNAME").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncPath": settings.get("CTO_EMAIL_ACTIVESYNC_PATH").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncDeviceId": settings.get("CTO_EMAIL_ACTIVESYNC_DEVICE_ID").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncDeviceType": settings.get("CTO_EMAIL_ACTIVESYNC_DEVICE_TYPE").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncProtocolVersion": settings.get("CTO_EMAIL_ACTIVESYNC_PROTOCOL_VERSION").map(|value| value.trim()).unwrap_or(""),
+            "activeSyncPolicyKey": settings.get("CTO_EMAIL_ACTIVESYNC_POLICY_KEY").map(|value| value.trim()).unwrap_or(""),
         });
         ensure_account(
             &mut conn,
@@ -2666,7 +2678,11 @@ fn hold_leased_messages_impl(
     let mut conn = open_channel_db(&db_path)?;
     ensure_queue_account(&mut conn)?;
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    // Immediate: the transaction reads, then writes across the attached queue
+    // projection store the RxDB peer writes constantly. A deferred read cannot be
+    // promoted once the peer committed (SQLite 517, "database is locked" at once,
+    // without the busy timeout): 15 of 43 worker starts failed so on 11.09.2026.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if let Some(attempt_id) = attempt_id {
         let already_applied: Option<Option<String>> = tx
             .query_row(
@@ -2921,7 +2937,11 @@ pub fn create_queue_task_with_metadata(
     let mut conn = open_channel_db(&db_path)?;
     ensure_queue_account(&mut conn)?;
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    // Immediate: the transaction reads, then writes across the attached queue
+    // projection store the RxDB peer writes constantly. A deferred read cannot be
+    // promoted once the peer committed (SQLite 517, "database is locked" at once,
+    // without the busy timeout): 15 of 43 worker starts failed so on 11.09.2026.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let task = create_queue_task_with_metadata_tx(&tx, request)?;
     refresh_queue_projection_tasks(root, &tx, std::slice::from_ref(&task))?;
     tx.commit()?;
@@ -3484,7 +3504,11 @@ fn update_queue_task_with_optional_terminal_policy_grant(
         metadata.remove("defer_reason");
     }
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    // Immediate: the transaction reads, then writes across the attached queue
+    // projection store the RxDB peer writes constantly. A deferred read cannot be
+    // promoted once the peer committed (SQLite 517, "database is locked" at once,
+    // without the busy timeout): 15 of 43 worker starts failed so on 11.09.2026.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     if cockpit_control {
         let status = current_queue_route_status(&tx, &current.message_key)?;
         anyhow::ensure!(
@@ -6363,7 +6387,7 @@ fn load_queue_message_from_conn(
     .map_err(anyhow::Error::from)
 }
 
-fn load_queue_task_from_conn(
+pub(crate) fn load_queue_task_from_conn(
     conn: &Connection,
     message_key: &str,
 ) -> Result<Option<QueueTaskView>> {

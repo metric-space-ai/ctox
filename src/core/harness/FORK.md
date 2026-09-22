@@ -40,6 +40,24 @@ Attribution rule:
 
 - When a file under this subtree differs from the imported snapshot, describe it as a CTOX fork delta, not as an ambiguous upstream version.
 
+## 2026-09 Required-Tool Completion Recovery
+
+The turn loop tracks successful required-tool calls in the current turn, rather
+than accepting matching calls retained from earlier conversation history. The
+managed Responses request keeps `tool_choice: auto` for provider compatibility.
+If a response ends without the required call, the same bounded turn records a
+developer correction and samples again, at most twice. Repeated refusal emits a
+turn error; cancellation and the caller's existing turn deadline still apply.
+Successful tool results and their recorded outputs survive transport retries
+within the turn. Only a successful real tool result releases the full tool
+surface. No plan or
+activity event is synthesized, and CTOX's durable missing-plan completion guard
+remains authoritative.
+
+Regression coverage in `core/src/codex_required_plan_tests.rs` drives the actual
+turn loop with deterministic Responses streams: text-only recovery, repeated
+refusal, retained history, unrelated calls, failed plan calls, and cancellation.
+
 ## 2026-09 Bound Web-Stack Auth Assist
 
 The typed `ctox_web_auth_assist_request` fork tool no longer treats model-provided
@@ -140,3 +158,33 @@ without changing existing error Display strings or unrelated retry behavior:
   Display text while using the typed protocol projection.
 
 Ticket: I-074.
+
+## 2026-09 Named Persistent Thread Resume Test
+
+CTOX native workers reuse one named non-ephemeral harness thread. The
+app-server JSON-RPC path must look that thread up from disk after a
+`ThreadManager` restart and fail closed if an identified `thread/resume`
+cannot load it. This is not Codex/Claude export/import or cross-device
+restore.
+
+Fork test delta:
+
+- `app-server-client/src/persistent_resume_tests.rs`: in-process
+  `InProcessAppServerClient` coverage against an isolated `codex_home`.
+  A named persistent thread is started, named, and given a mock Responses
+  turn. After manager shutdown, a new manager on the same home lists the
+  named Exec thread, resumes the same id, and rereads the same completed
+  history. Resume of a missing identified id returns a JSON-RPC server
+  error (`no rollout found`) and leaves the original loaded thread id in
+  the manager. Provider traffic stays on the local mock fixture.
+
+This nested package is not executed by root `cargo test`. Existing CI
+does not invoke `ctox-app-server-client` tests.
+
+Verification command:
+
+```bash
+cargo test --manifest-path src/core/harness/Cargo.toml -p ctox-app-server-client -- --test-threads=2 named_persistent_thread_survives_manager_restart
+```
+
+Refs #97.

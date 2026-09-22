@@ -264,12 +264,49 @@ test('outbound message progress is a six-step status model rendered in the row',
   assert.equal(failed.percent, 60);
 });
 
+test('mail actions prefer shell icons and keep semantic fallback controls usable', () => {
+  const requested = [
+    'add', 'check', 'chevronLeft', 'chevronRight', 'clock', 'close', 'columns',
+    'download', 'edit', 'export', 'eye', 'filter', 'grid', 'link', 'list',
+    'refresh', 'send', 'settings', 'warning',
+  ];
+  assert.equal(
+    hooks.mailActionIcon({ getActionIcon: (name, size, strokeWidth) => `shell:${name}:${size}:${strokeWidth}` }, 'send', 11, 1.9),
+    'shell:send:11:1.9',
+  );
+  for (const provider of [undefined, { getActionIcon: () => '' }, { getActionIcon: () => '   ' }]) {
+    for (const name of requested) {
+      const svg = hooks.mailActionIcon(provider, name, 11, 1.9);
+      assert.match(svg, new RegExp('class="mail-action-icon mail-action-' + name + '"'));
+      assert.match(svg, /width="11" height="11"/);
+      assert.match(svg, /stroke-width="1\.9"/);
+      assert.doesNotMatch(svg, /class="mail-action-icon mail-action-more"/);
+    }
+  }
+  const expectedPaths = {
+    send: 'M4 12 20 4l-4 16-4.5-6.5L4 12ZM11.5 13.5 20 4',
+    warning: 'M12 4 2.8 19.5h18.4L12 4ZM12 10v4M12 17h.01',
+    eye: 'M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6ZM12 9.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z',
+    link: 'M10 14a4 4 0 0 0 6 .4l3-3a4 4 0 0 0-5.6-5.6L12 7.2M14 10a4 4 0 0 0-6-.4l-3 3a4 4 0 0 0 5.6 5.6L12 16.8',
+    list: 'M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01',
+    grid: 'M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z',
+  };
+  for (const [name, expected] of Object.entries(expectedPaths)) {
+    const actual = hooks.mailActionIcon({}, name).match(/ d="([^"]+)"/)?.[1];
+    assert.equal(actual, expected);
+  }
+  const unlisted = hooks.mailActionIcon({}, 'unlisted-icon');
+  assert.match(unlisted, /class="mail-action-icon mail-action-unlisted-icon"/);
+  assert.match(unlisted, /d="M6 12h\.01M12 12h\.01M18 12h\.01"/);
+});
+
 test('mail surface provides a progressive inspector workbench and responsive composer', async () => {
-  const [html, css, manifest, source] = await Promise.all([
+  const [html, css, manifest, source, browserQaSource] = await Promise.all([
     readFile(new URL('index.html', moduleRoot), 'utf8'),
     readFile(new URL('index.css', moduleRoot), 'utf8'),
     readFile(new URL('module.json', moduleRoot), 'utf8').then(JSON.parse),
     readFile(new URL('index.js', moduleRoot), 'utf8'),
+    readFile(new URL('tests/mail-browser-qa.mjs', moduleRoot), 'utf8'),
   ]);
   assert.match(html, /data-mail-account/);
   assert.match(html, /data-mail-group-list/);
@@ -294,6 +331,16 @@ test('mail surface provides a progressive inspector workbench and responsive com
   assert.match(css, /\.mail-module\.is-inspector-open/);
   assert.match(source, /function mailActionIcon\(/);
   assert.match(source, /const MAIL_ICON_FALLBACK_PATHS = Object\.freeze/);
+  assert.match(source, /mailActionIcon\(ctx, step\.icon, 11, 1\.9\)/);
+  assert.match(source, /const icon = \(name\) => mailActionIcon\(ctx, name\)/);
+  assert.match(source, /button\.innerHTML = mailActionIcon\(ctx, cards \? 'list' : 'grid'\)/);
+  const iconOnlyBranch = browserQaSource.match(/if \(mailIconOnly\) \{[\s\S]*?break mailQa;/)?.[0] || '';
+  const browserErrorCheck = iconOnlyBranch.indexOf('assert.deepEqual(browserErrors, []');
+  const iconSuccessLog = iconOnlyBranch.indexOf('console.log(`Mail icon QA OK');
+  assert.ok(browserErrorCheck >= 0, 'icon-only QA must check browser errors');
+  assert.ok(iconSuccessLog > browserErrorCheck, 'icon-only success must follow the browser-error check');
+  const iconNavigation = browserQaSource.slice(browserQaSource.indexOf('async function assertMailIconAcceptance'));
+  assert.match(iconNavigation, /\[data-mail-close-nav\]'\)\.click\(\);\s*await sidebar\.waitFor\(\{ state: 'hidden' \}\)/);
   assert.equal(manifest.layout.shell_contract, 'v2');
   assert.equal(manifest.install_scope, 'store');
   assert.equal(manifest.default_installed, false);

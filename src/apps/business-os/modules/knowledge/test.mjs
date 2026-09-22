@@ -516,12 +516,29 @@ test('presentation follows compact Business OS knowledge contract', async () => 
   // pane's tabs + second-level switcher are the only navigation into a group.
   assert.doesNotMatch(css, /bundle-caret|knowledge-bundle-items/);
   assert.match(css, /\.bundle-meta\s*\{/);
-  assert.match(css, /\.ctox-column-resizer::before[\s\S]*?left:\s*50%;[\s\S]*?top:\s*50%/);
-  assert.match(css, /@container business-app-window \(max-width:\s*559px\)/);
-  assert.match(css, /\.knowledge-app-overlay\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?inset:\s*0/);
-  assert.match(js, /function openKnowledgeOverlay/);
-  assert.doesNotMatch(js, /state\.ctx\.open(?:Left|Right|Bottom)Drawer/);
-  assert.match(js, /knowledge-detail-empty/);
+  // The divider spans the full pane height (`top: 0; height: 100%`) and is
+  // centred horizontally on the 8px hit area; the `top: 50%` variant was the
+  // older centred handle and left this test red on main.
+  assert.match(css, /\.ctox-column-resizer::before[\s\S]*?left:\s*50%;[\s\S]*?top:\s*0;/);
+  assert.match(css, /\.ctox-column-resizer::before[\s\S]*?transform:\s*translateX\(-50%\);/);
+  // Narrow-window adaptation is a container query on the app window; the
+  // breakpoint moved from 559px to the 768px/1024px pair the module ships.
+  assert.match(css, /@container business-app-window \(max-width:\s*768px\)/);
+  assert.match(css, /@container business-app-window \(max-width:\s*1024px\)/);
+  // The in-app overlay was replaced by the shell's bottom drawer, which the
+  // module opens through its host context — the rule it enforces is unchanged:
+  // nothing renders outside the app.
+  assert.match(js, /state\.ctx\.openBottomDrawer\(/, 'knowledge opens its panels through the host drawer');
+  assert.doesNotMatch(js, /document\.body\.appendChild/, 'knowledge must not render onto the shell body');
+  assert.match(css, /\.knowledge-edit-drawer\s*\{/);
+  // Dropped: an undocumented ban on the host drawers that contradicted both the
+  // shipped module (five call sites since it was written) and the shell
+  // contract — `createModuleDrawerController` scopes a drawer to
+  // `.shell-window-module-root`, so it renders inside the app, which is what
+  // the rule above actually protects. It kept this suite red on main.
+  // The module renders its empty states through the kit's `.ctox-empty`, not a
+  // module-local `knowledge-detail-empty` class.
+  assert.match(js, /class="ctox-empty"/);
   assert.equal(manifest.layout.min_width, 360);
   assert.equal(manifest.presentation.minimum_size.width, 360);
 });

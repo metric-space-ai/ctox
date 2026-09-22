@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260908-shell-v2-hidden-transfer-v355';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260923-shell-v2-hidden-transfer-v385';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

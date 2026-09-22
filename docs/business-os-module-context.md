@@ -1,6 +1,6 @@
 # Business OS Module Context (`mount(ctx)`) — Contract v1
 
-Stand: 2026-07-06
+Stand: 2026-09-13
 Contract-ID: `business-os-module-context-v1`
 
 Jedes Business-OS-Modul — statisch oder runtime-installiert, von Hand oder
@@ -64,6 +64,7 @@ Browser-Tab-Schließen ist davon getrennt: `beforeunload` kann bei ungespeichert
 | `db` | facade | Guarded/scoped Collection-Zugriff (Live-Facade; runtime-installierte Module bekommen den Data-Guard). Kein direkter Bundle-Import. |
 | `documents` | facade | Generischer DOCX-Vertrag: `loadVersion`, `createDocx`, `open`. Bytes laufen ausschließlich über `documents`, `document_versions` und `document_blob_chunks` im shell-gelieferten `db`-Facade. |
 | `sync` | facade | `startCollection`, `stopCollection`, `restartCollection(s)`, `suspendCollections`, `resumeCollections`, `stop`; `collectionReadiness(name)` und `subscribeCollectionReadiness(name, listener)`; `requestNative(method, params, options)` für explizit capability-gatete, ephemere WebRTC-Steuerpfade ohne RxDB-Dokumente; Getter `mode`, `config`, `diagnostics` (inkl. per-Collection `pullCheckpointAgeMs`, §OS-A3). |
+| `readNativeCollectionDocument(collection, documentId, options?)` | fn \| null | Nur Desktop: strikte native Autoritätslesung über Sync. Ein erfolgreicher fehlender Datensatz wird zu `null`; Timeout, Abbruch oder Generationswechsel werden als Fehler propagiert, ohne auf lokale Daten zurückzufallen. Andere Module erhalten `null`. |
 | `syncConfig` | object | Momentaufnahme der Sync-Konfiguration. |
 | `storageScope` | facade | Modul-, Workspace- und Actor-gescopte UI-Ablage: `key`, `get`, `set`, `remove`. Module greifen nicht direkt auf Browser Storage zu. |
 | `runtimeCapabilities` | frozen object | Trust-/Fähigkeitsmatrix (`business-os-runtime-capabilities-v1`): trust_model, code_origin, database.guarded, … |
@@ -147,8 +148,9 @@ schlagen geschlossen fehl. Es gibt keinen HTTP- oder Storage-Fallback.
 
 ## Stabilität
 
-- v1 umfasst exakt die 45 oben gelisteten Felder (Pin im Assert-Skript;
-  `getActionIcon`, `args` und `documents` kamen additiv hinzu).
+- v1 umfasst exakt die 49 im Assert-Skript gepinnten Felder.
+  `getActionIcon`, `args`, `documents` und
+  `readNativeCollectionDocument` kamen additiv hinzu.
 - Additiv erweitern ist erlaubt (Pin + Doku im selben Commit).
 - Entfernen/Umbenennen ⇒ `business-os-module-context-v2` mit
   Migrationshinweisen für alle Module.

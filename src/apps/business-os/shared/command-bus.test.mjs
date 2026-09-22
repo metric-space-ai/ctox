@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { CollectionSyncRegistry } from './sync-collection-registry.js';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -29,6 +30,186 @@ test.beforeEach(() => {
 test.afterEach(() => {
   delete globalThis.CTOX_BUSINESS_OS_SESSION;
   resetBusinessOsCapabilityTokenCacheForTests();
+});
+
+test('dispatch receipt lifecycle reports elapsed time from the original dispatch', async (t) => {
+  let now = Date.now();
+  const startedAt = now;
+  t.mock.method(Date, 'now', () => now);
+  const events = [];
+  t.mock.method(console, 'info', (tag, payload) => {
+    if (tag === '[command-bus]') events.push(JSON.parse(payload));
+  });
+  let stored;
+  const commands = {
+    async insert(document) { stored = { ...document }; now = startedAt + 125; },
+    findOne() {
+      return {
+        $: { subscribe(listener) {
+          listener({ toJSON: () => ({ ...stored }) });
+          return { unsubscribe() {} };
+        } },
+        async exec() { return stored ? { toJSON: () => ({ ...stored }) } : null; },
+      };
+    },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: commands } },
+    sync: { async startCollection() {
+      return { state: { async pushDocumentsToRemotePeers() {
+        now = startedAt + 900;
+        stored = { ...stored, status: 'queued', replication_phase: 'native_observed' };
+        return true;
+      } } };
+    } },
+  });
+  const receipt = await bus.dispatch({
+    id: 'cmd-lifecycle-elapsed', command_type: 'business_os.smoke', sync_queue_tasks: false,
+  }, { until: 'accepted' });
+  assert.equal(receipt.status, 'queued');
+  for (const phase of ['local_receipt', 'accepted']) {
+    const event = events.find((entry) => entry.phase === phase);
+    assert.ok(event, `missing ${phase} lifecycle event`);
+    assert.equal(event.command_id, 'cmd-lifecycle-elapsed');
+    assert.equal(event.elapsed_ms, 900, `${phase} must retain the dispatch start time`);
+  }
+});
+
+test('sync_queue_tasks:false as a dispatch option skips the queue-task collection', async () => {
+  let stored;
+  const started = [];
+  const commands = {
+    async insert(document) { stored = { ...document }; },
+    findOne() {
+      return {
+        $: { subscribe(listener) {
+          listener({ toJSON: () => ({ ...stored }) });
+          return { unsubscribe() {} };
+        } },
+        async exec() { return stored ? { toJSON: () => ({ ...stored }) } : null; },
+      };
+    },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: commands } },
+    sync: { async startCollection(name) {
+      started.push(name);
+      return { state: { async pushDocumentsToRemotePeers() {
+        stored = { ...stored, status: 'queued', replication_phase: 'native_observed' };
+        return true;
+      } } };
+    } },
+  });
+  await bus.dispatch({ id: 'cmd-option-no-queue', command_type: 'ctox.secret.list' }, {
+    until: 'accepted',
+    sync_queue_tasks: false,
+  });
+  assert.deepEqual(started.filter((name) => name === 'ctox_queue_tasks'), []);
+  assert.ok(started.includes('business_commands'));
+});
+
+function leaseTestState(connected) {
+  const listeners = new Set();
+  const peers = connected ? new Map([['native', {}]]) : new Map();
+  return {
+    collection: { name: 'business_commands' },
+    peerStates$: {
+      getValue: () => peers,
+      subscribe(fn) { listeners.add(fn); fn(peers); return { unsubscribe: () => listeners.delete(fn) }; },
+    },
+    listenerCount: () => listeners.size,
+    async pushDocumentsToRemotePeers() { return true; },
+  };
+}
+
+test('submission follows a retained lease replacement without inserting on the cancelled peer', async () => {
+  const registry = new CollectionSyncRegistry();
+  const previous = leaseTestState(false);
+  registry.set('business_commands', Promise.resolve({ state: previous }));
+  let inserts = 0;
+  const commands = {
+    async insert(doc) { inserts++; assert.equal(doc.id, 'cmd-replaced-lease'); },
+    findOne() { return { async exec() { return null; } }; },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: commands } },
+    sync: { async leaseCollection(name) { return registry.acquire(name, 'command', async () => {}); } },
+  });
+  const pending = bus.submit({ id: 'cmd-replaced-lease', command_type: 'business_os.chat.task', sync_queue_tasks: false });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(inserts, 0);
+  previous.cancelled = true;
+  registry.delete('business_commands');
+  const replacement = leaseTestState(true);
+  registry.set('business_commands', Promise.resolve({ state: replacement }));
+  const receipt = await pending;
+  assert.equal(receipt.pushConfirmed, true);
+  assert.equal(inserts, 1);
+  assert.equal(previous.listenerCount(), 0);
+  assert.equal(replacement.listenerCount(), 0);
+  assert.equal(registry.leaseCount('business_commands'), 0);
+});
+
+test('repeated lease replacement cannot reset the command deadline or bypass peer readiness', async () => {
+  const registry = new CollectionSyncRegistry();
+  registry.set('business_commands', Promise.resolve({ state: leaseTestState(false) }));
+  let inserts = 0;
+  const bus = createCommandBus({
+    db: { raw: { business_commands: { async insert() { inserts++; } } } },
+    sync: { async leaseCollection(name) { return registry.acquire(name, 'command', async () => {}); } },
+  });
+  const replacement = setInterval(() => {
+    registry.delete('business_commands');
+    registry.set('business_commands', Promise.resolve({ state: leaseTestState(false) }));
+  }, 10);
+  try {
+    await assert.rejects(bus.submit({
+      id: 'cmd-lease-deadline', command_type: 'business_os.chat.task',
+      sync_queue_tasks: false, sync_ready_timeout_ms: 80,
+    }), /no authenticated WebRTC peer after 80 ms/);
+    assert.equal(inserts, 0);
+    assert.equal(registry.leaseCount('business_commands'), 0);
+  } finally { clearInterval(replacement); registry.revokeAllLeases(); }
+});
+
+
+test('terminal tracking moves its master-change subscription to the replacement bridge', async () => {
+  const registry = new CollectionSyncRegistry();
+  const createState = () => {
+    const state = leaseTestState(true);
+    const listeners = new Set();
+    state.masterChange$ = { subscribe(fn) { listeners.add(fn); return { unsubscribe: () => listeners.delete(fn) }; } };
+    state.emit = command => { for (const fn of [...listeners]) fn({ documents: [command] }); };
+    state.masterListeners = () => listeners.size;
+    return state;
+  };
+  const old = createState();
+  registry.set('business_commands', Promise.resolve({ state: old }));
+  const id = 'cmd-master-replacement';
+  const commands = {
+    findOne() { return {
+      $: { subscribe() { return { unsubscribe() {} }; } },
+      async exec() { return { id, status: 'queued' }; },
+    }; },
+  };
+  const bus = createCommandBus({
+    db: { raw: { business_commands: commands } },
+    sync: { async leaseCollection(name) { return registry.acquire(name, 'watch', async () => {}); } },
+  });
+  const pending = bus.waitForTerminal(id, { timeoutMs: 1000, sync_queue_tasks: false });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(old.masterListeners(), 1);
+  const replacement = createState();
+  registry.delete('business_commands');
+  registry.set('business_commands', Promise.resolve({ state: replacement }));
+  await Promise.resolve();
+  assert.equal(old.masterListeners(), 0);
+  assert.equal(replacement.masterListeners(), 1);
+  replacement.emit({ id, command_id: id, status: 'completed', result: { outcome: { ok: true } } });
+  const result = await pending;
+  assert.equal(result.ok, true);
+  assert.equal(replacement.masterListeners(), 0);
+  assert.equal(registry.leaseCount('business_commands'), 0);
 });
 
 test('command client context normalizer preserves visible app scope and canonical aliases', () => {
@@ -139,6 +320,48 @@ test('command client context normalizer does not overwrite caller actor', () => 
   assert.equal(context.scope.command.type, 'ctox.coding.turn');
 });
 
+test('command client context fills placeholder actor identity from the session', () => {
+  const sessionActor = { id: 'user-1', display_name: 'Operator', role: 'user', is_admin: false };
+  const context = normalizeCommandClientContext({
+    command: {
+      module: 'ctox',
+      command_type: 'business_os.chat.task',
+      client_context: {
+        actor: { display_name: 'Operator', role: 'user' },
+        owner: 'user-1',
+      },
+    },
+    moduleId: 'ctox',
+    commandType: 'business_os.chat.task',
+    inboundChannel: 'business_os_chat',
+    actor: sessionActor,
+  });
+
+  assert.equal(context.actor.id, 'user-1');
+  assert.equal(context.actor.display_name, 'Operator');
+  assert.equal(context.owner_user_id, 'user-1');
+});
+
+test('command client context skips local-dev owner_user_id before actor identity', () => {
+  const sessionActor = { id: 'user-1', display_name: 'Operator', role: 'user', is_admin: false };
+  const context = normalizeCommandClientContext({
+    command: {
+      module: 'ctox',
+      command_type: 'business_os.chat.task',
+      client_context: {
+        owner_user_id: 'local-dev',
+        actor: { user_id: 'user-1', display_name: 'Operator' },
+      },
+    },
+    moduleId: 'ctox',
+    commandType: 'business_os.chat.task',
+    inboundChannel: 'business_os_chat',
+    actor: sessionActor,
+  });
+  assert.equal(context.owner_user_id, 'user-1');
+  assert.equal(context.actor.id, 'user-1');
+});
+
 test('command bus scopes demand-only desktop chunk dependencies with leases', () => {
   assert.match(source, /const DEMAND_ONLY_SYNC_COLLECTIONS = new Set/);
   assert.match(source, /'desktop_file_chunks'/);
@@ -150,7 +373,7 @@ test('command bus scopes demand-only desktop chunk dependencies with leases', ()
 test('command bus reports missing queue projection as transient tracking state', () => {
   assert.match(source, /status:\s*'projection_pending'/);
   assert.match(source, /transient:\s*true/);
-  assert.match(source, /wartet noch auf die Rueckmeldung/);
+  assert.match(source, /Die Rückmeldung steht noch aus/);
   assert.doesNotMatch(source, /noch keinen echten Queue-Task/);
 });
 
@@ -1006,7 +1229,10 @@ test('terminal tracking falls back to the local store when demand queries are ov
     storageCollection: {
       async findDocumentsById(ids) {
         localReads += 1;
-        return ids.includes(commandId) ? { [commandId]: completed } : {};
+        // The first local receipt probe precedes native completion. After
+        // the overloaded demand query, tracking must read the fresh local row.
+        const document = localReads === 1 ? { ...completed, status: 'queued' } : completed;
+        return ids.includes(commandId) ? { [commandId]: document } : {};
       },
     },
     findOne(id) {
@@ -1032,7 +1258,7 @@ test('terminal tracking falls back to the local store when demand queries are ov
   assert.equal(receipt.ok, true);
   assert.equal(receipt.status, 'completed');
   assert.equal(demandReads, 1);
-  assert.equal(localReads, 1);
+  assert.equal(localReads, 2);
 });
 
 test('sync push errors remain typed instead of becoming a command timeout', async () => {

@@ -3169,7 +3169,7 @@ pub(crate) mod tests {
     }
 
     fn seed_project_and_copy(root: &Path, owner: &str, suffix: &str) -> anyhow::Result<String> {
-        super::super::store_workjet_projects::handle_workjet_project_upsert_command(
+        super::super::store_workjet_projects::tests::handle_workjet_project_upsert_command(
             root,
             &command(
                 "ctox.workjet.project.upsert",

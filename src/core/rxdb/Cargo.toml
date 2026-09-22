@@ -63,9 +63,13 @@ url = "2"
 rustls = { version = "0.23", features = ["ring"] }
 
 # Phase-4 WebRTC transport for rxdb-rs <-> browser simple-peer interop.
-webrtc = "0.20.0-alpha.1"
-ice = { version = "0.20.0-alpha.1", package = "rtc-ice" }
+webrtc = "=0.20.0-alpha.1"
+ice = { version = "=0.20.0-alpha.1", package = "rtc-ice" }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile = "3"
+
+# Cargo ignores dependency patches; standalone tests must mirror the host.
+[patch.crates-io]
+rtc-ice = { path = "patches/rtc-ice" }

@@ -4009,26 +4009,26 @@ mod tests {
                 parent_message_key: None,
                 extra_metadata: None,
             },
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(claimed.task.route_status, "blocked");
         // Settlement runs after explicit confirmation and the existing
         // browser-session/controller checks in the command handler.
-        let result = settle_auth_assist_queue_task(
-            root.path(), "auth-confirm", &claimed.task.message_key,
-        );
+        let result =
+            settle_auth_assist_queue_task(root.path(), "auth-confirm", &claimed.task.message_key);
         assert_eq!(result["status"], "cancelled_after_user_confirmation");
         assert_eq!(
-            settle_auth_assist_queue_task(
-                root.path(), "auth-confirm", &claimed.task.message_key,
-            )["status"],
+            settle_auth_assist_queue_task(root.path(), "auth-confirm", &claimed.task.message_key,)
+                ["status"],
             "already_terminal",
         );
         assert_eq!(
-            crate::mission::channels::recover_auth_assist_requests(root.path()).unwrap(), 0,
+            crate::mission::channels::recover_auth_assist_requests(root.path()).unwrap(),
+            0,
         );
-        let command = crate::mission::channels::business_command_projection(
-            root.path(), "auth-confirm",
-        ).unwrap();
+        let command =
+            crate::mission::channels::business_command_projection(root.path(), "auth-confirm")
+                .unwrap();
         assert_eq!(command["terminal_status"], "cancelled");
     }
 

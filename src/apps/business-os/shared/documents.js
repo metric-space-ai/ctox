@@ -1215,7 +1215,7 @@ async function acquireDocumentSyncLease(sync, collection) {
               `Document storage did not acquire a direct native peer for ${collection}.`,
             );
           }
-          lease.bridge = directBridge;
+          // The runtime publishes the direct bridge to the retained lease.
         } catch (error) {
           await lease?.release?.().catch(() => null);
           throw error;
@@ -1234,11 +1234,18 @@ async function acquireDocumentSyncLease(sync, collection) {
 async function waitForDocumentSync(lease) {
   const bridge = lease?.bridge || lease || null;
   const replication = bridge?.state || lease?.state || null;
-  if (!replication) return;
-  if (hasSyncPeerStatus(replication)) {
+  const followsBridge = typeof lease?.subscribeBridge === 'function';
+  if (!replication && !followsBridge) return;
+  if (followsBridge || hasSyncPeerStatus(replication)) {
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
-      if (syncPeerConnected(replication)) return;
+      const current = followsBridge ? lease.bridge : bridge;
+      if (['released', 'stopped', 'failed'].includes(current?.mode)) {
+        throw documentsError('DOCUMENTS_SYNC_UNAVAILABLE', 'Document storage sync lease is unavailable.');
+      }
+      if (current?.state && !current.state.cancelled
+        && current.state.canceled$?.getValue?.() !== true
+        && syncPeerConnected(current.state)) return;
       await delay(100);
     }
     throw documentsError(
@@ -1300,7 +1307,12 @@ async function flushDocumentSync(lease, documents = []) {
     return;
   }
   const replication = bridge?.state || lease?.state || null;
-  if (!replication) return;
+  if (!replication) {
+    if (typeof lease?.subscribeBridge === 'function') {
+      throw documentsError('DOCUMENTS_SYNC_UNAVAILABLE', 'Document storage has no current bridge to confirm delivery.');
+    }
+    return;
+  }
   await withDocumentsTimeout(
     () => {
       if (documents.length && typeof replication.pushDocumentsToRemotePeers === 'function') {

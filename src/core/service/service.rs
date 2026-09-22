@@ -3312,13 +3312,7 @@ pub(crate) fn run_business_os_web_stack_via_service(
     if !socket_path.exists() {
         return Ok(None);
     }
-    let timeout_ms = argv
-        .windows(2)
-        .find(|pair| pair[0] == "--timeout-ms")
-        .and_then(|pair| pair[1].parse::<u64>().ok())
-        .unwrap_or(60_000)
-        .clamp(1_000, 300_000);
-    let timeout = Duration::from_millis(timeout_ms.saturating_add(15_000));
+    let timeout = web_stack_ipc_timeout(argv);
     match send_service_ipc_request_with_timeout(
         root,
         ServiceIpcRequest::BusinessOsWebStack {
@@ -4662,6 +4656,20 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
                     .unwrap_or(120)
                     .min(SANDBOXED_CLI_MAX_TIMEOUT_SECONDS);
                 Duration::from_secs(timeout_seconds.saturating_add(90))
+            } else if matches!(
+                argv.as_slice(),
+                [command, area, subcommand, ..]
+                    if command == "business-os"
+                        && area == "web-stack"
+                        && matches!(
+                            subcommand.as_str(),
+                            "auth-assist-login" | "source-capture" | "authenticated-automation"
+                        )
+            ) {
+                // A login that has to wait for an e-mail one-time code (up to
+                // 150 s) plus the post-login capture outlives 60 s; the client
+                // gave up with EAGAIN while the daemon was still signing in.
+                Duration::from_secs(420)
             } else {
                 Duration::from_secs(60)
             }
@@ -4672,16 +4680,51 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
         // cancel the daemon-side work and therefore only produces a false
         // failure. Keep the client wait bounded, but long enough for a complete
         // command run.
-        ServiceIpcRequest::BusinessOsWebStack { argv } => {
-            let timeout_ms = argv
-                .windows(2)
-                .find(|pair| pair[0] == "--timeout-ms")
-                .and_then(|pair| pair[1].parse::<u64>().ok())
-                .unwrap_or(60_000)
-                .clamp(1_000, 300_000);
-            Duration::from_millis(timeout_ms.saturating_add(15_000))
-        }
+        ServiceIpcRequest::BusinessOsWebStack { argv } => web_stack_ipc_timeout(argv),
         ServiceIpcRequest::BusinessCommandDispatch { .. } => BUSINESS_COMMAND_IPC_TIMEOUT,
+    }
+}
+
+/// How long a client waits for a web-stack command. A login whose second
+/// factor arrives by e-mail waits for that mail (up to 150 s) on top of its
+/// browser budget; with the plain +15 s the client gave up with EAGAIN while
+/// the daemon was still signing in (thesen 22.09.2026, D&B).
+fn web_stack_ipc_timeout(argv: &[String]) -> Duration {
+    let timeout_ms = argv
+        .windows(2)
+        .find(|pair| pair[0] == "--timeout-ms")
+        .and_then(|pair| pair[1].parse::<u64>().ok())
+        .unwrap_or(60_000)
+        .clamp(1_000, 300_000);
+    let waits_for_email_otp = argv.iter().any(|value| {
+        matches!(
+            value.as_str(),
+            "auth-assist-login" | "source-capture" | "authenticated-automation"
+        )
+    });
+    let slack_ms = if waits_for_email_otp { 210_000 } else { 15_000 };
+    Duration::from_millis(timeout_ms.saturating_add(slack_ms))
+}
+
+#[cfg(test)]
+mod web_stack_ipc_timeout_tests {
+    use super::*;
+
+    #[test]
+    fn login_waiting_for_an_email_code_gets_the_longer_client_budget() {
+        let argv = |items: &[&str]| items.iter().map(|v| v.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            web_stack_ipc_timeout(&argv(&["auth-assist-login", "--timeout-ms", "120000"])),
+            Duration::from_millis(330_000)
+        );
+        assert_eq!(
+            web_stack_ipc_timeout(&argv(&["source-capture", "--timeout-ms", "60000"])),
+            Duration::from_millis(270_000)
+        );
+        assert_eq!(
+            web_stack_ipc_timeout(&argv(&["auth-assist-status", "--timeout-ms", "60000"])),
+            Duration::from_millis(75_000)
+        );
     }
 }
 
@@ -6412,10 +6455,10 @@ fn start_prompt_worker(
                                 },
                             );
                         if result.is_err() {
-                            // Recreate the in-process client after any failed
-                            // slice. The next job resumes the same durable rollout
-                            // instead of trusting possibly broken process-local
-                            // transport state.
+                            // Drop the process-local client after any failed
+                            // slice. The next job must bind the same named
+                            // durable thread; a lookup/resume/turn-start
+                            // failure must not create a replacement thread.
                             *session = None;
                         }
                         result
@@ -9252,6 +9295,9 @@ fn run_completion_review(
             clip_text(&outcome.summary, 160),
         ),
     );
+    if let Some(hold) = incomplete_review_outcome_hold(&outcome) {
+        return hold;
+    }
     // Only enqueue a rework slice for actionable verdicts (FAIL / PARTIAL).
     // `Unavailable` means the reviewer itself failed (timeout, gateway error)
     // — the executor's work might be fine; we surface it but do not auto-rework
@@ -9673,6 +9719,38 @@ fn run_completion_review(
             }
         }
     }
+}
+
+fn incomplete_review_outcome_hold(
+    outcome: &review::ReviewOutcome,
+) -> Option<CompletionReviewDisposition> {
+    let task_outcome = review::parse_task_outcome(&outcome.canonical_report());
+    let could_close = outcome.verdict == review::ReviewVerdict::Pass
+        || matches!(outcome.disposition, review::ReviewDisposition::NoSend);
+    if task_outcome == review::ReviewTaskOutcome::Completed
+        || (task_outcome != review::ReviewTaskOutcome::Blocked && !could_close)
+    {
+        return None;
+    }
+    let reason = if let Some(wait_ref) = outcome
+        .no_send_wait_ref()
+        .filter(|_| outcome.no_send_reason() == Some(review::NoSendReason::WaitingExternal))
+    {
+        review::HoldReason::WaitingExternal(wait_ref)
+    } else if task_outcome == review::ReviewTaskOutcome::Blocked {
+        review::HoldReason::Technical {
+            policy_id: "requested-work-blocked".into(),
+        }
+    } else {
+        review::HoldReason::MissingReviewEvidence
+    };
+    Some(CompletionReviewDisposition::Hold {
+        reason,
+        summary: format!(
+            "Requested work is blocked or unverified. {}",
+            outcome.summary
+        ),
+    })
 }
 
 fn completion_review_unavailable_disposition(
@@ -15268,6 +15346,11 @@ fn start_mission_maintenance_loop(root: std::path::PathBuf, state: Arc<Mutex<Sha
             // memory in the LCM (anchors from the typed retrospective, then the
             // existing continuity refresh). Serial, bounded, after the gates.
             run_crew_learning_tick(&root, &state);
+            // Outbound Update-Verteiler: the admin-configured morning update
+            // (recipients, weekdays, local time) — at most once per day.
+            if let Some(event) = crate::business_os::outbound_update_digest_tick(&root) {
+                push_event(&state, event);
+            }
             thread::sleep(Duration::from_secs(MISSION_MAINTENANCE_POLL_SECS));
         }
     });
@@ -23662,6 +23745,35 @@ fn existing_timeout_continuation(
 mod tests {
     // ctox-allow-direct-state-write: test fixture module
     use super::*;
+
+    #[test]
+    fn blocked_review_cannot_close_through_pass_or_no_send() {
+        for verdict in [review::ReviewVerdict::Pass, review::ReviewVerdict::Fail] {
+            for disposition in [
+                review::ReviewDisposition::Send,
+                review::ReviewDisposition::NoSend,
+            ] {
+                let mut outcome =
+                    review::ReviewOutcome::skipped("Required operation was not performed");
+                outcome.required = true;
+                outcome.verdict = verdict.clone();
+                outcome.disposition = disposition;
+                outcome.report = "TASK_OUTCOME: blocked\n".into();
+                assert!(matches!(
+                    incomplete_review_outcome_hold(&outcome),
+                    Some(CompletionReviewDisposition::Hold { .. })
+                ));
+            }
+        }
+        let mut outcome = review::ReviewOutcome::skipped("Missing execution evidence");
+        outcome.verdict = review::ReviewVerdict::Pass;
+        assert!(matches!(
+            incomplete_review_outcome_hold(&outcome),
+            Some(CompletionReviewDisposition::Hold { .. })
+        ));
+        outcome.report = "TASK_OUTCOME: completed\n".into();
+        assert!(incomplete_review_outcome_hold(&outcome).is_none());
+    }
     use crate::lcm::{ContinuityKind, LcmConfig, LcmEngine};
     use crate::plan;
     use crate::secrets;

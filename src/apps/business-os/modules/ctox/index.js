@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260908-shell-v2-hidden-transfer-v355';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260923-shell-v2-hidden-transfer-v385';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
@@ -20,7 +20,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260908-shell-v2-hidden-transfer-v355';
+const CTOX_STYLE_BUILD = '20260923-shell-v2-hidden-transfer-v385';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -907,21 +907,23 @@ async function renderFromLocalCache(state) {
 // One load path. Every collection is a bounded RxDB read; there is no HTTP
 // fallback and no poll loop — subscriptions (wireLocalRealtime) call this.
 async function hydrateFromLocal(state) {
+  // Status must not wait for task lists or selected-task event queries.
+  refreshConfirmedHarnessStatus(state);
   // The two task sources fail loudly: a failed read must never look like an
   // idle harness (showDataError keeps the last good model). Secondary sources
   // degrade quietly.
-  const [commands, queueTasks, bugReports, webStack, blobFlow, crewMembers, harnessStatus] = await Promise.all([
+  const [commands, queueTasks, bugReports, webStack, blobFlow, crewMembers, channelAccounts] = await Promise.all([
     loadLocalCommands(state.ctx),
     loadLocalQueueTasks(state.ctx),
     loadLocalBugReports(state.ctx).catch(() => []),
     loadLocalWebStackOverview(state.ctx).catch((error) => ({ ok: false, error: error.message || String(error) })),
     loadHarnessFlowSnapshot(state.ctx).catch(() => emptyHarnessFlow('harness_flow_unavailable')),
     loadLocalCrewMembers(state.ctx).catch(() => []),
-    loadLocalHarnessStatus(state.ctx).catch(() => null),
+    loadLocalChannelAccounts(state.ctx).catch(() => null),
   ]);
   if (state.disposed) return;
   state.crewMembers = crewMembers;
-  state.harnessStatus = harnessStatus;
+  state.channelAccounts = channelAccounts;
   armExpressionRefresh(state);
   state.webStack = {
     loading: false,
@@ -934,7 +936,7 @@ async function hydrateFromLocal(state) {
   // First pass with the server blob decides the selection; the second pass
   // swaps in the selected task's own event stream when the blob is not about it.
   state.flow = state.blobFlow;
-  state.model = buildHarnessModel(state.bundle, state.flow, state.lang);
+  state.model = buildHarnessModel(state.bundle, state.flow, state.lang, state.channelAccounts);
   state.dataLoaded = true;
   state.dataError = '';
   state.focusTask = state.focusTaskConsumed ? null : readFocusTask();
@@ -968,7 +970,7 @@ function changeConcernsSelectedTask(state, change) {
 }
 
 function wireLocalRealtime(state) {
-  const collectionsToWatch = ['business_commands', 'ctox_runtime_settings', 'ctox_queue_tasks', 'ctox_bug_reports', 'ctox_crew_members', 'ctox_harness_status', 'ctox_runs', 'ctox_harness_events'];
+  const collectionsToWatch = ['business_commands', 'communication_accounts', 'ctox_runtime_settings', 'ctox_queue_tasks', 'ctox_bug_reports', 'ctox_crew_members', 'ctox_harness_status', 'ctox_runs', 'ctox_harness_events'];
   const selectedTaskOnly = new Set(['ctox_runs', 'ctox_harness_events']);
   let renderTimer = null;
   const scheduleRender = () => {
@@ -992,8 +994,9 @@ function wireLocalRealtime(state) {
       if (!collection?.$?.subscribe) return null;
       return collection.$.subscribe((change) => {
         if (selectedTaskOnly.has(collectionName) && !changeConcernsSelectedTask(state, change)) return;
+        if (collectionName === "ctox_harness_status") refreshConfirmedHarnessStatus(state, true);
         scheduleRender();
-      }) || null;
+      }, {emitPendingChanges: collectionName === "ctox_harness_status"}) || null;
     })
     .filter(Boolean);
   state.realtimeCollectionCount = subscriptions.length;
@@ -1109,6 +1112,8 @@ function render(state) {
   // flow canvas / drawer as before.
   renderTaskList(state);
   if (mainIsBusy(state)) {
+    // Confirmed control status must remain live even while the menu/editor is in use.
+    syncHarnessControlStatus(state);
     state.mainRenderPending = true;
   } else {
     state.mainRenderPending = false;
@@ -1150,12 +1155,13 @@ function deriveHarnessHealth(state) {
   const oldestWaitingAgeMs = waitingTasks.length && Number.isFinite(oldestWaitingAt)
     ? Math.max(0, now - oldestWaitingAt)
     : 0;
-  const stalled = waitingTasks.length > 0
+  const paused = state?.harnessStatus?.paused === true;
+  const stalled = !paused && waitingTasks.length > 0
     && activeTasks.length === 0
     && (flowProjectionMissing || oldestWaitingAgeMs >= HARNESS_STALL_GRACE_MS);
   const waitingWithoutLease = waitingTasks.length > 0 && activeTasks.length === 0;
-  const severity = stalled ? 'critical' : (waitingWithoutLease ? 'warning' : 'ok');
-  const reason = stalled
+  const severity = paused ? 'ok' : stalled ? 'critical' : (waitingWithoutLease ? 'warning' : 'ok');
+  const reason = paused ? 'paused' : stalled
     ? (flowProjectionMissing ? 'flow_projection_missing' : 'queue_stalled')
     : (waitingWithoutLease ? 'queue_waiting' : 'healthy');
   const focusTask = waitingTasks[0] || null;
@@ -1241,6 +1247,7 @@ function syncHarnessHealthUiState(state) {
 
 function harnessHealthTitle(state, health) {
   const t = labels[state.lang];
+  if (health?.reason === 'paused') return state.lang === 'de' ? 'Die Crew ist pausiert' : 'The crew is paused';
   if (health?.severity === 'critical') return t.harnessCriticalTitle;
   if (health?.severity === 'warning') return t.harnessWarningTitle;
   return t.harnessHealthy;
@@ -1248,6 +1255,7 @@ function harnessHealthTitle(state, health) {
 
 function harnessHealthMessage(state, health) {
   const t = labels[state.lang];
+  if (health?.reason === 'paused') return state.lang === 'de' ? 'Aufgaben starten, sobald du die Crew fortsetzt.' : 'Tasks start when you resume the crew';
   const values = {
     count: String(health?.waitingCount || 0),
     age: formatRelativeAge(health?.oldestWaitingAgeMs || 0, state.lang),
@@ -1338,6 +1346,39 @@ function buildTaskColumn(state, options = {}) {
   left.removeAttribute('data-pg-wired');
   left.__ctoxPaneGrammar = null;
   wireTaskColumn(state);
+  wireCompactMenus(left);
+}
+
+function wireCompactMenus(container, onClose = null) {
+  for (const details of container.querySelectorAll('.ctox-more-actions')) {
+    const summary = details.querySelector('summary');
+    const panel = details.querySelector('.ctox-more-actions-body');
+    panel.setAttribute('popover', 'auto');
+    summary.setAttribute('aria-expanded', 'false');
+    summary.addEventListener('click', (event) => {
+      event.preventDefault();
+      if (panel.matches(':popover-open')) { panel.hidePopover(); return; }
+      details.open = true;
+      const rect = summary.getBoundingClientRect();
+      panel.style.left = Math.max(8, Math.min(rect.right - 240, window.innerWidth - 248)) + 'px';
+      panel.style.top = Math.min(rect.bottom + 4, window.innerHeight - 120) + 'px';
+      panel.showPopover();
+      summary.setAttribute('aria-expanded', 'true');
+    });
+    panel.addEventListener('toggle', (event) => {
+      if (event.newState === 'closed') {
+        details.open = false;
+        summary.setAttribute('aria-expanded', 'false');
+        onClose?.();
+      }
+    });
+    panel.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') summary.focus();
+    });
+    panel.addEventListener('click', (event) => {
+      if (event.target.closest('button')) panel.hidePopover();
+    });
+  }
 }
 
 // Persistent, delegated wiring on the pane element (survives list rebuilds).
@@ -1388,7 +1429,7 @@ function wireTaskColumn(state) {
       return;
     }
     const select = target.closest('[data-select-task-id]');
-    if (select) selectTask(state, select.dataset.selectTaskId, { drawer: true, center: true });
+    if (select) selectTask(state, select.dataset.selectTaskId, { drawer: false, center: true });
   });
 }
 
@@ -1676,12 +1717,16 @@ function taskColumnMarkup(tasks, state, options = {}) {
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">${escapeHtml(t.harnessKicker)}</span>
           <h2 class="ctox-pane-title">${escapeHtml(t.tasks)}</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" data-task-import aria-label="${escapeAttr(t.importTasks)}" title="${escapeAttr(t.importTasks)}">${actionIcon(state, 'download')}</button>
-          <button type="button" class="ctox-pane-icon" data-task-export aria-label="${escapeAttr(t.exportTasks)}" title="${escapeAttr(t.exportTasks)}">${actionIcon(state, 'export')}</button>
+          <details class="ctox-more-actions">
+            <summary aria-label="${escapeAttr(state.lang === 'de' ? 'Weitere Aktionen' : 'More actions')}">···</summary>
+            <div class="ctox-more-actions-body">
+              <button type="button" class="ctox-button" data-task-import>${escapeHtml(t.importTasks)}</button>
+              <button type="button" class="ctox-button" data-task-export>${escapeHtml(t.exportTasks)}</button>
+            </div>
+          </details>
         </div>
       </div>
     </header>
@@ -1739,10 +1784,15 @@ function taskCardMarkup(task, state) {
   const pinned = state.pinnedTaskIds.has(task.id);
   const title = taskDisplayTitle(task, state);
   const source = task.channelLabel || displayWorkSource(task.channel || task.source || task.moduleId || 'ctox');
-  const status = displayStatus(task.routeStatus || task.status, state.lang);
+  // The queue's `handled` is a routing fact, not an outcome: a task that ran,
+  // passed review and committed its command reads as "Ohne Review-Beleg" when
+  // the card prefers it. The authoritative status is what the filter buckets
+  // already count, so card and bucket must not disagree (measured 09.09.2026:
+  // two reviewed tasks sat in "Erledigt" while their cards said the opposite).
+  const status = displayStatus(authoritativeTaskStatus(task) || task.routeStatus || task.status, state.lang);
   const changed = formatShortTimestamp(task.updatedAt || task.createdAt || task.timestamp);
   const problem = ['blocked', 'failed', 'cancelled'].includes(normalizeCommandStatus(task.routeStatus || task.status));
-  const reason = taskReasonText(task, state);
+  const reason = taskSummaryReason(task, state);
   // The card says who and how, not why: the member's creature carries the
   // state, the reason lives in the tooltip and the drawer (Owner 08.09.).
   // The one exception is a task that stopped — blocked, failed, cancelled —
@@ -1756,7 +1806,7 @@ function taskCardMarkup(task, state) {
   return `
     <article class="ctox-list-item ctox-task-card ${selected ? 'is-selected' : ''} ${pinned ? 'is-pinned' : ''} ${member ? 'has-member' : ''}"
       data-task-id="${escapeAttr(task.id)}" data-context-record-id="${escapeAttr(task.id)}" data-context-record-type="ctox_task" data-context-label="${escapeAttr(title)}">
-      <button type="button" class="ctox-task-selector" data-select-task-id="${escapeAttr(task.id)}" aria-label="${escapeAttr(`${t.openTaskDetail}: ${title}`)}" title="${escapeAttr(tooltip)}">
+      <button type="button" class="ctox-task-selector" data-select-task-id="${escapeAttr(task.id)}" aria-label="${escapeAttr(`${state.lang === 'de' ? 'Aufgabe auswählen' : 'Select task'}: ${title}`)}" title="${escapeAttr(tooltip)}">
         ${portrait}
         <strong>${escapeHtml(title)}</strong>
         <small class="ctox-task-meta">${status ? `<span class="ctox-task-meta-status ${problem ? 'is-problem' : ''}">${escapeHtml(status)}</span>` : ''}${changed ? `<span>${escapeHtml(changed)}</span>` : ''}</small>
@@ -2287,6 +2337,9 @@ function taskStatusSteps(task, state) {
 function renderMain(state) {
   const t = labels[state.lang];
   const model = state.model;
+  // Locale readiness can arrive before the first data hydration. Keep the
+  // existing loading surface until the model is available.
+  if (!model) return;
   const timelineIndex = clampIndex(state.selectedStepIndex, model.timeline.length);
   const selectedTask = getSelectedTask(state);
   const taskStepView = selectedTask ? selectedTaskStepView(selectedTask, state) : null;
@@ -2311,31 +2364,44 @@ function renderMain(state) {
   // real start timestamp shows a clock anchored to that timestamp. No anchor
   // means no number — never a free-running animation.
   const elapsedSeconds = live ? liveElapsedSeconds(state) : metrics.seconds;
-  const flowSource = flowSourceView(state);
   const main = state.ctx.host.querySelector('[data-ctox-main]');
+  const panelTaskId = selectedTask?.id || '';
+  if (state.compactPanelTaskId !== panelTaskId) {
+    state.compactPanelTaskId = panelTaskId;
+    state.jobEditorOpen = false;
+    state.historyOpen = false;
+  }
+  const history = timelinePanel(state, selectedTask, selectedNode, metrics);
+  const hasHistory = selectedTask ? taskSteps(selectedTask, state).length > 1 : state.model.timeline.length > 1;
   const previousViewport = readFlowViewport(state);
   const viewBox = flowViewBox(selectedTask, state);
   // Without a selected task and without current data the workspace itself
   // carries the state line; the footer must not repeat it.
   const stateInWorkspace = !selectedTask && Boolean(state.ctx) && dataState(state).kind !== 'ready';
+  const dataNotice = stateInWorkspace ? '' : (dataStatusMarkup(state) || (!syncIsConnected(state) ? escapeHtml(t.syncDisconnected) : ''));
   main.innerHTML = `
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">${escapeHtml(t.liveFlow)}</span>
-          <h2 class="ctox-pane-title">${escapeHtml(t.doingNow)}</h2>
-          ${harnessStatusText(state) ? `<small class="ctox-harness-status-line" data-harness-status>${escapeHtml(harnessStatusText(state))}</small>` : ''}
+          <h2 class="ctox-pane-title">${escapeHtml(selectedTask ? taskDisplayTitle(selectedTask, state) : t.doingNow)}</h2>
+          <small class="ctox-paused-note" ${state.harnessStatus?.paused ? '' : 'hidden'}>${escapeHtml(t.harnessPaused)}</small>
         </div>
         <div class="ctox-pane-actions">
-          ${harnessControlsMarkup(state)}
-          <button type="button" class="ctox-pane-icon ${state.detailDrawer?.type === 'webstack' ? 'is-active' : ''}" data-webstack-toggle aria-pressed="${state.detailDrawer?.type === 'webstack'}" aria-label="${escapeAttr(t.webStack)}" title="${escapeAttr(t.webStack)}">${webStackIcon()}</button>
-          ${selectedTask ? `<button type="button" class="ctox-pane-icon" data-open-selected-task aria-label="${escapeAttr(t.openTaskDetail)}" title="${escapeAttr(t.openTaskDetail)}">${actionIcon(state, 'open')}</button>` : ''}
+          ${selectedTask ? `<button type="button" class="ctox-button ctox-job-toggle" data-job-toggle aria-expanded="${Boolean(state.jobEditorOpen)}">${escapeHtml(t.editTask)}</button>` : ''}
+          <details class="ctox-more-actions">
+            <summary aria-label="${escapeAttr(state.lang === 'de' ? 'Crew verwalten' : 'Manage crew')}">···</summary>
+            <div class="ctox-more-actions-body">
+              ${harnessControlsMarkup(state)}
+              <button type="button" class="ctox-button" data-manage-channels>${escapeHtml(state.lang === 'de' ? 'Kanäle verwalten' : 'Manage channels')}</button>
+              <button type="button" class="ctox-button" data-webstack-toggle>${escapeHtml(t.webStack)}</button>
+              ${selectedTask ? `<button type="button" class="ctox-button" data-open-selected-task>${escapeHtml(t.openTaskDetail)}</button>` : ''}
+              ${crewStripMarkup(state)}
+            </div>
+          </details>
         </div>
       </div>
     </header>
-    ${metricsStripMarkup(metrics, elapsedSeconds, live, state)}
-    ${executionProgressBar(metrics, state)}
-    ${shouldShowCrewHome(state) ? '' : crewStripMarkup(state)}
+    <section class="ctox-job-panel" data-job-panel ${state.jobEditorOpen ? '' : 'hidden'} aria-label="${escapeAttr(t.editTask)}"></section>
     ${shouldShowCrewHome(state) ? crewHomeMarkup(state) : stateInWorkspace ? emptyWorkspaceMarkup(state) : `<div class="ctox-canvas-container ctox-flow-well">
       <div class="ctox-flow-toolbar" aria-label="${escapeAttr(t.flowControls)}" data-flow-control>
         <button type="button" class="ctox-pane-icon" data-zoom="-" aria-label="${escapeAttr(t.zoomOut)}" title="${escapeAttr(t.zoomOut)}" ${state.zoom <= MIN_ZOOM ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
@@ -2348,16 +2414,32 @@ function renderMain(state) {
         </div>
       </div>
     </div>`}
-    ${timelinePanel(state, selectedTask, selectedNode, metrics)}
-    <footer class="ctox-harness-footer ${syncIsConnected(state) ? '' : 'is-disconnected'}" data-harness-health-tooltip>${(stateInWorkspace ? '' : dataStatusMarkup(state)) || `${syncIsConnected(state) ? '' : `<span class="ctox-footer-hint">${escapeHtml(t.syncDisconnected)}</span> · `}${escapeHtml(selectedTask ? taskDisplayTitle(selectedTask, state) : t.flowFooterEmpty)} · ${escapeHtml(flowSource.mode)} · ${escapeHtml(flowSource.status)}${live ? ` · ${escapeHtml(t.live)}` : ''}`}</footer>
+    <details class="ctox-history-fold" ${state.historyOpen && hasHistory ? 'open' : ''} ${hasHistory ? '' : 'hidden'}>
+      <summary>${escapeHtml(t.timeline)}${dataNotice ? `<span class="ctox-history-connection">${dataNotice}</span>` : ''}</summary>
+      <div class="ctox-history-content">${history}${executionProgressBar(metrics, state)}${metricsStripMarkup(metrics, elapsedSeconds, live, state)}</div>
+    </details>
+    ${!hasHistory && dataNotice ? `<footer class="ctox-harness-footer" data-harness-health-tooltip>${dataNotice}</footer>` : ''}
   `;
   restoreFlowViewport(state, previousViewport);
-  main.querySelector('[data-harness-pause]')?.addEventListener('click', () => {
-    runHarnessControl(state, 'pause', !state.harnessStatus?.paused);
+  const editor = main.querySelector('[data-job-panel]');
+  wireCompactMenus(main, () => flushPendingMainRender(state));
+  main.querySelector('[data-manage-channels]')?.addEventListener('click', () => {
+    window.CTOX_BUSINESS_OS_APP?.openSettingsDrawer?.({ initialTab: 'channels' });
   });
-  main.querySelector('[data-harness-capacity]')?.addEventListener('change', (event) => {
-    runHarnessControl(state, 'capacity', event.currentTarget.value);
+  const mountEditor = () => {
+    if (selectedTask && !editor.firstElementChild) editor.append(taskDrawer(selectedTask, state, { editorOnly: true }));
+  };
+  if (state.jobEditorOpen) mountEditor();
+  main.querySelector('[data-job-toggle]')?.addEventListener('click', (event) => {
+    state.jobEditorOpen = !state.jobEditorOpen;
+    editor.hidden = !state.jobEditorOpen;
+    event.currentTarget.setAttribute('aria-expanded', String(state.jobEditorOpen));
+    if (state.jobEditorOpen) mountEditor();
   });
+  main.querySelector('.ctox-history-fold')?.addEventListener('toggle', (event) => {
+    state.historyOpen = event.currentTarget.open;
+  });
+  wireHarnessControls(state, main);
   main.querySelector('[data-webstack-toggle]')?.addEventListener('click', () => {
     if (state.detailDrawer?.type === 'webstack') {
       closeDetailDrawer(state);
@@ -2711,8 +2793,9 @@ function normalizeCoreStateKey(value) {
 function inboundEndpointFlowSvg(model, selectedTask, state) {
   const channels = model.inboundChannels || [];
   const t = labels[state.lang];
-  const endpoint = inboundEndpointForTask(selectedTask, state);
-  const selectedChannel = normalizeInboundChannel(endpoint.id);
+  const selectedChannel = selectedTask ? inferInboundChannel(selectedTask) : '';
+  const selected = channels.find((channel) => channel.id === selectedChannel);
+  const endpoint = selected || channels[0] || null;
   const queued = model.nodeMap.get('queued') || { x: 330, y: 520 };
   const nodeX = 44;
   const nodeWidth = 144;
@@ -2720,17 +2803,18 @@ function inboundEndpointFlowSvg(model, selectedTask, state) {
   const selectedEdgeY = nodeY + 26;
   const queueLeft = queued.x - NODE_WIDTH / 2;
   const queueApproachX = Math.max(nodeX + nodeWidth + 22, queueLeft - 26);
-  const detail = endpoint.detail || (channels.length ? `${channels.reduce((sum, channel) => sum + channel.count, 0)} ${t.inboundItems}` : '');
+  if (!endpoint) return `<g class="ctox-flow-inbound"><text class="ctox-flow-inbound-label" x="${nodeX}" y="${nodeY - 14}">${escapeHtml(t.inboundChannels)}</text><text class="ctox-flow-channel-count" x="${nodeX}" y="${nodeY + 16}">${escapeHtml(model.inboundChannelsAvailable === false ? (state.lang === 'de' ? 'Kanäle nicht verfügbar' : 'Channels unavailable') : (state.lang === 'de' ? 'Keine Kanäle eingerichtet' : 'No channels configured'))}</text></g>`;
+  const detail = state.lang === 'de' ? `${endpoint.count} ${endpoint.count === 1 ? 'Aufgabe' : 'Aufgaben'}` : `${endpoint.count} ${endpoint.count === 1 ? 'task' : 'tasks'}`;
   return `
     <g class="ctox-flow-inbound" aria-label="Eingänge für die Crew">
-      <text class="ctox-flow-inbound-label" x="${nodeX}" y="${nodeY - 14}">${escapeHtml(t.inboundEndpoint)}</text>
-      <path class="ctox-flow-channel-edge is-selected" d="M ${nodeX + nodeWidth} ${selectedEdgeY} L ${queueApproachX} ${selectedEdgeY} L ${queueApproachX} ${queued.y} L ${queueLeft} ${queued.y}"></path>
-      <g class="ctox-flow-channel-node is-selected" transform="translate(${nodeX} ${nodeY})">
+      <text class="ctox-flow-inbound-label" x="${nodeX}" y="${nodeY - 14}">${escapeHtml(t.inboundChannels)}</text>
+      <path class="ctox-flow-channel-edge ${selected ? 'is-selected' : ''}" d="M ${nodeX + nodeWidth} ${selectedEdgeY} L ${queueApproachX} ${selectedEdgeY} L ${queueApproachX} ${queued.y} L ${queueLeft} ${queued.y}"></path>
+      <g class="ctox-flow-channel-node ${selected ? 'is-selected' : ''}" transform="translate(${nodeX} ${nodeY})">
         <rect width="${nodeWidth}" height="52" rx="12"></rect>
         <text class="ctox-flow-channel-name" x="12" y="19">${escapeHtml(clip(endpoint.label, 18))}</text>
         <text class="ctox-flow-channel-count" x="12" y="36">${escapeHtml(clip(detail || endpoint.kind, 20))}</text>
       </g>
-      ${channels.filter((channel) => channel.id !== selectedChannel).slice(0, 4).map((channel, index) => {
+      ${channels.filter((channel) => channel.id !== endpoint.id).slice(0, 4).map((channel, index) => {
         const x = nodeX;
         const y = nodeY + 66 + index * 56;
         const edgeY = y + 22;
@@ -2791,7 +2875,7 @@ function inboundEndpointForTask(task, state) {
 
 function outboundEndpointForTask(task, selectedNode, state) {
   const t = labels[state.lang];
-  const status = normalizeCommandStatus(task?.status || '');
+  const status = authoritativeTaskStatus(task) || normalizeCommandStatus(task?.status || '');
   const terminalNode = terminalNodeForTask(task, selectedNode, state);
   const terminalLabels = {
     passed: state.lang === 'en' ? 'Delivered / closed' : 'Ausgeliefert / geschlossen',
@@ -2817,6 +2901,13 @@ function outboundEndpointForTask(task, selectedNode, state) {
 }
 
 function terminalNodeForTask(task, selectedNode, state) {
+  // Retained flow events may be absent or describe a previous attempt. Use
+  // the same durable execution state as the task card before that history.
+  const authoritative = authoritativeTaskStatus(task);
+  if (authoritative === 'completed') return 'passed';
+  if (['failed', 'cancelled'].includes(authoritative)) return 'model-failed';
+  if (authoritative) return null;
+
   const status = normalizeCommandStatus(task?.status || '');
   if (selectedNode && ['passed', 'model-failed', 'infra-failed'].includes(selectedNode.id) && selectedNode.status === 'done') return selectedNode.id;
   if (taskMatchesHarnessFlow(task, state)) {
@@ -2867,14 +2958,14 @@ function flowNodeSvg(node, selectedNode, traceStrength, lang = 'de', standortNod
   return `
     <g class="ctox-flow-node-g is-${escapeAttr(node.status)} ${isVisibleTrace ? 'is-observed is-trace' : 'is-possible'} ${isSelected ? 'is-current is-selected' : ''} ${standortNodeId && node.id === standortNodeId ? 'is-crew-hier' : ''}"
        data-node-id="${escapeAttr(node.id)}" data-context-record-id="${escapeAttr(node.id)}" data-context-record-type="ctox_flow_node" data-context-label="${escapeAttr(node.label)}" role="button" style="--trace-strength:${traceStrength}" tabindex="0" transform="translate(${node.x} ${node.y})">
-      <title>${escapeHtml(`${node.label} (${node.machinePhase || node.phase})\n${metricsLabel(node, lang)}\n${node.lines.join('\n')}`)}</title>
+      <title>${escapeHtml(node.label)}</title>
       ${ring}
       ${shape}
       <text class="ctox-flow-node-phase" x="${-NODE_WIDTH / 2 + 10}" y="${-NODE_HEIGHT / 2 + 16}">${escapeHtml(node.phase)}</text>
       <text class="ctox-flow-node-title" x="${-NODE_WIDTH / 2 + 10}" y="${-NODE_HEIGHT / 2 + 34}">
         ${wrapSvgText(node.label).map((line, index) => `<tspan x="${-NODE_WIDTH / 2 + 10}" dy="${index === 0 ? 0 : 15}">${escapeHtml(line)}</tspan>`).join('')}
       </text>
-      <text class="ctox-flow-node-metrics" x="${-NODE_WIDTH / 2 + 10}" y="${NODE_HEIGHT / 2 - 8}">${escapeHtml(metricsLabel(node, lang))}</text>
+      ${Number.isFinite(node.inputTokens) && Number.isFinite(node.outputTokens) ? `<text class="ctox-flow-node-metrics" x="${-NODE_WIDTH / 2 + 10}" y="${NODE_HEIGHT / 2 - 8}">${escapeHtml(metricsLabel(node, lang))}</text>` : ''}
     </g>
   `;
 }
@@ -2976,7 +3067,7 @@ function taskCrewStatus(task) {
   return 'queued';
 }
 
-function buildHarnessModel(data, flow, lang = 'de') {
+function buildHarnessModel(data, flow, lang = 'de', channelAccounts = []) {
   const tasks = applyHarnessFlowStatus(buildTaskList(data), flow)
     .filter(isTaskOverviewItemVisible);
   const activeTask = tasks.find(taskIsHarnessActive) || null;
@@ -3026,7 +3117,8 @@ function buildHarnessModel(data, flow, lang = 'de') {
     activeNodeId,
     completedRuns: data.runs.filter((run) => run.status === 'completed'),
     tasks,
-    inboundChannels: buildInboundChannels(tasks),
+    inboundChannels: buildInboundChannels(tasks, channelAccounts),
+    inboundChannelsAvailable: channelAccounts !== null,
     recentTasks: buildRecentTasks(data),
     queueNow: data.queue.filter((item) => ['queued', 'running', 'leased', 'pending'].includes(item.status) || item.priority === 'urgent'),
     reviewItems: data.communications.filter((item) => item.status === 'review' || item.status === 'drafting'),
@@ -3130,9 +3222,20 @@ function buildTaskList(data) {
     .sort((left, right) => Date.parse(right.timestamp || right.createdAt || 0) - Date.parse(left.timestamp || left.createdAt || 0));
 }
 
-function buildInboundChannels(tasks) {
+function buildInboundChannels(tasks, accounts = []) {
   const channels = new Map();
-  for (const item of tasks || []) addInboundChannel(channels, item);
+  for (const account of accounts || []) {
+    if (!account?.channel || account._deleted === true || account.is_deleted === true || account.enabled === false) continue;
+    const key = normalizeInboundChannel(account.channel);
+    // Native accounts also contain internal scheduling routes; those are not
+    // communication adapters, matching the native channel summary.
+    if (['queue', 'cron', 'plan'].includes(key)) continue;
+    // A task's module is provenance, not an installed communication adapter.
+    if (!channels.has(key)) channels.set(key, { id: key, label: inboundChannelLabel(key), count: 0, active: false });
+  }
+  for (const item of tasks || []) {
+    if (channels.has(inferInboundChannel(item))) addInboundChannel(channels, item);
+  }
   return Array.from(channels.values())
     .sort((left, right) => right.active - left.active || right.count - left.count || left.label.localeCompare(right.label));
 }
@@ -3236,7 +3339,10 @@ function openFocusedTaskDrawer(state) {
   const nextIndex = timelineIndexForSelectedTask(state);
   if (nextIndex !== null) state.selectedStepIndex = nextIndex;
   state.selectedTaskStepIndex = activeTaskStepIndex(task, state);
-  state.detailDrawer = { type: 'task', taskId: task.id };
+  state.detailDrawer = state.focusTaskOpenDrawer ? { type: 'task', taskId: task.id } : null;
+  if (!state.focusTaskOpenDrawer) state.ctx.closeDrawers();
+  state.jobEditorOpen = false;
+  state.historyOpen = false;
   state.focusTaskOpenDrawer = false;
   return true;
 }
@@ -3328,7 +3434,29 @@ function syncDetailDrawer(state) {
   if (!state.detailDrawer) return;
   if (state.detailDrawer.type === 'task') {
     const task = state.model?.tasks?.find((item) => item.id === state.detailDrawer.taskId) || getSelectedTask(state);
-    if (task) state.ctx.openLeftDrawer(taskDrawer(task, state));
+    if (task) {
+      const previous = state.taskDrawerNode;
+      const sameTask = previous?.isConnected && previous.dataset.contextRecordId === task.id;
+      const active = document.activeElement;
+      // A live refresh must never replace a control while the owner edits it.
+      if (sameTask && previous.contains(active) && active.matches('input, textarea, select')) return;
+      const body = taskDrawer(task, state, { remember: false });
+      const markup = body.innerHTML;
+      if (sameTask && state.taskDrawerMarkup === markup) return;
+      const scroller = sameTask ? scrollParentOf(previous) : null;
+      const scrollTop = scroller?.scrollTop || 0;
+      const folds = sameTask ? new Map([...previous.querySelectorAll('details')].map(node => [node.className, node.open])) : new Map();
+      const focusedFold = sameTask && active?.matches('summary') && previous.contains(active) ? active.parentElement.className : null;
+      for (const node of body.querySelectorAll('details')) {
+        if (folds.has(node.className)) node.open = folds.get(node.className);
+      }
+      state.taskDrawerMarkup = markup;
+      state.taskDrawerNode = body;
+      state.ctx.openLeftDrawer(body);
+      const nextScroller = scrollParentOf(body);
+      if (nextScroller) nextScroller.scrollTop = scrollTop;
+      if (focusedFold) [...body.querySelectorAll('details')].find(node => node.className === focusedFold)?.querySelector('summary')?.focus({ preventScroll: true });
+    }
     return;
   }
   if (state.detailDrawer.type === 'webstack') {
@@ -3382,7 +3510,7 @@ function closeDetailDrawer(state) {
   if (wasWebStack && state.model) renderMain(state);
 }
 
-function taskDrawer(task, state) {
+function taskDrawer(task, state, { editorOnly = false, remember = true } = {}) {
   const t = labels[state.lang];
   const steps = taskSteps(task, state);
   const selectedTaskStepIndex = clampMetric(state.selectedTaskStepIndex || 0, 0, Math.max(steps.length - 1, 0));
@@ -3390,13 +3518,15 @@ function taskDrawer(task, state) {
   const titleField = taskFieldDisplay(task.title || '', state);
   const promptField = taskPromptDisplay(task, state);
   const summary = taskDetailText(itemSummary(task) || '', state);
-  const resultSummaryText = taskDetailText(task.resultSummary || '', state);
-  const target = displayPathLike(task.target || task.commandId || task.taskId || '');
+  const resultSummaryText = String(task.resultSummary || '').trim() === promptField.text
+    ? '' : taskDetailText(task.resultSummary || '', state);
+
   const sourceLine = [
     displayWorkSource(task.source || task.moduleId || 'ctox'),
     formatShortTimestamp(task.createdAt || task.startedAt || task.timestamp),
   ].filter(Boolean).join(' · ');
-  const showSummary = summary && summary !== task.target && summary !== task.commandId && summary !== task.taskId;
+  const showSummary = summary && summary !== task.target && summary !== task.commandId && summary !== task.taskId
+    && summary !== taskDetailText(promptField.text, state);
   const body = document.createElement('div');
   body.className = 'drawer-body ctox-task-drawer';
   body.setAttribute('data-context-record-id', task.id);
@@ -3413,14 +3543,17 @@ function taskDrawer(task, state) {
     </header>
     <section class="ctox-callout ${['blocked', 'failed'].includes(normalizeCommandStatus(task.routeStatus || task.status)) ? 'is-danger' : 'is-info'} ctox-task-status-strip">
       <div>
-        <strong class="ctox-badge ${statusBadgeVariant(statusClass(task.routeStatus || task.status))}">${escapeHtml(displayStatus(task.routeStatus || task.status, state.lang))}</strong>
-        ${target ? `<small>${escapeHtml(target)}</small>` : ''}
+        <strong class="ctox-badge ${statusBadgeVariant(statusClass(authoritativeTaskStatus(task) || task.routeStatus || task.status))}">${escapeHtml(displayStatus(authoritativeTaskStatus(task) || task.routeStatus || task.status, state.lang))}</strong>
+
       </div>
-      ${taskReasonText(task, state) ? `<p class="ctox-task-reason-line">${escapeHtml(taskReasonText(task, state))}</p>` : ''}
+      ${taskSummaryReason(task, state) ? `<p class="ctox-task-reason-line">${escapeHtml(taskSummaryReason(task, state))}</p>` : ''}
       ${taskLeaseLineMarkup(task, state)}
       ${taskLiveStatusMarkup(task, state)}
-      ${taskControlsMarkup(task, state)}
     </section>
+    ${taskControlsMarkup(task, state)}
+    ${!editorOnly && promptField.text ? `<section class="ctox-task-description"><h3>${escapeHtml(t.taskPrompt)}</h3><p>${escapeHtml(promptField.text)}</p></section>` : ''}
+    <details class="ctox-drawer-edit-fold" ${editorOnly ? 'open' : ''}>
+    <summary>${escapeHtml(t.editTask)}</summary>
     <form class="ctox-card ctox-task-edit" data-ctox-task-edit>
       <header>
         <div class="ctox-task-edit-heading">
@@ -3445,7 +3578,7 @@ function taskDrawer(task, state) {
         <label class="ctox-task-edit-field">
           <span class="ctox-field-label">${escapeHtml(t.priority)}</span>
           <select class="ctox-select" name="priority" ${canModifyCtoxApp(state) ? '' : 'disabled'}>
-            ${['urgent', 'high', 'normal', 'low'].map((priority) => `<option value="${priority}" ${String(task.priority || 'normal') === priority ? 'selected' : ''}>${escapeHtml(displayPriority(priority))}</option>`).join('')}
+            ${['urgent', 'high', 'normal', 'low'].map((priority) => `<option value="${priority}" ${String(task.priority || 'normal') === priority ? 'selected' : ''}>${escapeHtml(displayPriority(priority, state.lang))}</option>`).join('')}
           </select>
         </label>
       </div>
@@ -3454,6 +3587,8 @@ function taskDrawer(task, state) {
         <small data-ctox-task-action-status></small>
       </footer>
     </form>
+    </details>
+    ${taskDiagnosticMarkup(task, state)}
     ${showSummary ? `
       <section class="ctox-card">
         <header>${escapeHtml(t.summary)}</header>
@@ -3470,11 +3605,11 @@ function taskDrawer(task, state) {
         </div>
       </section>
     ` : ''}
-    <section class="ctox-drawer-timeline">
-      <header>
+    <details class="ctox-drawer-timeline">
+      <summary>
         <h3>${escapeHtml(t.timeline)}</h3>
         <small>${escapeHtml(`${steps.length} ${t.taskSteps}`)}</small>
-      </header>
+      </summary>
       <div class="ctox-drawer-steps">
         ${steps.map((step, index) => `
           <button type="button" class="${index === selectedTaskStepIndex ? 'is-current' : ''}" data-drawer-task-step="${index}" data-context-record-id="${escapeAttr(`${task.id}:${step.id || index}`)}" data-context-record-type="ctox_task_step" data-context-label="${escapeAttr(step.label)}">
@@ -3485,12 +3620,28 @@ function taskDrawer(task, state) {
           </button>
         `).join('')}
       </div>
-    </section>
+    </details>
   `;
   body.querySelector('[data-close-ctox-drawer]')?.addEventListener('click', () => closeDetailDrawer(state));
   body.querySelector('[data-ctox-task-edit]')?.addEventListener('submit', async (event) => {
     event.preventDefault();
     await saveCtoxTaskFromDrawer(state, task, event.currentTarget);
+  });
+  if (editorOnly) {
+    for (const child of [...body.children]) {
+      if (!child.matches('.ctox-drawer-edit-fold, .ctox-task-status-strip, .ctox-task-controls')) child.remove();
+    }
+  }
+  const editForm = body.querySelector('[data-ctox-task-edit]');
+  const draft = state.taskEditDrafts?.get(task.id);
+  for (const name of ['title', 'prompt', 'priority']) {
+    if (draft && editForm?.elements.namedItem(name)) editForm.elements.namedItem(name).value = draft[name];
+  }
+  editForm?.addEventListener('input', (event) => {
+    state.taskEditDrafts ||= new Map();
+    state.taskEditDrafts.set(task.id, Object.fromEntries(
+      ['title', 'prompt', 'priority'].map((name) => [name, event.currentTarget.elements.namedItem(name).value]),
+    ));
   });
   body.querySelector('[data-ctox-task-delete]')?.addEventListener('click', async () => {
     await deleteCtoxTaskFromDrawer(state, task, body);
@@ -3518,6 +3669,10 @@ function taskDrawer(task, state) {
       setTaskTimelineStep(state, Number(button.dataset.drawerTaskStep), { center: true });
     });
   });
+  if (!editorOnly && remember) {
+    state.taskDrawerNode = body;
+    state.taskDrawerMarkup = body.innerHTML;
+  }
   return body;
 }
 
@@ -3528,11 +3683,10 @@ function taskLeaseLineMarkup(task, state) {
   const memberBit = member
     ? `<button type="button" class="ctox-task-member" data-open-crew-member="${escapeAttr(member.id)}"><span class="ctox-flow-creature-shell ctox-task-member-portrait">${memberCreatureHtml(member, state)}</span>${escapeHtml(task.crewMemberId === member.id ? member.name : `${t.assignedTo} ${member.name}`)}</button>`
     : '';
-  if (task.leaseOwner) bits.push(`${t.leaseOwner}: ${task.leaseOwner}${task.leaseExpiresAt ? ` (${t.until} ${formatClockTime(task.leaseExpiresAt)})` : ''}`);
+
   if (Number.isFinite(task.attempt) && task.attempt > 0) bits.push(`${t.attemptLabel} ${task.attempt}`);
   if (!bits.length && !memberBit) return '';
-  const selection = taskSelectionSentence(task, state);
-  return `<small class="ctox-task-lease-line">${memberBit}${bits.map((bit) => `<span>${escapeHtml(bit)}</span>`).join('')}</small>${selection ? `<small class="ctox-task-selection-line">${escapeHtml(selection)}</small>` : ''}`;
+  return `<small class="ctox-task-lease-line">${memberBit}${bits.map((bit) => `<span>${escapeHtml(bit)}</span>`).join('')}</small>`;
 }
 
 function canResumeCtoxTask(task) {
@@ -3613,6 +3767,7 @@ async function saveCtoxTaskFromDrawer(state, task, form) {
       commandPath: 'ctox_task_update',
     });
     applyTaskMutationToModel(state, task.id, payload);
+    state.taskEditDrafts?.delete(task.id);
     if (status) status.textContent = t.taskSaved;
     render(state);
     syncDetailDrawer(state);
@@ -4279,6 +4434,10 @@ function normalizeInboundChannel(value) {
 function inboundChannelLabel(channel) {
   const normalized = normalizeInboundChannel(channel);
   const labelsById = {
+    email: 'E-Mail',
+    whatsapp: 'WhatsApp',
+    teams: 'Microsoft Teams',
+    google_chat: 'Google Chat',
     'business_os.llm.chat': 'LLM Chat',
     'business-os': 'Business OS',
     ctox: 'Crew',
@@ -4576,6 +4735,17 @@ async function loadLocalCollection(ctx, collectionName) {
   return localDocs.map((doc) => doc.toJSON());
 }
 
+async function loadLocalChannelAccounts(ctx) {
+  const collection = ctoxCollection(ctx, 'communication_accounts');
+  if (!collection) return null;
+  const docs = await collection.find({ selector: {}, limit: 200 }).exec();
+  // No account addresses, credentials or adapter diagnostics enter this view.
+  return docs.map((doc) => {
+    const account = doc.toJSON();
+    return { channel: account.channel, enabled: account.enabled, _deleted: account._deleted, is_deleted: account.is_deleted };
+  });
+}
+
 async function loadLocalCrewMembers(ctx) {
   const collection = ctoxCollection(ctx, 'ctox_crew_members');
   if (!collection) return [];
@@ -4586,6 +4756,44 @@ async function loadLocalCrewMembers(ctx) {
 function crewMemberById(state, memberId) {
   if (!memberId) return null;
   return (state?.crewMembers || []).find((member) => member.id === memberId) || null;
+}
+
+// One independent, coalesced read lane. Events arriving during a read invalidate
+// its result and request one follow-up; task hydration never assigns status.
+function refreshConfirmedHarnessStatus(state, invalidate = false) {
+  if (state.disposed) return Promise.resolve();
+  if (state.harnessStatusRead) {
+    // General hydration joins the current read; only a newer status event
+    // invalidates it. Busy task updates must not starve confirmed status.
+    if (invalidate) state.harnessStatusRequest += 1;
+    return state.harnessStatusRead;
+  }
+  state.harnessStatusRequest = (state.harnessStatusRequest || 0) + 1;
+  let request;
+  state.harnessStatusRead = (async () => {
+    do {
+      request = state.harnessStatusRequest;
+      try {
+        const status = await loadLocalHarnessStatus(state.ctx);
+        if (state.disposed) return;
+        if (request !== state.harnessStatusRequest) continue;
+        if (status) {
+          state.harnessStatus = status;
+          state.harnessHealth = deriveHarnessHealth(state);
+          syncHarnessControlStatus(state);
+          syncHarnessHealthUiState(state);
+        }
+      } catch (error) {
+        if (!state.disposed) console.warn('[ctox] harness status read failed', error);
+      }
+    } while (!state.disposed && request !== state.harnessStatusRequest);
+  })().finally(() => {
+    state.harnessStatusRead = null;
+    // A subscriber may have queued work after the loop settled but before this
+    // finalizer. Serve that request too; no retry exists without a new request.
+    if (!state.disposed && request !== state.harnessStatusRequest) return refreshConfirmedHarnessStatus(state);
+  });
+  return state.harnessStatusRead;
 }
 
 async function loadLocalHarnessStatus(ctx) {
@@ -4783,7 +4991,7 @@ function applyLiveFlow(state) {
   const flow = flowForSelectedTask(state);
   if (flow === state.flow) return false;
   state.flow = flow;
-  state.model = buildHarnessModel(state.bundle, flow, state.lang);
+  state.model = buildHarnessModel(state.bundle, flow, state.lang, state.channelAccounts);
   reconcileSelection(state);
   return true;
 }
@@ -4828,6 +5036,7 @@ function syncIsConnected(state) {
 function mainIsBusy(state) {
   if (state.mainInteracting) return true;
   const main = state.ctx?.host?.querySelector?.('[data-ctox-main]');
+  if (main?.querySelector('.ctox-more-actions[open]')) return true;
   const active = typeof document !== 'undefined' ? document.activeElement : null;
   if (!main || !active || !main.contains(active)) return false;
   return ['INPUT', 'TEXTAREA', 'SELECT'].includes(active.tagName);
@@ -5761,6 +5970,45 @@ function harnessStatusText(state) {
   return bits.join(' · ');
 }
 
+// Patch only facts from the hydrated native projection. Never infer acceptance
+// from a dispatched command, and do not replace the active menu/editor DOM.
+function syncHarnessControlStatus(state) {
+  const main = state.ctx?.host?.querySelector?.('[data-ctox-main]');
+  if (!main || !state.harnessStatus) return;
+  const paused = state.harnessStatus.paused === true;
+  const t = labels[state.lang];
+  if (!main.querySelector('[data-harness-pause]') && mayManageWorkspace(state)) {
+    const menu = main.querySelector('.ctox-more-actions-body');
+    if (menu) {
+      menu.insertAdjacentHTML('afterbegin', harnessControlsMarkup(state));
+      wireHarnessControls(state, main);
+    }
+  }
+  const capacity = main.querySelector('[data-harness-capacity]');
+  if (capacity && document.activeElement !== capacity) capacity.value = String(Number(state.harnessStatus.worker_capacity) || 1);
+  else if (capacity) state.mainRenderPending = true;
+  const button = main.querySelector('[data-harness-pause]');
+  if (button) {
+    button.textContent = paused ? t.resumeHarness : t.pauseHarness;
+    button.setAttribute('aria-pressed', String(paused));
+    button.classList.toggle('is-active', paused);
+  }
+  const note = main.querySelector('.ctox-paused-note');
+  if (note) {
+    note.textContent = t.harnessPaused;
+    note.hidden = !paused;
+  }
+}
+
+function wireHarnessControls(state, main) {
+  main.querySelector('[data-harness-pause]')?.addEventListener('click', () => {
+    runHarnessControl(state, 'pause', !state.harnessStatus?.paused);
+  });
+  main.querySelector('[data-harness-capacity]')?.addEventListener('change', (event) => {
+    runHarnessControl(state, 'capacity', event.currentTarget.value);
+  });
+}
+
 function harnessControlsMarkup(state) {
   const t = labels[state.lang];
   const h = state.harnessStatus;
@@ -5768,7 +6016,7 @@ function harnessControlsMarkup(state) {
   const paused = Boolean(h.paused);
   const capacity = Number(h.worker_capacity) || 1;
   return `
-    <button type="button" class="ctox-pane-icon ${paused ? 'is-active' : ''}" data-harness-pause aria-pressed="${paused}" aria-label="${escapeAttr(paused ? t.resumeHarness : t.pauseHarness)}" title="${escapeAttr(paused ? t.resumeHarness : t.pauseHarness)}">${actionIcon(state, paused ? 'play' : 'pause')}</button>
+    <button type="button" class="ctox-button ${paused ? 'is-active' : ''}" data-harness-pause aria-pressed="${paused}">${escapeHtml(paused ? t.resumeHarness : t.pauseHarness)}</button>
     <label class="ctox-harness-capacity" title="${escapeAttr(t.capacity)}"><span class="ctox-field-label">${escapeHtml(t.capacity)}</span><select class="ctox-select" data-harness-capacity aria-label="${escapeAttr(t.capacity)}">${[1,2,3,4,5,6,7,8].map((n) => `<option value="${n}" ${n === capacity ? 'selected' : ''}>${n}</option>`).join('')}</select></label>`;
 }
 
@@ -6426,7 +6674,7 @@ function taskFieldDisplay(value) {
 }
 
 function taskPromptDisplay(task) {
-  return { redacted: false, text: String(task?.prompt || task?.summary || '').trim() };
+  return { redacted: false, text: String(task?.prompt || task?.description || task?.summary || '').trim() };
 }
 
 function taskDetailText(value, state) {
@@ -6505,9 +6753,11 @@ function displayPathLike(value) {
   return displayWorkSource(value);
 }
 
-function displayPriority(priority) {
-  const labelsByPriority = { urgent: 'Urgent', high: 'High', normal: 'Normal', low: 'Low' };
-  return labelsByPriority[priority] || displayStatus(priority, 'en');
+function displayPriority(priority, lang = 'de') {
+  const labelsByPriority = lang === 'en'
+    ? { urgent: 'Urgent', high: 'High', normal: 'Normal', low: 'Low' }
+    : { urgent: 'Dringend', high: 'Hoch', normal: 'Normal', low: 'Niedrig' };
+  return labelsByPriority[priority] || displayStatus(priority, lang);
 }
 
 const HOLD_REASON_KEYS = {
@@ -6552,6 +6802,36 @@ function crewMemberName(state, memberId) {
 // One sentence of truth per task: why it waits, when it retries, how it
 // failed, who holds it. Built only from durable routing fields — never from
 // guesses — and empty when there is nothing worth saying.
+function taskSummaryReason(task, state) {
+  if (state.harnessStatus?.paused === true && taskIsHarnessWaiting(task)) return state.lang === 'en' ? 'The crew is paused. Resume it to start this task.' : 'Die Crew ist pausiert. Zum Starten die Crew fortsetzen.';
+  const note = String(task.statusNote || task.error || '').trim();
+  const de = state.lang !== 'en';
+  const rules = [
+    [/model API.*rate.limit/i, 'Der Modelldienst hat zu viele Anfragen erhalten.', 'The model service received too many requests.'],
+    [/model API|worker-runtime-api-failure/i, 'Der Modelldienst war nicht erreichbar.', 'The model service could not be reached.'],
+    [/completion review.*(?:verdict|finish|timeout)/i, 'Die Abschlussprüfung hat nicht rechtzeitig geantwortet.', 'The final review did not respond in time.'],
+    [/MCP.*handshake|thread\/start/i, 'Die Verbindung zu einem Werkzeug konnte nicht aufgebaut werden.', 'A connection to a tool could not be established.'],
+    [/app.*validation.*(?:failed|exhausted)/i, 'Die App-Prüfung ist fehlgeschlagen.', 'The app validation failed.'],
+    [/SQLITE|database is locked|queue:|\blease\b|worker error|technical:/i, 'Ein technischer Fehler hat die Bearbeitung unterbrochen.', 'A technical error interrupted the work.'],
+  ];
+  const rule = rules.find(([pattern]) => pattern.test(note));
+  if (!rule) return taskReasonText(task, state);
+  const count = Number(task.failureAttemptCount || 0);
+  const attempts = count > 1 ? ` · ${count} ${labels[state.lang].attemptMany}` : '';
+  return rule[de ? 1 : 2] + attempts;
+}
+
+function taskDiagnosticMarkup(task, state) {
+  const note = [
+    task.statusNote || task.error,
+    taskSelectionSentence(task, state),
+    task.leaseOwner ? `${labels[state.lang].leaseOwner}: ${task.leaseOwner}` : '',
+    task.target || task.commandId || task.taskId,
+  ].map(value => String(value || '').trim()).filter(Boolean).join('\n\n');
+  if (!note) return '';
+  return `<details class="ctox-task-diagnostics"><summary>${state.lang === 'de' ? 'Technische Details' : 'Technical details'}</summary><pre>${escapeHtml(note)}</pre></details>`;
+}
+
 function taskReasonText(task, state) {
   const t = labels[state.lang];
   const status = normalizeCommandStatus(task.routeStatus || task.status);
@@ -6704,6 +6984,11 @@ function escapeAttr(value) {
 }
 
 export const __ctoxTestHooks = {
+  outboundEndpointForTask,
+  taskCardMarkup,
+  displayStatus,
+  taskLeaseLineMarkup,
+  taskPromptDisplay,
   aggregateFlowMetrics,
   crewHomeMarkup,
   crewMemberDrawer,
@@ -6733,6 +7018,8 @@ export const __ctoxTestHooks = {
   authoritativeTaskNodeId,
   authoritativeTaskStatus,
   buildHarnessModel,
+  buildInboundChannels,
+  inboundEndpointFlowSvg,
   canModifyCtoxApp,
   clampMetric,
   deriveHarnessHealth,
@@ -6747,6 +7034,8 @@ export const __ctoxTestHooks = {
   safeTaskDisplayText,
   setFlowZoom,
   taskSteps,
+  taskSummaryReason,
+  taskDiagnosticMarkup,
   timelinePanel,
   observedDetailsFromFlow,
   webStackStateFromRefreshResult,
@@ -6759,6 +7048,7 @@ export const __ctoxTestHooks = {
   taskListInner,
   renderTaskList,
   renderMain,
+  syncDetailDrawer,
   applyTaskSelection,
   webStackPanel,
   taskPipelineStage,
@@ -6766,4 +7056,6 @@ export const __ctoxTestHooks = {
   taskCrewNodeId,
   taskCrewStatus,
   wireTaskSourceReadiness,
+  wireLocalRealtime,
+  renderFromLocalCache,
 };

@@ -1,3 +1,4 @@
+import { normalizeCrewAppearance, renderCrewCreature, CREW_CREATURE_BASE_CSS } from './crew-renderer.js';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
   FILE_CHUNK_HASH_SCHEME,
@@ -13,6 +14,7 @@ import {
 
 const CHAT_STYLE_ID = 'ctox-business-chat-style';
 const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
+const CHAT_SUBMISSIONS = new WeakMap();
 const CHAT_CHANNEL = 'business_os.llm.chat';
 const CHAT_COLLECTION = 'business_chats';
 const CHAT_OPEN_EVENT = 'ctox-business-os-chat-open';
@@ -31,7 +33,6 @@ const CHAT_REMOTE_PERSIST_TIMEOUT_MS = 1500;
 const CHAT_REMOTE_PERSIST_DEFER_MS = 0;
 const CREW_NAMES = Object.freeze(['Milo', 'Nori', 'Lumi', 'Pico', 'Tavi', 'Momo', 'Koda', 'Fino']);
 const CREW_COLORS = Object.freeze(['#1685ee', '#00aa9a', '#7d7f84', '#7c6df2', '#e97255', '#34a26f']);
-const CREW_SHAPES = Object.freeze(['round', 'blob', 'square', 'triangle']);
 const CHAT_LIVE_SYNC_COLLECTIONS = Object.freeze([
   CHAT_COLLECTION,
   'business_commands',
@@ -193,6 +194,7 @@ async function loadCrewAppTasks(db) {
 
 // Presence follows the queue, the crew, opened windows and the desktop grid.
 function wireCrewAppPresence({ state, db, syncFacade }) {
+  let disposed = false;
   let tasks = [];
   let reloadTimer = null;
   let expressionTimer = null;
@@ -200,7 +202,10 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
   let desktopObserver = null;
   let desktopObserverTarget = null;
   const subscriptions = [];
+  const readinessCleanups = [];
+  let windowBusCleanup = null;
   const apply = () => {
+    if (disposed) return;
     const members = state.crewMembers || [];
     applyCrewAppPresence(crewAppPresenceFromTasks(tasks, members));
     // Expressions decay (reading -> running, learning -> idle); re-draw when
@@ -213,17 +218,26 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     expressionTimer = Number.isFinite(ttl) ? window.setTimeout(() => { expressionTimer = null; apply(); }, ttl + 50) : null;
     wireLate();
   };
-  const reload = () => loadCrewAppTasks(db).then((next) => { tasks = next; apply(); }).catch(() => {});
+  const reload = () => {
+    if (disposed) return Promise.resolve();
+    return loadCrewAppTasks(db).then((next) => {
+      if (disposed) return;
+      tasks = next;
+      apply();
+    }).catch(() => {});
+  };
   const scheduleReload = () => {
-    if (reloadTimer) return;
+    if (disposed || reloadTimer) return;
     reloadTimer = window.setTimeout(() => { reloadTimer = null; reload(); }, 400);
   };
   const wireLate = () => {
+    if (disposed) return;
     if (!busWired) {
       const bus = window.CTOX_BUSINESS_OS_APP?.eventBus;
-      if (bus && typeof bus.on === 'function') {
+      if (bus && typeof bus.on === 'function' && typeof bus.off === 'function') {
         busWired = true;
-        bus.on('window:opened', () => apply());
+        const token = bus.on('window:opened', apply);
+        windowBusCleanup = () => bus.off('window:opened', token);
       }
     }
     const container = document.querySelector('[data-desktop-icons]');
@@ -237,16 +251,21 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
   try { subscriptions.push(db?.raw?.ctox_queue_tasks?.$?.subscribe?.(scheduleReload) || null); } catch {}
   try {
     subscriptions.push(db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
+      if (disposed) return;
       loadCrewMembers({ state, db }).then(apply).catch(() => {});
     }) || null);
   } catch {}
   try {
-    syncFacade?.subscribeCollectionReadiness?.('ctox_queue_tasks', () => { reload(); });
-    syncFacade?.subscribeCollectionReadiness?.('ctox_crew_members', () => { reload(); });
+    readinessCleanups.push(syncFacade?.subscribeCollectionReadiness?.('ctox_queue_tasks', reload));
+    readinessCleanups.push(syncFacade?.subscribeCollectionReadiness?.('ctox_crew_members', reload));
   } catch {}
   reload();
   return () => {
+    if (disposed) return;
+    disposed = true;
     subscriptions.forEach((subscription) => subscription?.unsubscribe?.());
+    readinessCleanups.forEach((cleanup) => cleanup?.());
+    windowBusCleanup?.();
     if (reloadTimer) window.clearTimeout(reloadTimer);
     if (expressionTimer) window.clearTimeout(expressionTimer);
     desktopObserver?.disconnect?.();
@@ -398,6 +417,23 @@ export function initBusinessChat({
       }
       return;
     }
+    const maximizeButton = event.target.closest?.('[data-chat-maximize]');
+    if (maximizeButton && root.contains(maximizeButton)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const node = maximizeButton.closest('[data-chat-id]');
+      const chat = state.chats.find((item) => item.id === node?.dataset.chatId);
+      if (!chat) return;
+      captureDrafts(root, state);
+      const ticket = claimChatOpenOwnership(state);
+      chat.maximized = !chat.maximized;
+      markChatExpandedByUser(state, chat, ticket);
+      state.dockCollapsed = false;
+      state.activeChatId = chat.id;
+      touchChats(state, [chat]);
+      renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
+      return;
+    }
     const minimizeButton = event.target.closest?.('[data-chat-minimize]');
     if (minimizeButton && root.contains(minimizeButton)) {
       event.preventDefault();
@@ -524,27 +560,40 @@ export function initBusinessChat({
   // The pool follows the crew collection, however late it becomes ready: the
   // first load after readiness fills the bar, later changes re-render it.
   let crewChangeSubscription = null;
-  const refreshCrewPool = () => loadCrewMembers({ state, db }).then((changed) => {
-    if (!crewChangeSubscription) {
-      try {
-        crewChangeSubscription = db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
-          loadCrewMembers({ state, db }).then((next) => {
-            if (next) renderChatRoot({ root, state, commandBus, db, getActiveModule });
-          }).catch(() => {});
-        }) || null;
-      } catch {}
-    }
-    if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
-  }).catch(() => {});
+  let crewPoolDisposed = false;
+  let crewPoolRetryTimer = null;
+  let crewReadinessCleanup = null;
+  const refreshCrewPool = () => {
+    if (crewPoolDisposed) return Promise.resolve();
+    return loadCrewMembers({ state, db }).then((changed) => {
+      if (crewPoolDisposed) return;
+      if (!crewChangeSubscription) {
+        try {
+          crewChangeSubscription = db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
+            if (crewPoolDisposed) return;
+            loadCrewMembers({ state, db }).then((next) => {
+              // The app-presence subscriber can load the shared member state
+              // first. Compare the rendered pool as well as the loader's delta.
+              if (!crewPoolDisposed && (next || root.dataset?.crewPoolSignature !== crewPoolSignature(state))) {
+                renderChatRoot({ root, state, commandBus, db, getActiveModule });
+              }
+            }).catch(() => {});
+          }) || null;
+        } catch {}
+      }
+      if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
+    }).catch(() => {});
+  };
   try {
-    syncFacade?.subscribeCollectionReadiness?.('ctox_crew_members', () => { refreshCrewPool(); });
+    crewReadinessCleanup = syncFacade?.subscribeCollectionReadiness?.('ctox_crew_members', refreshCrewPool);
   } catch {}
   // Bounded start-up retries: the collection registers and fills after the
   // bar exists; a handful of widening attempts, then readiness/changes only.
   const crewPoolRetryDelays = [2000, 5000, 10000, 20000, 40000];
   const retryCrewPool = (attempt = 0) => {
-    if ((state.crewMembers || []).length || attempt >= crewPoolRetryDelays.length) return;
-    window.setTimeout(() => {
+    if (crewPoolDisposed || (state.crewMembers || []).length || attempt >= crewPoolRetryDelays.length) return;
+    crewPoolRetryTimer = window.setTimeout(() => {
+      crewPoolRetryTimer = null;
       refreshCrewPool().then(() => retryCrewPool(attempt + 1));
     }, crewPoolRetryDelays[attempt]);
   };
@@ -563,6 +612,12 @@ export function initBusinessChat({
     if (createNewChat) state.chats.push(chat);
     if (detail.title) chat.title = String(detail.title).trim() || chat.title;
     chat.contextMeta = chatContextMetaFromDetail(detail);
+    const handedMember = String(detail.crew_member_id || detail.crewMemberId || '').trim();
+    if (handedMember) {
+      chat.crew_member_id = handedMember;
+      const identity = detail.crew_identity || detail.crewIdentity || (state.crewMembers || []).find((member) => member.id === handedMember);
+      if (identity?.name) chat.crewIdentity = { name: String(identity.name), shape: String(identity.shape || ''), color: String(identity.color || '') };
+    }
     markChatExpandedByUser(state, chat, presentationTicket);
     focusChatForUser(state, chat);
     chat.draft = '';
@@ -579,6 +634,7 @@ export function initBusinessChat({
         onPending: () => {
           persistChatState({ state, db, remote: false }).catch(() => {});
           renderChatRoot({ root, state, commandBus, db, getActiveModule });
+          detail.onPresented?.({ command_id: chat.lastTrackingId });
         },
       });
       if (!submission) {
@@ -606,17 +662,13 @@ export function initBusinessChat({
   const handleExternalOpen = async (event) => {
     const detail = event.detail || {};
     const presentationTicket = claimChatOpenOwnership(state);
-    await hydrateChatsFromRxDb({ state, db, session }).catch(() => false);
-    await loadCrewMembers({ state, db }).catch(() => false);
-    // The pool follows the crew: a new or archived member shows up without a
-    // reload, a member on duty changes its expression in the bar.
-    try {
-      db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
-        loadCrewMembers({ state, db }).then((changed) => {
-          if (changed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
-        }).catch(() => {});
-      });
-    } catch {}
+    // A fresh draft and an already loaded conversation are local presentation
+    // operations. Only an unresolved tracking identity needs a lookup before
+    // choosing a chat; creating one first could duplicate the remote history.
+    if (chatOpenNeedsHydration(state, detail)) {
+      await hydrateChatsFromRxDb({ state, db, session }).catch(() => false);
+    }
+    // Crew readiness and updates already belong to refreshCrewPool above.
     if (!ownsChatOpenOwnership(state, presentationTicket)) return;
     state.selectedDate = getLocalDateString(Date.now());
     const chat = resolveChatForOpenDetail(state, session, detail);
@@ -802,6 +854,10 @@ export function initBusinessChat({
   trackingWatch.refresh({ schedule: true });
 
   root.__ctoxChatCleanup = () => {
+    crewPoolDisposed = true;
+    if (crewPoolRetryTimer) window.clearTimeout(crewPoolRetryTimer);
+    crewChangeSubscription?.unsubscribe?.();
+    crewReadinessCleanup?.();
     root.__ctoxCrewAppPresenceCleanup?.();
     root.removeEventListener('click', handleRootClick, true);
     window.removeEventListener('ctox-business-os-chat-submit', handleExternalSubmit);
@@ -828,6 +884,10 @@ export function initBusinessChat({
     }));
     clearSchedulerLoop(root);
   };
+
+  // Mount the local presentation immediately. Hydration may be delayed or
+  // unavailable; it must not gate the dock or its prompt/open event handlers.
+  renderChatRoot({ root, state, commandBus, db, getActiveModule });
 }
 
 function publishChatLayout(root, state) {
@@ -1123,7 +1183,7 @@ function hasScheduledChatAttachments(value) {
 }
 
 function setWindowInteractiveState(win, isActive) {
-  win.querySelectorAll('button, input, textarea, select, a').forEach((node) => {
+  win.querySelectorAll('button, input, textarea, select, a, summary').forEach((node) => {
     const isAlwaysInteractiveHeaderControl = Boolean(node.closest('.ctox-chat-header-actions, .ctox-chat-delegation-card'));
     if (isActive || isAlwaysInteractiveHeaderControl) {
       if (node.dataset.chatInactiveTabManaged === 'true') {
@@ -1204,9 +1264,10 @@ function ensureTaskTrackingDelegation(root) {
   root.__ctoxTaskTrackingDelegated = true;
   root.addEventListener('click', (event) => {
     const button = event.target?.closest?.('[data-track-task]');
-    if (!button || !root.contains(button)) return;
+    if (!button || !root.contains(button) || !button.dataset.taskId) return;
     event.preventDefault();
     event.stopPropagation();
+    root.__ctoxBeforeTaskNavigation?.();
     openCtoxTask(
       button.dataset.taskId || '',
       button.dataset.commandId || '',
@@ -1218,6 +1279,15 @@ function ensureTaskTrackingDelegation(root) {
 }
 
 function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
+  root.__ctoxBeforeTaskNavigation = () => {
+    captureDrafts(root, state);
+    const expanded = state.chats.filter((chat) => chat.open !== false && !chat.minimized);
+    for (const chat of expanded) markChatMinimizedByUser(state, chat);
+    state.dockCollapsed = true;
+    state.preCollapseExpandedChatIds = expanded.map((chat) => chat.id);
+    touchChats(state, expanded);
+    renderAndPersistChatState({ root, state, commandBus, db, getActiveModule });
+  };
   ensureTaskTrackingDelegation(root);
   const syncFacade = root.__ctoxChatSync || null;
   initSchedulerLoop({
@@ -1268,6 +1338,12 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const datePickerEl = root.querySelector('[data-chat-date-picker]');
   const matchesCurrentDate = datePickerEl && datePickerEl.value === selectedDate;
   const existingWindows = Array.from(root.querySelectorAll('.ctox-chat-window'));
+  for (const win of existingWindows) {
+    // A minimized or off-date window is about to leave the DOM, but its
+    // inspection choice still belongs to the retained conversation.
+    const chat = state.chats.find(item => item.id === win.dataset.chatId);
+    if (chat) chat.inspectionOpen = Boolean(win.querySelector('.ctox-chat-inspection')?.open);
+  }
   const hasBusyPanel = Boolean(root.querySelector('[data-chat-busy-panel]'));
   const hasDatePanel = Boolean(root.querySelector('[data-chat-date-workload-panel]'));
   const currentWindowIds = existingWindows.map(w => w.dataset.chatId);
@@ -1331,7 +1407,9 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       if (chat) {
         const category = chatWorkjetCategory(chat);
         const categoryChanged = setDatasetIfChanged(chip, 'workjetCategory', category);
-        if (categoryChanged) {
+        const chipCreature = chip.querySelector('.ctox-crew-creature');
+        const crewChanged = Boolean(chipCreature && chipCreature.dataset?.crewIdentity !== JSON.stringify(crewIdentity(chat)));
+        if (categoryChanged || crewChanged) {
           if (typeof chip.getAttribute === 'function') {
             if (setAttrIfChanged(chip, 'style', chatWorkjetCategoryStyleText(category, chat))) inPlaceDomChanged = true;
           } else if (setInlineStyleIfChanged(chip, chatWorkjetCategoryStyleText(category, chat))) {
@@ -1366,7 +1444,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
           const markCreature = markEl.querySelector?.('.ctox-crew-creature');
           const markHasCorrectMode = !markCreature
             || markCreature.dataset?.crewMode === crewCreatureMode(chat, taskState);
-          if (!markHasCorrectState || !markHasCorrectMode) {
+          if (!markHasCorrectState || !markHasCorrectMode || crewChanged) {
             markEl.outerHTML = chatChipMarkHtml(chat, taskState);
             inPlaceDomChanged = true;
           } else if (markCreature && syncCrewTelemetryNode(markCreature, chat)) {
@@ -1417,7 +1495,9 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         inPlaceDomChanged = true;
       }
       const categoryChanged = setDatasetIfChanged(win, 'workjetCategory', category);
-      if (categoryChanged) {
+      const windowCreature = win.querySelector('.ctox-crew-creature');
+      const crewChanged = Boolean(windowCreature && windowCreature.dataset?.crewIdentity !== JSON.stringify(crewIdentity(chat)));
+      if (categoryChanged || crewChanged) {
         if (typeof win.getAttribute === 'function') {
             if (setAttrIfChanged(win, 'style', chatWorkjetCategoryStyleText(category, chat))) inPlaceDomChanged = true;
         } else if (setInlineStyleIfChanged(win, chatWorkjetCategoryStyleText(category, chat))) {
@@ -1432,6 +1512,15 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       }
 
       // Update title text in header
+      const titleButton = win.querySelector('[data-chat-title]');
+      if (titleButton) {
+        const title = chatWindowTitle(chat);
+        if (setAttrIfChanged(titleButton, 'aria-label', title)) inPlaceDomChanged = true;
+        if (setAttrIfChanged(titleButton, 'title', title)) inPlaceDomChanged = true;
+      }
+      const composerInput = win.querySelector('textarea[name="message"]');
+      if (composerInput && setAttrIfChanged(composerInput, 'placeholder', chatUiIsGerman()
+        ? `Aufgabe für ${crewIdentity(chat).name}...` : `Task for ${crewIdentity(chat).name}...`)) inPlaceDomChanged = true;
       const titleStrong = win.querySelector('.ctox-chat-title strong');
       if (titleStrong && setTextIfChanged(titleStrong, crewIdentity(chat).name)) inPlaceDomChanged = true;
       const titleTask = win.querySelector('.ctox-chat-title-task');
@@ -1453,21 +1542,24 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       }
 
       const creature = win.querySelector('.ctox-crew-creature');
-      if (creature && creature.dataset?.crewMode !== creatureMode) {
+      if (creature && (creature.dataset?.crewMode !== creatureMode || crewChanged)) {
         creature.outerHTML = crewCreatureHtml(chat, taskState, 'window');
         inPlaceDomChanged = true;
       } else if (creature && syncCrewTelemetryNode(creature, chat)) {
         inPlaceDomChanged = true;
       }
 
-      if (taskState === 'queued' || taskState === 'running' || taskState === 'blocked') {
+      // Existing progress remains visible after completion; update its final
+      // revision too, so the ring cannot contradict the completed title.
+      if (win.querySelector('.ctox-chat-delegation-card')
+        || taskState === 'queued' || taskState === 'running' || taskState === 'blocked') {
         const trackingMessage = latestTrackingMessage(chat);
         const taskId = trackingMessage?.taskId || '';
         const commandId = trackingMessage?.commandId || chat.lastTrackingId || '';
         const taskStatus = trackingMessage?.status || 'queued';
         const progressCard = win.querySelector('.ctox-chat-delegation-card');
         const nextSignature = executionProgressSignature(chat);
-        if (progressCard?.dataset.progressSignature !== nextSignature) {
+        if (progressCard?.dataset.progressSignature !== nextSignature || progressCard?.querySelector('[data-track-task]')?.dataset.taskId !== taskId) {
           const expectedCard = delegationProgressCardHtml(chat, { taskId, commandId, taskStatus });
           let cardUpdated = false;
           if (progressCard) {
@@ -1495,6 +1587,20 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         }
       }
 
+      const inspection = win.querySelector('.ctox-chat-inspection');
+      if (inspection) {
+        const content = chatInspectionContent(chat);
+        const summary = inspection.querySelector('summary');
+        const body = inspection.querySelector('.ctox-chat-inspection-body');
+        if (summary.textContent !== content.title) summary.textContent = content.title;
+        if (body.innerHTML !== content.body) {
+          const scrollTop = body.scrollTop;
+          body.innerHTML = content.body;
+          body.scrollTop = scrollTop;
+          setWindowInteractiveState(win, win.classList.contains('is-active'));
+          inPlaceDomChanged = true;
+        }
+      }
       // Update messages container content if it changed
       const messagesContainer = win.querySelector('.ctox-chat-messages');
       if (messagesContainer) {
@@ -1565,6 +1671,21 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const previousStripScrollLeft = previousStrip?.scrollLeft || 0;
   const previousActiveChatId = root.dataset?.activeChatId || '';
   const hadRenderedDock = Boolean(root.querySelector('[data-chat-dock]'));
+  // Crew expression changes rebuild the dock. Preserve the reader's position
+  // and the composer selection across that rebuild, just as on in-place ticks.
+  const retainedWindows = new Map(existingWindows.map((win) => {
+    const input = win.querySelector('[name="message"]');
+    const messages = win.querySelector('.ctox-chat-messages');
+    return [win.dataset.chatId, {
+      scrollTop: messages?.scrollTop || 0,
+      atBottom: messages ? isScrolledToBottom(messages) : true,
+      focused: Boolean(input && (win.ownerDocument || document).activeElement === input),
+      selectionStart: input?.selectionStart,
+      selectionEnd: input?.selectionEnd,
+      selectionDirection: input?.selectionDirection,
+      inputScrollTop: input?.scrollTop || 0,
+    }];
+  }));
 
   if (root.dataset) root.dataset.crewPoolSignature = crewPoolSignature(state);
   root.innerHTML = `
@@ -1880,7 +2001,9 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         textarea.style.height = `${textarea.scrollHeight}px`;
       };
       textarea.addEventListener('input', (event) => {
-        chat.draft = event.currentTarget.value;
+        // Hydration can replace the chat object while retaining this textarea.
+        const currentChat = state.chats.find((item) => item.id === node.dataset.chatId);
+        if (currentChat) currentChat.draft = event.currentTarget.value;
         adjustHeight();
       });
       textarea.addEventListener('paste', async (e) => {
@@ -1943,6 +2066,18 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   });
   updateChatStripOverflowState(root);
   publishChatLayout(root, state);
+  root.querySelectorAll('.ctox-chat-window').forEach((win) => {
+    const retained = retainedWindows.get(win.dataset.chatId);
+    if (!retained) return;
+    const messages = win.querySelector('.ctox-chat-messages');
+    if (messages) messages.scrollTop = retained.atBottom ? messages.scrollHeight : retained.scrollTop;
+    const input = win.querySelector('[name="message"]');
+    if (input && retained.focused && win.dataset.chatId === activeExpandedChat?.id) {
+      input.focus({ preventScroll: true });
+      input.setSelectionRange(retained.selectionStart, retained.selectionEnd, retained.selectionDirection);
+      input.scrollTop = retained.inputScrollTop;
+    }
+  });
   window.requestAnimationFrame(() => {
     root.querySelectorAll('.ctox-chat-window.no-left-transition').forEach((win) => {
       win.classList.remove('no-left-transition');
@@ -1952,7 +2087,12 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
 }
 
 async function submitChatForm({ root, state, chat, node, commandBus, db, sync, getActiveModule }) {
-  if (chat.__submitting) return;
+  // A retained form must submit the current hydrated chat, not its old closure.
+  chat = state.chats.find((item) => item.id === chat.id);
+  if (!chat) return;
+  let submitting = CHAT_SUBMISSIONS.get(state);
+  if (!submitting) CHAT_SUBMISSIONS.set(state, submitting = new Set());
+  if (submitting.has(chat.id)) return;
   captureDrafts(root, state);
   const input = node.querySelector('[name="message"]');
   const text = String(input?.value || chat.draft || '').trim();
@@ -1963,7 +2103,7 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
 
   const isFuture = chat.createdAt > Date.now();
   if (isFuture) {
-    chat.__submitting = true;
+    submitting.add(chat.id);
     chat.draft = '';
     chat.showFollowUp = false;
     if (input) input.value = '';
@@ -2004,14 +2144,14 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
       await persistChatState({ state, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     } finally {
-      delete chat.__submitting;
+      submitting.delete(chat.id);
     }
     return;
   }
 
-  chat.__submitting = true;
+  submitting.add(chat.id);
   chat.draft = '';
-  const isFollowUpSubmission = chat.showFollowUp === true;
+  const isFollowUpSubmission = chat.showFollowUp === true || Boolean(chat.lastTrackingId);
   chat.showFollowUp = false; // Reset follow-up container state
   if (input) input.value = '';
   try {
@@ -2032,12 +2172,18 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
         root.__ctoxChatOnTrackingStateChanged?.();
       },
     });
-    if (delivered) chat.attachments = [];
+    const currentChat = state.chats.find((item) => item.id === chat.id);
+    if (delivered && currentChat) {
+      const submitted = new Set(attachments.map((attachment) => attachmentSignature({ attachments: [attachment] })));
+      currentChat.attachments = (currentChat.attachments || []).filter((attachment) => (
+        !submitted.has(attachmentSignature({ attachments: [attachment] }))
+      ));
+    }
     await persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
     root.__ctoxChatOnTrackingStateChanged?.();
   } finally {
-    delete chat.__submitting;
+    submitting.delete(chat.id);
   }
 }
 
@@ -2142,13 +2288,13 @@ function getTaskState(chat) {
     (m.taskId && m.taskId === chat.lastTrackingId)
   );
   if (!trackingMsg) return 'idle';
-  const status = String(trackingMsg.status || '').toLowerCase();
+  const status = canonicalTrackingStatus(trackingMsg.status);
   if (status === 'scheduled') return 'scheduled';
   if (!status) return 'idle';
   if (status === 'success' || status === 'completed' || status === 'handled' || status === 'done' || status === 'erledigt') return 'success';
   if (isBlockedTrackingStatus(status)) return 'blocked';
   if (['failed', 'error'].includes(status)) return 'failed';
-  if (['queued', 'pending', 'pending_sync', 'waiting'].includes(status)) return 'queued';
+  if (['queued', 'pending', 'pending_sync', 'waiting', 'terminal'].includes(status)) return 'queued';
   if (['running', 'processing', 'executing', 'active'].includes(status)) return 'running';
   return 'idle';
 }
@@ -2235,6 +2381,15 @@ function findChatForOpenDetail(state, detail = {}) {
   }) || null;
 }
 
+function chatOpenNeedsHydration(state, detail = {}) {
+  const focus = detail.focus && typeof detail.focus === 'object' ? detail.focus : {};
+  const taskId = String(detail.task_id || detail.taskId || focus.task_id || focus.taskId || '').trim();
+  const commandId = String(detail.command_id || detail.commandId || focus.command_id || focus.commandId || '').trim();
+  if (!taskId && !commandId) return false;
+  const trackedChat = findChatForOpenDetail(state, detail);
+  return !trackedChat || getLocalDateString(trackedChat.createdAt) !== getLocalDateString(Date.now());
+}
+
 function resolveChatForOpenDetail(state, session, detail = {}) {
   const trackedChat = findChatForOpenDetail(state, detail);
   // Nur ein Chat von HEUTE wird wiederverwendet. Ein Lead behaelt seinen
@@ -2295,9 +2450,12 @@ function preferredChatForDockOpen(state) {
 }
 
 function moveEmptyHistoricalChatToToday(state, chat) {
-  if (!state || !chat || !isChatEmptyForDeletion(chat)) return false;
+  // A typed draft (or its attachments) is the new request, not prior history.
+  // Keep the stricter deletion predicate separate from first-submission dating.
+  if (!state || !chat || chat.messages?.length || String(chat.lastTrackingId || '').trim()
+    || hasScheduledChatAttachments(chat.scheduledAttachmentsByCommand)) return false;
   const today = getLocalDateString(Date.now());
-  if (getLocalDateString(chat.createdAt) === today) return false;
+  if (getLocalDateString(chat.createdAt) >= today) return false;
   const now = Date.now();
   chat.createdAt = now;
   chat.updated_at_ms = now;
@@ -2316,19 +2474,8 @@ function attachmentSignature(chat) {
 }
 
 function chatComposerSignature(chat) {
-  // Encode the composer SHAPE, not the raw task state. queued/running/blocked
-  // all render the same delegation card; treating each as a new shape forced a
-  // full window rebuild on every status transition (and on every tick that
-  // flipped between queued and running), which is the "chat fenster baut sich
-  // alle 2 sekunden neu auf" failure.
-  const taskState = getTaskState(chat);
-  let shape = 'idle';
-  if (taskState === 'scheduled') shape = 'scheduled';
-  else if (taskState === 'queued' || taskState === 'running' || taskState === 'blocked') shape = 'active';
-  else if (taskState === 'success' || taskState === 'failed') {
-    shape = chat?.showFollowUp ? 'terminal-follow-up' : 'terminal';
-  }
-  return shape;
+  // Immediate conversations keep their input across every task transition.
+  return getTaskState(chat) === 'scheduled' ? 'scheduled' : 'conversation';
 }
 
 function windowTaskStateMatches(win, chat) {
@@ -2369,16 +2516,6 @@ export function renderChatAgentScopeHtml(contextMeta = {}) {
   return renderGlobalCtoxAgentScopeHtml({ view });
 }
 
-function crewHash(value) {
-  let hash = 2166136261;
-  const input = String(value || 'ctox-crew');
-  for (let index = 0; index < input.length; index += 1) {
-    hash ^= input.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
 function crewIdentityKey(subject = {}) {
   const tracking = Array.isArray(subject.messages) ? latestTrackingMessage(subject) : null;
   return subject.crewKey
@@ -2401,22 +2538,20 @@ function crewIdentityKey(subject = {}) {
 // `ctox_crew_members` brings its own name, colour and shape. Until the router
 // has decided who takes a task, the owner talks to the crew as a whole — one
 // neutral creature, the same in the chat bar and on the map.
-const NEUTRAL_CREW_IDENTITY = Object.freeze({ name: 'Crew', color: '#7d7f84', shape: 'round' });
-
 function crewIdentity(chat = {}) {
-  const explicit = chat?.crewIdentity;
-  if (explicit && typeof explicit === 'object' && String(explicit.name || '').trim()) {
-    return {
-      name: String(explicit.name).trim(),
-      color: /^#[0-9a-f]{6}$/i.test(String(explicit.color || '')) ? String(explicit.color) : NEUTRAL_CREW_IDENTITY.color,
-      shape: CREW_SHAPES.includes(explicit.shape) ? explicit.shape : NEUTRAL_CREW_IDENTITY.shape,
-    };
-  }
-  return { ...NEUTRAL_CREW_IDENTITY };
+  return normalizeCrewAppearance(chat?.crewIdentity);
 }
 
 // The member holding a chat's command, as the harness recorded it; the reason
 // the router gave, as the owner reads it.
+function chatCrewSnapshot(chat) {
+  const memberId = String(chat?.crew_member_id || '').trim();
+  if (!memberId || !String(chat?.crewIdentity?.name || '').trim()) return {};
+  // Cache public presentation only. Queue/member projections still determine
+  // assignment; no soul, permissions or execution context comes from this cache.
+  return { crew_member_id: memberId, crewIdentity: crewIdentity(chat) };
+}
+
 async function findCrewMembersByIds(collection, ids) {
   return findDocsByIds(collection, ids);
 }
@@ -2448,71 +2583,6 @@ function takeoverText(name, reasonTitle) {
   return reason ? `${name} takes over: ${reason}` : `${name} takes over.`;
 }
 
-function crewBodyMarkup(shape) {
-  if (shape === 'blob') {
-    return '<path d="M13 34c0-8 5-13 12-14 2-8 8-12 16-10 7 1 11 6 12 13 6 2 10 7 9 14-1 8-7 12-15 12-4 6-12 7-18 2-9 1-16-7-16-17Z" />';
-  }
-  if (shape === 'square') {
-    return '<path d="M12 14c5-5 35-6 40 0 5 6 5 33 0 38-6 5-34 5-40 0-5-5-5-32 0-38Z" />';
-  }
-  if (shape === 'triangle') {
-    return '<path d="M27 9c3-5 8-5 11 0l22 38c3 6 0 10-7 10H11c-7 0-10-5-7-11L27 9Z" />';
-  }
-  return '<path d="M32 7c15 0 26 10 26 25S48 58 32 58 7 48 7 32 17 7 32 7Z" />';
-}
-
-function crewEyesMarkupForMode(shape, mode = 'working') {
-  const y = shape === 'triangle' ? 36 : 30;
-  if (mode === 'failed') {
-    return `
-      <g class="ctox-crew-eyes-x">
-        <path d="M21 ${y - 5}l10 10M31 ${y - 5}L21 ${y + 5}" />
-        <path d="M36 ${y - 5}l10 10M46 ${y - 5}L36 ${y + 5}" />
-      </g>
-    `;
-  }
-  if (mode === 'sleeping') {
-    return `
-      <g class="ctox-crew-eyes-sleeping">
-        <path d="M21 ${y + 2}q5 5 10 0" />
-        <path d="M36 ${y + 2}q5 5 10 0" />
-      </g>
-    `;
-  }
-  if (mode === 'review') {
-    // Scrutinising: the eyes narrow into peering arcs, unlike the open
-    // working eyes and the closed sleeping ones (Review-Befund B5).
-    return `
-      <g class="ctox-crew-eyes-review">
-        <path d="M21 ${y + 2}q5 -7 10 0" />
-        <path d="M36 ${y + 2}q5 -7 10 0" />
-      </g>
-    `;
-  }
-  if (mode === 'reading') {
-    // Lowered gaze: the eyes sit on a page and scan it (CSS moves them).
-    return `
-      <g class="ctox-crew-eyes-reading">
-        <path d="M22 ${y + 2}h8" />
-        <path d="M37 ${y + 2}h8" />
-      </g>
-    `;
-  }
-  if (mode === 'learning') {
-    // Wide, lifted eyes: something just clicked.
-    return `
-      <g class="ctox-crew-eyes-learning">
-        <circle cx="26" cy="${y - 1}" r="3.2" />
-        <circle cx="41" cy="${y - 2}" r="3.2" />
-      </g>
-    `;
-  }
-  return `
-    <path d="M25 ${y - 3}l3 8" />
-    <path d="M40 ${y - 4}l3 8" />
-  `;
-}
-
 function crewCreatureMode(chat, taskState = getTaskState(chat)) {
   if (taskState === 'failed') return 'failed';
   if (taskState === 'running') {
@@ -2534,32 +2604,6 @@ function crewCreatureMode(chat, taskState = getTaskState(chat)) {
       || taskState === 'success') return 'sleeping';
   // reading / learning are member expressions (crewMemberExpression).
   return taskState;
-}
-
-function crewMotionStyle(chat) {
-  const hash = crewHash(crewIdentityKey(chat));
-  const tenths = (offset, min, span) => (min + ((hash >>> offset) % span) / 10).toFixed(2);
-  const delay = (offset, duration) => (-((hash >>> offset) % 1000) / 1000 * duration).toFixed(2);
-  const workDrift = tenths(3, 3.7, 21);
-  const workBody = tenths(11, 2.3, 27);
-  const workEyes = tenths(19, 4.1, 31);
-  const reviewDrift = tenths(7, 4.4, 25);
-  const reviewBody = tenths(15, 2.7, 29);
-  const reviewEyes = tenths(23, 5.2, 37);
-  return [
-    `--crew-work-drift:${workDrift}s`,
-    `--crew-work-body:${workBody}s`,
-    `--crew-work-eyes:${workEyes}s`,
-    `--crew-review-drift:${reviewDrift}s`,
-    `--crew-review-body:${reviewBody}s`,
-    `--crew-review-eyes:${reviewEyes}s`,
-    `--crew-work-delay:${delay(5, Number(workDrift))}s`,
-    `--crew-work-body-delay:${delay(13, Number(workBody))}s`,
-    `--crew-work-eyes-delay:${delay(21, Number(workEyes))}s`,
-    `--crew-review-delay:${delay(9, Number(reviewDrift))}s`,
-    `--crew-review-body-delay:${delay(17, Number(reviewBody))}s`,
-    `--crew-review-eyes-delay:${delay(25, Number(reviewEyes))}s`,
-  ].join(';');
 }
 
 function stopCrewProceduralMotion(root, { reset = true } = {}) {
@@ -2718,20 +2762,15 @@ export function syncCrewProceduralMotion(root) {
 }
 
 export function crewCreatureHtml(chat, taskState = getTaskState(chat), placement = 'dock') {
-  const crew = crewIdentity(chat);
-  const mode = crewCreatureMode(chat, taskState);
-  const progress = executionProgressForChat(chat);
-  const progressAngle = Math.max(0, Math.min(360, Number(progress?.percent || 0) * 3.6));
-  const telemetry = executionActivityTelemetry(chat);
-  const motionSeed = crewHash(`${crewIdentityKey(chat)}:${placement}`);
-  return `
-    <span class="ctox-crew-creature is-${escapeAttr(taskState)} is-${escapeAttr(mode)} is-${escapeAttr(crew.shape)} is-${escapeAttr(placement)}" data-crew-mode="${escapeAttr(mode)}" data-crew-seed="${motionSeed}" data-crew-key="${escapeAttr(`${crewIdentityKey(chat)}:${placement}`)}" data-activity-turns="${telemetry.total}" data-activity-kind="${escapeAttr(telemetry.lastKind)}" data-activity-updated-at="${telemetry.updatedAt}" style="--crew-color:${escapeAttr(crew.color)};--ctox-progress-angle:${progressAngle}deg;${crewMotionStyle(chat)}" aria-hidden="true">
-      <svg viewBox="0 0 64 64" focusable="false">
-        <g class="ctox-crew-body">${crewBodyMarkup(crew.shape)}</g>
-        <g class="ctox-crew-eyes is-${escapeAttr(mode)}">${crewEyesMarkupForMode(crew.shape, mode)}</g>
-      </svg>
-    </span>
-  `;
+  return renderCrewCreature({
+    appearance: crewIdentity(chat),
+    animationKey: crewIdentityKey(chat),
+    taskState,
+    mode: crewCreatureMode(chat, taskState),
+    placement,
+    progressPercent: executionProgressForChat(chat)?.percent || 0,
+    activity: executionActivityTelemetry(chat),
+  });
 }
 
 function normalizeExecutionProgress(value) {
@@ -2781,16 +2820,30 @@ function latestTrackingMessage(chat) {
 }
 
 function executionProgressForChat(chat) {
+  const latest = latestTrackingMessage(chat);
+  const taskId = trackingIdFromMessage(latest, 'task');
+  const commandId = trackingIdFromMessage(latest, 'command');
+  // Status and plan projections arrive independently. A new status without a
+  // plan must not hide the last plan for this task, nor inherit another task's
+  // plan when the conversation receives a follow-up command.
+  const previousPlan = [...(chat?.messages || [])].reverse().find(message => (
+    message.executionProgress && (taskId
+      ? trackingIdFromMessage(message, 'task') === taskId
+      : commandId && trackingIdFromMessage(message, 'command') === commandId)
+  ));
   return normalizeExecutionProgress(
     chat?.executionProgress
     || chat?.execution_progress
-    || latestTrackingMessage(chat)?.executionProgress,
+    || latest?.executionProgress
+    || previousPlan?.executionProgress,
   );
 }
 
+
 function executionProgressSignature(chat) {
   const progress = executionProgressForChat(chat);
-  if (!progress) return 'planning';
+  const status = canonicalTrackingStatus(latestTrackingMessage(chat)?.status || getTaskState(chat) || '');
+  if (!progress) return `planning:${status}`;
   return [
     progress.revision,
     progress.percent,
@@ -2799,6 +2852,7 @@ function executionProgressSignature(chat) {
     progress.activity_turns.total,
     progress.activity_turns.last_kind,
     progress.updated_at_ms,
+    status,
   ].join(':');
 }
 
@@ -2818,9 +2872,9 @@ function executionStepStatusLabel(status) {
   return 'Offen';
 }
 
-function executionProgressTooltip(progress) {
+function executionProgressTooltip(progress, taskStatus = '') {
   if (!progress) return chatUiIsGerman() ? 'Plan wird erstellt' : 'Creating plan';
-  const isReviewPhase = progress.phase === 'review' || progress.phase === 'completed';
+  const isReviewPhase = progressShowsActiveReview(progress, taskStatus);
   const current = isReviewPhase
     ? null
     : progress.steps.find((step) => step.position === progress.current_step)
@@ -2844,6 +2898,13 @@ function executionProgressTooltip(progress) {
   return lines.join('\n');
 }
 
+function progressShowsActiveReview(progress, taskStatus = '') {
+  if (!progress) return false;
+  const status = canonicalTrackingStatus(taskStatus);
+  if (isFailureStatus(status) || isCancelledTrackingStatus(status)) return false;
+  return progress.phase === 'review' || progress.phase === 'completed';
+}
+
 function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskStatus = 'queued' } = {}) {
   const progress = executionProgressForChat(chat);
   if (!progress) {
@@ -2852,8 +2913,8 @@ function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskSta
       ? (chatUiIsGerman() ? 'Plan wird erstellt' : 'Creating plan')
       : (chatUiIsGerman() ? 'Noch kein Ausführungsplan' : 'No execution plan yet');
     return `
-      <div class="ctox-chat-delegation-card ${isPlanning ? 'is-planning' : 'is-dormant'}" data-progress-signature="planning">
-        <button class="ctox-progress-visual ${isPlanning ? 'is-planning' : 'is-dormant'}" type="button" style="--ctox-progress-percent:0" data-track-task data-task-id="${escapeAttr(taskId)}" data-command-id="${escapeAttr(commandId)}" data-task-status="${escapeAttr(taskStatus)}" aria-label="${escapeAttr(tooltip)}" title="${escapeAttr(tooltip)}">
+      <div class="ctox-chat-delegation-card ${isPlanning ? 'is-planning' : 'is-dormant'}" data-progress-signature="${escapeAttr(executionProgressSignature(chat))}">
+        <button class="ctox-progress-visual ${isPlanning ? 'is-planning' : 'is-dormant'}" type="button" style="--ctox-progress-percent:0" data-track-task ${taskId ? '' : 'disabled'} data-task-id="${escapeAttr(taskId)}" data-command-id="${escapeAttr(commandId)}" data-task-status="${escapeAttr(taskStatus)}" aria-label="${escapeAttr(tooltip)}" title="${escapeAttr(tooltip)}">
           <span class="ctox-progress-activity" style="--ctox-turn-angle:0deg" aria-hidden="true"><i></i></span>
           <span class="ctox-progress-track">
             <span class="ctox-progress-work"><span class="ctox-progress-planning-line"></span></span>
@@ -2864,7 +2925,7 @@ function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskSta
     `;
   }
 
-  const isReviewPhase = progress.phase === 'review' || progress.phase === 'completed';
+  const isReviewPhase = progressShowsActiveReview(progress, taskStatus);
   const current = isReviewPhase
     ? null
     : progress.steps.find((step) => step.position === progress.current_step)
@@ -2881,11 +2942,11 @@ function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskSta
   const workSegments = progress.steps.map((step) => `
     <span class="ctox-progress-segment is-${escapeAttr(step.status)}" title="${escapeAttr(`${step.position}. ${step.label}: ${executionStepStatusLabel(step.status)}`)}"></span>
   `).join('');
-  const tooltip = executionProgressTooltip(progress);
+  const tooltip = executionProgressTooltip(progress, taskStatus);
 
   return `
     <div class="ctox-chat-delegation-card ${activityClass}" data-progress-signature="${escapeAttr(executionProgressSignature(chat))}">
-      <button class="ctox-progress-visual ${isReviewPhase ? 'is-reviewing' : ''}" type="button" style="--ctox-progress-percent:${Math.max(0, Math.min(100, Number(progress.percent) || 0))}" data-track-task data-task-id="${escapeAttr(taskId)}" data-command-id="${escapeAttr(commandId)}" data-task-status="${escapeAttr(taskStatus)}" aria-label="${escapeAttr(tooltip)}" title="${escapeAttr(tooltip)}">
+      <button class="ctox-progress-visual ${isReviewPhase ? 'is-reviewing' : ''}" type="button" style="--ctox-progress-percent:${Math.max(0, Math.min(100, Number(progress.percent) || 0))}" data-track-task ${taskId ? '' : 'disabled'} data-task-id="${escapeAttr(taskId)}" data-command-id="${escapeAttr(commandId)}" data-task-status="${escapeAttr(taskStatus)}" aria-label="${escapeAttr(tooltip)}" title="${escapeAttr(tooltip)}">
         <span class="ctox-progress-activity" style="--ctox-turn-angle:${turnAngle}deg" aria-hidden="true"><i></i></span>
         <span class="ctox-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.percent}">
           <div class="ctox-progress-work">${workSegments}</div>
@@ -2914,7 +2975,16 @@ function chatWorkjetCategoryStyleText(category, chat = null) {
   ].join(';');
 }
 
+function chatWindowTitle(chat) {
+  return [
+    `${crewIdentity(chat).name} · ${chat.title || (chatUiIsGerman() ? 'Neue Aufgabe' : 'New task')}`,
+    chatDockStatusText(chat, getTaskState(chat)),
+    executionProgressTooltip(executionProgressForChat(chat), getTaskState(chat)),
+  ].filter(Boolean).join('\n');
+}
+
 function chatWindow(chat, activeId, relation = 'center') {
+
   const moduleName = chat.contextMeta?.module || 'ctox';
   const category = chatWorkjetCategory(chat);
   const categoryStyleText = chatWorkjetCategoryStyleText(category, chat);
@@ -2987,7 +3057,8 @@ function chatWindow(chat, activeId, relation = 'center') {
 
   // Determine what to show at the bottom
   let bottomHtml = '';
-  let headerProgressHtml = delegationProgressCardHtml(chat, { taskStatus: taskState });
+  const tracking = chatTrackingSummary(chat);
+  const headerProgressHtml = delegationProgressCardHtml(chat, { taskId: tracking.tracking_task_id, commandId: tracking.tracking_command_id, taskStatus: taskState });
   if (taskState === 'scheduled') {
     const timeText = getFormattedDateTime(chat.createdAt);
     bottomHtml = `
@@ -3010,45 +3081,9 @@ function chatWindow(chat, activeId, relation = 'center') {
         </button>
       </div>
     `;
-  } else if (taskState === 'queued' || taskState === 'running' || taskState === 'blocked') {
-    // Active work keeps the composer hidden. Its progress lives in the header,
-    // so the content area remains exclusively for the conversation.
-    const trackingMsg = [...chat.messages].reverse().find(m => 
-      (m.commandId && m.commandId === chat.lastTrackingId) || 
-      (m.taskId && m.taskId === chat.lastTrackingId)
-    );
-    const taskId = trackingMsg?.taskId || '';
-    const commandId = trackingMsg?.commandId || chat.lastTrackingId || '';
-    const taskStatus = trackingMsg?.status || 'queued';
-    
-    headerProgressHtml = delegationProgressCardHtml(chat, { taskId, commandId, taskStatus });
-  } else if (taskState === 'success' || taskState === 'failed') {
-    if (chat.showFollowUp) {
-      bottomHtml = `
-        ${attachmentsHtml}
-        <form class="ctox-chat-form" data-chat-form>
-          <input type="file" multiple accept="image/*,application/pdf" style="display: none;" data-chat-file-input="${chat.id}" />
-          <button type="button" class="ctox-chat-clip-btn" data-chat-clip="${chat.id}" title="Datei hinzufügen">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
-          </button>
-          <textarea name="message" placeholder="${escapeAttr(chatUiIsGerman() ? `Nächste Aufgabe für ${crew.name}...` : `Next task for ${crew.name}...`)}" required>${escapeHtml(chat.draft || '')}</textarea>
-          <button type="submit" data-chat-send aria-label="Senden">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
-          </button>
-        </form>
-      `;
-    } else {
-      bottomHtml = `
-        <div class="ctox-followup-container">
-          <button class="ctox-followup-btn" type="button" data-chat-followup-trigger="${escapeAttr(chat.id)}">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
-            <span>Folgeaufgabe eingeben</span>
-          </button>
-        </div>
-      `;
-    }
   } else {
-    // idle state
+    // Keep conversation input available while work waits, runs, or finishes.
+    // Follow-up submissions retain the chat thread and use the normal queue.
     bottomHtml = `
       ${attachmentsHtml}
       <form class="ctox-chat-form" data-chat-form>
@@ -3066,11 +3101,7 @@ function chatWindow(chat, activeId, relation = 'center') {
 
   const isMinimizedClass = chat.minimized ? 'is-minimized' : '';
   const taskStateClass = `is-task-${taskState}`;
-  const windowTitle = [
-    `${crew.name} · ${chat.title || (chatUiIsGerman() ? 'Neue Aufgabe' : 'New task')}`,
-    taskState,
-    executionProgressTooltip(executionProgressForChat(chat)),
-  ].filter(Boolean).join('\n');
+  const windowTitle = chatWindowTitle(chat);
 
   let schedulerBarHtml = '';
   if (isFuture) {
@@ -3120,6 +3151,7 @@ function chatWindow(chat, activeId, relation = 'center') {
         <strong>Datei hier ablegen</strong>
       </div>
       ${schedulerBarHtml}
+      ${chatInspectionMarkup(chat)}
       <div class="ctox-chat-messages">
         ${agentScopeHtml}
         ${chat.messages.length ? chatMessagesMarkup(chat.messages) : `<div class="ctox-chat-empty">${escapeHtml(chatUiIsGerman() ? `Gib ${crew.name} eine Aufgabe.` : `Give ${crew.name} a task.`)}</div>`}
@@ -3765,6 +3797,22 @@ function trackButtonLabel(message) {
 function friendlyCrewMessage(text) {
   const value = String(text || '');
   const de = chatUiIsGerman();
+  const selection = value.match(/^(.{1,80} übernimmt):/);
+  if (selection) return selection[1];
+  if (/^Der Versuch wird wiederholt: CTOX chat could not continue because the model API/.test(value)) return de ? 'Der Modelldienst antwortet nicht. Die Crew versucht es erneut.' : 'The model service is not responding. The crew will retry.';
+  if (value === 'Aufgabe in der CTOX Queue angelegt. Fortschritt und Antwort erscheinen hier.') {
+    return de ? 'Die Crew hat deine Aufgabe erhalten. Fortschritt und Antwort erscheinen hier.'
+      : 'The crew has received your task. Progress and the reply will appear here.';
+  }
+  if (/^CTOX konnte die Aufgabe nicht ausführen: CTOX chat could not continue because the model API is (temporarily unavailable|rate-limited)\./.test(value)) {
+    return /rate-limited/.test(value)
+      ? (de ? 'Die Crew konnte die Aufgabe nicht abschließen: Der Modelldienst hat zu viele Anfragen erhalten.' : 'The crew could not complete the task: The model service received too many requests.')
+      : (de ? 'Die Crew konnte die Aufgabe nicht abschließen: Der Modelldienst war nicht erreichbar.' : 'The crew could not complete the task: The model service was unavailable.');
+  }
+  if (/^Der Versuch wird wiederholt: Harness retry feedback injected after runtime failure: direct session (error|timeout)/.test(value)) {
+    return de ? 'Die Crew versucht es erneut. Die Verbindung zum Modelldienst wurde unterbrochen.'
+      : 'The crew is trying again. The connection to the model service was interrupted.';
+  }
   if (/^Task angelegt und in der CTOX Queue\.(?: Antwort erscheint hier, sobald (?:CTOX ihn|der CTOX Service ihn) verarbeitet\.)?$/.test(value)) {
     return de
       ? 'Deine Aufgabe steht auf der Aufgabenliste. Die Antwort erscheint hier, sobald die Crew sie bearbeitet hat.'
@@ -3828,13 +3876,13 @@ function formatChatBodyHtml(rawText) {
     .join('');
 }
 
-function messageMarkup(message) {
+function messageMarkup(message, { conversation = false } = {}) {
   const trackId = message.taskId || message.commandId;
   const visibleTrackId = compactTrackingId(trackId);
-  const tracking = message.trackable === false ? '' : (message.commandId || message.taskId)
+  const tracking = message.trackable === false || !message.taskId ? '' : (message.commandId || message.taskId)
     ? `<button class="ctox-chat-track" type="button" data-track-task data-task-id="${escapeAttr(message.taskId || '')}" data-command-id="${escapeAttr(message.commandId || '')}" data-task-status="${escapeAttr(message.status || '')}" title="${escapeAttr(`${trackButtonLabel(message)} · ${trackId}`)}" aria-label="${escapeAttr(`${trackButtonLabel(message)} · ${trackId}`)}"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3h7v7"></path><path d="M10 14 21 3"></path><path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"></path></svg><code class="ctox-chat-track-id">${escapeHtml(visibleTrackId)}</code></button>`
     : '';
-  const rawText = message.role === 'user' ? String(message.text || '') : friendlyCrewMessage(message.text);
+  const rawText = conversation || message.role === 'user' ? String(message.text || '') : friendlyCrewMessage(message.text);
   const promptIsLong = message.role === 'user'
     && (rawText.length > 180 || rawText.split('\n').length > 2);
   const compactText = rawText.replace(/\s+/g, ' ').trim();
@@ -3864,8 +3912,41 @@ function compactTrackingId(value) {
   return `…${tail.slice(-12)}`;
 }
 
+function isChatInspectionMessage(message) {
+  if (message.role === 'user' || message.role === 'assistant') return false;
+  if (['reply', 'question', 'interim'].includes(message.kind)) return false;
+  if (message.kind === 'status' || message.takeoverFor || message.blockedFor || message.failureFor || String(message.id || '').startsWith('status_')) return true;
+  // Old clients copied queue receipts out of command.result into replyFor.
+  // Keep those receipts in inspection, without rewriting the stored conversation.
+  if (message.replyFor) return /^(?:Aufgabe (?:wird|in der)|Task angelegt|Deine Aufgabe steht|Die Crew hat deine Aufgabe erhalten|Die Bearbeitung hat begonnen|Der Versuch wird wiederholt|CTOX konnte die Aufgabe)/.test(String(message.text || ''));
+  return false;
+}
+
 function chatMessagesMarkup(messages = []) {
-  return messages.map((message) => messageMarkup(message)).join('');
+  return messages.filter(message => !isChatInspectionMessage(message)).map(message => messageMarkup(message, { conversation: true })).join('');
+}
+
+function chatInspectionContent(chat) {
+  const messages = (chat.messages || []).filter(isChatInspectionMessage);
+  const current = messages.at(-1);
+  const progress = executionProgressForChat(chat);
+  const de = chatUiIsGerman();
+  const state = getTaskState(chat);
+  const title = state === 'success' ? (de ? 'Aufgabe abgeschlossen' : 'Task completed')
+    : state === 'failed' ? (de ? 'Bearbeitung fehlgeschlagen' : 'Task failed')
+      : current ? friendlyCrewMessage(current.text) : (de ? 'Bereit' : 'Ready');
+  const states = de ? { pending: 'Offen', in_progress: 'In Arbeit', completed: 'Erledigt', failed: 'Fehlgeschlagen', blocked: 'Wartet' }
+    : { pending: 'Pending', in_progress: 'Working', completed: 'Done', failed: 'Failed', blocked: 'Waiting' };
+  const steps = (progress?.steps || []).map(step => `<li><span>${escapeHtml(step.label)}</span><small>${escapeHtml(states[step.status] || (de ? 'Offen' : 'Pending'))}</small></li>`).join('');
+  const history = messages.map(message => `<li><time>${escapeHtml(Number(message.createdAt) > 0 ? new Date(Number(message.createdAt)).toLocaleTimeString(de ? 'de-DE' : 'en-GB', { hour: '2-digit', minute: '2-digit' }) : '')}</time><span>${escapeHtml(friendlyCrewMessage(message.text))}</span></li>`).join('');
+  const tracked = [...(chat.messages || [])].reverse().find(message => message.taskId && message.trackable !== false);
+  const link = tracked ? `<button type="button" class="ctox-button" title="${escapeAttr(tracked.taskId)}" data-track-task data-task-id="${escapeAttr(tracked.taskId)}" data-command-id="${escapeAttr(tracked.commandId || '')}" data-task-status="${escapeAttr(tracked.status || '')}">${de ? 'Aufgabe öffnen' : 'Open task'}</button>` : '';
+  return { title, body: `${steps ? `<ol class="ctox-chat-inspection-steps">${steps}</ol>` : ''}<ol class="ctox-chat-inspection-history">${history}</ol>${link}` };
+}
+
+function chatInspectionMarkup(chat) {
+  const content = chatInspectionContent(chat);
+  return `<details class="ctox-chat-inspection" ${chat.inspectionOpen ? 'open' : ''}><summary>${escapeHtml(content.title)}</summary><div class="ctox-chat-inspection-body">${content.body}</div></details>`;
 }
 
 async function submitChatMessage({
@@ -3997,6 +4078,14 @@ async function submitChatMessage({
         module: sourceModule,
         source_module: sourceModule,
         source_title: sourceTitle,
+        owner_user_id: canonicalChatOwnerUserId(
+          extraClientContext.owner_user_id,
+          extraClientContext.owner,
+          extraClientContext.actor?.id,
+          extraClientContext.actor?.user_id,
+          chat.owner_user_id,
+          state.ownerUserId,
+        ),
         inbound_channel: meta.inbound_channel || CHAT_CHANNEL,
         outbound_channel: 'business_os_chat',
         chat_id: chat.id,
@@ -4151,7 +4240,7 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         chatChanged = true;
       }
       const takeoverKey = nextTaskId || commandId;
-      if (member && takeoverKey && !chat.messages.some((item) => item.takeoverFor === takeoverKey)) {
+      if (member && takeoverKey && !hasTrackingMarker(chat, 'takeoverFor', { commandId, taskId: nextTaskId })) {
         const reasonTitle = await crewSelectionReason(db?.raw?.ctox_harness_events, String(taskDoc?.task_id || taskDoc?.id || nextTaskId).replace(/^queue-/, ''));
         chat.messages.push({
           id: `takeover_${crypto.randomUUID()}`,
@@ -4175,7 +4264,8 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         || commandDoc?.executionProgress
         || null;
       const normalizedProgress = normalizeExecutionProgress(nextProgress);
-      if (JSON.stringify(message.executionProgress || null) !== JSON.stringify(normalizedProgress)) {
+      if (normalizedProgress
+        && JSON.stringify(message.executionProgress || null) !== JSON.stringify(normalizedProgress)) {
         message.executionProgress = normalizedProgress;
         changed = true;
         chatChanged = true;
@@ -4199,8 +4289,15 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         changed = true;
         chatChanged = true;
       }
-      const outbound = extractOutboundText(commandDoc) || extractOutboundText(taskDoc);
-      if (outbound && !chat.messages.some((item) => item.replyFor === (message.taskId || message.commandId))) {
+      const outbound = shouldDeliverTrackedOutbound(nextStatus, commandDoc, taskDoc)
+        ? (extractOutboundText(commandDoc) || extractOutboundText(taskDoc))
+        : '';
+      // A tracked message starts with only its command id and gains its task id
+      // the moment the queue admits it. Matching the marker against the current
+      // identity alone therefore missed a reply that had been filed under the
+      // other one, and the same answer was appended a second time (measured on
+      // welsch 09.09.2026). Both identities are the same conversation turn.
+      if (outbound && !hasReplyAlready(chat, message, outbound)) {
         chat.messages.push({
           id: `reply_${crypto.randomUUID()}`,
           role: 'ctox',
@@ -4215,7 +4312,7 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         chatChanged = true;
         shouldFocusChat = true;
       }
-      if (isBlockedTrackingStatus(nextStatus) && !chat.messages.some((item) => item.blockedFor === (message.taskId || message.commandId))) {
+      if (isBlockedTrackingStatus(nextStatus) && !hasTrackingMarker(chat, 'blockedFor', message)) {
         chat.messages.push({
           id: `blocked_${crypto.randomUUID()}`,
           role: 'ctox',
@@ -4229,7 +4326,7 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         changed = true;
         chatChanged = true;
       }
-      if (isFailureStatus(nextStatus) && !chat.messages.some((item) => item.failureFor === (message.taskId || message.commandId))) {
+      if (isFailureStatus(nextStatus) && !hasTrackingMarker(chat, 'failureFor', message)) {
         chat.messages.push({
           id: `failure_${crypto.randomUUID()}`,
           role: 'ctox',
@@ -4276,6 +4373,9 @@ function trackedMessageNeedsSync(chat, message) {
   const status = message?.status || 'queued';
   if (isActiveTrackingStatus(status)) return true;
   if (!isTerminalTrackingStatus(status)) return false;
+  if ((isFailureStatus(status) || isCancelledTrackingStatus(status)) && !trackingIdFromMessage(message, 'task')) {
+    return true;
+  }
   return !hasTerminalReplyForTracking(chat, message);
 }
 
@@ -4286,7 +4386,12 @@ function hasTerminalReplyForTracking(chat, trackedMessage) {
   ].filter(Boolean);
   if (!refs.length) return false;
   return (Array.isArray(chat?.messages) ? chat.messages : []).some((message) => {
-    if (!message || message === trackedMessage) return false;
+    if (!message) return false;
+    if (message === trackedMessage && !['reply', 'interim'].includes(message.kind)) return false;
+    // Completion of the task and delivery of its answer are separate updates.
+    // A receipt/plan promoted to completed must not stop answer hydration.
+    if (canonicalTrackingStatus(trackedMessage?.status) === 'completed'
+      && isChatInspectionMessage(message)) return false;
     if (String(message.role || '').toLowerCase() !== 'ctox') return false;
     if (!String(message.text || '').trim()) return false;
     if (!isTerminalTrackingStatus(message.status || 'completed')) return false;
@@ -4378,11 +4483,16 @@ async function findDoc(collection, id) {
 }
 
 function preferredTrackingStatus(commandDoc, taskDoc, currentStatus = '') {
-  const commandStatus = firstStatusValue(commandDoc, ['execution_phase', 'task_status', 'status', 'route_status', 'terminal_status']);
-  const taskStatus = firstStatusValue(taskDoc, ['execution_phase', 'task_status', 'status', 'route_status', 'terminal_status']);
-  const terminalStatus = [commandStatus, taskStatus].find(isTerminalTrackingStatus);
+  const commandOutcome = firstStatusValue(commandDoc, ['terminal_status', 'task_status', 'status', 'route_status']);
+  const taskOutcome = firstStatusValue(taskDoc, ['terminal_status', 'task_status', 'status', 'route_status']);
+  const commandPhase = firstStatusValue(commandDoc, ['execution_phase']);
+  const taskPhase = firstStatusValue(taskDoc, ['execution_phase']);
+  const outcomes = [commandOutcome, taskOutcome].map(canonicalTrackingStatus).filter(Boolean);
+  const terminalStatus = outcomes.find(isTerminalTrackingStatus);
   if (terminalStatus) return canonicalTrackingStatus(terminalStatus);
-  return canonicalTrackingStatus(commandStatus || taskStatus || currentStatus || '');
+  const phases = [commandPhase, taskPhase, currentStatus].map(canonicalTrackingStatus);
+  if (phases.some((status) => status === 'running')) return 'running';
+  return canonicalTrackingStatus(commandOutcome || taskOutcome || commandPhase || taskPhase || currentStatus || '');
 }
 
 async function flushChatTrackingCollections({ sync, db } = {}) {
@@ -4406,8 +4516,8 @@ function firstStatusValue(doc, fields) {
   if (!doc || typeof doc !== 'object') return '';
   for (const field of fields) {
     const value = String(doc[field] || '').trim();
-    if (value === 'none') continue;
-    if (value) return value;
+    if (!value || value === 'none' || value === 'terminal') continue;
+    return value;
   }
   return '';
 }
@@ -4431,6 +4541,39 @@ function isTerminalTrackingStatus(status) {
   return ['completed', 'failed', 'cancelled', 'canceled', 'error'].includes(value);
 }
 
+// The answer reaches the chat document from two writers: the native projection
+// appends it without a marker, and this tracking pass appends it with
+// `replyFor`. Text plus the turn's identity is what makes them the same answer;
+// measured on welsch 09.09.2026, where every completed chat carried its reply
+// twice.
+export function hasReplyAlready(chat, message, outbound) {
+  const text = String(outbound || '').trim();
+  if (!text) return false;
+  // Admission receipts from older clients also carry replyFor. They belong
+  // to inspection and must not silence the worker's later actual answer.
+  const replies = (chat?.messages || []).filter(item => item?.role === 'ctox'
+    && (!isChatInspectionMessage(item) || String(item.text || '').trim() === text));
+  if (hasTrackingMarker({ messages: replies }, 'replyFor', message)) return true;
+  const keys = [message?.taskId, message?.commandId].map((value) => String(value || '').trim()).filter(Boolean);
+  return replies.some((item) => {
+    if (item?.role !== 'ctox' || String(item?.text || '').trim() !== text) return false;
+    const itemKeys = [item?.taskId, item?.commandId].map((value) => String(value || '').trim()).filter(Boolean);
+    return !itemKeys.length || !keys.length || itemKeys.some((key) => keys.includes(key));
+  });
+}
+
+// One conversation turn is addressed by its command id before the queue admits
+// it and by its task id afterwards. A marker filed under either identity means
+// the chat already carries that message.
+export function hasTrackingMarker(chat, field, message) {
+  const keys = [message?.taskId, message?.commandId].map((value) => String(value || '').trim()).filter(Boolean);
+  if (!keys.length) return false;
+  return (chat?.messages || []).some((item) => {
+    const marker = String(item?.[field] || '').trim();
+    return marker && keys.includes(marker);
+  });
+}
+
 function extractOutboundText(doc) {
   if (!doc || typeof doc !== 'object') return '';
   const candidates = [
@@ -4451,8 +4594,23 @@ function extractOutboundText(doc) {
   return String(candidates.find((value) => String(value || '').trim()) || '').trim();
 }
 
+function shouldDeliverTrackedOutbound(status, commandDoc, taskDoc) {
+  const value = canonicalTrackingStatus(status);
+  if (isFailureStatus(value) || isCancelledTrackingStatus(value) || value === 'terminal') return false;
+  if (!isTerminalTrackingStatus(value)) {
+    const rawPhase = String(commandDoc?.execution_phase || taskDoc?.execution_phase || '').trim().toLowerCase();
+    if (rawPhase === 'terminal') return false;
+  }
+  return true;
+}
+
 function isFailureStatus(status) {
   return ['failed', 'error'].includes(String(status || '').toLowerCase());
+}
+
+function isCancelledTrackingStatus(status) {
+  const value = canonicalTrackingStatus(status);
+  return value === 'cancelled' || value === 'canceled';
 }
 
 // Every other Business OS surface (ctox, conversations, outbound) reports
@@ -4465,6 +4623,7 @@ function isBlockedTrackingStatus(status) {
 function isActiveTrackingStatus(status) {
   const value = String(status || '').toLowerCase();
   if (isBlockedTrackingStatus(value)) return true;
+  if (value === 'terminal') return true;
   return ['accepted', 'queued', 'pending', 'pending_sync', 'waiting', 'retry_wait', 'retry-wait', 'review_rework', 'review-rework', 'running', 'processing', 'executing', 'active'].includes(value);
 }
 
@@ -4474,9 +4633,9 @@ function trackingMessageAgeMs(message) {
 }
 
 function isTransientCommandTrackingError(error) {
-  if (error?.code === 'peer_connect_timeout') return true;
+  if (error?.code === 'peer_connect_timeout' || error?.code === 'peer_unstable_after_open') return true;
   const text = String(error?.message || error || '');
-  return /WebRTC native peer did not open|Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21|wartet noch auf die Rueckmeldung|Die Rückmeldung steht noch aus/i.test(text);
+  return /WebRTC native peer did not open|opened and closed again within|Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21|wartet noch auf die Rueckmeldung|Die Rückmeldung steht noch aus/i.test(text);
 }
 
 function failureText(commandDoc, taskDoc) {
@@ -4503,7 +4662,7 @@ function blockedText(commandDoc, taskDoc) {
 }
 
 async function openCtoxTask(taskId, commandId, taskStatus) {
-  const focus = { taskId, commandId, taskStatus, sourceModule: 'business-os-chat', openDrawer: true };
+  const focus = { taskId, commandId, taskStatus, sourceModule: 'business-os-chat', openDrawer: false };
   try {
     sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify(focus));
   } catch {}
@@ -4512,7 +4671,7 @@ async function openCtoxTask(taskId, commandId, taskStatus) {
   if (commandId) params.set('command_id', commandId);
   if (taskStatus) params.set('task_status', taskStatus);
   params.set('source', 'business-os-chat');
-  params.set('drawer', '1');
+  params.set('drawer', '0');
   location.hash = `#ctox?${params.toString()}`;
   const app = window.CTOX_BUSINESS_OS_APP;
   if (typeof app?.openModule === 'function' && app.activeModule?.id !== 'ctox') {
@@ -4708,8 +4867,9 @@ function readChatState(session) {
       deletedChatIds: normalizeChatDeletionMap(parsed.deletedChatIds),
       remoteHydrationComplete: chats.length > 0,
       chats: chats
-        .filter((chat) => !chat.owner_user_id || chat.owner_user_id === owner)
+        .filter((chat) => isOwnedChat(chat, owner))
         .map((chat) => ({
+          ...chatCrewSnapshot(chat),
           id: chat.id || `chat_${crypto.randomUUID()}`,
           title: chat.title || 'Crew',
           open: chat.open !== false,
@@ -4865,6 +5025,11 @@ async function persistChatDocsRemote(collection, docs) {
       const existing = await withChatPersistenceTimeout(collection.findOne(doc.id).exec());
       if (existing) {
         const existingJson = existing.toJSON?.() || {};
+        const existingOwner = String(existingJson.owner_user_id || '').trim();
+        const docOwner = String(doc.owner_user_id || '').trim();
+        if (existingOwner && existingOwner !== docOwner) {
+          continue;
+        }
         const owner = doc.owner_user_id || existingJson.owner_user_id || '';
         const merged = mergeChatPair(doc, existingJson, owner);
         await withChatPersistenceTimeout(existing.incrementalPatch(merged));
@@ -5053,6 +5218,8 @@ function mergeChatPair(localChat, remoteChat, owner) {
   const messages = mergeChatMessages(local.messages, remote.messages);
   return applyChatTrackingSummary({
     ...base,
+    ...chatCrewSnapshot(localIsNewer ? remote : local),
+    ...chatCrewSnapshot(base),
     title: local.title || remote.title || base.title,
     open: local.open !== false || remote.open !== false,
     minimized: Boolean(presentation.minimized),
@@ -5166,6 +5333,7 @@ function preferredChatTrackingId(local, remote, messages) {
 
 function normalizeChat(chat) {
   return applyChatTrackingSummary({
+    ...chatCrewSnapshot(chat),
     id: chat.id || `chat_${crypto.randomUUID()}`,
     title: chat.title || 'Crew',
     open: chat.open !== false,
@@ -5196,8 +5364,23 @@ function ownerUserId(session) {
   return String(session?.user?.id || 'local-dev').trim() || 'local-dev';
 }
 
+function isPlaceholderChatOwner(ownerId) {
+  const value = String(ownerId || '').trim();
+  return !value || value === 'local-dev';
+}
+
+function canonicalChatOwnerUserId(...candidates) {
+  const values = candidates
+    .filter((candidate) => candidate == null || typeof candidate !== 'object')
+    .map((candidate) => String(candidate || '').trim())
+    .filter(Boolean);
+  return values.find((value) => !isPlaceholderChatOwner(value)) || values[0] || '';
+}
+
 function isOwnedChat(chat, owner) {
-  return !owner || !chat?.owner_user_id || chat.owner_user_id === owner;
+  if (!owner) return true;
+  const chatOwner = String(chat?.owner_user_id || '').trim();
+  return !chatOwner || chatOwner === String(owner).trim();
 }
 
 function compactConversation(messages) {
@@ -5479,7 +5662,7 @@ function installChatStyles() {
       max-width: none;
     }
     .ctox-chat-dock.is-collapsed {
-      grid-template-columns: 88px var(--ctox-date-pill-width);
+      grid-template-columns: max-content var(--ctox-date-pill-width);
       width: auto;
     }
     .ctox-chat-dock.is-collapsed .ctox-chat-nav,
@@ -6041,165 +6224,7 @@ function installChatStyles() {
       color: var(--status-color);
       font-weight: 820;
     }
-
-    .ctox-crew-creature {
-      display: inline-grid;
-      place-items: center;
-      width: 100%;
-      height: 100%;
-      transform-origin: 50% 78%;
-      will-change: transform;
-      contain: layout style;
-    }
-    .ctox-crew-creature svg {
-      display: block;
-      width: 100%;
-      height: 100%;
-      overflow: visible;
-    }
-    .ctox-crew-body {
-      fill: var(--crew-color);
-      filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--crew-color) 32%, transparent));
-      transform-box: fill-box;
-      transform-origin: center;
-    }
-    .ctox-crew-eyes {
-      fill: none;
-      stroke: #090a0c;
-      stroke-width: 5;
-      stroke-linecap: round;
-      transform-box: fill-box;
-      transform-origin: center;
-    }
-    .ctox-crew-eyes-x,
-    .ctox-crew-eyes-sleeping {
-      fill: none;
-      stroke: #090a0c;
-      stroke-width: 5;
-      stroke-linecap: round;
-    }
-    .ctox-crew-creature.is-window {
-      width: 38px;
-      height: 38px;
-      flex: 0 0 38px;
-    }
-    /* Resting, queued and scheduled crew members deliberately stay still. */
-    .ctox-crew-creature.is-working,
-    .ctox-chat-window.is-task-running:not(.is-task-review) .ctox-crew-creature {
-      animation: none;
-    }
-    .ctox-crew-creature.is-working .ctox-crew-body,
-    .ctox-chat-window.is-task-running:not(.is-task-review) .ctox-crew-body {
-      animation: none;
-    }
-    .ctox-crew-creature.is-working .ctox-crew-eyes,
-    .ctox-chat-window.is-task-running:not(.is-task-review) .ctox-crew-eyes {
-      animation: none;
-    }
-    .ctox-crew-creature.is-review,
-    .ctox-chat-window.is-task-review .ctox-crew-creature {
-      animation: none;
-    }
-    .ctox-crew-creature.is-review .ctox-crew-body,
-    .ctox-chat-window.is-task-review .ctox-crew-body {
-      animation: none;
-    }
-    .ctox-crew-creature.is-review .ctox-crew-eyes,
-    .ctox-chat-window.is-task-review .ctox-crew-eyes {
-      animation: none;
-    }
-    .ctox-crew-creature.is-failed,
-    .ctox-chat-window.is-task-failed .ctox-crew-creature {
-      animation: ctoxCrewOops 860ms cubic-bezier(.22,.75,.35,1) 1 both;
-    }
-    /* Reading: the body leans in a little, the lowered eyes scan the page. */
-    .ctox-chat-crew-slot { touch-action: none; }
-    .ctox-crew-eyes-review,
-    .ctox-crew-eyes-reading,
-    .ctox-crew-eyes-learning {
-      fill: none;
-      stroke: #090a0c;
-      stroke-width: 5;
-      stroke-linecap: round;
-    }
-    .ctox-crew-eyes-learning circle {
-      fill: #090a0c;
-      stroke: none;
-    }
-    .ctox-crew-creature.is-reading .ctox-crew-body {
-      animation: ctoxCrewReadLean 3.2s ease-in-out infinite;
-    }
-    .ctox-crew-creature.is-reading .ctox-crew-eyes {
-      animation: ctoxCrewReadScan 2.4s ease-in-out infinite;
-    }
-    /* Learning: a slow, content nod with a soft glow of the body. */
-    .ctox-crew-creature.is-learning {
-      animation: ctoxCrewLearnNod 2.6s ease-in-out infinite;
-    }
-    .ctox-crew-creature.is-learning .ctox-crew-body {
-      animation: ctoxCrewLearnGlow 2.6s ease-in-out infinite;
-    }
-    @keyframes ctoxCrewReadLean {
-      0%, 100% { transform: scale(1, 1) rotate(0); }
-      50% { transform: scale(1.02, .985) rotate(2deg); }
-    }
-    @keyframes ctoxCrewReadScan {
-      0%, 100% { transform: translateX(-2px); }
-      45% { transform: translateX(2.5px); }
-      55% { transform: translateX(2.5px); }
-    }
-    @keyframes ctoxCrewLearnNod {
-      0%, 100% { transform: translateY(0) rotate(0); }
-      35% { transform: translateY(-1.5px) rotate(-2deg); }
-      70% { transform: translateY(1px) rotate(1.5deg); }
-    }
-    @keyframes ctoxCrewLearnGlow {
-      0%, 100% { filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--crew-color) 32%, transparent)); }
-      50% { filter: drop-shadow(0 0 9px color-mix(in srgb, var(--crew-color) 78%, transparent)); }
-    }
-    @keyframes ctoxCrewWorkDrift {
-      0%, 19%, 100% { transform: translate3d(0, 0, 0) rotate(-1.5deg); }
-      33% { transform: translate3d(0, -2px, 0) rotate(1deg); }
-      57% { transform: translate3d(1px, 1px, 0) rotate(2.5deg); }
-      78% { transform: translate3d(-1px, -1px, 0) rotate(-2deg); }
-    }
-    @keyframes ctoxCrewWorkBody {
-      0%, 100% { transform: scale(1, 1); }
-      27% { transform: scale(1.035, .97) skewX(-1deg); }
-      52% { transform: scale(.975, 1.025) skewX(1.5deg); }
-      81% { transform: scale(1.018, .988) skewX(-.5deg); }
-    }
-    @keyframes ctoxCrewWorkEyes {
-      0%, 23%, 100% { transform: translateX(0) rotate(0); }
-      41% { transform: translateX(2px) rotate(-2deg); }
-      63% { transform: translateX(-1px) rotate(1deg); }
-      86% { transform: translateX(1px) rotate(-1deg); }
-    }
-    @keyframes ctoxCrewReviewDrift {
-      0%, 100% { transform: translate3d(0, 0, 0) rotate(2deg); }
-      24% { transform: translate3d(-1px, -1px, 0) rotate(-2deg); }
-      49% { transform: translate3d(1px, 1px, 0) rotate(3deg); }
-      73% { transform: translate3d(-1px, 0, 0) rotate(-1deg); }
-    }
-    @keyframes ctoxCrewReviewBody {
-      0%, 100% { transform: scale(1) rotate(0); }
-      18% { transform: scale(.965, 1.03) rotate(-2deg); }
-      46% { transform: scale(1.025, .975) rotate(1.5deg); }
-      68% { transform: scale(.985, 1.015) rotate(3deg); }
-      88% { transform: scale(1.012, .99) rotate(-1deg); }
-    }
-    @keyframes ctoxCrewReviewEyes {
-      0%, 100% { transform: translateX(-1px) rotate(2deg); }
-      31% { transform: translateX(3px) rotate(-3deg); }
-      59% { transform: translateX(-3px) rotate(2deg); }
-      82% { transform: translateX(1px) rotate(-1deg); }
-    }
-    @keyframes ctoxCrewOops {
-      0%, 68%, 100% { transform: translate3d(0, 0, 0) rotate(0); }
-      76% { transform: translate3d(-2px, 0, 0) rotate(-3deg); }
-      84% { transform: translate3d(2px, 0, 0) rotate(3deg); }
-      92% { transform: translate3d(-1px, 0, 0) rotate(-1deg); }
-    }
+${CREW_CREATURE_BASE_CSS}
     /* Kept for the planning indicator; creature bodies never use this loop. */
     @keyframes ctoxCrewBreathe {
       0%, 100% { transform: scale(1); }
@@ -6644,6 +6669,12 @@ function installChatStyles() {
       box-sizing: border-box;
       overflow-wrap: anywhere;
     }
+    .ctox-chat-inspection { flex: 0 0 auto; border-bottom: 1px solid var(--line); }
+    .ctox-chat-inspection > summary { cursor: pointer; padding: 6px 14px; color: var(--muted); font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ctox-chat-inspection-body { max-height: 260px; overflow: auto; padding: 0 14px 10px; font-size: var(--fs-meta); }
+    .ctox-chat-inspection-body ol { padding: 0; list-style: none; }
+    .ctox-chat-inspection-body li { display: flex; gap: 10px; margin: 8px 0; }
+    .ctox-chat-inspection-body time, .ctox-chat-inspection-body small { color: var(--muted); flex-shrink: 0; }
     .ctox-chat-messages .ctox-agent-scope {
       flex: 0 0 auto;
       display: grid;
@@ -7772,8 +7803,29 @@ function installChatStyles() {
     .ctox-chat-stage-inner.has-maximized {
       height: min(600px, calc(100dvh - 112px));
     }
+    .ctox-chat-stage-inner.is-empty { height: 0; padding: 0; }
+    .ctox-chat-stage-inner.has-maximized { height: calc(100dvh - 112px); }
+    .ctox-chat-window.is-maximized {
+      width: min(960px, calc(100dvw - 24px)) !important;
+      max-width: min(960px, calc(100dvw - 24px));
+      height: calc(100dvh - 132px) !important;
+      min-height: 0;
+      max-height: calc(100dvh - 132px);
+    }
     .ctox-chat-window:not(:has(.ctox-chat-form)):not(:has(.ctox-followup-container)):not(:has(.ctox-chat-scheduler-card)) {
       grid-template-rows: 64px minmax(0, 1fr);
+    }
+    /* The task inspection is a fourth grid child between header and
+       messages. With the three-row templates it took the flexible row: on
+       an affected layout it stood 402px tall and empty while the messages got
+       56px and the user's own task sat clipped behind the input. */
+    .ctox-chat-window:has(> .ctox-chat-inspection),
+    .ctox-chat-window.is-active:has(> .ctox-chat-inspection),
+    .ctox-chat-window[class*="is-task-"]:has(> .ctox-chat-inspection) {
+      grid-template-rows: 64px auto minmax(0, 1fr) 56px;
+    }
+    .ctox-chat-window:has(> .ctox-chat-inspection):not(:has(.ctox-chat-form)):not(:has(.ctox-followup-container)):not(:has(.ctox-chat-scheduler-card)) {
+      grid-template-rows: 64px auto minmax(0, 1fr);
     }
     .ctox-chat-window header {
       position: relative;
@@ -8017,8 +8069,9 @@ function installChatStyles() {
       100% { width: 58%; opacity: 0.9; }
     }
     .ctox-chat-dock {
-      --ctox-date-pill-width: 42px;
-      grid-template-columns: 108px var(--ctox-date-pill-width) 36px;
+      /* Two 24px day arrows, a 30px calendar, gaps, padding and border. */
+      --ctox-date-pill-width: 88px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) 36px;
       gap: 6px;
       padding: 5px;
       border-color: color-mix(in srgb, var(--line) 48%, transparent);
@@ -8026,20 +8079,21 @@ function installChatStyles() {
       background: var(--surface);
     }
     .ctox-chat-dock.has-visible-chats {
-      grid-template-columns: 108px var(--ctox-date-pill-width) minmax(48px, auto) 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) minmax(48px, auto) 36px;
     }
     .ctox-chat-dock.has-nav {
-      grid-template-columns: 108px var(--ctox-date-pill-width) 26px minmax(0, auto) 26px 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) 26px minmax(0, auto) 26px 36px;
     }
     .ctox-chat-dock.has-many-chats {
-      grid-template-columns: 108px var(--ctox-date-pill-width) 26px minmax(0, min(350px, 36dvw)) 26px 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) 26px minmax(0, min(350px, 36dvw)) 26px 36px;
     }
     .ctox-chat-fab {
       display: grid;
       grid-template-columns: auto 1fr;
       align-items: center;
       gap: 6px;
-      width: 108px;
+      /* Reserve the full overlapping member row, including all six portraits. */
+      width: max-content;
       min-width: 108px;
       height: 42px;
       padding: 0 8px;
@@ -8050,7 +8104,7 @@ function installChatStyles() {
       display: flex;
       align-items: center;
       justify-content: flex-end;
-      width: 100%;
+      width: max-content;
       height: 34px;
       padding-left: 8px;
     }
@@ -8075,6 +8129,14 @@ function installChatStyles() {
     }
     .ctox-chat-fab-creatures.is-members .ctox-crew-creature {
       margin-left: 0;
+    }
+    /* Keep five/six full-size portraits within the four-member row width,
+       leaving both date controls and the reporter reservation their space. */
+    .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) {
+      padding-left: 16px;
+    }
+    .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) .ctox-chat-crew-slot {
+      margin-left: -16px;
     }
     /* A member at work on an app: small portrait in the corner of the window
        icon and on the desktop icon. Pure presence, no text. */
@@ -8254,11 +8316,11 @@ function installChatStyles() {
       max-width: 100%;
     }
     .ctox-chat-dock.has-visible-chats:not(.is-collapsed) {
-      grid-template-columns: 108px var(--ctox-date-pill-width) minmax(48px, auto) 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) minmax(48px, auto) 36px;
     }
     .ctox-chat-dock.has-few-chats:not(.is-collapsed),
     .ctox-chat-dock.has-many-chats:not(.is-collapsed) {
-      grid-template-columns: 108px var(--ctox-date-pill-width) 26px minmax(0, 1fr) 26px 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) 26px minmax(0, 1fr) 26px 36px;
       justify-self: stretch;
       width: 100%;
       max-width: 100%;
@@ -8977,6 +9039,13 @@ async function dispatchScheduledChat({ chat, scheduledMsg, commandBus, db, sync 
       module: chat.contextMeta?.module || 'ctox',
       source_module: chat.contextMeta?.module || 'ctox',
       source_title: chat.contextMeta?.source_title || 'Crew',
+      owner_user_id: canonicalChatOwnerUserId(
+        chatClientContext.owner_user_id,
+        chatClientContext.owner,
+        chatClientContext.actor?.id,
+        chatClientContext.actor?.user_id,
+        chat.owner_user_id,
+      ),
       inbound_channel: CHAT_CHANNEL,
       outbound_channel: 'business_os_chat',
       chat_id: chat.id,
@@ -9054,7 +9123,10 @@ async function cancelScheduledChat(state, chat, db, root, commandBus, getActiveM
 }
 
 export const __businessChatTestInternals = Object.freeze({
+  hasTrackingMarker,
+  hasReplyAlready,
   crewMemberExpression,
+  wireCrewAppPresence,
   crewPoolSlotHtml,
   clearSchedulerLoop,
   chatAllowsAutoFocus,
@@ -9070,7 +9142,14 @@ export const __businessChatTestInternals = Object.freeze({
   executionProgressHeaderHtml,
   executionProgressSignature,
   messageMarkup,
+  isChatInspectionMessage,
+  chatInspectionContent,
+  chatInspectionMarkup,
+  chatMessagesMarkup,
+  chatWindow,
+  chatComposerSignature,
   mergeChatPair,
+  mergeChats,
   mergeChatMessages,
   claimChatOpenOwnership,
   currentChatOpenOwnership,
@@ -9082,12 +9161,14 @@ export const __businessChatTestInternals = Object.freeze({
   createTrackedMessageWatch,
   findDocsByIds,
   findChatForOpenDetail,
+  chatOpenNeedsHydration,
   focusChatForUser,
   getLocalDateString,
   hasActiveTrackedMessages,
   hasTrackedMessagesNeedingSync,
   flushChatTrackingCollections,
   hydrateChatsFromRxDb,
+  isOwnedChat,
   initSchedulerLoop,
   isChatEmptyForDeletion,
   isScrolledToBottom,
@@ -9114,8 +9195,11 @@ export const __businessChatTestInternals = Object.freeze({
   isTransientCommandTrackingError,
   withChatPersistenceTimeout,
   isBlockedTrackingStatus,
+  isCancelledTrackingStatus,
   isFailureStatus,
   isTerminalTrackingStatus,
   isActiveTrackingStatus,
   getTaskState,
+  preferredTrackingStatus,
+  progressShowsActiveReview,
 });

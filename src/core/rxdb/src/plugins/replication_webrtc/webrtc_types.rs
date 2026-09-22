@@ -129,6 +129,23 @@ pub trait WebRTCConnectionHandler: Send + Sync {
         super::NativePeerRole::CtoxInstance
     }
 
+    /// A query-only consumer uses the existing browser/replica wire role.
+    /// This is fixed before signaling join, never inferred from remote input.
+    fn is_data_client(&self) -> bool {
+        false
+    }
+
+    /// Fresh host credentials for this connection and optional remote challenge.
+    /// The host must authorize disclosure to this peer; room membership alone
+    /// is not authentication. No provider means the existing anonymous envelope.
+    async fn local_session_credentials(
+        &self,
+        _peer: &Self::Peer,
+        _nonce: Option<String>,
+    ) -> Result<Option<super::local_session::LocalSessionCredentials>, RxError> {
+        Ok(None)
+    }
+
     async fn send(&self, peer: &Self::Peer, frame: WebRTCWireFrame) -> Result<(), RxError>;
 
     async fn send_auxiliary(
@@ -274,6 +291,9 @@ pub trait WebRTCConnectionHandler: Send + Sync {
 }
 
 /// Signaling-peer admission predicate shared by WebRTC replication options.
+/// Checked for incoming RPCs as well as outgoing handshakes, and rechecked
+/// around asynchronous credential acquisition. This does not authenticate a
+/// server identity: credential providers still authorize the target instance.
 pub type WebRTCPeerValidator<P> = Arc<dyn Fn(&P) -> bool + Send + Sync>;
 
 /// Result of validating a full `ctoxProtocol.peerSession` envelope.

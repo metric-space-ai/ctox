@@ -29,6 +29,7 @@ use crate::types::{
     BulkWriteRow, EventBulk, FilledMangoQuery, RxJsonSchema, RxQueryPlan,
     RxStorageBulkWriteResponse, RxStorageChangedDocumentsSinceResult, RxStorageCountResult,
     RxStorageInstance, RxStorageInstanceCreationParams, RxStorageQueryResult,
+    RxStorageSnapshotEvent,
 };
 
 use super::cleanup::cleanup_deleted_documents;
@@ -414,11 +415,13 @@ pub struct RxStorageInstanceSqlite {
 }
 
 impl RxStorageInstanceSqlite {
-    pub fn new(
+    pub(crate) fn new(
         connection: SharedSqliteConnection,
         params: RxStorageInstanceCreationParams,
         table_name: String,
         database_path: std::path::PathBuf,
+        read_connection: super::types::SqliteReaderCache,
+        change_feed_read_connection: super::types::SqliteReaderCache,
     ) -> Self {
         let primary_path = get_primary_field_of_primary_key(&params.schema.primary_key);
         let database_key = database_key_for_path(&database_path);
@@ -430,8 +433,6 @@ impl RxStorageInstanceSqlite {
             let conn = lock_sqlite_writer(&connection);
             latest_checkpoint(&conn, &table_name).unwrap_or_else(|| json!({ "id": "", "lwt": 0 }))
         }));
-        let read_connection = Arc::new(Mutex::new(None));
-
         let notifier = register_table_notifier(&database_key, &table_name);
         // One startup reconciliation closes the gap between the initial
         // checkpoint read and the database-wide data_version watcher baseline.
@@ -446,7 +447,7 @@ impl RxStorageInstanceSqlite {
             closed: Arc::clone(&closed),
             checkpoint: Arc::clone(&external_checkpoint),
             notifier: Arc::clone(&notifier),
-            read_connection: Arc::clone(&read_connection),
+            read_connection: change_feed_read_connection,
         });
         let external_notifier = notifier;
         Self {
@@ -496,41 +497,49 @@ impl RxStorageInstanceSqlite {
         T: Send + 'static,
         F: FnOnce(&rusqlite::Connection) -> RxResult<T> + Send + 'static,
     {
-        let connection = match self.open_read_only_connection() {
-            Ok(connection) => ReadConnection::ReadOnly(connection),
-            Err(_) => {
-                SQLITE_READ_ONLY_OPEN_FAILURES.fetch_add(1, Ordering::Relaxed);
-                SQLITE_WRITER_FALLBACKS.fetch_add(1, Ordering::Relaxed);
-                #[cfg(test)]
-                match operation {
-                    ReadOperation::FindDocumentsById => {
-                        FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
-                    }
-                    ReadOperation::Query => {
-                        QUERY_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
-                    }
-                    ReadOperation::ChangedDocumentsSince => {
-                        CHANGED_DOCUMENTS_SINCE_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
-                    }
-                    ReadOperation::Count => {}
-                }
-                #[cfg(not(test))]
-                let _ = operation;
+        let database_path = self.database_path.clone();
+        let read_connection = Arc::clone(&self.read_connection);
+        let writer = Arc::clone(&self.connection);
+        tokio::task::spawn_blocking(move || {
+            let connection =
+                match cached_read_only_connection_for_path(&database_path, &read_connection) {
+                    Ok(connection) => ReadConnection::ReadOnly(connection),
+                    Err(_) => {
+                        SQLITE_READ_ONLY_OPEN_FAILURES.fetch_add(1, Ordering::Relaxed);
+                        SQLITE_WRITER_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+                        #[cfg(test)]
+                        match operation {
+                            ReadOperation::FindDocumentsById => {
+                                FIND_DOCUMENTS_BY_ID_WRITER_FALLBACKS
+                                    .fetch_add(1, Ordering::SeqCst);
+                            }
+                            ReadOperation::Query => {
+                                QUERY_WRITER_FALLBACKS.fetch_add(1, Ordering::SeqCst);
+                            }
+                            ReadOperation::ChangedDocumentsSince => {
+                                CHANGED_DOCUMENTS_SINCE_WRITER_FALLBACKS
+                                    .fetch_add(1, Ordering::SeqCst);
+                            }
+                            ReadOperation::Count => {}
+                        }
+                        #[cfg(not(test))]
+                        let _ = operation;
 
-                // In-memory databases cannot be reopened as independent read-only
-                // connections. Preserve the legacy shared-writer fallback there and
-                // for read-only connection open failures.
-                ReadConnection::WriterFallback(Arc::clone(&self.connection))
-            }
-        };
-        tokio::task::spawn_blocking(move || match connection {
-            ReadConnection::ReadOnly(connection) => {
-                let conn = connection.lock();
-                read(&conn)
-            }
-            ReadConnection::WriterFallback(connection) => {
-                let conn = lock_sqlite_writer(&connection);
-                read(&conn)
+                        // In-memory databases cannot be reopened as independent read-only
+                        // connections. Preserve the legacy shared-writer fallback there and
+                        // for read-only connection open failures.
+                        ReadConnection::WriterFallback(writer)
+                    }
+                };
+            match connection {
+                ReadConnection::ReadOnly(connection) => {
+                    let conn = connection.lock();
+                    read(&conn)
+                }
+                ReadConnection::WriterFallback(connection) => {
+                    let conn = lock_sqlite_writer(&connection);
+                    read(&conn)
+                }
             }
         })
         .await
@@ -1426,6 +1435,25 @@ impl RxStorageInstance for RxStorageInstanceSqlite {
         Some(self.query_stream(prepared_query, chunk_size, on_batch))
     }
 
+    fn query_snapshot_stream_into_blocking(
+        &self,
+        prepared_query: &Value,
+        chunk_size: usize,
+        on_event: &mut (dyn FnMut(RxStorageSnapshotEvent) -> RxResult<bool> + Send),
+    ) -> Option<RxResult<()>> {
+        Some(self.ensure_open("query_snapshot_stream").and_then(|()| {
+            query_snapshot_on_dedicated_connection(
+                &self.database_path,
+                &self.table_name,
+                &self.collection_name,
+                &self.primary_path,
+                prepared_query,
+                chunk_size,
+                on_event,
+            )
+        }))
+    }
+
     async fn query(&self, prepared_query: &Value) -> Result<RxStorageQueryResult, RxError> {
         self.ensure_open("query")?;
         SQLITE_QUERY_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -1602,6 +1630,67 @@ impl Drop for RxStorageInstanceSqlite {
     }
 }
 
+fn query_snapshot_on_dedicated_connection(
+    database_path: &Path,
+    table_name: &str,
+    collection_name: &str,
+    primary_path: &str,
+    prepared_query: &Value,
+    chunk_size: usize,
+    on_event: &mut (dyn FnMut(RxStorageSnapshotEvent) -> RxResult<bool> + Send),
+) -> RxResult<()> {
+    let query = parse_filled_query(prepared_query)?;
+    let compiled = compile_query_sql(table_name, primary_path, &query).ok_or_else(|| {
+        new_rx_error(
+            SQLITE_QUERY_STREAM_UNSUPPORTED,
+            Some(json!({
+                "message": "snapshot requires a SQL-compilable Mango query",
+                "collection": collection_name,
+            })),
+        )
+    })?;
+    let mut connection = open_dedicated_read_only_connection_for_path(database_path)?;
+    // BEGIN alone does not pin a deferred SQLite transaction. This SELECT is
+    // the first read and pins both the counter and subsequent document cursor.
+    // WAL writers remain free to commit while the consumer handles batches.
+    let transaction = connection.transaction().map_err(sqlite_error)?;
+    let change_counter: u64 = transaction
+        .query_row(
+            "SELECT changed_at FROM __rxdb_changed_tables WHERE table_name = ?1",
+            [table_name],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(sqlite_error)?
+        .unwrap_or(0);
+    if !on_event(RxStorageSnapshotEvent::Start { change_counter })? {
+        return Ok(());
+    }
+    let chunk_size = chunk_size.max(1);
+    let mut batch = Vec::new();
+    let mut cancelled = false;
+    for_each_document_with_compiled_sql(&transaction, &compiled, |document| {
+        batch.push(document);
+        if batch.len() >= chunk_size {
+            cancelled = !on_event(RxStorageSnapshotEvent::Documents(std::mem::take(
+                &mut batch,
+            )))?;
+        }
+        Ok(!cancelled)
+    })?;
+    if cancelled {
+        return Ok(());
+    }
+    if !batch.is_empty() && !on_event(RxStorageSnapshotEvent::Documents(batch))? {
+        return Ok(());
+    }
+    // Release the read transaction before notifying completion, including when
+    // the final callback is slow or fails. Errors/cancellation never emit End.
+    transaction.commit().map_err(sqlite_error)?;
+    on_event(RxStorageSnapshotEvent::End)?;
+    Ok(())
+}
+
 fn query_stream_on_dedicated_connection<F>(
     database_path: &Path,
     table_name: &str,
@@ -1692,6 +1781,7 @@ impl RxStorageInstanceSqlite {
         )
     }
 
+    #[cfg(test)]
     fn open_read_only_connection(&self) -> RxResult<SharedSqliteConnection> {
         let path = &self.database_path;
         // SQLite supports `:memory:` only for the connection that created
@@ -2207,7 +2297,7 @@ mod tests {
         let second = instance.open_read_only_connection().unwrap();
         assert!(
             std::sync::Arc::ptr_eq(&first, &second),
-            "file-backed storage must reuse one read-only connection per instance"
+            "a collection must retain its assigned cached read-only connection"
         );
 
         instance
@@ -2232,6 +2322,157 @@ mod tests {
             std::sync::Arc::ptr_eq(&first, &after_reads),
             "hot read paths must not reopen read-only SQLite connections"
         );
+    }
+
+    #[tokio::test]
+    async fn file_backed_collections_bound_readers_without_mixing_data_or_lifetimes() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("shared.sqlite3"),
+        });
+        let started = std::time::Instant::now();
+        let mut instances = Vec::new();
+        let mut readers = HashSet::new();
+        for index in 0..24 {
+            let mut creation = params(test_schema());
+            creation.collection_name = format!("collection_{index}");
+            let instance = create_storage_instance(&storage, creation).await.unwrap();
+            instance
+                .bulk_write(
+                    vec![BulkWriteRow {
+                        previous: None,
+                        document: doc("same-id", "1-seed", index, false, 100.0),
+                    }],
+                    "seed",
+                )
+                .await
+                .unwrap();
+            let rows = instance
+                .find_documents_by_id(&["same-id".to_owned()], false)
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(
+                rows[0]["age"], index,
+                "shared readers must retain table scope"
+            );
+            readers.insert(Arc::as_ptr(&instance.open_read_only_connection().unwrap()) as usize);
+            instances.push(instance);
+        }
+        let initial_ms = started.elapsed().as_secs_f64() * 1_000.0;
+        assert_eq!(
+            readers.len(),
+            super::super::types::SQLITE_POINT_READER_COUNT,
+            "opening more collections must not open an unbounded set of point readers"
+        );
+        instances[0].close().await.unwrap();
+        let rows = instances[4]
+            .find_documents_by_id(&["same-id".to_owned()], false)
+            .await
+            .unwrap();
+        assert_eq!(
+            rows[0]["age"], 4,
+            "closing one table must not close another's shared reader"
+        );
+        assert!(instances[0]
+            .find_documents_by_id(&["same-id".to_owned()], false)
+            .await
+            .is_err());
+
+        let other_storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("other.sqlite3"),
+        });
+        let mut creation = params(test_schema());
+        creation.collection_name = "collection_4".into();
+        let other = create_storage_instance(&other_storage, creation)
+            .await
+            .unwrap();
+        assert!(
+            other
+                .find_documents_by_id(&["same-id".to_owned()], false)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a second database must not reuse the first database's cached connection"
+        );
+        other
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("same-id", "1-other", 999, false, 100.0),
+                }],
+                "seed-other",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            other
+                .find_documents_by_id(&["same-id".to_owned()], false)
+                .await
+                .unwrap()[0]["age"],
+            999
+        );
+        assert_eq!(
+            instances[4]
+                .find_documents_by_id(&["same-id".to_owned()], false)
+                .await
+                .unwrap()[0]["age"],
+            4
+        );
+        eprintln!(
+            "sqlite_reader_cache_fixture collections=24 readers={} initial_ms={initial_ms:.3}",
+            readers.len()
+        );
+        for instance in instances {
+            instance.close().await.unwrap();
+        }
+        other.close().await.unwrap();
+    }
+
+    // A held background cursor models a slow change-feed drain. Its guard
+    // stays on an OS thread; timeout/failure cannot strand test teardown.
+    #[tokio::test]
+    async fn file_backed_point_read_progresses_while_shared_change_feed_reader_is_busy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ctox.sqlite3");
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: path.clone(),
+        });
+        let instance = create_storage_instance(&storage, params(test_schema()))
+            .await
+            .unwrap();
+        instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("point", "1-point", 7, false, 100.0),
+                }],
+                "seed",
+            )
+            .await
+            .unwrap();
+        let (_, background_cache) = storage.collection_readers();
+        let background = cached_read_only_connection_for_path(&path, &background_cache).unwrap();
+        let (held_tx, held_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let holder = std::thread::spawn(move || {
+            let _guard = background.lock();
+            let _ = held_tx.send(());
+            let _ = release_rx.recv_timeout(std::time::Duration::from_secs(5));
+        });
+        held_rx.await.unwrap();
+        let rows = tokio::time::timeout(
+            std::time::Duration::from_millis(750),
+            instance.find_documents_by_id(&["point".to_owned()], false),
+        )
+        .await;
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+        let rows = rows
+            .expect("background drains must not occupy a point-read connection")
+            .unwrap();
+        assert_eq!(rows[0]["age"], 7);
+        instance.close().await.unwrap();
     }
 
     #[tokio::test]
@@ -3017,6 +3258,352 @@ mod tests {
             runtime_counter("count_fallback_query_calls") > fallback_count_before,
             "runtime counters must expose count fallback calls"
         );
+    }
+
+    fn snapshot_query(schema: &RxJsonSchema) -> Value {
+        prepare_query(
+            schema,
+            normalize_mango_query(
+                schema,
+                MangoQuery {
+                    selector: Some(json!({"_deleted": false})),
+                    sort: Some(vec![HashMap::from([("id".into(), "asc".into())])]),
+                    index: None,
+                    limit: None,
+                    skip: Some(0),
+                },
+            ),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn snapshot_counter_and_pages_share_a_read_transaction_during_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("snapshot.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        instance
+            .bulk_write(
+                (1..=3)
+                    .map(|n| BulkWriteRow {
+                        previous: None,
+                        document: doc(&format!("doc-{n}"), "1-a", n, false, n as f64),
+                    })
+                    .collect(),
+                "seed",
+            )
+            .await
+            .unwrap();
+        let prepared = snapshot_query(&schema);
+        let mut original = Vec::new();
+        let mut first_counter = None;
+        let mut ended = false;
+        instance
+            .query_snapshot_stream_into_blocking(&prepared, 1, &mut |event| {
+                match event {
+                    RxStorageSnapshotEvent::Start { change_counter } => {
+                        first_counter = Some(change_counter);
+                        // These commits happen BEFORE the document SELECT starts.
+                        // A separate checkpoint read would mix new data with the old boundary.
+                        let conn = storage.connection().unwrap();
+                        let mut writer = conn.lock();
+                        let tx = writer.transaction().unwrap();
+                        for (id, age, deleted) in [("doc-2", 20, false), ("doc-3", 3, true)] {
+                            update_document(
+                                &tx,
+                                &instance.table_name,
+                                "id",
+                                &BulkWriteRow {
+                                    previous: None,
+                                    document: doc(id, "2-b", age, deleted, 0.0),
+                                },
+                            )
+                            .unwrap();
+                        }
+                        insert_document(
+                            &tx,
+                            &instance.table_name,
+                            "id",
+                            &doc("doc-4", "1-a", 4, false, 0.0),
+                        )
+                        .unwrap();
+                        tx.commit().unwrap();
+                    }
+                    RxStorageSnapshotEvent::Documents(documents) => {
+                        assert_eq!(documents.len(), 1);
+                        if original.is_empty() {
+                            // A physical deletion also commits while the cursor is open.
+                            storage
+                                .connection()
+                                .unwrap()
+                                .lock()
+                                .execute(
+                                    &format!(
+                                        "DELETE FROM {} WHERE id = 'doc-1'",
+                                        quote_identifier(&instance.table_name)
+                                    ),
+                                    [],
+                                )
+                                .unwrap();
+                        }
+                        original.extend(documents);
+                    }
+                    RxStorageSnapshotEvent::End => ended = true,
+                }
+                Ok(true)
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(first_counter, Some(3));
+        assert!(ended);
+        assert_eq!(
+            original
+                .iter()
+                .map(|d| d["age"].as_i64().unwrap())
+                .collect::<Vec<_>>(),
+            [1, 2, 3]
+        );
+        let mut current = Vec::new();
+        let mut current_counter = None;
+        instance
+            .query_snapshot_stream_into_blocking(&prepared, 2, &mut |event| {
+                match event {
+                    RxStorageSnapshotEvent::Start { change_counter } => {
+                        current_counter = Some(change_counter)
+                    }
+                    RxStorageSnapshotEvent::Documents(documents) => current.extend(documents),
+                    RxStorageSnapshotEvent::End => {}
+                }
+                Ok(true)
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(current_counter, Some(7));
+        assert_eq!(
+            current
+                .iter()
+                .map(|d| d["age"].as_i64().unwrap())
+                .collect::<Vec<_>>(),
+            [20, 4]
+        );
+        instance.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn empty_snapshot_pins_the_boundary_before_a_concurrent_first_insert() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("empty-snapshot.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let mut ended = false;
+        instance
+            .query_snapshot_stream_into_blocking(&snapshot_query(&schema), 1, &mut |event| {
+                match event {
+                    RxStorageSnapshotEvent::Start { change_counter } => {
+                        assert_eq!(change_counter, 0);
+                        insert_document(
+                            &storage.connection().unwrap().lock(),
+                            &instance.table_name,
+                            "id",
+                            &doc("first", "1-a", 1, false, 1.0),
+                        )
+                        .unwrap();
+                    }
+                    RxStorageSnapshotEvent::Documents(_) => {
+                        panic!("write leaked into the earlier empty snapshot")
+                    }
+                    RxStorageSnapshotEvent::End => ended = true,
+                }
+                Ok(true)
+            })
+            .unwrap()
+            .unwrap();
+        assert!(ended);
+        assert_eq!(
+            instance
+                .query(&snapshot_query(&schema))
+                .await
+                .unwrap()
+                .documents
+                .len(),
+            1
+        );
+        instance.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_or_failed_snapshot_never_emits_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("cancel-snapshot.sqlite3"),
+        });
+        let mut schema = test_schema();
+        // Inject corrupt storage below to exercise the reader error boundary.
+        // A JSON expression index would reject that injection at write time.
+        schema.indexes = vec![vec!["id".into()]];
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("a", "1-a", 1, false, 1.0),
+                }],
+                "seed",
+            )
+            .await
+            .unwrap();
+        let prepared = snapshot_query(&schema);
+        for fail in [false, true] {
+            let mut events = 0;
+            let result = instance
+                .query_snapshot_stream_into_blocking(&prepared, 1, &mut |event| {
+                    events += 1;
+                    match event {
+                        RxStorageSnapshotEvent::Start { .. } => Ok(true),
+                        RxStorageSnapshotEvent::Documents(_) if fail => {
+                            Err(new_rx_error("CONSUMER_CLOSED", None))
+                        }
+                        RxStorageSnapshotEvent::Documents(_) => Ok(false),
+                        RxStorageSnapshotEvent::End => {
+                            panic!("incomplete snapshot cannot complete")
+                        }
+                    }
+                })
+                .unwrap();
+            assert_eq!(result.is_err(), fail);
+            assert_eq!(events, 2);
+        }
+        let mut events = 0;
+        instance
+            .query_snapshot_stream_into_blocking(&prepared, 1, &mut |_| {
+                events += 1;
+                Ok(false)
+            })
+            .unwrap()
+            .unwrap();
+        assert_eq!(events, 1);
+        // A storage decoding failure also terminates without a completion event.
+        storage
+            .connection()
+            .unwrap()
+            .lock()
+            .execute(
+                &format!(
+                    "UPDATE {} SET data = ?1 WHERE id = ?2",
+                    quote_identifier(&instance.table_name)
+                ),
+                params!["{invalid-json", "a"],
+            )
+            .unwrap();
+        let result = instance
+            .query_snapshot_stream_into_blocking(&prepared, 1, &mut |event| {
+                assert!(!matches!(event, RxStorageSnapshotEvent::End));
+                Ok(true)
+            })
+            .unwrap();
+        assert!(result.is_err());
+        update_document(
+            &storage.connection().unwrap().lock(),
+            &instance.table_name,
+            "id",
+            &BulkWriteRow {
+                previous: None,
+                document: doc("a", "1-a", 1, false, 1.0),
+            },
+        )
+        .unwrap();
+        // A failed callback has released its reader: another write and query work.
+        instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: doc("b", "1-a", 2, false, 2.0),
+                }],
+                "after-cancel",
+            )
+            .await
+            .unwrap();
+        assert_eq!(instance.query(&prepared).await.unwrap().documents.len(), 2);
+        instance.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn snapshot_storage_latency_reports_bounded_batches_separately_from_transport() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = get_rx_storage_sqlite(RxStorageSqliteSettings {
+            database_path: dir.path().join("snapshot-latency.sqlite3"),
+        });
+        let schema = test_schema();
+        let instance = create_storage_instance(&storage, params(schema.clone()))
+            .await
+            .unwrap();
+        let rows = (0..1000)
+            .map(|n| {
+                let mut document = doc(&format!("doc-{n:04}"), "1-a", n, false, n as f64);
+                document["content"] = json!("x".repeat(1024));
+                BulkWriteRow {
+                    previous: None,
+                    document,
+                }
+            })
+            .collect();
+        let written = instance
+            .bulk_write(rows, "snapshot-benchmark")
+            .await
+            .unwrap();
+        assert!(written.error.is_empty());
+        let prepared = snapshot_query(&schema);
+        let mut durations = Vec::new();
+        // One explicit warmup, followed by the 30 reported complete snapshots.
+        for sample in 0..31 {
+            let mut documents = 0;
+            let mut completed = false;
+            let started = Instant::now();
+            instance
+                .query_snapshot_stream_into_blocking(&prepared, 100, &mut |event| {
+                    match event {
+                        RxStorageSnapshotEvent::Start { change_counter } => {
+                            assert_eq!(change_counter, 1000)
+                        }
+                        RxStorageSnapshotEvent::Documents(batch) => {
+                            assert!(batch.len() <= 100);
+                            documents += batch.len();
+                        }
+                        RxStorageSnapshotEvent::End => completed = true,
+                    }
+                    Ok(true)
+                })
+                .unwrap()
+                .unwrap();
+            let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(documents, 1000);
+            assert!(completed);
+            if sample > 0 {
+                durations.push(elapsed);
+            }
+        }
+        durations.sort_by(f64::total_cmp);
+        println!(
+            "{}",
+            json!({
+                "scenario": "sqlite-consistent-snapshot", "samples": durations.len(),
+                "documents": 1000, "contentBytesPerDocument": 1024, "batchDocuments": 100,
+                "p50Ms": durations[14], "p95Ms": durations[28], "quantile": "nearest-rank",
+                "includesTransportOrUi": false,
+            })
+        );
+        instance.close().await.unwrap();
     }
 
     #[tokio::test]

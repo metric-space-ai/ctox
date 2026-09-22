@@ -1,15 +1,98 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { CREW_CREATURE_BASE_CSS } from './crew-renderer.js';
 
-import {
+if (typeof globalThis.window === 'undefined') {
+  globalThis.window = globalThis;
+}
+if (typeof globalThis.document === 'undefined') {
+  globalThis.document = {
+    documentElement: { lang: 'de' },
+    addEventListener() {},
+    body: { append() {} },
+  };
+}
+
+const {
   __businessChatTestInternals,
   chatAgentScopeViewFromMeta,
   crewAppPresenceFromTasks,
   renderChatAgentScopeHtml,
-} from './business-chat.js';
+} = await import('./business-chat.js');
 
-const businessChatSource = readFileSync(new URL('./business-chat.js', import.meta.url), 'utf8');
+const rawBusinessChatSource = readFileSync(new URL('./business-chat.js', import.meta.url), 'utf8');
+assert.ok(rawBusinessChatSource.includes('${CREW_CREATURE_BASE_CSS}'), 'chat stylesheet must consume the shared creature rules');
+// Keep the existing motion guards on the stylesheet actually inserted by the chat.
+const businessChatSource = rawBusinessChatSource.replace('${CREW_CREATURE_BASE_CSS}', CREW_CREATURE_BASE_CSS);
+
+test('inspection separates system history from real replies and keeps an input in every task state', () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { documentElement: { lang: 'de' } };
+  try {
+    const hooks = __businessChatTestInternals;
+    const user = { role: 'user', text: 'Bitte rechne 2 + 2.' };
+    const receipt = { id: 'status_cmd-test', role: 'ctox', text: 'Aufgabe wird an die Crew gesendet.', commandId: 'cmd-test', status: 'pending_sync' };
+    const reply = { role: 'ctox', kind: 'reply', text: '2 + 2 = 4.', commandId: 'cmd-test', taskId: 'task-test', status: 'completed' };
+    const question = { role: 'ctox', kind: 'question', text: 'Welche Einheit?' };
+    const legacyReply = { role: 'ctox', replyFor: 'old-command', text: 'Hier ist die Antwort.' };
+    const chat = { id: 'chat-test', createdAt: 1, messages: [user, receipt], lastTrackingId: 'cmd-test' };
+    assert.doesNotMatch(hooks.chatMessagesMarkup(chat.messages), /Crew gesendet/);
+    assert.doesNotMatch(hooks.chatInspectionMarkup(chat), /data-track-task/);
+    chat.messages.push(reply, question, legacyReply);
+    const conversation = hooks.chatMessagesMarkup(chat.messages);
+    for (const text of ['2 + 2 = 4.', 'Welche Einheit?', 'Hier ist die Antwort.']) assert.ok(conversation.includes(text));
+    assert.match(hooks.chatInspectionMarkup(chat), /data-task-id="task-test"/);
+    assert.equal(hooks.chatInspectionContent(chat).title, 'Aufgabe abgeschlossen', 'final reply supersedes old receipt in current status');
+    assert.doesNotMatch(hooks.chatInspectionMarkup(chat), /2 \+ 2 = 4/);
+    for (const status of ['pending', 'running', 'blocked', 'failed', 'completed']) {
+      chat.messages = [user, { ...receipt, status, taskId: 'task-test' }];
+      const html = hooks.chatWindow(chat, chat.id);
+      assert.match(html, /<textarea name="message"/, status);
+      assert.equal(hooks.chatComposerSignature(chat), 'conversation', status);
+    }
+    assert.equal(hooks.isChatInspectionMessage({ ...receipt, kind: 'reply', text: 'Aufgabe wird morgen erledigt.' }), false);
+    assert.match(hooks.chatMessagesMarkup([{ role: 'ctox', kind: 'reply', text: 'CTOX konnte die Aufgabe nicht ausführen.' }]), /CTOX konnte die Aufgabe nicht ausführen\./);
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
+
+test('a status-only projection retains this task plan without leaking it into the next task', () => {
+  const { executionProgressForChat } = __businessChatTestInternals;
+  const plan = { version: 1, revision: 2, phase: 'working', percent: 30,
+    current_step: 2, completed_steps: 1, total_steps: 3,
+    steps: [
+      { position: 1, label: 'Daten laden', status: 'completed' },
+      { position: 2, label: 'Daten prüfen', status: 'in_progress' },
+      { position: 3, label: 'Ergebnis schreiben', status: 'pending' },
+    ] };
+  const chat = { messages: [
+    { taskId: 'task-one', commandId: 'command-one', executionProgress: plan },
+    { taskId: 'task-one', commandId: 'command-one', kind: 'status', text: 'Werkzeug gestartet' },
+  ] };
+  assert.equal(executionProgressForChat(chat).steps.length, 3);
+  assert.equal(executionProgressForChat(chat).current_step, 2);
+  chat.messages.push({ commandId: 'command-two', status: 'pending_sync' });
+  assert.equal(executionProgressForChat(chat), null, 'unaccepted follow-up cannot inherit the preceding task plan');
+  chat.messages.push({ commandId: 'command-two', taskId: 'task-two', status: 'running' });
+  assert.equal(executionProgressForChat(chat), null, 'new task starts with no fabricated steps');
+});
+
+test('chat hydration and reload retain the assigned member public appearance', () => {
+  const { mergeChatPair, crewIdentity } = __businessChatTestInternals;
+  const local = { id: 'chat-assigned', owner_user_id: 'owner', createdAt: 1, updated_at_ms: 1,
+    messages: [], crew_member_id: 'crew-milo',
+    crewIdentity: { name: 'Milo', color: '#0088ff', shape: 'round', soul: 'never cache this' } };
+  const remote = { id: local.id, owner_user_id: 'owner', createdAt: 1, updated_at_ms: 2, messages: [] };
+  const merged = mergeChatPair(local, remote, 'owner');
+  assert.equal(merged.crew_member_id, 'crew-milo');
+  assert.deepEqual(crewIdentity(merged), { name: 'Milo', color: '#0088ff', shape: 'round' });
+  assert.deepEqual(Object.keys(merged.crewIdentity).sort(), ['color', 'name', 'shape']);
+  const reloaded = mergeChatPair(null, JSON.parse(JSON.stringify(merged)), 'owner');
+  assert.deepEqual(crewIdentity(reloaded), crewIdentity(merged));
+  assert.equal(reloaded.crew_member_id, 'crew-milo');
+});
 
 test('saved crew status messages use plain language without rewriting user instructions', () => {
   const previousDocument = globalThis.document;
@@ -34,6 +117,16 @@ test('saved crew status messages use plain language without rewriting user instr
     });
     assert.match(failure, /Anfrage an den Modelldienst ist fehlgeschlagen/);
     assert.doesNotMatch(failure, /technical:|worker-runtime|CTOX/);
+    for (const text of [
+      'Aufgabe in der CTOX Queue angelegt. Fortschritt und Antwort erscheinen hier.',
+      'CTOX konnte die Aufgabe nicht ausführen: CTOX chat could not continue because the model API is temporarily unavailable. The task must stay open and retry after cooldown.',
+      'Der Versuch wird wiederholt: Harness retry feedback injected after runtime failure: direct session error: ErrorEvent { message: unexpected status 502 Bad Gateway }',
+    ]) {
+      const message = { role: 'ctox', text };
+      assert.doesNotMatch(__businessChatTestInternals.messageMarkup(message), /CTOX|Harness|ErrorEvent|Queue|cooldown/);
+      assert.equal(message.text, text);
+      assert.match(__businessChatTestInternals.messageMarkup({ role: 'user', text }), /CTOX|Harness/);
+    }
   } finally {
     globalThis.document = previousDocument;
   }
@@ -727,6 +820,185 @@ test('business chat tracking sync follows business command execution phase', asy
   assert.equal(state.chats[0].messages[0].status, 'running');
 });
 
+test('terminal command phase does not mask failed status or nested succeeded envelopes', () => {
+  const hooks = __businessChatTestInternals;
+  const failedCommand = {
+    execution_phase: 'terminal',
+    terminal_status: 'failed',
+    status: 'failed',
+    result: { status: 'succeeded', outbound_text: 'Die Aufgabe ist erledigt.' },
+  };
+  assert.equal(hooks.preferredTrackingStatus(failedCommand, null, 'queued'), 'failed');
+  assert.equal(hooks.preferredTrackingStatus(failedCommand, null, 'running'), 'failed');
+  assert.equal(
+    hooks.preferredTrackingStatus({
+      execution_phase: 'terminal',
+      result: { status: 'succeeded', outbound_text: 'Fertig.' },
+    }, null, 'queued'),
+    'queued',
+    'unknown terminal outcome stays pending',
+  );
+  assert.equal(hooks.getTaskState({
+    lastTrackingId: 'cmd-terminal',
+    messages: [{ commandId: 'cmd-terminal', status: 'terminal' }],
+  }), 'queued');
+  assert.equal(hooks.isActiveTrackingStatus('terminal'), true);
+  assert.equal(hooks.isTerminalTrackingStatus('terminal'), false);
+  assert.equal(hooks.preferredTrackingStatus({
+    execution_phase: 'running',
+    terminal_status: 'none',
+    status: 'accepted',
+  }, { status: 'queued' }, 'queued'), 'running');
+});
+
+test('failed terminal command stays tracked until the delayed queue task arrives', async () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { documentElement: { lang: 'de' } };
+  const hooks = __businessChatTestInternals;
+  const reviewProgress = {
+    version: 1,
+    revision: 3,
+    phase: 'review',
+    percent: 90,
+    current_step: 3,
+    completed_steps: 2,
+    total_steps: 3,
+    steps: [
+      { position: 1, label: 'Lesen', status: 'completed', activity_turns: 2 },
+      { position: 2, label: 'Prüfen', status: 'completed', activity_turns: 3 },
+      { position: 3, label: 'Antworten', status: 'completed', activity_turns: 1 },
+    ],
+    review: { status: 'in_progress' },
+    activity_turns: { total: 8, thinking: 5, tools: 3, last_kind: 'thinking' },
+    updated_at_ms: 1700,
+  };
+  const command = {
+    id: 'cmd-delayed-fail',
+    execution_phase: 'terminal',
+    terminal_status: 'failed',
+    status: 'failed',
+    error: 'Usage limit exceeded.',
+    result: { status: 'succeeded', outbound_text: 'Die Aufgabe ist erledigt.', message: 'OK' },
+  };
+  const tracked = {
+    id: 'message-delayed-fail',
+    role: 'ctox',
+    text: 'Die Bearbeitung hat begonnen.',
+    commandId: 'cmd-delayed-fail',
+    status: 'running',
+    executionProgress: reviewProgress,
+    createdAt: Date.now(),
+  };
+  const historicalTakeover = {
+    id: 'takeover-historical',
+    role: 'ctox',
+    text: 'Pico übernimmt: frühere Zuweisung.',
+    takeoverFor: 'cmd-delayed-fail',
+    commandId: 'cmd-delayed-fail',
+    crewMemberId: 'member_0',
+    status: 'running',
+    createdAt: Date.now() - 10,
+  };
+  const chat = {
+    id: 'chat-delayed-fail',
+    lastTrackingId: 'cmd-delayed-fail',
+    createdAt: Date.now(),
+    messages: [tracked, historicalTakeover],
+  };
+  const state = { chats: [chat] };
+
+  try {
+    const first = await hooks.syncTrackedMessages({
+      state,
+      db: { raw: { business_commands: makeBatchCollection([command]), ctox_queue_tasks: makeBatchCollection([]) } },
+    });
+    assert.equal(first, true);
+    assert.equal(tracked.status, 'failed');
+    assert.equal(tracked.taskId || '', '');
+    assert.equal(tracked.executionProgress.percent, 90);
+    assert.equal(chat.messages.filter((message) => message.failureFor).length, 1);
+    assert.equal(chat.messages.some((message) => String(message.text || '').includes('Die Aufgabe ist erledigt.')), false);
+    assert.equal(hooks.hasTrackedMessagesNeedingSync(state), true, 'failure without a queue task must keep tracking');
+
+    const task = {
+      id: 'queue:system::delayed-fail',
+      command_id: 'cmd-delayed-fail',
+      status: 'failed',
+      status_note: 'Usage limit exceeded.',
+      crew_member_id: 'member_0',
+    };
+    const members = makeBatchCollection([{
+      id: 'member_0',
+      name: 'Pico',
+      shape: 'round',
+      color: '#e0a458',
+    }]);
+    const second = await hooks.syncTrackedMessages({
+      state,
+      db: {
+        raw: {
+          business_commands: makeBatchCollection([command]),
+          ctox_queue_tasks: makeBatchCollection([task]),
+          ctox_crew_members: members,
+        },
+      },
+    });
+    assert.equal(second, true);
+    assert.equal(tracked.taskId, 'queue:system::delayed-fail');
+    assert.equal(tracked.status, 'failed');
+    assert.equal(chat.messages.filter((message) => message.failureFor).length, 1, 'failure is delivered once');
+    assert.equal(chat.messages.filter((message) => message.takeoverFor).length, 1, 'historical takeover is retained once');
+    assert.equal(chat.crew_member_id, 'member_0');
+    assert.equal(hooks.hasTrackedMessagesNeedingSync(state), false);
+
+    const card = hooks.delegationProgressCardHtml(chat, {
+      taskId: tracked.taskId,
+      commandId: tracked.commandId,
+      taskStatus: 'failed',
+    });
+    assert.match(card, /90%/);
+    assert.doesNotMatch(card, /is-reviewing/);
+    assert.equal(hooks.progressShowsActiveReview(tracked.executionProgress, 'failed'), false);
+    assert.equal(hooks.progressShowsActiveReview(tracked.executionProgress, 'running'), true);
+    assert.equal(hooks.crewCreatureMode(chat, 'failed'), 'failed');
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+  }
+});
+
+test('unknown terminal command outcome stays pending and does not publish nested success', async () => {
+  const hooks = __businessChatTestInternals;
+  const tracked = {
+    id: 'message-unknown-terminal',
+    commandId: 'cmd-unknown-terminal',
+    status: 'running',
+    createdAt: Date.now(),
+  };
+  const state = { chats: [{ id: 'chat-unknown-terminal', lastTrackingId: 'cmd-unknown-terminal', messages: [tracked] }] };
+  const changed = await hooks.syncTrackedMessages({
+    state,
+    db: {
+      raw: {
+        business_commands: makeBatchCollection([{
+          id: 'cmd-unknown-terminal',
+          execution_phase: 'terminal',
+          terminal_status: 'none',
+          result: { status: 'succeeded', outbound_text: 'Fertig ohne Ergebnis.' },
+        }]),
+        ctox_queue_tasks: makeBatchCollection([]),
+      },
+    },
+  });
+  assert.equal(changed, false);
+  assert.equal(tracked.status, 'running');
+  assert.equal(state.chats[0].messages.some((message) => String(message.text || '').includes('Fertig ohne Ergebnis.')), false);
+  assert.equal(hooks.getTaskState(state.chats[0]), 'running');
+  assert.equal(hooks.hasTrackedMessagesNeedingSync(state), true);
+});
+
+
+
 test('business chat projects durable execution progress into the tracked crew message', async () => {
   const progress = {
     version: 1,
@@ -1022,6 +1294,102 @@ test('business chat does not defer remote hydration while a tracked command is a
       globalThis.document = previousDocument;
     }
   }
+});
+
+test('chat ownership stays exact and does not claim placeholder remote chats', () => {
+  const { isOwnedChat, mergeChats } = __businessChatTestInternals;
+  assert.equal(isOwnedChat({ owner_user_id: 'local-dev' }, 'user-1'), false);
+  assert.equal(isOwnedChat({ owner_user_id: '' }, 'user-1'), true);
+  assert.equal(isOwnedChat({ owner_user_id: 'user-1' }, 'user-1'), true);
+  assert.equal(isOwnedChat({ owner_user_id: 'user-2' }, 'user-1'), false);
+  assert.equal(
+    mergeChats([], [{ id: 'chat-unattributed', owner_user_id: 'local-dev', messages: [] }], 'user-1').length,
+    0,
+    'remote placeholder chats must not be claimed by the current session',
+  );
+});
+
+test('another session does not persist a leftover placeholder chat as its own', async () => {
+  const previousLocalStorage = globalThis.localStorage;
+  const store = new Map();
+  globalThis.localStorage = {
+    getItem(key) {
+      return store.has(key) ? store.get(key) : null;
+    },
+    setItem(key, value) {
+      store.set(key, String(value));
+    },
+    removeItem(key) {
+      store.delete(key);
+    },
+  };
+  const createdAt = Date.now();
+  const leftover = {
+    id: 'chat-from-user-a',
+    owner_user_id: 'local-dev',
+    title: 'Crew',
+    createdAt,
+    updated_at_ms: createdAt,
+    open: true,
+    draft: 'Should stay unclaimed.',
+    messages: [],
+  };
+  const state = {
+    ownerUserId: 'user-b',
+    selectedDate: __businessChatTestInternals.getLocalDateString(createdAt),
+    activeChatId: leftover.id,
+    dockCollapsed: false,
+    remoteHydrationComplete: true,
+    deletedChatIds: {},
+    chats: [leftover],
+  };
+  try {
+    await __businessChatTestInternals.persistChatState({ state, db: null, remote: false });
+    const persisted = JSON.parse(store.get('ctox.businessOs.chat.v1') || '{}');
+    assert.equal((persisted.chats || []).length, 0, 'placeholder chats must not be persisted for another session');
+    assert.equal(leftover.owner_user_id, 'local-dev');
+    const restored = __businessChatTestInternals.readChatState({ user: { id: 'user-b' } });
+    assert.equal(restored.chats.length, 0);
+  } finally {
+    if (previousLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previousLocalStorage;
+  }
+});
+
+test('remote persistence does not patch another users existing chat', async () => {
+  const patches = [];
+  const inserts = [];
+  const collection = {
+    findOne(id) {
+      assert.equal(id, 'chat-owner-a');
+      return {
+        async exec() {
+          return {
+            toJSON: () => ({
+              id: 'chat-owner-a',
+              owner_user_id: 'user-a',
+              title: 'Owner A chat',
+              messages: [{ id: 'chatmsg-owner-a', text: 'Create the owned chat.' }],
+            }),
+            async incrementalPatch(patch) {
+              patches.push(patch);
+            },
+          };
+        },
+      };
+    },
+    async insert(doc) {
+      inserts.push(doc);
+    },
+  };
+  await __businessChatTestInternals.persistChatDocsRemote(collection, [{
+    id: 'chat-owner-a',
+    owner_user_id: 'user-b',
+    title: 'Foreign targeting',
+    messages: [{ id: 'chatmsg-owner-b', text: 'Inject into the other chat.' }],
+  }]);
+  assert.equal(patches.length, 0, 'foreign targeting must not patch another users chat');
+  assert.equal(inserts.length, 0, 'foreign targeting must not insert over another users chat');
 });
 
 test('business chat hydration focuses a newly replicated CTOX reply inside an open dock', async () => {
@@ -1341,6 +1709,85 @@ test('business chat open resolves the already submitted task instead of creating
   );
   assert.notEqual(created, submitted);
   assert.equal(state.chats.length, 3);
+});
+
+test('disposed crew presence releases observers and ignores queued callbacks and late reads', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  let finishRead;
+  const pending = new Promise((resolve) => { finishRead = resolve; });
+  let reads = 0;
+  let domReads = 0;
+  const observers = new Set();
+  const readiness = new Set();
+  const queuedCallbacks = [];
+  const timers = new Set();
+  const subscribe = (set, callback) => {
+    const token = { callback };
+    set.add(token);
+    queuedCallbacks.push(callback);
+    return () => set.delete(token);
+  };
+  const collection = {
+    find: () => ({ exec: () => { reads += 1; return pending; } }),
+    $: { subscribe: (callback) => ({ unsubscribe: subscribe(observers, callback) }) },
+  };
+  globalThis.window = {
+    setTimeout: (callback) => { timers.add(callback); return callback; },
+    clearTimeout: (callback) => timers.delete(callback),
+  };
+  globalThis.document = {
+    querySelector: () => { domReads += 1; return null; },
+    querySelectorAll: () => { domReads += 1; return []; },
+  };
+  try {
+    const dispose = __businessChatTestInternals.wireCrewAppPresence({
+      state: { crewMembers: [] },
+      db: { raw: { ctox_queue_tasks: collection, ctox_crew_members: collection } },
+      syncFacade: { subscribeCollectionReadiness: (_name, callback) => subscribe(readiness, callback) },
+    });
+    assert.equal(observers.size, 2);
+    assert.equal(readiness.size, 2);
+    assert.equal(reads, 1);
+    dispose();
+    dispose();
+    assert.equal(observers.size, 0);
+    assert.equal(readiness.size, 0);
+    for (const callback of queuedCallbacks) callback();
+    finishRead([]);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(reads, 1, 'queued callbacks must not read after disposal');
+    assert.equal(domReads, 0, 'a late read must not render or rewire the disposed view');
+    assert.equal(timers.size, 0, 'a late completion must not rearm timers');
+  } finally {
+    finishRead?.([]);
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
+test('chat opening reads storage only to resolve a missing current tracking identity', () => {
+  const { chatOpenNeedsHydration } = __businessChatTestInternals;
+  const state = { chats: [{
+    id: 'known',
+    createdAt: Date.now(),
+    lastTrackingId: 'task-known',
+    messages: [{ commandId: 'command-known' }],
+  }] };
+  for (const detail of [{ draft: 'new' }, { reuseActive: true }, { focus: {} }]) {
+    assert.equal(chatOpenNeedsHydration(state, detail), false);
+  }
+  for (const detail of [
+    { task_id: 'task-known' }, { taskId: 'task-known' },
+    { command_id: 'command-known' }, { commandId: 'command-known' },
+    { focus: { task_id: 'task-known' } }, { focus: { commandId: 'command-known' } },
+  ]) assert.equal(chatOpenNeedsHydration(state, detail), false);
+  for (const detail of [
+    { task_id: 'not-loaded' }, { command_id: 'not-loaded', reuseActive: true },
+    { focus: { taskId: 'not-loaded' } },
+  ]) assert.equal(chatOpenNeedsHydration(state, detail), true);
+  state.chats[0].createdAt = Date.now() - 86400000 * 2;
+  assert.equal(chatOpenNeedsHydration(state, { task_id: 'task-known' }), true);
 });
 
 test('first remote hydration keeps a newly submitted chat focused', async () => {
@@ -2130,6 +2577,9 @@ function makeTimerWindow(timers) {
     assert.equal(getTaskState(chatWith('stale_missing_native')), 'blocked');
     assert.equal(getTaskState(chatWith('failed')), 'failed');
     assert.equal(getTaskState(chatWith('completed')), 'success');
+    assert.equal(getTaskState(chatWith('leased')), 'running', 'native worker lease must appear active');
+    assert.equal(getTaskState(chatWith('retry_wait')), 'queued', 'retry wait must not appear idle');
+    assert.equal(getTaskState(chatWith('review_rework')), 'queued', 'rework remains queued');
   });
 }
 
@@ -2283,8 +2733,7 @@ function makeTimerWindow(timers) {
       );
 
       // Reader scrolled up: a later message rewrite must preserve that position.
-      // Keep the task state queued so the in-place path stays active (a terminal
-      // status would flip the composer signature and force a full rebuild).
+      // Exercise a nonterminal message update first, then completion below.
       const messages = root.querySelector('.ctox-chat-messages');
       messages.scrollTop = 12;
       messages.clientHeight = 200;
@@ -2319,6 +2768,33 @@ function makeTimerWindow(timers) {
       ));
       assert.equal(yanked, false, 'reader who scrolled up must keep their position');
       assert.equal(messages.scrollTop, 12, 'scrollTop stays where the reader left it');
+
+      // A terminal update must refresh the existing header ring as well as
+      // the title, without rebuilding the conversation or losing reader state.
+      const win = root.querySelectorAll('.ctox-chat-window')[0];
+      const originalQuery = win.querySelector.bind(win);
+      let terminalCard = '';
+      const oldCard = {
+        dataset: { progressSignature: 'old-review' },
+        querySelector() { return { dataset: { taskId: 'task-stable' } }; },
+        set outerHTML(value) { terminalCard = value; },
+      };
+      win.querySelector = selector => selector === '.ctox-chat-delegation-card'
+        ? oldCard : originalQuery(selector);
+      chat.messages.at(-1).status = 'completed';
+      chat.executionProgress = {
+        version: 1, revision: 4, phase: 'completed', percent: 100,
+        current_step: 1, completed_steps: 1, total_steps: 1,
+        steps: [{ position: 1, label: 'Antwort liefern', status: 'completed', activity_turns: 1 }],
+        review: { status: 'passed' },
+        activity_turns: { total: 1, thinking: 0, tools: 1, last_kind: 'tool' },
+        updated_at_ms: Date.now(),
+      };
+      renderChatRoot({ root, state, commandBus: null, db: null,
+        getActiveModule: () => ({ id: 'outbound', title: 'Outbound' }) });
+      assert.match(terminalCard, /100%/, 'terminal progress replaces the stale ring');
+      assert.match(terminalCard, /Planstand 4/);
+      assert.equal(messages.scrollTop, 12, 'terminal ring update preserves reader position');
     } finally {
       if (previousDocument === undefined) delete globalThis.document;
       else globalThis.document = previousDocument;
@@ -2465,7 +2941,7 @@ function makeChatRootFixture({ chat, mutations }) {
       chatId: chat.id,
       chatRel: 'center',
       chatAttachmentSignature: '',
-      chatComposerSignature: 'active',
+      chatComposerSignature: 'conversation',
     },
     classList: classListFor(['ctox-chat-window', 'is-active', 'is-task-queued']),
     style: {},
@@ -2478,7 +2954,7 @@ function makeChatRootFixture({ chat, mutations }) {
       return null;
     },
     querySelectorAll(selector) {
-      if (selector === 'button, input, textarea, select, a') return interactiveNodes;
+      if (selector === 'button, input, textarea, select, a, summary') return interactiveNodes;
       return [];
     },
     getBoundingClientRect() {
@@ -2997,4 +3473,81 @@ test('crew app presence maps active queue tasks to their app by member', () => {
   assert.deepEqual(presence.get('tickets').map((entry) => entry.member.id), ['m2']);
   assert.equal(crewAppPresenceFromTasks([], members).size, 0);
   assert.equal(crewAppPresenceFromTasks(tasks, []).size, 0);
+});
+
+test('a reply filed under the command id is not appended again once the task id arrives', () => {
+  const hooks = __businessChatTestInternals;
+  // The chat tracks a turn by command id until the queue admits it; then the
+  // same turn carries a task id. Measured on welsch 09.09.2026: the answer was
+  // stored twice because the second pass looked only for the task id.
+  const chat = {
+    id: 'chat-dup',
+    messages: [
+      { role: 'user', text: 'Frage' },
+      { role: 'ctox', text: 'Antwort', replyFor: 'cmd-1' },
+    ],
+  };
+  const beforeAdmission = { commandId: 'cmd-1', taskId: '' };
+  const afterAdmission = { commandId: 'cmd-1', taskId: 'queue:system::abc' };
+  assert.equal(hooks.hasTrackingMarker(chat, 'replyFor', beforeAdmission), true);
+  assert.equal(hooks.hasTrackingMarker(chat, 'replyFor', afterAdmission), true, 'the task id must find the reply filed under its command id');
+  assert.equal(hooks.hasTrackingMarker(chat, 'replyFor', { commandId: 'cmd-2', taskId: 'queue:system::other' }), false);
+  assert.equal(hooks.hasTrackingMarker(chat, 'failureFor', afterAdmission), false);
+  assert.equal(hooks.hasTrackingMarker(chat, 'replyFor', { commandId: '', taskId: '' }), false);
+});
+
+test('an answer the native projection already appended is not repeated by the chat', () => {
+  const hooks = __businessChatTestInternals;
+  const answer = 'Die Hauptstadt von Norwegen ist Oslo.';
+  const tracked = { commandId: 'cmd_5f2', taskId: 'queue:system::a55d' };
+  // The projection writes the answer without a marker but with the turn's ids.
+  const projected = {
+    id: 'chat-native',
+    messages: [
+      { role: 'user', text: 'Frage' },
+      { role: 'ctox', text: answer, commandId: 'cmd_5f2', taskId: 'queue:system::a55d' },
+    ],
+  };
+  assert.equal(hooks.hasReplyAlready(projected, tracked, answer), true);
+  // A different answer in the same turn is a new message.
+  assert.equal(hooks.hasReplyAlready(projected, tracked, 'Etwas anderes.'), false);
+  // The same text belonging to another turn must not silence this one.
+  const foreign = { id: 'chat-foreign', messages: [{ role: 'ctox', text: answer, commandId: 'cmd_other', taskId: 'queue:system::other' }] };
+  assert.equal(hooks.hasReplyAlready(foreign, tracked, answer), false);
+  // The marker path still holds.
+  const marked = { id: 'chat-marked', messages: [{ role: 'ctox', text: 'anders formuliert', replyFor: 'cmd_5f2' }] };
+  assert.equal(hooks.hasReplyAlready(marked, tracked, answer), true);
+  // A user echo of the same sentence is not the crew's answer.
+  const echo = { id: 'chat-echo', messages: [{ role: 'user', text: answer, commandId: 'cmd_5f2' }] };
+  assert.equal(hooks.hasReplyAlready(echo, tracked, answer), false);
+});
+
+
+test('an inspection receipt marker does not suppress the later worker answer', () => {
+  const hooks = __businessChatTestInternals;
+  const tracked = { commandId: 'cmd-receipt', taskId: 'queue:system::receipt' };
+  for (const receipt of [
+    { text: 'Aufgabe in der CTOX Queue angelegt. Fortschritt und Antwort erscheinen hier.', replyFor: 'cmd-receipt' },
+    { text: 'Deine Aufgabe steht auf der Aufgabenliste.', replyFor: 'queue:system::receipt' },
+    { text: 'Accepted', kind: 'status', replyFor: 'cmd-receipt' },
+  ]) {
+    const chat = { messages: [{ role: 'ctox', ...receipt }] };
+    assert.equal(hooks.hasReplyAlready(chat, tracked, receipt.text), true, 'the same receipt must not repeat');
+    assert.equal(hooks.hasReplyAlready(chat, tracked, '12 minus 5 ergibt 7.'), false);
+    chat.messages.push({ role: 'ctox', text: '12 minus 5 ergibt 7.', replyFor: tracked.taskId });
+    assert.equal(hooks.hasReplyAlready(chat, tracked, '12 minus 5 ergibt 7.'), true);
+  }
+});
+
+
+test('completed tracking keeps syncing until an actual answer arrives', () => {
+  const hooks = __businessChatTestInternals;
+  const tracked = { role: 'ctox', kind: 'status', text: 'Die Bearbeitung hat begonnen.', commandId: 'cmd-final', taskId: 'queue-final', status: 'completed' };
+  const receipt = { role: 'ctox', text: 'Aufgabe in der CTOX Queue angelegt.', replyFor: 'cmd-final', status: 'completed' };
+  const plan = { role: 'ctox', kind: 'status', text: 'Plan aktualisiert', commandId: 'cmd-final', taskId: 'queue-final', status: 'completed' };
+  const chat = { id: 'chat-final', messages: [tracked, receipt, plan] };
+  const state = { chats: [chat] };
+  assert.equal(hooks.hasTrackedMessagesNeedingSync(state), true, 'receipts and plan updates are not the final answer');
+  chat.messages.push({ role: 'ctox', kind: 'reply', text: '12 minus 5 ergibt 7.', commandId: 'cmd-final', taskId: 'queue-final', status: 'completed' });
+  assert.equal(hooks.hasTrackedMessagesNeedingSync(state), false);
 });

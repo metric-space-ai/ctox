@@ -1735,6 +1735,40 @@ fn crew_read_is_public(
         ))
 }
 
+fn workjet_record_visible(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    collection: &str,
+    record: &Value,
+) -> anyhow::Result<bool> {
+    workjet_record_visible_with_reader(
+        root,
+        context,
+        collection,
+        record,
+        &mut super::project_chats::VisibilityReadContext::new(root),
+    )
+}
+
+fn workjet_record_visible_with_reader(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    collection: &str,
+    record: &Value,
+    reader: &mut super::project_chats::VisibilityReadContext,
+) -> anyhow::Result<bool> {
+    if !super::project_chats::has_restricted_reference(collection, record) {
+        return Ok(true);
+    }
+    let actor = resolved_mcp_actor_context(root, context)?;
+    if actor["active"] != true {
+        return Ok(false);
+    }
+    Ok(reader
+        .visible(collection, record, actor["id"].as_str().unwrap_or_default())
+        .unwrap_or(true))
+}
+
 pub fn query_records(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -1752,15 +1786,23 @@ pub fn query_records(
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let records = documents
-        .into_iter()
-        .map(|mut record| {
-            if public_crew {
-                crate::crew::public_member_document(&mut record);
-            }
-            record_summary_from_value(collection, record)
-        })
-        .collect::<Vec<_>>();
+    let mut records = Vec::new();
+    let mut workjet_reader = super::project_chats::VisibilityReadContext::new(root);
+    for mut record in documents {
+        if !workjet_record_visible_with_reader(
+            root,
+            context,
+            collection,
+            &record,
+            &mut workjet_reader,
+        )? {
+            continue;
+        }
+        if public_crew {
+            crate::crew::public_member_document(&mut record);
+        }
+        records.push(record_summary_from_value(collection, record));
+    }
     Ok(BusinessOsMcpList {
         ok: true,
         count: records.len(),
@@ -1805,7 +1847,9 @@ pub fn upsert_record(
     let collection = required_arg(arguments, "collection")?;
     ensure_non_empty("collection", &collection)?;
     enforce_collection_policy(root, &collection)?;
-    if collection_requires_typed_mcp_tool(&collection) {
+    if collection_requires_typed_mcp_tool(&collection)
+        || super::project_chats::is_owned_collection(&collection)
+    {
         return Err(anyhow::Error::new(BusinessOsMcpError::validation(
             "collection",
             format!(
@@ -4006,6 +4050,13 @@ pub fn get_record(
             format!("Business OS record `{record_id}` was not found in `{collection}`"),
         )
     })?;
+    if !workjet_record_visible(root, context, collection, &payload)? {
+        return Err(BusinessOsMcpError::not_found(
+            BusinessOsMcpErrorCode::RecordNotFound,
+            format!("Business OS record `{record_id}` was not found in `{collection}`"),
+        )
+        .into());
+    }
     let mut payload = payload;
     if public_crew {
         crate::crew::public_member_document(&mut payload);
@@ -4029,6 +4080,13 @@ pub fn get_command_status(
                 format!("Business OS command `{command_id}` was not found"),
             )
         })?;
+    if !workjet_record_visible(root, context, "business_commands", &payload)? {
+        return Err(BusinessOsMcpError::not_found(
+            BusinessOsMcpErrorCode::RecordNotFound,
+            format!("Business OS command `{command_id}` was not found"),
+        )
+        .into());
+    }
     Ok(BusinessOsMcpRecordResponse {
         ok: true,
         record: record_summary_from_value("business_commands", payload),
@@ -7623,18 +7681,29 @@ fn validate_person_research_record_binding(
             );
         }
     }
+    let record_string = |fields: &[&str]| {
+        fields
+            .iter()
+            .find_map(|field| record_object.get(*field).and_then(Value::as_str))
+            .or_else(|| {
+                record_object
+                    .get("data")
+                    .and_then(Value::as_object)
+                    .and_then(|data| {
+                        fields
+                            .iter()
+                            .find_map(|field| data.get(*field).and_then(Value::as_str))
+                    })
+            })
+            .map(str::trim)
+            .unwrap_or_default()
+    };
     let company = payload
         .get("company")
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
-    let bound_company = record_object
-        .get("company")
-        .or_else(|| record_object.get("company_name"))
-        .or_else(|| record_object.get("title"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
+    let bound_company = record_string(&["company", "company_name", "firma_name", "name", "title"]);
     anyhow::ensure!(
         !bound_company.is_empty() && company == bound_company,
         BusinessOsMcpError::validation(
@@ -7647,12 +7716,7 @@ fn validate_person_research_record_binding(
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
-    let bound_country = record_object
-        .get("country")
-        .or_else(|| record_object.get("country_code"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .unwrap_or_default();
+    let bound_country = record_string(&["country", "country_code", "land"]);
     anyhow::ensure!(
         !bound_country.is_empty() && country == bound_country,
         BusinessOsMcpError::validation(
@@ -12673,6 +12737,58 @@ mod tests {
                 .downcast_ref::<BusinessOsMcpError>()
                 .map(|error| &error.code),
             Some(&BusinessOsMcpErrorCode::RecordNotFound)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn person_research_record_binding_accepts_nested_lead_data() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "outbound-lead-generation",
+            "Outbound Lead Generation",
+            "1.0.5",
+            &["outbound_lead_generation_leads"],
+            Some(serde_json::json!({ "public": true })),
+        )?;
+        seed_default_mcp_admin(root)?;
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "outbound_lead_generation_leads",
+                "documents": [{
+                    "id": "lead_nested",
+                    "data": {
+                        "name": "Nested GmbH",
+                        "country": "DE"
+                    },
+                    "workspace": "test-workspace"
+                }]
+            }),
+        )?;
+
+        let result = execute_action(
+            root,
+            &test_context("business_os.execute_action"),
+            "outbound-lead-generation",
+            "web_stack.person_research",
+            &serde_json::json!({
+                "record_id": "lead_nested",
+                "run_key": "nested-research-1",
+                "payload": {
+                    "operation_id": "lead_nested",
+                    "company": "Nested GmbH",
+                    "country": "DE",
+                    "mode": "update_person"
+                }
+            }),
+        )?;
+
+        assert_eq!(
+            result.client_context["writeback_contract"],
+            "person_research/native"
         );
         Ok(())
     }

@@ -39,10 +39,10 @@ for example `runtime/ticket_local.db` and `runtime/ctox_scraping.db`.
 Every service-owned queue attempt starts with `update_plan` as its required
 initial harness tool. Until that call succeeds, the fork exposes no other tool
 to the model. A plan contains at least one ordered step and is valid only as a
-completed prefix, at most one active step, and a pending suffix. Successful
-assistant persistence fails closed unless the latest durable plan exists and
-all model-owned steps are completed; only then may the native CTOX review
-begin.
+completed prefix, at most one active step, and a pending suffix. Assistant
+persistence requires a durable plan, but incomplete plans may enter review so
+blocked work can retain honest pending steps. Only validated completion with
+all model-owned steps completed may reach terminal success and 100 percent.
 
 `task_execution_plan_revisions` is the authoritative plan history. Status-only
 updates rewrite the current revision, while changed labels, count, or order
@@ -248,17 +248,27 @@ execution:
 
 Plan-step messages force continuity refresh because they are task boundaries.
 Normal worker slices reuse one named, non-ephemeral harness thread. Its rollout
-is resumed after a service restart. Jobs with a replacement base prompt or a
-narrow no-MCP profile remain deliberately isolated sessions because they have a
-different capability/instruction contract. A queue job's workspace is applied
-as the typed per-turn cwd rather than encoded only in prompt prose.
+is resumed after a service restart. If lookup of that named thread fails, or
+resume of an identified thread fails, or `turn/start` is rejected on the bound
+thread, the native adapter returns an actionable error. It does not start a
+replacement thread and does not resubmit the turn. Ambiguous `turn/start`
+outcomes (timeout, transport, or decode) still poison the process-local session
+so a duplicate turn cannot be issued. First-time creation remains allowed when
+lookup completes and finds no named durable thread. Jobs with a replacement
+base prompt or a narrow no-MCP profile remain deliberately isolated sessions
+because they have a different capability/instruction contract; isolated
+sessions still start fresh/ephemeral threads and may rotate once after a
+definitive `turn/start` rejection. A queue job's workspace is applied as the
+typed per-turn cwd rather than encoded only in prompt prose.
 Systematic-research jobs are also isolated: each attempt starts a fresh
 non-persistent session with the typed CTOX Web tools. This prevents prior
 research history from influencing a new evidence run while preserving the
 server-authoritative research toolchain.
 Before reuse, the worker compares the current composed base instructions and
 model with the live session contract. A mismatch rebuilds the process-local
-client and resumes the durable thread with the new contract.
+client and resumes the durable thread with the new contract. This native
+in-process continuity is not Codex/Claude export/import, cross-device restore,
+or checkpoint-certified provider failover.
 
 Turn timeout defaults follow the resolved provider boundary. Native local
 inference keeps the long local budget; a local proxy/process that resolves to
@@ -289,6 +299,12 @@ one-hour local-inference timeout.
 Direct-session model events write token and timing forensics to
 `runtime/context-log.jsonl`. Worker failures are persisted as structured
 `messages.agent_outcome` values rather than by scraping assistant text.
+
+The direct-session adapter retains an explicitly final answer when a separate
+terminal `ctox-crew` metadata block follows in the same turn. Known commentary
+is never promoted to the reply. Unphased providers keep last-message behavior;
+an unphased earlier message is not evidence for recovering an answer from a
+metadata-only completion. Existing thread and turn attribution gates still apply.
 
 On Linux, CTOX-managed in-process sessions select the stable Landlock backend
 for root workers and reviewers. Normal workers can read and write their current
@@ -382,7 +398,14 @@ only and do not decide refresh behavior.
 A successful model turn does not automatically close work. The service starts a
 completion review unless the source is internal queue-guard maintenance. The
 reviewer runs as a separate skeptical pass over the worker result and returns a
-typed disposition:
+typed disposition. Review reports separately declare
+`TASK_OUTCOME: completed|blocked|unverified`. Only `completed` with acceptable
+independent proof can pass. Missing, unknown, or conflicting declarations fail
+closed. A truthful blocker report does not complete requested execution; a
+verified query with zero matches can complete it. Review admission preserves
+incomplete plan steps and their actual progress.
+
+The supported dispositions are:
 
 - `Approved`
 - `Hold`

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
 import './tests/data-state.test.mjs';
+import './tests/terminal-endpoint.test.mjs';
 
 async function importBrowserBundle(relativePath) {
   const bundledModule = await build({
@@ -75,6 +76,59 @@ const {
   webStackProjectionMissing,
   wireTaskSourceReadiness,
 } = hooks;
+
+test('Only configured communication accounts appear as inputs, never task-origin apps', () => {
+  const tasks = [
+    { module: 'omarchy-radio', status: 'running' },
+    { inbound_channel: 'documents', status: 'queued' },
+    { inbound_channel: 'email', status: 'queued' },
+    { inbound_channel: 'email', status: 'completed' },
+  ];
+  assert.deepEqual(hooks.buildInboundChannels(tasks), []);
+  const channels = hooks.buildInboundChannels(tasks, [
+    { channel: 'email' }, { channel: 'email' }, { channel: 'slack' },
+    { channel: 'queue' }, { channel: 'cron' }, { channel: 'plan' },
+    { channel: 'discord', enabled: false }, { channel: 'jami', is_deleted: true },
+  ]);
+  assert.deepEqual(channels.map(({id, count}) => ({id, count})), [
+    { id: 'email', count: 2 }, { id: 'slack', count: 0 },
+  ]);
+  const model = { inboundChannels: channels, nodeMap: new Map() };
+  const svg = hooks.inboundEndpointFlowSvg(model, tasks[0], { lang: 'de' });
+  assert.match(svg, /E-Mail/);
+  assert.doesNotMatch(svg, /omarchy|documents|is-selected|report_/i);
+  const empty = hooks.inboundEndpointFlowSvg({ ...model, inboundChannels: [] }, tasks[0], { lang: 'de' });
+  assert.match(empty, /Keine Kanäle eingerichtet/);
+  assert.doesNotMatch(empty, /ctox-flow-channel-edge/);
+  assert.deepEqual(hooks.buildInboundChannels(tasks, null), []);
+  const unavailable = hooks.inboundEndpointFlowSvg({ ...model, inboundChannels: [], inboundChannelsAvailable: false }, tasks[0], { lang: 'de' });
+  assert.match(unavailable, /Kanäle nicht verfügbar/);
+  assert.doesNotMatch(unavailable, /Keine Kanäle eingerichtet/);
+});
+
+test('Task cards explain failures while original evidence remains inspectable', () => {
+  const task = { status: 'failed', failureAttemptCount: 4, statusNote: 'thread/start MCP handshake timeout <unsafe>' };
+  assert.equal(hooks.taskSummaryReason(task, { lang: 'de' }), 'Die Verbindung zu einem Werkzeug konnte nicht aufgebaut werden. · 4 Versuche');
+  assert.match(hooks.taskSummaryReason(task, { lang: 'en' }), /connection to a tool/);
+  const leased = { ...task, attempt: 4, leaseOwner: 'worker-internal-42', target: 'business_os.chat.task' };
+  const leaseLine = hooks.taskLeaseLineMarkup(leased, { lang: 'de' });
+  assert.match(leaseLine, /Versuch 4/);
+  assert.doesNotMatch(leaseLine, /worker-internal|business_os/);
+  assert.match(hooks.taskDiagnosticMarkup(leased, { lang: 'de' }), /worker-internal-42/);
+  assert.match(hooks.taskDiagnosticMarkup(leased, { lang: 'de' }), /business_os.chat.task/);
+  const details = hooks.taskDiagnosticMarkup(task, { lang: 'de' });
+  assert.match(details, /<details class="ctox-task-diagnostics">/);
+  assert.match(details, /thread\/start MCP handshake timeout &lt;unsafe&gt;/);
+  assert.doesNotMatch(details, /<unsafe>|<details[^>]* open/);
+  assert.match(hooks.taskSummaryReason({ status: 'failed', statusNote: 'CTOX chat could not continue because the model API is temporarily unavailable. The task must stay open and retry after cooldown.' }, { lang: 'de' }), /^Der Modelldienst war nicht erreichbar\.$/);
+});
+
+test('Reported task descriptions populate the order without replacing an explicit prompt', () => {
+  assert.equal(hooks.taskPromptDisplay({ description: 'Die Liste lädt dauerhaft.' }).text, 'Die Liste lädt dauerhaft.');
+  assert.equal(hooks.taskPromptDisplay({ prompt: 'Auftrag', description: 'Befund', summary: 'Kurzfassung' }).text, 'Auftrag');
+  assert.equal(hooks.taskPromptDisplay({ summary: 'Kurzfassung' }).text, 'Kurzfassung');
+  assert.equal(hooks.taskPromptDisplay({}).text, '');
+});
 
 test('crew labels describe work without exposing implementation terminology', () => {
   function check(value, path) {
@@ -710,6 +764,17 @@ test('Task display copy is shown as written (no regex redaction, no underscore m
   assert.equal(safeTaskDisplayText('a'.repeat(400), 'en', { max: 20 }), `${'a'.repeat(19)}...`);
 });
 
+
+test('Paused crew explains waiting without a false critical stall alarm', () => {
+  const task = { id: 'paused-task', status: 'queued', routeStatus: 'pending', createdAt: new Date(Date.now() - 3600000).toISOString() };
+  const state = { lang: 'de', harnessStatus: { paused: true }, flow: { ok: true }, model: { tasks: [task] } };
+  const health = deriveHarnessHealth(state);
+  assert.equal(health.severity, 'ok');
+  assert.equal(health.reason, 'paused');
+  assert.match(hooks.taskSummaryReason(task, state), /Crew ist pausiert/);
+  state.harnessStatus.paused = false;
+  assert.equal(deriveHarnessHealth(state).severity, 'critical');
+});
 test('Queued work with missing flow projection is a critical harness health state', () => {
   const health = deriveHarnessHealth({
     lang: 'de',
@@ -1185,3 +1250,28 @@ test('Field of work is derived, and the takeover sentence reads the router event
   state.selectedLive.events[1].title = 'assigned: Manuelle Zuordnung vor dem Lease: Nori (crew:nori)';
   assert.equal(taskSelectionSentence(task, state), 'Nori: Manuelle Zuordnung vor dem Lease');
 });
+
+// A task that ran, passed review and committed its command keeps `handled` as
+// its routing fact. Measured live on 09.09.2026: the card rendered
+// "Ohne Review-Beleg" while the same task sat in the "Erledigt" bucket, so the
+// reader saw a successful task labelled like a defect. Card and bucket read the
+// same authoritative status now.
+{
+  const reviewed = {
+    id: 'queue:system::8e455fd1191fd6feb1e0c7df',
+    title: 'Nenne in genau einem Satz auf Deutsch d...',
+    routeStatus: 'handled',
+    status: 'completed',
+    executionProgress: hooks.normalizeExecutionProgress({ version: 1, phase: 'completed', percent: 100 }),
+    updatedAt: '2026-09-09T10:19:44Z',
+  };
+  const state = { lang: 'de', selectedTaskId: '', pinnedTaskIds: new Set(), crewMembers: [] };
+  assert.equal(hooks.authoritativeTaskStatus(reviewed), 'completed');
+  const card = hooks.taskCardMarkup(reviewed, state);
+  assert.match(card, /Erledigt/);
+  assert.doesNotMatch(card, /Ohne Review-Beleg/);
+  // A genuinely stopped task keeps its problem label.
+  const failed = { ...reviewed, routeStatus: 'failed', status: 'failed', executionProgress: null };
+  assert.match(hooks.taskCardMarkup(failed, state), /Fehler/);
+  console.log('ok - reviewed task reads as done on the card, not as missing review proof');
+}
