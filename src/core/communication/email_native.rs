@@ -205,6 +205,13 @@ pub(crate) fn service_sync(
             }
             Ok(None) => json!({ "account": account.address, "scope": "personal", "skipped": true }),
             Err(error) => {
+                // Without this line a rejected mailbox (EWS 401) failed silently
+                // every cycle; nothing in the journal said why no mail arrived.
+                eprintln!(
+                    "[email] personal account sync failed account={} error={}",
+                    account.address,
+                    error.to_string().chars().take(300).collect::<String>()
+                );
                 json!({ "account": account.address, "scope": "personal", "error": error.to_string() })
             }
         };
