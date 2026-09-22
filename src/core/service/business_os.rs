@@ -5862,7 +5862,16 @@ const verifySelectorVisible = configuredVerifySelector
 // token interstitial (/login?F…=_) before drawing its username step, so no
 // field check at that moment is reliable. A live session redirects away from
 // the login URL; while we are still on it, go through the login path.
-const stillOnLoginPage = samePage(page.url(), targetUrl);
+// D&B is opened at its app root and redirects to /login?F…=_, so "same page as
+// the target" alone misses it: a login-looking path is never a live session.
+const looksLikeLoginPath = (value) => {
+  try {
+    return /(^|\/)(log-?in|sign-?in|sign\/in|auth|sso)(\/|$)/i.test(new URL(value).pathname);
+  } catch {
+    return false;
+  }
+};
+const stillOnLoginPage = samePage(page.url(), targetUrl) || looksLikeLoginPath(page.url());
 if (verifySelectorVisible && stillOnLoginPage) {
   // Give a late-rendering form a bounded chance before the fill step.
   const deadline = Date.now() + 8000;
@@ -5884,6 +5893,7 @@ const preAuthenticatedByLanding = await (async () => {
   if (preAuthenticatedVerifyFound) return false;
   const landedElsewhere = beforeSignals.url && !samePage(beforeSignals.url, targetUrl);
   if (!landedElsewhere) return false;
+  if (looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;
   const signals = beforeSignals.auth_signals || emptyAuthSignals();
   if (signals.mfa_required === true || signals.login_error_detected === true) return false;
   if (Number(beforeSignals.form_state?.visible_password_fields || 0) > 0) return false;
@@ -7248,6 +7258,11 @@ mod tests {
         // link) must not count while the login form is still shown.
         assert!(source.contains(
             "const preAuthenticatedVerifyFound = verifySelectorVisible && !stillOnLoginPage;"
+        ));
+        // D&B opens at the app root and lands on /login?F…=_: a login-looking
+        // path must never count as an existing session.
+        assert!(source.contains(
+            "if (looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;"
         ));
         assert!(source.contains("gotoTargetWithRetry"));
         assert!(source.contains("attempt <= 2"));
