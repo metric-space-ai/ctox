@@ -434,8 +434,21 @@ export async function mount(ctx) {
 
   function wireCollectionSubscriptions() {
     for (const [name, collection] of Object.entries(collections)) {
-      if (!collection?.$) continue;
-      const subscription = collection.$.subscribe(() => scheduleRefresh());
+      // An installed app only gets data grants for its own collections;
+      // shared ones such as business_commands are denied by design. Reading
+      // `collection.$` then throws, and the whole Mail app failed to mount
+      // ("Mail konnte nicht geladen werden", thesen 22.09.2026). A denied
+      // optional collection is skipped; the app works without it.
+      let stream = null;
+      try {
+        stream = collection?.$ || null;
+      } catch (error) {
+        if (!isPermissionDenied(error)) throw error;
+        collections[name] = null;
+        continue;
+      }
+      if (!stream) continue;
+      const subscription = stream.subscribe(() => scheduleRefresh());
       cleanups.push(() => subscription.unsubscribe?.());
     }
   }
@@ -1500,7 +1513,13 @@ export async function mount(ctx) {
     if (!collections.business_commands) return initial;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const document = await collections.business_commands.findOne(commandId).exec();
+      let document = null;
+      try {
+        document = await collections.business_commands.findOne(commandId).exec();
+      } catch (error) {
+        if (isPermissionDenied(error)) return initial;
+        throw error;
+      }
       const command = document?.toJSON?.() || document || null;
       if (command && TERMINAL_COMMAND_STATUSES.has(command.status)) return command;
       await sleep(250);
@@ -2737,6 +2756,11 @@ function latestMessageForThread(threadKey, messages) {
 
 function renderMetric(value, label) {
   return `<div class="mail-metric"><strong>${Number(value || 0)}</strong><span>${escapeHtml(label)}</span></div>`;
+}
+
+function isPermissionDenied(error) {
+  return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
+    || error?.name === 'BusinessOsPermissionError';
 }
 
 async function readAll(collection) {
