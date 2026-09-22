@@ -11,6 +11,22 @@ cluster: research
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
 - Everything you do goes through the `ctox` CLI. There is no other data path: the CLI runs inside the daemon and writes to the CTOX SQLite stores; the Business OS UI receives results through replication of the collection the command bus writes.
+- **Inside a worker turn the shell sandbox cannot open the CTOX stores** (`ctox … ` from `exec_command` ends with a permission error on `~/.local/state/ctox`). Use the tools instead: `business_os.*` (MCP) for the command, record and writeback; `ctox_web_search` / `ctox_web_read` for the open web; **`ctox_web_scrape` with `mode: "execute"` for every registered source adapter.**
+
+## 0. Mandatory first step: run the registered adapters
+
+Before any open-web search, call `ctox_web_scrape` once for every entry of `source_policy.sources` that has a `target_key` and fits the lead's country:
+
+```json
+{"mode": "execute", "target_key": "<entry.target_key>", "timeout_seconds": 180,
+ "input": {"source_id": "<entry.id>", "company": "<company>", "country": "<DE|AT|CH>",
+           "city": "<city>", "domain": "<domain if known>", "task_id": "<command id>"}}
+```
+
+- `linkedin-com` and `xing-com` need a person: add `"person": {"first_name": "…", "last_name": "…"}` (from the register/Impressum) and give LinkedIn `timeout_seconds: 400`. `mailtester-com` / `experte-de` need `"email"`.
+- Adapters with a credential (D&B Hoovers, Leadfeeder, XING) sign in with the stored login by themselves; `task_id` must be the command id.
+- A record from an adapter is a source: `source_id` = the entry id, `url` = the record's `source_url`, `quote` = the record's value. `blocked`, `authorization_required` or `temporary_unreachable` prove nothing — note the status and continue with the next source.
+- Only then fill the remaining gaps with `ctox_web_search` / `ctox_web_read`.
 
 ## 1. Wie die App, der Harness und der Web-Stack zusammenspielen
 
