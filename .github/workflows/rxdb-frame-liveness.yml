@@ -29,6 +29,10 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: '22'
+      - name: Install inventory scanner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
       - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
         with:
           workspaces: src/core/rxdb -> ../../../runtime/build/cargo-target
