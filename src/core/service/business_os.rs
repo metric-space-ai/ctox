@@ -5860,11 +5860,21 @@ const verifySelectorVisible = configuredVerifySelector
 // A verify selector only proves a session when we are not looking at the login
 // form itself. D&B's selector matches a search link on its login page, so the
 // username step read as signed in and the stored credential was never sent.
-const loginFormStillShown = samePage(beforeSignals.url, targetUrl) && (
-  Number(beforeSignals.form_state?.visible_password_fields || 0) > 0
-  || (await browserCandidateFields("login").catch(() => [])).some((field) => field.source === "heuristic")
-  || (await browserCandidateFields("credential").catch(() => [])).some((field) => field.source === "heuristic")
-);
+// The form can render seconds after network idle (D&B draws its username step
+// late), so on the login URL itself give it a bounded chance to appear.
+const loginFormVisibleNow = async () =>
+  (await browserCandidateFields("login").catch(() => [])).some((field) => field.source === "heuristic")
+  || (await browserCandidateFields("credential").catch(() => [])).some((field) => field.source === "heuristic");
+const loginFormStillShown = await (async () => {
+  if (!verifySelectorVisible || !samePage(page.url(), targetUrl)) return false;
+  if (Number(beforeSignals.form_state?.visible_password_fields || 0) > 0) return true;
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    if (await loginFormVisibleNow()) return true;
+    await page.waitForTimeout(500).catch(() => null);
+  }
+  return false;
+})();
 const preAuthenticatedVerifyFound = verifySelectorVisible && !loginFormStillShown;
 // A stored session sends us straight past the login form: Leadfeeder answers
 // /login with its dashboard, XING with an in-app page. The verify selector is
