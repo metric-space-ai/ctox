@@ -26,7 +26,12 @@ Before any open-web search, call `ctox_web_scrape` once for every entry of `sour
 - `linkedin-com` and `xing-com` need a person: add `"person": {"first_name": "…", "last_name": "…"}` (from the register/Impressum) and give LinkedIn `timeout_seconds: 400`. `mailtester-com` / `experte-de` need `"email"`.
 - Adapters with a credential (D&B Hoovers, Leadfeeder, XING) sign in with the stored login by themselves; `task_id` must be the command id.
 - A record from an adapter is a source: `source_id` = the entry id, `url` = the record's `source_url`, `quote` = the record's value. `blocked`, `authorization_required` or `temporary_unreachable` prove nothing — note the status and continue with the next source.
-- Only then fill the remaining gaps with `ctox_web_search` / `ctox_web_read`.
+- **Minimum set per lead** (skip only what `source_policy` does not list):
+  - DE: `handelsregister-de`, `northdata-de`, `bundesanzeiger-de`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum` (with `"domain"` once known).
+  - AT: `firmenabc-at`, `northdata-de`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum`. CH: `zefix-ch`, `moneyhouse-ch`, `shab-ch`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum`.
+  - Persons: for **each** person found in the register or Impressum, run `linkedin-com` (Bright Data, `timeout_seconds: 400`) and `xing-com` with `"person"`. Never open `linkedin.com` or `xing.com` pages with `ctox_web_read` — LinkedIn answers bots with HTTP 999 and XING with its login wall; only the adapters get through.
+  - E-mail: once an address pattern is known, `mailtester-com` with `"email"`.
+- Only then fill the remaining gaps with `ctox_web_search` / `ctox_web_read`. In `result`, list every adapter you ran with its status.
 
 ## 1. Wie die App, der Harness und der Web-Stack zusammenspielen
 
