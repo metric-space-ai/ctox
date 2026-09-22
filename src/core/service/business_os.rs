@@ -5324,7 +5324,9 @@ const state = await page.evaluate(() => {
   const isOtpField = Array.from(document.querySelectorAll('input')).some((el) => visible(el) && /(otp|code|verification|passcode)/i.test((el.name || '') + (el.id || '') + (el.placeholder || '') + (el.getAttribute('autocomplete') || '')));
   const radio = controls.find((el) => el.tagName === 'INPUT' && el.type === 'radio' && wantsEmail.test(label(el)));
   if (radio) radio.click();
-  const trigger = controls.find((el) => el.tagName !== 'INPUT' && wantsEmail.test(label(el)));
+  // Okta renders "Send me an email" as <input type="submit">, not a button.
+  const pressable = (el) => el.tagName !== 'INPUT' || ['submit', 'button'].includes((el.type || '').toLowerCase());
+  const trigger = controls.find((el) => pressable(el) && wantsEmail.test(label(el)));
   if (trigger) trigger.setAttribute('data-ctox-otp-trigger', '1');
   return {
     otp_field_present: isOtpField,
