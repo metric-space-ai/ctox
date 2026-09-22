@@ -311,7 +311,7 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
         if reconnect.is_none() {
             let mut handoff_spec = spec.clone();
             handoff_spec.job_id = "additional-worker-handoff".into();
-            handoff_spec.session_id = "additional-worker-checkpoint".into();
+            handoff_spec.session_id = "22222222-2222-4222-8222-222222222222".into();
             let initial = call(&handoff_endpoints[&1], "create-for-worker-handoff",
                 SyncIpcOperation::Create { spec: handoff_spec.clone() }).await;
             let SyncIpcResult::Applied { ownership: initial_owner, .. } = initial else {
@@ -700,7 +700,7 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
         }
         let spec = ExecutionSpec {
             job_id: "job".into(),
-            session_id: "session".into(),
+            session_id: "11111111-1111-4111-8111-111111111111".into(),
             scope_id: "scope".into(),
             harness: "codex".into(),
             harness_version: "fixture".into(),
@@ -1066,7 +1066,7 @@ async fn exercise_native_session_group(scenario: NativeGroupScenario) {
         }
         let spec = ExecutionSpec {
             job_id: "job".into(),
-            session_id: "session".into(),
+            session_id: "11111111-1111-4111-8111-111111111111".into(),
             scope_id: "scope".into(),
             harness: "codex".into(),
             harness_version: "fixture".into(),
@@ -1179,7 +1179,7 @@ async fn exercise_native_session_group(scenario: NativeGroupScenario) {
             client_spec.session_id = "workjet-session".into();
             let mut handoff_spec = client_spec.clone();
             handoff_spec.job_id = "workjet-handoff-job".into();
-            handoff_spec.session_id = "workjet-handoff-session".into();
+            handoff_spec.session_id = "33333333-3333-4333-8333-333333333333".into();
             let receipts: Vec<_> = [1, 2]
                 .into_iter()
                 .map(|id| {

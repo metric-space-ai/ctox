@@ -63,6 +63,9 @@ impl CheckpointStore {
     /// publish one content-addressed manifest. The caller must stop accepting
     /// new work before calling this method.
     pub async fn capture(&self, request: CaptureRequest) -> io::Result<CaptureResult> {
+        for journal_bytes in &request.history {
+            crate::checkpoint::validate_capture_journal(&request.session, journal_bytes)?;
+        }
         let root = fs::canonicalize(&request.workspace_root)?;
         if !root.is_dir() {
             return Err(invalid_capture("workspace root is not a directory"));

@@ -2917,11 +2917,14 @@ dependencies = [
  "mime_guess",
  "schemars 0.8.22",
  "serde",
+ "serde_ignored",
  "serde_json",
  "serde_with",
+ "sha2 0.10.9",
  "strum 0.27.2",
  "strum_macros 0.28.0",
  "sys-locale",
+ "time",
  "tracing",
  "ts-rs",
  "uuid",
@@ -3085,6 +3088,7 @@ name = "ctox-sync"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "ctox-protocol",
  "ctox-rxdb",
  "fs2",
  "futures-util",
@@ -10885,6 +10889,16 @@ dependencies = [
  "indexmap 2.13.0",
  "itoa",
  "ryu",
+ "serde_core",
+]
+
+[[package]]
+name = "serde_ignored"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "115dffd5f3853e06e746965a20dcbae6ee747ae30b543d91b0e089668bb07798"
+dependencies = [
+ "serde",
  "serde_core",
 ]
 

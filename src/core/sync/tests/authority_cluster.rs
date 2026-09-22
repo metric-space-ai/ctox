@@ -691,7 +691,7 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
         .unwrap();
         let mut handoff_spec = spec();
         handoff_spec.job_id = "workjet-handoff-job".into();
-        handoff_spec.session_id = "workjet-handoff-session".into();
+        handoff_spec.session_id = "44444444-4444-4444-8444-444444444444".into();
         let receipts: Vec<_> = [1, 2]
             .into_iter()
             .map(|id| {
@@ -756,7 +756,7 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
 fn spec() -> ExecutionSpec {
     ExecutionSpec {
         job_id: "job".into(),
-        session_id: "session".into(),
+        session_id: "11111111-1111-1111-1111-111111111111".into(),
         scope_id: "test-scope".into(),
         harness: "codex".into(),
         harness_version: "pinned-test".into(),

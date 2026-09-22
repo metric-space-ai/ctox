@@ -2,7 +2,7 @@ name: Native Sync
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, codex/checkpoint-workspace-restore]
     paths:
       - '.github/workflows/native-sync.yml'
       - 'Cargo.toml'
@@ -12,6 +12,8 @@ on:
       - 'src/core/secrets.rs'
       - 'src/core/mission/channels/**'
       - 'src/core/sync/**'
+      - 'src/core/harness/protocol/src/portable_journal*'
+      - 'tests/portable_journal_roundtrip.rs'
       - 'src/core/sync_host/**'
       - 'src/core/sync_host.rs'
       - 'src/core/rxdb/**'
@@ -35,6 +37,8 @@ on:
       - 'src/core/secrets.rs'
       - 'src/core/mission/channels/**'
       - 'src/core/sync/**'
+      - 'src/core/harness/protocol/src/portable_journal*'
+      - 'tests/portable_journal_roundtrip.rs'
       - 'src/core/sync_host/**'
       - 'src/core/sync_host.rs'
       - 'src/core/rxdb/**'
@@ -284,6 +288,19 @@ jobs:
           cargo run --locked --manifest-path src/core/sync/Cargo.toml --features webrtc --example host_cli_acceptance -- \
             "$CARGO_TARGET_DIR/debug/ctox" "$RUNNER_TEMP/ctox-host-fixtures" \
             | tee "$RUNNER_TEMP/ctox-host-proof/acceptance.json"
+      - name: Verify strict portable journals and real recorder roundtrip
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --manifest-path src/core/harness/protocol/Cargo.toml portable_journal -- --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/portable-journal-protocol-tests.log"
+          cargo test --locked --test portable_journal_roundtrip -- --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/portable-journal-roundtrip-tests.log"
+          cargo test --locked --manifest-path src/core/sync/Cargo.toml checkpoint -- --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/portable-journal-checkpoint-tests.log"
+          cargo test --locked --manifest-path src/core/sync/Cargo.toml capture -- --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/portable-journal-capture-tests.log"
       - name: Command completion and queue transaction regressions
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash
@@ -353,7 +370,7 @@ jobs:
             SMOKE_COMMAND_TIMING_REPORT_OUTPUT="$RUNNER_TEMP/ctox-host-proof/command-stages.json" \
             SMOKE_PROCESS_LIFECYCLE_PATH="$RUNNER_TEMP/ctox-host-proof/command-processes.json" \
             node src/core/rxdb/tools/browser_rust_smoke.js \
-            | tee "$RUNNER_TEMP/ctox-host-proof/command-browser.log"
+            2>&1 | tee "$RUNNER_TEMP/ctox-host-proof/command-browser.log"
           node src/apps/business-os/rxdb/tests/command-roundtrip-budget.mjs \
             --input "$RUNNER_TEMP/ctox-host-proof/command-marks.json" \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-budget.json"
