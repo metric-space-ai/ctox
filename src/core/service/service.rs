@@ -4693,7 +4693,18 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
                 .and_then(|pair| pair[1].parse::<u64>().ok())
                 .unwrap_or(60_000)
                 .clamp(1_000, 300_000);
-            Duration::from_millis(timeout_ms.saturating_add(15_000))
+            // A login whose second factor arrives by e-mail waits for that mail
+            // (up to 150 s) on top of its browser budget; with the plain
+            // +15 s the client gave up with EAGAIN while the daemon was still
+            // signing in (thesen 22.09.2026, D&B).
+            let waits_for_email_otp = argv.iter().any(|value| {
+                matches!(
+                    value.as_str(),
+                    "auth-assist-login" | "source-capture" | "authenticated-automation"
+                )
+            });
+            let slack_ms = if waits_for_email_otp { 210_000 } else { 15_000 };
+            Duration::from_millis(timeout_ms.saturating_add(slack_ms))
         }
         ServiceIpcRequest::BusinessCommandDispatch { .. } => BUSINESS_COMMAND_IPC_TIMEOUT,
     }
