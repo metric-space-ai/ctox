@@ -5857,25 +5857,22 @@ const samePage = (left, right) => {
 const verifySelectorVisible = configuredVerifySelector
   ? await page.locator(configuredVerifySelector).first().isVisible().catch(() => false)
   : false;
-// A verify selector only proves a session when we are not looking at the login
-// form itself. D&B's selector matches a search link on its login page, so the
-// username step read as signed in and the stored credential was never sent.
-// The form can render seconds after network idle (D&B draws its username step
-// late), so on the login URL itself give it a bounded chance to appear.
-const loginFormVisibleNow = async () =>
-  (await browserCandidateFields("login").catch(() => [])).some((field) => field.source === "heuristic")
-  || (await browserCandidateFields("credential").catch(() => [])).some((field) => field.source === "heuristic");
-const loginFormStillShown = await (async () => {
-  if (!verifySelectorVisible || !samePage(page.url(), targetUrl)) return false;
-  if (Number(beforeSignals.form_state?.visible_password_fields || 0) > 0) return true;
+// A verify selector only proves a session once we have left the login page.
+// D&B's selector matches a search link on /login itself, and D&B first shows a
+// token interstitial (/login?F…=_) before drawing its username step, so no
+// field check at that moment is reliable. A live session redirects away from
+// the login URL; while we are still on it, go through the login path.
+const stillOnLoginPage = samePage(page.url(), targetUrl);
+if (verifySelectorVisible && stillOnLoginPage) {
+  // Give a late-rendering form a bounded chance before the fill step.
   const deadline = Date.now() + 8000;
   while (Date.now() < deadline) {
-    if (await loginFormVisibleNow()) return true;
+    const fields = await browserCandidateFields("login").catch(() => []);
+    if (fields.some((field) => field.source === "heuristic")) break;
     await page.waitForTimeout(500).catch(() => null);
   }
-  return false;
-})();
-const preAuthenticatedVerifyFound = verifySelectorVisible && !loginFormStillShown;
+}
+const preAuthenticatedVerifyFound = verifySelectorVisible && !stillOnLoginPage;
 // A stored session sends us straight past the login form: Leadfeeder answers
 // /login with its dashboard, XING with an in-app page. The verify selector is
 // the only thing that used to notice, and once its markup drifts the run walks
@@ -7250,7 +7247,7 @@ mod tests {
         // A verify selector that also matches on the login page (D&B: a search
         // link) must not count while the login form is still shown.
         assert!(source.contains(
-            "const preAuthenticatedVerifyFound = verifySelectorVisible && !loginFormStillShown;"
+            "const preAuthenticatedVerifyFound = verifySelectorVisible && !stillOnLoginPage;"
         ));
         assert!(source.contains("gotoTargetWithRetry"));
         assert!(source.contains("attempt <= 2"));
