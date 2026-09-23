@@ -668,7 +668,7 @@ mailQa: try {
   await visibleContent.waitFor({ state: 'visible' });
   await page.locator('[data-mail-close-content-editor]').click();
 
-  await page.locator('[data-mail-compose]').click();
+  await page.locator('[data-mail-compose-primary]').click();
   await page.locator('[data-mail-compose-to]').fill('kontakt@example.test');
   await page.locator('[data-mail-compose-campaign]').selectOption('campaign-1');
   await page.locator('[data-mail-compose-subject]').fill('August Update');
