@@ -250,6 +250,8 @@ export async function mount(ctx) {
     disposed: false,
     readiness: null,
     refreshTimer: null,
+    activeRefreshes: 0,
+    refreshPending: false,
     refreshSequence: 0,
     lastSuccessfulMailSequence: 0,
     lastAppliedAuxiliarySequence: 0,
@@ -506,16 +508,39 @@ export async function mount(ctx) {
 
   function scheduleRefresh() {
     if (view.disposed) return;
-    if (view.refreshTimer) window.clearTimeout(view.refreshTimer);
+    view.refreshPending = true;
+    // Coalesce a notification burst without moving its deadline forward.
+    // Keep at most two local reads active when replication emits continuously.
+    if (view.refreshTimer || view.activeRefreshes >= 2) return;
     view.refreshTimer = window.setTimeout(async () => {
       view.refreshTimer = null;
       if (view.disposed) return;
-      await refreshData();
+      view.refreshPending = false;
+      try {
+        await refreshData();
+      } catch (error) {
+        view.mailReadError = String(error?.message || error);
+        view.loading = false;
+      }
       if (!view.disposed) render();
     }, 120);
   }
 
   async function refreshData() {
+    if (view.activeRefreshes >= 2) {
+      view.refreshPending = true;
+      return;
+    }
+    view.activeRefreshes += 1;
+    try {
+      return await readSnapshot();
+    } finally {
+      view.activeRefreshes -= 1;
+      if (view.refreshPending && view.activeRefreshes < 2 && !view.disposed) scheduleRefresh();
+    }
+  }
+
+  async function readSnapshot() {
     const sequence = ++view.refreshSequence;
     let recoveredCollection = false;
     for (const name of ['communication_accounts', 'communication_threads', 'communication_messages']) {

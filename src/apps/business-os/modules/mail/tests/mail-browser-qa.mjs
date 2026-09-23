@@ -706,7 +706,10 @@ mailQa: try {
     window.__mailReadPulse = window.setInterval(() => window.__mailNotify('communication_threads'), 600);
   });
   await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
-  assert.ok(await page.evaluate(() => window.__mailReadAttempts.get('communication_threads') > 3));
+  assert.ok(await page.evaluate(() => {
+    const attempts = window.__mailReadAttempts.get('communication_threads');
+    return attempts >= 2 && attempts <= 3;
+  }), 'notification pulses must not start an unbounded number of reads');
   await page.evaluate(() => {
     window.clearInterval(window.__mailReadPulse);
     window.__mailReadFailures.delete('communication_threads');
@@ -714,6 +717,12 @@ mailQa: try {
   });
   await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
   await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
+  await page.evaluate(() => {
+    window.__mailRows.communication_messages.find((message) => message.message_key === 'mail-1').subject = 'Projektstatus nach Sync';
+    window.__mailFastPulse = window.setInterval(() => window.__mailNotify('communication_threads'), 20);
+  });
+  await assertVisibleText(page, 'Projektstatus nach Sync');
+  await page.evaluate(() => window.clearInterval(window.__mailFastPulse));
   assert.deepEqual(browserErrors, []);
   console.log('Mail browser QA OK: inbox, sent, reconnect recovery, thread, campaign, draft, group, mailbox administration, Sellify series-email handoff, and responsive composer');
 } catch (error) {
