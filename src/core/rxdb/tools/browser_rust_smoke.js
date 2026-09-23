@@ -13017,7 +13017,7 @@ function ensureCtoxSmokeBinary() {
           document.body.dataset.authState = 'authenticated';
           return catalog;
         };
-        const ensureAppStoreListView = async (label) => {
+        const ensureAppStoreCardsGrid = async (label) => {
           await waitFor(() => {
             const root = document.querySelector('[data-app-store-root]');
             const center = root?.querySelector('.store-center');
@@ -13033,20 +13033,27 @@ function ensureCtoxSmokeBinary() {
               text: root?.innerText?.slice(0, 500) || '',
             };
           }, 30000, `${label} opened`);
+          // Card actions (release/versions/...) render only on the
+          // shard-card grid of the CARDS view: the list view renders compact
+          // rows without action buttons (Karten/Listen-Differenzierung), so
+          // forcing list view makes every data-card-action query structurally
+          // empty. The cards view hides the DOM grid only while the WebGL
+          // shelf is live; the smoke environment falls back to DOM shard
+          // cards, which keep the grid visible and actionable.
           const toggle = document.querySelector('[data-app-store-root] [data-store-view-toggle]');
-          if (toggle?.dataset?.viewMode !== 'list') {
-            click('[data-app-store-root] [data-store-view-toggle]', `${label} list toggle`);
+          if (toggle?.dataset?.viewMode === 'list') {
+            click('[data-app-store-root] [data-store-view-toggle]', `${label} cards toggle`);
           }
           await waitFor(() => {
             const grid = document.querySelector('[data-app-store-root] [data-apps-grid]');
             return {
-              ok: Boolean(toggle?.dataset?.viewMode === 'list'
+              ok: Boolean(toggle?.dataset?.viewMode === 'cards'
                 && visible('[data-app-store-root] [data-apps-grid]')
                 && grid && !grid.hidden),
               toggleMode: toggle?.dataset?.viewMode || '',
               gridHidden: grid?.hidden ?? null,
             };
-          }, 10000, `${label} list view`);
+          }, 10000, `${label} cards grid`);
         };
 
         await syncBusinessCollections();
@@ -13072,13 +13079,25 @@ function ensureCtoxSmokeBinary() {
             session: releaseSession,
             governance: initialCatalog.governance,
           });
+        // Fail fast with the actual projection gap instead of an opaque card
+        // timeout downstream: the release button needs the founder assignment
+        // (governance.founders) and the private lifecycle in the catalog doc.
+        if (!privateBeforeRelease) {
+          throw new Error(`release fixture must be private and founder-visible before release: ${JSON.stringify({
+            lifecycle: initialModule.lifecycle || null,
+            version: initialModule.version || '',
+            governanceFounders: Object.keys(initialCatalog.governance?.founders || {}),
+            founderAssignment: initialCatalog.governance?.founders?.[moduleId] || null,
+          })}`);
+        }
 
         await state.openModule('app-store', { force: true, asModule: true });
-        await ensureAppStoreListView('App Store for release smoke');
+        await ensureAppStoreCardsGrid('App Store for release smoke');
         click('[data-scope="installed"]', 'installed scope');
         await waitFor(() => {
           const card = document.querySelector(`[data-apps-grid] [data-app-id="${css(moduleId)}"]`);
           const releaseButton = card?.querySelector('[data-card-action="release"]');
+          const deniedButton = card?.querySelector('button.denied[data-disabled-reason]');
           const lifecycleBadge = card?.querySelector('.app-card-version-row .ctox-badge[data-state]');
           return {
             ok: Boolean(card
@@ -13088,6 +13107,8 @@ function ensureCtoxSmokeBinary() {
             hasCard: Boolean(card),
             hasReleaseButton: Boolean(releaseButton),
             releaseDisabled: releaseButton?.disabled ?? null,
+            deniedReason: deniedButton?.dataset?.disabledReason || '',
+            viewMode: document.querySelector('[data-app-store-root] [data-store-view-toggle]')?.dataset?.viewMode || '',
             lifecycleText: lifecycleBadge?.textContent?.trim() || '',
             cardText: card?.innerText?.slice(0, 500) || '',
           };
@@ -13186,7 +13207,7 @@ function ensureCtoxSmokeBinary() {
         localStorage.removeItem(storageKey);
 
         await state.openModule('app-store', { force: true, asModule: true });
-        await ensureAppStoreListView('App Store before versions');
+        await ensureAppStoreCardsGrid('App Store before versions');
         const versionStateReady = await waitFor(async () => {
           await syncBusinessCollections(5000);
           const catalog = await catalogSnapshot();
