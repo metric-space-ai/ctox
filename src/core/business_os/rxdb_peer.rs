@@ -11574,10 +11574,15 @@ pub(in crate::business_os) mod tests {
         let old = open_test_database_with_name(path.clone(), name.clone()).await?;
         old.add_collections(creator(schema_from_json(old_schema)))
             .await?;
-        old.collection("workjet_computers")
-            .unwrap()
-            .insert(legacy.clone())
-            .await?;
+        let old_collection = old.collection("workjet_computers").unwrap();
+        // 67e44b11d introduced the deployed v0 schema. Welsch retained this
+        // hash in RxDB metadata while later source changed v0 in place (DB6).
+        assert_eq!(
+            old_collection.schema.as_ref().unwrap().hash().await,
+            "039a86246af89f137f1a9646cd6f58b9200c1203175a7c9671a440f8919c2250"
+        );
+        old_collection.insert(legacy.clone()).await?;
+        drop(old_collection);
         old.close().await?;
         drop(old);
 
