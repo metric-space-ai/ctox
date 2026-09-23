@@ -41,6 +41,15 @@ export function createQueryDemandLoader({
   // push pipeline echoed them (and cache-eviction tombstones — i.e. DELETES)
   // back to the master, and the LWW gate let them veto later master pulls.
   replicationOrigin = null,
+  // SYNC-12 boundary for control-plane reads: live provider for this
+  // browser's read-permission digest (hash of the role+epoch capability
+  // claims). A role or grant change bumps the digest; control-plane windows
+  // stamped under a superseded digest must not be served locally before a
+  // newly authorized fetch re-stamps their membership. An empty current
+  // digest (identity unresolvable right now) stays permissive, mirroring
+  // readPermissionDigestMatches, so a token-endpoint blip never blocks warm
+  // rendering.
+  readPermissionDigest = null,
 }) {
   if (!storageCollection) throw new TypeError('demand loader requires storageCollection');
   if (!sidecar) throw new TypeError('demand loader requires sidecar');
@@ -50,6 +59,9 @@ export function createQueryDemandLoader({
   }
   const resolveReplicationOrigin = () => (
     (typeof replicationOrigin === 'function' ? replicationOrigin() : replicationOrigin) || null
+  );
+  const resolveReadPermissionDigest = () => String(
+    (typeof readPermissionDigest === 'function' ? readPermissionDigest() : readPermissionDigest) || '',
   );
   const boundedQueryWindowRevalidateMs = Math.max(
     250,
@@ -184,6 +196,24 @@ export function createQueryDemandLoader({
       const queryWindowStale = cached
         && clock() - Number(cached.updatedAt || cached.createdAt || 0)
           >= boundedQueryWindowRevalidateMs;
+      // SYNC-12 fail-closed boundary: control-plane lifecycle rows were
+      // fetched under a specific read-permission identity. After a role or
+      // grant change (new capability epoch, hence a new digest) a cached
+      // window's membership may still reference rows the identity is no
+      // longer authorized to see, or miss rows of the new scope — the
+      // retained-checkpoint invalidation in replication-webrtc forces a full
+      // re-pull, but it does not rewrite these persisted windows. Neither the
+      // complete fast path nor stale-while-revalidate may serve that
+      // membership before a newly authorized fetch re-stamps the window.
+      // Windows persisted before this stamp existed mismatch a known identity
+      // exactly once — the safe direction.
+      const currentReadPermissionDigest = isControlPlaneStatusCollection(collectionName)
+        ? resolveReadPermissionDigest()
+        : '';
+      const controlPlanePermissionMismatch = isControlPlaneStatusCollection(collectionName)
+        && cached
+        && (cached.complete || cached.everCompleted)
+        && !windowReadPermissionDigestMatches(cached.permissionDigest, currentReadPermissionDigest);
       if (
         cached
         && cached.complete
@@ -191,6 +221,7 @@ export function createQueryDemandLoader({
         && !emptyWindowStale
         && !mutableMembershipWindowStale
         && !queryWindowStale
+        && !controlPlanePermissionMismatch
       ) {
         if (strictRequireRevision) {
           // Same token plus exact bridge/connection/database generation may
@@ -266,6 +297,10 @@ export function createQueryDemandLoader({
             authoritativeRevision: result.authoritativeRevision ?? null,
             satisfiedRevision: query?.requireRevision ?? null,
             satisfiedGeneration: strictRequireRevision ? generation : null,
+            // SYNC-12: stamp the read-permission identity this authorized
+            // fetch ran under; a later role/grant change (new digest) must
+            // not be served this membership.
+            permissionDigest: resolveReadPermissionDigest() || null,
             queryShape: {
               selector: query?.selector ?? {},
               sort: normalizeSort(query?.sort),
@@ -291,7 +326,11 @@ export function createQueryDemandLoader({
               storageCollection,
               query,
               normalizedWindow,
-              cached?.documentIds,
+              // Fail-closed: an aborted fetch must not fall back to window
+              // membership authorized under a superseded read-permission
+              // identity; an empty membership renders nothing until the next
+              // authorized fetch re-stamps the window.
+              controlPlanePermissionMismatch ? [] : cached?.documentIds,
             );
           }
           bumpStatus(status, 'queryFetchErrorCount');
@@ -347,6 +386,7 @@ export function createQueryDemandLoader({
         if (
           materialized?.complete
           && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds)
+          && windowReadPermissionDigestMatches(materialized.permissionDigest, currentReadPermissionDigest)
           && (
             !strictRequireRevision
             || (
@@ -376,7 +416,7 @@ export function createQueryDemandLoader({
               storageCollection,
               query,
               normalizedWindow,
-              cached?.documentIds,
+              controlPlanePermissionMismatch ? [] : cached?.documentIds,
             );
           }
           // A dead/replaced collection state can leave a 30 s broker claim
@@ -435,6 +475,7 @@ export function createQueryDemandLoader({
         cached?.everCompleted
         && cachedDocumentsAvailable
         && !emptyWindowStale
+        && !controlPlanePermissionMismatch
         && !query?.requireRevision
       ) {
         coordinatedFetchJob().catch(() => {
@@ -668,6 +709,17 @@ function normalizeSort(sort) {
     const direction = entry[key];
     return { [key]: direction === -1 || direction === 'desc' || direction === 'DESC' ? 'desc' : 'asc' };
   });
+}
+
+// Mirrors readPermissionDigestMatches in replication-webrtc.mjs (SYNC-12):
+// an empty CURRENT digest means the identity is unresolvable right now (no
+// token / token-endpoint blip) and stays permissive, so a transient token
+// outage never blocks warm rendering or forces a resync. A non-empty current
+// digest must equal the window's stamp. Windows persisted before the stamp
+// existed mismatch a known identity exactly once — the safe direction.
+function windowReadPermissionDigestMatches(storedDigest, currentDigest) {
+  if (!currentDigest) return true;
+  return String(storedDigest || '') === currentDigest;
 }
 
 async function readLocalDocuments(storageCollection, query, window, documentIds = null) {

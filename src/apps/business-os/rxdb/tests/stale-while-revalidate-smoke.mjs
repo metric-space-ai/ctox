@@ -16,6 +16,7 @@
 import {
   createQueryDemandLoader,
   createSidecarWithMemoryBackend,
+  queryFingerprint,
 } from '../dist/ctox-rxdb-js.mjs';
 
 function makeStorageCollection() {
@@ -29,6 +30,18 @@ function makeStorageCollection() {
         if (doc._deleted) { docs.set(doc.id, { ...doc }); continue; }
         docs.set(doc.id, { ...doc });
       }
+    },
+    // The production storage (storage-indexeddb.mjs) serves membership reads
+    // through findDocumentsById; mirror it so membership order/filters match
+    // the real path (the queryDocuments fallback truncates by limit BEFORE
+    // the membership filter and is not what production exercises).
+    async findDocumentsById(ids) {
+      const out = {};
+      for (const id of ids) {
+        const doc = docs.get(String(id));
+        if (doc) out[String(id)] = doc;
+      }
+      return out;
     },
     async queryDocuments(query, { matchesSelector, sortDocuments }) {
       let all = Array.from(docs.values())
@@ -314,6 +327,149 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
   const strictDocs = await strict;
   assert(strictResolved && strictDocs[0]?.status === 'completed',
     'strict control-plane read resolves with the refreshed row');
+}
+
+// --- 7. permission-digest boundary: superseded control-plane windows fail
+// closed ---------------------------------------------------------------------
+// A role/grant change issues a capability token with a bumped epoch, so the
+// SYNC-12 read-permission digest changes. replication-webrtc drops retained
+// pull checkpoints then, but persisted query windows keep their membership.
+// A control-plane window stamped under a superseded digest must NOT serve
+// local rows before a newly authorized fetch re-stamps it — neither via SWR
+// nor via the complete fast path — while an unchanged digest keeps the
+// instant warm render, and an unresolvable current digest stays permissive
+// (token-endpoint blip convention, mirroring readPermissionDigestMatches).
+{
+  let now = 30_000;
+  const sidecar = createSidecarWithMemoryBackend({ databaseName: 'swr-7', clock: () => now });
+  const storage = makeStorageCollection();
+  let currentDigest = 'digest-role-a';
+  let fetches = 0;
+  let releaseRefresh;
+  const refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
+  const loader = createQueryDemandLoader({
+    storageCollection: storage,
+    sidecar,
+    collectionName: 'business_commands',
+    schemaVersion: 1,
+    clock: () => now,
+    readPermissionDigest: () => currentDigest,
+    requestQueryFetch: async () => {
+      fetches += 1;
+      if (fetches === 1) {
+        return { documents: [{ id: 'cmd-1', status: 'running', scope: 'role-a' }] };
+      }
+      await refreshGate; // the authorized fetch under the new identity is gated
+      return { documents: [{ id: 'cmd-2', status: 'running', scope: 'role-b' }] };
+    },
+  });
+
+  await loader.resolveQuery({ selector: {} }); // cold: fetched and stamped digest-role-a
+  assert(fetches === 1, 'control-plane cold start fetched remotely (digest boundary)');
+
+  now += 60_000; // ordinary reload age: window past the freshness budget
+  currentDigest = 'digest-role-b'; // role/grant change: new capability epoch
+
+  let served = null;
+  let servedAt = 0;
+  const started = Date.now();
+  const pending = loader.resolveQuery({ selector: {} })
+    .then((docs) => { served = docs; servedAt = Date.now() - started; return docs; });
+  await settle();
+  assert(served === null,
+    'superseded permission digest must NOT serve the stale control-plane membership');
+  assert(fetches === 2, 'superseded window triggers a newly authorized fetch');
+
+  releaseRefresh();
+  const refreshed = await pending;
+  assert(refreshed.length === 1 && refreshed[0].id === 'cmd-2',
+    'after the authorized fetch the new membership is served');
+  assert(servedAt >= 0, 'resolved after the authorized fetch completed');
+
+  now += 60_000; // stable warm session under the SAME digest: SWR intact
+  const fetchesBeforeWarm = fetches;
+  const warmStarted = Date.now();
+  const warmDocs = await loader.resolveQuery({ selector: {} });
+  assert(warmDocs.length === 1 && warmDocs[0].id === 'cmd-2',
+    'unchanged digest keeps the instant local warm render');
+  assert(Date.now() - warmStarted < 200, 'warm read under unchanged digest stays sub-200ms');
+  assert(fetches === fetchesBeforeWarm + 1, 'unchanged digest revalidates in the background');
+
+  // Unresolvable current digest (token-endpoint blip): permissive, no storm.
+  currentDigest = '';
+  now += 60_000;
+  const blip = await loader.resolveQuery({ selector: {} });
+  assert(blip.length === 1 && blip[0].id === 'cmd-2',
+    'unresolvable current digest stays permissive (token-blip convention)');
+}
+
+// --- 8. pre-stamp-era control-plane window mismatches a known identity once -
+// Windows persisted before the permissionDigest stamp existed carry no stamp;
+// with a known current identity they must refetch once (fail-closed), then
+// serve normally.
+{
+  let now = 40_000;
+  const sidecar = createSidecarWithMemoryBackend({ databaseName: 'swr-8', clock: () => now });
+  const storage = makeStorageCollection();
+  let fetches = 0;
+  let releaseFirst;
+  const firstGate = new Promise((resolve) => { releaseFirst = resolve; });
+  const loader = createQueryDemandLoader({
+    storageCollection: storage,
+    sidecar,
+    collectionName: 'ctox_queue_tasks',
+    schemaVersion: 1,
+    clock: () => now,
+    readPermissionDigest: () => 'digest-known',
+    requestQueryFetch: async () => {
+      fetches += 1;
+      if (fetches === 1) await firstGate; // hold the authorized fetch
+      return { documents: [{ id: 'task-1', status: 'leased' }] };
+    },
+  });
+  // Seed a legacy window directly: complete, members present, NO digest
+  // stamp (the pre-fix persisted format). The fingerprint input must match
+  // the loader's computation for resolveQuery with an empty selector.
+  await storage.bulkWrite([{ id: 'task-legacy', status: 'done' }]);
+  const legacyFingerprint = await queryFingerprint({
+    collection: 'ctox_queue_tasks',
+    schemaVersion: 1,
+    selector: {},
+    sort: [],
+    limit: undefined,
+    skip: undefined,
+    window: { offset: 0, limit: 200 },
+  });
+  await sidecar.upsertQueryWindow({
+    collection: 'ctox_queue_tasks',
+    queryFingerprint: legacyFingerprint,
+    offset: 0,
+    limit: 200,
+    documentIds: ['task-legacy'],
+    complete: true,
+  });
+  now += 60_000; // past the freshness budget, as after an ordinary reload
+
+  // With a known current identity and no stamp, the legacy window must NOT
+  // serve locally; it awaits the authorized fetch.
+  let legacyServed = null;
+  const legacyPending = loader.resolveQuery({ selector: {} })
+    .then((docs) => { legacyServed = docs; return docs; });
+  await settle();
+  assert(legacyServed === null,
+    'legacy control-plane window without a digest stamp must not serve under a known identity');
+  assert(fetches === 1, 'legacy window triggers the authorized fetch');
+  releaseFirst();
+  const legacyDocs = await legacyPending;
+  assert(legacyDocs.length === 1 && legacyDocs[0].id === 'task-1',
+    'legacy window is replaced by the authorized membership');
+
+  // After the re-stamped fetch the same digest serves instantly again.
+  now += 60_000;
+  const warmAgain = await loader.resolveQuery({ selector: {} });
+  assert(warmAgain.length === 1 && warmAgain[0].id === 'task-1',
+    're-stamped window resumes stale-while-revalidate under the same identity');
+  assert(fetches === 2, 're-stamped window revalidates in the background');
 }
 
 console.log('ctox-rxdb stale-while-revalidate smoke OK');

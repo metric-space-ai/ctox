@@ -557,7 +557,18 @@ immediately and the refresh corrects them via the storage change event;
 `requireRevision` reads on these collections still await their authoritative
 answer. Stale empty windows remain blocking revalidations (the false-empty
 projection-race guard), and never-completed or evicted windows still fetch
-before answering. The opaque token
+before answering.
+
+Fail-closed permission boundary: each control-plane window carries the SYNC-12
+read-permission digest (hash of the role/epoch capability claims) of the
+authorized fetch that produced it. A role or grant change bumps the digest;
+the demand loader then refuses to serve that window locally — complete fast
+path, stale-while-revalidate, cross-tab materialized window and cancel
+fallbacks alike — until a newly authorized fetch re-stamps it. Windows
+persisted before this stamp existed mismatch a known identity exactly once.
+An unresolvable current digest stays permissive, mirroring
+`readPermissionDigestMatches`, so a token-endpoint blip never blocks warm
+rendering. Non-control-plane collections are unchanged. The opaque token
 is carried through the existing in-flight identity and sidecar satisfied-token
 fields; it is not a server revision or new transport.
 
