@@ -97,7 +97,7 @@ pub(super) fn cancel_native_project(
     // The core command projection deliberately redacts actor identity for audit.
     // Read ownership from the admitted native command, then bind it back to the
     // projected command before authorizing cancellation.
-    let admitted = store::load_business_command(&open_store(root)?, target_command_id)?;
+    let admitted = store::load_business_command(&store::open_store(root)?, target_command_id)?;
     let native_project = target_command_id.starts_with("workjet_project_native_")
         && canonical
             .pointer("/payload/project_id")
