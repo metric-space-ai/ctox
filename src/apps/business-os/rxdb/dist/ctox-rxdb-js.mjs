@@ -7778,9 +7778,6 @@ function createQueryDemandLoader({
           return job;
         };
         if (cached?.everCompleted && cachedDocumentsAvailable && !emptyWindowStale && !query?.requireRevision) {
-          if (controlPlaneWindowStale) {
-            return coordinatedFetchJob();
-          }
           coordinatedFetchJob().catch(() => {
           });
           bumpStatus(status, "queryFetchStaleServedCount");

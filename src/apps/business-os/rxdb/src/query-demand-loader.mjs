@@ -422,6 +422,14 @@ export function createQueryDemandLoader({
       // the background; the materialised refresh emits a storage change
       // event, so reactive queries re-render on arrival. This turns repeat
       // module loads from a WebRTC round-trip into an IndexedDB read.
+      // Control-plane status collections (business_commands, ctox_queue_tasks)
+      // share this path: their short freshness budget remains the trigger for
+      // the bounded, deduplicated refresh, but no longer blocks the caller on
+      // a native round-trip — on an ordinary reload every such window is older
+      // than its budget, so awaiting it parked app lists behind the native
+      // query plane for seconds to minutes. Cached lifecycle rows render
+      // immediately and the background refresh corrects them via the storage
+      // change event, so the window never becomes a permanent cache hit.
       // An explicit requireRevision keeps strict await semantics.
       if (
         cached?.everCompleted
@@ -429,14 +437,6 @@ export function createQueryDemandLoader({
         && !emptyWindowStale
         && !query?.requireRevision
       ) {
-        if (controlPlaneWindowStale) {
-          // Commands and queue tasks are demand-only to avoid replaying the
-          // complete historical ledger. Their records are mutable lifecycle
-          // projections, though, so a completed query window cannot remain a
-          // permanent cache hit. Await the bounded, deduplicated ID/window
-          // refresh once its short freshness budget expires.
-          return coordinatedFetchJob();
-        }
         coordinatedFetchJob().catch(() => {
           // Surfaced via queryFetchErrorCount; the next exec retries.
         });

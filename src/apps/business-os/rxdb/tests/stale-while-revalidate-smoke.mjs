@@ -227,5 +227,94 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
   );
 }
 
+// --- 5. control-plane status windows: stale serve NOW, refresh behind ------
+// business_commands/ctox_queue_tasks keep a short freshness budget, but the
+// budget triggers a BACKGROUND revalidation — it must not park the caller on
+// a native round-trip after an ordinary reload (every cached window is older
+// than the budget then). Regression pin for the issue #211 warm-load finding
+// (2026-09-23): Crew/Tickets/Mail first reads blocked minutes behind a
+// congested native query plane because control-plane staleness was awaited.
+{
+  let now = 10_000;
+  // Loader and sidecar must share the same clock: window staleness compares
+  // the loader clock against sidecar-stamped updatedAt.
+  const sidecar = createSidecarWithMemoryBackend({ databaseName: 'swr-5', clock: () => now });
+  const storage = makeStorageCollection();
+  let fetches = 0;
+  let releaseRefresh;
+  const refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
+  const loader = createQueryDemandLoader({
+    storageCollection: storage,
+    sidecar,
+    collectionName: 'business_commands',
+    schemaVersion: 1,
+    clock: () => now,
+    requestQueryFetch: async () => {
+      fetches += 1;
+      if (fetches === 1) {
+        return { documents: [{ id: 'cmd-1', status: 'running' }] };
+      }
+      await refreshGate; // background refresh is gated
+      return { documents: [{ id: 'cmd-1', status: 'completed' }] };
+    },
+  });
+
+  await loader.resolveQuery({ selector: {} }); // cold: awaited
+  assert(fetches === 1, 'control-plane cold start fetched remotely');
+
+  now += 60_000; // ordinary reload: every cached window is past the budget
+  const started = Date.now();
+  const stale = await loader.resolveQuery({ selector: {} });
+  const elapsed = Date.now() - started;
+  assert(stale.length === 1 && stale[0].status === 'running',
+    'stale control-plane window serves the cached row immediately');
+  assert(elapsed < 200, `control-plane stale answer must not await the refresh (took ${elapsed}ms)`);
+  assert(fetches === 2, 'control-plane background revalidation fetch was started');
+
+  releaseRefresh();
+  await settle();
+  const fresh = await loader.resolveQuery({ selector: {} });
+  assert(fresh[0]?.status === 'completed', 'background refresh updates the control-plane window');
+}
+
+// --- 6. strict requireRevision on control-plane still awaits ---------------
+{
+  let now = 20_000;
+  const sidecar = createSidecarWithMemoryBackend({ databaseName: 'swr-6', clock: () => now });
+  const storage = makeStorageCollection();
+  let fetches = 0;
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const loader = createQueryDemandLoader({
+    storageCollection: storage,
+    sidecar,
+    collectionName: 'business_commands',
+    schemaVersion: 1,
+    clock: () => now,
+    queryGeneration: () => 'swr-control-plane-generation',
+    requestQueryFetch: async () => {
+      fetches += 1;
+      if (fetches === 1) {
+        return { documents: [{ id: 'cmd-1', status: 'running' }], authoritativeRevision: 'r1' };
+      }
+      await gate;
+      return { documents: [{ id: 'cmd-1', status: 'completed' }], authoritativeRevision: 'r2' };
+    },
+  });
+  await loader.resolveQuery({ selector: {}, requireRevision: 'r1' });
+  now += 60_000;
+
+  let strictResolved = false;
+  const strict = loader
+    .resolveQuery({ selector: {}, requireRevision: 'r2' })
+    .then((docs) => { strictResolved = true; return docs; });
+  await settle();
+  assert(!strictResolved, 'strict control-plane read must await its authoritative refresh');
+  release();
+  const strictDocs = await strict;
+  assert(strictResolved && strictDocs[0]?.status === 'completed',
+    'strict control-plane read resolves with the refreshed row');
+}
+
 console.log('ctox-rxdb stale-while-revalidate smoke OK');
 process.exit(0);

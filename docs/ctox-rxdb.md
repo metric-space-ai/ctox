@@ -544,7 +544,20 @@ A stricter authority-readiness barrier is separate from the render hint. It
 requires query-fetch capability plus a successfully installed demand loader for
 the current connection generation. `requireRevision` reads use this barrier and
 are never satisfied by ordinary stale-while-revalidate state, a closed
-multi-tab broker, a timeout, or another connection generation. The opaque token
+multi-tab broker, a timeout, or another connection generation.
+
+Control-plane status collections (`business_commands`, `ctox_queue_tasks`)
+share the ordinary stale-while-revalidate path: their short freshness budget
+(1 s, 250 ms for actively tracked commands) triggers the bounded, deduplicated
+window refresh in the background instead of blocking the caller on a native
+round-trip. After any ordinary reload every cached window is older than that
+budget, so awaiting it parked app first reads behind the native query plane
+(issue #211 warm-load finding, 2026-09-23). Cached lifecycle rows render
+immediately and the refresh corrects them via the storage change event;
+`requireRevision` reads on these collections still await their authoritative
+answer. Stale empty windows remain blocking revalidations (the false-empty
+projection-race guard), and never-completed or evicted windows still fetch
+before answering. The opaque token
 is carried through the existing in-flight identity and sidecar satisfied-token
 fields; it is not a server revision or new transport.
 
