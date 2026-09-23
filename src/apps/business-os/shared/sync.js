@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20260923-read-mail-computer-migration-v391';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260923-read-mail-computer-migration-v391';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260923-read-mail-computer-migration-v391';
+} from './sync-contract.js?v=20260923-shell-v2-read-mail-computer-migration-v392';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260923-shell-v2-read-mail-computer-migration-v392';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260923-shell-v2-read-mail-computer-migration-v392';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20260923-read-mail-computer-migration-v391';
+const MULTI_TAB_COORDINATOR_EPOCH = '20260923-shell-v2-read-mail-computer-migration-v392';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
