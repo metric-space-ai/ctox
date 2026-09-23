@@ -2915,15 +2915,24 @@ function isPermissionDenied(error) {
 async function readAll(collection, required = false) {
   if (!collection) return required ? new Error('Mail collection unavailable') : [];
   let timeout;
+  let timedOut = false;
+  const controller = new AbortController();
   try {
     const docs = await Promise.race([
-      collection.find().exec(),
+      collection.find({ signal: controller.signal }).exec(),
       new Promise((_, reject) => {
-        timeout = setTimeout(() => reject(new Error('Mail collection read timed out')), MAIL_READ_TIMEOUT_MS);
+        timeout = setTimeout(() => {
+          timedOut = true;
+          // CTOX RxDB demand queries accept this signal and cancel their
+          // underlying request; a bare Promise.race would leave it running.
+          controller.abort();
+          reject(new Error('Mail collection read timed out'));
+        }, MAIL_READ_TIMEOUT_MS);
       }),
     ]);
     return docs.map((doc) => doc?.toJSON?.() || doc).filter(Boolean);
   } catch (error) {
+    if (timedOut) return new Error('Mail collection read timed out');
     if (isTransientCollectionReadError(error)) return null;
     console.warn('[mail] collection read failed', error);
     return error instanceof Error ? error : new Error(String(error));

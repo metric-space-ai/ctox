@@ -183,6 +183,9 @@ mailQa: try {
     const listeners = new Map();
     const readFailures = new Map();
     const readAttempts = new Map();
+    const pendingReads = new Map();
+    const maxPendingReads = new Map();
+    const abortedReads = new Map();
     const mailserver = {
       domains: [{
         domain_name: 'example.test',
@@ -220,9 +223,20 @@ mailQa: try {
     }
     function collection(name) {
       return {
-        find: () => ({ exec: async () => {
+        find: (query = {}) => ({ exec: async () => {
           readAttempts.set(name, (readAttempts.get(name) || 0) + 1);
-          if (readFailures.get(name) === 'PENDING') return new Promise(() => {});
+          if (readFailures.get(name) === 'PENDING') return new Promise((_, reject) => {
+            const pending = (pendingReads.get(name) || 0) + 1;
+            pendingReads.set(name, pending);
+            maxPendingReads.set(name, Math.max(maxPendingReads.get(name) || 0, pending));
+            const abort = () => {
+              pendingReads.set(name, (pendingReads.get(name) || 1) - 1);
+              abortedReads.set(name, (abortedReads.get(name) || 0) + 1);
+              reject(new Error('QUERY_CANCELLED'));
+            };
+            if (query.signal?.aborted) abort();
+            else query.signal?.addEventListener('abort', abort, { once: true });
+          });
           if (readFailures.has(name)) throw new Error(readFailures.get(name));
           return rows[name].map((record) => ({ toJSON: () => ({ ...record }) }));
         } }),
@@ -246,6 +260,9 @@ mailQa: try {
     window.__mailRows = rows;
     window.__mailReadFailures = readFailures;
     window.__mailReadAttempts = readAttempts;
+    window.__mailPendingReads = pendingReads;
+    window.__mailMaxPendingReads = maxPendingReads;
+    window.__mailAbortedReads = abortedReads;
     window.__mailNotify = notify;
     window.__mailserver = mailserver;
     window.__dispatchedCommands = [];
@@ -710,6 +727,12 @@ mailQa: try {
     const attempts = window.__mailReadAttempts.get('communication_threads');
     return attempts >= 2 && attempts <= 3;
   }), 'notification pulses must not start an unbounded number of reads');
+  await page.waitForFunction(() => (window.__mailReadAttempts.get('communication_threads') || 0) >= 5, null, { timeout: 14_000 });
+  assert.ok(await page.evaluate(() => (
+    (window.__mailMaxPendingReads.get('communication_threads') || 0) <= 2
+    && (window.__mailPendingReads.get('communication_threads') || 0) <= 2
+    && (window.__mailAbortedReads.get('communication_threads') || 0) >= 3
+  )), 'multiple timeout windows must cancel pending queries and stay bounded');
   await page.evaluate(() => {
     window.clearInterval(window.__mailReadPulse);
     window.__mailReadFailures.delete('communication_threads');
