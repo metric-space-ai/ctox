@@ -1772,6 +1772,18 @@ fn workjet_record_visible_with_reader(
         .unwrap_or(true))
 }
 
+fn mcp_app_collection_uses_rxdb_authority(collection: &str) -> bool {
+    !collection_requires_typed_mcp_tool(collection)
+        && !super::project_chats::is_owned_collection(collection)
+        && !matches!(
+            collection,
+            "communication_accounts"
+                | "communication_threads"
+                | "communication_messages"
+                | "business_workspace_branding"
+        )
+}
+
 pub fn query_records(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -1783,7 +1795,11 @@ pub fn query_records(
     enforce_collection_policy(root, collection)?;
     let public_crew = crew_read_is_public(root, context, collection)?;
     let limit = bounded_limit(limit);
-    let payload = store::pull_latest_collection_records(root, collection, Some(limit))?;
+    let payload = if mcp_app_collection_uses_rxdb_authority(collection) {
+        store::pull_mcp_app_collection_records(root, collection, Some(limit))?
+    } else {
+        store::pull_latest_collection_records(root, collection, Some(limit))?
+    };
     let documents = payload
         .get("documents")
         .and_then(Value::as_array)
@@ -4051,7 +4067,12 @@ pub fn get_record(
     ensure_non_empty("collection", collection)?;
     enforce_collection_policy(root, collection)?;
     let public_crew = crew_read_is_public(root, context, collection)?;
-    let payload = store::pull_collection_record(root, collection, record_id)?.ok_or_else(|| {
+    let payload = if mcp_app_collection_uses_rxdb_authority(collection) {
+        store::pull_mcp_app_collection_record(root, collection, record_id)?
+    } else {
+        store::pull_collection_record(root, collection, record_id)?
+    }
+    .ok_or_else(|| {
         BusinessOsMcpError::not_found(
             BusinessOsMcpErrorCode::RecordNotFound,
             format!("Business OS record `{record_id}` was not found in `{collection}`"),
@@ -8638,6 +8659,113 @@ mod tests {
             records.items[0].deep_link.url_fragment,
             "#module=customer_accounts&record=acct_1"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_reads_prefer_rxdb_rows_and_tombstones_over_shadow() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "documents": [
+                    {"id": "stale", "name": "Old live shadow", "updated_at_ms": 100},
+                    {"id": "fallback", "name": "Shadow only", "updated_at_ms": 90}
+                ]
+            }),
+        )?;
+        let path = store::rxdb_store_path(root);
+        std::fs::create_dir_all(path.parent().expect("RxDB path has a parent"))?;
+        let conn = rusqlite::Connection::open(&path)?;
+        conn.execute_batch(
+            "CREATE TABLE ctox_business_os__customer_accounts__v2 (
+                id TEXT PRIMARY KEY NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL,
+                lastWriteTime REAL NOT NULL,
+                data TEXT NOT NULL
+            );",
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__customer_accounts__v2
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "stale",
+                "2-stale",
+                1,
+                300.0,
+                serde_json::json!({
+                    "id": "stale",
+                    "name": "Tombstoned in RxDB",
+                    "_deleted": false,
+                    "updated_at_ms": 100
+                })
+                .to_string()
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__customer_accounts__v2
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "new",
+                "1-new",
+                0,
+                400.0,
+                serde_json::json!({
+                    "id": "new",
+                    "name": "New RxDB only",
+                    "_deleted": false,
+                    "updated_at_ms": 200
+                })
+                .to_string()
+            ],
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__customer_accounts__v2
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "json-deleted",
+                "1-json-deleted",
+                0,
+                350.0,
+                serde_json::json!({
+                    "id": "json-deleted",
+                    "name": "JSON tombstone",
+                    "_deleted": true,
+                    "updated_at_ms": 150
+                })
+                .to_string()
+            ],
+        )?;
+        drop(conn);
+
+        let context = test_context("business_os.query_records");
+        let top_three = query_records(root, &context, "customer_accounts", Some(3))?;
+        assert_eq!(top_three.count, 3);
+        assert_eq!(top_three.items[0].id, "new");
+        assert_eq!(top_three.items[1].id, "json-deleted");
+        assert_eq!(top_three.items[1].data["_deleted"], true);
+        assert_eq!(top_three.items[2].id, "stale");
+        assert_eq!(top_three.items[2].data["_deleted"], true);
+        assert_eq!(top_three.items[2].data["name"], "Tombstoned in RxDB");
+
+        let with_fallback = query_records(root, &context, "customer_accounts", Some(4))?;
+        assert_eq!(with_fallback.count, 4);
+        assert_eq!(with_fallback.items[3].id, "fallback");
+        assert_eq!(with_fallback.items[3].data["_deleted"], false);
+
+        let get_context = test_context("business_os.get_record");
+        let stale = get_record(root, &get_context, "customer_accounts", "stale")?;
+        assert_eq!(stale.record.data["_deleted"], true);
+        assert_eq!(stale.record.data["name"], "Tombstoned in RxDB");
+        let new = get_record(root, &get_context, "customer_accounts", "new")?;
+        assert_eq!(new.record.data["name"], "New RxDB only");
+        let json_deleted = get_record(root, &get_context, "customer_accounts", "json-deleted")?;
+        assert_eq!(json_deleted.record.data["_deleted"], true);
+        let fallback = get_record(root, &get_context, "customer_accounts", "fallback")?;
+        assert_eq!(fallback.record.data["name"], "Shadow only");
         Ok(())
     }
 

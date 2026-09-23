@@ -11188,6 +11188,168 @@ pub fn pull_latest_collection_records(
     }))
 }
 
+fn mcp_rxdb_document(record_id: &str, raw: &str, sql_deleted: i64) -> anyhow::Result<Value> {
+    let mut document: Value = serde_json::from_str(raw)
+        .with_context(|| format!("parse native RxDB document `{record_id}` for MCP read"))?;
+    let deleted = sql_deleted != 0 || is_rxdb_deleted_document(&document);
+    let object = document
+        .as_object_mut()
+        .with_context(|| format!("native RxDB document `{record_id}` is not an object"))?;
+    if object
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| id != record_id)
+    {
+        anyhow::bail!("native RxDB document `{record_id}` has a different payload id");
+    }
+    object.insert("id".to_string(), Value::String(record_id.to_string()));
+    object.insert("_deleted".to_string(), Value::Bool(deleted));
+    if object.contains_key("is_deleted") {
+        object.insert("is_deleted".to_string(), Value::Bool(deleted));
+    }
+    Ok(document)
+}
+
+/// MCP app reads prefer the native RxDB row that the browser sees. A tombstone
+/// is a present row; falling back to an older shadow would resurrect it.
+pub fn pull_mcp_app_collection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let path = rxdb_store_path(root);
+    if path.is_file() {
+        let conn = Connection::open(&path)?;
+        if let Some(table) = rxdb_collection_table_name(&path, &conn, collection) {
+            let columns = rxdb_table_columns(&conn, &table)?;
+            let deleted_column = if columns.contains("deleted") {
+                "deleted"
+            } else if columns.contains("_deleted") {
+                "_deleted"
+            } else {
+                "0"
+            };
+            let row = conn
+                .query_row(
+                    &format!("SELECT data, {deleted_column} FROM {table} WHERE id = ?1"),
+                    [record_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .optional()?;
+            if let Some((raw, deleted)) = row {
+                return Ok(Some(mcp_rxdb_document(record_id, &raw, deleted)?));
+            }
+        }
+    }
+    pull_collection_record(root, collection, record_id)
+}
+
+/// RxDB rows come first, newest replication write first. Shadow-only rows are
+/// a fallback for native data not yet represented in that collection table.
+pub fn pull_mcp_app_collection_records(
+    root: &Path,
+    collection: &str,
+    limit: Option<usize>,
+) -> anyhow::Result<Value> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let path = rxdb_store_path(root);
+    let rxdb = if path.is_file() {
+        let conn = Connection::open(&path)?;
+        rxdb_collection_table_name(&path, &conn, collection).map(|table| (conn, table))
+    } else {
+        None
+    };
+    let mut documents = Vec::new();
+    if let Some((conn, table)) = rxdb.as_ref() {
+        let columns = rxdb_table_columns(conn, table)?;
+        let deleted_column = if columns.contains("deleted") {
+            "deleted"
+        } else if columns.contains("_deleted") {
+            "_deleted"
+        } else {
+            "0"
+        };
+        let write_clock = if columns.contains("lastWriteTime") {
+            "lastWriteTime"
+        } else {
+            "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
+        };
+        let mut statement = conn.prepare(&format!(
+            "SELECT id, data, {deleted_column} FROM {table}
+             ORDER BY {write_clock} DESC, id DESC LIMIT ?1"
+        ))?;
+        let rows = statement.query_map([limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, raw, deleted) = row?;
+            documents.push(mcp_rxdb_document(&id, &raw, deleted)?);
+        }
+    }
+    if documents.len() < limit {
+        let shadow_only = with_store_connection(root, |conn| {
+            let mut statement = conn.prepare(
+                "SELECT record_id, deleted, updated_at_ms, payload_json
+                 FROM business_records WHERE collection = ?1
+                 ORDER BY updated_at_ms DESC, record_id DESC",
+            )?;
+            let mut rows = statement.query([collection])?;
+            let mut fallback = Vec::new();
+            while documents.len() + fallback.len() < limit {
+                let Some(row) = rows.next()? else { break };
+                let id: String = row.get(0)?;
+                if let Some((rxdb_conn, table)) = rxdb.as_ref() {
+                    let exists = rxdb_conn
+                        .query_row(
+                            &format!("SELECT 1 FROM {table} WHERE id = ?1"),
+                            [&id],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .optional()?
+                        .is_some();
+                    if exists {
+                        continue;
+                    }
+                }
+                let deleted: i64 = row.get(1)?;
+                let updated_at_ms: i64 = row.get(2)?;
+                let raw: String = row.get(3)?;
+                let mut document: Value = serde_json::from_str(&raw)
+                    .with_context(|| format!("parse shadow document `{collection}/{id}`"))?;
+                let object = document.as_object_mut().with_context(|| {
+                    format!("shadow document `{collection}/{id}` is not an object")
+                })?;
+                object
+                    .entry("id".to_string())
+                    .or_insert_with(|| Value::String(id));
+                object.insert("_deleted".to_string(), Value::Bool(deleted != 0));
+                object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+                fallback.push(document);
+            }
+            Ok(fallback)
+        })?;
+        documents.extend(shadow_only);
+    }
+    Ok(serde_json::json!({
+        "ok": true,
+        "collection": collection,
+        "count": documents.len(),
+        "documents": documents,
+        "since_ms": 0,
+        "source": "mcp_rxdb_priority"
+    }))
+}
+
 pub fn pull_business_command_status_record(
     root: &Path,
     command_id: &str,
