@@ -202,6 +202,7 @@ function bindElements(root) {
   els.watch = root.querySelector('[data-thread-watch]');
   els.snooze = root.querySelector('[data-thread-snooze]');
   els.archive = root.querySelector('[data-thread-archive]');
+  els.delegate = root.querySelector('[data-thread-delegate]');
   els.toggleActions = root.querySelector('[data-toggle-actions]');
   els.syncState = root.querySelector('[data-sync-state]');
   els.mobileBack = root.querySelector('[data-mobile-back]');
@@ -297,10 +298,7 @@ function wireUi() {
   // Header actions: create-note opens the action workbench with the note form
   // focused; export serializes the currently filtered thread list as JSON.
   els.root?.querySelector('[data-action="create-note"]')?.addEventListener('click', () => {
-    els.root?.classList.remove('is-actions-hidden');
-    els.toggleActions?.setAttribute('aria-pressed', 'true');
-    els.noteBody?.focus();
-    els.noteBody?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    openActionPanel('note', els.noteBody);
   });
   els.root?.querySelector('[data-action="export-threads"]')?.addEventListener('click', exportVisibleThreads);
   els.list?.addEventListener('click', (event) => {
@@ -367,11 +365,7 @@ function wireUi() {
   // Delegate is a thread action, not a buried form: open the action pane and
   // put the cursor into the handoff target picker.
   els.root?.querySelector('[data-thread-delegate]')?.addEventListener('click', () => {
-    els.root.classList.remove('is-actions-hidden');
-    els.toggleActions?.setAttribute('aria-pressed', 'true');
-    const target = els.root.querySelector('[data-handoff-target]');
-    target?.focus();
-    target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    openActionPanel('handoff', els.handoffTarget);
   });
   wireMentionPopup();
   els.watch?.addEventListener('click', () => toggleWatch().catch(showError));
@@ -431,6 +425,16 @@ function wireUi() {
   };
   window.addEventListener('hashchange', onHash);
   state.cleanup.push(() => window.removeEventListener('hashchange', onHash));
+}
+
+function openActionPanel(name, focusTarget) {
+  els.root?.classList.remove('is-actions-hidden');
+  els.root?.classList.add('is-context-open');
+  els.toggleActions?.setAttribute('aria-pressed', 'true');
+  const panel = els.root?.querySelector(`[data-action-panel="${name}"]`);
+  if (panel) panel.open = true;
+  focusTarget?.focus();
+  focusTarget?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }
 
 // Field finding 2026-09-06 (managed tenant): this module keeps running in the
@@ -1671,12 +1675,16 @@ function approvalById(approvalId) {
 
 function setThreadActionState(thread) {
   const disabled = !thread || state.busy;
-  [els.watch, els.snooze, els.archive, ...els.claimButtons].forEach((button) => {
+  [els.watch, els.snooze, els.mobileSnooze, els.archive, els.delegate, ...els.claimButtons].forEach((button) => {
     if (button) button.disabled = disabled;
   });
+  const terminal = ['archived', 'completed', 'closed', 'cancelled', 'canceled'].includes(thread?.status);
+  for (const button of [els.snooze, els.mobileSnooze, els.archive, els.delegate]) {
+    if (button) button.disabled = disabled || terminal;
+  }
   for (const button of els.claimButtons) {
     const canClaim = thread && (!thread.assigned_user_id || thread.assigned_user_id === currentUserId())
-      && !['archived', 'completed', 'closed'].includes(thread.status);
+      && !terminal;
     button.disabled = disabled || !canClaim;
     button.title = thread?.assigned_user_id === currentUserId() ? 'Bereits übernommen' : 'Abstimmung übernehmen';
   }

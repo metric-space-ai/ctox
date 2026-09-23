@@ -98,7 +98,7 @@
           <button type="button" class="ctox-pane-icon" data-thread-snooze title="Snooze" aria-label="Snooze">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15ZM12 8v4.5l3 2"/></svg>
           </button>
-          <button type="button" class="ctox-pane-icon" data-thread-archive title="Archivieren" aria-label="Archivieren">
+          <button type="button" class="ctox-pane-icon" data-thread-archive title="Abstimmung aus der Inbox entfernen; der Fachvorgang bleibt bestehen" aria-label="Abstimmung aus der Inbox entfernen">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v4H4zM6 9v10h12V9M10 13h4"/></svg>
           </button>
           <button type="button" class="ctox-pane-icon threads-toggle-actions" data-toggle-actions title="Aktionen & Aufmerksamkeit" aria-label="Aktionen & Aufmerksamkeit einblenden" aria-pressed="false">
@@ -126,8 +126,8 @@
 
   <aside class="ctox-pane threads-right" aria-label="Thread Actions">
     <div class="ctox-pane-scroll threads-right-scroll">
-      <section class="ctox-card threads-panel">
-        <header><h3>Aufmerksamkeit</h3></header>
+      <details class="ctox-card threads-panel" name="thread-actions" data-action-panel="notifications">
+        <summary><h3>Aufmerksamkeit</h3></summary>
         <div class="ctox-card-body">
           <form data-notification-preferences-form class="threads-form">
             <label><span class="ctox-field-label">Mindestpriorität</span><input class="ctox-input" type="number" min="0" max="100" step="10" value="20" data-notification-threshold></label>
@@ -139,10 +139,10 @@
             <button type="submit" class="ctox-button">Speichern</button>
           </form>
         </div>
-      </section>
+      </details>
 
-      <section class="ctox-card threads-panel">
-        <header><h3>Übergabe</h3></header>
+      <details class="ctox-card threads-panel" name="thread-actions" data-action-panel="handoff">
+        <summary><h3>Übergabe</h3></summary>
         <div class="ctox-card-body">
           <form data-handoff-form class="threads-form">
             <label><span class="ctox-field-label">An</span><select class="ctox-select" data-handoff-target data-roster-select required></select></label>
@@ -152,20 +152,20 @@
             <button type="submit" class="ctox-button">Übergeben</button>
           </form>
         </div>
-      </section>
+      </details>
 
-      <section class="ctox-card threads-panel">
-        <header><h3>AI beauftragen</h3></header>
+      <details class="ctox-card threads-panel" name="thread-actions" data-action-panel="ai">
+        <summary><h3>Neue CTOX-Aufgabe</h3></summary>
         <div class="ctox-card-body">
           <form data-ai-form class="threads-form">
             <label><span class="ctox-field-label">Ziel</span><textarea class="ctox-textarea" data-ai-goal rows="3" required></textarea></label>
-            <button type="submit" class="ctox-button is-primary">AI starten</button>
+            <button type="submit" class="ctox-button is-primary">Neue Aufgabe starten</button>
           </form>
         </div>
-      </section>
+      </details>
 
-      <section class="ctox-card threads-panel">
-        <header><h3>Neue Notiz</h3></header>
+      <details class="ctox-card threads-panel" name="thread-actions" data-action-panel="note">
+        <summary><h3>Neue Notiz</h3></summary>
         <div class="ctox-card-body">
           <form data-note-form class="threads-form">
             <label>
@@ -179,10 +179,10 @@
             <button type="submit" class="ctox-button is-primary">Notiz hinterlassen</button>
           </form>
         </div>
-      </section>
+      </details>
 
-      <section class="ctox-card threads-panel">
-        <header><h3>CTOX Freigabe</h3></header>
+      <details class="ctox-card threads-panel" name="thread-actions" data-action-panel="approval">
+        <summary><h3>CTOX Freigabe</h3></summary>
         <div class="ctox-card-body">
           <form data-approval-form class="threads-form">
             <label>
@@ -196,7 +196,7 @@
             <button type="submit" class="ctox-button is-primary">Freigabe anfragen</button>
           </form>
         </div>
-      </section>
+      </details>
 
       <section class="ctox-card threads-panel" data-context-panel>
         <header><h3>Kontext</h3></header>

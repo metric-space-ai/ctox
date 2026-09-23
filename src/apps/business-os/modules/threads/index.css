@@ -630,12 +630,21 @@
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 .threads-right .ctox-card.threads-panel:last-child { border-bottom: 0; }
-.threads-right .ctox-card.threads-panel > header h3 {
+.threads-right .ctox-card.threads-panel > header h3,
+.threads-right .ctox-card.threads-panel > summary h3 {
   font-size: var(--fs-micro);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
+}
+.threads-right .ctox-card.threads-panel > summary {
+  cursor: pointer;
+  padding: 10px 12px;
+}
+.threads-right .ctox-card.threads-panel > summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
 }
 
 /* Main-view toggle: the timeline renders as message cards or as compact rows —
