@@ -1557,6 +1557,30 @@ fn sanitize_research_writeback(
             Some(field) if verworfene_felder.contains(field) => {
                 Some(format!("Feld {field} wurde bereits verworfen"))
             }
+            Some(field)
+                if !quantity_quote_backs(
+                    field,
+                    &evidence
+                        .get("value")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            request.field_status.get(field).and_then(|status| {
+                                match &status.value {
+                                    Value::String(text) => Some(text.clone()),
+                                    Value::Number(number) => Some(number.to_string()),
+                                    _ => None,
+                                }
+                            })
+                        })
+                        .unwrap_or_default(),
+                    evidence.get("quote").and_then(Value::as_str).unwrap_or(""),
+                ) =>
+            {
+                Some(format!(
+                    "Zitat stuetzt den Wert von {field} nicht (nur Spanne oder andere Zahl)"
+                ))
+            }
             Some(field) if parse_requested_fields(&[field.to_string()]).is_err() => {
                 Some(format!("Feld {field} ist kein bekanntes Recherchefeld"))
             }
@@ -1623,7 +1647,21 @@ fn sanitize_research_writeback(
                 }
             },
         );
-        let dropped = before - status.sources.len();
+        // A figure needs a quote that states it. Carbosulf, 23.09.2026:
+        // mitarbeiter "30 Vollzeitmitarbeiter" carried Leadfeeder's quote
+        // "employee range 11-100" as its second source; a size class proves
+        // no exact headcount. Checked for every source, not only Sellify.
+        let vor_mengenpruefung = status.sources.len();
+        status
+            .sources
+            .retain(|source| quantity_quote_backs(field, &value, &source.quote));
+        let mengen_verworfen = vor_mengenpruefung - status.sources.len();
+        if mengen_verworfen > 0 {
+            rejections.push(format!(
+                "field_status.{field}: {mengen_verworfen} Beleg(e) verworfen (Zitat nennt den Wert nicht, nur eine Spanne oder eine andere Zahl)"
+            ));
+        }
+        let dropped = before - vor_mengenpruefung;
         if dropped > 0 {
             rejections.push(format!(
                 "field_status.{field}: {dropped} Sellify-Beleg(e) verworfen ({})",
@@ -1895,6 +1933,72 @@ fn sanitize_research_writeback(
     }
 
     Ok(rejections)
+}
+
+/// Fields whose value is a figure. Only for these is a quote's number checked.
+const QUANTITY_FIELDS: &[&str] = &["mitarbeiter", "umsatz"];
+
+/// Numbers in a text, German or English notation ("1.500", "50,87",
+/// "50.870.000", "1,500"), in order of appearance, each with its byte span.
+fn numbers_in(text: &str) -> Vec<(f64, std::ops::Range<usize>)> {
+    let pattern = regex::Regex::new(r"\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?")
+        .expect("number pattern");
+    pattern
+        .find_iter(text)
+        .filter_map(|found| {
+            let raw = found.as_str();
+            let grouped = regex::Regex::new(r"^\d{1,3}(?:([.,])\d{3})+(?:[.,]\d+)?$")
+                .expect("group pattern")
+                .captures(raw)
+                .and_then(|caps| caps.get(1).map(|sep| sep.as_str().to_string()));
+            let normalized = match grouped.as_deref() {
+                // Thousands separator: drop it; the other mark is the decimal.
+                Some(".") => raw.replace('.', "").replace(',', "."),
+                Some(",") => raw.replace(',', ""),
+                _ => raw.replace(',', "."),
+            };
+            normalized
+                .parse::<f64>()
+                .ok()
+                .map(|number| (number, found.range()))
+        })
+        .collect()
+}
+
+/// Whether a source quote states the field's figure. Not a quantity field, no
+/// figure in the value, or no number in the quote: nothing to check (true).
+/// Numbers that only bound a range ("11-100", "11 bis 100") do not count: a
+/// size class never proves an exact value.
+fn quantity_quote_backs(field: &str, value: &str, quote: &str) -> bool {
+    if !QUANTITY_FIELDS.contains(&field) {
+        return true;
+    }
+    let Some((wanted, _)) = numbers_in(value).into_iter().next() else {
+        return true;
+    };
+    let in_quote = numbers_in(quote);
+    if in_quote.is_empty() {
+        return true;
+    }
+    let range =
+        regex::Regex::new(r"(?i)\d[\d.,]*\s*(?:-|–|—|bis|to)\s*\d[\d.,]*").expect("range pattern");
+    let range_spans: Vec<std::ops::Range<usize>> =
+        range.find_iter(quote).map(|found| found.range()).collect();
+    let same = |a: f64, b: f64| (a - b).abs() <= 0.005 * a.abs().max(b.abs()).max(1e-9);
+    in_quote
+        .iter()
+        .filter(|(_, span)| {
+            !range_spans
+                .iter()
+                .any(|outer| outer.start <= span.start && span.end <= outer.end)
+        })
+        .any(|(number, _)| {
+            same(*number, wanted)
+                || same(*number, wanted * 1_000.0)
+                || same(*number, wanted * 1_000_000.0)
+                || same(*number * 1_000.0, wanted)
+                || same(*number * 1_000_000.0, wanted)
+        })
 }
 
 fn validate_field_status_keys(
@@ -2881,6 +2985,62 @@ pub(super) fn seed_rxdb_collection_table_for_tests(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_size_class_or_other_number_never_backs_an_exact_figure() {
+        // Carbosulf 23.09.2026: Leadfeeder's range cited for "30".
+        assert!(!quantity_quote_backs(
+            "mitarbeiter",
+            "30 Vollzeitmitarbeiter (Stand 31.12.2024)",
+            "Leadfeeder employee range 11-100"
+        ));
+        assert!(!quantity_quote_backs(
+            "mitarbeiter",
+            "30",
+            "D&B Hoovers: 31 Mitarbeiter"
+        ));
+        assert!(!quantity_quote_backs(
+            "mitarbeiter",
+            "100",
+            "Größenklasse 11 bis 100"
+        ));
+        assert!(quantity_quote_backs(
+            "mitarbeiter",
+            "30",
+            "30 Mitarbeiter (Größenklasse 11-100)"
+        ));
+        assert!(quantity_quote_backs(
+            "mitarbeiter",
+            "1.500",
+            "rund 1500 Beschäftigte"
+        ));
+        assert!(quantity_quote_backs(
+            "umsatz",
+            "50,87 Mio. EUR",
+            "Umsatzerlöse 50.870.000 EUR"
+        ));
+        assert!(quantity_quote_backs(
+            "umsatz",
+            "50,87 Mio. EUR",
+            "Umsatz: 50,87 Mio. €"
+        ));
+        assert!(!quantity_quote_backs(
+            "umsatz",
+            "50,87 Mio. EUR",
+            "Umsatz 38,3 Mio. €"
+        ));
+        // Nothing to judge: no figure in the quote, or not a quantity field.
+        assert!(quantity_quote_backs(
+            "mitarbeiter",
+            "30",
+            "Mitarbeiterzahl laut Registerauszug"
+        ));
+        assert!(quantity_quote_backs(
+            "firma_plz",
+            "50735",
+            "Postleitzahl 12345"
+        ));
+    }
 
     fn create_gap_fixture(
         root: &Path,
