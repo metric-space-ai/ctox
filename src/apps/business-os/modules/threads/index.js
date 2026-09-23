@@ -50,8 +50,12 @@ const state = {
 };
 
 let els = {};
+let mountSequence = 0;
 
 export async function mount(ctx) {
+  const metricPrefix = `ctox.threads.${++mountSequence}`;
+  state.metrics = { prefix: metricPrefix, recorded: new Set() };
+  performance.mark(`${metricPrefix}.mount`);
   state.ctx = ctx;
   state.filter = 'inbox';
   state.listView = false;
@@ -699,6 +703,20 @@ function render(options = {}) {
   syncGrammarSurfaces(threads.length);
   renderList(threads, options);
   renderDetail();
+  if (threads.length || personalCollectionsReady()) recordFirstRenderMetric('first_usable_list');
+  if (personalCollectionsReady()) recordFirstRenderMetric('complete_personal_inbox');
+  if (state.selectedId && state.detailCompleteThreadId === state.selectedId) {
+    recordFirstRenderMetric('selected_detail');
+  }
+}
+
+function recordFirstRenderMetric(name) {
+  const metrics = state.metrics;
+  if (!metrics || metrics.recorded.has(name)) return;
+  metrics.recorded.add(name);
+  const endMark = `${metrics.prefix}.${name}`;
+  performance.mark(endMark);
+  performance.measure(`ctox.threads.${name}`, `${metrics.prefix}.mount`, endMark);
 }
 
 function renderMobileState() {
