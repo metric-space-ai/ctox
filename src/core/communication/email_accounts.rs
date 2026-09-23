@@ -56,11 +56,6 @@ pub(crate) struct EmailAccountConfig {
     /// Business-OS-Benutzer, dem dieses Konto gehört.
     #[serde(default)]
     pub owner_user_id: String,
-    /// Exchange/OWA-Konten: Web-Adressen des eigenen Servers.
-    #[serde(default)]
-    pub owa_url: String,
-    #[serde(default)]
-    pub ews_url: String,
 }
 
 pub(crate) fn normalize_address(value: &str) -> String {
