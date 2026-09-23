@@ -7,7 +7,7 @@ const EDITOR_MODES = Object.freeze({
 });
 
 const DEFAULT_EASY_EMAIL_MODULE = '../../../vendor/easy-email-editor/index.mjs';
-const STYLE_REVISION = '20260807-mail-content-editor-v1';
+const STYLE_REVISION = '20260923-mail-content-editor-v2';
 
 const COPY = Object.freeze({
   de: Object.freeze({
