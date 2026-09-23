@@ -153,9 +153,9 @@ where
                 if !status.is_object() {
                     continue;
                 }
-                let parsed = serde_json::from_value::<FieldStatus>(status)
-                    .map_err(|error| D::Error::custom(format!("field_status.{field}: {error}")))?;
-                entries.insert(field, parsed);
+                if let Some(parsed) = parse_field_status_entry(status) {
+                    entries.insert(field, parsed);
+                }
             }
         }
         Value::Array(list) => {
@@ -174,9 +174,9 @@ where
                 for key in ["field", "key", "name", "field_key"] {
                     status.remove(key);
                 }
-                let parsed = serde_json::from_value::<FieldStatus>(Value::Object(status))
-                    .map_err(|error| D::Error::custom(format!("field_status.{field}: {error}")))?;
-                entries.insert(field, parsed);
+                if let Some(parsed) = parse_field_status_entry(Value::Object(status)) {
+                    entries.insert(field, parsed);
+                }
             }
         }
         Value::Null => {}
@@ -189,9 +189,20 @@ where
     Ok(entries)
 }
 
+/// One malformed field entry must not cost the whole writeback. On the
+/// Carbosulf lead 23.09.2026 four of six writebacks were rejected, one of them
+/// carrying the only person record, because a single entry had no `status` or
+/// a source said `"requires_credential": "false"`. An entry that still cannot
+/// be read, or names no status, is dropped: the field then shows up as open
+/// and the rest of the payload lands.
+fn parse_field_status_entry(entry: Value) -> Option<FieldStatus> {
+    let parsed = serde_json::from_value::<FieldStatus>(entry).ok()?;
+    (!parsed.status.trim().is_empty()).then_some(parsed)
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct FieldStatus {
-    #[serde(deserialize_with = "lenient_string")]
+    #[serde(default, deserialize_with = "lenient_string")]
     status: String,
     #[serde(default)]
     value: Value,
@@ -363,7 +374,7 @@ struct RawFieldSource {
     quote: String,
     #[serde(default)]
     person_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_bool")]
     requires_credential: bool,
     #[serde(default, deserialize_with = "lenient_string")]
     task_id: String,
@@ -407,6 +418,23 @@ fn host_of_url(url: &str) -> String {
         .unwrap_or("")
         .trim_start_matches("www.");
     host.to_ascii_lowercase()
+}
+
+/// Flags that arrive as strings (`"false"`, `"true"`, `"ja"`, `"1"`) or numbers
+/// are read by meaning; null and anything unrecognised count as false.
+fn lenient_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Bool(flag) => flag,
+        Value::Number(number) => number.as_f64().is_some_and(|value| value != 0.0),
+        Value::String(text) => matches!(
+            text.trim().to_ascii_lowercase().as_str(),
+            "true" | "1" | "yes" | "ja" | "y" | "j"
+        ),
+        _ => false,
+    })
 }
 
 /// Strings that arrive as numbers or booleans are rendered; null becomes "".
@@ -1558,7 +1586,7 @@ fn sanitize_research_writeback(
                 Some(format!("Feld {field} wurde bereits verworfen"))
             }
             Some(field)
-                if !quantity_quote_backs(
+                if !quote_backs_value(
                     field,
                     &evidence
                         .get("value")
@@ -1654,7 +1682,7 @@ fn sanitize_research_writeback(
         let vor_mengenpruefung = status.sources.len();
         status
             .sources
-            .retain(|source| quantity_quote_backs(field, &value, &source.quote));
+            .retain(|source| quote_backs_value(field, &value, &source.quote));
         let mengen_verworfen = vor_mengenpruefung - status.sources.len();
         if mengen_verworfen > 0 {
             rejections.push(format!(
@@ -1677,6 +1705,11 @@ fn sanitize_research_writeback(
         let Some(person) = person.as_object_mut() else {
             continue;
         };
+        let person_email = person
+            .get("person_email")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         for list in ["evidence", "sources"] {
             let Some(entries) = person.get_mut(list).and_then(Value::as_array_mut) else {
                 continue;
@@ -1695,10 +1728,11 @@ fn sanitize_research_writeback(
                     .unwrap_or("");
                 let quote = entry.get("quote").and_then(Value::as_str).unwrap_or("");
                 crm.check(field, url, quote) != Some(false)
+                    && email_quote_backs(field, &person_email, quote)
             });
             if entries.len() != before {
                 rejections.push(format!(
-                    "result.person_records: {} Sellify-Beleg(e) verworfen ({})",
+                    "result.person_records: {} Beleg(e) verworfen (Sellify ohne Deckung oder Zitat nennt die E-Mail-Adresse nicht; {})",
                     before - entries.len(),
                     crm.hint()
                 ));
@@ -1969,6 +2003,39 @@ fn numbers_in(text: &str) -> Vec<(f64, std::ops::Range<usize>)> {
 /// figure in the value, or no number in the quote: nothing to check (true).
 /// Numbers that only bound a range ("11-100", "11 bis 100") do not count: a
 /// size class never proves an exact value.
+/// A quote backs a value only when it states it: figures by number
+/// ([`quantity_quote_backs`]), a personal e-mail address by the address
+/// itself ([`email_quote_backs`]).
+fn quote_backs_value(field: &str, value: &str, quote: &str) -> bool {
+    quantity_quote_backs(field, value, quote) && email_quote_backs(field, value, quote)
+}
+
+/// BNT, 23.09.2026: `person_email` robert.suesse@bnt-chemicals.de was
+/// "verified" by a Kontakt-page quote naming info(at)bnt-chemicals.de and four
+/// other people, never Robert. An address pattern or a sibling's address is
+/// no evidence for this address. The quote must contain the exact address;
+/// the obfuscations first-party pages use ((at), [at], " at ", (dot)) count.
+fn email_quote_backs(field: &str, value: &str, quote: &str) -> bool {
+    if field != "person_email" {
+        return true;
+    }
+    let wanted = value.trim().to_ascii_lowercase();
+    if !wanted.contains('@') {
+        return true;
+    }
+    normalized_email_text(quote).contains(&wanted)
+}
+
+fn normalized_email_text(text: &str) -> String {
+    let lower = text.to_lowercase();
+    let at = regex::Regex::new(r"\s*(?:\(at\)|\[at\]|\{at\}|\(@\)|\[@\]|\sat\s)\s*")
+        .expect("at pattern");
+    let dot = regex::Regex::new(r"\s*(?:\(dot\)|\[dot\]|\{dot\}|\(punkt\)|\[punkt\]|\sdot\s)\s*")
+        .expect("dot pattern");
+    let lower = at.replace_all(&lower, "@");
+    dot.replace_all(&lower, ".").into_owned()
+}
+
 fn quantity_quote_backs(field: &str, value: &str, quote: &str) -> bool {
     if !QUANTITY_FIELDS.contains(&field) {
         return true;
@@ -4741,6 +4808,69 @@ mod tests {
         let merged = merge_field_status(Some(&earlier), probe);
         assert_eq!(merged["firma_domain"]["status"], "verified");
         assert_eq!(merged["firma_domain"]["value"], "aeroxon.de");
+    }
+
+    #[test]
+    fn an_email_quote_must_name_the_exact_address() {
+        // BNT, 23.09.2026: Robert's address was "verified" by a Kontakt-page
+        // quote that names info(at) and four colleagues, never Robert.
+        let bnt = "info(at)bnt-chemicals.de; firmeneigenes Adressmuster vorname.nachname@bnt-chemicals.de: Norman Quandt, Birgit Hessler, Sina Helfer, Grit Hartmann";
+        assert!(!quote_backs_value(
+            "person_email",
+            "robert.suesse@bnt-chemicals.de",
+            bnt
+        ));
+        assert!(quote_backs_value(
+            "person_email",
+            "norman.quandt@bnt-chemicals.de",
+            "Norman Quandt, Vertrieb, E-Mail: norman.quandt(at)bnt-chemicals.de"
+        ));
+        assert!(quote_backs_value(
+            "person_email",
+            "Grit.Hartmann@bnt-chemicals.de",
+            "grit.hartmann [at] bnt-chemicals [dot] de"
+        ));
+        // Other fields are not affected.
+        assert!(quote_backs_value("person_vorname", "Robert", bnt));
+    }
+
+    #[test]
+    fn one_malformed_field_entry_does_not_cost_the_person_records() {
+        // Carbosulf, 23.09.2026: four of six writebacks were rejected whole,
+        // one of them carrying the only person record, because a source said
+        // "requires_credential": "false" or an entry had no status.
+        let payload = serde_json::json!({
+            "record_id": "lead-a",
+            "module": "outbound-lead-generation",
+            "research_command_id": "cmd-a",
+            "field_status": {
+                "firma_name": {
+                    "status": "verified",
+                    "value": "Carbosulf Chemische Werke GmbH",
+                    "sources": {"item": [{
+                        "source_id": "online-handelsregister.de",
+                        "url": "https://www.online-handelsregister.de/x",
+                        "quote": "Carbosulf Chemische Werke GmbH HRB 1797",
+                        "requires_credential": "false",
+                        "person_key": ""
+                    }]}
+                },
+                "mitarbeiter": {"attempts": {"item": [{"kind": "web_read"}]}}
+            },
+            "result": {
+                "person_records": {"item": {
+                    "person_key": "p1",
+                    "person_vorname": "Hans-Robert",
+                    "person_nachname": "Jacob"
+                }}
+            }
+        });
+        let request: ResearchWritebackRequest =
+            serde_json::from_value(hoist_top_level_field_entries(unwrap_item_carriers(payload)))
+                .expect("a single malformed entry must not reject the payload");
+        assert_eq!(request.result.person_records.len(), 1);
+        assert!(!request.field_status["firma_name"].sources[0].requires_credential);
+        assert!(!request.field_status.contains_key("mitarbeiter"));
     }
 
     #[test]
