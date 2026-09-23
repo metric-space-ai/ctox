@@ -1392,7 +1392,7 @@ function documentListState(state, records) {
   if (state.documentsReadError) return 'error';
   if (state.documentsReadiness?.state === 'offline-pending') return 'offline-pending';
   if (!state.documentsReadComplete || state.documentsReadiness?.ready === false) return 'loading';
-  // Older local-only hosts have no readiness facade. A shell that exposes it
+  // Older shells may not expose readiness. A shell that does
   // must affirm the first pull before zero rows can mean "no documents".
   const sync = state.ctx?.sync;
   const hasReadinessFacade = typeof sync?.collectionReadiness === 'function'
