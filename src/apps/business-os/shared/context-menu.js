@@ -7,6 +7,7 @@ export function createContextMenu({ host, viewportEl }) {
   let selectedIndex = -1;
   let activeMenu = null;
   let activeItems = [];
+  let returnFocus = null;
 
   function show(event, items) {
     if (event) {
@@ -16,10 +17,12 @@ export function createContextMenu({ host, viewportEl }) {
     hide();
     if (!items?.length) return;
 
+    returnFocus = event?.target instanceof HTMLElement ? event.target : document.activeElement;
     activeItems = items;
     const menu = document.createElement('div');
     menu.className = 'shell-context-menu';
     menu.setAttribute('role', 'menu');
+    menu.tabIndex = -1;
     items.forEach((item, index) => {
       if (item.type === 'separator') {
         const sep = document.createElement('div');
@@ -30,8 +33,13 @@ export function createContextMenu({ host, viewportEl }) {
       const el = document.createElement('div');
       el.className = 'shell-context-menu-item';
       el.setAttribute('role', 'menuitem');
+      el.tabIndex = -1;
       el.dataset.index = String(index);
-      if (item.disabled) el.setAttribute('aria-disabled', 'true');
+      if (item.disabled) {
+        el.setAttribute('aria-disabled', 'true');
+        el.style.opacity = '0.5';
+        el.style.cursor = 'not-allowed';
+      }
       const iconHtml = item.icon
         ? `<span class="shell-context-menu-icon">${escapeHtml(item.icon)}</span>`
         : '<span class="shell-context-menu-icon"></span>';
@@ -69,17 +77,22 @@ export function createContextMenu({ host, viewportEl }) {
     container.appendChild(menu);
     activeMenu = menu;
 
+    menu.style.maxHeight = `calc(100vh - 16px)`;
+    menu.style.overflowY = 'auto';
     const rect = menu.getBoundingClientRect();
     const viewportRect = viewport.getBoundingClientRect();
     let x = event ? event.clientX : viewportRect.left + 20;
     let y = event ? event.clientY : viewportRect.top + 20;
     const maxX = viewportRect.right - rect.width - 8;
     const maxY = viewportRect.bottom - rect.height - 8;
-    if (x > maxX) x = Math.max(viewportRect.left + 8, maxX);
-    if (y > maxY) y = Math.max(viewportRect.top + 8, maxY);
+    x = Math.max(viewportRect.left + 8, Math.min(x, maxX));
+    y = Math.max(viewportRect.top + 8, Math.min(y, maxY));
     menu.style.left = `${x}px`;
     menu.style.top = `${y}px`;
     requestAnimationFrame(() => menu.classList.add('is-active'));
+    const firstIndex = nextSelectableIndex(items, -1, 1);
+    if (firstIndex >= 0) setSelectedIndex(menu, items, firstIndex);
+    else menu.focus();
 
     activePointerListener = (evt) => {
       if (!menu.contains(evt.target)) hide();
@@ -97,7 +110,7 @@ export function createContextMenu({ host, viewportEl }) {
         selected?.click();
       } else if (evt.key === 'Escape') {
         evt.preventDefault();
-        hide();
+        hide(true);
       }
     };
     clearTimeout(attachTimer);
@@ -109,7 +122,7 @@ export function createContextMenu({ host, viewportEl }) {
     }, 10);
   }
 
-  function hide() {
+  function hide(restoreFocus = false) {
     if (attachTimer) {
       clearTimeout(attachTimer);
       attachTimer = null;
@@ -131,6 +144,8 @@ export function createContextMenu({ host, viewportEl }) {
       activeMenu = null;
     }
     activeItems = [];
+    if (restoreFocus && returnFocus?.isConnected) returnFocus.focus?.();
+    returnFocus = null;
   }
 
   function destroy() {
@@ -139,10 +154,13 @@ export function createContextMenu({ host, viewportEl }) {
 
   function setSelectedIndex(menu, items, index) {
     if (index < 0 || index >= items.length) return;
-    if (items[index]?.type === 'separator') return;
+    if (items[index]?.type === 'separator' || items[index]?.disabled) return;
     selectedIndex = index;
     for (const el of menu.querySelectorAll('.shell-context-menu-item')) {
-      el.classList.toggle('is-selected', Number(el.dataset.index) === index);
+      const selected = Number(el.dataset.index) === index;
+      el.classList.toggle('is-selected', selected);
+      el.tabIndex = selected ? 0 : -1;
+      if (selected) el.focus();
     }
   }
 

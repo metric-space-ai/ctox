@@ -1,14 +1,12 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
-import { showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
+import { showBusinessConfirm, showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { createCtoxLauncher } from './ctoxLauncher.js';
 import { ensureDesktopLayoutWithAuthority } from './layout-authority.js';
 import { makeIconDraggable } from './iconDrag.js?v=20260816-browser-sync-guards-v141';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js?v=20260816-browser-sync-guards-v141';
 import {
-  buildQuickAppCreateCommand,
   isRuntimeInstalledApp,
   moduleRenamePayload,
-  nextQuickAppIdentity,
 } from './appCommands.js';
 import {
   applyWorkjetCategory,
@@ -61,24 +59,28 @@ const FALLBACK_LABELS = {
     askCtox: 'Frage stellen',
     workWithData: 'Daten ändern',
     modifyApp: 'App ändern',
-    createApp: 'Neue App erstellen',
-    createAppStarted: 'App wurde erstellt',
-    createAppStartedDetail: '{title} ist bereit und erscheint gleich auf dem Desktop.',
-    createAppFailed: 'App konnte nicht erstellt werden',
+    createApp: 'App Creator öffnen',
     renameApp: 'App umbenennen',
     renameAppDone: 'App umbenannt',
-    renameAppFailed: 'App konnte nicht umbenannt werden',
     chatContextLabel: 'Desktop-Kontext',
     pinToTaskbar: 'An Bar anheften',
     unpinFromTaskbar: 'Von Bar lösen',
     renameIcon: 'Icon umbenennen',
     deleteIcon: 'Icon entfernen',
     arrangeIcons: 'Icons ausrichten',
+    sortIcons: 'Icons nach Namen sortieren',
     addMissingIcons: 'Fehlende Standard-Icons hinzufügen',
     openExplorer: 'Explorer öffnen',
-    openNotes: 'Notiz öffnen',
-    iconRestoreDefaults: 'Standard-Icons wiederherstellen',
-    refresh: 'Aktualisieren',
+    openNotes: 'Notizen öffnen',
+    iconRestoreDefaults: 'Desktop-Icons zurücksetzen',
+    resetConfirm: 'Alle Desktop-Verknüpfungen und eigenen Anordnungen entfernen und Standard-Icons wiederherstellen?',
+    refresh: 'Desktop-Icons neu laden',
+    iconsUnavailable: 'Desktop-Icons sind noch nicht bereit. Sync-Verbindung prüfen und erneut versuchen.',
+    menuActionFailed: 'Desktop-Aktion fehlgeschlagen',
+    noMissingIcons: 'Alle verfügbaren Standard-Icons sind bereits vorhanden.',
+    iconsAdded: 'Fehlende Standard-Icons wurden hinzugefügt.',
+    iconsArranged: 'Desktop-Icons wurden ausgerichtet.',
+    iconsSorted: 'Desktop-Icons wurden nach Namen sortiert.',
     platformActive: 'CTOX Plattform aktiv',
     syncReady: 'Sync aktuell',
     syncStarting: 'Sync startet',
@@ -100,24 +102,28 @@ const FALLBACK_LABELS = {
     askCtox: 'Ask question',
     workWithData: 'Change data',
     modifyApp: 'Modify app',
-    createApp: 'Create new app',
-    createAppStarted: 'App created',
-    createAppStartedDetail: '{title} is ready and will appear on the desktop shortly.',
-    createAppFailed: 'App could not be created',
+    createApp: 'Open App Creator',
     renameApp: 'Rename app',
     renameAppDone: 'App renamed',
-    renameAppFailed: 'App could not be renamed',
     chatContextLabel: 'Desktop context',
     pinToTaskbar: 'Pin to bar',
     unpinFromTaskbar: 'Unpin from bar',
     renameIcon: 'Rename icon',
     deleteIcon: 'Remove icon',
     arrangeIcons: 'Arrange icons',
+    sortIcons: 'Sort icons by name',
     addMissingIcons: 'Add missing default icons',
     openExplorer: 'Open Explorer',
-    openNotes: 'Open note',
-    iconRestoreDefaults: 'Restore default icons',
-    refresh: 'Refresh',
+    openNotes: 'Open Notes',
+    iconRestoreDefaults: 'Reset desktop icons',
+    resetConfirm: 'Remove all desktop shortcuts and custom positions, then restore the default icons?',
+    refresh: 'Reload desktop icons',
+    iconsUnavailable: 'Desktop icons are not ready. Check sync and try again.',
+    menuActionFailed: 'Desktop action failed',
+    noMissingIcons: 'All available default icons are already present.',
+    iconsAdded: 'Missing default icons were added.',
+    iconsArranged: 'Desktop icons were arranged.',
+    iconsSorted: 'Desktop icons were sorted by name.',
     platformActive: 'CTOX platform active',
     syncReady: 'Sync current',
     syncStarting: 'Starting sync',
@@ -167,6 +173,7 @@ export async function mount(ctx) {
     widgetSyncDetail: root.querySelector('[data-widget-sync-detail]'),
     widgetSyncFill: root.querySelector('[data-widget-sync-fill]'),
   };
+  refs.surface.tabIndex = -1;
   applyWorkjetCategory(refs.root, workjetCategoryForModule(ctx.module));
 
   const initialModules = Array.isArray(ctx.modules) ? ctx.modules : await loadModuleRegistry();
@@ -596,18 +603,20 @@ export async function mount(ctx) {
   function onSurfaceContextMenu(event) {
     if (event.target.closest('.desktop-icon')) return;
     if (!ctx.contextMenu) return;
+    for (const node of refs.icons.querySelectorAll('.desktop-icon.selected')) node.classList.remove('selected');
     ctx.contextMenu.show(event, [
-      { label: t('createApp', 'Neue App erstellen'), icon: '+', action: safeAction(createQuickApp) },
+      { label: t('createApp', 'App Creator öffnen'), icon: '+', disabled: !launcher.knows('creator'), action: () => openLauncherTarget('creator') },
       { label: t('chatWithCtox', 'Mit CTOX chatten'), icon: '◆', action: safeAction(chatWithCtoxAboutDesktop) },
       { type: 'separator' },
-      { label: t('openExplorer', 'Explorer öffnen'), icon: '⌘', disabled: !launcher.knows('explorer'), action: () => launcher.open('explorer') },
-      { label: t('openNotes', 'Notiz öffnen'), icon: '✎', disabled: !launcher.knows('notes'), action: () => launcher.open('notes') },
+      { label: t('openExplorer', 'Explorer öffnen'), icon: '⌘', disabled: !launcher.knows('explorer'), action: () => openLauncherTarget('explorer') },
+      { label: t('openNotes', 'Notizen öffnen'), icon: '✎', disabled: !launcher.knows('notes'), action: () => openLauncherTarget('notes') },
       { type: 'separator' },
-      { label: t('arrangeIcons', 'Icons ausrichten'), icon: '▦', action: safeAction(arrangeIcons) },
-      { label: t('addMissingIcons', 'Fehlende Standard-Icons hinzufügen'), icon: '+', action: safeAction(addMissingDefaultIcons) },
-      { label: t('iconRestoreDefaults', 'Standard-Icons wiederherstellen'), icon: '⟳', action: safeAction(restoreDefaultIcons) },
+      { label: t('arrangeIcons', 'Icons ausrichten'), icon: '▦', disabled: !iconsCollection, action: safeAction(arrangeIcons) },
+      { label: t('sortIcons', 'Icons nach Namen sortieren'), icon: '⇅', disabled: !iconsCollection, action: safeAction(() => arrangeIcons('name')) },
+      { label: t('addMissingIcons', 'Fehlende Standard-Icons hinzufügen'), icon: '+', disabled: !iconsCollection, action: safeAction(addMissingDefaultIcons) },
+      { label: t('iconRestoreDefaults', 'Desktop-Icons zurücksetzen'), icon: '⟳', disabled: !iconsCollection, action: safeAction(restoreDefaultIcons) },
       { type: 'separator' },
-      { label: t('refresh', 'Aktualisieren'), icon: '↻', action: safeAction(renderIcons) },
+      { label: t('refresh', 'Desktop-Icons neu laden'), icon: '↻', action: safeAction(refreshIcons) },
     ]);
   }
 
@@ -666,36 +675,20 @@ export async function mount(ctx) {
     return () => {
       Promise.resolve()
         .then(action)
-        .catch((error) => console.error('[desktop] context menu action failed:', error));
+        .catch((error) => {
+          console.error('[desktop] context menu action failed:', error);
+          notify({ type: 'error', title: t('menuActionFailed'), message: String(error?.message || error) });
+        });
     };
   }
 
-  async function createQuickApp() {
-    if (!ctx.commandBus?.dispatch) throw new Error('Business OS command runtime is not ready.');
-    const identity = nextQuickAppIdentity(currentModules(), ctx.locale, Date.now());
-    const command = buildQuickAppCreateCommand({
-      moduleId: identity.id,
-      title: identity.title,
-      actor: actorContext(),
-    });
-    try {
-      await ctx.commandBus.dispatch(command, { until: 'terminal' });
-      notify({
-        type: 'success',
-        title: t('createAppStarted', 'App wurde erstellt'),
-        message: formatMessage(
-          t('createAppStartedDetail', '{title} ist bereit und erscheint gleich auf dem Desktop.'),
-          { title: identity.title },
-        ),
-      });
-    } catch (error) {
-      notify({
-        type: 'error',
-        title: t('createAppFailed', 'App konnte nicht erstellt werden'),
-        message: String(error?.message || error),
-      });
-      throw error;
-    }
+  function openLauncherTarget(targetId) {
+    return openDesktopTarget({ target_module: targetId, label: titleForModule(targetId) });
+  }
+
+  async function refreshIcons() {
+    renderIcons.lastSignature = '';
+    await renderIcons();
   }
 
   async function renameApp(doc, app) {
@@ -709,35 +702,26 @@ export async function mount(ctx) {
     if (!title || title === current) return;
     const payload = moduleRenamePayload(app, title);
     const commandId = `cmd_module_rename_${crypto.randomUUID?.() || Date.now()}`;
-    try {
-      await ctx.commandBus.dispatch({
-        id: commandId,
-        command_id: commandId,
-        module: 'ctox',
-        command_type: 'ctox.module.save',
-        record_id: app.id,
-        payload,
-        client_context: {
-          source: 'desktop-app-context-menu',
-          action: 'app.rename',
-          module_id: app.id,
-          app_id: app.id,
-          actor: actorContext(),
-        },
-      }, { until: 'terminal' });
-      const existing = iconsCollection ? await iconsCollection.findOne(doc.id).exec() : null;
-      if (existing) {
-        await existing.incrementalPatch({ label: title, updated_at_ms: Date.now() });
-      }
-      notify({ type: 'success', title: t('renameAppDone', 'App umbenannt'), message: title });
-    } catch (error) {
-      notify({
-        type: 'error',
-        title: t('renameAppFailed', 'App konnte nicht umbenannt werden'),
-        message: String(error?.message || error),
-      });
-      throw error;
+    await ctx.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: 'ctox.module.save',
+      record_id: app.id,
+      payload,
+      client_context: {
+        source: 'desktop-app-context-menu',
+        action: 'app.rename',
+        module_id: app.id,
+        app_id: app.id,
+        actor: actorContext(),
+      },
+    }, { until: 'terminal' });
+    const existing = iconsCollection ? await iconsCollection.findOne(doc.id).exec() : null;
+    if (existing) {
+      await existing.incrementalPatch({ label: title, updated_at_ms: Date.now() });
     }
+    notify({ type: 'success', title: t('renameAppDone', 'App umbenannt'), message: title });
   }
 
   function currentModules() {
@@ -789,9 +773,9 @@ export async function mount(ctx) {
   }
 
   async function deleteIcon(iconId) {
-    if (!iconsCollection) return;
+    if (!iconsCollection) throw new Error(t('iconsUnavailable'));
     const existing = await iconsCollection.findOne(iconId).exec();
-    if (existing) await existing.remove();
+    if (existing) await existing.incrementalPatch({ hidden: true, updated_at_ms: Date.now() });
   }
 
   function isPinnedTarget(targetId) {
@@ -934,22 +918,28 @@ export async function mount(ctx) {
   }
 
   async function restoreDefaultIcons() {
-    if (!iconsCollection) return;
-    iconPositionCache = new Map();
-    writeIconPositionCache();
+    if (!iconsCollection) throw new Error(t('iconsUnavailable'));
+    const confirmed = await showBusinessConfirm(t('resetConfirm'), {
+      title: t('iconRestoreDefaults'),
+      confirmLabel: t('iconRestoreDefaults'),
+    });
+    if (!confirmed) return;
     const all = await iconsCollection.find().exec();
     await Promise.all(all.map((doc) => doc.remove()));
     await ensureIcons(iconsCollection, launcher, { force: true });
-    await renderIcons();
+    iconPositionCache = new Map();
+    writeIconPositionCache();
+    await refreshIcons();
   }
 
   async function addMissingDefaultIcons() {
-    if (!iconsCollection) return;
+    if (!iconsCollection) throw new Error(t('iconsUnavailable'));
     const existing = await iconsCollection.find().exec();
-    const existingTargets = new Set(existing.map((doc) => doc.target_module).filter(Boolean));
+    const existingTargets = new Set(existing.filter((doc) => !doc.hidden).map((doc) => doc.target_module).filter(Boolean));
     const entries = launcher.entries().filter((entry) => !existingTargets.has(entry.id));
     if (!entries.length) {
       await renderIcons();
+      notify({ type: 'info', title: t('noMissingIcons') });
       return;
     }
     const grid = currentGrid();
@@ -970,21 +960,30 @@ export async function mount(ctx) {
         sort_index: startIndex + offsetIndex,
         updated_at_ms: Date.now(),
       };
-      await upsertSeed(iconsCollection, seed.id, { ...seed, hidden: false });
+      const hidden = existing.find((doc) => doc.id === seed.id);
+      if (hidden) await hidden.incrementalPatch({ hidden: false, updated_at_ms: Date.now() });
+      else await insertMissingSeed(iconsCollection, seed.id, seed);
     }
+    await refreshIcons();
+    notify({ type: 'success', title: t('iconsAdded') });
   }
 
-  async function arrangeIcons() {
-    if (!iconsCollection) return;
+  async function arrangeIcons(order = 'current') {
+    if (!iconsCollection) throw new Error(t('iconsUnavailable'));
     const docs = (await iconsCollection.find().exec())
-      .filter((doc) => !doc.hidden)
-      .sort((a, b) => (a.sort_index ?? 0) - (b.sort_index ?? 0));
+      .filter((doc) => !doc.hidden && launcher.knows(doc.target_module))
+      .sort((a, b) => order === 'name'
+        ? desktopIconLabel(a).localeCompare(desktopIconLabel(b), ctx.locale || 'de') || a.id.localeCompare(b.id)
+        : (a.sort_index ?? 0) - (b.sort_index ?? 0));
     const grid = currentGrid();
-    docs.forEach((doc, index) => {
+    for (const [index, doc] of docs.entries()) {
       const position = gridPosition(index, grid);
-      rememberIconPosition(doc.id, position, Date.now() + index);
-    });
-    await renderIcons();
+      const updatedAt = Date.now() + index;
+      await doc.incrementalPatch({ ...position, sort_index: index, updated_at_ms: updatedAt });
+      rememberIconPosition(doc.id, position, updatedAt);
+    }
+    await refreshIcons();
+    notify({ type: 'success', title: t(order === 'name' ? 'iconsSorted' : 'iconsArranged') });
   }
 
   async function reorderIcons(orderedIconIds) {
@@ -1275,8 +1274,7 @@ export async function mount(ctx) {
       const grid = currentGrid();
       const entries = launcherRef.entries();
       const existingById = new Map(existing.map((doc) => [doc.id, doc]));
-      const visibleLauncherIcons = existing.filter((doc) => !doc.hidden && launcherRef.knows(doc.target_module));
-      const shouldUnhideDefaults = force || !visibleLauncherIcons.length;
+      const shouldUnhideDefaults = force;
       const seeds = entries.map((entry, index) => ({
         ...iconSeedForEntry(entry, index, grid, launcherRef),
         hidden: shouldUnhideDefaults ? false : undefined,
@@ -1404,22 +1402,6 @@ export async function mount(ctx) {
     try {
       window.localStorage.setItem(migrationKey, 'complete');
     } catch {}
-  }
-
-  async function upsertSeed(collection, id, seed) {
-    const existing = await collection.findOne(id).exec();
-    if (existing) {
-      await existing.incrementalPatch(seed);
-      return;
-    }
-    try {
-      await collection.insert(seed);
-    } catch (error) {
-      if (!isConflictError(error)) throw error;
-      const conflicted = await collection.findOne(id).exec();
-      if (!conflicted) throw error;
-      await conflicted.incrementalPatch(seed);
-    }
   }
 
   async function insertMissingSeed(collection, id, seed) {
