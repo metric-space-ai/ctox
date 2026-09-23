@@ -813,7 +813,7 @@ export async function mount(ctx) {
       }
       const previewLine = compact(preview);
       return `${open}
-        <span class="mail-record-copy"><span class="mail-record-subject">${escapeHtml(subject)}</span><span class="mail-record-meta">${escapeHtml(sender || '—')} · ${escapeHtml(status)}</span>${previewLine ? `<span class="mail-record-preview">${escapeHtml(previewLine)}</span>` : ''}</span>
+        <span class="mail-record-copy"><span class="mail-record-identity"><span class="mail-record-person">${escapeHtml(sender || '—')}</span><span class="mail-record-status">${escapeHtml(status)}</span></span><span class="mail-record-subject">${escapeHtml(subject)}</span>${previewLine ? `<span class="mail-record-preview">${escapeHtml(previewLine)}</span>` : ''}</span>
         ${time}
       </div>`;
     }
@@ -837,7 +837,7 @@ export async function mount(ctx) {
     const progressIcons = progress.steps.map((step) => `<span class="mail-progress-step is-${escapeAttribute(step.state)}" title="${escapeAttribute(step.label)}" aria-label="${escapeAttribute(step.label)}">${mailActionIcon(ctx, step.icon, 11, 1.9)}</span>`).join('');
     const group = campaign?.name ? `${escapeHtml(campaign.name)} · ` : '';
     return `${open}
-      <span class="mail-record-copy"><span class="mail-record-subject">${escapeHtml(subject)}</span><span class="mail-record-meta">${escapeHtml(recipient)} · ${group}${escapeHtml(status)}</span><span class="mail-record-progress" role="img" aria-label="${escapeAttribute(progress.ariaLabel)}"><span class="mail-progress-track"><i style="width:${progress.percent}%"></i></span><span class="mail-progress-steps">${progressIcons}</span><span class="mail-progress-label">${escapeHtml(displayStatus)}</span></span></span>
+      <span class="mail-record-copy"><span class="mail-record-identity"><span class="mail-record-person">${escapeHtml(recipient)}</span><span class="mail-record-status">${group}${escapeHtml(status)}</span></span><span class="mail-record-subject">${escapeHtml(subject)}</span><span class="mail-record-progress" role="img" aria-label="${escapeAttribute(progress.ariaLabel)}"><span class="mail-progress-track"><i style="width:${progress.percent}%"></i></span><span class="mail-progress-steps">${progressIcons}</span><span class="mail-progress-label">${escapeHtml(displayStatus)}</span></span></span>
       ${time}
     </div>`;
   }

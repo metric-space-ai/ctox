@@ -438,11 +438,13 @@ mailQa: try {
   await aliceSharedRow.click();
   await page.locator('[data-mail-detail]').getByText('Können Sie uns den aktuellen Stand schicken?', { exact: true }).waitFor({ state: 'visible' });
   assert.doesNotMatch(await page.locator('[data-mail-detail]').textContent(), /Bob private/);
+  await page.locator('[data-mail-left-pane] [data-pg-tray-toggle]').click();
   await page.locator('[data-mail-account]').selectOption('email:bob@example.test');
   assert.equal(await page.locator('[data-mail-record-kind="thread"]').count(), 0);
-  await page.locator('[data-mail-detail]').getByText('Keine Mail ausgewählt', { exact: true }).waitFor({ state: 'visible' });
+  await page.locator('[data-mail-detail]').waitFor({ state: 'hidden' });
   assert.doesNotMatch(await page.locator('[data-mail-detail]').textContent(), /Können Sie uns den aktuellen Stand schicken/);
   await page.locator('[data-mail-account]').selectOption('all');
+  await page.locator('[data-mail-left-pane] [data-pg-tray-toggle]').click();
   await page.evaluate(() => {
     window.__mailRows.communication_accounts = window.__mailRows.communication_accounts.filter((account) => account.account_key !== 'email:bob@example.test');
     window.__mailRows.communication_messages = window.__mailRows.communication_messages.filter((message) => message.message_key !== 'bob-shared-thread');
@@ -460,7 +462,7 @@ mailQa: try {
     await page.locator('[data-mail-scope="queue"].is-active').evaluateAll((nodes) => nodes.map((node) => node.dataset.mailScopeId)),
     ['outbound'],
   );
-  assert.match(await page.locator('[data-mail-record-id="thread-sent"] .mail-record-meta').textContent(), /Gesendet/);
+  assert.match(await page.locator('[data-mail-record-id="thread-sent"] .mail-record-status').textContent(), /Gesendet/);
   if (process.env.CTOX_MAIL_QA_SENT_SCREENSHOT) {
     await page.screenshot({ path: resolve(process.env.CTOX_MAIL_QA_SENT_SCREENSHOT), fullPage: true });
   }
@@ -507,8 +509,8 @@ mailQa: try {
     break mailQa;
   }
 
-  await page.locator('[data-mail-select-record="thread:thread-1"]').check();
-  await page.locator('[data-mail-select-record="thread:thread-2"]').check();
+  await page.locator('[data-mail-record-id="thread-1"][data-mail-record-account="email:alice@example.test"] [data-mail-select-record]').check();
+  await page.locator('[data-mail-record-id="thread-2"][data-mail-record-account="email:alice@example.test"] [data-mail-select-record]').check();
   await page.locator('[data-mail-bulkbar]').waitFor({ state: 'visible' });
   await page.locator('[data-mail-bulk-route]').click();
   await page.locator('[data-mail-route-destination]').selectOption('support');
@@ -561,10 +563,8 @@ mailQa: try {
   const visibleContent = editorFrame.locator('[contenteditable="true"]:visible')
     .filter({ hasText: 'Echter visueller Kampagneninhalt' }).first();
   await editable.waitFor({ state: 'visible' });
-  await editable.dblclick();
-  await page.keyboard.press('Meta+A');
-  await page.keyboard.insertText('Echter visueller Kampagneninhalt');
-  await visibleContent.waitFor({ state: 'visible' });
+  await editable.fill('Echter visueller Kampagneninhalt');
+  await visibleContent.waitFor({ state: 'visible', timeout: 5000 });
   await page.locator('[data-mail-content-title]').click();
   await page.waitForTimeout(500);
   await page.locator('[data-mail-editor-history="undo"]').click();
@@ -834,6 +834,8 @@ mailQa: try {
         .map((button) => ({ name: button.dataset.mailEditorViewport, pressed: button.getAttribute('aria-pressed') })),
       editorFrames: document.querySelectorAll('[data-mail-easy-email-host] iframe').length,
       contentSurfaceVisible: Boolean(document.querySelector('[data-mail-content-surface]')?.getClientRects().length),
+      editorText: [...(document.querySelector('[data-mail-easy-email-host] iframe')?.contentDocument?.querySelectorAll('[contenteditable="true"]') || [])]
+        .map((element) => ({ text: element.textContent?.slice(0, 120), html: element.outerHTML.slice(0, 260) })),
       readAttempts: (window.__mailReadAttempts?.get('communication_threads') || 0) - (window.__mailReadAttemptBaseline || 0),
       pendingReads: window.__mailPendingReads?.get('communication_threads') || 0,
       maxPendingReads: window.__mailMaxPendingReads?.get('communication_threads') || 0,
