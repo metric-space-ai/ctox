@@ -12055,6 +12055,7 @@ fn upsert_rxdb_collection_record_with_writer(
     merge_existing: bool,
 ) -> anyhow::Result<()> {
     let mut previous_revision = None;
+    let mut existing_row = false;
     if let Some(existing_json) = conn
         .query_row(
             &format!("SELECT data FROM {table} WHERE id = ?1"),
@@ -12063,6 +12064,7 @@ fn upsert_rxdb_collection_record_with_writer(
         )
         .optional()?
     {
+        existing_row = true;
         if let Ok(mut existing) = serde_json::from_str::<Value>(&existing_json) {
             previous_revision = existing
                 .get("_rev")
@@ -12072,6 +12074,21 @@ fn upsert_rxdb_collection_record_with_writer(
                 merge_json_object_values(&mut existing, &payload);
                 payload = existing;
             }
+        }
+    }
+    if existing_row && previous_revision.is_none() {
+        if let Some(revision_column) = ["revision", "_rev"]
+            .into_iter()
+            .find(|column| table_columns.contains(*column))
+        {
+            previous_revision = conn
+                .query_row(
+                    &format!("SELECT {revision_column} FROM {table} WHERE id = ?1"),
+                    [record_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten();
         }
     }
     let rev = next_direct_rxdb_revision(previous_revision.as_deref());
@@ -39224,15 +39241,19 @@ pub(super) mod tests {
             ("sql_tombstone_without_json_flag", true),
             ("sql_tombstone_with_live_json_flag", true),
         ] {
-            let (deleted_column, raw): (i64, String) = conn.query_row(
-                &format!("SELECT deleted, data FROM {table} WHERE id = ?1"),
+            let (revision_column, deleted_column, raw): (String, i64, String) = conn.query_row(
+                &format!("SELECT revision, deleted, data FROM {table} WHERE id = ?1"),
                 [id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
             let repaired: Value = serde_json::from_str(&raw)?;
             assert_eq!(repaired["_deleted"], expected_deleted);
             assert_eq!(deleted_column != 0, expected_deleted);
             assert!(repaired["_rev"].as_str().is_some_and(|revision| !revision.is_empty()));
+            assert_eq!(repaired["_rev"], revision_column);
+            if id == "missing_revision" {
+                assert!(revision_column.starts_with("2-"));
+            }
             if id.starts_with("sql_tombstone") {
                 assert_eq!(repaired["result"], serde_json::json!({"preserve": true}));
                 let expected_revision = if id.ends_with("without_json_flag") {
