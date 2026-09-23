@@ -2144,7 +2144,10 @@ pub(super) async fn browser_runtime_maintenance_loop(
                 Ok(rows) => rows > 0,
                 Err(err) => {
                     eprintln!("[business-os] browser runtime maintenance failed: {err:#}");
-                    true
+                    // A failed GC pass made no progress. Counting it as work
+                    // keeps the active 10ms cadence and retries a persistent
+                    // query error indefinitely while holding the DB write lock.
+                    false
                 }
             }
         };
