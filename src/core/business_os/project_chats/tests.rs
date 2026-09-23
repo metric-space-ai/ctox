@@ -993,6 +993,9 @@ fn native_project_task_needs_no_app_crew_or_executor_and_replays_one_task() -> a
     let canonical = channels::business_command_projection(root.path(), command_id)?;
     assert_eq!(canonical["module"], "ctox");
     assert_eq!(canonical["command_type"], "business_os.chat.task");
+    assert!(canonical.pointer("/client_context/actor/id").is_none());
+    let admitted = store::load_business_command(&open_store(root.path())?, command_id)?;
+    assert_eq!(admitted.client_context["actor"]["id"], "owner");
     assert_eq!(canonical["payload"]["project_id"], "project");
     assert!(canonical["payload"].get("module_id").is_none());
     assert!(canonical["payload"].get("thread_id").is_none());
