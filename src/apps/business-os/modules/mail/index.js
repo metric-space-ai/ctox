@@ -251,6 +251,7 @@ export async function mount(ctx) {
     disposed: false,
     readiness: null,
     refreshTimer: null,
+    emptyReadTimer: null,
     activeRefreshes: 0,
     refreshPending: false,
     refreshSequence: 0,
@@ -290,14 +291,6 @@ export async function mount(ctx) {
   wireCollectionSubscriptions();
   wireReadiness();
   render();
-  // A cancelled first read can settle immediately and never emit another
-  // collection event. Do not leave an empty mailbox in "syncing" indefinitely.
-  const initialReadWatchdog = window.setTimeout(() => {
-    if (view.disposed || view.mailReadError || view.mailReadComplete) return;
-    view.mailReadError = 'Initial mail sync did not complete';
-    view.loading = false;
-    renderList();
-  }, MAIL_READ_TIMEOUT_MS);
   // Keep the app responsive when a local RxDB query stalls during reconnect.
   // The first snapshot can finish after mount; later subscription updates use
   // the same refresh path and retain the last successful rows.
@@ -314,7 +307,7 @@ export async function mount(ctx) {
 
   return () => {
     view.disposed = true;
-    window.clearTimeout(initialReadWatchdog);
+    if (view.emptyReadTimer) window.clearTimeout(view.emptyReadTimer);
     void view.contentEditor?.destroy?.();
     if (view.refreshTimer) window.clearTimeout(view.refreshTimer);
     for (const cleanup of cleanups) {
@@ -602,10 +595,12 @@ export async function mount(ctx) {
         view.communicationMessages = communicationMessages.filter((message) => message.channel === 'email' && !isDeleted(message) && visibleAccountKeys.has(message.account_key));
         view.lastSuccessfulMailSequence = sequence;
         view.mailReadComplete = true;
-        view.mailReadError = '';
         if (view.accountKey && !view.accounts.some((account) => account.account_key === view.accountKey)) {
           view.accountKey = '';
         }
+        // Keep a timed-out empty mailbox actionable until replication reports
+        // readiness or the selected folder actually contains records.
+        if (view.readiness?.ready !== false || currentRecords().length) view.mailReadError = '';
       } else if (failedRead) {
         // The first timeout remains visible even while newer reads are pending;
         // a later successful snapshot clears it. An older failure cannot
@@ -775,6 +770,21 @@ export async function mount(ctx) {
       : '';
 
     const shouldSync = view.loading || (view.readiness && view.readiness.ready === false);
+    // Bound every empty syncing view, including a folder selected after mount.
+    // Do not restart the deadline on each replication notification.
+    if (allRows.length || !shouldSync || view.mailReadError) {
+      if (view.emptyReadTimer) window.clearTimeout(view.emptyReadTimer);
+      view.emptyReadTimer = null;
+    } else if (!view.emptyReadTimer) {
+      view.emptyReadTimer = window.setTimeout(() => {
+        view.emptyReadTimer = null;
+        if (view.disposed || view.mailReadError || currentRecords().length) return;
+        if (!view.loading && view.readiness?.ready !== false) return;
+        view.mailReadError = 'Mail sync did not complete';
+        view.loading = false;
+        renderList();
+      }, MAIL_READ_TIMEOUT_MS);
+    }
     refs.listEmpty.hidden = allRows.length > 0;
     if (!allRows.length) {
       refs.emptyTitle.textContent = view.mailReadError
