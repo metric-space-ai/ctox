@@ -6555,6 +6555,15 @@ mod tests {
         let temp = tempdir()?;
         let root = temp.path();
         let conn = open_store(root)?;
+        for collection in [
+            "outbound_lead_generation_sources",
+            "outbound_lead_generation_adapters",
+            "outbound_lead_generation_research_policies",
+        ] {
+            super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                root, collection,
+            )?;
+        }
         let now = 1_000;
         let source = serde_json::json!({
             "id": "example.com",
@@ -6689,6 +6698,14 @@ mod tests {
         let temp = tempdir()?;
         let root = temp.path();
         let conn = open_store(root)?;
+        for collection in [
+            "outbound_lead_generation_sources",
+            "outbound_lead_generation_adapters",
+        ] {
+            super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                root, collection,
+            )?;
+        }
         let now = 1_000;
         let source = |id: &str| {
             let target_key = id.replace('.', "-");
