@@ -525,7 +525,7 @@ async function refreshOnce(options = {}) {
     me ? loadPersonalPages('ctox_task_approval_requests', { status: 'pending', reviewer_user_id: me })
       : Promise.resolve([]),
     loadCollection('ctox_task_approval_requests', recentQuery(APPROVAL_LIST_LIMIT)),
-    me ? loadPersonalPages('user_thread_states', { user_id: me })
+    me ? loadPersonalPages('user_thread_states', { user_id: me, attention_score: { $gt: 0 } })
       : Promise.resolve([]),
   ]);
   state.personalStateByThread = new Map(states.filter((item) => item.user_id === me).map((item) => [item.thread_id, item]));
