@@ -249,6 +249,7 @@ export async function mount(ctx) {
     disposed: false,
     readiness: null,
     refreshTimer: null,
+    refreshSequence: 0,
     busy: false,
     mailserver: {
       open: false,
@@ -501,6 +502,7 @@ export async function mount(ctx) {
   }
 
   async function refreshData() {
+    const sequence = ++view.refreshSequence;
     let recoveredCollection = false;
     for (const name of ['communication_accounts', 'communication_threads', 'communication_messages']) {
       if (collections[name]) continue;
@@ -522,7 +524,7 @@ export async function mount(ctx) {
       readAll(collections.outbound_messages),
       readAll(collections.outbound_approvals),
     ]);
-    if (view.disposed) return;
+    if (view.disposed || sequence !== view.refreshSequence) return;
     const failedRead = [3, 4, 5].map((index) => snapshots[index])
       .find((snapshot) => snapshot instanceof Error);
     view.mailReadError = failedRead ? String(failedRead.message || failedRead) : '';
