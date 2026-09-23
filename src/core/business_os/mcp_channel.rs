@@ -8700,6 +8700,8 @@ mod tests {
                     "id": "stale",
                     "name": "Tombstoned in RxDB",
                     "_deleted": false,
+                    "deleted": false,
+                    "is_deleted": false,
                     "updated_at_ms": 100
                 })
                 .to_string()
@@ -8749,6 +8751,8 @@ mod tests {
         assert_eq!(top_three.items[1].data["_deleted"], true);
         assert_eq!(top_three.items[2].id, "stale");
         assert_eq!(top_three.items[2].data["_deleted"], true);
+        assert_eq!(top_three.items[2].data["deleted"], true);
+        assert_eq!(top_three.items[2].data["is_deleted"], true);
         assert_eq!(top_three.items[2].data["name"], "Tombstoned in RxDB");
 
         let with_fallback = query_records(root, &context, "customer_accounts", Some(4))?;

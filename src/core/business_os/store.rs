@@ -11204,8 +11204,10 @@ fn mcp_rxdb_document(record_id: &str, raw: &str, sql_deleted: i64) -> anyhow::Re
     }
     object.insert("id".to_string(), Value::String(record_id.to_string()));
     object.insert("_deleted".to_string(), Value::Bool(deleted));
-    if object.contains_key("is_deleted") {
-        object.insert("is_deleted".to_string(), Value::Bool(deleted));
+    for alias in ["deleted", "is_deleted"] {
+        if object.contains_key(alias) {
+            object.insert(alias.to_string(), Value::Bool(deleted));
+        }
     }
     Ok(document)
 }
