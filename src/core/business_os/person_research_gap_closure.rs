@@ -1238,7 +1238,7 @@ pub(super) fn handle_research_writeback(
         // Auftrag nachliefern statt die ganze Firma neu zu recherchieren.
         "rejections": rejections,
         "summary": format!(
-            "{} Feld(er) gespeichert, {} Beleg(e) verworfen, {} Feld(er) noch offen. Ein Feld gilt erst als beantwortet, wenn es verifiziert ist (zwei unabhaengige Quell-Hosts; bei Selbstauskuenften wie Telefon, E-Mail, Domain und allen person_-Feldern genuegt ein Beleg von der Unternehmensseite bzw. dem Profil) oder als no_match belegt wurde. Offene Felder sind keine Ablehnung: hole die fehlende Zweitquelle bzw. den Wert und sende sie gesammelt in einem weiteren Aufruf; gespeicherte Felder nicht erneut senden.",
+            "{} Feld(er) gespeichert, {} Beleg(e) verworfen, {} Feld(er) noch offen. Ein Feld gilt erst als beantwortet, wenn es verifiziert ist (eine passende externe Quelle, deren Zitat den Wert nennt; Sellify allein belegt nichts; widersprechen sich Quellen, bleibt das Feld action_required) oder als no_match belegt wurde. Offene Felder sind keine Ablehnung: hole die fehlende externe Quelle bzw. den Wert und sende sie gesammelt in einem weiteren Aufruf; gespeicherte Felder nicht erneut senden.",
             accepted_count,
             rejections.len(),
             open_count
@@ -3679,7 +3679,7 @@ mod tests {
     }
 
     #[test]
-    fn a_field_rejected_for_a_single_source_stays_open() -> anyhow::Result<()> {
+    fn a_field_with_one_external_source_is_accepted() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let record_id = "lead-einzelquelle";
         let research_command_id = "research-einzelquelle";
@@ -3709,30 +3709,15 @@ mod tests {
         );
         let result = handle_research_writeback(temp.path(), &command)?;
         assert_eq!(result["ok"], true);
-        let rejections = result["rejections"]
-            .as_array()
-            .context("rejections fehlen")?;
-        assert!(
-            rejections.iter().any(|entry| entry
-                .as_str()
-                .is_some_and(|text| text.contains("unabhaengige Quell-Hosts"))),
-            "the single-host claim must be rejected: {rejections:?}"
-        );
+        // Owner rule 23.09.2026: one external provider is enough. Two pages of
+        // northdata.de are still ONE source, and that one source now carries
+        // the field.
         assert_eq!(
             result["accepted_fields"],
-            serde_json::json!([]),
-            "a rejected field was never stored, so it is not accepted"
-        );
-        assert_eq!(
-            result["open_fields"],
             serde_json::json!(["umsatz"]),
-            "a rejected field stays open so the worker fetches a second source"
+            "one external source is enough: {result}"
         );
-        assert!(result["summary"]
-            .as_str()
-            .is_some_and(|text| text.contains("0 Feld(er) gespeichert")
-                && text.contains("1 Feld(er) noch offen")));
-        assert_eq!(result["research_status"], "needs_review");
+        assert_eq!(result["open_fields"], serde_json::json!([]), "{result}");
         Ok(())
     }
 
@@ -3960,7 +3945,7 @@ mod tests {
     /// Gemessen am 03.09.2026: 100 von 265 "verified" Feldern hatten weniger
     /// als zwei verschiedene Quell-Hosts. Auf dem Chatweg pruefte das niemand.
     #[test]
-    fn verified_mit_nur_einem_quell_host_wird_nicht_als_belegt_uebernommen() -> anyhow::Result<()> {
+    fn verified_mit_einem_externen_quell_host_wird_uebernommen() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let record_id = "lead-eine-quelle";
         let research_command_id = "research-eine-quelle";
@@ -3996,19 +3981,10 @@ mod tests {
         let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
             .context("lead missing after writeback")?;
         assert_eq!(
-            lead["field_status"]["umsatz"]["status"], "unsupported",
-            "ein einziger Quell-Host darf nicht als belegt durchgehen"
+            lead["field_status"]["umsatz"]["status"], "verified",
+            "ein externer Quell-Host genuegt seit 23.09.2026"
         );
-        assert_eq!(result["research_status"], "needs_review");
-        let ablehnungen = result["rejections"]
-            .as_array()
-            .context("rejections fehlen")?;
-        assert!(
-            ablehnungen.iter().any(|entry| entry
-                .as_str()
-                .is_some_and(|text| text.contains("unabhaengige Quell-Hosts"))),
-            "der Grund muss benannt sein: {ablehnungen:?}"
-        );
+        assert_eq!(result["research_status"], "completed");
         Ok(())
     }
 
@@ -4148,8 +4124,10 @@ mod tests {
             lead["field_status"]["umsatz"]["status"], "unsupported",
             "{result}"
         );
+        // One external source (northdata) is enough since 23.09.2026; the
+        // forged Sellify citation next to it is still dropped.
         assert_eq!(
-            lead["field_status"]["wz_code"]["status"], "unsupported",
+            lead["field_status"]["wz_code"]["status"], "verified",
             "{result}"
         );
         assert_eq!(
@@ -4160,8 +4138,11 @@ mod tests {
             lead["field_status"]["person_vorname"]["status"], "verified",
             "{result}"
         );
+        // Sellify (192) is the old CRM value, not evidence; the external
+        // source (205) carries the field, the contradicting CRM citation is
+        // dropped and named in the rejections.
         assert_eq!(
-            lead["field_status"]["mitarbeiter"]["status"], "unsupported",
+            lead["field_status"]["mitarbeiter"]["status"], "verified",
             "{result}"
         );
         assert!(
@@ -4279,7 +4260,7 @@ mod tests {
         let status = |field: &str| lead["field_status"][field]["status"].clone();
         assert_eq!(status("firma_plz"), "verified", "{result}");
         assert_eq!(status("umsatz"), "verified", "{result}");
-        assert_eq!(status("wz_code"), "unsupported", "{result}");
+        assert_eq!(status("wz_code"), "verified", "{result}");
         assert_eq!(status("firma_telefon"), "unsupported", "{result}");
         assert_eq!(status("person_email"), "verified", "{result}");
         let sellify_urls = |field: &str| {
@@ -4659,7 +4640,7 @@ mod tests {
     }
 
     #[test]
-    fn verified_sources_must_use_different_hosts() {
+    fn one_verified_host_is_enough() {
         let status = |second_url: &str| FieldStatus {
             status: "verified".to_string(),
             value: serde_json::json!("example.test"),
@@ -4688,13 +4669,14 @@ mod tests {
             extra: BTreeMap::new(),
         };
         let temp = tempfile::tempdir().unwrap();
+        // One host is enough since 23.09.2026.
         assert!(validate_terminal_field(
             "umsatz",
             &status("https://example.test/b"),
             temp.path(),
             &serde_json::json!({})
         )
-        .is_err());
+        .is_ok());
         assert!(validate_terminal_field(
             "umsatz",
             &status("https://other.test/b"),
