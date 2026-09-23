@@ -1011,6 +1011,25 @@ fn native_project_task_needs_no_app_crew_or_executor_and_replays_one_task() -> a
     let cancel = |request: Value| {
         mcp_channel::call_tool(root.path(), "business_os.cancel_project_task", request)
     };
+    let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner",
+        "Owner",
+        "user",
+        chrono::Utc::now().timestamp_millis(),
+    )?;
+    assert!(cancel(cancel_request.clone()).is_err());
+    assert_eq!(
+        channels::business_command_projection(root.path(), command_id)?["status"],
+        "accepted"
+    );
+    let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner",
+        "Owner",
+        "admin",
+        chrono::Utc::now().timestamp_millis(),
+    )?;
     let cancelled = cancel(cancel_request.clone())?;
     assert_eq!(cancelled["target_command_id"], command_id);
     assert_eq!(cancelled["task_id"], task_id);
