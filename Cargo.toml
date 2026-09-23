@@ -19,6 +19,7 @@ path = "src/core/main.rs"
 anyhow = "1"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
 csv = "1"
 flate2 = "1"
 futures-util = "0.3"

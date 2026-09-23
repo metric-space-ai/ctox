@@ -56,6 +56,11 @@ pub(crate) struct EmailAccountConfig {
     /// Business-OS-Benutzer, dem dieses Konto gehört.
     #[serde(default)]
     pub owner_user_id: String,
+    /// Exchange/OWA-Konten: Web-Adressen des eigenen Servers.
+    #[serde(default)]
+    pub owa_url: String,
+    #[serde(default)]
+    pub ews_url: String,
 }
 
 pub(crate) fn normalize_address(value: &str) -> String {
@@ -235,9 +240,30 @@ pub(crate) fn account_runtime_overrides(
     ] {
         overrides.insert(key.to_owned(), String::new());
     }
-    set(&mut overrides, "CTO_EMAIL_EWS_URL", &config.ews_url);
-    set(&mut overrides, "CTO_EMAIL_OWA_URL", &config.owa_url);
-    set(&mut overrides, "CTO_EMAIL_EWS_USERNAME", &config.username);
+    // Ein Exchange-Konto (OWA/EWS) braucht seinen eigenen Server und seinen
+    // Domänen-Benutzernamen. Beides wurde oben geleert und nie aus dem Konto
+    // gesetzt: der Konnektor meldete sich mit der Mailadresse an und bekam
+    // HTTP 401 (lena.ogiermann@thesen-ag.com, gemessen 22.09.2026), obwohl
+    // "thesen-ag\\lena.ogiermann" im Konto hinterlegt war.
+    if matches!(config.provider.trim(), "owa" | "ews" | "exchange") {
+        let owa_url = config.owa_url.trim();
+        let ews_url = if !config.ews_url.trim().is_empty() {
+            config.ews_url.trim().to_owned()
+        } else {
+            ews_url_from_owa_url(owa_url)
+        };
+        set(&mut overrides, "CTO_EMAIL_OWA_URL", owa_url);
+        set(&mut overrides, "CTO_EMAIL_EWS_URL", &ews_url);
+        set(&mut overrides, "CTO_EMAIL_EWS_USERNAME", &config.username);
+        set(
+            &mut overrides,
+            "CTO_EMAIL_ACTIVESYNC_USERNAME",
+            &config.username,
+        );
+        if let Some(server) = url_origin(owa_url) {
+            set(&mut overrides, "CTO_EMAIL_ACTIVESYNC_SERVER", &server);
+        }
+    }
     set(
         &mut overrides,
         "CTO_EMAIL_EWS_AUTH_TYPE",
@@ -245,6 +271,21 @@ pub(crate) fn account_runtime_overrides(
     );
     set(&mut overrides, "CTO_EMAIL_EWS_VERSION", &config.ews_version);
     overrides
+}
+
+fn url_origin(value: &str) -> Option<String> {
+    let url = url::Url::parse(value.trim()).ok()?;
+    let host = url.host_str()?;
+    Some(match url.port() {
+        Some(port) => format!("{}://{}:{}", url.scheme(), host, port),
+        None => format!("{}://{}", url.scheme(), host),
+    })
+}
+
+fn ews_url_from_owa_url(owa_url: &str) -> String {
+    url_origin(owa_url)
+        .map(|origin| format!("{origin}/EWS/Exchange.asmx"))
+        .unwrap_or_default()
 }
 
 /// Öffentliche (secret-freie) Sicht für Listen-Endpunkte.
@@ -261,8 +302,8 @@ pub(crate) fn public_json(root: &Path, config: &EmailAccountConfig) -> Value {
         "smtp_host": config.smtp_host,
         "smtp_port": config.smtp_port,
         "username": config.username,
-        "ews_url": config.ews_url,
         "owa_url": config.owa_url,
+        "ews_url": config.ews_url,
         "ews_auth_type": config.ews_auth_type,
         "ews_version": config.ews_version,
         "owner_user_id": config.owner_user_id,
@@ -395,6 +436,34 @@ mod tests {
         assert_eq!(overrides.get("CTO_EMAIL_EWS_URL").unwrap(), "");
 
         assert!(delete_account(root, "JILL@example.com")?);
+        assert!(load_accounts(root)?.is_empty());
+
+        // Exchange-Konto: eigener Server und Domänen-Benutzer kommen an.
+        let exchange = upsert_account(
+            root,
+            EmailAccountConfig {
+                address: "lena@example.com".into(),
+                provider: "owa".into(),
+                username: "example\\lena".into(),
+                owa_url: "https://mail.example.com/".into(),
+                ..Default::default()
+            },
+            Some("geheim"),
+        )?;
+        let overrides = account_runtime_overrides(root, &exchange);
+        assert_eq!(
+            overrides.get("CTO_EMAIL_EWS_USERNAME").unwrap(),
+            "example\\lena"
+        );
+        assert_eq!(
+            overrides.get("CTO_EMAIL_EWS_URL").unwrap(),
+            "https://mail.example.com/EWS/Exchange.asmx"
+        );
+        assert_eq!(
+            overrides.get("CTO_EMAIL_ACTIVESYNC_SERVER").unwrap(),
+            "https://mail.example.com"
+        );
+        assert!(delete_account(root, "lena@example.com")?);
         assert!(load_accounts(root)?.is_empty());
         Ok(())
     }

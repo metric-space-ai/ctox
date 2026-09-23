@@ -896,6 +896,8 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                     ews_auth_type: field("ews_auth_type"),
                     ews_version: field("ews_version"),
                     owner_user_id: owner,
+                    owa_url: field("owa_url"),
+                    ews_url: field("ews_url"),
                 };
                 let password = field("password");
                 let password = if password.is_empty() {

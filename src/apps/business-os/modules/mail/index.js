@@ -381,6 +381,12 @@ export async function mount(ctx) {
         view.selectedKind = '';
         view.selectedId = '';
         view.page = 0;
+        view.listGrammar = { ...view.listGrammar, band: 'all' };
+        refs.listPane.querySelectorAll('[data-pg-band]').forEach((tab) => {
+          const active = tab.dataset.pgBand === 'all';
+          tab.classList.toggle('is-active', active);
+          tab.setAttribute('aria-selected', String(active));
+        });
         clearSelection();
         closeRouteDrawer();
         concealInspector();
@@ -434,8 +440,21 @@ export async function mount(ctx) {
 
   function wireCollectionSubscriptions() {
     for (const [name, collection] of Object.entries(collections)) {
-      if (!collection?.$) continue;
-      const subscription = collection.$.subscribe(() => scheduleRefresh());
+      // An installed app only gets data grants for its own collections;
+      // shared ones such as business_commands are denied by design. Reading
+      // `collection.$` then throws, and the whole Mail app failed to mount
+      // ("Mail konnte nicht geladen werden", thesen 22.09.2026). A denied
+      // optional collection is skipped; the app works without it.
+      let stream = null;
+      try {
+        stream = collection?.$ || null;
+      } catch (error) {
+        if (!isPermissionDenied(error)) throw error;
+        collections[name] = null;
+        continue;
+      }
+      if (!stream) continue;
+      const subscription = stream.subscribe(() => scheduleRefresh());
       cleanups.push(() => subscription.unsubscribe?.());
     }
   }
@@ -478,18 +497,21 @@ export async function mount(ctx) {
       readAll(collections.outbound_approvals),
     ]);
     if (view.disposed) return;
-    view.commands = commands.filter((command) => !isDeleted(command));
-    view.routeDestinations = routeDestinationsFromCatalog(catalogs, ctx.permissions);
-    view.users = users.filter((user) => !isDeleted(user) && user.active !== false).sort((a, b) => userDisplayName(a).localeCompare(userDisplayName(b)));
-    view.accounts = visibleEmailAccounts(accounts, ctx.session?.user || {});
-    view.threads = threads.filter((thread) => thread.channel === 'email' && !isDeleted(thread));
-    view.communicationMessages = communicationMessages.filter((message) => message.channel === 'email' && !isDeleted(message));
-    view.campaigns = visibleMailCampaigns(campaigns, ctx.session?.user || {}, view.accounts, outboundMessages);
-    view.engagements = engagements.filter((engagement) => !isDeleted(engagement));
-    view.outboundMessages = outboundMessages.filter((message) => (
+    // A replication reconnect can cancel an RxDB query. Keep the last good
+    // snapshot until a successful read replaces it; [] would flash an empty
+    // mailbox and make counts collapse to zero on every reconnect.
+    if (commands) view.commands = commands.filter((command) => !isDeleted(command));
+    if (catalogs) view.routeDestinations = routeDestinationsFromCatalog(catalogs, ctx.permissions);
+    if (users) view.users = users.filter((user) => !isDeleted(user) && user.active !== false).sort((a, b) => userDisplayName(a).localeCompare(userDisplayName(b)));
+    if (accounts) view.accounts = visibleEmailAccounts(accounts, ctx.session?.user || {});
+    if (threads) view.threads = threads.filter((thread) => thread.channel === 'email' && !isDeleted(thread));
+    if (communicationMessages) view.communicationMessages = communicationMessages.filter((message) => message.channel === 'email' && !isDeleted(message));
+    if (campaigns || outboundMessages) view.campaigns = visibleMailCampaigns(campaigns || view.campaigns, ctx.session?.user || {}, view.accounts, outboundMessages || view.outboundMessages);
+    if (engagements) view.engagements = engagements.filter((engagement) => !isDeleted(engagement));
+    if (outboundMessages) view.outboundMessages = outboundMessages.filter((message) => (
       !isDeleted(message) && (!message.channel || message.channel === 'email')
     )).sort(sortUpdatedDesc);
-    view.approvals = approvals.filter((approval) => !isDeleted(approval));
+    if (approvals) view.approvals = approvals.filter((approval) => !isDeleted(approval));
     if (view.accountKey && !view.accounts.some((account) => account.account_key === view.accountKey)) {
       view.accountKey = '';
     }
@@ -536,6 +558,8 @@ export async function mount(ctx) {
     const visibleGroups = view.campaigns.filter((campaign) => !campaign.payload?.hidden_in_mail_groups);
     const queueRows = mailQueueDefinitions({
       threads: filteredAccountThreads(),
+      inboxThreads: inboxAccountThreads(),
+      sentThreads: sentAccountThreads(),
       outboundMessages: filteredAccountOutboundMessages(),
       communicationMessages: view.communicationMessages,
       commands: view.commands,
@@ -576,10 +600,10 @@ export async function mount(ctx) {
       return `<button class="mail-scope-card ${shape}${view.scopeType === scopeType && view.scopeId === item.id ? ' is-active' : ''}" type="button" data-mail-scope="${scopeType}" data-mail-scope-id="${escapeAttribute(item.id)}" data-context-record-id="${escapeAttribute(item.id)}" data-context-record-type="${scopeType}" data-context-record-label="${escapeAttribute(item.title)}" data-context-label="${escapeAttribute(item.title)}">
         <span class="mail-scope-title">${escapeHtml(item.title)}</span>${meta}<span class="mail-scope-count">${escapeHtml(item.countLabel ?? item.count)}</span>
       </button>`;
-    }).join('') : `<div class="ctox-empty"><span>${escapeHtml(view.leftGrammar.band === 'campaigns' ? t('noGroups', 'Noch keine E-Mail-Gruppen') : t('noResults', 'Keine passenden Queues'))}</span></div>`;
+    }).join('') : `<div class="ctox-empty"><span>${escapeHtml(view.leftGrammar.band === 'campaigns' ? t('noGroups', 'Noch keine E-Mail-Gruppen') : t('noResults', 'Keine passenden Ordner'))}</span></div>`;
     renderNavigationSelection();
     const groupsVisible = view.leftGrammar.band === 'campaigns';
-    refs.navigationTitle.textContent = groupsVisible ? t('groups', 'E-Mail-Gruppen') : 'E-Mail-Queues';
+    refs.navigationTitle.textContent = groupsVisible ? t('groups', 'E-Mail-Gruppen') : t('mailbox', 'Postfach');
     refs.newGroup.hidden = !groupsVisible;
     const footer = `${view.accounts.length} ${t('mailbox', 'Postfächer')} · ${visibleGroups.length} ${t('groups', 'E-Mail-Gruppen')}`;
     refs.sidebarFooter.textContent = footer;
@@ -601,10 +625,11 @@ export async function mount(ctx) {
     view.page = Math.min(view.page, maxPage);
     const pageStart = view.page * view.pageSize;
     const rows = allRows.slice(pageStart, pageStart + view.pageSize);
-    const counts = listBandCounts(scopeRecords(), view.commands);
+    const counts = listBandCounts(scopeRecords(), view.commands, view.communicationMessages);
     const scopeLabel = currentScopeLabel();
     refs.listKicker.textContent = view.scopeType === 'campaign' ? t('campaign', 'Kampagne') : t('mailbox', 'Postfach');
-    refs.listTitle.textContent = scopeLabel;
+    refs.listTitle.textContent = view.listGrammar.band === 'outbound' && ['all', 'inbound'].includes(view.scopeId)
+      ? t('sent', 'Gesendet') : scopeLabel;
     refs.listPane.dataset.mailView = view.listGrammar.view;
     syncViewToggleButton(ctx, refs.listPane, view.listGrammar.view, t);
     writePaneCounts(refs.listPane, counts);
@@ -1500,7 +1525,13 @@ export async function mount(ctx) {
     if (!collections.business_commands) return initial;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      const document = await collections.business_commands.findOne(commandId).exec();
+      let document = null;
+      try {
+        document = await collections.business_commands.findOne(commandId).exec();
+      } catch (error) {
+        if (isPermissionDenied(error)) return initial;
+        throw error;
+      }
       const command = document?.toJSON?.() || document || null;
       if (command && TERMINAL_COMMAND_STATUSES.has(command.status)) return command;
       await sleep(250);
@@ -1557,6 +1588,21 @@ export async function mount(ctx) {
     ));
   }
 
+  function sentAccountThreads() {
+    const sentKeys = new Set(view.communicationMessages
+      .filter((message) => message.direction === 'outbound' || ['sent', 'sentitems'].includes(String(message.folder_hint || '').toLowerCase()))
+      .map((message) => message.thread_key));
+    return filteredAccountThreads().filter((thread) => sentKeys.has(thread.thread_key));
+  }
+
+  function inboxAccountThreads() {
+    const sentKeys = new Set(sentAccountThreads().map((thread) => thread.thread_key));
+    const inboundKeys = new Set(view.communicationMessages
+      .filter((message) => message.direction === 'inbound' || ['inbox', 'incoming'].includes(String(message.folder_hint || '').toLowerCase()))
+      .map((message) => message.thread_key));
+    return filteredAccountThreads().filter((thread) => inboundKeys.has(thread.thread_key) || !sentKeys.has(thread.thread_key));
+  }
+
   function filteredAccountOutboundMessages() {
     const allowedAccounts = new Set(view.accounts.map((account) => account.account_key));
     return view.outboundMessages.filter((message) => {
@@ -1574,21 +1620,22 @@ export async function mount(ctx) {
   }
 
   function scopeRecords() {
-    const inbound = filteredAccountThreads().map((thread) => ({ ...thread, __kind: 'thread' }));
+    const allThreads = filteredAccountThreads().map((thread) => ({ ...thread, __kind: 'thread' }));
+    const inbound = inboxAccountThreads().map((thread) => ({ ...thread, __kind: 'thread' }));
     const outbound = filteredAccountOutboundMessages().map((message) => ({ ...message, __kind: 'outbound' }));
     let records;
     if (view.scopeType === 'campaign') {
       records = outbound.filter((message) => message.campaign_id === view.scopeId);
     } else if (view.scopeId === 'all') {
-      records = [...inbound, ...outbound];
+      records = [...allThreads, ...outbound];
     } else if (view.scopeId === 'outbound') {
-      records = outbound;
+      records = sentAccountThreads().map((thread) => ({ ...thread, __kind: 'thread' }));
     } else if (view.scopeId === 'approval') {
       records = outbound.filter((message) => String(message.approval_status || '') === 'awaiting_approval');
     } else if (view.scopeId === 'failed') {
       records = outbound.filter((message) => String(message.send_status || '').toLowerCase().includes('fail'));
     } else if (view.scopeId === 'routed') {
-      records = [...inbound, ...outbound].filter((record) => routeCommandForRecord(record, view.commands));
+      records = [...allThreads, ...outbound].filter((record) => routeCommandForRecord(record, view.commands));
     } else {
       records = inbound;
     }
@@ -1615,7 +1662,7 @@ export async function mount(ctx) {
     return ({
       all: t('allTraffic', 'Gesamter Mail-Verkehr'),
       inbound: t('inbox', 'Massen-Eingang'),
-      outbound: t('outboundQueue', 'Massen-Ausgang'),
+      outbound: t('sent', 'Gesendet'),
       approval: t('awaiting', 'Freigabe-Queue'),
       failed: t('failed', 'Fehler-Queue'),
       routed: t('routed', 'Geroutete E-Mails'),
@@ -2171,7 +2218,7 @@ function routeDestinationTitle(id, destinations = []) {
     || id;
 }
 
-function mailQueueDefinitions({ threads = [], outboundMessages = [], communicationMessages = [], commands = [], t = (_key, fallback) => fallback } = {}) {
+function mailQueueDefinitions({ threads = [], inboxThreads = threads, sentThreads = [], outboundMessages = [], communicationMessages = [], commands = [], t = (_key, fallback) => fallback } = {}) {
   const allRecords = [
     ...threads.map((record) => ({ ...record, __kind: 'thread' })),
     ...outboundMessages.map((record) => ({ ...record, __kind: 'outbound' })),
@@ -2180,8 +2227,8 @@ function mailQueueDefinitions({ threads = [], outboundMessages = [], communicati
   const routed = allRecords.filter((record) => routeCommandForRecord(record, commands));
   return [
     { id: 'all', title: t('allTraffic', 'Gesamter Mail-Verkehr'), meta: t('inboundOutbound', 'Eingang und Ausgang'), count: allRecords.length, updatedAt: latest },
-    { id: 'inbound', title: t('inbox', 'Massen-Eingang'), meta: `${threads.filter((item) => Number(item.unread_count || 0) > 0).length} ${t('unread', 'ungelesen')}`, count: threads.length, updatedAt: Math.max(0, ...threads.map(recordTime)) },
-    { id: 'outbound', title: t('outboundQueue', 'Massen-Ausgang'), meta: `${outboundMessages.filter((item) => String(item.approval_status || '').toLowerCase() === 'approved').length} ${t('approvedCount', 'freigegeben')}`, count: outboundMessages.length, updatedAt: Math.max(0, ...outboundMessages.map(recordTime)) },
+    { id: 'inbound', title: t('inbox', 'Posteingang'), meta: `${inboxThreads.filter((item) => Number(item.unread_count || 0) > 0).length} ${t('unread', 'ungelesen')}`, count: inboxThreads.length, updatedAt: Math.max(0, ...inboxThreads.map(recordTime)) },
+    { id: 'outbound', title: t('sent', 'Gesendet'), meta: t('sentMail', 'Versendete Nachrichten'), count: sentThreads.length, updatedAt: Math.max(0, ...sentThreads.map(recordTime)) },
     { id: 'approval', title: t('awaiting', 'Freigabe-Queue'), meta: t('governedSending', 'Governed Sending'), count: outboundMessages.filter((item) => String(item.approval_status || '') === 'awaiting_approval').length, updatedAt: latest },
     { id: 'failed', title: t('failed', 'Fehler-Queue'), meta: t('retryRequired', 'Prüfung erforderlich'), count: outboundMessages.filter((item) => String(item.send_status || '').toLowerCase().includes('fail')).length, updatedAt: latest },
     { id: 'routed', title: t('routed', 'Geroutete E-Mails'), meta: t('crossAppHandoffs', 'App-Übergaben'), count: routed.length, updatedAt: Math.max(0, ...routed.map((record) => Number(routeCommandForRecord(record, commands)?.updated_at_ms || 0))) },
@@ -2302,19 +2349,22 @@ function buildMailRouteCommands({ batchId, destinationModule, mode = 'handoff', 
   return commands;
 }
 
-function listBandCounts(records, commands = []) {
+function listBandCounts(records, commands = [], messages = []) {
   return {
     all: records.length,
-    inbound: records.filter((record) => record.__kind === 'thread').length,
-    outbound: records.filter((record) => record.__kind === 'outbound').length,
+    inbound: records.filter((record) => recordMatchesBand(record, 'inbound', messages)).length,
+    outbound: records.filter((record) => recordMatchesBand(record, 'outbound', messages)).length,
     attention: records.filter((record) => recordNeedsAttention(record) || routeCommandForRecord(record, commands)?.status === 'failed').length,
   };
 }
 
 function recordMatchesBand(record, band, messages, commands = []) {
-  void messages;
-  if (band === 'inbound') return record.__kind === 'thread';
-  if (band === 'outbound') return record.__kind === 'outbound';
+  if (band === 'inbound') return record.__kind === 'thread'
+    && (!messages.some((message) => message.thread_key === record.thread_key)
+      || messages.some((message) => message.thread_key === record.thread_key && message.direction === 'inbound'));
+  if (band === 'outbound') return record.__kind === 'outbound'
+    || record.__kind === 'thread' && messages.some((message) => message.thread_key === record.thread_key
+      && (message.direction === 'outbound' || ['sent', 'sentitems'].includes(String(message.folder_hint || '').toLowerCase())));
   if (band === 'attention') return recordNeedsAttention(record) || routeCommandForRecord(record, commands)?.status === 'failed';
   return true;
 }
@@ -2739,15 +2789,20 @@ function renderMetric(value, label) {
   return `<div class="mail-metric"><strong>${Number(value || 0)}</strong><span>${escapeHtml(label)}</span></div>`;
 }
 
+function isPermissionDenied(error) {
+  return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
+    || error?.name === 'BusinessOsPermissionError';
+}
+
 async function readAll(collection) {
   if (!collection) return [];
   try {
     const docs = await collection.find().exec();
     return docs.map((doc) => doc?.toJSON?.() || doc).filter(Boolean);
   } catch (error) {
-    if (isTransientCollectionReadError(error)) return [];
+    if (isTransientCollectionReadError(error)) return null;
     console.warn('[mail] collection read failed', error);
-    return [];
+    return null;
   }
 }
 

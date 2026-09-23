@@ -386,8 +386,22 @@ test('mail queues expose operational volume and routed evidence', () => {
   const thread = { thread_key: 'thread-1', unread_count: 3, last_message_at: '2026-08-06T09:00:00Z' };
   const outbound = { id: 'message-1', approval_status: 'awaiting_approval', send_status: 'not_scheduled', updated_at_ms: 2 };
   const commands = hooks.buildMailRouteCommands({ batchId: 'route', destinationModule: 'support', records: [{ ...thread, __kind: 'thread' }] });
-  const queues = hooks.mailQueueDefinitions({ threads: [thread], outboundMessages: [outbound], commands });
+  const queues = hooks.mailQueueDefinitions({ threads: [thread], sentThreads: [thread], outboundMessages: [outbound], commands });
   assert.equal(queues.find((queue) => queue.id === 'all').count, 2);
+  assert.equal(queues.find((queue) => queue.id === 'outbound').count, 1);
+  assert.equal(queues.find((queue) => queue.id === 'outbound').title, 'Gesendet');
   assert.equal(queues.find((queue) => queue.id === 'approval').count, 1);
   assert.equal(queues.find((queue) => queue.id === 'routed').count, 1);
+});
+
+test('sent mail from the communication store appears in the sent band', () => {
+  const received = { __kind: 'thread', thread_key: 'inbox' };
+  const sent = { __kind: 'thread', thread_key: 'sent' };
+  const messages = [
+    { thread_key: 'inbox', direction: 'inbound', folder_hint: 'inbox' },
+    { thread_key: 'sent', direction: 'outbound', folder_hint: 'sent' },
+  ];
+  const counts = hooks.listBandCounts([received, sent], [], messages);
+  assert.equal(counts.inbound, 1);
+  assert.equal(counts.outbound, 1);
 });

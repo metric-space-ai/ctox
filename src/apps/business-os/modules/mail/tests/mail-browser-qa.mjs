@@ -95,6 +95,10 @@ mailQa: try {
         thread_key: 'thread-3', channel: 'email', account_key: 'email:alice@example.test',
         subject: 'Neuer Supportfall', participant_keys_json: ['help@example.test'],
         last_message_at: '2026-08-06T08:45:00Z', unread_count: 2, updated_at: '2026-08-06T08:45:00Z',
+      }, {
+        thread_key: 'thread-sent', channel: 'email', account_key: 'email:alice@example.test',
+        subject: 'Versandter Bericht', participant_keys_json: ['kunde@example.test'],
+        last_message_at: '2026-08-06T09:10:00Z', unread_count: 0, updated_at: '2026-08-06T09:10:00Z',
       }],
       communication_messages: [{
         message_key: 'mail-1',
@@ -115,6 +119,10 @@ mailQa: try {
       }, {
         message_key: 'mail-3', thread_key: 'thread-3', channel: 'email', account_key: 'email:alice@example.test', direction: 'inbound', folder_hint: 'inbox',
         sender_display: 'Help Desk', sender_address: 'help@example.test', subject: 'Neuer Supportfall', body_text: 'Wir benötigen kurzfristig Unterstützung.', external_created_at: '2026-08-06T08:45:00Z', observed_at: '2026-08-06T08:45:01Z',
+      }, {
+        message_key: 'mail-sent', thread_key: 'thread-sent', channel: 'email', account_key: 'email:alice@example.test', direction: 'outbound', folder_hint: 'sent',
+        sender_display: 'Alice Admin', sender_address: 'alice@example.test', recipient_addresses_json: ['kunde@example.test'],
+        subject: 'Versandter Bericht', body_text: 'Der Bericht ist angehängt.', external_created_at: '2026-08-06T09:10:00Z', observed_at: '2026-08-06T09:10:01Z',
       }],
       outbound_campaigns: [{
         id: 'campaign-1',
@@ -361,10 +369,14 @@ mailQa: try {
   }, iconProviderMode);
 
   await page.locator('[data-mail-root]').waitFor({ state: 'visible' });
-  assert.equal(await page.locator('[data-mail-navigation-title]').textContent(), 'E-Mail-Queues');
+  assert.equal(await page.locator('[data-mail-navigation-title]').textContent(), 'Postfach');
   assert.equal(await page.locator('[data-mail-account]').inputValue(), 'all');
   assert.match(await page.locator('[data-mail-account]').textContent(), /alice@example\.test/);
   await assertVisibleText(page, 'Projektstatus August');
+  assert.match(await page.locator('[data-mail-scope-id="outbound"]').textContent(), /Gesendet/);
+  await page.locator('[data-mail-scope-id="outbound"]').click();
+  await assertVisibleText(page, 'Versandter Bericht');
+  await page.locator('[data-mail-scope-id="inbound"]').click();
   await assertMailIconAcceptance(page, iconProviderMode);
   if (mailIconOnly) {
     assert.deepEqual(browserErrors, [], `Mail icon QA must not emit page or console errors (${iconProviderMode} provider)`);

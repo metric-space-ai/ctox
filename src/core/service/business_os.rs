@@ -2121,11 +2121,15 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
         verify_selector.trim(),
         continuation_source,
     )?;
+    let login_started_epoch_s = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs() as i64)
+        .unwrap_or(0);
     let mut automation = crate::business_os::run_browser_session_automation(
         root,
         crate::business_os::BrowserSessionAutomationRequest {
             session_id: session_id.clone(),
-            dir: browser_dir,
+            dir: browser_dir.clone(),
             timeout_ms: Some(timeout_ms),
             source: automation_source,
             profile_owner: auth_assist
@@ -2141,7 +2145,7 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
             redact_secret_value_from_json(&mut automation, login_hint);
         }
     }
-    let login_result = automation
+    let mut login_result = automation
         .get("result")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
@@ -2149,10 +2153,60 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
         .get("ok")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let login_ok = login_result
+    let mut login_ok = login_result
         .get("ok")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(automation_ok);
+    // Second factor by e-mail: when the provider sends a one-time code to a
+    // mailbox CTOX reads (D&B: no-reply@mail.dnb.com -> the crew mailbox),
+    // fetch it and finish the login in the same session instead of parking
+    // the research on a human (owner 22.09.2026: "der research agent soll
+    // moeglichst autonom arbeiten").
+    let mut email_otp = serde_json::Value::Null;
+    if automation_ok
+        && !login_ok
+        && login_result
+            .get("login_state")
+            .and_then(serde_json::Value::as_str)
+            == Some("mfa_required")
+    {
+        if let Some(recipe) = web_stack_email_otp_recipe(&source_id) {
+            email_otp = complete_web_stack_login_with_email_otp(
+                root,
+                &session_id,
+                browser_dir.clone(),
+                timeout_ms,
+                auth_assist
+                    .get("owner_user_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                &recipe,
+                login_started_epoch_s,
+                continuation_source,
+            );
+            if email_otp.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+                login_ok = true;
+                if let Some(object) = login_result.as_object_mut() {
+                    object.insert("ok".to_string(), serde_json::Value::Bool(true));
+                    object.insert(
+                        "login_state".to_string(),
+                        serde_json::Value::String("authenticated".to_string()),
+                    );
+                    object.insert("mfa_required".to_string(), serde_json::Value::Bool(false));
+                    object.insert(
+                        "reason".to_string(),
+                        serde_json::Value::String("email-otp-completed".to_string()),
+                    );
+                    if let Some(post_auth) = email_otp.get("post_auth_result") {
+                        object.insert("post_auth_result".to_string(), post_auth.clone());
+                    }
+                }
+                if let Some(object) = automation.as_object_mut() {
+                    object.insert("result".to_string(), login_result.clone());
+                }
+            }
+        }
+    }
     let login_state = login_result
         .get("login_state")
         .and_then(serde_json::Value::as_str)
@@ -2193,6 +2247,7 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
         "login_error_detected": login_error_detected,
         "verify_selector": verify_selector,
         "credential_selector": credential_selector,
+        "email_otp": email_otp,
         "secret_value_in_payload": false,
         "frame_data_in_payload": false,
         "browser_stream": "rxdb",
@@ -5339,6 +5394,375 @@ fn parse_local_ctox_secret_ref(value: &str) -> anyhow::Result<LocalCtoxSecretRef
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Picks the e-mail delivery option on a challenge page and presses the
+/// "send code" control when the provider offers one, then reports what the
+/// page shows (controls, fields) so a missing code mail can be diagnosed.
+const EMAIL_OTP_TRIGGER_SOURCE: &str = r#"
+const state = await page.evaluate(() => {
+  const visible = (el) => { const s = getComputedStyle(el); const r = el.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
+  const controls = Array.from(document.querySelectorAll('button, a, input[type="submit"], input[type="radio"], [role="button"]')).filter(visible);
+  const label = (el) => ((el.innerText || el.value || el.getAttribute('aria-label') || '') + ' ' + (el.id || '') + ' ' + (el.name || '')).trim();
+  const wantsEmail = /(e-?mail|mail|send code|send a code|code senden|code anfordern|per e-?mail)/i;
+  const isOtpField = Array.from(document.querySelectorAll('input')).some((el) => visible(el) && /(otp|code|verification|passcode)/i.test((el.name || '') + (el.id || '') + (el.placeholder || '') + (el.getAttribute('autocomplete') || '')));
+  const radio = controls.find((el) => el.tagName === 'INPUT' && el.type === 'radio' && wantsEmail.test(label(el)));
+  if (radio) radio.click();
+  // Okta renders "Send me an email" as <input type="submit">, not a button.
+  const pressable = (el) => el.tagName !== 'INPUT' || ['submit', 'button'].includes((el.type || '').toLowerCase());
+  const trigger = controls.find((el) => pressable(el) && wantsEmail.test(label(el)));
+  if (trigger) trigger.setAttribute('data-ctox-otp-trigger', '1');
+  return {
+    otp_field_present: isOtpField,
+    email_option_selected: !!radio,
+    trigger_label: trigger ? label(trigger).slice(0, 60) : null,
+    controls: controls.map((el) => label(el).slice(0, 40)).filter(Boolean).slice(0, 12),
+    text: (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 400),
+  };
+});
+if (state.trigger_label && !state.otp_field_present) {
+  await page.locator('[data-ctox-otp-trigger="1"]').first().click({ timeout: 5000 }).catch(() => null);
+  await page.waitForTimeout(3000);
+}
+// Okta sends a link and a code; the code field only appears after
+// "Enter a code from the email instead".
+const codeInstead = page.locator('a, button').filter({ hasText: /(enter a (verification )?code|code (from the email )?instead|code eingeben)/i }).first();
+if (await codeInstead.count()) {
+  await codeInstead.click({ timeout: 5000 }).catch(() => null);
+  await page.waitForTimeout(1500);
+}
+return { ...state, url: page.url(), title: await page.title() };
+"#;
+
+fn run_browser_session_automation_value(
+    root: &Path,
+    session_id: &str,
+    browser_dir: Option<PathBuf>,
+    timeout_ms: u64,
+    profile_owner: Option<String>,
+    source: String,
+) -> serde_json::Value {
+    match crate::business_os::run_browser_session_automation(
+        root,
+        crate::business_os::BrowserSessionAutomationRequest {
+            session_id: session_id.to_string(),
+            dir: browser_dir,
+            timeout_ms: Some(timeout_ms),
+            source,
+            profile_owner,
+        },
+    ) {
+        Ok(value) => value
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        Err(error) => serde_json::json!({ "error": error.to_string() }),
+    }
+}
+
+/// Providers that send their second factor by e-mail. The code is read from a
+/// mailbox CTOX already syncs (communication_messages); nothing is typed by a
+/// human and the code never leaves the host.
+struct WebStackEmailOtpRecipe {
+    sender_domains: &'static [&'static str],
+}
+
+fn web_stack_email_otp_recipe(source_id: &str) -> Option<WebStackEmailOtpRecipe> {
+    let sender_domains: &'static [&'static str] = match source_id.trim() {
+        // D&B signs in through Okta (sso.dnb.com); the code mail comes from Okta.
+        "dnbhoovers.com" | "app.dnbhoovers.com" => &[
+            "mail.dnb.com",
+            "dnb.com",
+            "hoovers.com",
+            "okta.com",
+            "okta-emea.com",
+        ],
+        "leadfeeder.com" | "app.leadfeeder.com" => &["leadfeeder.com", "dealfront.com"],
+        "xing.com" => &["xing.com"],
+        "linkedin.com" => &["linkedin.com"],
+        "rocketreach.com" | "rocketreach.co" => &["rocketreach.co", "rocketreach.com"],
+        _ => return None,
+    };
+    Some(WebStackEmailOtpRecipe { sender_domains })
+}
+
+/// Pull the one-time code out of a verification mail. Prefers a token that
+/// follows a code/PIN marker; falls back to "<code> is your …" and to a lone
+/// 6-digit number.
+fn extract_email_otp_code(subject: &str, body: &str) -> Option<String> {
+    let text = format!("{subject}\n{body}");
+    let has_digit = |value: &str| value.chars().any(|ch| ch.is_ascii_digit());
+    if let Ok(marker) = regex::Regex::new(
+        r"(?i)(?:code|pin|token|passcode|verifizierungscode|bestätigungscode|bestaetigungscode)\b[^A-Za-z0-9]{0,40}([A-Z0-9]{4,8})\b",
+    ) {
+        for captures in marker.captures_iter(&text) {
+            if let Some(candidate) = captures.get(1).map(|value| value.as_str()) {
+                if has_digit(candidate) {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+    }
+    if let Ok(leading) = regex::Regex::new(r"\b([A-Za-z0-9]{4,8}) is your\b") {
+        if let Some(candidate) = leading
+            .captures(&text)
+            .and_then(|captures| captures.get(1))
+            .map(|value| value.as_str())
+        {
+            if has_digit(candidate) {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    regex::Regex::new(r"\b(\d{6})\b")
+        .ok()?
+        .captures(&text)
+        .and_then(|captures| captures.get(1))
+        .map(|value| value.as_str().to_string())
+}
+
+fn email_otp_sender_matches(recipe: &WebStackEmailOtpRecipe, sender: &str) -> bool {
+    let sender = sender.trim().to_ascii_lowercase();
+    let sender_domain = sender.rsplit('@').next().unwrap_or("");
+    recipe
+        .sender_domains
+        .iter()
+        .any(|domain| sender_domain == *domain || sender_domain.ends_with(&format!(".{domain}")))
+}
+
+fn find_fresh_email_otp(
+    root: &Path,
+    recipe: &WebStackEmailOtpRecipe,
+    not_before_epoch_s: i64,
+) -> Option<(String, String)> {
+    let conn = rusqlite::Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    let mut statement = conn
+        .prepare(
+            "SELECT message_key, COALESCE(sender_address, ''), COALESCE(subject, ''),
+                    COALESCE(NULLIF(body_text, ''), preview, '')
+             FROM communication_messages
+             WHERE channel = 'email' AND direction = 'inbound'
+               AND CAST(strftime('%s', COALESCE(external_created_at, observed_at)) AS INTEGER) >= ?1
+             ORDER BY CAST(strftime('%s', COALESCE(external_created_at, observed_at)) AS INTEGER) DESC
+             LIMIT 40",
+        )
+        .ok()?;
+    let rows = statement
+        .query_map(rusqlite::params![not_before_epoch_s], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })
+        .ok()?;
+    for (message_key, sender, subject, body) in rows.flatten() {
+        if !email_otp_sender_matches(recipe, &sender) {
+            continue;
+        }
+        if let Some(code) = extract_email_otp_code(&subject, &body) {
+            return Some((code, message_key));
+        }
+    }
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn complete_web_stack_login_with_email_otp(
+    root: &Path,
+    session_id: &str,
+    browser_dir: Option<PathBuf>,
+    timeout_ms: u64,
+    profile_owner: Option<String>,
+    recipe: &WebStackEmailOtpRecipe,
+    login_started_epoch_s: i64,
+    continuation_source: Option<&str>,
+) -> serde_json::Value {
+    // Many providers only send the code once the user picks "e-mail" or
+    // presses "send code" on the challenge page, so trigger it first and note
+    // what the page offered — a silent 150 s wait for a mail nobody sent looks
+    // exactly like a broken mailbox.
+    let trigger = run_browser_session_automation_value(
+        root,
+        session_id,
+        browser_dir.clone(),
+        timeout_ms.min(60_000),
+        profile_owner.clone(),
+        EMAIL_OTP_TRIGGER_SOURCE.to_string(),
+    );
+    // Tolerate some clock skew between the mail server and this host.
+    let not_before = login_started_epoch_s.saturating_sub(90);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(150);
+    let mut polls = 0usize;
+    let mut found = None;
+    while std::time::Instant::now() < deadline {
+        polls += 1;
+        if let Ok(settings) = crate::inference::runtime_env::effective_operator_env_map(root) {
+            let _ = crate::communication::email_native::service_sync(root, &settings);
+        }
+        if let Some(hit) = find_fresh_email_otp(root, recipe, not_before) {
+            found = Some(hit);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    }
+    let Some((code, message_key)) = found else {
+        return serde_json::json!({
+            "ok": false,
+            "status": "no_code_mail",
+            "polls": polls,
+            "challenge_page": trigger,
+            "detail": "no verification mail from the provider reached a synced mailbox within 150 s",
+        });
+    };
+    let mut source = format!("const otpCode = {};\n", serde_json::json!(code));
+    source.push_str(
+        r#"
+const marked = await page.evaluate(() => {
+  const visible = (el) => { const s = getComputedStyle(el); const r = el.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
+  const inputs = Array.from(document.querySelectorAll('input')).filter((el) => visible(el) && !['hidden','checkbox','radio','submit','button','password','email'].includes((el.type || '').toLowerCase()));
+  const tokens = (el) => [el.name, el.id, el.placeholder, el.getAttribute('aria-label'), el.getAttribute('autocomplete'), el.getAttribute('inputmode')].filter(Boolean).join(' ').toLowerCase();
+  const split = inputs.filter((el) => Number(el.maxLength) === 1);
+  if (split.length >= 4) { split.forEach((el, i) => el.setAttribute('data-ctox-otp-i', String(i))); return { kind: 'split', count: split.length }; }
+  const scored = inputs.map((el) => { const t = tokens(el); let score = 0; if (/one-time-code/.test(t)) score += 100; if (/(otp|code|verification|verif|token|pin|passcode)/.test(t)) score += 60; if (Number(el.maxLength) >= 4 && Number(el.maxLength) <= 10) score += 20; if (/numeric/.test(t)) score += 10; return { el, score }; }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+  const pick = scored[0] ? scored[0].el : (inputs.length === 1 ? inputs[0] : null);
+  if (!pick) return { kind: 'none', count: inputs.length };
+  pick.setAttribute('data-ctox-otp', '1');
+  return { kind: 'single', count: 1 };
+});
+if (marked.kind === 'none') {
+  return { ok: false, otp_field_found: false, url: page.url(), title: await page.title() };
+}
+if (marked.kind === 'split') {
+  for (let i = 0; i < Math.min(marked.count, otpCode.length); i += 1) {
+    await page.locator('[data-ctox-otp-i="' + i + '"]').first().fill(otpCode[i]);
+  }
+} else {
+  await page.locator('[data-ctox-otp="1"]').first().fill(otpCode);
+}
+const submit = page.locator('button[type="submit"], input[type="submit"], button').filter({ hasText: /(verify|continue|submit|confirm|sign in|log in|weiter|bestätigen|anmelden|absenden|fortfahren)/i }).first();
+if (await submit.count()) { await submit.click({ timeout: 5000 }).catch(() => null); } else { await page.keyboard.press('Enter').catch(() => null); }
+await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => null);
+await page.waitForTimeout(4000);
+const stillMfa = await page.evaluate(() => {
+  const text = (document.body ? document.body.innerText : '').toLowerCase();
+  const field = document.querySelector('[data-ctox-otp], [data-ctox-otp-i]');
+  return !!field && /(verification code|one[- ]time|otp|bestätigungscode|verifizierung|passcode)/.test(text);
+});
+const errorShown = await page.evaluate(() => /(invalid code|incorrect code|code (has )?expired|ungültig|abgelaufen)/i.test(document.body ? document.body.innerText : ''));
+const otpOutcome = { ok: !stillMfa && !errorShown, otp_field_found: true, still_mfa: stillMfa, error_shown: errorShown, url: page.url(), title: await page.title() };
+"#,
+    );
+    if let Some(continuation) = continuation_source {
+        source.push_str(
+            "if (!otpOutcome.ok) return otpOutcome;\nconst postAuthResult = await (async () => {\n",
+        );
+        source.push_str(continuation);
+        source.push_str("\n})();\nreturn { ...otpOutcome, post_auth_result: postAuthResult };\n");
+    } else {
+        source.push_str("return otpOutcome;\n");
+    }
+    match crate::business_os::run_browser_session_automation(
+        root,
+        crate::business_os::BrowserSessionAutomationRequest {
+            session_id: session_id.to_string(),
+            dir: browser_dir,
+            timeout_ms: Some(timeout_ms),
+            source,
+            profile_owner,
+        },
+    ) {
+        Ok(mut value) => {
+            redact_secret_value_from_json(&mut value, &code);
+            let result = value
+                .get("result")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let ok = value.get("ok").and_then(serde_json::Value::as_bool) == Some(true)
+                && result.get("ok").and_then(serde_json::Value::as_bool) == Some(true);
+            let field = |name: &str| result.get(name).cloned().unwrap_or(serde_json::Value::Null);
+            serde_json::json!({
+                "ok": ok,
+                "status": if ok { "completed" } else { "code_rejected_or_no_field" },
+                "polls": polls,
+                "challenge_page": trigger,
+                "code_message_key": message_key,
+                "otp_field_found": field("otp_field_found"),
+                "still_mfa": field("still_mfa"),
+                "error_shown": field("error_shown"),
+                "url": field("url"),
+                "post_auth_result": field("post_auth_result"),
+                "code_value_in_payload": false,
+            })
+        }
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "status": "otp_automation_failed",
+            "polls": polls,
+            "code_message_key": message_key,
+            "detail": error.to_string(),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod email_otp_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_okta_email_factor_code() {
+        assert_eq!(
+            extract_email_otp_code(
+                "One-time verification code",
+                "Hi Lena, your verification code is 739104. Or click the link to sign in."
+            )
+            .as_deref(),
+            Some("739104")
+        );
+    }
+
+    #[test]
+    fn extracts_codes_from_provider_verification_mails() {
+        assert_eq!(
+            extract_email_otp_code(
+                "One-time verification code",
+                "Your verification code is 482913."
+            )
+            .as_deref(),
+            Some("482913")
+        );
+        assert_eq!(
+            extract_email_otp_code("vSR358 is your Bright Data access code", "").as_deref(),
+            Some("vSR358")
+        );
+        assert_eq!(
+            extract_email_otp_code("Ihr Bestätigungscode", "Bestätigungscode: 7Q4K2P").as_deref(),
+            Some("7Q4K2P")
+        );
+        assert_eq!(
+            extract_email_otp_code("Welcome to D&B Hoovers!", "Hello there"),
+            None
+        );
+    }
+
+    #[test]
+    fn otp_recipe_only_trusts_the_providers_sender_domains() {
+        let recipe = web_stack_email_otp_recipe("dnbhoovers.com").expect("dnb recipe");
+        assert!(email_otp_sender_matches(&recipe, "no-reply@mail.dnb.com"));
+        assert!(email_otp_sender_matches(&recipe, "No-Reply@HOOVERS.com"));
+        assert!(email_otp_sender_matches(&recipe, "noreply@okta.com"));
+        assert!(!email_otp_sender_matches(
+            &recipe,
+            "attacker@dnb.com.evil.example"
+        ));
+        assert!(!email_otp_sender_matches(&recipe, "noreply@brightdata.com"));
+        assert!(web_stack_email_otp_recipe("northdata.de").is_none());
+    }
+}
+
 fn build_web_stack_auth_assist_login_source_with_continuation(
     target_url: &str,
     source_id: &str,
@@ -5454,7 +5878,8 @@ const browserCandidateFieldsInFrame = async (frame, kind, relaxed) => frame.eval
     if (kind === "credential") {
       let score = type === "password" ? 100 : 0;
       if (/(password|passwort|passwd|pwd|kennwort|secret)/.test(tokens)) score += 80;
-      if (/(otp|totp|mfa|2fa|code|verification|confirm)/.test(tokens)) score -= 70;
+      // Same trap as above: `credentials.passcode` is Okta's password field.
+      if (type !== "password" && /(\botp\b|\btotp\b|\bmfa\b|\b2fa\b|\bcode\b|verification|confirm)/.test(tokens)) score -= 70;
       return score;
     }
     let score = 0;
@@ -5772,6 +6197,11 @@ const pageSignals = async () => {
         { term: "sicherheitscode", pattern: /sicherheitscode/ },
         { term: "verifizierungscode", pattern: /verifizierungscode/ },
         { term: "zweifaktor", pattern: /zweifaktor|zwei[-\s]?faktor|zweistufig/ },
+        // Okta's e-mail factor (D&B): "Send a verification email to … by
+        // clicking on 'Send me an email'" — it has no code field yet, so
+        // without these terms the page read as signed in.
+        { term: "verification-email", pattern: /verification\s+e-?mail|send\s+me\s+an\s+e-?mail|verify\s+with\s+(your\s+)?e-?mail|enter\s+(a|the)\s+(verification\s+)?code/ },
+        { term: "bestaetigungsmail", pattern: /bestätigungs-?e-?mail|bestaetigungs-?e-?mail|code\s+per\s+e-?mail/ },
       ]);
       const errorTerms = matchingTerms([
         { term: "invalid", pattern: /\binvalid\b/ },
@@ -5796,9 +6226,14 @@ const pageSignals = async () => {
         { term: "inloggegevens-onjuist", pattern: /inloggegevens\s+(onjuist|ongeldig)/ },
         { term: "nieprawidlowe-dane", pattern: /nieprawidlowe\s+dane|bledne\s+haslo/ },
       ]);
+      // A password field is never a one-time-code field: Okta names its
+      // password input `credentials.passcode`, whose "code" made every D&B
+      // sign-in look like a second factor, so the stored password was never
+      // typed (gemessen 22.09.2026). Match whole words, not substrings.
       const otpFieldCount = Array.from(document.querySelectorAll("input, textarea"))
         .filter(visible)
-        .filter((element) => /(otp|totp|mfa|2fa|code|verification|verifizierung|sicherheitscode|one[-\s]?time)/.test(tokensFor(element)))
+        .filter((element) => String(element.getAttribute("type") || "").toLowerCase() !== "password")
+        .filter((element) => /(\botp\b|\btotp\b|\bmfa\b|\b2fa\b|\bcode\b|one[-\s]?time|verification|verifizierung|sicherheitscode)/.test(tokensFor(element)))
         .length;
       const errorNodes = Array.from(document.querySelectorAll([
         "[role='alert']",
@@ -5922,9 +6357,48 @@ const before = await gotoTargetWithRetry();
 await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
 const consentTransition = await dismissConsent();
 const beforeSignals = await pageSignals();
-const preAuthenticatedVerifyFound = configuredVerifySelector
+// "Elsewhere" means another page, not the same login page with a token in the
+// query: D&B Hoovers answers /login with /login?F1084…=_ and a username-only
+// first step. Comparing whole URLs read that as a landing, found no password
+// field (the password step comes later) and reported `already-authenticated`,
+// so the stored credential was never submitted.
+const samePage = (left, right) => {
+  try {
+    const a = new URL(left);
+    const b = new URL(right);
+    return a.origin === b.origin && a.pathname.replace(/\/+$/, "") === b.pathname.replace(/\/+$/, "");
+  } catch {
+    return left === right;
+  }
+};
+const verifySelectorVisible = configuredVerifySelector
   ? await page.locator(configuredVerifySelector).first().isVisible().catch(() => false)
   : false;
+// A verify selector only proves a session once we have left the login page.
+// D&B's selector matches a search link on /login itself, and D&B first shows a
+// token interstitial (/login?F…=_) before drawing its username step, so no
+// field check at that moment is reliable. A live session redirects away from
+// the login URL; while we are still on it, go through the login path.
+// D&B is opened at its app root and redirects to /login?F…=_, so "same page as
+// the target" alone misses it: a login-looking path is never a live session.
+const looksLikeLoginPath = (value) => {
+  try {
+    return /(^|\/)(log-?in|sign-?in|sign\/in|auth|sso)(\/|$)/i.test(new URL(value).pathname);
+  } catch {
+    return false;
+  }
+};
+const stillOnLoginPage = samePage(page.url(), targetUrl) || looksLikeLoginPath(page.url());
+if (verifySelectorVisible && stillOnLoginPage) {
+  // Give a late-rendering form a bounded chance before the fill step.
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    const fields = await browserCandidateFields("login").catch(() => []);
+    if (fields.some((field) => field.source === "heuristic")) break;
+    await page.waitForTimeout(500).catch(() => null);
+  }
+}
+const preAuthenticatedVerifyFound = verifySelectorVisible && !stillOnLoginPage;
 // A stored session sends us straight past the login form: Leadfeeder answers
 // /login with its dashboard, XING with an in-app page. The verify selector is
 // the only thing that used to notice, and once its markup drifts the run walks
@@ -5934,8 +6408,9 @@ const preAuthenticatedVerifyFound = configuredVerifySelector
 // error is the same evidence, and it does not rot when a class name changes.
 const preAuthenticatedByLanding = await (async () => {
   if (preAuthenticatedVerifyFound) return false;
-  const landedElsewhere = beforeSignals.url && beforeSignals.url !== targetUrl;
+  const landedElsewhere = beforeSignals.url && !samePage(beforeSignals.url, targetUrl);
   if (!landedElsewhere) return false;
+  if (looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;
   const signals = beforeSignals.auth_signals || emptyAuthSignals();
   if (signals.mfa_required === true || signals.login_error_detected === true) return false;
   if (Number(beforeSignals.form_state?.visible_password_fields || 0) > 0) return false;
@@ -7497,6 +7972,26 @@ mod tests {
         assert!(source.contains("waitForLoginEntryTransition"));
         assert!(source.contains("waitForCredentialTransition"));
         assert!(source.contains("browserCandidateFields(\"credential\")"));
+        // A login page that only gained a query token (D&B: /login?F…=_) is not a
+        // landing elsewhere; otherwise a username-first step reads as signed in.
+        assert!(source.contains("!samePage(beforeSignals.url, targetUrl)"));
+        assert!(!source.contains("beforeSignals.url !== targetUrl"));
+        // A verify selector that also matches on the login page (D&B: a search
+        // link) must not count while the login form is still shown.
+        assert!(source.contains(
+            "const preAuthenticatedVerifyFound = verifySelectorVisible && !stillOnLoginPage;"
+        ));
+        // D&B opens at the app root and lands on /login?F…=_: a login-looking
+        // path must never count as an existing session.
+        assert!(source.contains(
+            "if (looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;"
+        ));
+        // Okta's password field is named `credentials.passcode`; counting it
+        // as a one-time-code field turned every D&B sign-in into "MFA".
+        assert!(source.contains("!== \"password\""));
+        assert!(!source.contains(
+            "/(otp|totp|mfa|2fa|code|verification|verifizierung|sicherheitscode|one[-\\s]?time)/"
+        ));
         assert!(source.contains("gotoTargetWithRetry"));
         assert!(source.contains("attempt <= 2"));
         assert!(source.contains("same-origin-link"));
