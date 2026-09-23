@@ -1896,53 +1896,50 @@ pub(super) fn apply_outbound_adapter_reconciliation_reply(
             .filter(|value| value.is_object())
             .cloned()
             .unwrap_or_else(|| serde_json::json!({}));
-        outbound_payload_insert(
-            &mut payload,
-            "configuration_digest",
+        // This is already the adapter's payload object. The record-level
+        // helper would create an unintended payload.payload nesting.
+        let payload_fields = payload
+            .as_object_mut()
+            .context("adapter payload is not an object")?;
+        payload_fields.insert(
+            "configuration_digest".to_string(),
             Value::String(expected_digest.clone()),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "reconciliation_command_id",
+        payload_fields.insert(
+            "reconciliation_command_id".to_string(),
             Value::String(command_id.to_string()),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "reconciliation_task_id",
+        payload_fields.insert(
+            "reconciliation_task_id".to_string(),
             Value::String(task_id.to_string()),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "reconciled_command_id",
+        payload_fields.insert(
+            "reconciled_command_id".to_string(),
             Value::String(command_id.to_string()),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "reconciled_command_status",
+        payload_fields.insert(
+            "reconciled_command_status".to_string(),
             Value::String(result_status.clone()),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "adapter_revision",
+        payload_fields.insert(
+            "adapter_revision".to_string(),
             adapter_result
                 .get("adapter_revision")
                 .cloned()
                 .unwrap_or(Value::Null),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "script_path",
+        payload_fields.insert(
+            "script_path".to_string(),
             adapter_result
                 .get("script_path")
                 .cloned()
                 .unwrap_or(Value::Null),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "test",
+        payload_fields.insert(
+            "test".to_string(),
             adapter_result.get("test").cloned().unwrap_or(Value::Null),
         );
-        outbound_payload_insert(&mut payload, "secret_value_in_payload", Value::Bool(false));
+        payload_fields.insert("secret_value_in_payload".to_string(), Value::Bool(false));
         let record = serde_json::json!({
             "id": adapter_id.clone(),
             "source_id": source_id.clone(),
@@ -6672,6 +6669,7 @@ mod tests {
         )?
         .context("adapter writeback")?;
         assert_eq!(adapter.get("status").and_then(Value::as_str), Some("ready"));
+        assert!(adapter.pointer("/payload/payload").is_none());
         assert_eq!(
             adapter
                 .pointer("/payload/test/records_found")
