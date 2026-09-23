@@ -385,6 +385,11 @@ mailQa: try {
   assert.match(await page.locator('[data-mail-account]').textContent(), /alice@example\.test/);
   await assertVisibleText(page, 'Projektstatus August');
   assert.match(await page.locator('[data-mail-scope-id="outbound"]').textContent(), /Gesendet/);
+  await page.locator('[data-mail-list-pane] [data-pg-band="outbound"]').click();
+  await assertVisibleText(page, 'Versandter Bericht');
+  assert.equal(await page.locator('[data-mail-list-title]').textContent(), 'Gesendet');
+  await page.locator('[data-mail-list-pane] [data-pg-band="inbound"]').click();
+  await assertVisibleText(page, 'Projektstatus August');
   await page.locator('[data-mail-scope-id="outbound"]').click();
   await assertVisibleText(page, 'Versandter Bericht');
   await page.locator('[data-mail-scope-id="inbound"]').click();
