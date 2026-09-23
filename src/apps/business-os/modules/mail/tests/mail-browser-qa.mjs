@@ -715,6 +715,7 @@ mailQa: try {
   await page.evaluate(async () => {
     location.hash = '';
     window.__unmountMail();
+    window.__mailReadAttemptBaseline = window.__mailReadAttempts.get('communication_threads') || 0;
     window.__mailReadFailures.set('communication_threads', 'PENDING');
     window.__unmountMail = await window.__mailMount(window.__mailMountContext);
   });
@@ -725,10 +726,10 @@ mailQa: try {
   });
   await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
   assert.ok(await page.evaluate(() => {
-    const attempts = window.__mailReadAttempts.get('communication_threads');
+    const attempts = (window.__mailReadAttempts.get('communication_threads') || 0) - window.__mailReadAttemptBaseline;
     return attempts >= 2 && attempts <= 3;
   }), 'notification pulses must not start an unbounded number of reads');
-  await page.waitForFunction(() => (window.__mailReadAttempts.get('communication_threads') || 0) >= 5, null, { timeout: 14_000 });
+  await page.waitForFunction(() => (window.__mailReadAttempts.get('communication_threads') || 0) - window.__mailReadAttemptBaseline >= 5, null, { timeout: 14_000 });
   assert.ok(await page.evaluate(() => (
     (window.__mailMaxPendingReads.get('communication_threads') || 0) <= 2
     && (window.__mailPendingReads.get('communication_threads') || 0) <= 2
@@ -757,6 +758,10 @@ mailQa: try {
         .map((button) => ({ name: button.dataset.mailEditorViewport, pressed: button.getAttribute('aria-pressed') })),
       editorFrames: document.querySelectorAll('[data-mail-easy-email-host] iframe').length,
       contentSurfaceVisible: Boolean(document.querySelector('[data-mail-content-surface]')?.getClientRects().length),
+      readAttempts: (window.__mailReadAttempts?.get('communication_threads') || 0) - (window.__mailReadAttemptBaseline || 0),
+      pendingReads: window.__mailPendingReads?.get('communication_threads') || 0,
+      maxPendingReads: window.__mailMaxPendingReads?.get('communication_threads') || 0,
+      abortedReads: window.__mailAbortedReads?.get('communication_threads') || 0,
     }));
     console.error('[mail QA] failure state', JSON.stringify({ ...state, browserErrors }));
   } catch (diagnosticError) {
