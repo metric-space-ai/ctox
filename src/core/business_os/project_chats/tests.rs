@@ -889,7 +889,8 @@ fn project_crew_admission_uses_native_chat_binding_and_rejects_revocation() -> a
         super::super::project_crew_member_for_task(root.path(), task_id)?,
         Some("project-crew".into())
     );
-    channels::lease_queue_task(root.path(), task_id, "project-worker")?;
+    let leased = channels::lease_queue_task(root.path(), task_id, "project-worker")?;
+    assert!(leased.attempt > 0);
     let prepare = || {
         crate::crew::prepare_attempt(
             root.path(),
