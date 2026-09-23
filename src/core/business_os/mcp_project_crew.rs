@@ -39,7 +39,7 @@ struct CancelNativeProjectRequest {
 pub(super) fn native_project_cancel_descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(
         "business_os.cancel_project_task",
-        "Cancel an owned native Workjet project task admitted by start_project_task. A repeated key returns the same cancellation command and native task result; cancellation may not undo side effects already started.",
+        "Cancel an owned Workjet project task admitted by start_project_task or start_crew_execution. A repeated key returns the same cancellation command and native task result; cancellation may not undo side effects already started.",
         serde_json::json!({"type":"object","additionalProperties":false,
             "required":["target_command_id","idempotency_key"],
             "properties":{
@@ -58,7 +58,9 @@ pub(super) fn cancel_native_project(
     let request: CancelNativeProjectRequest = serde_json::from_value(arguments.clone())?;
     let target_command_id = request.target_command_id.trim();
     anyhow::ensure!(
-        target_command_id.starts_with("workjet_project_native_") && target_command_id.len() <= 256,
+        (target_command_id.starts_with("workjet_project_native_")
+            || target_command_id.starts_with("workjet_crew_"))
+            && target_command_id.len() <= 256,
         "native project target command is required"
     );
     let key = request.idempotency_key.as_bytes();
@@ -92,8 +94,27 @@ pub(super) fn cancel_native_project(
     let target = crate::mission::channels::inspect_business_command(root, target_command_id)?
         .context("native project target command was not found")?;
     let canonical = &target["command"];
+    let native_project = target_command_id.starts_with("workjet_project_native_")
+        && canonical
+            .pointer("/payload/project_id")
+            .and_then(Value::as_str)
+            .is_some()
+        && canonical.pointer("/payload/external_executor").is_none();
+    let project_crew = target_command_id.starts_with("workjet_crew_")
+        && canonical
+            .pointer("/payload/thread_id")
+            .and_then(Value::as_str)
+            .is_some_and(|thread| thread.starts_with("workjet_private_"))
+        && canonical
+            .pointer("/payload/workjet_crew_member_id")
+            .and_then(Value::as_str)
+            .is_some()
+        && canonical
+            .pointer("/payload/external_executor")
+            .is_some_and(Value::is_object);
     anyhow::ensure!(
-        canonical["module"] == "ctox"
+        (native_project || project_crew)
+            && canonical["module"] == "ctox"
             && canonical["command_type"] == "business_os.chat.task"
             && canonical
                 .pointer("/payload/workjet_request_fingerprint")

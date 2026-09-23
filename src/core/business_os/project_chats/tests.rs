@@ -940,6 +940,26 @@ fn project_crew_admission_uses_native_chat_binding_and_rejects_revocation() -> a
         stored, "project-crew",
         "revocation must not retarget the existing attempt"
     );
+    let cancel_request = json!({
+        "target_command_id":accepted["command_id"],
+        "idempotency_key":"cancel-project-crew-1",
+        "reason":"stop leased Crew turn",
+        "_context":{"actor":"owner","workspace":"project-test"}
+    });
+    let cancelled = mcp_channel::call_tool(
+        root.path(),
+        "business_os.cancel_project_task",
+        cancel_request.clone(),
+    )?;
+    assert_eq!(cancelled["task_id"], task_id);
+    assert_eq!(cancelled["target_status"], "cancelled");
+    assert_eq!(cancelled["side_effects_may_have_started"], true);
+    let replay_cancel = mcp_channel::call_tool(
+        root.path(),
+        "business_os.cancel_project_task",
+        cancel_request,
+    )?;
+    assert_eq!(cancelled["command_id"], replay_cancel["command_id"]);
     Ok(())
 }
 

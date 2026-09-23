@@ -253,8 +253,10 @@ command/task status. The source test checks admission, replay, changed intent,
 foreign ownership and archived-project denial; it does not prove a full worker
 turn or an installed Dev/Ops user path. Those are required before release.
 
-`business_os.cancel_project_task` accepts only the native command ID returned
-by that ingress, a stable cancellation retry key and an optional bounded reason.
+`business_os.cancel_project_task` accepts only a command ID returned by
+`start_project_task` or `start_crew_execution`, a stable cancellation retry key
+and an optional bounded reason. It checks the corresponding canonical project
+or private Crew command shape, including the external executor for Crew turns.
 The MCP actor must still own the canonical command and pass `ctox.task.manage`
 on its actual linked native task; a caller cannot provide a task, actor, module
 or policy scope. The tool submits the existing `ctox.command.cancel` control
