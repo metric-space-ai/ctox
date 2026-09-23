@@ -912,6 +912,8 @@ enum ServiceIpcRequest {
     /// daemon process that owns the persistent browser runtime.
     BusinessOsWebStack {
         argv: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
     },
     /// Validate and persist a typed Business OS command inside the daemon.
     /// Sandboxed workers may connect to the service socket, but cannot write
@@ -2979,14 +2981,44 @@ fn sandboxed_cli_arg_is_flag(arg: &str, flag: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('='))
 }
 
+fn sandboxed_cli_runtime_root_is_own(root: &Path, value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    let canonical =
+        |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    canonical(Path::new(value)) == canonical(root)
+}
+
 fn sanitize_sandboxed_cli_argv(root: &Path, argv: &[String]) -> Result<Vec<String>> {
-    for flag in ["--runtime-root", "--db"] {
-        if argv.iter().any(|arg| sandboxed_cli_arg_is_flag(arg, flag)) {
-            anyhow::bail!("sandboxed cli: flag {flag} is not allowed over the relay");
+    if argv
+        .iter()
+        .any(|arg| sandboxed_cli_arg_is_flag(arg, "--db"))
+    {
+        anyhow::bail!("sandboxed cli: flag --db is not allowed over the relay");
+    }
+    // The native person research (web-stack scrape bridge) always passes
+    // `--runtime-root <daemon root>` to `ctox scrape execute`. Pointing at the
+    // daemon's own root changes nothing, so it is dropped; every other root
+    // stays forbidden. Before, all eight adapters of a native run failed with
+    // "flag --runtime-root is not allowed over the relay" (thesen, 23.09.2026).
+    let mut argv = argv.to_vec();
+    while let Some(index) = argv
+        .iter()
+        .position(|arg| sandboxed_cli_arg_is_flag(arg, "--runtime-root"))
+    {
+        let (value, span) = match argv[index].strip_prefix("--runtime-root=") {
+            Some(value) => (value.to_string(), 1),
+            None => (argv.get(index + 1).cloned().unwrap_or_default(), 2),
+        };
+        if !sandboxed_cli_runtime_root_is_own(root, &value) {
+            anyhow::bail!("sandboxed cli: flag --runtime-root is not allowed over the relay");
         }
+        argv.drain(index..(index + span).min(argv.len()));
     }
 
-    let mut sanitized = argv.to_vec();
+    let mut sanitized = argv.clone();
     for index in 0..sanitized.len() {
         if sanitized[index] != "--timeout-seconds" {
             continue;
@@ -3307,6 +3339,7 @@ pub fn dispatch_business_command(
 pub(crate) fn run_business_os_web_stack_via_service(
     root: &Path,
     argv: &[String],
+    source: Option<&str>,
 ) -> Result<Option<Value>> {
     let socket_path = service_socket_path(root);
     if !socket_path.exists() {
@@ -3317,6 +3350,7 @@ pub(crate) fn run_business_os_web_stack_via_service(
         root,
         ServiceIpcRequest::BusinessOsWebStack {
             argv: argv.to_vec(),
+            source: source.map(str::to_owned),
         },
         timeout,
     ) {
@@ -3341,6 +3375,7 @@ pub(crate) fn run_business_os_web_stack_via_service(
 pub(crate) fn run_business_os_web_stack_via_service(
     _root: &Path,
     _argv: &[String],
+    _source: Option<&str>,
 ) -> Result<Option<Value>> {
     Ok(None)
 }
@@ -3954,9 +3989,12 @@ fn handle_service_ipc_request(
                 payload: dispatch_sandboxed_cli_capturing(root, &argv),
             })
         }
-        ServiceIpcRequest::BusinessOsWebStack { argv } => {
-            match crate::service::business_os::run_business_os_web_stack_cli_json_local(root, &argv)
-            {
+        ServiceIpcRequest::BusinessOsWebStack { argv, source } => {
+            match crate::service::business_os::run_business_os_web_stack_cli_json_local(
+                root,
+                &argv,
+                source.as_deref(),
+            ) {
                 Ok(payload) => Ok(ServiceIpcResponse::Json {
                     status: 200,
                     payload,
@@ -4680,7 +4718,7 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
         // cancel the daemon-side work and therefore only produces a false
         // failure. Keep the client wait bounded, but long enough for a complete
         // command run.
-        ServiceIpcRequest::BusinessOsWebStack { argv } => web_stack_ipc_timeout(argv),
+        ServiceIpcRequest::BusinessOsWebStack { argv, .. } => web_stack_ipc_timeout(argv),
         ServiceIpcRequest::BusinessCommandDispatch { .. } => BUSINESS_COMMAND_IPC_TIMEOUT,
     }
 }
@@ -8996,7 +9034,27 @@ fn run_completion_review(
     _mission_state: Option<&lcm::MissionStateRecord>,
 ) -> CompletionReviewDisposition {
     match command_writeback_failure(root, job) {
-        Ok(Some(summary)) => return CompletionReviewDisposition::TerminalQueueFailure { summary },
+        Ok(Some(summary)) => {
+            // A research turn that ended right before its writeback ("JSON ist
+            // valide. Jetzt der Writeback.", CHT and Cilag on thesen,
+            // 23.09.2026, after 1-2 h of finished research) is not a failed
+            // task: the result exists in the thread. Send the same task back
+            // through the bounded review-feedback loop with one instruction,
+            // write back now. Only a missing receipt is retried; an invalid
+            // contract stays terminal, and the review budget still ends the
+            // loop.
+            if missing_writeback_receipt_is_retryable(&summary)
+                && !job.leased_message_keys.is_empty()
+            {
+                let outcome = missing_writeback_review_outcome(&summary);
+                if let Ok(disposition) =
+                    queue_review_rejection_feedback_disposition(root, job, &outcome, reply_text)
+                {
+                    return disposition;
+                }
+            }
+            return CompletionReviewDisposition::TerminalQueueFailure { summary };
+        }
         Ok(None) => {}
         Err(error) => {
             return CompletionReviewDisposition::TerminalQueueFailure {
@@ -14954,6 +15012,25 @@ fn handle_actionable_completion_review_rejection(
             };
         }
     }
+}
+
+fn missing_writeback_receipt_is_retryable(summary: &str) -> bool {
+    summary.starts_with("Business command writeback failed: no successful ")
+}
+
+fn missing_writeback_review_outcome(summary: &str) -> review::ReviewOutcome {
+    let mut outcome = review::ReviewOutcome::skipped(
+        "The research result was never written back: the turn ended before the business_os.execute_writeback call.",
+    );
+    outcome.required = true;
+    outcome.verdict = review::ReviewVerdict::Fail;
+    outcome.failed_gates = vec!["business_command_writeback_missing".to_string()];
+    outcome.open_items = vec![
+        "Call the MCP tool business_os.execute_writeback now with the finished field_status and result for this record_id. Do not research again and do not restart; use the result you already assembled in this thread.".to_string(),
+        "Read the writeback response: store what it accepted, fix only the rejected or open fields it names, and send those in one further call.".to_string(),
+    ];
+    outcome.evidence = vec![clip_text(summary, 400)];
+    outcome
 }
 
 fn queue_review_rejection_feedback_disposition(
@@ -23947,6 +24024,208 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn authenticated_automation_cli_reader_forwards_source_to_daemon_socket() {
+        assert_authenticated_automation_socket_forwarding(false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authenticated_automation_public_dispatcher_forwards_source_to_daemon_socket() {
+        assert_authenticated_automation_socket_forwarding(true);
+    }
+
+    #[cfg(unix)]
+    fn assert_authenticated_automation_socket_forwarding(public_dispatcher: bool) {
+        let root = temp_root("aa-ipc");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let listener = UnixListener::bind(service_socket_path(&root)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let source = "return { text: 'Grüße\n世界' };";
+        let server = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "CLI never contacted daemon"
+                        );
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("socket accept failed: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let request: ServiceIpcRequest = serde_json::from_str(&line).unwrap();
+            match request {
+                ServiceIpcRequest::BusinessOsWebStack {
+                    argv,
+                    source: Some(actual),
+                } => {
+                    assert_eq!(argv, vec!["authenticated-automation"]);
+                    assert_eq!(actual, source);
+                }
+                other => panic!("unexpected request: {other:?}"),
+            }
+            let response = ServiceIpcResponse::Json {
+                status: 200,
+                payload: serde_json::json!({"receipt": "daemon"}),
+            };
+            writeln!(stream, "{}", serde_json::to_string(&response).unwrap()).unwrap();
+        });
+        let args = ["authenticated-automation".into()];
+        if public_dispatcher {
+            crate::service::business_os::handle_business_os_web_stack_with_reader(
+                &root,
+                &args,
+                source.as_bytes(),
+            )
+            .unwrap();
+        } else {
+            let result =
+                crate::service::business_os::run_business_os_web_stack_cli_json_with_reader(
+                    &root,
+                    &args,
+                    source.as_bytes(),
+                )
+                .unwrap();
+            assert_eq!(result["receipt"], "daemon");
+        }
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn authenticated_automation_ipc_preserves_source_and_auth_gate() {
+        let source = "return { text: 'Grüße\n世界' };";
+        let request = ServiceIpcRequest::BusinessOsWebStack {
+            argv: vec![
+                "authenticated-automation".into(),
+                "--source-id".into(),
+                "example.test".into(),
+            ],
+            source: Some(source.to_owned()),
+        };
+        let wire = serde_json::to_vec(&request).unwrap();
+        let decoded: ServiceIpcRequest = serde_json::from_slice(&wire).unwrap();
+        match &decoded {
+            ServiceIpcRequest::BusinessOsWebStack {
+                source: Some(actual),
+                ..
+            } => assert_eq!(actual, source),
+            other => panic!("unexpected request: {other:?}"),
+        }
+        // The forwarded script reaches the existing login authorization path;
+        // it cannot execute without the required credential reference.
+        let root = temp_root("authenticated-automation-auth-gate");
+        let response = handle_service_ipc_request(
+            decoded,
+            &root,
+            Arc::new(Mutex::new(SharedState::default())),
+        )
+        .unwrap();
+        match response {
+            ServiceIpcResponse::Error { message } => {
+                assert!(message.contains("auth-assist-login requires --credential-ref"))
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn authenticated_automation_ipc_does_not_bypass_command_session_validation() {
+        let root = temp_root("authenticated-automation-command-session");
+        let response = handle_service_ipc_request(
+            ServiceIpcRequest::BusinessOsWebStack {
+                argv: vec![
+                    "authenticated-automation".into(),
+                    "--source-id".into(),
+                    "example.test".into(),
+                    "--credential-ref".into(),
+                    "ctox-secret://credentials/TEST_ONLY".into(),
+                    "--command-session".into(),
+                    "malformed-token".into(),
+                ],
+                source: Some("throw new Error('must never execute');".into()),
+            },
+            &root,
+            Arc::new(Mutex::new(SharedState::default())),
+        )
+        .unwrap();
+        match response {
+            ServiceIpcResponse::Error { message } => {
+                assert!(message.contains("malformed Business OS internal command-session token"))
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn authenticated_automation_ipc_rejects_missing_oversize_and_misrouted_source() {
+        let root = temp_root("authenticated-automation-source-rejection");
+        let missing: ServiceIpcRequest = serde_json::from_value(serde_json::json!({
+            "kind": "business_os_web_stack", "argv": ["authenticated-automation"]
+        }))
+        .unwrap();
+        let cases = [
+            (missing, "requires forwarded script source"),
+            (
+                ServiceIpcRequest::BusinessOsWebStack {
+                    argv: vec!["authenticated-automation".into()],
+                    source: Some("x".repeat(
+                        crate::service::business_os::AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES + 1,
+                    )),
+                },
+                "exceeds 1 MiB",
+            ),
+            (
+                ServiceIpcRequest::BusinessOsWebStack {
+                    argv: vec!["auth-assist-status".into()],
+                    source: Some("return {};".into()),
+                },
+                "only allowed for authenticated-automation",
+            ),
+        ];
+        for (request, expected) in cases {
+            let response = handle_service_ipc_request(
+                request,
+                &root,
+                Arc::new(Mutex::new(SharedState::default())),
+            )
+            .unwrap();
+            match response {
+                ServiceIpcResponse::Error { message } => {
+                    assert!(message.contains(expected), "{message}")
+                }
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+        // Legacy requests for other commands still deserialize without source.
+        let request: ServiceIpcRequest = serde_json::from_value(serde_json::json!({
+            "kind": "business_os_web_stack", "argv": ["auth-assist-status"]
+        }))
+        .unwrap();
+        let response = handle_service_ipc_request(
+            request,
+            &root,
+            Arc::new(Mutex::new(SharedState::default())),
+        )
+        .unwrap();
+        match response {
+            ServiceIpcResponse::Error { message } => assert!(message.contains("--session-id")),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
     #[test]
     fn sandboxed_cli_ipc_rejects_non_allowlisted_command() {
         let root = temp_root("sandboxed-cli-rejection");
@@ -24063,6 +24342,61 @@ mod tests {
             sandboxed_cli_flag_value(&accepted, "--input-file"),
             canonical_allowed_input.to_str()
         );
+    }
+
+    #[test]
+    fn sandboxed_cli_relay_drops_the_daemons_own_runtime_root() {
+        // Native person research passes `--runtime-root <daemon root>`; all
+        // eight adapters of a thesen run failed on it (23.09.2026).
+        let root = temp_root("sandboxed-cli-own-root");
+        let own = root.to_str().unwrap().to_string();
+        for argv in [
+            vec![
+                "scrape".to_string(),
+                "execute".to_string(),
+                "--target-key".to_string(),
+                "fixture".to_string(),
+                "--runtime-root".to_string(),
+                own.clone(),
+            ],
+            vec![
+                "scrape".to_string(),
+                "execute".to_string(),
+                format!("--runtime-root={own}"),
+                "--target-key".to_string(),
+                "fixture".to_string(),
+            ],
+        ] {
+            let sanitized = sanitize_sandboxed_cli_argv(&root, &argv).unwrap();
+            assert!(!sanitized
+                .iter()
+                .any(|arg| arg.starts_with("--runtime-root")));
+            assert_eq!(
+                sandboxed_cli_flag_value(&sanitized, "--target-key"),
+                Some("fixture")
+            );
+        }
+        let foreign = vec![
+            "scrape".to_string(),
+            "execute".to_string(),
+            "--runtime-root".to_string(),
+            "/tmp/attacker-runtime".to_string(),
+        ];
+        assert!(sanitize_sandboxed_cli_argv(&root, &foreign).is_err());
+    }
+
+    #[test]
+    fn a_missing_research_writeback_is_retried_not_failed() {
+        assert!(missing_writeback_receipt_is_retryable(
+            "Business command writeback failed: no successful outbound.lead.research_writeback receipt for record lead_1 and originating research cmd_1."
+        ));
+        assert!(!missing_writeback_receipt_is_retryable(
+            "writeback contract incomplete: expected mechanism=business_command"
+        ));
+        let outcome =
+            missing_writeback_review_outcome("Business command writeback failed: no successful x");
+        assert_eq!(outcome.verdict, review::ReviewVerdict::Fail);
+        assert!(outcome.open_items[0].contains("business_os.execute_writeback"));
     }
 
     #[test]

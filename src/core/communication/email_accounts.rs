@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
-use rusqlite::Connection;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -45,14 +45,17 @@ pub(crate) struct EmailAccountConfig {
     /// SMTP/IMAP-Benutzername, falls abweichend von der Adresse.
     #[serde(default)]
     pub username: String,
-    /// Business-OS-Benutzer, dem dieses Konto gehört.
     #[serde(default)]
-    pub owner_user_id: String,
-    /// Exchange/OWA-Konten: Web-Adressen des eigenen Servers.
+    pub ews_url: String,
     #[serde(default)]
     pub owa_url: String,
     #[serde(default)]
-    pub ews_url: String,
+    pub ews_auth_type: String,
+    #[serde(default)]
+    pub ews_version: String,
+    /// Business-OS-Benutzer, dem dieses Konto gehört.
+    #[serde(default)]
+    pub owner_user_id: String,
 }
 
 pub(crate) fn normalize_address(value: &str) -> String {
@@ -128,25 +131,29 @@ pub(crate) fn upsert_account(
 
     // Konto sofort in communication_accounts sichtbar machen (Mail-App-Liste).
     let db_path = root.join("runtime/ctox.sqlite3");
-    if let Ok(mut conn) = Connection::open(&db_path) {
+    {
+        let mut conn = crate::communication_store::open_channel_db(&db_path)?;
         let profile_json = json!({
             "imapHost": config.imap_host,
             "imapPort": config.imap_port,
             "smtpHost": config.smtp_host,
             "smtpPort": config.smtp_port,
             "username": config.username,
+            "ewsUrl": config.ews_url,
+            "owaUrl": config.owa_url,
+            "ewsUsername": config.username,
             "ownerUserId": config.owner_user_id,
             "displayName": config.display_name,
             "source": "mail-app-account",
         });
-        let _ = crate::mission::channels::upsert_communication_account(
+        crate::mission::channels::upsert_communication_account(
             &mut conn,
             &format!("email:{}", config.address),
             "email",
             &config.address,
             &config.provider,
             profile_json,
-        );
+        )?;
     }
     Ok(config)
 }
@@ -207,6 +214,8 @@ pub(crate) fn account_runtime_overrides(
     // Instanz-spezifische Graph/EWS/ActiveSync-Werte nicht erben.
     for key in [
         "CTO_EMAIL_GRAPH_ACCESS_TOKEN",
+        "CTO_EMAIL_GRAPH_BASE_URL",
+        "CTO_EMAIL_GRAPH_USER",
         "CTO_EMAIL_GRAPH_TENANT_ID",
         "CTO_EMAIL_GRAPH_CLIENT_ID",
         "CTO_EMAIL_GRAPH_CLIENT_SECRET",
@@ -218,6 +227,11 @@ pub(crate) fn account_runtime_overrides(
         "CTO_EMAIL_EWS_BEARER_TOKEN",
         "CTO_EMAIL_ACTIVESYNC_SERVER",
         "CTO_EMAIL_ACTIVESYNC_USERNAME",
+        "CTO_EMAIL_ACTIVESYNC_PATH",
+        "CTO_EMAIL_ACTIVESYNC_DEVICE_ID",
+        "CTO_EMAIL_ACTIVESYNC_DEVICE_TYPE",
+        "CTO_EMAIL_ACTIVESYNC_PROTOCOL_VERSION",
+        "CTO_EMAIL_ACTIVESYNC_POLICY_KEY",
     ] {
         overrides.insert(key.to_owned(), String::new());
     }
@@ -245,6 +259,12 @@ pub(crate) fn account_runtime_overrides(
             set(&mut overrides, "CTO_EMAIL_ACTIVESYNC_SERVER", &server);
         }
     }
+    set(
+        &mut overrides,
+        "CTO_EMAIL_EWS_AUTH_TYPE",
+        &config.ews_auth_type,
+    );
+    set(&mut overrides, "CTO_EMAIL_EWS_VERSION", &config.ews_version);
     overrides
 }
 
@@ -279,6 +299,8 @@ pub(crate) fn public_json(root: &Path, config: &EmailAccountConfig) -> Value {
         "username": config.username,
         "owa_url": config.owa_url,
         "ews_url": config.ews_url,
+        "ews_auth_type": config.ews_auth_type,
+        "ews_version": config.ews_version,
         "owner_user_id": config.owner_user_id,
         "has_password": has_password,
     })
@@ -287,6 +309,80 @@ pub(crate) fn public_json(root: &Path, config: &EmailAccountConfig) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exchange_account_roundtrip_preserves_other_accounts_and_hides_password() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("runtime"))?;
+        let crew = upsert_account(
+            root,
+            EmailAccountConfig {
+                address: "crew@example.test".into(),
+                provider: "imap".into(),
+                imap_host: "crew.example.test".into(),
+                owner_user_id: "crew-owner".into(),
+                ..Default::default()
+            },
+            Some("crew-fixture"),
+        )?;
+        let lena = upsert_account(
+            root,
+            EmailAccountConfig {
+                address: "Lena@Example.test".into(),
+                provider: "owa".into(),
+                username: "DOMAIN\\lena".into(),
+                owa_url: "https://lena.example.test/owa/".into(),
+                ews_url: "https://lena.example.test/EWS/Exchange.asmx".into(),
+                ews_auth_type: "basic".into(),
+                ews_version: "Exchange2013".into(),
+                owner_user_id: "lena-owner".into(),
+                ..Default::default()
+            },
+            Some("lena-fixture"),
+        )?;
+        let accounts = load_accounts(root)?;
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(
+            serde_json::to_value(&accounts[0])?,
+            serde_json::to_value(&crew)?
+        );
+        assert_eq!(
+            serde_json::to_value(&accounts[1])?,
+            serde_json::to_value(&lena)?
+        );
+        let settings = account_runtime_overrides(root, &accounts[1]);
+        assert_eq!(settings["CTO_EMAIL_EWS_USERNAME"], "DOMAIN\\lena");
+        assert_eq!(settings["CTO_EMAIL_OWA_URL"], lena.owa_url);
+        assert_eq!(settings["CTO_EMAIL_EWS_URL"], lena.ews_url);
+        assert_eq!(settings["CTO_EMAIL_PASSWORD"], "lena-fixture");
+        assert_eq!(settings["CTO_EMAIL_IMAP_HOST"], "");
+        assert_eq!(settings["CTO_EMAIL_GRAPH_ACCESS_TOKEN"], "");
+        assert_eq!(settings["CTO_EMAIL_ACTIVESYNC_SERVER"], "");
+        assert_eq!(
+            account_runtime_overrides(root, &crew)["CTO_EMAIL_PASSWORD"],
+            "crew-fixture"
+        );
+        let public = public_json(root, &accounts[1]);
+        assert_eq!(public["has_password"], true);
+        assert_eq!(public["username"], "DOMAIN\\lena");
+        assert_eq!(public["owa_url"], lena.owa_url);
+        assert!(!public.to_string().contains("lena-fixture"));
+        assert!(!serde_json::to_string(&accounts)?.contains("lena-fixture"));
+        // A fresh runtime must expose the assigned account immediately, not
+        // silently skip projection because the channel schema did not exist.
+        let conn = crate::communication_store::open_channel_db(&root.join("runtime/ctox.sqlite3"))?;
+        let profile: String = conn.query_row(
+            "SELECT profile_json FROM communication_accounts WHERE account_key = ?1",
+            ["email:lena@example.test"],
+            |row| row.get(0),
+        )?;
+        let profile: Value = serde_json::from_str(&profile)?;
+        assert_eq!(profile["ownerUserId"], "lena-owner");
+        assert_eq!(profile["displayName"], "");
+        assert_eq!(profile["owaUrl"], "https://lena.example.test/owa/");
+        Ok(())
+    }
 
     #[test]
     fn upsert_normalizes_and_keeps_owner() -> Result<()> {

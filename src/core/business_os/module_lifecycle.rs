@@ -1533,6 +1533,29 @@ pub(super) fn record_module_version_with_conn(
         return Ok(None);
     }
     let bundle = compute_module_bundle(app_root, &module_id)?;
+    record_module_bundle_version(conn, &module_id, bundle, origin, label, created_by)
+}
+
+/// Snapshot exactly the directory selected for a source write, without resolving
+/// its id again through another bundled/installed namespace.
+pub(super) fn record_module_version_at(
+    root: &Path,
+    module_root: &Path,
+    module_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    let conn = open_store(root)?;
+    let bundle = super::store::compute_module_bundle_at(module_root, module_id)?;
+    record_module_bundle_version(&conn, module_id, bundle, "edit", "", "")
+}
+
+fn record_module_bundle_version(
+    conn: &Connection,
+    module_id: &str,
+    bundle: super::store::ModuleBundle,
+    origin: &str,
+    label: &str,
+    created_by: &str,
+) -> anyhow::Result<Option<Value>> {
     let now = now_ms() as i64;
     let is_boundary = origin != "edit";
 

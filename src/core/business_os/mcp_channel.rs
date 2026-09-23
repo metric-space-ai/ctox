@@ -36,6 +36,9 @@ use super::store;
 #[path = "mcp_writeback.rs"]
 mod command_writeback;
 pub(crate) use command_writeback::supports_command_writeback;
+#[path = "mcp_app_authority.rs"]
+mod app_authority;
+pub(super) use app_authority::AuthenticatedMcpAppCommand;
 
 const DEFAULT_LIMIT: usize = 25;
 const MAX_LIMIT: usize = 100;
@@ -93,9 +96,9 @@ pub struct McpChannelRequestContext {
     pub tool: String,
     pub request_id: String,
     pub confirmation_state: McpConfirmationState,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub trusted_role: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(skip_deserializing, skip_serializing_if = "Option::is_none")]
     pub trusted_role_source: Option<String>,
 }
 
@@ -1951,8 +1954,9 @@ pub fn create_app(
         "install_target": "runtime-installed-module",
         "required_skills": ["business-os-app-module-development"]
     });
-    let accepted = store::record_command(
+    let accepted = store::record_mcp_app_command(
         root,
+        AuthenticatedMcpAppCommand::from_context(context)?,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
             id: None,
@@ -2011,6 +2015,7 @@ pub fn modify_app(
     enforce_module_policy(root, &module_id)?;
     enforce_business_os_mcp_policy(root, context, "business_os.modify_app", arguments)?;
     let _module = get_module(root, context, &module_id)?;
+    store::ensure_delegated_app_modify_target_supported(root, &module_id)?;
     let title = optional_string_arg(arguments, "title")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| format!("Modify {}", title_from_module_id(&module_id)));
@@ -2031,8 +2036,9 @@ pub fn modify_app(
         "install_target": "runtime-installed-module",
         "required_skills": ["business-os-app-module-development"]
     });
-    let accepted = store::record_command(
+    let accepted = store::record_mcp_app_command(
         root,
+        AuthenticatedMcpAppCommand::from_context(context)?,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
             id: None,
@@ -2408,7 +2414,8 @@ pub fn write_app_file(
         store::runtime_app_delivery_evidence(root, &module_id)?;
     Ok(BusinessOsAppSourceWrite {
         ok: outcome.get("ok").and_then(Value::as_bool).unwrap_or(false),
-        app_directory: format!("runtime/business-os/installed-modules/{module_id}"),
+        app_directory: string_field(&outcome, "app_directory")
+            .context("source write did not report its actual directory")?,
         module_id,
         path,
         source_file_id: string_field(&outcome, "source_file_id").unwrap_or_default(),
@@ -6586,7 +6593,10 @@ fn context_from_arguments_with_trusted_gateway_context(
     arguments: &Value,
     trusted_gateway_context: Option<&Value>,
 ) -> anyhow::Result<McpChannelRequestContext> {
-    let context = arguments.get("_context").unwrap_or(&Value::Null);
+    // The role and its actor/workspace must have the same provenance. Never
+    // combine a verified gateway role with caller-selected identity fields.
+    let context = trusted_gateway_context
+        .unwrap_or_else(|| arguments.get("_context").unwrap_or(&Value::Null));
     let trusted_role = trusted_managed_gateway_role(trusted_gateway_context);
     let internal_context = trusted_gateway_context.filter(|context| {
         string_field(context, "auth_source").as_deref() == Some(MCP_INTERNAL_SESSION_AUTH_SOURCE)
@@ -7682,20 +7692,22 @@ fn validate_person_research_record_binding(
         }
     }
     let record_string = |fields: &[&str]| {
-        fields
-            .iter()
-            .find_map(|field| record_object.get(*field).and_then(Value::as_str))
-            .or_else(|| {
-                record_object
-                    .get("data")
-                    .and_then(Value::as_object)
-                    .and_then(|data| {
-                        fields
-                            .iter()
-                            .find_map(|field| data.get(*field).and_then(Value::as_str))
-                    })
-            })
-            .map(str::trim)
+        let find_in = |object: &serde_json::Map<String, Value>| {
+            fields
+                .iter()
+                .find_map(|field| object.get(*field).and_then(Value::as_str))
+                .map(ToOwned::to_owned)
+        };
+        // Prefer the bound lead payload. Some records expose a technical
+        // `title` (often the record id) alongside the human company name.
+        // Looking at the outer object first would bind the request to that id
+        // and reject an otherwise valid research call.
+        record_object
+            .get("data")
+            .and_then(Value::as_object)
+            .and_then(find_in)
+            .or_else(|| find_in(record_object))
+            .map(|value| value.trim().to_owned())
             .unwrap_or_default()
     };
     let company = payload
@@ -7703,9 +7715,42 @@ fn validate_person_research_record_binding(
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or_default();
-    let bound_company = record_string(&["company", "company_name", "firma_name", "name", "title"]);
+
+    // Runtime Outbound leads store their identity in `name` and
+    // `data.firma_name`; an MCP descriptor's derived title is not a raw field.
+    // All present identity aliases must agree, so a matching display name
+    // cannot override a conflicting canonical company on the stored record.
+    let mut has_bound_company = false;
+    for value in [
+        record_object.get("company"),
+        record_object.get("company_name"),
+        record_object
+            .get("title")
+            .filter(|value| value.as_str().map(str::trim) != Some(record_id)),
+        record_object.get("name"),
+        record_object.get("firma_name"),
+        record.pointer("/data/company"),
+        record.pointer("/data/company_name"),
+        record.pointer("/data/title"),
+        record.pointer("/data/name"),
+        record.pointer("/data/firma_name"),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let bound_company = value.as_str().map(str::trim).unwrap_or_default();
+        anyhow::ensure!(
+            !bound_company.is_empty() && company == bound_company,
+            BusinessOsMcpError::validation(
+                "payload.company",
+                "payload.company must match every declared company identity on the existing lead record",
+            )
+        );
+        has_bound_company = true;
+    }
+
     anyhow::ensure!(
-        !bound_company.is_empty() && company == bound_company,
+        has_bound_company,
         BusinessOsMcpError::validation(
             "payload.company",
             "payload.company must match the existing lead record",
@@ -12625,6 +12670,241 @@ mod tests {
     }
 
     #[test]
+    fn person_research_binding_accepts_runtime_lead_name_fields() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "outbound-lead-generation",
+            "Outbound Lead Generation",
+            "1.0.5",
+            &["outbound_lead_generation_leads"],
+            Some(serde_json::json!({ "public": true })),
+        )?;
+        seed_default_mcp_admin(root)?;
+        for (index, identity) in [
+            serde_json::json!({
+                "name": "Beiersdorf Manufacturing Leipzig GmbH",
+                "data": { "firma_name": "Beiersdorf Manufacturing Leipzig GmbH" }
+            }),
+            serde_json::json!({ "name": "Beiersdorf Manufacturing Leipzig GmbH" }),
+            serde_json::json!({
+                "data": { "firma_name": "Beiersdorf Manufacturing Leipzig GmbH" }
+            }),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let record_id = format!("runtime_lead_{index}");
+            let mut record = identity;
+            record["id"] = serde_json::json!(record_id);
+            record["country"] = serde_json::json!("DE");
+            record["workspace"] = serde_json::json!("test-workspace");
+            store::push_collection_records(
+                root,
+                serde_json::json!({
+                    "collection": "outbound_lead_generation_leads",
+                    "documents": [record]
+                }),
+            )?;
+            let proposal = propose_action(
+                root,
+                &test_context("business_os.propose_action"),
+                "outbound-lead-generation",
+                "web_stack.person_research",
+                &serde_json::json!({
+                    "record_id": record_id,
+                    "payload": {
+                        "operation_id": record_id,
+                        "company": "Beiersdorf Manufacturing Leipzig GmbH",
+                        "country": "DE",
+                        "mode": "update_firm",
+                        "include_private": []
+                    }
+                }),
+            )?;
+            assert_eq!(proposal.record_id.as_deref(), Some(record_id.as_str()));
+            assert_eq!(proposal.payload["operation_id"], record_id);
+            assert_eq!(
+                proposal.payload["writeback_contract"]["record_ids"],
+                serde_json::json!([record_id])
+            );
+            assert_eq!(
+                proposal.payload["writeback_contract"]["workspace"],
+                "test-workspace"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn person_research_binding_runtime_leads_preserve_identity_and_scope() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_installed_module(
+            root,
+            "outbound-lead-generation",
+            "Outbound Lead Generation",
+            "1.0.5",
+            &["outbound_lead_generation_leads"],
+            Some(serde_json::json!({ "public": true })),
+        )?;
+        seed_default_mcp_admin(root)?;
+        let valid_record = serde_json::json!({
+            "id": "runtime_scoped_lead",
+            "name": "Beiersdorf Manufacturing Leipzig GmbH",
+            "country": "DE",
+            "workspace": "test-workspace",
+            "data": { "firma_name": "Beiersdorf Manufacturing Leipzig GmbH" }
+        });
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "outbound_lead_generation_leads",
+                "documents": [valid_record]
+            }),
+        )?;
+        for (field, value) in [
+            ("operation_id", "another_record"),
+            ("company", "Other GmbH"),
+            ("country", "AT"),
+        ] {
+            let mut payload = serde_json::json!({
+                "operation_id": "runtime_scoped_lead",
+                "company": "Beiersdorf Manufacturing Leipzig GmbH",
+                "country": "DE",
+                "mode": "update_firm"
+            });
+            payload[field] = serde_json::json!(value);
+            let error = propose_action(
+                root,
+                &test_context("business_os.propose_action"),
+                "outbound-lead-generation",
+                "web_stack.person_research",
+                &serde_json::json!({ "record_id": "runtime_scoped_lead", "payload": payload }),
+            )
+            .expect_err("a valid runtime lead must not admit another request identity");
+            let typed = error
+                .downcast_ref::<BusinessOsMcpError>()
+                .context("typed request binding error")?;
+            assert_eq!(typed.code, BusinessOsMcpErrorCode::ValidationFailed);
+            assert_eq!(typed.field, Some(format!("payload.{field}")));
+        }
+        for (index, (path, value, expected_field)) in [
+            (
+                "/company",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/company_name",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            ("/title", serde_json::json!("Other GmbH"), "payload.company"),
+            ("/name", serde_json::json!("Other GmbH"), "payload.company"),
+            (
+                "/firma_name",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/data/company",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/data/company_name",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/data/title",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/data/name",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/data/firma_name",
+                serde_json::json!("Other GmbH"),
+                "payload.company",
+            ),
+            (
+                "/data/firma_name",
+                serde_json::json!(false),
+                "payload.company",
+            ),
+            ("/name", serde_json::json!(""), "payload.company"),
+            ("/country", serde_json::json!("AT"), "payload.country"),
+            (
+                "/workspace",
+                serde_json::json!("other-workspace"),
+                "workspace",
+            ),
+            ("/module_id", serde_json::json!("other-module"), "module_id"),
+            (
+                "/collection",
+                serde_json::json!("other_leads"),
+                "collection",
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let record_id = format!("runtime_mismatch_{index}");
+            let mut record = serde_json::json!({
+                "id": record_id,
+                "name": "Beiersdorf Manufacturing Leipzig GmbH",
+                "country": "DE",
+                "workspace": "test-workspace",
+                "data": { "firma_name": "Beiersdorf Manufacturing Leipzig GmbH" }
+            });
+            if let Some(field) = path.strip_prefix("/data/") {
+                record["data"][field] = value;
+            } else {
+                record[path.trim_start_matches('/')] = value;
+            }
+            store::push_collection_records(
+                root,
+                serde_json::json!({
+                    "collection": "outbound_lead_generation_leads",
+                    "documents": [record]
+                }),
+            )?;
+            let error = propose_action(
+                root,
+                &test_context("business_os.propose_action"),
+                "outbound-lead-generation",
+                "web_stack.person_research",
+                &serde_json::json!({
+                    "record_id": record_id,
+                    "payload": {
+                        "operation_id": record_id,
+                        "company": "Beiersdorf Manufacturing Leipzig GmbH",
+                        "country": "DE",
+                        "mode": "update_firm"
+                    }
+                }),
+            )
+            .expect_err("runtime lead aliases must not weaken identity or scope binding");
+            let typed = error
+                .downcast_ref::<BusinessOsMcpError>()
+                .context("typed binding error")?;
+            assert_eq!(
+                typed.code,
+                BusinessOsMcpErrorCode::ValidationFailed,
+                "{path}"
+            );
+            assert_eq!(typed.field.as_deref(), Some(expected_field), "{path}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn person_research_execute_is_idempotent_and_record_bound() -> anyhow::Result<()> {
         let temp = tempdir()?;
         let root = temp.path();
@@ -12738,6 +13018,30 @@ mod tests {
                 .map(|error| &error.code),
             Some(&BusinessOsMcpErrorCode::RecordNotFound)
         );
+
+        let mismatch = execute_action(
+            root,
+            &context,
+            "outbound-lead-generation",
+            "web_stack.person_research",
+            &serde_json::json!({
+                "record_id": "lead_1",
+                "idempotency_key": "mismatch-1",
+                "payload": {
+                    "operation_id": "lead_1",
+                    "company": "Other GmbH",
+                    "country": "DE",
+                    "mode": "update_person"
+                }
+            }),
+        )
+        .expect_err("company mismatch must be rejected before command acceptance");
+        assert_eq!(
+            mismatch
+                .downcast_ref::<BusinessOsMcpError>()
+                .map(|error| &error.code),
+            Some(&BusinessOsMcpErrorCode::ValidationFailed)
+        );
         Ok(())
     }
 
@@ -12760,6 +13064,7 @@ mod tests {
                 "collection": "outbound_lead_generation_leads",
                 "documents": [{
                     "id": "lead_nested",
+                    "title": "lead_nested",
                     "data": {
                         "name": "Nested GmbH",
                         "country": "DE"

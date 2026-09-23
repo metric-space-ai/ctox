@@ -4292,6 +4292,7 @@ async fn sync_business_record_projections_background_loop(
     let mut next_collection_index = persisted_progress.next_collection_index;
     let mut chat_tracking_repair_stamp = None;
     let mut last_source_stamp = None;
+    let mut last_rewound_communication_stamp = None::<channels::CommunicationIntakeSourceStamp>;
     let mut consecutive_idle_rounds = 0u32;
     let mut consecutive_failure_rounds = 0u32;
     loop {
@@ -4301,6 +4302,20 @@ async fn sync_business_record_projections_background_loop(
             let source_stamp = business_record_projection_source_stamp(&root).await?;
             if last_source_stamp.as_ref() == Some(&source_stamp) {
                 return Ok(0);
+            }
+
+            // Message bodies and routing state can change without advancing
+            // observed_at. Revisit the bounded message pages when their source
+            // changes, including once after loading a persisted cursor. Finish
+            // an in-progress slice first so a busy mailbox cannot starve it.
+            if next_collection_index == 0
+                && last_rewound_communication_stamp.as_ref() != Some(&source_stamp.communication)
+            {
+                since_by_collection.remove("communication_messages");
+                after_record_id_by_collection.remove("communication_messages");
+                clock_version_by_collection.remove("communication_messages");
+                next_collection_index = 0;
+                last_rewound_communication_stamp = Some(source_stamp.communication.clone());
             }
 
             let (synced, caught_up) = sync_business_record_projections_slice_with_database(
@@ -4316,7 +4331,11 @@ async fn sync_business_record_projections_background_loop(
             )
             .await?;
             if caught_up {
-                last_source_stamp = Some(source_stamp);
+                // A resumed partial slice has not rewound its persisted
+                // message cursor yet; keep the loop active for that pass.
+                last_source_stamp = (last_rewound_communication_stamp.as_ref()
+                    == Some(&source_stamp.communication))
+                .then_some(source_stamp);
             } else {
                 slice_incomplete = true;
             }
@@ -5072,6 +5091,11 @@ async fn sync_business_record_projections_with_database_if_changed(
     if last_source_stamp.as_ref() == Some(&source_stamp) {
         return Ok(0);
     }
+    if last_source_stamp.as_ref().map(|stamp| &stamp.communication)
+        != Some(&source_stamp.communication)
+    {
+        since_by_collection.remove("communication_messages");
+    }
 
     let synced = sync_business_record_projections_with_database(
         root,
@@ -5324,21 +5348,23 @@ async fn sync_business_record_projections_slice_with_database(
             .as_ref()
             .and_then(|clocks| clocks.get(&collection_name).copied());
         let stored_clock_version = clock_version_by_collection.get(&collection_name).copied();
-        let clock_proves_collection_unchanged = projection_clocks.is_some()
-            && after_record_id.is_empty()
-            && match current_clock {
-                // Channel-backed collections (mail, threads, accounts) live in
-                // the channel store and never get a row in
-                // `business_records_projection_clock`. "No clock" meant
-                // "unchanged" for them, so from 19.08.2026 on no new mail
-                // reached the Mail app (thesen: newest projected message
-                // 19.08, 38 newer inbound mails in the channel store).
-                None => !is_channel_backed_projection_collection(&collection_name),
-                Some((version, latest_updated_at_ms)) => {
-                    stored_clock_version == Some(version)
-                        || (stored_clock_version.is_none() && since_ms > latest_updated_at_ms)
-                }
-            };
+        let clock_proves_collection_unchanged =
+            !is_channel_backed_projection_collection(&collection_name)
+                && projection_clocks.is_some()
+                && after_record_id.is_empty()
+                && match current_clock {
+                    // Channel-backed collections (mail, threads, accounts) live in
+                    // the channel store and never get a row in
+                    // `business_records_projection_clock`. "No clock" meant
+                    // "unchanged" for them, so from 19.08.2026 on no new mail
+                    // reached the Mail app (thesen: newest projected message
+                    // 19.08, 38 newer inbound mails in the channel store).
+                    None => !is_channel_backed_projection_collection(&collection_name),
+                    Some((version, latest_updated_at_ms)) => {
+                        stored_clock_version == Some(version)
+                            || (stored_clock_version.is_none() && since_ms > latest_updated_at_ms)
+                    }
+                };
         if clock_proves_collection_unchanged {
             clock_version_by_collection.insert(
                 collection_name,
@@ -16075,6 +16101,116 @@ pub(in crate::business_os) mod tests {
             )
             .expect("count paged document projections");
         assert_eq!(projected_count, record_count);
+    }
+
+    #[test]
+    fn hydrated_communication_body_reaches_rxdb_without_new_observation_time() {
+        let root = tempfile::tempdir().expect("temp root");
+        channels::list_communication_accounts_for_business_os(root.path())
+            .expect("initialize channel schema");
+        let channel_path = root.path().join("runtime/ctox.sqlite3");
+        let conn = Connection::open(&channel_path).expect("open channel sqlite");
+        conn.execute_batch(
+            r#"
+            INSERT INTO communication_accounts
+                (account_key, channel, address, provider, profile_json, created_at, updated_at)
+            VALUES ('email:mail@example.test', 'email', 'mail@example.test', 'owa', '{}',
+                    '2026-09-21T08:00:00Z', '2026-09-21T08:00:00Z');
+            INSERT INTO communication_threads
+                (thread_key, channel, account_key, subject, participant_keys_json,
+                 last_message_key, last_message_at, message_count, unread_count,
+                 metadata_json, updated_at)
+            VALUES ('hydrated-thread', 'email', 'email:mail@example.test', 'Mail projection',
+                    '[]', 'hydrated-message', '2026-09-21T08:00:00Z', 1, 1, '{}',
+                    '2026-09-21T08:00:00Z');
+            INSERT INTO communication_messages
+                (message_key, channel, account_key, thread_key, remote_id, direction,
+                 folder_hint, sender_display, sender_address, recipient_addresses_json,
+                 cc_addresses_json, bcc_addresses_json, subject, preview, body_text,
+                 body_html, raw_payload_ref, trust_level, status, seen, has_attachments,
+                 external_created_at, observed_at, metadata_json)
+            VALUES ('hydrated-message', 'email', 'email:mail@example.test', 'hydrated-thread',
+                    'remote-hydration', 'inbound', 'INBOX', 'Sender', 'sender@example.test',
+                    '[]', '[]', '[]', 'Mail projection', 'Preview', '', '', '', 'normal',
+                    'received', 0, 0, '2026-09-21T08:00:00Z', '2026-09-21T08:00:00Z', '{}');
+            "#,
+        )
+        .expect("insert channel message with missing body");
+        drop(conn);
+
+        let projection_root = root.path().to_path_buf();
+        with_business_os_database(
+            root.path(),
+            "failed to create Mail body projection test runtime",
+            true,
+            TemporaryDatabaseLockScope::EntireOperation,
+            move |_peer, database| async move {
+                let database_write_lock = Arc::new(AsyncMutex::new(()));
+                let mut since_by_collection = HashMap::new();
+                let mut chat_tracking_repair_stamp = None;
+                let mut last_source_stamp = None;
+                sync_business_record_projections_with_database_if_changed(
+                    &projection_root,
+                    &database,
+                    &database_write_lock,
+                    &mut since_by_collection,
+                    &mut chat_tracking_repair_stamp,
+                    &mut last_source_stamp,
+                )
+                .await?;
+                let cursor = since_by_collection
+                    .get("communication_messages")
+                    .copied()
+                    .unwrap_or_default();
+                assert!(cursor > 0, "initial message projection must retain a cursor");
+
+                let conn = Connection::open(projection_root.join("runtime/ctox.sqlite3"))?;
+                conn.execute(
+                    "UPDATE communication_messages SET body_text = 'Hydrated body' WHERE message_key = 'hydrated-message'",
+                    [],
+                )?;
+                let observed_at: String = conn.query_row(
+                    "SELECT observed_at FROM communication_messages WHERE message_key = 'hydrated-message'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(observed_at, "2026-09-21T08:00:00Z");
+                drop(conn);
+
+                let changed = sync_business_record_projections_with_database_if_changed(
+                    &projection_root,
+                    &database,
+                    &database_write_lock,
+                    &mut since_by_collection,
+                    &mut chat_tracking_repair_stamp,
+                    &mut last_source_stamp,
+                )
+                .await?;
+                assert!(changed >= 1, "body hydration must update RxDB");
+                let rxdb = Connection::open(store::rxdb_store_path(&projection_root))?;
+                let data: String = rxdb.query_row(
+                    "SELECT data FROM ctox_business_os__communication_messages__v0 WHERE id = 'hydrated-message'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let message: Value = serde_json::from_str(&data)?;
+                assert_eq!(message["body_text"], "Hydrated body");
+                assert_eq!(message["observed_at"], observed_at);
+
+                let unchanged = sync_business_record_projections_with_database_if_changed(
+                    &projection_root,
+                    &database,
+                    &database_write_lock,
+                    &mut since_by_collection,
+                    &mut chat_tracking_repair_stamp,
+                    &mut last_source_stamp,
+                )
+                .await?;
+                assert_eq!(unchanged, 0);
+                Ok(())
+            },
+        )
+        .expect("project newly hydrated Mail text");
     }
 
     #[test]

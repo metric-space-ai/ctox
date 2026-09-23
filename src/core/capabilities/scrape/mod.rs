@@ -1,4 +1,5 @@
 mod registry;
+pub(crate) use registry::target_script_registration;
 use registry::{
     count_rows, list_targets, open_db, register_script, register_source_module, resolve_db_path,
     show_api, show_target, upsert_target,
