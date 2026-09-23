@@ -723,8 +723,9 @@ fn execute_sync(options: &EmailOptions) -> Result<Value> {
                     let sender_display = extract_display_name(&parsed.from_header)
                         .unwrap_or_else(|| sender_address.clone());
                     let direction = synced_message_direction(&sender_address, &options.email);
-                    let thread_key =
+                    let provider_thread_key =
                         thread_key_from_email(&parsed, &format!("{account_key}::{uid}"));
+                    let thread_key = account_thread_key(&conn, &account_key, &provider_thread_key)?;
                     let observed_at = now_iso_string();
                     let raw_payload_ref = write_raw_payload(&options.raw_dir, &uid, &fetched.raw)?;
                     let technical_self_test = is_ctox_mail_self_test(
@@ -886,6 +887,41 @@ fn generated_sync_run_key(account_key: &str, folder: &str, started_at: &str) -> 
     )
 }
 
+// Existing installations have raw provider conversation IDs as thread keys.
+// Keep the incumbent account's key stable, but namespace a second mailbox
+// when a provider reuses the same conversation or RFC Message-ID. This avoids
+// rewriting already projected thread IDs or losing their route references.
+fn account_thread_key(
+    conn: &Connection,
+    account_key: &str,
+    provider_thread_key: &str,
+) -> Result<String> {
+    let scoped = format!(
+        "mail-account:{}:{}:{}",
+        account_key.len(),
+        account_key,
+        provider_thread_key
+    );
+    let already_scoped: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM communication_messages WHERE thread_key = ?1 AND account_key = ?2)",
+        rusqlite::params![scoped, account_key],
+        |row| row.get(0),
+    )?;
+    if already_scoped != 0 {
+        return Ok(scoped);
+    }
+    let used_by_another_account: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM communication_messages WHERE thread_key = ?1 AND account_key <> ?2)",
+        rusqlite::params![provider_thread_key, account_key],
+        |row| row.get(0),
+    )?;
+    Ok(if used_by_another_account != 0 {
+        scoped
+    } else {
+        provider_thread_key.to_string()
+    })
+}
+
 fn store_provider_message(
     conn: &mut Connection,
     options: &EmailOptions,
@@ -922,6 +958,7 @@ fn store_provider_message(
         return Ok(false);
     }
 
+    let thread_key = account_thread_key(conn, account_key, &item.thread_key)?;
     let observed_at = now_iso_string();
     let direction = synced_message_direction(&item.sender_address, &options.email);
     let raw_payload_ref = provider_attachment_refs(&item.metadata).join("\n");
@@ -931,7 +968,7 @@ fn store_provider_message(
             message_key: &message_key,
             channel: "email",
             account_key,
-            thread_key: &item.thread_key,
+            thread_key: &thread_key,
             remote_id: &item.remote_id,
             direction,
             folder_hint: &item.folder_hint,
@@ -954,7 +991,7 @@ fn store_provider_message(
             metadata_json: &serde_json::to_string(&item.metadata)?,
         },
     )?;
-    refresh_thread(conn, &item.thread_key)?;
+    refresh_thread(conn, &thread_key)?;
     Ok(true)
 }
 
@@ -4550,6 +4587,73 @@ mod tests {
         options.graph_access_token = token.into();
         options
     }
+
+    #[test]
+    fn provider_conversation_is_isolated_between_email_accounts() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut conn = open_channel_db(&temp.path().join("ctox.sqlite3"))?;
+        let mut options = empty_options();
+        options.provider = "ews".into();
+        options.trust_level = "low".into();
+        let message = |remote_id: &str, sender: &str| super::MailboxMessage {
+            remote_id: remote_id.into(),
+            thread_key: "shared-provider-conversation".into(),
+            folder_hint: "inbox".into(),
+            subject: "Shared subject".into(),
+            sender_display: sender.into(),
+            sender_address: sender.into(),
+            recipient_addresses: vec![],
+            cc_addresses: vec![],
+            body_text: sender.into(),
+            body_html: String::new(),
+            preview: sender.into(),
+            seen: false,
+            has_attachments: false,
+            external_created_at: "2026-09-23T00:00:00Z".into(),
+            metadata: serde_json::json!({}),
+        };
+        options.email = "alice@example.test".into();
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:alice@example.test",
+            message("alice-remote", "alice-sender@example.test"),
+        )?);
+        options.email = "bob@example.test".into();
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:bob@example.test",
+            message("bob-remote", "bob-sender@example.test"),
+        )?);
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:bob@example.test",
+            message("bob-remote-2", "bob-sender@example.test"),
+        )?);
+        let mut statement = conn.prepare(
+            "SELECT account_key, participant_keys_json, message_count FROM communication_threads ORDER BY account_key",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "email:alice@example.test");
+        assert_eq!(rows[0].2, 1);
+        assert!(!rows[0].1.contains("bob-sender@example.test"));
+        assert_eq!(rows[1].0, "email:bob@example.test");
+        assert_eq!(rows[1].2, 2);
+        assert!(!rows[1].1.contains("alice-sender@example.test"));
+        Ok(())
+    }
+
     #[test]
     fn synced_message_direction_treats_self_authored_mail_as_outbound() {
         assert_eq!(
