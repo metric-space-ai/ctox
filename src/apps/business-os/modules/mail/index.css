@@ -103,11 +103,19 @@
   transition: background 150ms cubic-bezier(.25, 1, .5, 1), border-color 150ms cubic-bezier(.25, 1, .5, 1);
 }
 
-.mail-scope-card:hover { background: var(--surface-2); }
+.mail-scope-card:hover:not(.is-active) { background: color-mix(in srgb, var(--text) 5%, var(--surface)); }
 .mail-scope-card:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: -1px; }
 .mail-scope-card.is-active {
   border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+.mail-scope-card.is-active::before {
+  position: absolute;
+  inset: 7px auto 7px 0;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--accent);
+  content: '';
 }
 
 .mail-scope-title {

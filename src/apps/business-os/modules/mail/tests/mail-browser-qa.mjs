@@ -421,6 +421,10 @@ mailQa: try {
     await page.locator('[data-mail-scope="queue"][aria-selected="true"]').evaluateAll((nodes) => nodes.map((node) => node.dataset.mailScopeId)),
     ['outbound'],
   );
+  assert.deepEqual(
+    await page.locator('[data-mail-scope="queue"].is-active').evaluateAll((nodes) => nodes.map((node) => node.dataset.mailScopeId)),
+    ['outbound'],
+  );
   assert.match(await page.locator('[data-mail-record-id="thread-sent"] .mail-record-meta').textContent(), /Gesendet/);
   if (process.env.CTOX_MAIL_QA_SENT_SCREENSHOT) {
     await page.screenshot({ path: resolve(process.env.CTOX_MAIL_QA_SENT_SCREENSHOT), fullPage: true });
