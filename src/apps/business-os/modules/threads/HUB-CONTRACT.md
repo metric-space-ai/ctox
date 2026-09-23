@@ -263,7 +263,9 @@ Recorded against `threads.rs` and the module as of 2026-09-23:
    leaving the search or hiding the app stops the scan between pages. Team,
    system and all-thread views without an active search still start from a
    bounded recent thread window; their counts are marked as lower bounds when
-   that window is full.
+   that window is full. The `team` view is exposed to Chef/Admin only, matching
+   the native broad document-read roles; ordinary users remain scoped by the
+   native per-thread replication filter.
 2. **Notification type vocabulary.** The refactor plan names five short types
    (`approval`, `mention`, `note`, `handoff`, `escalation`). The code emits the
    concrete strings in §6 instead: approvals as `approval_request` /

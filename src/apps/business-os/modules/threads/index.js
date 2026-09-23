@@ -268,6 +268,12 @@ function applyLabels() {
   };
   setFilterText('approvals', 'filterApprovals', 'Freigaben');
   setFilterText('delegated', 'filterDelegated', 'Delegiert');
+  const teamOption = els.root?.querySelector('[data-pg-filter][data-pg-name="view"] option[value="team"]');
+  if (teamOption) {
+    const allowed = ['chef', 'admin'].includes(currentUserRole());
+    teamOption.hidden = !allowed;
+    teamOption.disabled = !allowed;
+  }
   if (els.approvalForm) {
     const heading = els.approvalForm.closest('.threads-panel')?.querySelector('h3');
     if (heading) heading.textContent = state.t('approvalPanelTitle', 'CTOX Freigabe');
@@ -862,7 +868,9 @@ function onLeftGrammarChange(event) {
   // nothing is selected anywhere (grammar reset from a secondary view), fall
   // back to the inbox.
   const secondary = String(detail.filters?.view || '');
-  if (secondary) {
+  if (secondary === 'team' && !['chef', 'admin'].includes(currentUserRole())) {
+    state.filter = 'inbox';
+  } else if (secondary) {
     state.filter = secondary;
   } else {
     const band = els.leftPane?.querySelector('[data-pg-band][aria-selected="true"]')?.dataset.pgBand;
@@ -1007,6 +1015,7 @@ function renderNotificationPreferences() {
 // One predicate for filtering AND for the counts on the switcher band — the
 // numbers a tab shows must be computed by the exact rule the tab applies.
 function threadMatchesFilter(thread, filter, me, isAdmin) {
+  if (filter === 'team' && !isAdmin) return false;
   // Personal relevance applies to EVERYONE including admins — an admin wants
   // their inbox, not a firehose. The wide views are 'all', 'team', 'system'.
   const wideView = ['all', 'team', 'system'].includes(filter);
@@ -2074,7 +2083,10 @@ function restoreDraft() {
     if (saved && els.messageBody) els.messageBody.value = saved;
     const nav = JSON.parse(storageGet(`ctox:threads:navigation:${currentUserId() || 'anonymous'}`) || '{}');
     if (!state.requestedThreadId) state.requestedThreadId = String(nav.selectedId || '');
-    if (nav.filter && THREAD_FILTERS.includes(nav.filter)) state.filter = nav.filter;
+    if (nav.filter && THREAD_FILTERS.includes(nav.filter)
+      && (nav.filter !== 'team' || ['chef', 'admin'].includes(currentUserRole()))) {
+      state.filter = nav.filter;
+    }
     state.mobileView = nav.mobileView === 'detail' ? 'detail' : 'list';
   } catch {}
 }
