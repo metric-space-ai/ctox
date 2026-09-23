@@ -4633,7 +4633,7 @@ mod tests {
             message("bob-remote-2", "bob-sender@example.test"),
         )?);
         let mut statement = conn.prepare(
-            "SELECT account_key, participant_keys_json, message_count FROM communication_threads ORDER BY account_key",
+            "SELECT account_key, participant_keys_json, message_count, thread_key FROM communication_threads ORDER BY account_key",
         )?;
         let rows = statement
             .query_map([], |row| {
@@ -4641,15 +4641,18 @@ mod tests {
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].0, "email:alice@example.test");
         assert_eq!(rows[0].2, 1);
+        assert_eq!(rows[0].3, "shared-provider-conversation");
         assert!(!rows[0].1.contains("bob-sender@example.test"));
         assert_eq!(rows[1].0, "email:bob@example.test");
         assert_eq!(rows[1].2, 2);
+        assert!(rows[1].3.starts_with("mail-account:"));
         assert!(!rows[1].1.contains("alice-sender@example.test"));
         Ok(())
     }
