@@ -76,6 +76,16 @@ try {
       const bytes=await readFile(exported);
       return {data:bytes.toString('base64'),sha256:createHash('sha256').update(bytes).digest('hex')};
     });
+    await context.exposeBinding('officeLabCanonicalize', async (_, encoded) => {
+      assert.equal(kind, 'spreadsheet');
+      const source = Buffer.from(encoded, 'base64');
+      assert.match(source.toString(), /^[,\r\n]*$/, 'The blank spreadsheet source must be CSV');
+      const canonical = emptyWorkbook();
+      return {
+        data: canonical.toString('base64'),
+        sha256: createHash('sha256').update(canonical).digest('hex'),
+      };
+    });
     await context.exposeBinding('officeLabPrepare', async (_, requestedKind, encoded) => {
       assert.equal(requestedKind, kind);
       let source = Buffer.from(encoded, 'base64');
