@@ -12,6 +12,7 @@ const appStorePath = resolve(businessOsRoot, 'modules/app-store/index.js');
 const desktopPath = resolve(businessOsRoot, 'modules/desktop/index.js');
 const desktopLauncherPath = resolve(businessOsRoot, 'modules/desktop/ctoxLauncher.js');
 const desktopLayoutAuthorityPath = resolve(businessOsRoot, 'modules/desktop/layout-authority.js');
+const desktopMenuActionsPath = resolve(businessOsRoot, 'modules/desktop/desktopMenuActions.js');
 
 const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
 const systemApps = JSON.parse(readFileSync(systemAppsPath, 'utf8'));
@@ -20,6 +21,7 @@ const appStoreSource = readFileSync(appStorePath, 'utf8');
 const desktopSource = readFileSync(desktopPath, 'utf8');
 const desktopLauncherSource = readFileSync(desktopLauncherPath, 'utf8');
 const desktopLayoutAuthoritySource = readFileSync(desktopLayoutAuthorityPath, 'utf8');
+const desktopMenuActionsSource = readFileSync(desktopMenuActionsPath, 'utf8');
 
 const modules = Array.isArray(registry.modules) ? registry.modules : [];
 const moduleIds = modules.map((mod) => mod.id).filter(Boolean);
@@ -123,8 +125,9 @@ assert.ok(
   'Desktop icon drag must write the local position cache before async RxDB persistence'
 );
 assert.ok(
-  desktopSource.includes('await doc.incrementalPatch({ ...position, sort_index: index, updated_at_ms: updatedAt });')
-    && desktopSource.includes('rememberIconPosition(doc.id, position, updatedAt);'),
+  desktopSource.includes('await arrangeDesktopIcons({')
+    && desktopMenuActionsSource.includes('await doc.incrementalPatch({ ...position, sort_index: index, updated_at_ms: updatedAt });')
+    && desktopMenuActionsSource.includes('rememberPosition(doc.id, position, updatedAt);'),
   'Desktop icon auto-arrange must persist positions before updating the per-user cache'
 );
 assert.ok(
@@ -148,7 +151,8 @@ assert.ok(
   'Desktop initial icon rendering must tolerate transient IndexedDB connection shutdown'
 );
 assert.ok(
-  desktopLayoutAuthoritySource.includes('authority = await readNativeDocument();')
+  desktopSource.includes('ensureDesktopLayoutWithAuthority({')
+    && desktopLayoutAuthoritySource.includes('authority = await readNativeDocument();')
     && desktopLayoutAuthoritySource.includes('return defaultLayout();'),
   'Desktop layout loading must leave replicated state untouched when authority is unavailable'
 );

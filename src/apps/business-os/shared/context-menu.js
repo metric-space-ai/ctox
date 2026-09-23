@@ -37,6 +37,10 @@ export function createContextMenu({ host, viewportEl }) {
       el.dataset.index = String(index);
       if (item.disabled) {
         el.setAttribute('aria-disabled', 'true');
+        if (item.disabledReason) {
+          el.setAttribute('aria-description', item.disabledReason);
+          el.title = item.disabledReason;
+        }
         el.style.opacity = '0.5';
         el.style.cursor = 'not-allowed';
       }
@@ -51,7 +55,11 @@ export function createContextMenu({ host, viewportEl }) {
       el.querySelector('.shell-context-menu-trailing')?.addEventListener('click', (trailingEvent) => {
         trailingEvent.preventDefault();
         trailingEvent.stopPropagation();
-        if (item.disabled) return;
+        if (item.disabled) {
+          item.onDisabled?.();
+          hide();
+          return;
+        }
         try {
           item.trailingAction?.();
         } catch (error) {
@@ -62,7 +70,11 @@ export function createContextMenu({ host, viewportEl }) {
       el.onclick = (clickEvent) => {
         clickEvent.stopPropagation();
         if (clickEvent.target.closest('.shell-context-menu-trailing')) return;
-        if (item.disabled) return;
+        if (item.disabled) {
+          item.onDisabled?.();
+          hide();
+          return;
+        }
         try {
           item.action?.();
         } catch (error) {
@@ -77,10 +89,11 @@ export function createContextMenu({ host, viewportEl }) {
     container.appendChild(menu);
     activeMenu = menu;
 
-    menu.style.maxHeight = `calc(100vh - 16px)`;
+    const viewportRect = viewport.getBoundingClientRect();
+    menu.style.maxHeight = `${Math.max(0, viewportRect.height - 16)}px`;
+    menu.style.maxWidth = `${Math.max(0, viewportRect.width - 16)}px`;
     menu.style.overflowY = 'auto';
     const rect = menu.getBoundingClientRect();
-    const viewportRect = viewport.getBoundingClientRect();
     let x = event ? event.clientX : viewportRect.left + 20;
     let y = event ? event.clientY : viewportRect.top + 20;
     const maxX = viewportRect.right - rect.width - 8;
@@ -154,7 +167,7 @@ export function createContextMenu({ host, viewportEl }) {
 
   function setSelectedIndex(menu, items, index) {
     if (index < 0 || index >= items.length) return;
-    if (items[index]?.type === 'separator' || items[index]?.disabled) return;
+    if (items[index]?.type === 'separator') return;
     selectedIndex = index;
     for (const el of menu.querySelectorAll('.shell-context-menu-item')) {
       const selected = Number(el.dataset.index) === index;
@@ -165,7 +178,7 @@ export function createContextMenu({ host, viewportEl }) {
   }
 
   function nextSelectableIndex(items, current, direction) {
-    const indices = items.map((_, i) => i).filter((i) => items[i].type !== 'separator' && !items[i].disabled);
+    const indices = items.map((_, i) => i).filter((i) => items[i].type !== 'separator');
     if (!indices.length) return -1;
     if (current === -1) return direction === 1 ? indices[0] : indices[indices.length - 1];
     const pos = indices.indexOf(current);

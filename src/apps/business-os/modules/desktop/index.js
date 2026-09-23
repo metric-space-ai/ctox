@@ -1,6 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessConfirm, showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { createCtoxLauncher } from './ctoxLauncher.js';
+import { addMissingDesktopIcons, arrangeDesktopIcons, desktopIconWriteAvailability, replaceDesktopIcons, runDesktopActionOnce } from './desktopMenuActions.js';
 import { ensureDesktopLayoutWithAuthority } from './layout-authority.js';
 import { makeIconDraggable } from './iconDrag.js?v=20260816-browser-sync-guards-v141';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js?v=20260816-browser-sync-guards-v141';
@@ -73,6 +74,11 @@ const FALLBACK_LABELS = {
     openExplorer: 'Explorer öffnen',
     openNotes: 'Notizen öffnen',
     iconRestoreDefaults: 'Desktop-Icons zurücksetzen',
+    maintenance: 'Desktop-Wartung…',
+    restoreArrangement: 'Vorherige Anordnung wiederherstellen',
+    restoreConfirm: 'Aktuelle Desktop-Icons durch die vor dem letzten Zurücksetzen gespeicherte Anordnung ersetzen?',
+    backupUnavailable: 'Die vorherige Anordnung konnte nicht gesichert werden. Zurücksetzen abgebrochen.',
+    noBackup: 'Keine vorherige Desktop-Anordnung gespeichert.',
     resetConfirm: 'Alle Desktop-Verknüpfungen und eigenen Anordnungen entfernen und Standard-Icons wiederherstellen?',
     refresh: 'Desktop-Icons neu laden',
     iconsUnavailable: 'Desktop-Icons sind noch nicht bereit. Sync-Verbindung prüfen und erneut versuchen.',
@@ -116,6 +122,11 @@ const FALLBACK_LABELS = {
     openExplorer: 'Open Explorer',
     openNotes: 'Open Notes',
     iconRestoreDefaults: 'Reset desktop icons',
+    maintenance: 'Desktop maintenance…',
+    restoreArrangement: 'Restore previous arrangement',
+    restoreConfirm: 'Replace current desktop icons with the arrangement saved before the last reset?',
+    backupUnavailable: 'Previous arrangement could not be saved. Reset cancelled.',
+    noBackup: 'No previous desktop arrangement is saved.',
     resetConfirm: 'Remove all desktop shortcuts and custom positions, then restore the default icons?',
     refresh: 'Reload desktop icons',
     iconsUnavailable: 'Desktop icons are not ready. Check sync and try again.',
@@ -180,6 +191,7 @@ export async function mount(ctx) {
   let launcher = createLauncher(initialModules);
 
   const cleanups = [];
+  const pendingActions = new Set();
   let disposed = false;
   const mountedAtMs = Date.now();
 
@@ -588,6 +600,17 @@ export async function mount(ctx) {
       onMoved: async (iconId, position) => {
         const updatedAt = Date.now();
         rememberIconPosition(iconId, position, updatedAt);
+        try {
+          if (!iconsCollection) throw new Error(t('iconsUnavailable'));
+          const existing = await iconsCollection.findOne(iconId).exec();
+          if (!existing) throw new Error(t('iconsUnavailable'));
+          await existing.incrementalPatch({ ...position, updated_at_ms: updatedAt });
+        } catch (error) {
+          iconPositionCache.delete(iconId);
+          writeIconPositionCache();
+          refreshIcons().catch(() => {});
+          notify({ type: 'error', title: t('menuActionFailed'), message: String(error?.message || error) });
+        }
       },
       onDragToTopbar: (iconId) => {
         if (doc.target_module) {
@@ -605,18 +628,18 @@ export async function mount(ctx) {
     if (!ctx.contextMenu) return;
     for (const node of refs.icons.querySelectorAll('.desktop-icon.selected')) node.classList.remove('selected');
     ctx.contextMenu.show(event, [
-      { label: t('createApp', 'App Creator öffnen'), icon: '+', disabled: !launcher.knows('creator'), action: () => openLauncherTarget('creator') },
+      { label: t('createApp', 'App Creator öffnen'), icon: '+', disabled: !launcher.knows('creator'), disabledReason: t('openUnavailable'), onDisabled: () => notifyUnavailableTarget('creator'), action: () => openLauncherTarget('creator') },
       { label: t('chatWithCtox', 'Mit CTOX chatten'), icon: '◆', action: safeAction(chatWithCtoxAboutDesktop) },
       { type: 'separator' },
-      { label: t('openExplorer', 'Explorer öffnen'), icon: '⌘', disabled: !launcher.knows('explorer'), action: () => openLauncherTarget('explorer') },
-      { label: t('openNotes', 'Notizen öffnen'), icon: '✎', disabled: !launcher.knows('notes'), action: () => openLauncherTarget('notes') },
+      { label: t('openExplorer', 'Explorer öffnen'), icon: '⌘', disabled: !launcher.knows('explorer'), disabledReason: t('openUnavailable'), onDisabled: () => notifyUnavailableTarget('explorer'), action: () => openLauncherTarget('explorer') },
+      { label: t('openNotes', 'Notizen öffnen'), icon: '✎', disabled: !launcher.knows('notes'), disabledReason: t('openUnavailable'), onDisabled: () => notifyUnavailableTarget('notes'), action: () => openLauncherTarget('notes') },
       { type: 'separator' },
-      { label: t('arrangeIcons', 'Icons ausrichten'), icon: '▦', disabled: !iconsCollection, action: safeAction(arrangeIcons) },
-      { label: t('sortIcons', 'Icons nach Namen sortieren'), icon: '⇅', disabled: !iconsCollection, action: safeAction(() => arrangeIcons('name')) },
-      { label: t('addMissingIcons', 'Fehlende Standard-Icons hinzufügen'), icon: '+', disabled: !iconsCollection, action: safeAction(addMissingDefaultIcons) },
-      { label: t('iconRestoreDefaults', 'Desktop-Icons zurücksetzen'), icon: '⟳', disabled: !iconsCollection, action: safeAction(restoreDefaultIcons) },
+      { label: t('arrangeIcons', 'Icons ausrichten'), icon: '▦', ...iconWriteAvailability(), action: safeAction(arrangeIcons, 'icons') },
+      { label: t('sortIcons', 'Icons nach Namen sortieren'), icon: '⇅', ...iconWriteAvailability(), action: safeAction(() => arrangeIcons('name'), 'icons') },
+      { label: t('addMissingIcons', 'Fehlende Standard-Icons hinzufügen'), icon: '+', ...iconWriteAvailability(), action: safeAction(addMissingDefaultIcons, 'icons') },
       { type: 'separator' },
-      { label: t('refresh', 'Desktop-Icons neu laden'), icon: '↻', action: safeAction(refreshIcons) },
+      { label: t('refresh', 'Desktop-Icons neu laden'), icon: '↻', action: safeAction(refreshIcons, 'refresh') },
+      { label: t('maintenance', 'Desktop-Wartung…'), icon: '⋯', action: safeAction(() => showDesktopMaintenance(event)) },
     ]);
   }
 
@@ -638,17 +661,17 @@ export async function mount(ctx) {
       {
         label: pinned ? t('unpinFromTaskbar', 'Von Bar lösen') : t('pinToTaskbar', 'An Bar anheften'),
         icon: pinned ? '−' : '+',
-        action: safeAction(() => togglePinnedTarget(doc.target_module, !pinned)),
+        action: safeAction(() => togglePinnedTarget(doc.target_module, !pinned), `pin:${doc.target_module}`),
       },
       { label: t('askCtox', 'Frage stellen'), icon: '?', action: safeAction(() => chatWithCtoxAboutIcon(doc, 'ask')) },
       { label: t('workWithData', 'Daten ändern'), icon: '◇', action: safeAction(() => chatWithCtoxAboutIcon(doc, 'data')) },
       { label: t('modifyApp', 'App ändern'), icon: '✦', action: safeAction(() => chatWithCtoxAboutIcon(doc, 'app')) },
       ...(canRenameApp ? [
-        { label: t('renameApp', 'App umbenennen'), icon: '✎', action: safeAction(() => renameApp(doc, app)) },
+        { label: t('renameApp', 'App umbenennen'), icon: '✎', action: safeAction(() => renameApp(doc, app), `rename-app:${app.id}`) },
       ] : []),
-      { label: t('renameIcon', 'Icon umbenennen'), icon: '✎', action: safeAction(() => renameIcon(doc)) },
+      { label: t('renameIcon', 'Icon umbenennen'), icon: '✎', ...iconWriteAvailability(), action: safeAction(() => renameIcon(doc), `icon:${doc.id}`) },
       { type: 'separator' },
-      { label: t('deleteIcon', 'Icon entfernen'), icon: '−', action: safeAction(() => deleteIcon(doc.id)) },
+      { label: t('deleteIcon', 'Icon entfernen'), icon: '−', ...iconWriteAvailability(), action: safeAction(() => deleteIcon(doc.id), `icon:${doc.id}`) },
     ]);
   }
 
@@ -657,24 +680,34 @@ export async function mount(ctx) {
   // verworfen: ein Icon, dessen Zielmodul nicht (mehr) im Katalog dieser Instanz
   // steht, tat auf Klick GAR NICHTS — kein Fenster, keine Meldung. Genau so
   // sieht ein "kaputtes" Kontextmenue aus. Der Fehlschlag wird jetzt benannt.
-  function openDesktopTarget(doc) {
+  async function openDesktopTarget(doc) {
     const targetModule = doc?.target_module || '';
-    if (launcher.open(targetModule)) return true;
+    try {
+      const opened = await runDesktopActionOnce(pendingActions, `open:${targetModule}`, () => launcher.open(targetModule));
+      if (opened === undefined) return false;
+      if (opened) return true;
+    } catch (error) {
+      notify({ type: 'error', title: t('menuActionFailed'), message: String(error?.message || error) });
+      return false;
+    }
+    notifyUnavailableTarget(targetModule, doc);
+    return false;
+  }
+
+  function notifyUnavailableTarget(targetModule, doc = null) {
     notify({
       type: 'warning',
       title: t('openUnavailable', 'Diese App ist auf dieser Instanz nicht verfügbar.'),
       message: formatMessage(
         t('openUnavailableDetail', '„{label}" verweist auf {target} — dieses Modul steht im Katalog dieser Instanz nicht (mehr) zur Verfügung.'),
-        { label: desktopIconLabel(doc), target: targetModule || '—' },
+        { label: desktopIconLabel(doc || { target_module: targetModule }), target: targetModule || '—' },
       ),
     });
-    return false;
   }
 
-  function safeAction(action) {
+  function safeAction(action, key = '') {
     return () => {
-      Promise.resolve()
-        .then(action)
+      runDesktopActionOnce(pendingActions, key || Symbol('desktop-action'), () => Promise.resolve().then(action))
         .catch((error) => {
           console.error('[desktop] context menu action failed:', error);
           notify({ type: 'error', title: t('menuActionFailed'), message: String(error?.message || error) });
@@ -684,6 +717,26 @@ export async function mount(ctx) {
 
   function openLauncherTarget(targetId) {
     return openDesktopTarget({ target_module: targetId, label: titleForModule(targetId) });
+  }
+
+  function iconWriteAvailability() {
+    return desktopIconWriteAvailability({
+      collection: iconsCollection,
+      readiness: iconsReadiness,
+      reason: t('iconsUnavailable'),
+      notify: (reason) => notify({ type: 'warning', title: reason }),
+      retry: safeAction(refreshIcons, 'refresh'),
+    });
+  }
+
+  function showDesktopMaintenance(event) {
+    ctx.contextMenu.show(event, [
+      { label: t('iconRestoreDefaults'), icon: '⟳', ...iconWriteAvailability(), action: safeAction(restoreDefaultIcons, 'icons') },
+      { label: t('restoreArrangement'), icon: '↶', disabled: !hasResetBackup() || iconWriteAvailability().disabled,
+        disabledReason: !hasResetBackup() ? t('noBackup') : t('iconsUnavailable'),
+        onDisabled: () => notify({ type: 'warning', title: !hasResetBackup() ? t('noBackup') : t('iconsUnavailable') }),
+        action: safeAction(restorePreviousArrangement, 'icons') },
+    ]);
   }
 
   async function refreshIcons() {
@@ -925,44 +978,66 @@ export async function mount(ctx) {
     });
     if (!confirmed) return;
     const all = await iconsCollection.find().exec();
-    await Promise.all(all.map((doc) => doc.remove()));
-    await ensureIcons(iconsCollection, launcher, { force: true });
+    const snapshot = all.map((doc) => Object.fromEntries(
+      Object.entries(plainIconDoc(doc)).filter(([key]) => DESKTOP_ICON_PERSISTED_FIELDS.has(key)),
+    ));
+    try {
+      window.localStorage.setItem(resetBackupStorageKey(), JSON.stringify(snapshot));
+    } catch {
+      throw new Error(t('backupUnavailable'));
+    }
+    const grid = currentGrid();
+    const defaults = launcher.entries().map((entry, index) => iconSeedForEntry(entry, index, grid, launcher));
+    await replaceDesktopIcons({ collection: iconsCollection, snapshot: defaults, insertMissingSeed });
     iconPositionCache = new Map();
     writeIconPositionCache();
     await refreshIcons();
   }
 
+  async function restorePreviousArrangement() {
+    if (!iconsCollection) throw new Error(t('iconsUnavailable'));
+    const snapshot = readResetBackup();
+    if (!snapshot) throw new Error(t('backupUnavailable'));
+    const confirmed = await showBusinessConfirm(t('restoreConfirm'), { title: t('restoreArrangement') });
+    if (!confirmed) return;
+    await replaceDesktopIcons({
+      collection: iconsCollection,
+      snapshot: snapshot.map((icon) => ({ ...icon, updated_at_ms: Date.now() })),
+      insertMissingSeed,
+    });
+    iconPositionCache = new Map();
+    writeIconPositionCache();
+    window.localStorage.removeItem(resetBackupStorageKey());
+    await refreshIcons();
+  }
+
+  function resetBackupStorageKey() {
+    return `${desktopIconPositionCacheStorageKey()}.reset-backup`;
+  }
+
+  function readResetBackup() {
+    try {
+      const snapshot = JSON.parse(window.localStorage.getItem(resetBackupStorageKey()) || 'null');
+      return Array.isArray(snapshot) && snapshot.every((icon) => icon?.id && icon?.target_type) ? snapshot : null;
+    } catch { return null; }
+  }
+
+  function hasResetBackup() {
+    return readResetBackup() !== null;
+  }
+
   async function addMissingDefaultIcons() {
     if (!iconsCollection) throw new Error(t('iconsUnavailable'));
-    const existing = await iconsCollection.find().exec();
-    const existingTargets = new Set(existing.filter((doc) => !doc.hidden).map((doc) => doc.target_module).filter(Boolean));
-    const entries = launcher.entries().filter((entry) => !existingTargets.has(entry.id));
-    if (!entries.length) {
-      await renderIcons();
+    const count = await addMissingDesktopIcons({
+      collection: iconsCollection,
+      entries: launcher.entries(),
+      gridPosition,
+      glyphFor: launcher.glyphFor,
+      insertMissingSeed,
+    });
+    if (!count) {
       notify({ type: 'info', title: t('noMissingIcons') });
       return;
-    }
-    const grid = currentGrid();
-    const startIndex = existing.length;
-    for (const [offsetIndex, entry] of entries.entries()) {
-      const position = gridPosition(startIndex + offsetIndex, grid);
-      const seed = {
-        id: `desk_icon_${entry.id}`,
-        target_type: entry.kind || 'module',
-        target_module: entry.id,
-        target_record_id: '',
-        label: entry.title || entry.id,
-        glyph: launcher.glyphFor(entry.id),
-        x: position.x,
-        y: position.y,
-        pinned: false,
-        hidden: false,
-        sort_index: startIndex + offsetIndex,
-        updated_at_ms: Date.now(),
-      };
-      const hidden = existing.find((doc) => doc.id === seed.id);
-      if (hidden) await hidden.incrementalPatch({ hidden: false, updated_at_ms: Date.now() });
-      else await insertMissingSeed(iconsCollection, seed.id, seed);
     }
     await refreshIcons();
     notify({ type: 'success', title: t('iconsAdded') });
@@ -970,18 +1045,15 @@ export async function mount(ctx) {
 
   async function arrangeIcons(order = 'current') {
     if (!iconsCollection) throw new Error(t('iconsUnavailable'));
-    const docs = (await iconsCollection.find().exec())
-      .filter((doc) => !doc.hidden && launcher.knows(doc.target_module))
-      .sort((a, b) => order === 'name'
-        ? desktopIconLabel(a).localeCompare(desktopIconLabel(b), ctx.locale || 'de') || a.id.localeCompare(b.id)
-        : (a.sort_index ?? 0) - (b.sort_index ?? 0));
-    const grid = currentGrid();
-    for (const [index, doc] of docs.entries()) {
-      const position = gridPosition(index, grid);
-      const updatedAt = Date.now() + index;
-      await doc.incrementalPatch({ ...position, sort_index: index, updated_at_ms: updatedAt });
-      rememberIconPosition(doc.id, position, updatedAt);
-    }
+    await arrangeDesktopIcons({
+      collection: iconsCollection,
+      knows: launcher.knows,
+      labelFor: desktopIconLabel,
+      gridPosition,
+      rememberPosition: rememberIconPosition,
+      order,
+      locale: ctx.locale || 'de',
+    });
     await refreshIcons();
     notify({ type: 'success', title: t(order === 'name' ? 'iconsSorted' : 'iconsArranged') });
   }
@@ -1082,7 +1154,7 @@ export async function mount(ctx) {
         message: composeCommandToast(doc),
         action: launcher.knows(doc.module) ? {
           label: t('openInModule', 'Öffnen'),
-          callback: () => launcher.open(doc.module),
+          callback: () => openDesktopTarget({ target_module: doc.module, label: titleForModule(doc.module) }),
         } : undefined,
       });
     });
