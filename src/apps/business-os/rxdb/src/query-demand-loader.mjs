@@ -224,6 +224,28 @@ export function createQueryDemandLoader({
       const controlPlaneFallbackMembership = () => (
         controlPlanePermissionMismatchNow() || (controlPlaneRead && !cached)
       ) ? [] : cached?.documentIds;
+      // Post-local-read guard: the IndexedDB serve read itself can span a
+      // role-change handshake, so a window whose stamp matched when the
+      // decision was taken can be superseded before its rows materialize.
+      // Re-check after the read for control-plane ledgers and fail closed.
+      const serveWindowDocuments = async (windowRecord, membershipIds) => {
+        const documents = await readLocalDocuments(
+          storageCollection,
+          query,
+          normalizedWindow,
+          membershipIds,
+        );
+        if (
+          controlPlaneRead
+          && !windowReadPermissionDigestMatches(
+            windowRecord?.permissionDigest,
+            resolveReadPermissionDigest(),
+          )
+        ) {
+          return [];
+        }
+        return documents;
+      };
       if (
         cached
         && cached.complete
@@ -243,21 +265,11 @@ export function createQueryDemandLoader({
             && !controlPlaneWindowStale
           ) {
             await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached.documentIds,
-            );
+            return serveWindowDocuments(cached, cached.documentIds);
           }
         } else if (!controlPlaneWindowStale) {
           await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-          return readLocalDocuments(
-            storageCollection,
-            query,
-            normalizedWindow,
-            cached.documentIds,
-          );
+          return serveWindowDocuments(cached, cached.documentIds);
         }
       }
 
@@ -359,16 +371,11 @@ export function createQueryDemandLoader({
             // A strict authority token has no local fallback. An explicit
             // consumer abort must not silently become local data either.
             if (strictRequireRevision || invocationEntry.consumerCancelled) throw error;
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              // Fail-closed: an aborted fetch must not fall back to window
-              // membership authorized under a superseded read-permission
-              // identity; an empty membership renders nothing until the next
-              // authorized fetch re-stamps the window.
-              controlPlaneFallbackMembership(),
-            );
+            // Fail-closed: an aborted fetch must not fall back to window
+            // membership authorized under a superseded read-permission
+            // identity; an empty membership renders nothing until the next
+            // authorized fetch re-stamps the window.
+            return serveWindowDocuments(cached, controlPlaneFallbackMembership());
           }
           bumpStatus(status, 'queryFetchErrorCount');
           v15Log('fetch:error', { fingerprint, error: String(error?.message ?? error) });
@@ -388,12 +395,7 @@ export function createQueryDemandLoader({
           if (strictRequireRevision || invocationEntry.consumerCancelled) {
             throw createQueryCancelledError('multi-tab-broker-closed');
           }
-          return readLocalDocuments(
-            storageCollection,
-            query,
-            normalizedWindow,
-            controlPlaneFallbackMembership(),
-          );
+          return serveWindowDocuments(cached, controlPlaneFallbackMembership());
         }
         assertFresh();
         const leader = await multiTabBroker.claim(dedupKey);
@@ -411,12 +413,7 @@ export function createQueryDemandLoader({
           if (strictRequireRevision || invocationEntry.consumerCancelled) {
             throw createQueryCancelledError('multi-tab-broker-closed');
           }
-          return readLocalDocuments(
-            storageCollection,
-            query,
-            normalizedWindow,
-            controlPlaneFallbackMembership(),
-          );
+          return serveWindowDocuments(cached, controlPlaneFallbackMembership());
         }
         const materialized = await sidecar.getQueryWindow(sidecarKey);
         assertFresh();
@@ -436,12 +433,7 @@ export function createQueryDemandLoader({
           )
         ) {
           bumpStatus(status, 'queryFetchDedupHitCount');
-          return readLocalDocuments(
-            storageCollection,
-            query,
-            normalizedWindow,
-            materialized.documentIds,
-          );
+          return serveWindowDocuments(materialized, materialized.documentIds);
         }
         // The owner may have crashed. Bounded wait plus TTL-aware re-claim
         // lets this tab take over without leaving the query hung forever.
@@ -452,12 +444,7 @@ export function createQueryDemandLoader({
             if (strictRequireRevision || invocationEntry.consumerCancelled) {
               throw createQueryCancelledError('multi-tab-broker-closed');
             }
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              controlPlaneFallbackMembership(),
-            );
+            return serveWindowDocuments(cached, controlPlaneFallbackMembership());
           }
           // A dead/replaced collection state can leave a 30 s broker claim
           // behind. We already waited the full bounded follower window; a
@@ -524,12 +511,7 @@ export function createQueryDemandLoader({
         bumpStatus(status, 'queryFetchStaleServedCount');
         v15Log('fetch:stale-served', { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
         await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
-        return readLocalDocuments(
-          storageCollection,
-          query,
-          normalizedWindow,
-          cached.documentIds || [],
-        );
+        return serveWindowDocuments(cached, cached.documentIds || []);
       }
 
       return coordinatedFetchJob();

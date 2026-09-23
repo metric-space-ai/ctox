@@ -485,6 +485,8 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
   let fetches = 0;
   let releaseThird;
   const thirdGate = new Promise((resolve) => { releaseThird = resolve; });
+  let releaseFlip;
+  const flipGate = new Promise((resolve) => { releaseFlip = resolve; });
   const loader = createQueryDemandLoader({
     storageCollection: storage,
     sidecar,
@@ -496,8 +498,13 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
       fetches += 1;
       if (fetches === 1) return { documents: [{ id: 'cmd-1', status: 'running' }] };
       if (fetches === 2) {
-        // Role/grant change lands WHILE this revalidation is in flight; the
+        // Held until the stale serve below has completed: the post-local-read
+        // guard would (correctly) fail that serve closed if the identity
+        // flipped while its membership read was pending. This section tests
+        // the mid-flight FETCH discard, so the role/grant change lands while
+        // this revalidation is in flight but after the serve decision; the
         // response below was still authorized under the old identity.
+        await flipGate;
         currentDigest = 'digest-role-b';
         return { documents: [{ id: 'cmd-old-authority', status: 'running' }] };
       }
@@ -513,6 +520,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
   const stale = await loader.resolveQuery({ selector: {} }); // SWR serve + background fetch 2
   assert(stale.length === 1 && stale[0].id === 'cmd-1',
     'identity was still valid at entry: stale serve is allowed');
+  releaseFlip(); // let the role change land mid-flight, after the serve
   await settle(); // let the background fetch 2 complete (and be discarded)
   assert(!storage.docs.has('cmd-old-authority'),
     'mid-flight old-authority response must NOT be materialized into the store');
@@ -661,6 +669,8 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
   };
   let releaseFinal;
   const finalGate = new Promise((resolve) => { releaseFinal = resolve; });
+  let releaseServeDone;
+  const serveDoneGate = new Promise((resolve) => { releaseServeDone = resolve; });
   const loader = createQueryDemandLoader({
     storageCollection: storage,
     sidecar,
@@ -671,7 +681,15 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
     requestQueryFetch: async () => {
       fetches += 1;
       if (fetches === 1) return { documents: [{ id: 'cmd-1', status: 'running' }] };
-      if (fetches === 2) return { documents: [{ id: 'cmd-2', status: 'running' }] };
+      // Held until the stale serve below has completed: the post-local-read
+      // guard would (correctly) fail that serve closed if the identity
+      // flipped while its membership read was pending. This section tests the
+      // materialization-time flip, so the response arrives only after the
+      // serve decision.
+      if (fetches === 2) {
+        await serveDoneGate;
+        return { documents: [{ id: 'cmd-2', status: 'running' }] };
+      }
       await finalGate;
       return { documents: [{ id: 'cmd-3', status: 'running' }] };
     },
@@ -681,9 +699,10 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
   assert(fetches === 1, 'cold start fetched (final guard)');
 
   now += 60_000;
-  flipOnNextWrite = true;
   const stale = await loader.resolveQuery({ selector: {} }); // SWR serve + background fetch 2
   assert(stale.length === 1 && stale[0].id === 'cmd-1', 'entry identity valid: stale serve allowed');
+  flipOnNextWrite = true; // flip during fetch 2's materialization, post-serve
+  releaseServeDone();
   await settle(); // background fetch 2 materializes, flips identity, final guard discards
   assert(storage.docs.has('cmd-2'),
     'documents materialized before the flip stay in the store (self-correcting via stamp)');
@@ -714,5 +733,62 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
   assert(win12b.permissionDigest === 'digest-f', 'window re-stamped with the current identity');
 }
 
+
+// --- 13. identity flip during the local serve read: nothing is served ------
+// Even when the window stamp matched at the serve DECISION, the IndexedDB
+// membership read itself can span a role-change handshake. The
+// post-local-read guard must re-check the digest after the read resolves and
+// fail closed rather than returning rows read under the old authority.
+{
+  let now = 90_000;
+  const sidecar = createSidecarWithMemoryBackend({ databaseName: 'swr-13', clock: () => now });
+  const storage = makeStorageCollection();
+  let currentDigest = 'digest-g';
+  let fetches = 0;
+  const baseFind = storage.findDocumentsById;
+  let membershipReads = 0;
+  let holdServeRead = false;
+  storage.findDocumentsById = async (ids) => {
+    membershipReads += 1;
+    if (holdServeRead && membershipReads > 1) {
+      // The first membership read is queryWindowDocumentsAvailable at entry;
+      // the second is the serve read inside readLocalDocuments. The identity
+      // flips while that second read is still in flight.
+      holdServeRead = false;
+      currentDigest = 'digest-h'; // role change lands mid-read
+      await settle(); // the IndexedDB read outlasts the handshake
+    }
+    return baseFind(ids);
+  };
+  const loader = createQueryDemandLoader({
+    storageCollection: storage,
+    sidecar,
+    collectionName: 'business_commands',
+    schemaVersion: 1,
+    clock: () => now,
+    readPermissionDigest: () => currentDigest,
+    requestQueryFetch: async () => {
+      fetches += 1;
+      return { documents: [{ id: 'cmd-1', status: 'running' }] };
+    },
+  });
+
+  await loader.resolveQuery({ selector: {} }); // cold: stamped digest-g
+  assert(fetches === 1, 'cold start fetched (post-local-read guard)');
+
+  now += 60_000; // ordinary reload age: window past the freshness budget
+  holdServeRead = true;
+  const started = Date.now();
+  const served = await loader.resolveQuery({ selector: {} });
+  // The digest flipped from digest-g to digest-h while the stale-serve
+  // membership read was pending: the rows were read under the old authority
+  // and must not reach the caller, even though the stamp matched at entry.
+  assert(served.length === 0,
+    'identity flip during the local serve read must fail closed');
+  assert(Date.now() - started < 1000,
+    'the fail-closed serve path must not deadlock');
+  assert(fetches === 2,
+    'entry identity was valid at the decision: background refresh started');
+}
 console.log('ctox-rxdb stale-while-revalidate smoke OK');
 process.exit(0);

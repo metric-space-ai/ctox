@@ -7612,25 +7612,30 @@ function createQueryDemandLoader({
         const controlPlaneRead = isControlPlaneStatusCollection(collectionName);
         const controlPlanePermissionMismatchNow = () => controlPlaneRead && cached && (cached.complete || cached.everCompleted) && !windowReadPermissionDigestMatches(cached.permissionDigest, resolveReadPermissionDigest());
         const controlPlaneFallbackMembership = () => controlPlanePermissionMismatchNow() || controlPlaneRead && !cached ? [] : cached?.documentIds;
+        const serveWindowDocuments = async (windowRecord, membershipIds) => {
+          const documents = await readLocalDocuments(
+            storageCollection,
+            query,
+            normalizedWindow,
+            membershipIds
+          );
+          if (controlPlaneRead && !windowReadPermissionDigestMatches(
+            windowRecord?.permissionDigest,
+            resolveReadPermissionDigest()
+          )) {
+            return [];
+          }
+          return documents;
+        };
         if (cached && cached.complete && cachedDocumentsAvailable && !emptyWindowStale && !mutableMembershipWindowStale && !queryWindowStale && !controlPlanePermissionMismatchNow()) {
           if (strictRequireRevision) {
             if (cached.satisfiedRevision === query.requireRevision && cached.satisfiedGeneration === generation && !controlPlaneWindowStale) {
               await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-              return readLocalDocuments(
-                storageCollection,
-                query,
-                normalizedWindow,
-                cached.documentIds
-              );
+              return serveWindowDocuments(cached, cached.documentIds);
             }
           } else if (!controlPlaneWindowStale) {
             await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached.documentIds
-            );
+            return serveWindowDocuments(cached, cached.documentIds);
           }
         }
         const dedupKey = strictRequireRevision ? `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}|strict|${query.requireRevision}|${generation}` : `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
@@ -7707,16 +7712,7 @@ function createQueryDemandLoader({
                 bumpStatus(status, "queryFetchCancelCount");
                 v15Log("fetch:cancel", { fingerprint, error: String(error?.message ?? error) });
                 if (strictRequireRevision || invocationEntry.consumerCancelled) throw error;
-                return readLocalDocuments(
-                  storageCollection,
-                  query,
-                  normalizedWindow,
-                  // Fail-closed: an aborted fetch must not fall back to window
-                  // membership authorized under a superseded read-permission
-                  // identity; an empty membership renders nothing until the next
-                  // authorized fetch re-stamps the window.
-                  controlPlaneFallbackMembership()
-                );
+                return serveWindowDocuments(cached, controlPlaneFallbackMembership());
               }
               bumpStatus(status, "queryFetchErrorCount");
               v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
@@ -7735,12 +7731,7 @@ function createQueryDemandLoader({
             if (strictRequireRevision || invocationEntry.consumerCancelled) {
               throw createQueryCancelledError("multi-tab-broker-closed");
             }
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              controlPlaneFallbackMembership()
-            );
+            return serveWindowDocuments(cached, controlPlaneFallbackMembership());
           }
           assertFresh();
           const leader = await multiTabBroker.claim(dedupKey);
@@ -7758,12 +7749,7 @@ function createQueryDemandLoader({
             if (strictRequireRevision || invocationEntry.consumerCancelled) {
               throw createQueryCancelledError("multi-tab-broker-closed");
             }
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              controlPlaneFallbackMembership()
-            );
+            return serveWindowDocuments(cached, controlPlaneFallbackMembership());
           }
           const materialized = await sidecar.getQueryWindow(sidecarKey);
           assertFresh();
@@ -7772,12 +7758,7 @@ function createQueryDemandLoader({
             controlPlaneRead ? resolveReadPermissionDigest() : ""
           ) && (!strictRequireRevision || materialized.satisfiedRevision === query.requireRevision && materialized.satisfiedGeneration === generation)) {
             bumpStatus(status, "queryFetchDedupHitCount");
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              materialized.documentIds
-            );
+            return serveWindowDocuments(materialized, materialized.documentIds);
           }
           const takeover = await multiTabBroker.claim(dedupKey);
           assertFresh();
@@ -7786,12 +7767,7 @@ function createQueryDemandLoader({
               if (strictRequireRevision || invocationEntry.consumerCancelled) {
                 throw createQueryCancelledError("multi-tab-broker-closed");
               }
-              return readLocalDocuments(
-                storageCollection,
-                query,
-                normalizedWindow,
-                controlPlaneFallbackMembership()
-              );
+              return serveWindowDocuments(cached, controlPlaneFallbackMembership());
             }
             return startFetchJob();
           }
@@ -7821,12 +7797,7 @@ function createQueryDemandLoader({
           bumpStatus(status, "queryFetchStaleServedCount");
           v15Log("fetch:stale-served", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
           await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
-          return readLocalDocuments(
-            storageCollection,
-            query,
-            normalizedWindow,
-            cached.documentIds || []
-          );
+          return serveWindowDocuments(cached, cached.documentIds || []);
         }
         return coordinatedFetchJob();
       })();
