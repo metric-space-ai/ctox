@@ -11984,25 +11984,43 @@ pub(super) fn repair_missing_rxdb_envelopes(
     let Some(mut writer) = RxdbCollectionWriter::open(root, collection)? else {
         return Ok(0);
     };
+    let deleted_column = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column));
     let rows = {
-        let mut statement = writer
-            .conn
-            .prepare(&format!("SELECT id, data FROM {}", writer.table))?;
+        let mut statement = writer.conn.prepare(&format!(
+            "SELECT id, data, {} FROM {}",
+            deleted_column.unwrap_or("NULL"),
+            writer.table
+        ))?;
         let mapped = statement.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
         })?;
         mapped.collect::<rusqlite::Result<Vec<_>>>()?
     };
     let mut repaired = 0;
-    for (id, raw) in rows {
+    for (id, raw, sql_deleted) in rows {
         let document: Value = serde_json::from_str(&raw)
             .with_context(|| format!("parse projected {collection} document {id}"))?;
+        let json_deleted = document.get("_deleted").and_then(Value::as_bool);
+        // A legacy SQLite tombstone must never become live because its JSON
+        // deletion marker was lost or contradicted during projection.
+        let deleted = sql_deleted.is_some_and(|value| value != 0)
+            || json_deleted
+                .or_else(|| document.get("is_deleted").and_then(Value::as_bool))
+                .unwrap_or(false);
         let valid_envelope = document
             .pointer("/_meta/lwt")
             .and_then(Value::as_f64)
             .is_some()
-            && document.get("_deleted").and_then(Value::as_bool).is_some()
-            && document.get("_attachments").is_some_and(Value::is_object);
+            && json_deleted.is_some()
+            && document.get("_attachments").is_some_and(Value::is_object)
+            && json_deleted == Some(deleted)
+            && sql_deleted.is_none_or(|value| (value != 0) == deleted);
         if valid_envelope {
             continue;
         }
@@ -12010,11 +12028,6 @@ pub(super) fn repair_missing_rxdb_envelopes(
             .get("updated_at_ms")
             .and_then(Value::as_i64)
             .unwrap_or_else(|| now_ms().min(i64::MAX as u128) as i64);
-        let deleted = document
-            .get("_deleted")
-            .and_then(Value::as_bool)
-            .or_else(|| document.get("is_deleted").and_then(Value::as_bool))
-            .unwrap_or(false);
         if deleted {
             writer.replace_source(&id, source_updated_at_ms, document, true)?;
         } else {
@@ -39150,9 +39163,27 @@ pub(super) mod tests {
             &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
             params!["malformed_tombstone", "1-old", malformed_tombstone.to_string()],
         )?;
+        let sql_tombstone_without_json_flag = serde_json::json!({
+            "id": "sql_tombstone_without_json_flag", "_rev": "2-old",
+            "_meta": {"lwt": 42}, "_attachments": {}, "updated_at_ms": 42,
+            "result": {"preserve": true}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 1, 42, ?3)"),
+            params!["sql_tombstone_without_json_flag", "2-old", sql_tombstone_without_json_flag.to_string()],
+        )?;
+        let sql_tombstone_with_live_json_flag = serde_json::json!({
+            "id": "sql_tombstone_with_live_json_flag", "_rev": "3-old",
+            "_meta": {"lwt": 42}, "_deleted": false, "_attachments": {},
+            "updated_at_ms": 42, "result": {"preserve": true}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 1, 42, ?3)"),
+            params!["sql_tombstone_with_live_json_flag", "3-old", sql_tombstone_with_live_json_flag.to_string()],
+        )?;
         drop(conn);
 
-        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 3);
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 5);
         assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 0);
         let conn = Connection::open(rxdb_store_path(root))?;
         let (revision, lwt, raw): (String, f64, String) = conn.query_row(
@@ -39174,7 +39205,12 @@ pub(super) mod tests {
         );
         assert_eq!(repaired["_deleted"], false);
         assert_eq!(repaired["_attachments"], serde_json::json!({}));
-        for (id, expected_deleted) in [("malformed_live", false), ("malformed_tombstone", true)] {
+        for (id, expected_deleted) in [
+            ("malformed_live", false),
+            ("malformed_tombstone", true),
+            ("sql_tombstone_without_json_flag", true),
+            ("sql_tombstone_with_live_json_flag", true),
+        ] {
             let (deleted_column, raw): (i64, String) = conn.query_row(
                 &format!("SELECT deleted, data FROM {table} WHERE id = ?1"),
                 [id],
@@ -39183,6 +39219,19 @@ pub(super) mod tests {
             let repaired: Value = serde_json::from_str(&raw)?;
             assert_eq!(repaired["_deleted"], expected_deleted);
             assert_eq!(deleted_column != 0, expected_deleted);
+            if id.starts_with("sql_tombstone") {
+                assert_eq!(repaired["result"], serde_json::json!({"preserve": true}));
+                let expected_revision = if id.ends_with("without_json_flag") {
+                    "3-"
+                } else {
+                    "4-"
+                };
+                assert!(
+                    repaired["_rev"]
+                        .as_str()
+                        .is_some_and(|revision| revision.starts_with(expected_revision))
+                );
+            }
         }
 
         let chats_table = format!(
