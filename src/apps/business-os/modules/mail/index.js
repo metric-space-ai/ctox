@@ -244,6 +244,8 @@ export async function mount(ctx) {
     selectedKind: '',
     selectedId: '',
     loading: true,
+    mailReadComplete: false,
+    mailReadError: '',
     disposed: false,
     readiness: null,
     refreshTimer: null,
@@ -337,6 +339,7 @@ export async function mount(ctx) {
     refs.confirmRoute?.addEventListener('click', confirmRoute);
     refs.prevPage?.addEventListener('click', () => changePage(-1));
     refs.nextPage?.addEventListener('click', () => changePage(1));
+    refs.retryRead?.addEventListener('click', async () => { await refreshData(); if (!view.disposed) render(); });
     refs.leftPane?.addEventListener('ctox-pane-grammar-change', (event) => {
       if (event.target !== refs.leftPane) return;
       view.leftGrammar = normalizePaneGrammar(event.detail, view.leftGrammar);
@@ -484,7 +487,7 @@ export async function mount(ctx) {
   }
 
   async function refreshData() {
-    const [commands, catalogs, users, accounts, threads, communicationMessages, campaigns, engagements, outboundMessages, approvals] = await Promise.all([
+    const snapshots = await Promise.all([
       readAll(collections.business_commands),
       readAll(collections.business_module_catalog),
       readAll(collections.business_users),
@@ -497,6 +500,10 @@ export async function mount(ctx) {
       readAll(collections.outbound_approvals),
     ]);
     if (view.disposed) return;
+    const failedRead = snapshots.find((snapshot) => snapshot instanceof Error);
+    view.mailReadError = failedRead ? String(failedRead.message || failedRead) : '';
+    const [commands, catalogs, users, accounts, threads, communicationMessages, campaigns, engagements, outboundMessages, approvals]
+      = snapshots.map((snapshot) => Array.isArray(snapshot) ? snapshot : null);
     // A replication reconnect can cancel an RxDB query. Keep the last good
     // snapshot until a successful read replaces it; [] would flash an empty
     // mailbox and make counts collapse to zero on every reconnect.
@@ -515,7 +522,8 @@ export async function mount(ctx) {
     if (view.accountKey && !view.accounts.some((account) => account.account_key === view.accountKey)) {
       view.accountKey = '';
     }
-    view.loading = false;
+    if (accounts && threads && communicationMessages) view.mailReadComplete = true;
+    view.loading = !view.mailReadComplete;
   }
 
   function render() {
@@ -643,11 +651,20 @@ export async function mount(ctx) {
     renderListSelection();
     renderBulkBar(rows, allRows);
 
+    refs.readError.hidden = !view.mailReadError;
+    refs.readErrorText.textContent = view.mailReadError
+      ? t('mailReadError', 'Postfach konnte nicht aktualisiert werden. Zuletzt geladene Nachrichten bleiben sichtbar.')
+      : '';
+
     const shouldSync = view.loading || (view.readiness && view.readiness.ready === false);
     refs.listEmpty.hidden = allRows.length > 0;
     if (!allRows.length) {
-      refs.emptyTitle.textContent = shouldSync ? t('syncingTitle', 'Mail wird synchronisiert') : t('emptyTitle', 'Keine E-Mails');
-      refs.emptyBody.textContent = shouldSync ? t('syncingBody', 'Postfächer und Nachrichten werden gerade geladen.') : t('emptyBody', 'Nachrichten erscheinen nach der ersten Synchronisierung.');
+      refs.emptyTitle.textContent = view.mailReadError
+        ? t('mailReadErrorTitle', 'Postfach derzeit nicht verfügbar')
+        : shouldSync ? t('syncingTitle', 'Mail wird synchronisiert') : t('emptyTitle', 'Keine E-Mails');
+      refs.emptyBody.textContent = view.mailReadError
+        ? t('mailReadErrorBody', 'Die Nachrichten konnten nicht gelesen werden. Bitte erneut versuchen.')
+        : shouldSync ? t('syncingBody', 'Postfächer und Nachrichten werden gerade geladen.') : t('emptyBody', 'Nachrichten erscheinen nach der ersten Synchronisierung.');
     }
   }
 
@@ -1968,6 +1985,9 @@ function collectRefs(root) {
     listKicker: one('[data-mail-list-kicker]'),
     listTitle: one('[data-mail-list-title]'),
     recordList: one('[data-mail-record-list]'),
+    readError: one('[data-mail-read-error]'),
+    readErrorText: one('[data-mail-read-error-text]'),
+    retryRead: one('[data-mail-retry-read]'),
     listEmpty: one('[data-mail-list-empty]'),
     emptyTitle: one('[data-mail-empty-title]'),
     emptyBody: one('[data-mail-empty-body]'),
@@ -2802,7 +2822,7 @@ async function readAll(collection) {
   } catch (error) {
     if (isTransientCollectionReadError(error)) return null;
     console.warn('[mail] collection read failed', error);
-    return null;
+    return error instanceof Error ? error : new Error(String(error));
   }
 }
 

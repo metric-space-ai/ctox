@@ -199,6 +199,29 @@
 .mail-table-head-subject,
 .mail-table-head-time { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.mail-read-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 28%, var(--line));
+  color: var(--text);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  font-size: 12px;
+  line-height: 1.35;
+}
+.mail-read-error[hidden] { display: none; }
+.mail-read-error button {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
 .mail-table-check { display: inline-flex; align-items: center; justify-content: center; }
 .mail-table-check input,
 .mail-record-select { width: 14px; height: 14px; margin: 0; accent-color: var(--accent); cursor: pointer; }

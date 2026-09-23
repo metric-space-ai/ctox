@@ -178,6 +178,8 @@ mailQa: try {
       outbound_approvals: [],
     };
     const listeners = new Map();
+    const readFailures = new Map();
+    const readAttempts = new Map();
     const mailserver = {
       domains: [{
         domain_name: 'example.test',
@@ -215,7 +217,11 @@ mailQa: try {
     }
     function collection(name) {
       return {
-        find: () => ({ exec: async () => rows[name].map((record) => ({ toJSON: () => ({ ...record }) })) }),
+        find: () => ({ exec: async () => {
+          readAttempts.set(name, (readAttempts.get(name) || 0) + 1);
+          if (readFailures.has(name)) throw new Error(readFailures.get(name));
+          return rows[name].map((record) => ({ toJSON: () => ({ ...record }) }));
+        } }),
         findOne: (id) => ({ exec: async () => {
           const record = rows[name].find((item) => item.id === id || item.command_id === id);
           return record ? { toJSON: () => ({ ...record }) } : null;
@@ -234,9 +240,13 @@ mailQa: try {
       import('/shared/icons.js'),
     ]);
     window.__mailRows = rows;
+    window.__mailReadFailures = readFailures;
+    window.__mailReadAttempts = readAttempts;
+    window.__mailNotify = notify;
     window.__mailserver = mailserver;
     window.__dispatchedCommands = [];
-    window.__unmountMail = await mount({
+    window.__mailMount = mount;
+    window.__mailMountContext = {
       host: document.querySelector('#host'),
       locale: 'de',
       session: { user: { id: 'alice', email: 'alice@example.test', role: 'admin' } },
@@ -361,7 +371,8 @@ mailQa: try {
         }
         return { id: command.id, status: 'completed', result: {} };
       } },
-    });
+    };
+    window.__unmountMail = await mount(window.__mailMountContext);
     const { wirePaneGrammar } = await import('/shared/pane-grammar.js');
     for (const pane of document.querySelectorAll('[data-mail-left-pane], [data-mail-list-pane]')) {
       pane.__ctoxPaneGrammar = wirePaneGrammar(pane);
@@ -377,6 +388,36 @@ mailQa: try {
   await page.locator('[data-mail-scope-id="outbound"]').click();
   await assertVisibleText(page, 'Versandter Bericht');
   await page.locator('[data-mail-scope-id="inbound"]').click();
+  await page.locator('[data-mail-record-id="thread-1"]').click();
+  await page.evaluate(() => {
+    window.__previousThreadReads = window.__mailReadAttempts.get('communication_threads') || 0;
+    window.__mailReadFailures.set('communication_threads', 'QUERY_CANCELLED');
+    window.__mailNotify('communication_threads');
+  });
+  await page.waitForFunction(() => (window.__mailReadAttempts.get('communication_threads') || 0) > window.__previousThreadReads);
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 1);
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"].is-selected').count(), 1);
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
+  await page.evaluate(() => {
+    window.__mailReadFailures.set('communication_threads', 'mail read failed');
+    window.__mailNotify('communication_threads');
+  });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 1);
+  await page.evaluate(() => {
+    window.__mailReadFailures.delete('communication_threads');
+    window.__savedMailThreads = [...window.__mailRows.communication_threads];
+    window.__mailRows.communication_threads = [];
+    window.__mailNotify('communication_threads');
+  });
+  await page.locator('[data-mail-list-empty]').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
+  await page.evaluate(() => {
+    window.__mailRows.communication_threads = window.__savedMailThreads;
+    window.__mailNotify('communication_threads');
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.locator('[data-mail-close-detail]').click();
   await assertMailIconAcceptance(page, iconProviderMode);
   if (mailIconOnly) {
     assert.deepEqual(browserErrors, [], `Mail icon QA must not emit page or console errors (${iconProviderMode} provider)`);
@@ -631,8 +672,22 @@ mailQa: try {
     await page.evaluate(() => window.__mailRows.outbound_messages.map((message) => message.recipient_email).sort()),
     ['einkauf@example.test', 'kontakt@example.test', 'kontakt@example.test', 'kunde@example.test'],
   );
+  await page.setViewportSize({ width: 1440, height: 940 });
+  await page.evaluate(async () => {
+    location.hash = '';
+    window.__unmountMail();
+    window.__mailReadFailures.set('communication_threads', 'QUERY_CANCELLED');
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await page.getByText('Mail wird synchronisiert', { exact: true }).waitFor({ state: 'visible' });
+  assert.equal(await page.getByText('Keine E-Mails', { exact: true }).count(), 0);
+  await page.evaluate(() => {
+    window.__mailReadFailures.delete('communication_threads');
+    window.__mailNotify('communication_threads');
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
   assert.deepEqual(browserErrors, []);
-  console.log('Mail browser QA OK: inbox, thread, campaign, draft, group, mailbox administration, Sellify series-email handoff, and responsive composer');
+  console.log('Mail browser QA OK: inbox, sent, reconnect recovery, thread, campaign, draft, group, mailbox administration, Sellify series-email handoff, and responsive composer');
 } finally {
   await context.close();
   await browser.close();

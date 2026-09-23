@@ -293,7 +293,7 @@ fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Resu
         return Ok(None);
     }
     let db_path = root.join("runtime/ctox.sqlite3");
-    let mut args = vec!["sync".to_string(), "--email".to_string(), email];
+    let mut args = vec!["sync".to_string(), "--email".to_string(), email.clone()];
     if let Some(provider) = settings
         .get("CTO_EMAIL_PROVIDER")
         .map(|value| value.trim())
@@ -351,11 +351,7 @@ fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Resu
     let mut inbox = sync(root, &runtime, &request)?;
     // Exchange exposes Sent Items as a separate folder. Synchronizing only
     // INBOX left a personal mailbox with no sent history in the Mail app.
-    let folder = setting(settings, "CTO_EMAIL_FOLDER");
-    let provider = setting(settings, "CTO_EMAIL_PROVIDER").to_ascii_lowercase();
-    if matches!(provider.as_str(), "ews" | "owa")
-        && (folder.is_empty() || folder.eq_ignore_ascii_case("inbox"))
-    {
+    if should_sync_sent_folder(settings) {
         let mut sent_args = args;
         sent_args.push("--folder".to_string());
         sent_args.push("sent".to_string());
@@ -364,12 +360,39 @@ fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Resu
             passthrough_args: &sent_args,
             skip_flags: &["--db", "--channel"],
         };
-        let sent = sync(root, &runtime, &sent_request)?;
-        if let Some(result) = inbox.as_object_mut() {
-            result.insert("sentSync".to_string(), sent);
+        match sync(root, &runtime, &sent_request) {
+            Ok(sent) => {
+                if let Some(result) = inbox.as_object_mut() {
+                    result.insert("sentSync".to_string(), sent);
+                }
+            }
+            Err(error) => {
+                // Keep the successful Inbox pass visible even if Sent Items
+                // times out or is denied. The failed folder has its own sync
+                // run and an explicit partial result for operator diagnosis.
+                let detail = error.to_string();
+                eprintln!(
+                    "[email] sent folder sync failed account={} error={}",
+                    email, detail
+                );
+                if let Some(result) = inbox.as_object_mut() {
+                    result.insert("partial".to_string(), Value::Bool(true));
+                    result.insert(
+                        "sentSync".to_string(),
+                        json!({"ok": false, "error": detail}),
+                    );
+                }
+            }
         }
     }
     Ok(Some(inbox))
+}
+
+fn should_sync_sent_folder(settings: &BTreeMap<String, String>) -> bool {
+    let provider = setting(settings, "CTO_EMAIL_PROVIDER").to_ascii_lowercase();
+    let folder = setting(settings, "CTO_EMAIL_FOLDER");
+    matches!(provider.as_str(), "ews" | "owa")
+        && (folder.is_empty() || folder.eq_ignore_ascii_case("inbox"))
 }
 
 fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -> Result<Value> {
@@ -788,61 +811,16 @@ fn execute_sync(options: &EmailOptions) -> Result<Value> {
             }
             "ews" | "owa" => {
                 let client = EwsClient::from_options(options)?;
-                let mut items = client.list_folder(
+                let items = client.list_folder(
                     &folder_hint_to_mailbox_folder(&options.folder),
                     options.limit,
                     None,
                 )?;
                 fetched_count = items.len() as i64;
-                // FindItem never returns bodies. Without GetItem every EWS mail
-                // was stored as subject only: the Mail app showed empty mails
-                // and one-time codes (D&B/Okta, 22.09.2026) were unreadable.
-                // Fetch only what is not stored with a body yet.
-                let missing = items
-                    .iter()
-                    .filter(|item| {
-                        !stored_message_has_body(
-                            &conn,
-                            &message_key_from_remote(
-                                &account_key,
-                                &item.folder_hint,
-                                &item.remote_id,
-                            ),
-                        )
-                    })
-                    .map(|item| item.remote_id.clone())
-                    .collect::<Vec<_>>();
-                if !missing.is_empty() {
-                    match client.fetch_text_bodies(&missing) {
-                        Ok(bodies) => {
-                            for item in items.iter_mut() {
-                                if let Some(body) = bodies.get(&item.remote_id) {
-                                    item.preview = crate::communication_store::preview_text(
-                                        body,
-                                        &item.subject,
-                                    );
-                                    item.body_text = body.clone();
-                                }
-                            }
-                        }
-                        Err(error) => eprintln!(
-                            "[email] ews body fetch failed account={} error={}",
-                            account_key,
-                            error.to_string().chars().take(300).collect::<String>()
-                        ),
-                    }
-                }
                 for item in items {
-                    let message_key =
-                        message_key_from_remote(&account_key, &item.folder_hint, &item.remote_id);
-                    let body_text = item.body_text.clone();
-                    let preview = item.preview.clone();
-                    if !store_provider_message(&mut conn, options, &account_key, item)?
-                        && !body_text.is_empty()
-                    {
-                        fill_missing_message_body(&conn, &message_key, &body_text, &preview)?;
+                    if store_provider_message(&mut conn, options, &account_key, item)? {
+                        stored_count += 1;
                     }
-                    stored_count += 1;
                 }
             }
             "activesync" => {
@@ -994,33 +972,6 @@ fn provider_attachment_refs(metadata: &Value) -> Vec<String> {
                 .map(str::to_string)
         })
         .collect()
-}
-
-fn stored_message_has_body(conn: &Connection, message_key: &str) -> bool {
-    conn.query_row(
-        "SELECT length(COALESCE(body_text, '')) > 0 FROM communication_messages WHERE message_key = ?1",
-        [message_key],
-        |row| row.get::<_, bool>(0),
-    )
-    .optional()
-    .ok()
-    .flatten()
-    .unwrap_or(false)
-}
-
-/// Rows stored before bodies were fetched keep their key; fill them once.
-fn fill_missing_message_body(
-    conn: &Connection,
-    message_key: &str,
-    body_text: &str,
-    preview: &str,
-) -> Result<()> {
-    conn.execute(
-        "UPDATE communication_messages SET body_text = ?2, preview = ?3
-         WHERE message_key = ?1 AND COALESCE(body_text, '') = ''",
-        rusqlite::params![message_key, body_text, preview],
-    )?;
-    Ok(())
 }
 
 fn known_communication_message(conn: &Connection, message_key: &str) -> Result<bool> {
@@ -3146,47 +3097,6 @@ impl EwsClient {
         })
     }
 
-    /// Text bodies for the given item ids (GetItem, batches of 25).
-    fn fetch_text_bodies(&self, item_ids: &[String]) -> Result<BTreeMap<String, String>> {
-        let mut bodies = BTreeMap::new();
-        for batch in item_ids.chunks(25) {
-            let ids = batch
-                .iter()
-                .map(|id| format!(r#"<t:ItemId Id="{}"/>"#, xml_escape(id)))
-                .collect::<String>();
-            let body = format!(
-                r#"<m:ItemShape>
-<t:BaseShape>IdOnly</t:BaseShape>
-<t:BodyType>Text</t:BodyType>
-<t:AdditionalProperties><t:FieldURI FieldURI="item:Body"/></t:AdditionalProperties>
-</m:ItemShape>
-<m:ItemIds>{ids}</m:ItemIds>"#
-            );
-            let document = self.request("GetItem", "", &body)?;
-            for node in document
-                .descendants()
-                .filter(|node| node.is_element() && node.tag_name().name() == "Message")
-            {
-                let Some(id) = node
-                    .children()
-                    .find(|child| child.is_element() && child.tag_name().name() == "ItemId")
-                    .and_then(|child| child.attribute("Id"))
-                else {
-                    continue;
-                };
-                let text = node
-                    .children()
-                    .find(|child| child.is_element() && child.tag_name().name() == "Body")
-                    .map(|child| child.text().unwrap_or("").trim().to_string())
-                    .unwrap_or_default();
-                if !text.is_empty() {
-                    bodies.insert(id.to_string(), text);
-                }
-            }
-        }
-        Ok(bodies)
-    }
-
     fn send_mail(
         &self,
         subject: &str,
@@ -4440,6 +4350,20 @@ mod tests {
     };
     use std::io::Write;
     use std::path::PathBuf;
+
+    #[test]
+    fn exchange_service_sync_adds_sent_only_for_inbox_poll() {
+        let mut settings = std::collections::BTreeMap::new();
+        settings.insert("CTO_EMAIL_PROVIDER".to_string(), "owa".to_string());
+        assert!(super::should_sync_sent_folder(&settings));
+        settings.insert("CTO_EMAIL_FOLDER".to_string(), "INBOX".to_string());
+        assert!(super::should_sync_sent_folder(&settings));
+        settings.insert("CTO_EMAIL_FOLDER".to_string(), "sent".to_string());
+        assert!(!super::should_sync_sent_folder(&settings));
+        settings.insert("CTO_EMAIL_PROVIDER".to_string(), "imap".to_string());
+        settings.insert("CTO_EMAIL_FOLDER".to_string(), "INBOX".to_string());
+        assert!(!super::should_sync_sent_folder(&settings));
+    }
 
     #[test]
     fn registered_exchange_account_builds_isolated_client_options() -> anyhow::Result<()> {
