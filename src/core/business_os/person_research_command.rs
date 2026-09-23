@@ -529,11 +529,12 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             .unwrap_or_default(),
         &lead_locations,
     );
-    let mut contact = contacts
-        .first()
-        .filter(|value| value.is_object())
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!({}));
+    // Person fields sent without person records belong to the person their
+    // own `person_key` names, field by field, not to whichever contact
+    // happens to be first. Carbosulf, 23.09.2026: Jacob's `person_vorname`
+    // "Hans-Robert" landed on the first contact, Thomas Schauzu, who became
+    // "Hans-Robert Schauzu". Fields without a key keep the old target.
+    let mut person_contacts: Vec<(Option<String>, Value)> = Vec::new();
     let person_records = outcome
         .get("person_records")
         .and_then(Value::as_array)
@@ -569,7 +570,23 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
         researched_field_keys.push(field_key.clone());
         let value = &restore_german_spelling(value, field);
         if field_key.starts_with("person_") && !has_person_records {
-            contact[field_key] = value.clone();
+            let key = field
+                .get("person_key")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(str::to_string);
+            let slot = match person_contacts.iter().position(|(slot, _)| *slot == key) {
+                Some(index) => index,
+                None => {
+                    person_contacts.push((
+                        key.clone(),
+                        contact_for_person_key(&contacts, key.as_deref()),
+                    ));
+                    person_contacts.len() - 1
+                }
+            };
+            person_contacts[slot].1[field_key] = value.clone();
         } else if !field_key.starts_with("person_") {
             data[field_key] = match field_key.as_str() {
                 "firma_land" => normalize_country_to_iso2(value),
@@ -651,31 +668,36 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             person_records,
             &lead_locations,
         );
-    } else if let Some(normalized) =
-        normalize_researched_contact_with_context(contact, &lead_locations)
-    {
-        let normalized = with_stable_contact_id(
-            existing.get("id").and_then(Value::as_str).unwrap_or("lead"),
-            normalized,
-            0,
-        );
-        if contacts.is_empty() {
-            contacts.push(normalized);
-        } else if let Some(existing_index) = contacts
-            .iter()
-            .position(|existing| contacts_match(existing, &normalized))
-        {
-            if contacts[existing_index]
-                .get("crm_known")
-                .and_then(Value::as_bool)
-                == Some(true)
+    } else {
+        for (index, (_, contact)) in person_contacts.into_iter().enumerate() {
+            let Some(normalized) =
+                normalize_researched_contact_with_context(contact, &lead_locations)
+            else {
+                continue;
+            };
+            let normalized = with_stable_contact_id(
+                existing.get("id").and_then(Value::as_str).unwrap_or("lead"),
+                normalized,
+                index,
+            );
+            if contacts.is_empty() {
+                contacts.push(normalized);
+            } else if let Some(existing_index) = contacts
+                .iter()
+                .position(|existing| contacts_match(existing, &normalized))
             {
-                merge_research_into_known_contact(&mut contacts[existing_index], &normalized);
+                if contacts[existing_index]
+                    .get("crm_known")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                {
+                    merge_research_into_known_contact(&mut contacts[existing_index], &normalized);
+                } else {
+                    contacts[existing_index] = normalized;
+                }
             } else {
-                contacts[existing_index] = normalized;
+                contacts.push(normalized);
             }
-        } else {
-            contacts.push(normalized);
         }
     }
     deduplicate_contacts(&mut contacts);
@@ -1006,7 +1028,41 @@ fn researched_alias_has_canonical_value(
     }
 }
 
+/// The contact a keyed person field belongs to: the one carrying that
+/// `person_key` (or Sellify person id), else a new contact with that key.
+/// Without a key the first contact stays the target, as before.
+fn contact_for_person_key(contacts: &[Value], key: Option<&str>) -> Value {
+    match key {
+        Some(key) => contacts
+            .iter()
+            .find(|existing| {
+                [
+                    existing.get("person_key"),
+                    existing.get("sellify_person_id"),
+                ]
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .any(|value| value.trim() == key)
+            })
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({ "person_key": key })),
+        None => contacts
+            .first()
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+    }
+}
+
 fn contacts_match(left: &Value, right: &Value) -> bool {
+    // Two different people never merge, even over a shared role address
+    // (info@, vertrieb@) or profile: distinct non-empty keys end the check.
+    let left_key = contact_string(left, &["person_key"]);
+    let right_key = contact_string(right, &["person_key"]);
+    if !left_key.is_empty() && !right_key.is_empty() {
+        return left_key == right_key;
+    }
     let left_email = normalized_email(&contact_string(left, &["person_email", "email"]));
     let right_email = normalized_email(&contact_string(right, &["person_email", "email"]));
     if !left_email.is_empty() && left_email == right_email {
@@ -3212,6 +3268,84 @@ mod tests {
             normalize_country_to_iso2(&serde_json::json!("Vereinigtes Koenigreich")),
             serde_json::json!("Vereinigtes Koenigreich")
         );
+    }
+
+    #[test]
+    fn lead_level_person_fields_land_on_their_own_person() {
+        // Carbosulf, 23.09.2026: Jacob's first name was written onto the first
+        // contact, Thomas Schauzu, who then read "Hans-Robert Schauzu".
+        let existing = serde_json::json!({
+            "id": "lead-c",
+            "contacts": [
+                {"id": "c1", "person_key": "thomas-schauzu", "person_vorname": "Thomas", "person_nachname": "Schauzu", "name": "Thomas Schauzu"},
+                {"id": "c2", "person_key": "sellify-person-59874", "person_vorname": "Hans-Robert", "person_nachname": "Jacob", "name": "Hans-Robert Jacob", "person_email": "hr.jacob@example.org"}
+            ]
+        });
+        let result = serde_json::json!({
+            "fields": {
+                "person_vorname": {"value": "Hans-Robert", "person_key": "sellify-person-59874"},
+                "person_position": {"value": "Geschäftsführer", "person_key": "sellify-person-59874"}
+            }
+        });
+        let patch = outbound_lead_generation_research_outcome_patch(&existing, &result, 1);
+        let contacts = patch["contacts"].as_array().expect("contacts");
+        let schauzu = contacts
+            .iter()
+            .find(|contact| contact["person_key"] == "thomas-schauzu")
+            .expect("Schauzu stays");
+        assert_eq!(schauzu["person_vorname"], "Thomas");
+        assert!(schauzu.get("person_position").is_none() || schauzu["person_position"].is_null());
+        let jacob = contacts
+            .iter()
+            .find(|contact| contact["person_key"] == "sellify-person-59874")
+            .expect("Jacob stays");
+        assert_eq!(jacob["person_position"], "Geschäftsführer");
+        assert_eq!(contacts.len(), 2);
+    }
+
+    #[test]
+    fn person_fields_with_two_keys_are_routed_field_by_field() {
+        let existing = serde_json::json!({
+            "id": "lead-d",
+            "contacts": [
+                {"id": "c1", "person_key": "thomas-schauzu", "person_vorname": "Thomas", "person_nachname": "Schauzu", "name": "Thomas Schauzu"},
+                {"id": "c2", "person_key": "sellify-person-59874", "person_vorname": "Hans-Robert", "person_nachname": "Jacob", "name": "Hans-Robert Jacob"}
+            ]
+        });
+        let result = serde_json::json!({
+            "fields": {
+                "person_position": {"value": "Geschäftsführer", "person_key": "sellify-person-59874"},
+                "person_telefon": {"value": "+49 221 1234567", "person_key": "thomas-schauzu"}
+            }
+        });
+        let patch = outbound_lead_generation_research_outcome_patch(&existing, &result, 1);
+        let contacts = patch["contacts"].as_array().expect("contacts");
+        let by_key = |key: &str| {
+            contacts
+                .iter()
+                .find(|contact| contact["person_key"] == key)
+                .unwrap_or_else(|| panic!("{key} missing"))
+                .clone()
+        };
+        let schauzu = by_key("thomas-schauzu");
+        let jacob = by_key("sellify-person-59874");
+        assert_eq!(schauzu["person_vorname"], "Thomas");
+        assert!(schauzu["person_telefon"]
+            .as_str()
+            .is_some_and(|value| value.contains("1234567")));
+        assert!(schauzu.get("person_position").map_or(true, Value::is_null));
+        assert_eq!(jacob["person_position"], "Geschäftsführer");
+        assert!(jacob.get("person_telefon").map_or(true, Value::is_null));
+        assert_eq!(contacts.len(), 2);
+    }
+
+    #[test]
+    fn different_person_keys_never_merge_over_a_role_address() {
+        let one = serde_json::json!({"person_key": "norman-quandt", "person_email": "info@bnt-chemicals.de", "person_vorname": "Norman", "person_nachname": "Quandt"});
+        let two = serde_json::json!({"person_key": "birgit-hessler", "person_email": "info@bnt-chemicals.de", "person_vorname": "Birgit", "person_nachname": "Hessler"});
+        assert!(!contacts_match(&one, &two));
+        let same = serde_json::json!({"person_key": "norman-quandt", "person_vorname": "N.", "person_nachname": "Quandt"});
+        assert!(contacts_match(&one, &same));
     }
 
     #[test]

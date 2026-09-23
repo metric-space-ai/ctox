@@ -2981,14 +2981,44 @@ fn sandboxed_cli_arg_is_flag(arg: &str, flag: &str) -> bool {
             .is_some_and(|suffix| suffix.starts_with('='))
 }
 
+fn sandboxed_cli_runtime_root_is_own(root: &Path, value: &str) -> bool {
+    let value = value.trim();
+    if value.is_empty() {
+        return false;
+    }
+    let canonical =
+        |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    canonical(Path::new(value)) == canonical(root)
+}
+
 fn sanitize_sandboxed_cli_argv(root: &Path, argv: &[String]) -> Result<Vec<String>> {
-    for flag in ["--runtime-root", "--db"] {
-        if argv.iter().any(|arg| sandboxed_cli_arg_is_flag(arg, flag)) {
-            anyhow::bail!("sandboxed cli: flag {flag} is not allowed over the relay");
+    if argv
+        .iter()
+        .any(|arg| sandboxed_cli_arg_is_flag(arg, "--db"))
+    {
+        anyhow::bail!("sandboxed cli: flag --db is not allowed over the relay");
+    }
+    // The native person research (web-stack scrape bridge) always passes
+    // `--runtime-root <daemon root>` to `ctox scrape execute`. Pointing at the
+    // daemon's own root changes nothing, so it is dropped; every other root
+    // stays forbidden. Before, all eight adapters of a native run failed with
+    // "flag --runtime-root is not allowed over the relay" (thesen, 23.09.2026).
+    let mut argv = argv.to_vec();
+    while let Some(index) = argv
+        .iter()
+        .position(|arg| sandboxed_cli_arg_is_flag(arg, "--runtime-root"))
+    {
+        let (value, span) = match argv[index].strip_prefix("--runtime-root=") {
+            Some(value) => (value.to_string(), 1),
+            None => (argv.get(index + 1).cloned().unwrap_or_default(), 2),
+        };
+        if !sandboxed_cli_runtime_root_is_own(root, &value) {
+            anyhow::bail!("sandboxed cli: flag --runtime-root is not allowed over the relay");
         }
+        argv.drain(index..(index + span).min(argv.len()));
     }
 
-    let mut sanitized = argv.to_vec();
+    let mut sanitized = argv.clone();
     for index in 0..sanitized.len() {
         if sanitized[index] != "--timeout-seconds" {
             continue;
@@ -9004,7 +9034,27 @@ fn run_completion_review(
     _mission_state: Option<&lcm::MissionStateRecord>,
 ) -> CompletionReviewDisposition {
     match command_writeback_failure(root, job) {
-        Ok(Some(summary)) => return CompletionReviewDisposition::TerminalQueueFailure { summary },
+        Ok(Some(summary)) => {
+            // A research turn that ended right before its writeback ("JSON ist
+            // valide. Jetzt der Writeback.", CHT and Cilag on thesen,
+            // 23.09.2026, after 1-2 h of finished research) is not a failed
+            // task: the result exists in the thread. Send the same task back
+            // through the bounded review-feedback loop with one instruction,
+            // write back now. Only a missing receipt is retried; an invalid
+            // contract stays terminal, and the review budget still ends the
+            // loop.
+            if missing_writeback_receipt_is_retryable(&summary)
+                && !job.leased_message_keys.is_empty()
+            {
+                let outcome = missing_writeback_review_outcome(&summary);
+                if let Ok(disposition) =
+                    queue_review_rejection_feedback_disposition(root, job, &outcome, reply_text)
+                {
+                    return disposition;
+                }
+            }
+            return CompletionReviewDisposition::TerminalQueueFailure { summary };
+        }
         Ok(None) => {}
         Err(error) => {
             return CompletionReviewDisposition::TerminalQueueFailure {
@@ -14962,6 +15012,25 @@ fn handle_actionable_completion_review_rejection(
             };
         }
     }
+}
+
+fn missing_writeback_receipt_is_retryable(summary: &str) -> bool {
+    summary.starts_with("Business command writeback failed: no successful ")
+}
+
+fn missing_writeback_review_outcome(summary: &str) -> review::ReviewOutcome {
+    let mut outcome = review::ReviewOutcome::skipped(
+        "The research result was never written back: the turn ended before the business_os.execute_writeback call.",
+    );
+    outcome.required = true;
+    outcome.verdict = review::ReviewVerdict::Fail;
+    outcome.failed_gates = vec!["business_command_writeback_missing".to_string()];
+    outcome.open_items = vec![
+        "Call the MCP tool business_os.execute_writeback now with the finished field_status and result for this record_id. Do not research again and do not restart; use the result you already assembled in this thread.".to_string(),
+        "Read the writeback response: store what it accepted, fix only the rejected or open fields it names, and send those in one further call.".to_string(),
+    ];
+    outcome.evidence = vec![clip_text(summary, 400)];
+    outcome
 }
 
 fn queue_review_rejection_feedback_disposition(
@@ -24273,6 +24342,61 @@ mod tests {
             sandboxed_cli_flag_value(&accepted, "--input-file"),
             canonical_allowed_input.to_str()
         );
+    }
+
+    #[test]
+    fn sandboxed_cli_relay_drops_the_daemons_own_runtime_root() {
+        // Native person research passes `--runtime-root <daemon root>`; all
+        // eight adapters of a thesen run failed on it (23.09.2026).
+        let root = temp_root("sandboxed-cli-own-root");
+        let own = root.to_str().unwrap().to_string();
+        for argv in [
+            vec![
+                "scrape".to_string(),
+                "execute".to_string(),
+                "--target-key".to_string(),
+                "fixture".to_string(),
+                "--runtime-root".to_string(),
+                own.clone(),
+            ],
+            vec![
+                "scrape".to_string(),
+                "execute".to_string(),
+                format!("--runtime-root={own}"),
+                "--target-key".to_string(),
+                "fixture".to_string(),
+            ],
+        ] {
+            let sanitized = sanitize_sandboxed_cli_argv(&root, &argv).unwrap();
+            assert!(!sanitized
+                .iter()
+                .any(|arg| arg.starts_with("--runtime-root")));
+            assert_eq!(
+                sandboxed_cli_flag_value(&sanitized, "--target-key"),
+                Some("fixture")
+            );
+        }
+        let foreign = vec![
+            "scrape".to_string(),
+            "execute".to_string(),
+            "--runtime-root".to_string(),
+            "/tmp/attacker-runtime".to_string(),
+        ];
+        assert!(sanitize_sandboxed_cli_argv(&root, &foreign).is_err());
+    }
+
+    #[test]
+    fn a_missing_research_writeback_is_retried_not_failed() {
+        assert!(missing_writeback_receipt_is_retryable(
+            "Business command writeback failed: no successful outbound.lead.research_writeback receipt for record lead_1 and originating research cmd_1."
+        ));
+        assert!(!missing_writeback_receipt_is_retryable(
+            "writeback contract incomplete: expected mechanism=business_command"
+        ));
+        let outcome =
+            missing_writeback_review_outcome("Business command writeback failed: no successful x");
+        assert_eq!(outcome.verdict, review::ReviewVerdict::Fail);
+        assert!(outcome.open_items[0].contains("business_os.execute_writeback"));
     }
 
     #[test]
