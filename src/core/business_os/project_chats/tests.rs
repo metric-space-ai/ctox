@@ -823,6 +823,7 @@ fn project_crew_admission_uses_native_chat_binding_and_rejects_revocation() -> a
     assert!(super::super::project_crew::member_for_chat(&conn, "owner", chat).is_err());
     let core = Connection::open(crate::paths::core_db(root.path()))?;
     crate::crew::ensure_schema(&core)?;
+    channels::ensure_schema_once(root.path(), &core)?;
     let soul = json!({"gruendlichkeit_vs_tempo":50,"vorsicht_vs_mut":50,
         "knapp_vs_ausfuehrlich":50,"regeltreu_vs_kreativ":50,"nachfragen_vs_annehmen":50,
         "sketch":"Project identity","voice":"Concise"})
