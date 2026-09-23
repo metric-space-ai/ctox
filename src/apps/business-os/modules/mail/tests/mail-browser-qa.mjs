@@ -727,8 +727,11 @@ mailQa: try {
   await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
   assert.ok(await page.evaluate(() => {
     const attempts = (window.__mailReadAttempts.get('communication_threads') || 0) - window.__mailReadAttemptBaseline;
-    return attempts >= 2 && attempts <= 3;
-  }), 'notification pulses must not start an unbounded number of reads');
+    return attempts >= 2
+      && (window.__mailMaxPendingReads.get('communication_threads') || 0) <= 2
+      && (window.__mailPendingReads.get('communication_threads') || 0) <= 2
+      && (window.__mailAbortedReads.get('communication_threads') || 0) >= 1;
+  }), 'notification pulses must cancel timed-out reads and bound concurrent queries');
   await page.waitForFunction(() => (window.__mailReadAttempts.get('communication_threads') || 0) - window.__mailReadAttemptBaseline >= 5, null, { timeout: 14_000 });
   assert.ok(await page.evaluate(() => (
     (window.__mailMaxPendingReads.get('communication_threads') || 0) <= 2
