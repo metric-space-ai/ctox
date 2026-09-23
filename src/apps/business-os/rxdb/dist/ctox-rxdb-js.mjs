@@ -1654,7 +1654,7 @@ var QueryMetaStorage = class {
     await this.backend.putQueryWindow(record);
     return record;
   }
-  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null }) {
+  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null, permissionDigest = void 0 }) {
     const now = this.clock();
     const existing = await this.backend.getQueryWindow(
       [collection, queryFingerprint2, offset, limit].join("|")
@@ -1677,6 +1677,11 @@ var QueryMetaStorage = class {
       // fetch satisfied — distinct from the server echo above.
       satisfiedRevision: satisfiedRevision ?? null,
       satisfiedGeneration: satisfiedGeneration ?? null,
+      // SYNC-12: read-permission identity (digest of role+epoch capability
+      // claims) this window's membership was authorized under. The demand
+      // loader refuses to serve control-plane windows whose stamp mismatches
+      // the current digest. Omitted on upsert: keep the previous stamp.
+      permissionDigest: permissionDigest === void 0 ? existing?.permissionDigest ?? null : permissionDigest ?? null,
       queryShape: queryShape && typeof queryShape === "object" ? structuredCloneSafe3(queryShape) : null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -7476,7 +7481,16 @@ function createQueryDemandLoader({
   // state: without the stamp they counted as unsynced LOCAL writes, so the
   // push pipeline echoed them (and cache-eviction tombstones — i.e. DELETES)
   // back to the master, and the LWW gate let them veto later master pulls.
-  replicationOrigin = null
+  replicationOrigin = null,
+  // SYNC-12 boundary for control-plane reads: live provider for this
+  // browser's read-permission digest (hash of the role+epoch capability
+  // claims). A role or grant change bumps the digest; control-plane windows
+  // stamped under a superseded digest must not be served locally before a
+  // newly authorized fetch re-stamps their membership. An empty current
+  // digest (identity unresolvable right now) stays permissive, mirroring
+  // readPermissionDigestMatches, so a token-endpoint blip never blocks warm
+  // rendering.
+  readPermissionDigest = null
 }) {
   if (!storageCollection) throw new TypeError("demand loader requires storageCollection");
   if (!sidecar) throw new TypeError("demand loader requires sidecar");
@@ -7485,6 +7499,9 @@ function createQueryDemandLoader({
     throw new TypeError("demand loader requires requestQueryFetch");
   }
   const resolveReplicationOrigin = () => (typeof replicationOrigin === "function" ? replicationOrigin() : replicationOrigin) || null;
+  const resolveReadPermissionDigest = () => String(
+    (typeof readPermissionDigest === "function" ? readPermissionDigest() : readPermissionDigest) || ""
+  );
   const boundedQueryWindowRevalidateMs = Math.max(
     250,
     Number(queryWindowRevalidateMs) || DEFAULT_QUERY_WINDOW_REVALIDATE_MS
@@ -7592,25 +7609,33 @@ function createQueryDemandLoader({
         const emptyWindowStale = cached && (!Array.isArray(cached.documentIds) || cached.documentIds.length === 0) && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= EMPTY_QUERY_WINDOW_REVALIDATE_MS;
         const mutableMembershipWindowStale = isMutableMembershipCollection(collectionName) && cached && Array.isArray(cached.documentIds) && cached.documentIds.length > 0 && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= MUTABLE_QUERY_MEMBERSHIP_REVALIDATE_MS;
         const queryWindowStale = cached && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= boundedQueryWindowRevalidateMs;
-        if (cached && cached.complete && cachedDocumentsAvailable && !emptyWindowStale && !mutableMembershipWindowStale && !queryWindowStale) {
+        const controlPlaneRead = isControlPlaneStatusCollection(collectionName);
+        const controlPlanePermissionMismatchNow = () => controlPlaneRead && cached && (cached.complete || cached.everCompleted) && !windowReadPermissionDigestMatches(cached.permissionDigest, resolveReadPermissionDigest());
+        const controlPlaneFallbackMembership = () => controlPlanePermissionMismatchNow() || controlPlaneRead && !cached ? [] : cached?.documentIds;
+        const serveWindowDocuments = async (windowRecord, membershipIds) => {
+          const documents = await readLocalDocuments(
+            storageCollection,
+            query,
+            normalizedWindow,
+            membershipIds
+          );
+          if (controlPlaneRead && !windowReadPermissionDigestMatches(
+            windowRecord?.permissionDigest,
+            resolveReadPermissionDigest()
+          )) {
+            return [];
+          }
+          return documents;
+        };
+        if (cached && cached.complete && cachedDocumentsAvailable && !emptyWindowStale && !mutableMembershipWindowStale && !queryWindowStale && !controlPlanePermissionMismatchNow()) {
           if (strictRequireRevision) {
             if (cached.satisfiedRevision === query.requireRevision && cached.satisfiedGeneration === generation && !controlPlaneWindowStale) {
               await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-              return readLocalDocuments(
-                storageCollection,
-                query,
-                normalizedWindow,
-                cached.documentIds
-              );
+              return serveWindowDocuments(cached, cached.documentIds);
             }
           } else if (!controlPlaneWindowStale) {
             await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached.documentIds
-            );
+            return serveWindowDocuments(cached, cached.documentIds);
           }
         }
         const dedupKey = strictRequireRevision ? `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}|strict|${query.requireRevision}|${generation}` : `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
@@ -7624,6 +7649,7 @@ function createQueryDemandLoader({
           throwIfQueryCancelled(invocationEntry);
           const job = (async () => {
             const startedAt = clock();
+            const fetchPermissionDigest = resolveReadPermissionDigest();
             try {
               assertFresh();
               const result = await Promise.race([
@@ -7644,6 +7670,9 @@ function createQueryDemandLoader({
                 cancellationPromise
               ]);
               assertFresh();
+              if (controlPlaneRead && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())) {
+                throw createQueryCancelledError("permission-identity-changed");
+              }
               await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
               assertFresh();
               const documentIds = (result.documents || []).map(extractId).filter(Boolean);
@@ -7657,6 +7686,10 @@ function createQueryDemandLoader({
                 authoritativeRevision: result.authoritativeRevision ?? null,
                 satisfiedRevision: query?.requireRevision ?? null,
                 satisfiedGeneration: strictRequireRevision ? generation : null,
+                // SYNC-12: stamp the read-permission identity this authorized
+                // fetch ran under; a later role/grant change (new digest) must
+                // not be served this membership.
+                permissionDigest: fetchPermissionDigest || null,
                 queryShape: {
                   selector: query?.selector ?? {},
                   sort: normalizeSort(query?.sort)
@@ -7667,6 +7700,9 @@ function createQueryDemandLoader({
                 estimatedBytes: estimateBytesPerDocument(result.documents || [])
               });
               assertFresh();
+              if (controlPlaneRead && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())) {
+                throw createQueryCancelledError("permission-identity-changed");
+              }
               bumpStatus(status, "queryFetchSuccessCount");
               if (status) status.lastQueryFetchMs = clock() - startedAt;
               v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
@@ -7676,12 +7712,7 @@ function createQueryDemandLoader({
                 bumpStatus(status, "queryFetchCancelCount");
                 v15Log("fetch:cancel", { fingerprint, error: String(error?.message ?? error) });
                 if (strictRequireRevision || invocationEntry.consumerCancelled) throw error;
-                return readLocalDocuments(
-                  storageCollection,
-                  query,
-                  normalizedWindow,
-                  cached?.documentIds
-                );
+                return serveWindowDocuments(cached, controlPlaneFallbackMembership());
               }
               bumpStatus(status, "queryFetchErrorCount");
               v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
@@ -7700,12 +7731,7 @@ function createQueryDemandLoader({
             if (strictRequireRevision || invocationEntry.consumerCancelled) {
               throw createQueryCancelledError("multi-tab-broker-closed");
             }
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached?.documentIds
-            );
+            return serveWindowDocuments(cached, controlPlaneFallbackMembership());
           }
           assertFresh();
           const leader = await multiTabBroker.claim(dedupKey);
@@ -7723,23 +7749,16 @@ function createQueryDemandLoader({
             if (strictRequireRevision || invocationEntry.consumerCancelled) {
               throw createQueryCancelledError("multi-tab-broker-closed");
             }
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached?.documentIds
-            );
+            return serveWindowDocuments(cached, controlPlaneFallbackMembership());
           }
           const materialized = await sidecar.getQueryWindow(sidecarKey);
           assertFresh();
-          if (materialized?.complete && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds) && (!strictRequireRevision || materialized.satisfiedRevision === query.requireRevision && materialized.satisfiedGeneration === generation)) {
+          if (materialized?.complete && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds) && windowReadPermissionDigestMatches(
+            materialized.permissionDigest,
+            controlPlaneRead ? resolveReadPermissionDigest() : ""
+          ) && (!strictRequireRevision || materialized.satisfiedRevision === query.requireRevision && materialized.satisfiedGeneration === generation)) {
             bumpStatus(status, "queryFetchDedupHitCount");
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              materialized.documentIds
-            );
+            return serveWindowDocuments(materialized, materialized.documentIds);
           }
           const takeover = await multiTabBroker.claim(dedupKey);
           assertFresh();
@@ -7748,12 +7767,7 @@ function createQueryDemandLoader({
               if (strictRequireRevision || invocationEntry.consumerCancelled) {
                 throw createQueryCancelledError("multi-tab-broker-closed");
               }
-              return readLocalDocuments(
-                storageCollection,
-                query,
-                normalizedWindow,
-                cached?.documentIds
-              );
+              return serveWindowDocuments(cached, controlPlaneFallbackMembership());
             }
             return startFetchJob();
           }
@@ -7777,21 +7791,13 @@ function createQueryDemandLoader({
           coordinatedByFingerprint.set(dedupKey, job);
           return job;
         };
-        if (cached?.everCompleted && cachedDocumentsAvailable && !emptyWindowStale && !query?.requireRevision) {
-          if (controlPlaneWindowStale) {
-            return coordinatedFetchJob();
-          }
+        if (cached?.everCompleted && cachedDocumentsAvailable && !emptyWindowStale && !controlPlanePermissionMismatchNow() && !query?.requireRevision) {
           coordinatedFetchJob().catch(() => {
           });
           bumpStatus(status, "queryFetchStaleServedCount");
           v15Log("fetch:stale-served", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
           await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
-          return readLocalDocuments(
-            storageCollection,
-            query,
-            normalizedWindow,
-            cached.documentIds || []
-          );
+          return serveWindowDocuments(cached, cached.documentIds || []);
         }
         return coordinatedFetchJob();
       })();
@@ -7990,6 +7996,10 @@ function normalizeSort(sort) {
     const direction = entry[key];
     return { [key]: direction === -1 || direction === "desc" || direction === "DESC" ? "desc" : "asc" };
   });
+}
+function windowReadPermissionDigestMatches(storedDigest, currentDigest) {
+  if (!currentDigest) return true;
+  return String(storedDigest || "") === currentDigest;
 }
 async function readLocalDocuments(storageCollection, query, window2, documentIds = null) {
   if (Array.isArray(documentIds)) {
@@ -11222,7 +11232,11 @@ var CtoxWebRtcReplicationState = class {
       status: this.demandStatus,
       multiTabBroker: this.multiTabBroker,
       queryGeneration: () => this.collectionQueryGenerationToken(this.activeRemotePeerId),
-      replicationOrigin: demandReplicationOrigin
+      replicationOrigin: demandReplicationOrigin,
+      // SYNC-12: live provider — runPeerReady recomputes this digest at every
+      // handshake, so a same-session role/grant change takes effect at the
+      // next control-plane read without rebuilding the loader.
+      readPermissionDigest: () => this.readPermissionDigest || ""
     }) : null;
     if (typeof this.collection.setDemandLoader === "function") {
       this.collection.setDemandLoader(this.demandLoader);

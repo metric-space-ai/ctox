@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260920-shell-v2-authoritative-read-lease-v386';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260923-read-lease-post-read-guard-v390';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

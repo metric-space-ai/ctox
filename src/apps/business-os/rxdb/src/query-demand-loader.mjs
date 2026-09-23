@@ -41,6 +41,15 @@ export function createQueryDemandLoader({
   // push pipeline echoed them (and cache-eviction tombstones — i.e. DELETES)
   // back to the master, and the LWW gate let them veto later master pulls.
   replicationOrigin = null,
+  // SYNC-12 boundary for control-plane reads: live provider for this
+  // browser's read-permission digest (hash of the role+epoch capability
+  // claims). A role or grant change bumps the digest; control-plane windows
+  // stamped under a superseded digest must not be served locally before a
+  // newly authorized fetch re-stamps their membership. An empty current
+  // digest (identity unresolvable right now) stays permissive, mirroring
+  // readPermissionDigestMatches, so a token-endpoint blip never blocks warm
+  // rendering.
+  readPermissionDigest = null,
 }) {
   if (!storageCollection) throw new TypeError('demand loader requires storageCollection');
   if (!sidecar) throw new TypeError('demand loader requires sidecar');
@@ -50,6 +59,9 @@ export function createQueryDemandLoader({
   }
   const resolveReplicationOrigin = () => (
     (typeof replicationOrigin === 'function' ? replicationOrigin() : replicationOrigin) || null
+  );
+  const resolveReadPermissionDigest = () => String(
+    (typeof readPermissionDigest === 'function' ? readPermissionDigest() : readPermissionDigest) || '',
   );
   const boundedQueryWindowRevalidateMs = Math.max(
     250,
@@ -184,6 +196,56 @@ export function createQueryDemandLoader({
       const queryWindowStale = cached
         && clock() - Number(cached.updatedAt || cached.createdAt || 0)
           >= boundedQueryWindowRevalidateMs;
+      // SYNC-12 fail-closed boundary: control-plane lifecycle rows were
+      // fetched under a specific read-permission identity. After a role or
+      // grant change (new capability epoch, hence a new digest) a cached
+      // window's membership may still reference rows the identity is no
+      // longer authorized to see, or miss rows of the new scope — the
+      // retained-checkpoint invalidation in replication-webrtc forces a full
+      // re-pull, but it does not rewrite these persisted windows. Neither the
+      // complete fast path nor stale-while-revalidate may serve that
+      // membership before a newly authorized fetch re-stamps the window.
+      // Windows persisted before this stamp existed mismatch a known identity
+      // exactly once — the safe direction.
+      const controlPlaneRead = isControlPlaneStatusCollection(collectionName);
+      // The digest is re-resolved at every serve/fallback decision: the
+      // identity can change mid-wait (broker claim, deduped in-flight job,
+      // mid-flight fetch), and each decision must be evaluated against the
+      // digest valid at THAT moment, not at resolveQuery entry.
+      const controlPlanePermissionMismatchNow = () => controlPlaneRead
+        && cached
+        && (cached.complete || cached.everCompleted)
+        && !windowReadPermissionDigestMatches(cached.permissionDigest, resolveReadPermissionDigest());
+      // Cancel/broker fallbacks: without a window record there is no
+      // membership evidence at all. For control-plane collections serve
+      // nothing rather than a raw selector match over the local store —
+      // these demand-only ledgers would otherwise expose a partial or
+      // orphaned (materialized but never window-stamped) set of rows.
+      const controlPlaneFallbackMembership = () => (
+        controlPlanePermissionMismatchNow() || (controlPlaneRead && !cached)
+      ) ? [] : cached?.documentIds;
+      // Post-local-read guard: the IndexedDB serve read itself can span a
+      // role-change handshake, so a window whose stamp matched when the
+      // decision was taken can be superseded before its rows materialize.
+      // Re-check after the read for control-plane ledgers and fail closed.
+      const serveWindowDocuments = async (windowRecord, membershipIds) => {
+        const documents = await readLocalDocuments(
+          storageCollection,
+          query,
+          normalizedWindow,
+          membershipIds,
+        );
+        if (
+          controlPlaneRead
+          && !windowReadPermissionDigestMatches(
+            windowRecord?.permissionDigest,
+            resolveReadPermissionDigest(),
+          )
+        ) {
+          return [];
+        }
+        return documents;
+      };
       if (
         cached
         && cached.complete
@@ -191,6 +253,7 @@ export function createQueryDemandLoader({
         && !emptyWindowStale
         && !mutableMembershipWindowStale
         && !queryWindowStale
+        && !controlPlanePermissionMismatchNow()
       ) {
         if (strictRequireRevision) {
           // Same token plus exact bridge/connection/database generation may
@@ -202,21 +265,11 @@ export function createQueryDemandLoader({
             && !controlPlaneWindowStale
           ) {
             await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached.documentIds,
-            );
+            return serveWindowDocuments(cached, cached.documentIds);
           }
         } else if (!controlPlaneWindowStale) {
           await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-          return readLocalDocuments(
-            storageCollection,
-            query,
-            normalizedWindow,
-            cached.documentIds,
-          );
+          return serveWindowDocuments(cached, cached.documentIds);
         }
       }
 
@@ -233,6 +286,11 @@ export function createQueryDemandLoader({
         throwIfQueryCancelled(invocationEntry);
         const job = (async () => {
         const startedAt = clock();
+        // Capture the read-permission identity BEFORE the request: the
+        // response may only be materialized, stamped and returned when the
+        // identity did not change mid-flight. Otherwise old-authority data
+        // would be persisted and served under the new identity's stamp.
+        const fetchPermissionDigest = resolveReadPermissionDigest();
         try {
           assertFresh();
           const result = await Promise.race([
@@ -253,6 +311,16 @@ export function createQueryDemandLoader({
             cancellationPromise,
           ]);
           assertFresh();
+          if (
+            controlPlaneRead
+            && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())
+          ) {
+            // The identity changed while the request was in flight: this
+            // response was authorized under the superseded identity. Do not
+            // materialize, stamp or return it — the cancelled path below
+            // renders nothing until the next authorized fetch.
+            throw createQueryCancelledError('permission-identity-changed');
+          }
           await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
           assertFresh();
           const documentIds = (result.documents || []).map(extractId).filter(Boolean);
@@ -266,6 +334,10 @@ export function createQueryDemandLoader({
             authoritativeRevision: result.authoritativeRevision ?? null,
             satisfiedRevision: query?.requireRevision ?? null,
             satisfiedGeneration: strictRequireRevision ? generation : null,
+            // SYNC-12: stamp the read-permission identity this authorized
+            // fetch ran under; a later role/grant change (new digest) must
+            // not be served this membership.
+            permissionDigest: fetchPermissionDigest || null,
             queryShape: {
               selector: query?.selector ?? {},
               sort: normalizeSort(query?.sort),
@@ -276,6 +348,18 @@ export function createQueryDemandLoader({
             estimatedBytes: estimateBytesPerDocument(result.documents || []),
           });
           assertFresh();
+          // Final guard: the identity can change during the local materialize/
+          // upsert awaits. The persisted window is already self-correcting (it
+          // carries the request-time stamp, so a changed identity mismatches
+          // future reads) — but this caller must not be returned old-authority
+          // rows either. Checked before the success accounting so a discarded
+          // response counts only as a cancellation.
+          if (
+            controlPlaneRead
+            && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())
+          ) {
+            throw createQueryCancelledError('permission-identity-changed');
+          }
           bumpStatus(status, 'queryFetchSuccessCount');
           if (status) status.lastQueryFetchMs = clock() - startedAt;
           v15Log('fetch:ok', { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
@@ -287,12 +371,11 @@ export function createQueryDemandLoader({
             // A strict authority token has no local fallback. An explicit
             // consumer abort must not silently become local data either.
             if (strictRequireRevision || invocationEntry.consumerCancelled) throw error;
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached?.documentIds,
-            );
+            // Fail-closed: an aborted fetch must not fall back to window
+            // membership authorized under a superseded read-permission
+            // identity; an empty membership renders nothing until the next
+            // authorized fetch re-stamps the window.
+            return serveWindowDocuments(cached, controlPlaneFallbackMembership());
           }
           bumpStatus(status, 'queryFetchErrorCount');
           v15Log('fetch:error', { fingerprint, error: String(error?.message ?? error) });
@@ -312,12 +395,7 @@ export function createQueryDemandLoader({
           if (strictRequireRevision || invocationEntry.consumerCancelled) {
             throw createQueryCancelledError('multi-tab-broker-closed');
           }
-          return readLocalDocuments(
-            storageCollection,
-            query,
-            normalizedWindow,
-            cached?.documentIds,
-          );
+          return serveWindowDocuments(cached, controlPlaneFallbackMembership());
         }
         assertFresh();
         const leader = await multiTabBroker.claim(dedupKey);
@@ -335,18 +413,17 @@ export function createQueryDemandLoader({
           if (strictRequireRevision || invocationEntry.consumerCancelled) {
             throw createQueryCancelledError('multi-tab-broker-closed');
           }
-          return readLocalDocuments(
-            storageCollection,
-            query,
-            normalizedWindow,
-            cached?.documentIds,
-          );
+          return serveWindowDocuments(cached, controlPlaneFallbackMembership());
         }
         const materialized = await sidecar.getQueryWindow(sidecarKey);
         assertFresh();
         if (
           materialized?.complete
           && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds)
+          && windowReadPermissionDigestMatches(
+            materialized.permissionDigest,
+            controlPlaneRead ? resolveReadPermissionDigest() : '',
+          )
           && (
             !strictRequireRevision
             || (
@@ -356,12 +433,7 @@ export function createQueryDemandLoader({
           )
         ) {
           bumpStatus(status, 'queryFetchDedupHitCount');
-          return readLocalDocuments(
-            storageCollection,
-            query,
-            normalizedWindow,
-            materialized.documentIds,
-          );
+          return serveWindowDocuments(materialized, materialized.documentIds);
         }
         // The owner may have crashed. Bounded wait plus TTL-aware re-claim
         // lets this tab take over without leaving the query hung forever.
@@ -372,12 +444,7 @@ export function createQueryDemandLoader({
             if (strictRequireRevision || invocationEntry.consumerCancelled) {
               throw createQueryCancelledError('multi-tab-broker-closed');
             }
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached?.documentIds,
-            );
+            return serveWindowDocuments(cached, controlPlaneFallbackMembership());
           }
           // A dead/replaced collection state can leave a 30 s broker claim
           // behind. We already waited the full bounded follower window; a
@@ -422,33 +489,29 @@ export function createQueryDemandLoader({
       // the background; the materialised refresh emits a storage change
       // event, so reactive queries re-render on arrival. This turns repeat
       // module loads from a WebRTC round-trip into an IndexedDB read.
+      // Control-plane status collections (business_commands, ctox_queue_tasks)
+      // share this path: their short freshness budget remains the trigger for
+      // the bounded, deduplicated refresh, but no longer blocks the caller on
+      // a native round-trip — on an ordinary reload every such window is older
+      // than its budget, so awaiting it parked app lists behind the native
+      // query plane for seconds to minutes. Cached lifecycle rows render
+      // immediately and the background refresh corrects them via the storage
+      // change event, so the window never becomes a permanent cache hit.
       // An explicit requireRevision keeps strict await semantics.
       if (
         cached?.everCompleted
         && cachedDocumentsAvailable
         && !emptyWindowStale
+        && !controlPlanePermissionMismatchNow()
         && !query?.requireRevision
       ) {
-        if (controlPlaneWindowStale) {
-          // Commands and queue tasks are demand-only to avoid replaying the
-          // complete historical ledger. Their records are mutable lifecycle
-          // projections, though, so a completed query window cannot remain a
-          // permanent cache hit. Await the bounded, deduplicated ID/window
-          // refresh once its short freshness budget expires.
-          return coordinatedFetchJob();
-        }
         coordinatedFetchJob().catch(() => {
           // Surfaced via queryFetchErrorCount; the next exec retries.
         });
         bumpStatus(status, 'queryFetchStaleServedCount');
         v15Log('fetch:stale-served', { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
         await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
-        return readLocalDocuments(
-          storageCollection,
-          query,
-          normalizedWindow,
-          cached.documentIds || [],
-        );
+        return serveWindowDocuments(cached, cached.documentIds || []);
       }
 
       return coordinatedFetchJob();
@@ -668,6 +731,17 @@ function normalizeSort(sort) {
     const direction = entry[key];
     return { [key]: direction === -1 || direction === 'desc' || direction === 'DESC' ? 'desc' : 'asc' };
   });
+}
+
+// Mirrors readPermissionDigestMatches in replication-webrtc.mjs (SYNC-12):
+// an empty CURRENT digest means the identity is unresolvable right now (no
+// token / token-endpoint blip) and stays permissive, so a transient token
+// outage never blocks warm rendering or forces a resync. A non-empty current
+// digest must equal the window's stamp. Windows persisted before the stamp
+// existed mismatch a known identity exactly once — the safe direction.
+function windowReadPermissionDigestMatches(storedDigest, currentDigest) {
+  if (!currentDigest) return true;
+  return String(storedDigest || '') === currentDigest;
 }
 
 async function readLocalDocuments(storageCollection, query, window, documentIds = null) {
