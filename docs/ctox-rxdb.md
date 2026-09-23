@@ -1,5 +1,41 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Workjet computer schema upgrade (v0 to v1)
+
+Two deployed `workjet_computers` schemas used version 0. Adding binding, epoch,
+liveness and tombstone fields without a version change caused DB6 on an existing
+native store. Optional registration skipped the collection, so the Workjet
+computer-list query failed with QUERY_NOT_SUPPORTED.
+
+Version 1 uses the existing packaged native copy-and-verify migration before
+stale-table cleanup. Browser and JSON declarations preserve existing fields;
+missing binding, epoch and liveness values become empty, zero and offline, as in
+the native computer writer. No device binding or authorization is created.
+Existing bindings and tombstones survive unchanged. The original schema is
+recorded in `tests/fixtures/workjet-computers-v0-67e44b11d.json`.
+
+The native regression reproduces DB6, registers v1, migrates, cleans up, reopens,
+and reads the retained computer through RxDB. A separate persisted-data test
+covers missing destination, replay and preservation of newer destination rows.
+These are release gates, not a claim that a deployed tenant has passed them.
+
+The Crew module also declares its channel-account dependency by reusing the
+canonical Conversations schema. This allows Crew to register the collection
+before Mail or Conversations has opened. Its generated module schema (and the
+Reports re-export) must include the same definition; no new collection version,
+permission grant, or independent channel store is introduced. The module
+conformance and DB-isolation inventory guards remain release gates. Inventory
+metadata tracks the current manifests, with newly inventoried modules explicitly
+marked as source-reviewed rather than newly certified for runtime isolation.
+
+Generate module JSON, the native contract and hashes together, rebuild the
+browser bundle, and advance the canonical shell/loader revision. Regeneration
+also reconciles pre-existing stale crew-memory and ticket-key fields in the
+packaged ctox/reports/threads JSON with their source; those fields already exist
+in the native contract. Release the native migration and matching main-built
+shell together. Actual Welsch assignment and remote coding still require UI
+acceptance after deployment.
+
 This is the reference document for CTOX Sync Engine: the WebRTC-only replication layer
 between the browser-side Business OS shell and the CTOX daemon. It is written
 for engineers and coding agents, and every technical claim in it has been

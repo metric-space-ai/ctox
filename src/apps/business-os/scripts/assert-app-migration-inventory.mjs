@@ -55,8 +55,15 @@ for (const app of inventory.sourceApps) {
   if (!Number.isInteger(minimumWidth) || minimumWidth < 360 || minimumWidth > Number(presentation?.initial_size?.width)) {
     failures.push(`${app.id}: minimum_size.width must be an integer between 360 and initial_size.width`);
   }
-  if (!Number.isInteger(minimumHeight) || minimumHeight < 480 || minimumHeight > Number(presentation?.initial_size?.height)) {
-    failures.push(`${app.id}: minimum_size.height must be an integer between 480 and initial_size.height`);
+  // The promoted file-viewer retains its compact, multi-window preview contract.
+  // Other modules still follow the original single-window migration contract.
+  const isFileViewer = app.id === 'file-viewer';
+  const minimumAllowedHeight = isFileViewer ? 400 : 480;
+  if (!Number.isInteger(minimumHeight) || minimumHeight < minimumAllowedHeight || minimumHeight > Number(presentation?.initial_size?.height)) {
+    failures.push(`${app.id}: minimum_size.height must be an integer between ${minimumAllowedHeight} and initial_size.height`);
+  }
+  if (isFileViewer && (minimumWidth !== 520 || minimumHeight !== 400 || manifest.launch_kind !== 'desktop-app')) {
+    failures.push('file-viewer: promoted desktop preview must retain its 520x400 minimum and desktop-app launch kind');
   }
   if (Number.isFinite(layoutMinimumWidth) && layoutMinimumWidth !== minimumWidth) {
     failures.push(`${app.id}: layout.min_width must match presentation.minimum_size.width when declared`);
@@ -64,7 +71,7 @@ for (const app of inventory.sourceApps) {
   if (Number.isFinite(layoutMinimumHeight) && layoutMinimumHeight !== minimumHeight) {
     failures.push(`${app.id}: layout.min_height must match presentation.minimum_size.height when declared`);
   }
-  if (presentation.multi_instance !== false) failures.push(`${app.id}: multi_instance must be false in migration v1`);
+  if (presentation.multi_instance !== isFileViewer) failures.push(`${app.id}: multi_instance must be ${isFileViewer} for its registered presentation contract`);
   if (presentation.auto_restore !== false) failures.push(`${app.id}: auto_restore must be false in migration v1`);
 }
 
