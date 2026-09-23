@@ -385,12 +385,19 @@ mailQa: try {
 
   await page.locator('[data-mail-root]').waitFor({ state: 'visible' });
   await assertVisibleText(page, 'Projektstatus August');
+  if (process.env.CTOX_MAIL_QA_INBOX_SCREENSHOT) {
+    await page.screenshot({ path: resolve(process.env.CTOX_MAIL_QA_INBOX_SCREENSHOT), fullPage: true });
+  }
   assert.equal(await page.locator('[data-mail-navigation-title]').textContent(), 'Postfach');
   assert.equal(await page.locator('[data-mail-account]').inputValue(), 'all');
   assert.match(await page.locator('[data-mail-account]').textContent(), /alice@example\.test/);
   assert.match(await page.locator('[data-mail-scope-id="outbound"]').textContent(), /Gesendet/);
   await page.locator('[data-mail-list-pane] [data-pg-band="outbound"]').click();
   await assertVisibleText(page, 'Versandter Bericht');
+  assert.match(await page.locator('[data-mail-record-id="thread-sent"] .mail-record-meta').textContent(), /Gesendet/);
+  if (process.env.CTOX_MAIL_QA_SENT_SCREENSHOT) {
+    await page.screenshot({ path: resolve(process.env.CTOX_MAIL_QA_SENT_SCREENSHOT), fullPage: true });
+  }
   assert.equal(await page.locator('[data-mail-list-title]').textContent(), 'Gesendet');
   await page.locator('[data-mail-list-pane] [data-pg-band="inbound"]').click();
   await assertVisibleText(page, 'Projektstatus August');

@@ -748,7 +748,7 @@ export async function mount(ctx) {
       const selectionKey = mailRecordKey(record);
       const route = routeCommandForRecord(record, view.commands);
       const unread = Number(record.unread_count || 0);
-      const status = route ? routeTargetLabel(route) : (unread ? `${unread} neu` : t('inbound', 'Eingang'));
+      const status = route ? routeTargetLabel(route) : (unread ? `${unread} neu` : latest?.direction === 'outbound' ? t('sent', 'Gesendet') : t('inbound', 'Eingang'));
       const open = `<div class="mail-record-row ${shape}${unread > 0 ? ' is-unread' : ''}" role="option" tabindex="0" data-mail-record-kind="thread" data-mail-record-id="${escapeAttribute(record.thread_key)}" data-context-record-id="${escapeAttribute(record.thread_key)}" data-context-record-type="communication_thread" data-context-record-label="${escapeAttribute(subject)}" data-context-label="${escapeAttribute(subject)}">
         <input class="mail-record-select" type="checkbox" data-mail-select-record="${escapeAttribute(selectionKey)}" aria-label="${escapeAttribute(subject)} auswählen" ${view.selectedRecords.has(selectionKey) ? 'checked' : ''} />`;
       const time = `<span class="mail-record-time">${escapeHtml(formatRecordTime(record.last_message_at))}</span>`;
