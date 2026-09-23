@@ -57,6 +57,7 @@ const FALLBACK_LABELS = {
     openUnavailable: 'Diese App ist auf dieser Instanz nicht verfügbar.',
     openUnavailableDetail: '„{label}" verweist auf {target} — dieses Modul steht im Katalog dieser Instanz nicht (mehr) zur Verfügung.',
     chatWithCtox: 'Mit CTOX chatten',
+    chatNotSaved: 'Chat geöffnet, Speichern oder Sync fehlgeschlagen. Verbindung prüfen und erneut versuchen.',
     askCtox: 'Frage stellen',
     workWithData: 'Daten ändern',
     modifyApp: 'App ändern',
@@ -105,6 +106,7 @@ const FALLBACK_LABELS = {
     openUnavailable: 'This app is not available on this instance.',
     openUnavailableDetail: '"{label}" points at {target}, which is not (or no longer) in this instance catalog.',
     chatWithCtox: 'Chat with CTOX',
+    chatNotSaved: 'Chat opened, but saving or sync failed. Check the connection and try again.',
     askCtox: 'Ask question',
     workWithData: 'Change data',
     modifyApp: 'Modify app',
@@ -963,11 +965,19 @@ export async function mount(ctx) {
   }
 
   function openCtoxChat(detail) {
+    const chatDetail = {
+      ...detail,
+      onOpenPersistError: (error) => notify({
+        type: 'error',
+        title: t('chatNotSaved'),
+        message: String(error?.message || error),
+      }),
+    };
     if (typeof ctx.openBusinessChat === 'function') {
-      ctx.openBusinessChat(detail);
+      ctx.openBusinessChat(chatDetail);
       return;
     }
-    window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail }));
+    window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: chatDetail }));
   }
 
   async function restoreDefaultIcons() {

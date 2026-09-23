@@ -21,6 +21,7 @@
   "notificationEmpty": "No new notifications.",
   "openInModule": "Open in module",
   "chatWithCtox": "Chat with CTOX",
+  "chatNotSaved": "Chat opened, but saving or sync failed. Check the connection and try again.",
   "askCtox": "Ask question",
   "workWithData": "Change data",
   "modifyApp": "Modify app",
