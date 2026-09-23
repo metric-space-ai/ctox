@@ -2629,21 +2629,40 @@ fn outbound_apply_research_adapter_scrape_effect(
         return Some(effect);
     };
 
-    let registration = outbound_register_research_scrape_target(
-        root,
-        adapter_payload,
-        record,
-        adapter_id,
-        source_id,
-        &target_key,
-    );
+    // A test observes the active registry revision. Registering the bundled
+    // template here can silently replace a tenant's specialized script.
+    let registration = if command_type == "outbound.research_source.test" {
+        scrape::registered_target_summary(root, &target_key).map(|target| {
+            let script_revision_no = target
+                .as_ref()
+                .and_then(|value| value.get("latest_script_revision_no"))
+                .and_then(Value::as_i64);
+            serde_json::json!({
+                "ok": true,
+                "target_key": target_key,
+                "registered_from": "existing_registry",
+                "script_registered": script_revision_no.is_some(),
+                "script_revision_no": script_revision_no,
+                "script_sha256": target.as_ref().and_then(|value| value.get("latest_script_sha256")),
+            })
+        })
+    } else {
+        outbound_register_research_scrape_target(
+            root,
+            adapter_payload,
+            record,
+            adapter_id,
+            source_id,
+            &target_key,
+        )
+    };
     let mut effect = match registration {
         Ok(effect) => effect,
         Err(err) => {
             let message = err.to_string();
             let mut effect = serde_json::json!({
                 "ok": false,
-                "phase": "register",
+                "phase": if command_type == "outbound.research_source.test" { "registry_lookup" } else { "register" },
                 "target_key": target_key,
                 "error": message.clone(),
             });
@@ -2651,7 +2670,7 @@ fn outbound_apply_research_adapter_scrape_effect(
                 let test_effect = outbound_persist_scrape_test_preflight_failure(
                     record,
                     "test_failed",
-                    "registration_failed",
+                    "registry_lookup_failed",
                     &message,
                     scrape_effect_started.elapsed(),
                 );
@@ -3442,7 +3461,6 @@ fn outbound_execute_research_scrape_target(
             "manual".to_string(),
             "--timeout-seconds".to_string(),
             "45".to_string(),
-            "--allow-heal".to_string(),
             "--input-json".to_string(),
             input.to_string(),
         ],
@@ -7460,6 +7478,26 @@ mod tests {
             }))?,
         )?;
         fs::write(&script_path, script_body)?;
+        scrape::handle_scrape_command(
+            root,
+            &[
+                "upsert-target".to_string(),
+                "--input".to_string(),
+                target_dir.join("target.json").to_string_lossy().to_string(),
+            ],
+        )?;
+        scrape::handle_scrape_command(
+            root,
+            &[
+                "register-script".to_string(),
+                "--target-key".to_string(),
+                "fixture-example".to_string(),
+                "--script-file".to_string(),
+                script_path.to_string_lossy().to_string(),
+                "--change-reason".to_string(),
+                "fixture_setup".to_string(),
+            ],
+        )?;
         Ok(())
     }
 
@@ -7475,6 +7513,13 @@ mod tests {
         let root = temp.path();
         write_outbound_scrape_test_fixture(root, script_body)?;
 
+        run_outbound_scrape_test_registered_fixture(root, field_keys)
+    }
+
+    fn run_outbound_scrape_test_registered_fixture(
+        root: &Path,
+        field_keys: &[&str],
+    ) -> anyhow::Result<(Value, Value)> {
         let adapter_payload = serde_json::json!({
             "source_id": "fixture.example",
             "label": "Fixture Research",
@@ -7542,6 +7587,43 @@ mod tests {
             true,
             true,
         ));
+    }
+
+    #[test]
+    fn outbound_source_test_preserves_registered_script_when_bundled_script_changes(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_outbound_scrape_test_fixture(
+            root,
+            r#"process.stdout.write(JSON.stringify({records:[{field:"company_name",value:"Original GmbH",source_url:"https://fixture.example/"}]}));"#,
+        )?;
+        let before = scrape::registered_target_summary(root, "fixture-example")?
+            .context("registered fixture target")?;
+        fs::write(
+            root.join("src/tools/web-stack/scrape-targets/fixture.example/scripts/v1.js"),
+            r#"process.stdout.write(JSON.stringify({records:[{field:"company_name",value:"Replacement GmbH",source_url:"https://fixture.example/"}]}));"#,
+        )?;
+
+        let (record, effect) =
+            run_outbound_scrape_test_registered_fixture(root, &["company_name"])?;
+        let after = scrape::registered_target_summary(root, "fixture-example")?
+            .context("registered fixture target after test")?;
+        assert_eq!(
+            before.get("latest_script_sha256"),
+            after.get("latest_script_sha256")
+        );
+        assert_eq!(
+            before.get("latest_script_revision_no"),
+            after.get("latest_script_revision_no")
+        );
+        assert_eq!(before.get("revisions"), after.get("revisions"));
+        assert_eq!(
+            effect.get("registered_from").and_then(Value::as_str),
+            Some("existing_registry")
+        );
+        assert_eq!(record.get("test_ok").and_then(Value::as_bool), Some(true));
+        Ok(())
     }
 
     #[test]

@@ -31,6 +31,10 @@ mod query_completion;
 use classify::Classification;
 pub(crate) use classify::ScrapeRunStatus;
 
+pub(crate) fn registered_target_summary(root: &Path, target_key: &str) -> Result<Option<Value>> {
+    show_target(root, target_key)
+}
+
 use anyhow::Context;
 use anyhow::Result;
 use rusqlite::params;
