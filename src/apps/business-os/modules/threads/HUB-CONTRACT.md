@@ -169,6 +169,13 @@ missing or inaccessible record yields `unavailable`; an explicit policy denial
 may yield `forbidden` without disclosing foreign record metadata. Neither
 outcome changes the source object or completes the thread.
 
+**Handoff concurrency.** `threads.handoff.create` carries the selected
+thread's `expected_updated_at_ms`. Native validates the actor, thread version,
+and active target user before creating the handoff message or notification.
+The assignment changes the conversation owner; it does not assign the linked
+source record. A concurrent write after preflight can still prevent the later
+assignment, so the client must inspect a failed command receipt and refresh.
+
 **Record-approval banner contract.** A pending approval MUST be able to surface
 **at the object** (the shell banner over the source record), not only inside
 Threads. The decision dispatches the same commands Threads uses:

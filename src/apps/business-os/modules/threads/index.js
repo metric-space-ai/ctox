@@ -1391,6 +1391,7 @@ async function submitHandoff() {
   if (!thread || !target || !expectation) return;
   await dispatchThreadsCommand('threads.handoff.create', {
     thread_id: thread.id,
+    expected_updated_at_ms: Number(thread.updated_at_ms || 0),
     target_user_id: target,
     expectation,
     due_at_ms: Number.isFinite(dueAt) ? dueAt : 0,
