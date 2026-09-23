@@ -472,5 +472,117 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
   assert(fetches === 2, 're-stamped window revalidates in the background');
 }
 
+// --- 9. mid-flight identity change: old-authority response is discarded ----
+// The fetch captures the digest BEFORE the request. If a same-user role/grant
+// transition lands while the request is in flight, the response was
+// authorized under the superseded identity: it must not be materialized into
+// the primary store, must not re-stamp the window, and must not be returned.
+{
+  let now = 50_000;
+  const sidecar = createSidecarWithMemoryBackend({ databaseName: 'swr-9', clock: () => now });
+  const storage = makeStorageCollection();
+  let currentDigest = 'digest-role-a';
+  let fetches = 0;
+  let releaseThird;
+  const thirdGate = new Promise((resolve) => { releaseThird = resolve; });
+  const loader = createQueryDemandLoader({
+    storageCollection: storage,
+    sidecar,
+    collectionName: 'business_commands',
+    schemaVersion: 1,
+    clock: () => now,
+    readPermissionDigest: () => currentDigest,
+    requestQueryFetch: async () => {
+      fetches += 1;
+      if (fetches === 1) return { documents: [{ id: 'cmd-1', status: 'running' }] };
+      if (fetches === 2) {
+        // Role/grant change lands WHILE this revalidation is in flight; the
+        // response below was still authorized under the old identity.
+        currentDigest = 'digest-role-b';
+        return { documents: [{ id: 'cmd-old-authority', status: 'running' }] };
+      }
+      await thirdGate; // hold the newly authorized fetch to prove blocking
+      return { documents: [{ id: 'cmd-2', status: 'running' }] };
+    },
+  });
+
+  await loader.resolveQuery({ selector: {} }); // cold: stamped digest-role-a
+  assert(fetches === 1, 'cold start fetched (mid-flight boundary)');
+
+  now += 60_000;
+  const stale = await loader.resolveQuery({ selector: {} }); // SWR serve + background fetch 2
+  assert(stale.length === 1 && stale[0].id === 'cmd-1',
+    'identity was still valid at entry: stale serve is allowed');
+  await settle(); // let the background fetch 2 complete (and be discarded)
+  assert(!storage.docs.has('cmd-old-authority'),
+    'mid-flight old-authority response must NOT be materialized into the store');
+  const fp9 = await queryFingerprint({
+    collection: 'business_commands', schemaVersion: 1, selector: {}, sort: [],
+    limit: undefined, skip: undefined, window: { offset: 0, limit: 200 },
+  });
+  const win9 = await sidecar.getQueryWindow(['business_commands', fp9, 0, 200]);
+  assert(win9.permissionDigest === 'digest-role-a',
+    'discarded response must NOT re-stamp the window with the new identity');
+  assert(
+    JSON.stringify(win9.documentIds) === JSON.stringify(['cmd-1']),
+    'discarded response must NOT rewrite the window membership',
+  );
+
+  // The next read under the new identity awaits a newly authorized fetch
+  // (gated), it must not fall back to the superseded membership.
+  let nextServed = null;
+  const nextPending = loader.resolveQuery({ selector: {} })
+    .then((docs) => { nextServed = docs; return docs; });
+  await settle();
+  assert(nextServed === null,
+    'read under the changed identity must await the authorized fetch, no stale serve');
+  assert(fetches === 3, 'read under the changed identity triggered the authorized fetch');
+  releaseThird();
+  const nextDocs = await nextPending;
+  assert(nextDocs.length === 1 && nextDocs[0].id === 'cmd-2',
+    'next read under the new identity returns the newly authorized membership');
+  const win9b = await sidecar.getQueryWindow(['business_commands', fp9, 0, 200]);
+  assert(win9b.permissionDigest === 'digest-role-b',
+    'the authorized fetch under the new identity re-stamps the window');
+}
+
+// --- 10. closed multi-tab broker fallback respects the digest boundary ------
+{
+  let now = 60_000;
+  const sidecar = createSidecarWithMemoryBackend({ databaseName: 'swr-10', clock: () => now });
+  const storage = makeStorageCollection();
+  let currentDigest = 'digest-c';
+  let fetches = 0;
+  const broker = { closed: false, claim: async () => true, release: async () => {} };
+  const loader = createQueryDemandLoader({
+    storageCollection: storage,
+    sidecar,
+    collectionName: 'business_commands',
+    schemaVersion: 1,
+    clock: () => now,
+    readPermissionDigest: () => currentDigest,
+    multiTabBroker: broker,
+    requestQueryFetch: async () => {
+      fetches += 1;
+      return { documents: [{ id: 'cmd-1', status: 'running' }] };
+    },
+  });
+  await loader.resolveQuery({ selector: {} }); // cold: broker open, stamped digest-c
+  assert(fetches === 1, 'cold start fetched (broker boundary)');
+
+  now += 60_000;
+  currentDigest = 'digest-d'; // identity changed
+  broker.closed = true; // broker closes before the next read
+  const blocked = await loader.resolveQuery({ selector: {} });
+  assert(blocked.length === 0,
+    'closed-broker fallback must render nothing under a superseded identity');
+  assert(fetches === 1, 'closed-broker fallback must not fetch');
+
+  currentDigest = 'digest-c'; // same identity again: warm path intact
+  const warm = await loader.resolveQuery({ selector: {} });
+  assert(warm.length === 1 && warm[0].id === 'cmd-1',
+    'closed broker with the matching identity keeps serving the cached window');
+}
+
 console.log('ctox-rxdb stale-while-revalidate smoke OK');
 process.exit(0);

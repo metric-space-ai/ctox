@@ -207,13 +207,16 @@ export function createQueryDemandLoader({
       // membership before a newly authorized fetch re-stamps the window.
       // Windows persisted before this stamp existed mismatch a known identity
       // exactly once — the safe direction.
-      const currentReadPermissionDigest = isControlPlaneStatusCollection(collectionName)
-        ? resolveReadPermissionDigest()
-        : '';
-      const controlPlanePermissionMismatch = isControlPlaneStatusCollection(collectionName)
+      const controlPlaneRead = isControlPlaneStatusCollection(collectionName);
+      // The digest is re-resolved at every serve/fallback decision: the
+      // identity can change mid-wait (broker claim, deduped in-flight job,
+      // mid-flight fetch), and each decision must be evaluated against the
+      // digest valid at THAT moment, not at resolveQuery entry.
+      const controlPlanePermissionMismatchNow = () => controlPlaneRead
         && cached
         && (cached.complete || cached.everCompleted)
-        && !windowReadPermissionDigestMatches(cached.permissionDigest, currentReadPermissionDigest);
+        && !windowReadPermissionDigestMatches(cached.permissionDigest, resolveReadPermissionDigest());
+      const controlPlanePermissionMismatch = controlPlanePermissionMismatchNow();
       if (
         cached
         && cached.complete
@@ -264,6 +267,11 @@ export function createQueryDemandLoader({
         throwIfQueryCancelled(invocationEntry);
         const job = (async () => {
         const startedAt = clock();
+        // Capture the read-permission identity BEFORE the request: the
+        // response may only be materialized, stamped and returned when the
+        // identity did not change mid-flight. Otherwise old-authority data
+        // would be persisted and served under the new identity's stamp.
+        const fetchPermissionDigest = resolveReadPermissionDigest();
         try {
           assertFresh();
           const result = await Promise.race([
@@ -284,6 +292,16 @@ export function createQueryDemandLoader({
             cancellationPromise,
           ]);
           assertFresh();
+          if (
+            controlPlaneRead
+            && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())
+          ) {
+            // The identity changed while the request was in flight: this
+            // response was authorized under the superseded identity. Do not
+            // materialize, stamp or return it — the cancelled path below
+            // renders nothing until the next authorized fetch.
+            throw createQueryCancelledError('permission-identity-changed');
+          }
           await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
           assertFresh();
           const documentIds = (result.documents || []).map(extractId).filter(Boolean);
@@ -300,7 +318,7 @@ export function createQueryDemandLoader({
             // SYNC-12: stamp the read-permission identity this authorized
             // fetch ran under; a later role/grant change (new digest) must
             // not be served this membership.
-            permissionDigest: resolveReadPermissionDigest() || null,
+            permissionDigest: fetchPermissionDigest || null,
             queryShape: {
               selector: query?.selector ?? {},
               sort: normalizeSort(query?.sort),
@@ -330,7 +348,7 @@ export function createQueryDemandLoader({
               // membership authorized under a superseded read-permission
               // identity; an empty membership renders nothing until the next
               // authorized fetch re-stamps the window.
-              controlPlanePermissionMismatch ? [] : cached?.documentIds,
+              controlPlanePermissionMismatchNow() ? [] : cached?.documentIds,
             );
           }
           bumpStatus(status, 'queryFetchErrorCount');
@@ -355,7 +373,7 @@ export function createQueryDemandLoader({
             storageCollection,
             query,
             normalizedWindow,
-            cached?.documentIds,
+            controlPlanePermissionMismatchNow() ? [] : cached?.documentIds,
           );
         }
         assertFresh();
@@ -378,7 +396,7 @@ export function createQueryDemandLoader({
             storageCollection,
             query,
             normalizedWindow,
-            cached?.documentIds,
+            controlPlanePermissionMismatchNow() ? [] : cached?.documentIds,
           );
         }
         const materialized = await sidecar.getQueryWindow(sidecarKey);
@@ -386,7 +404,10 @@ export function createQueryDemandLoader({
         if (
           materialized?.complete
           && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds)
-          && windowReadPermissionDigestMatches(materialized.permissionDigest, currentReadPermissionDigest)
+          && windowReadPermissionDigestMatches(
+            materialized.permissionDigest,
+            controlPlaneRead ? resolveReadPermissionDigest() : '',
+          )
           && (
             !strictRequireRevision
             || (
@@ -416,7 +437,7 @@ export function createQueryDemandLoader({
               storageCollection,
               query,
               normalizedWindow,
-              controlPlanePermissionMismatch ? [] : cached?.documentIds,
+              controlPlanePermissionMismatchNow() ? [] : cached?.documentIds,
             );
           }
           // A dead/replaced collection state can leave a 30 s broker claim

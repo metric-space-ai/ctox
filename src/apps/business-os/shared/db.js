@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260923-control-plane-permission-digest-gate-v386';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260923-control-plane-digest-midflight-guard-v387';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
