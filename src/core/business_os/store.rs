@@ -12017,6 +12017,10 @@ pub(super) fn repair_missing_rxdb_envelopes(
             .pointer("/_meta/lwt")
             .and_then(Value::as_f64)
             .is_some()
+            && document
+                .get("_rev")
+                .and_then(Value::as_str)
+                .is_some_and(|revision| !revision.is_empty())
             && json_deleted.is_some()
             && document.get("_attachments").is_some_and(Value::is_object)
             && json_deleted == Some(deleted)
@@ -39155,6 +39159,14 @@ pub(super) mod tests {
             &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
             params!["malformed_live", "1-old", malformed_live.to_string()],
         )?;
+        let missing_revision = serde_json::json!({
+            "id": "missing_revision", "_meta": {"lwt": 42},
+            "_deleted": false, "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["missing_revision", "1-old", missing_revision.to_string()],
+        )?;
         let malformed_tombstone = serde_json::json!({
             "id": "malformed_tombstone", "_rev": "1-old", "_meta": {"lwt": 42},
             "_deleted": "invalid", "is_deleted": true, "_attachments": {}, "updated_at_ms": 42
@@ -39183,7 +39195,7 @@ pub(super) mod tests {
         )?;
         drop(conn);
 
-        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 5);
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 6);
         assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 0);
         let conn = Connection::open(rxdb_store_path(root))?;
         let (revision, lwt, raw): (String, f64, String) = conn.query_row(
@@ -39207,6 +39219,7 @@ pub(super) mod tests {
         assert_eq!(repaired["_attachments"], serde_json::json!({}));
         for (id, expected_deleted) in [
             ("malformed_live", false),
+            ("missing_revision", false),
             ("malformed_tombstone", true),
             ("sql_tombstone_without_json_flag", true),
             ("sql_tombstone_with_live_json_flag", true),
@@ -39219,6 +39232,7 @@ pub(super) mod tests {
             let repaired: Value = serde_json::from_str(&raw)?;
             assert_eq!(repaired["_deleted"], expected_deleted);
             assert_eq!(deleted_column != 0, expected_deleted);
+            assert!(repaired["_rev"].as_str().is_some_and(|revision| !revision.is_empty()));
             if id.starts_with("sql_tombstone") {
                 assert_eq!(repaired["result"], serde_json::json!({"preserve": true}));
                 let expected_revision = if id.ends_with("without_json_flag") {
