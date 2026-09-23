@@ -292,7 +292,7 @@ export async function mount(ctx) {
   // A cancelled first read can settle immediately and never emit another
   // collection event. Do not leave an empty mailbox in "syncing" indefinitely.
   const initialReadWatchdog = window.setTimeout(() => {
-    if (view.disposed || view.mailReadError || (view.mailReadComplete && view.readiness?.ready !== false)) return;
+    if (view.disposed || view.mailReadError || view.mailReadComplete) return;
     view.mailReadError = 'Initial mail sync did not complete';
     view.loading = false;
     renderList();

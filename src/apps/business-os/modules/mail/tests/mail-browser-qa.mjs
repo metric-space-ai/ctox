@@ -771,6 +771,20 @@ mailQa: try {
   await page.locator('[data-mail-retry-read]').click();
   await assertVisibleText(page, 'Projektstatus nach Sync');
   await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
+  await page.evaluate(async () => {
+    window.__unmountMail();
+    const catchingUp = { ready: false, state: 'catching_up' };
+    window.__mailMountContext.sync.collectionReadiness = () => catchingUp;
+    window.__mailMountContext.sync.subscribeCollectionReadiness = (_name, listener) => {
+      listener(catchingUp);
+      return () => {};
+    };
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await assertVisibleText(page, 'Projektstatus nach Sync');
+  await page.waitForTimeout(10_500);
+  await assertVisibleText(page, 'Projektstatus nach Sync');
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
   assert.deepEqual(browserErrors, []);
   console.log('Mail browser QA OK: inbox, sent, reconnect recovery, thread, campaign, draft, group, mailbox administration, Sellify series-email handoff, and responsive composer');
 } catch (error) {
