@@ -389,7 +389,7 @@ fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Resu
 }
 
 fn should_sync_sent_folder(settings: &BTreeMap<String, String>) -> bool {
-    let provider = setting(settings, "CTO_EMAIL_PROVIDER").to_ascii_lowercase();
+    let provider = normalize_provider(&setting(settings, "CTO_EMAIL_PROVIDER"));
     let folder = setting(settings, "CTO_EMAIL_FOLDER");
     matches!(provider.as_str(), "ews" | "owa")
         && (folder.is_empty() || folder.eq_ignore_ascii_case("inbox"))
@@ -4357,6 +4357,8 @@ mod tests {
         settings.insert("CTO_EMAIL_PROVIDER".to_string(), "owa".to_string());
         assert!(super::should_sync_sent_folder(&settings));
         settings.insert("CTO_EMAIL_FOLDER".to_string(), "INBOX".to_string());
+        assert!(super::should_sync_sent_folder(&settings));
+        settings.insert("CTO_EMAIL_PROVIDER".to_string(), "exchange".to_string());
         assert!(super::should_sync_sent_folder(&settings));
         settings.insert("CTO_EMAIL_FOLDER".to_string(), "sent".to_string());
         assert!(!super::should_sync_sent_folder(&settings));
