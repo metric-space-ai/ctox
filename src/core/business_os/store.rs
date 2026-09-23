@@ -11249,8 +11249,8 @@ pub fn pull_mcp_app_collection_record(
     pull_collection_record(root, collection, record_id)
 }
 
-/// RxDB rows come first, newest replication write first. Shadow-only rows are
-/// a fallback for native data not yet represented in that collection table.
+/// RxDB owns each ID it contains. Merge shadow-only IDs by write time before
+/// applying the limit so a recent fallback cannot disappear behind older rows.
 pub fn pull_mcp_app_collection_records(
     root: &Path,
     collection: &str,
@@ -11283,7 +11283,7 @@ pub fn pull_mcp_app_collection_records(
             "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
         };
         let mut statement = conn.prepare(&format!(
-            "SELECT id, data, {deleted_column} FROM {table}
+            "SELECT id, data, {deleted_column}, {write_clock} AS write_clock FROM {table}
              ORDER BY {write_clock} DESC, id DESC LIMIT ?1"
         ))?;
         let rows = statement.query_map([limit as i64], |row| {
@@ -11291,57 +11291,71 @@ pub fn pull_mcp_app_collection_records(
                 row.get::<_, String>(0)?,
                 row.get::<_, String>(1)?,
                 row.get::<_, i64>(2)?,
+                row.get::<_, f64>(3)?,
             ))
         })?;
         for row in rows {
-            let (id, raw, deleted) = row?;
-            documents.push(mcp_rxdb_document(&id, &raw, deleted)?);
+            let (id, raw, deleted, write_time) = row?;
+            documents.push((
+                write_time,
+                id.clone(),
+                mcp_rxdb_document(&id, &raw, deleted)?,
+            ));
         }
     }
-    if documents.len() < limit {
-        let shadow_only = with_store_connection(root, |conn| {
-            let mut statement = conn.prepare(
-                "SELECT record_id, deleted, updated_at_ms, payload_json
+    let shadow_only = with_store_connection(root, |conn| {
+        let mut statement = conn.prepare(
+            "SELECT record_id, deleted, updated_at_ms, payload_json
                  FROM business_records WHERE collection = ?1
                  ORDER BY updated_at_ms DESC, record_id DESC",
-            )?;
-            let mut rows = statement.query([collection])?;
-            let mut fallback = Vec::new();
-            while documents.len() + fallback.len() < limit {
-                let Some(row) = rows.next()? else { break };
-                let id: String = row.get(0)?;
-                if let Some((rxdb_conn, table)) = rxdb.as_ref() {
-                    let exists = rxdb_conn
-                        .query_row(
-                            &format!("SELECT 1 FROM {table} WHERE id = ?1"),
-                            [&id],
-                            |row| row.get::<_, i64>(0),
-                        )
-                        .optional()?
-                        .is_some();
-                    if exists {
-                        continue;
-                    }
+        )?;
+        let mut rows = statement.query([collection])?;
+        let mut fallback = Vec::new();
+        while fallback.len() < limit {
+            let Some(row) = rows.next()? else { break };
+            let id: String = row.get(0)?;
+            if let Some((rxdb_conn, table)) = rxdb.as_ref() {
+                let exists = rxdb_conn
+                    .query_row(
+                        &format!("SELECT 1 FROM {table} WHERE id = ?1"),
+                        [&id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()?
+                    .is_some();
+                if exists {
+                    continue;
                 }
-                let deleted: i64 = row.get(1)?;
-                let updated_at_ms: i64 = row.get(2)?;
-                let raw: String = row.get(3)?;
-                let mut document: Value = serde_json::from_str(&raw)
-                    .with_context(|| format!("parse shadow document `{collection}/{id}`"))?;
-                let object = document.as_object_mut().with_context(|| {
-                    format!("shadow document `{collection}/{id}` is not an object")
-                })?;
-                object
-                    .entry("id".to_string())
-                    .or_insert_with(|| Value::String(id));
-                object.insert("_deleted".to_string(), Value::Bool(deleted != 0));
-                object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
-                fallback.push(document);
             }
-            Ok(fallback)
-        })?;
-        documents.extend(shadow_only);
-    }
+            let deleted: i64 = row.get(1)?;
+            let updated_at_ms: i64 = row.get(2)?;
+            let raw: String = row.get(3)?;
+            let mut document: Value = serde_json::from_str(&raw)
+                .with_context(|| format!("parse shadow document `{collection}/{id}`"))?;
+            let object = document
+                .as_object_mut()
+                .with_context(|| format!("shadow document `{collection}/{id}` is not an object"))?;
+            object
+                .entry("id".to_string())
+                .or_insert_with(|| Value::String(id));
+            object.insert("_deleted".to_string(), Value::Bool(deleted != 0));
+            object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+            fallback.push((updated_at_ms as f64, id, document));
+        }
+        Ok(fallback)
+    })?;
+    documents.extend(shadow_only);
+    documents.sort_by(|left, right| {
+        right
+            .0
+            .total_cmp(&left.0)
+            .then_with(|| right.1.cmp(&left.1))
+    });
+    documents.truncate(limit);
+    let documents: Vec<Value> = documents
+        .into_iter()
+        .map(|(_, _, document)| document)
+        .collect();
     Ok(serde_json::json!({
         "ok": true,
         "collection": collection,

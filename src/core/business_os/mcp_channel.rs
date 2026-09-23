@@ -8672,7 +8672,8 @@ mod tests {
                 "collection": "customer_accounts",
                 "documents": [
                     {"id": "stale", "name": "Old live shadow", "updated_at_ms": 100},
-                    {"id": "fallback", "name": "Shadow only", "updated_at_ms": 90}
+                    {"id": "fallback", "name": "Shadow only", "updated_at_ms": 90},
+                    {"id": "recent-fallback", "name": "Recent shadow only", "updated_at_ms": 375}
                 ]
             }),
         )?;
@@ -8744,21 +8745,27 @@ mod tests {
         drop(conn);
 
         let context = test_context("business_os.query_records");
+        let top_two = query_records(root, &context, "customer_accounts", Some(2))?;
+        assert_eq!(top_two.count, 2);
+        assert_eq!(top_two.items[0].id, "new");
+        assert_eq!(top_two.items[1].id, "recent-fallback");
+
         let top_three = query_records(root, &context, "customer_accounts", Some(3))?;
         assert_eq!(top_three.count, 3);
         assert_eq!(top_three.items[0].id, "new");
-        assert_eq!(top_three.items[1].id, "json-deleted");
-        assert_eq!(top_three.items[1].data["_deleted"], true);
-        assert_eq!(top_three.items[2].id, "stale");
+        assert_eq!(top_three.items[1].id, "recent-fallback");
+        assert_eq!(top_three.items[2].id, "json-deleted");
         assert_eq!(top_three.items[2].data["_deleted"], true);
-        assert_eq!(top_three.items[2].data["deleted"], true);
-        assert_eq!(top_three.items[2].data["is_deleted"], true);
-        assert_eq!(top_three.items[2].data["name"], "Tombstoned in RxDB");
 
-        let with_fallback = query_records(root, &context, "customer_accounts", Some(4))?;
-        assert_eq!(with_fallback.count, 4);
-        assert_eq!(with_fallback.items[3].id, "fallback");
-        assert_eq!(with_fallback.items[3].data["_deleted"], false);
+        let with_fallback = query_records(root, &context, "customer_accounts", Some(5))?;
+        assert_eq!(with_fallback.count, 5);
+        assert_eq!(with_fallback.items[3].id, "stale");
+        assert_eq!(with_fallback.items[3].data["_deleted"], true);
+        assert_eq!(with_fallback.items[3].data["deleted"], true);
+        assert_eq!(with_fallback.items[3].data["is_deleted"], true);
+        assert_eq!(with_fallback.items[3].data["name"], "Tombstoned in RxDB");
+        assert_eq!(with_fallback.items[4].id, "fallback");
+        assert_eq!(with_fallback.items[4].data["_deleted"], false);
 
         let get_context = test_context("business_os.get_record");
         let stale = get_record(root, &get_context, "customer_accounts", "stale")?;
