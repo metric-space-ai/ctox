@@ -500,21 +500,29 @@ function wireRealtime() {
     lastQueryAt = Date.now();
     refresh().catch(showError).finally(() => { lastQueryAt = Date.now(); });
   };
-  const subscriptions = [
+  const unsubscribers = [
     'user_threads', 'user_thread_states', 'ctox_task_approval_requests',
     'user_thread_messages', 'user_thread_links', 'user_notifications',
   ].map((name) => {
     const collection = collectionFor(name);
-    if (!collection?.$?.subscribe) return null;
-    return collection.$.subscribe((change) => {
+    // collection.$ performs an unbounded initial query before emitting a
+    // snapshot. Observe stored deltas instead; the poll covers missed events.
+    if (!collection?.observe) return null;
+    return collection.observe((event) => {
       if (!moduleIsVisible()) return;
-      const doc = change?.documentData || change?.document || null;
-      if (name === 'user_threads' && state.search.trim() && doc?.id) {
-        const cached = state.searchCorpus.find((item) => item.id === doc.id);
-        if (!cached || cached.updated_at_ms !== doc.updated_at_ms
-          || doc._deleted === true || doc.is_deleted === true) {
-          state.searchCorpusComplete = false;
-          scheduleSearchScan();
+      const changed = event?.success || event?.detail?.success || {};
+      const documents = Object.values(changed);
+      if (!documents.length) return;
+      if (name === 'user_threads' && state.search.trim()) {
+        for (const doc of documents) {
+          if (!doc?.id) continue;
+          const cached = state.searchCorpus.find((item) => item.id === doc.id);
+          if (!cached || cached.updated_at_ms !== doc.updated_at_ms
+            || doc._deleted === true || doc.is_deleted === true) {
+            state.searchCorpusComplete = false;
+            scheduleSearchScan();
+            break;
+          }
         }
       }
       if (state.refreshInFlight || state.searchScanInFlight) {
@@ -522,12 +530,20 @@ function wireRealtime() {
         return;
       }
       const me = currentUserId();
-      if (name === 'user_thread_states' && doc?.user_id && doc.user_id !== me) return;
-      if (name === 'user_notifications' && doc?.user_id && doc.user_id !== me) return;
-      if (name === 'ctox_task_approval_requests' && doc?.reviewer_user_id
-        && doc.reviewer_user_id !== me && doc.thread_id !== state.selectedId) return;
-      if ((name === 'user_thread_messages' || name === 'user_thread_links')
-        && doc?.thread_id && doc.thread_id !== state.selectedId) return;
+      const relevant = documents.some((doc) => {
+        if (name === 'user_thread_states' || name === 'user_notifications') {
+          return !doc?.user_id || doc.user_id === me;
+        }
+        if (name === 'ctox_task_approval_requests') {
+          return !doc?.reviewer_user_id || doc.reviewer_user_id === me
+            || doc.thread_id === state.selectedId;
+        }
+        if (name === 'user_thread_messages' || name === 'user_thread_links') {
+          return !doc?.thread_id || doc.thread_id === state.selectedId;
+        }
+        return true;
+      });
+      if (!relevant) return;
       if (Date.now() - lastQueryAt < REALTIME_CHANGE_COOLDOWN_MS || changeTimer) return;
       changeTimer = window.setTimeout(() => {
         changeTimer = null;
@@ -544,7 +560,7 @@ function wireRealtime() {
     window.clearInterval(timer);
     if (changeTimer) window.clearTimeout(changeTimer);
     document.removeEventListener('visibilitychange', onVisible);
-    for (const subscription of subscriptions) subscription.unsubscribe?.();
+    for (const unsubscribe of unsubscribers) unsubscribe();
   };
 }
 
