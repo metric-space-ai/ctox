@@ -216,7 +216,14 @@ export function createQueryDemandLoader({
         && cached
         && (cached.complete || cached.everCompleted)
         && !windowReadPermissionDigestMatches(cached.permissionDigest, resolveReadPermissionDigest());
-      const controlPlanePermissionMismatch = controlPlanePermissionMismatchNow();
+      // Cancel/broker fallbacks: without a window record there is no
+      // membership evidence at all. For control-plane collections serve
+      // nothing rather than a raw selector match over the local store —
+      // these demand-only ledgers would otherwise expose a partial or
+      // orphaned (materialized but never window-stamped) set of rows.
+      const controlPlaneFallbackMembership = () => (
+        controlPlanePermissionMismatchNow() || (controlPlaneRead && !cached)
+      ) ? [] : cached?.documentIds;
       if (
         cached
         && cached.complete
@@ -224,7 +231,7 @@ export function createQueryDemandLoader({
         && !emptyWindowStale
         && !mutableMembershipWindowStale
         && !queryWindowStale
-        && !controlPlanePermissionMismatch
+        && !controlPlanePermissionMismatchNow()
       ) {
         if (strictRequireRevision) {
           // Same token plus exact bridge/connection/database generation may
@@ -329,6 +336,18 @@ export function createQueryDemandLoader({
             estimatedBytes: estimateBytesPerDocument(result.documents || []),
           });
           assertFresh();
+          // Final guard: the identity can change during the local materialize/
+          // upsert awaits. The persisted window is already self-correcting (it
+          // carries the request-time stamp, so a changed identity mismatches
+          // future reads) — but this caller must not be returned old-authority
+          // rows either. Checked before the success accounting so a discarded
+          // response counts only as a cancellation.
+          if (
+            controlPlaneRead
+            && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())
+          ) {
+            throw createQueryCancelledError('permission-identity-changed');
+          }
           bumpStatus(status, 'queryFetchSuccessCount');
           if (status) status.lastQueryFetchMs = clock() - startedAt;
           v15Log('fetch:ok', { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
@@ -348,7 +367,7 @@ export function createQueryDemandLoader({
               // membership authorized under a superseded read-permission
               // identity; an empty membership renders nothing until the next
               // authorized fetch re-stamps the window.
-              controlPlanePermissionMismatchNow() ? [] : cached?.documentIds,
+              controlPlaneFallbackMembership(),
             );
           }
           bumpStatus(status, 'queryFetchErrorCount');
@@ -373,7 +392,7 @@ export function createQueryDemandLoader({
             storageCollection,
             query,
             normalizedWindow,
-            controlPlanePermissionMismatchNow() ? [] : cached?.documentIds,
+            controlPlaneFallbackMembership(),
           );
         }
         assertFresh();
@@ -396,7 +415,7 @@ export function createQueryDemandLoader({
             storageCollection,
             query,
             normalizedWindow,
-            controlPlanePermissionMismatchNow() ? [] : cached?.documentIds,
+            controlPlaneFallbackMembership(),
           );
         }
         const materialized = await sidecar.getQueryWindow(sidecarKey);
@@ -437,7 +456,7 @@ export function createQueryDemandLoader({
               storageCollection,
               query,
               normalizedWindow,
-              controlPlanePermissionMismatchNow() ? [] : cached?.documentIds,
+              controlPlaneFallbackMembership(),
             );
           }
           // A dead/replaced collection state can leave a 30 s broker claim
@@ -496,7 +515,7 @@ export function createQueryDemandLoader({
         cached?.everCompleted
         && cachedDocumentsAvailable
         && !emptyWindowStale
-        && !controlPlanePermissionMismatch
+        && !controlPlanePermissionMismatchNow()
         && !query?.requireRevision
       ) {
         coordinatedFetchJob().catch(() => {

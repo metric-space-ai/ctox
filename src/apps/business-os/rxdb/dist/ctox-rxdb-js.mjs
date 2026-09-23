@@ -7611,8 +7611,8 @@ function createQueryDemandLoader({
         const queryWindowStale = cached && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= boundedQueryWindowRevalidateMs;
         const controlPlaneRead = isControlPlaneStatusCollection(collectionName);
         const controlPlanePermissionMismatchNow = () => controlPlaneRead && cached && (cached.complete || cached.everCompleted) && !windowReadPermissionDigestMatches(cached.permissionDigest, resolveReadPermissionDigest());
-        const controlPlanePermissionMismatch = controlPlanePermissionMismatchNow();
-        if (cached && cached.complete && cachedDocumentsAvailable && !emptyWindowStale && !mutableMembershipWindowStale && !queryWindowStale && !controlPlanePermissionMismatch) {
+        const controlPlaneFallbackMembership = () => controlPlanePermissionMismatchNow() || controlPlaneRead && !cached ? [] : cached?.documentIds;
+        if (cached && cached.complete && cachedDocumentsAvailable && !emptyWindowStale && !mutableMembershipWindowStale && !queryWindowStale && !controlPlanePermissionMismatchNow()) {
           if (strictRequireRevision) {
             if (cached.satisfiedRevision === query.requireRevision && cached.satisfiedGeneration === generation && !controlPlaneWindowStale) {
               await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
@@ -7695,6 +7695,9 @@ function createQueryDemandLoader({
                 estimatedBytes: estimateBytesPerDocument(result.documents || [])
               });
               assertFresh();
+              if (controlPlaneRead && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())) {
+                throw createQueryCancelledError("permission-identity-changed");
+              }
               bumpStatus(status, "queryFetchSuccessCount");
               if (status) status.lastQueryFetchMs = clock() - startedAt;
               v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
@@ -7712,7 +7715,7 @@ function createQueryDemandLoader({
                   // membership authorized under a superseded read-permission
                   // identity; an empty membership renders nothing until the next
                   // authorized fetch re-stamps the window.
-                  controlPlanePermissionMismatchNow() ? [] : cached?.documentIds
+                  controlPlaneFallbackMembership()
                 );
               }
               bumpStatus(status, "queryFetchErrorCount");
@@ -7736,7 +7739,7 @@ function createQueryDemandLoader({
               storageCollection,
               query,
               normalizedWindow,
-              controlPlanePermissionMismatchNow() ? [] : cached?.documentIds
+              controlPlaneFallbackMembership()
             );
           }
           assertFresh();
@@ -7759,7 +7762,7 @@ function createQueryDemandLoader({
               storageCollection,
               query,
               normalizedWindow,
-              controlPlanePermissionMismatchNow() ? [] : cached?.documentIds
+              controlPlaneFallbackMembership()
             );
           }
           const materialized = await sidecar.getQueryWindow(sidecarKey);
@@ -7787,7 +7790,7 @@ function createQueryDemandLoader({
                 storageCollection,
                 query,
                 normalizedWindow,
-                controlPlanePermissionMismatchNow() ? [] : cached?.documentIds
+                controlPlaneFallbackMembership()
               );
             }
             return startFetchJob();
@@ -7812,7 +7815,7 @@ function createQueryDemandLoader({
           coordinatedByFingerprint.set(dedupKey, job);
           return job;
         };
-        if (cached?.everCompleted && cachedDocumentsAvailable && !emptyWindowStale && !controlPlanePermissionMismatch && !query?.requireRevision) {
+        if (cached?.everCompleted && cachedDocumentsAvailable && !emptyWindowStale && !controlPlanePermissionMismatchNow() && !query?.requireRevision) {
           coordinatedFetchJob().catch(() => {
           });
           bumpStatus(status, "queryFetchStaleServedCount");

@@ -584,5 +584,135 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
     'closed broker with the matching identity keeps serving the cached window');
 }
 
+// --- 11. cancel fallback without a window: control-plane renders nothing ---
+// Orphaned rows can sit in the primary store (materialized by a fetch that
+// never stamped a window, or live-replicated). Without window membership
+// there is no authorization evidence: a cancelled cold fetch on a
+// control-plane collection must render nothing rather than run a raw
+// selector over the local store. Non-control-plane collections keep the
+// pre-existing local fallback.
+{
+  const now = 70_000;
+  const sidecar = createSidecarWithMemoryBackend({ databaseName: 'swr-11', clock: () => now });
+  const storage = makeStorageCollection();
+  await storage.bulkWrite([{ id: 'cmd-orphan', status: 'running' }]);
+  let fetches = 0;
+  const loader = createQueryDemandLoader({
+    storageCollection: storage,
+    sidecar,
+    collectionName: 'business_commands',
+    schemaVersion: 1,
+    clock: () => now,
+    readPermissionDigest: () => 'digest-x',
+    requestCancel: async () => {},
+    requestQueryFetch: async () => {
+      fetches += 1;
+      return new Promise(() => {}); // hangs until the abort cancels it
+    },
+  });
+  const pending = loader.resolveQuery({ selector: {} });
+  await settle();
+  await loader.abortAllInFlight('reconnect');
+  const docs = await pending;
+  assert(docs.length === 0,
+    'cancelled cold control-plane read must not raw-serve membership-less local rows');
+  assert(fetches === 1, 'cold read attempted the fetch before the abort');
+
+  const sidecar2 = createSidecarWithMemoryBackend({ databaseName: 'swr-11b', clock: () => now });
+  const storage2 = makeStorageCollection();
+  await storage2.bulkWrite([{ id: 'rec-1', status: 'open' }]);
+  const loader2 = createQueryDemandLoader({
+    storageCollection: storage2,
+    sidecar: sidecar2,
+    collectionName: 'business_records',
+    schemaVersion: 1,
+    clock: () => now,
+    requestCancel: async () => {},
+    requestQueryFetch: async () => new Promise(() => {}),
+  });
+  const pending2 = loader2.resolveQuery({ selector: { status: 'open' } });
+  await settle();
+  await loader2.abortAllInFlight('reconnect');
+  const docs2 = await pending2;
+  assert(docs2.length === 1 && docs2[0].id === 'rec-1',
+    'non-control-plane cancel fallback keeps serving local rows');
+}
+
+// --- 12. identity change during materialization: final guard + self-stamp ---
+// The response passes the post-request digest check, but the identity flips
+// while materializeChunks/upsert await. The final guard must discard the
+// result for the caller, and the persisted window must carry the
+// REQUEST-time stamp (digest-e), so the changed identity mismatches it on
+// every later read — the window is self-correcting.
+{
+  let now = 80_000;
+  const sidecar = createSidecarWithMemoryBackend({ databaseName: 'swr-12', clock: () => now });
+  const storage = makeStorageCollection();
+  let currentDigest = 'digest-e';
+  let fetches = 0;
+  let flipOnNextWrite = false;
+  const baseBulkWrite = storage.bulkWrite;
+  storage.bulkWrite = async (rows, opts) => {
+    await baseBulkWrite(rows, opts);
+    if (flipOnNextWrite) {
+      flipOnNextWrite = false;
+      currentDigest = 'digest-f'; // role change lands mid-materialization
+    }
+  };
+  let releaseFinal;
+  const finalGate = new Promise((resolve) => { releaseFinal = resolve; });
+  const loader = createQueryDemandLoader({
+    storageCollection: storage,
+    sidecar,
+    collectionName: 'business_commands',
+    schemaVersion: 1,
+    clock: () => now,
+    readPermissionDigest: () => currentDigest,
+    requestQueryFetch: async () => {
+      fetches += 1;
+      if (fetches === 1) return { documents: [{ id: 'cmd-1', status: 'running' }] };
+      if (fetches === 2) return { documents: [{ id: 'cmd-2', status: 'running' }] };
+      await finalGate;
+      return { documents: [{ id: 'cmd-3', status: 'running' }] };
+    },
+  });
+
+  await loader.resolveQuery({ selector: {} }); // cold: stamped digest-e
+  assert(fetches === 1, 'cold start fetched (final guard)');
+
+  now += 60_000;
+  flipOnNextWrite = true;
+  const stale = await loader.resolveQuery({ selector: {} }); // SWR serve + background fetch 2
+  assert(stale.length === 1 && stale[0].id === 'cmd-1', 'entry identity valid: stale serve allowed');
+  await settle(); // background fetch 2 materializes, flips identity, final guard discards
+  assert(storage.docs.has('cmd-2'),
+    'documents materialized before the flip stay in the store (self-correcting via stamp)');
+  const fp12 = await queryFingerprint({
+    collection: 'business_commands', schemaVersion: 1, selector: {}, sort: [],
+    limit: undefined, skip: undefined, window: { offset: 0, limit: 200 },
+  });
+  const win12 = await sidecar.getQueryWindow(['business_commands', fp12, 0, 200]);
+  assert(win12.permissionDigest === 'digest-e',
+    'window keeps the request-time stamp; it must NOT carry the new identity');
+  assert(JSON.stringify(win12.documentIds) === JSON.stringify(['cmd-2']),
+    'membership was written with the request-time authority stamp');
+
+  // Every later read under the new identity mismatches the stamp and blocks
+  // on a newly authorized fetch.
+  let laterServed = null;
+  const laterPending = loader.resolveQuery({ selector: {} })
+    .then((docs) => { laterServed = docs; return docs; });
+  await settle();
+  assert(laterServed === null,
+    'read under the post-materialization identity must await a newly authorized fetch');
+  assert(fetches === 3, 'the mismatched stamp forces the authorized refetch');
+  releaseFinal();
+  const laterDocs = await laterPending;
+  assert(laterDocs.length === 1 && laterDocs[0].id === 'cmd-3',
+    'the newly authorized fetch serves and re-stamps under the current identity');
+  const win12b = await sidecar.getQueryWindow(['business_commands', fp12, 0, 200]);
+  assert(win12b.permissionDigest === 'digest-f', 'window re-stamped with the current identity');
+}
+
 console.log('ctox-rxdb stale-while-revalidate smoke OK');
 process.exit(0);
