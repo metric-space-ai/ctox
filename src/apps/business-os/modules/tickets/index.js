@@ -208,6 +208,7 @@ const state = {
   t: (key, fallback) => fallback || key,
   selectedId: '',
   requestedRecordId: '',
+  focusedCaseId: '',
   search: '',
   status: 'all',
   band: 'all',
@@ -344,6 +345,7 @@ export function resolveTicketListState({ loading = false, sourceCount = 0, readi
 export async function mount(ctx) {
   state.ctx = ctx;
   state.requestedRecordId = String(ctx.args?.record || ctx.args?.record_id || ctx.args?.case_id || '').trim();
+  state.focusedCaseId = '';
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
   const messages = await loadModuleMessages(import.meta.url, state.lang, labels);
   state.t = (key, fallback) => messages[key] ?? fallback ?? key;
@@ -368,6 +370,7 @@ export async function mount(ctx) {
     state.requestedRecordId = recordId;
     focusRequestedTicket();
     render();
+    scrollFocusedTicketCase();
   };
   ctx.host.addEventListener('ctox-business-os-app-launch', onAppLaunch);
   const stopReadiness = wireTicketReadiness();
@@ -585,16 +588,25 @@ async function refreshTickets() {
   syncSelectionToVisible();
   focusRequestedTicket();
   render();
+  scrollFocusedTicketCase();
+}
+
+function scrollFocusedTicketCase() {
+  if (!state.focusedCaseId) return;
+  const caseId = state.focusedCaseId;
+  requestAnimationFrame(() => {
+    const card = [...state.ctx.host.querySelectorAll('[data-context-record-type="ticket_case"]')]
+      .find((item) => item.dataset.contextRecordId === caseId);
+    card?.scrollIntoView?.({ block: 'nearest' });
+  });
 }
 
 function focusRequestedTicket() {
   const recordId = state.requestedRecordId;
   if (!recordId || state.loading) return;
+  const ticketCase = state.data.ctox_ticket_cases.find((item) => item.id === recordId || item.case_id === recordId);
   const ticket = state.data.ctox_ticket_items.find((item) => item.id === recordId || item.ticket_key === recordId)
-    || (() => {
-      const ticketCase = state.data.ctox_ticket_cases.find((item) => item.id === recordId || item.case_id === recordId);
-      return ticketCase && state.data.ctox_ticket_items.find((item) => item.ticket_key === ticketCase.ticket_key);
-    })();
+    || (ticketCase && state.data.ctox_ticket_items.find((item) => item.ticket_key === ticketCase.ticket_key));
   if (!ticket) {
     setCommandStatus(`Verknüpftes Ticket ${recordId} ist hier nicht verfügbar.`, true);
     return;
@@ -605,8 +617,10 @@ function focusRequestedTicket() {
   const search = root()?.querySelector('[data-pg-search]');
   if (search) search.value = '';
   state.selectedId = ticket.id;
+  state.focusedCaseId = ticketCase?.case_id || '';
+  if (ticketCase) state.opsMode = 'open';
   state.requestedRecordId = '';
-  setCommandStatus('Verknüpftes Ticket geöffnet.');
+  setCommandStatus(ticketCase ? 'Verknüpfter Ticket-Fall geöffnet.' : 'Verknüpftes Ticket geöffnet.');
 }
 
 // --- Crew on tickets: the member holding a ticket's queue task -----------------
@@ -792,6 +806,7 @@ function syncSelectionToVisible() {
 function selectRecord(id) {
   if (!id) return;
   state.selectedId = id;
+  state.focusedCaseId = '';
   // New ticket → operations pane returns to auto (reveals only if a flow needs
   // it). Selection is an in-place class flip, never a list rebuild.
   state.opsMode = 'auto';
@@ -905,7 +920,8 @@ function renderDetail() {
   }
   applyTicketContext(detail, ticket, 'detail');
   const events = eventsForTicket(ticket.ticket_key);
-  const primary = casesForTicket(ticket.ticket_key)[0] || null;
+  const primary = casesForTicket(ticket.ticket_key).find((item) => item.case_id === state.focusedCaseId)
+    || casesForTicket(ticket.ticket_key)[0] || null;
   const verifications = primary ? verificationsForCase(primary.case_id) : [];
   const writebacks = primary ? writebacksForCase(primary.case_id) : [];
   const opsOpen = resolveOpsVisible(state.opsMode, ticketFlowActive(ticket));
@@ -1062,7 +1078,7 @@ function renderCase(item) {
   const clarifications = state.data.ctox_ticket_clarification_requests.filter((clarification) => clarification.case_id === item.case_id);
   const actions = caseActionIconsHtml(item);
   return `
-    <article class="ctox-card" ${recordContextAttrs({
+    <article class="ctox-card${item.case_id === state.focusedCaseId ? ' is-selected' : ''}" ${recordContextAttrs({
     type: 'ticket_case',
     id: item.case_id || item.id,
     label: item.label || item.case_id,
