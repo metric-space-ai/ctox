@@ -1731,15 +1731,15 @@ export async function mount(ctx) {
   function sentAccountThreads() {
     const messages = filteredAccountMessages();
     return filteredAccountThreads().filter((thread) => messages.some((message) => messageBelongsToThread(message, thread)
-      && (message.direction === 'outbound' || ['sent', 'sentitems'].includes(String(message.folder_hint || '').toLowerCase()))));
+      && messageIsSent(message)));
   }
 
   function inboxAccountThreads() {
     const messages = filteredAccountMessages();
     return filteredAccountThreads().filter((thread) => {
       const threadMessages = messages.filter((message) => messageBelongsToThread(message, thread));
-      return threadMessages.some((message) => message.direction === 'inbound' || ['inbox', 'incoming'].includes(String(message.folder_hint || '').toLowerCase()))
-        || !threadMessages.some((message) => message.direction === 'outbound' || ['sent', 'sentitems'].includes(String(message.folder_hint || '').toLowerCase()));
+      return threadMessages.some(messageIsInbox)
+        || !threadMessages.some(messageIsSent);
     });
   }
 
@@ -2514,9 +2514,9 @@ function listBandCounts(records, commands = [], messages = []) {
 function recordMatchesBand(record, band, messages, commands = []) {
   if (band === 'inbound') return record.__kind === 'thread'
     && (!messages.some((message) => messageBelongsToThread(message, record))
-      || messages.some((message) => messageBelongsToThread(message, record) && message.direction === 'inbound'));
+      || messages.some((message) => messageBelongsToThread(message, record) && messageIsInbox(message)));
   if (band === 'outbound') return record.__kind === 'thread' && messages.some((message) => messageBelongsToThread(message, record)
-      && (message.direction === 'outbound' || ['sent', 'sentitems'].includes(String(message.folder_hint || '').toLowerCase())));
+      && messageIsSent(message));
   if (band === 'attention') return recordNeedsAttention(record) || routeCommandForRecord(record, commands)?.status === 'failed';
   return true;
 }
@@ -2691,10 +2691,22 @@ function filterThreadsForFolder(threads, folder, messages) {
   return (threads || []).filter((thread) => {
     const threadMessages = (messages || []).filter((message) => messageBelongsToThread(message, thread));
     if (folder === 'unread') return Number(thread.unread_count || 0) > 0;
-    if (folder === 'sent') return threadMessages.some((message) => message.direction === 'outbound');
+    if (folder === 'sent') return threadMessages.some(messageIsSent);
     return threadMessages.length === 0
-      || threadMessages.some((message) => message.direction === 'inbound' || String(message.folder_hint || '').toLowerCase() === 'inbox');
+      || threadMessages.some(messageIsInbox);
   }).sort((a, b) => timeOf(b.last_message_at) - timeOf(a.last_message_at));
+}
+
+function messageIsSent(message) {
+  const folder = String(message.folder_hint || '').toLowerCase();
+  return ['sent', 'sentitems'].includes(folder)
+    || (!['inbox', 'incoming'].includes(folder) && message.direction === 'outbound');
+}
+
+function messageIsInbox(message) {
+  const folder = String(message.folder_hint || '').toLowerCase();
+  if (['sent', 'sentitems'].includes(folder)) return false;
+  return ['inbox', 'incoming'].includes(folder) || message.direction === 'inbound';
 }
 
 function folderCounts(threads, outboundMessages, communicationMessages) {

@@ -722,7 +722,11 @@ fn execute_sync(options: &EmailOptions) -> Result<Value> {
                     let sender_address = extract_address(&parsed.from_header);
                     let sender_display = extract_display_name(&parsed.from_header)
                         .unwrap_or_else(|| sender_address.clone());
-                    let direction = synced_message_direction(&sender_address, &options.email);
+                    let direction = synced_message_direction_in_folder(
+                        &options.folder,
+                        &sender_address,
+                        &options.email,
+                    );
                     let provider_thread_key =
                         thread_key_from_email(&parsed, &format!("{account_key}::{uid}"));
                     let thread_key = account_thread_key(&conn, &account_key, &provider_thread_key)?;
@@ -960,7 +964,8 @@ fn store_provider_message(
 
     let thread_key = account_thread_key(conn, account_key, &item.thread_key)?;
     let observed_at = now_iso_string();
-    let direction = synced_message_direction(&item.sender_address, &options.email);
+    let direction =
+        synced_message_direction_in_folder(&item.folder_hint, &item.sender_address, &options.email);
     let raw_payload_ref = provider_attachment_refs(&item.metadata).join("\n");
     upsert_communication_message(
         conn,
@@ -2042,6 +2047,18 @@ fn synced_message_direction(sender_address: &str, account_email: &str) -> &'stat
         "outbound"
     } else {
         "inbound"
+    }
+}
+
+fn synced_message_direction_in_folder(
+    folder_hint: &str,
+    sender_address: &str,
+    account_email: &str,
+) -> &'static str {
+    match folder_hint.trim().to_ascii_lowercase().as_str() {
+        "sent" | "sentitems" => "outbound",
+        "inbox" | "incoming" => "inbound",
+        _ => synced_message_direction(sender_address, account_email),
     }
 }
 
@@ -4669,6 +4686,26 @@ mod tests {
     fn synced_message_direction_keeps_external_sender_as_inbound() {
         assert_eq!(
             synced_message_direction("Max Mustermann <founder@example.com>", "cto1@example.com"),
+            "inbound"
+        );
+    }
+
+    #[test]
+    fn synced_message_direction_uses_mailbox_folder_for_aliases_and_self_mail() {
+        assert_eq!(
+            synced_message_direction_in_folder(
+                "sent",
+                "Delegated <alias@example.com>",
+                "owner@example.com",
+            ),
+            "outbound"
+        );
+        assert_eq!(
+            synced_message_direction_in_folder(
+                "INBOX",
+                "Owner <owner@example.com>",
+                "owner@example.com",
+            ),
             "inbound"
         );
     }

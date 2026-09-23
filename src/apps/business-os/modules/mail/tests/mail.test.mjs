@@ -202,6 +202,20 @@ test('mail folders derive from canonical thread and message direction', () => {
   assert.deepEqual(hooks.filterThreadsForFolder(threads, 'sent', messages).map((row) => row.thread_key), ['sent']);
 });
 
+test('folder identity keeps delegated Sent mail and self-authored Inbox mail separate', () => {
+  const account_key = 'email:owner@example.test';
+  const sent = { __kind: 'thread', thread_key: 'delegated', account_key, last_message_at: '2026-08-06T09:00:00Z' };
+  const inbox = { __kind: 'thread', thread_key: 'self', account_key, last_message_at: '2026-08-06T08:00:00Z' };
+  const messages = [
+    { thread_key: 'delegated', account_key, direction: 'inbound', folder_hint: 'sent' },
+    { thread_key: 'self', account_key, direction: 'outbound', folder_hint: 'inbox' },
+  ];
+  assert.deepEqual(hooks.filterThreadsForFolder([sent, inbox], 'sent', messages).map((row) => row.thread_key), ['delegated']);
+  assert.deepEqual(hooks.filterThreadsForFolder([sent, inbox], 'inbox', messages).map((row) => row.thread_key), ['self']);
+  assert.equal(hooks.listBandCounts([sent, inbox], [], messages).outbound, 1);
+  assert.equal(hooks.listBandCounts([sent, inbox], [], messages).inbound, 1);
+});
+
 test('a shared provider thread ID never mixes messages from different accounts', () => {
   const alice = { thread_key: 'shared-id', account_key: 'email:alice@example.test' };
   const bob = { thread_key: 'shared-id', account_key: 'email:bob@example.test' };
