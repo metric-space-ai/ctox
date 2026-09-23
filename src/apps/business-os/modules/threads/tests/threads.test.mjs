@@ -8,6 +8,38 @@ import {
 } from '../commands.js';
 import { collections } from '../schema.js';
 import { collectUniquePages } from '../paging.js';
+import { normalizeInternalDeepLink, sourceDeepLinkFor, sourceFocusSupported } from '../links.js';
+
+assert.equal(
+  sourceDeepLinkFor({ source_module: 'tickets', source_record_type: 'ticket_case', source_record_id: 'case 1' }, 'thread-1'),
+  '#tickets?record=case+1&record_type=ticket_case&return_thread_id=thread-1',
+);
+assert.equal(
+  sourceDeepLinkFor({ source_module: 'ctox', source_record_type: 'task', source_record_id: 'task-1' }, 'thread-1'),
+  '#ctox?task_id=task-1&record_type=task&return_thread_id=thread-1',
+);
+assert.equal(
+  sourceDeepLinkFor({ source_module: 'mail', source_record_type: 'conversation', source_record_id: 'mail-1' }, 'thread-1'),
+  '#mail?thread_key=mail-1&record_type=conversation&return_thread_id=thread-1',
+);
+assert.equal(
+  sourceDeepLinkFor({ source_module: 'mail', source_record_type: 'message', source_deep_link: '#mail?record_id=mail-2' }, 'thread-1'),
+  '#mail?message_id=mail-2&record_type=message&return_thread_id=thread-1',
+);
+assert.equal(
+  sourceDeepLinkFor({ source_module: 'documents', source_record_type: 'document', source_record_id: 'doc-1' }, 'thread-1'),
+  '#documents?record=doc-1&record_type=document&return_thread_id=thread-1',
+);
+assert.equal(
+  sourceDeepLinkFor({ source_module: 'outbound', source_record_type: 'research_run', source_record_id: 'run-1' }, 'thread-1'),
+  '#outbound?record=run-1&record_type=research_run&return_thread_id=thread-1',
+);
+assert.equal(sourceFocusSupported({ source_module: 'outbound', source_record_type: 'research_run', source_record_id: 'run-1' }), true);
+assert.equal(sourceFocusSupported({ source_module: 'outbound', source_record_type: 'unknown', source_record_id: 'run-1' }), false);
+assert.equal(sourceFocusSupported({ source_module: 'outbound', source_record_type: 'research_run', source_record_id: 'run-1', source_deep_link: '#tickets?record=run-1' }), false);
+assert.equal(normalizeInternalDeepLink('javascript:alert(1)', 'thread-1'), '');
+assert.equal(normalizeInternalDeepLink('https://example.org/', 'thread-1'), '');
+assert.equal(normalizeInternalDeepLink('#tickets?record=1', 'thread-1', new Set(['mail'])), '');
 
 const manyRecords = Array.from({ length: 235 }, (_, index) => ({ id: `thread-${index}` }));
 const requestedOffsets = [];

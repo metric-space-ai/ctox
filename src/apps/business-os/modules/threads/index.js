@@ -1,6 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { renderHtmlIfChanged } from '../../shared/stable-dom.js';
 import { collectUniquePages } from './paging.js';
+import { normalizeInternalDeepLink, sourceDeepLinkFor as buildSourceDeepLink, sourceFocusSupported } from './links.js';
 import {
   THREAD_COLLECTIONS,
   buildApprovalRequestPayload,
@@ -1704,7 +1705,7 @@ function selectedSourceContext() {
 function renderContextRow(row) {
   const label = row?.label || '';
   const value = row?.value || row?.deepLink || '';
-  const deepLink = String(row?.deepLink || '').trim();
+  const deepLink = normalizeInternalDeepLink(row?.deepLink, state.selectedId, registeredModuleIds());
   const valueHtml = deepLink
     ? `<a href="${escapeAttr(deepLink)}" data-thread-deep-link="${escapeAttr(deepLink)}">${escapeHtml(value || deepLink)}</a>`
     : `<span>${escapeHtml(value)}</span>`;
@@ -1715,50 +1716,21 @@ function renderContextRow(row) {
 // about. Prefer an explicit deep link; otherwise derive the source app hash
 // so approving never happens blind.
 function sourceDeepLinkFor(entry) {
-  if (!entry) return '';
-  const explicit = String(entry.source_deep_link || '').trim();
-  const parsed = /^#([a-z][a-z0-9-]*)(?:\?([^#]*))?$/i.exec(explicit);
-  const module = parsed?.[1] || String(entry.source_module || entry.target_module || '').trim();
-  if (!/^[a-z][a-z0-9-]*$/i.test(module) || module === 'threads') return '';
-  const params = new URLSearchParams(parsed?.[2] || '');
-  const recordId = String(entry.source_record_id || entry.target_record_id || '').trim();
-  if (module === 'ctox' && !params.has('task_id') && !params.has('command_id')) {
-    if (entry.task_id) params.set('task_id', entry.task_id);
-    else if (entry.command_id) params.set('command_id', entry.command_id);
-    else if (entry.source_record_type === 'task' && recordId) params.set('task_id', recordId);
-    else if (entry.source_record_type === 'command' && recordId) params.set('command_id', recordId);
-  }
-  if (recordId && ![...params.keys()].some((key) => ['record', 'record_id', 'case_id', 'task_id', 'command_id', 'message_id', 'thread_key'].includes(key))) {
-    if (module === 'mail' && entry.source_record_type === 'conversation') params.set('thread_key', recordId);
-    else if (module === 'mail') params.set('message_id', recordId);
-    else params.set('record', recordId);
-  }
-  if (entry.source_record_type && !params.has('record_type')) params.set('record_type', entry.source_record_type);
-  if (state.selectedId) params.set('return_thread_id', state.selectedId);
-  const query = params.toString();
-  return `#${module}${query ? `?${query}` : ''}`;
-}
-
-function sourceFocusSupported(entry) {
-  const module = String(entry?.source_module || entry?.target_module || '').trim();
-  const type = String(entry?.source_record_type || entry?.target_record_type || '').trim();
-  const id = String(entry?.source_record_id || entry?.target_record_id || '').trim();
-  if (module === 'ctox') return Boolean(entry?.task_id || entry?.command_id || (id && ['task', 'command'].includes(type)));
-  if (module === 'tickets') return Boolean(id && ['ticket', 'ticket_case'].includes(type));
-  if (module === 'outbound') return Boolean(id && ['campaign', 'company', 'pipeline_item', 'engagement', 'outbound_engagement', 'research_run'].includes(type));
-  if (module === 'mail') return Boolean(id && ['conversation', 'message'].includes(type));
-  if (module === 'documents') return Boolean(id && ['document', 'file'].includes(type));
-  return false;
+  return normalizeInternalDeepLink(buildSourceDeepLink(entry, state.selectedId), state.selectedId, registeredModuleIds());
 }
 
 function navigateDeepLink(value) {
-  const link = String(value || '').trim();
-  if (!/^#[a-z][a-z0-9-]*(?:\?[^#]*)?$/i.test(link)) return;
-  const [module, query = ''] = link.slice(1).split('?');
-  const params = new URLSearchParams(query);
-  if (state.selectedId) params.set('return_thread_id', state.selectedId);
+  const link = normalizeInternalDeepLink(value, state.selectedId, registeredModuleIds());
+  if (!link) return;
   persistNavigationState();
-  window.location.hash = `#${module}${params.size ? `?${params.toString()}` : ''}`;
+  window.location.hash = link;
+}
+
+function registeredModuleIds() {
+  const modules = state.ctx?.getModules?.() || state.ctx?.modules;
+  return Array.isArray(modules) && modules.length
+    ? new Set(modules.map((item) => String(item.id || '').trim()))
+    : null;
 }
 
 function messagesForThread(threadId) {

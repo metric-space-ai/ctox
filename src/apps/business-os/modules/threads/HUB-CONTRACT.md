@@ -140,9 +140,9 @@ Object deep links are hash routes into the source app:
   `thread_key` or `message_id`; CTOX uses `task_id` or `command_id`.
 - The source module MUST confirm the record in its own data. If missing, it
   MUST show an unavailable state instead of silently focusing the first row.
-- An internal `source_deep_link` on the entry takes precedence. External paths
-  and URLs are not accepted as module navigation. A `module` of `threads`
-  (or empty) yields no object link.
+- An internal `source_deep_link` on the entry takes precedence. Its module must
+  be registered in the current shell. External paths and URLs are not accepted
+  as module navigation. A `module` of `threads` (or empty) yields no object link.
 - `return_thread_id` opens `#threads?thread_id=<id>` from the shell window.
 
 **Record-approval banner contract.** A pending approval MUST be able to surface
