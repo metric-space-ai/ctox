@@ -94,6 +94,10 @@ pub(super) fn cancel_native_project(
     let target = crate::mission::channels::inspect_business_command(root, target_command_id)?
         .context("native project target command was not found")?;
     let canonical = &target["command"];
+    // The core command projection deliberately redacts actor identity for audit.
+    // Read ownership from the admitted native command, then bind it back to the
+    // projected command before authorizing cancellation.
+    let admitted = store::load_business_command(&store::open_store(root)?, target_command_id)?;
     let native_project = target_command_id.starts_with("workjet_project_native_")
         && canonical
             .pointer("/payload/project_id")
@@ -120,8 +124,12 @@ pub(super) fn cancel_native_project(
                 .pointer("/payload/workjet_request_fingerprint")
                 .and_then(Value::as_str)
                 .is_some()
-            && canonical
-                .pointer("/client_context/actor/id")
+            && canonical["module"].as_str() == Some(admitted.module.as_str())
+            && canonical["command_type"].as_str() == Some(admitted.command_type.as_str())
+            && admitted.payload == canonical["payload"]
+            && admitted
+                .client_context
+                .pointer("/actor/id")
                 .and_then(Value::as_str)
                 == Some(owner.as_str()),
         "native project command is not owned by this actor"

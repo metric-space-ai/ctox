@@ -889,7 +889,8 @@ fn project_crew_admission_uses_native_chat_binding_and_rejects_revocation() -> a
         super::super::project_crew_member_for_task(root.path(), task_id)?,
         Some("project-crew".into())
     );
-    channels::lease_queue_task(root.path(), task_id, "project-worker")?;
+    let leased = channels::lease_queue_task(root.path(), task_id, "project-worker")?;
+    assert!(leased.attempt > 0);
     let prepare = || {
         crate::crew::prepare_attempt(
             root.path(),
@@ -993,6 +994,9 @@ fn native_project_task_needs_no_app_crew_or_executor_and_replays_one_task() -> a
     let canonical = channels::business_command_projection(root.path(), command_id)?;
     assert_eq!(canonical["module"], "ctox");
     assert_eq!(canonical["command_type"], "business_os.chat.task");
+    assert!(canonical.pointer("/client_context/actor/id").is_none());
+    let admitted = store::load_business_command(&open_store(root.path())?, command_id)?;
+    assert_eq!(admitted.client_context["actor"]["id"], "owner");
     assert_eq!(canonical["payload"]["project_id"], "project");
     assert!(canonical["payload"].get("module_id").is_none());
     assert!(canonical["payload"].get("thread_id").is_none());

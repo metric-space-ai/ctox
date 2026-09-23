@@ -14228,39 +14228,47 @@ pub(super) fn handle_workspace_control_command(
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .context("target command has no cancellable execution task")?;
-            let actor = session_user_id(&session).unwrap_or("unknown");
-            let cancellation = serde_json::json!({
-                "ok": true,
-                "target_command_id": target_command_id,
-                "execution_task_id": task_id,
-                "cancelled_by": actor,
-                "cancelled_at_ms": now_ms(),
-                "reason": reason,
-                "side_effects_may_have_started": target
-                    .pointer("/command/execution_phase")
-                    .and_then(Value::as_str)
-                    .is_some_and(|phase| !matches!(phase, "accepted" | "queued" | "waiting_dependencies")),
-            });
-            channels::transition_business_command_for_task(
-                root,
-                task_id,
-                "cancelled",
-                Some(&cancellation),
-                None,
-                None,
-                &format!("cancelled by {actor}: {reason}"),
-            )?;
-            return write_rxdb_control_command_outcome(
-                root,
-                &command,
-                "completed",
-                Some(task_id),
-                Some("cancelled"),
-                cancellation,
-            );
-            },
-        )?
-        .into_outcome();
+                    let actor = session_user_id(&session).unwrap_or("unknown");
+                    // Leasing hands the task to a worker before the command projection
+                    // necessarily advances. Once leased, side effects may have begun
+                    // even if the projected execution phase still says "accepted".
+                    let side_effects_may_have_started = target
+                        .pointer("/command/execution_phase")
+                        .and_then(Value::as_str)
+                        .is_some_and(|phase| {
+                            !matches!(phase, "accepted" | "queued" | "waiting_dependencies")
+                        })
+                        || channels::load_queue_task(root, task_id)?
+                            .is_some_and(|task| task.attempt > 0);
+                    let cancellation = serde_json::json!({
+                        "ok": true,
+                        "target_command_id": target_command_id,
+                        "execution_task_id": task_id,
+                        "cancelled_by": actor,
+                        "cancelled_at_ms": now_ms(),
+                        "reason": reason,
+                        "side_effects_may_have_started": side_effects_may_have_started,
+                    });
+                    channels::transition_business_command_for_task(
+                        root,
+                        task_id,
+                        "cancelled",
+                        Some(&cancellation),
+                        None,
+                        None,
+                        &format!("cancelled by {actor}: {reason}"),
+                    )?;
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "completed",
+                        Some(task_id),
+                        Some("cancelled"),
+                        cancellation,
+                    );
+                },
+            )?
+            .into_outcome();
         }
         "ctox.runtime_settings.save" => {
             let mutation: RuntimeSettingsRequest = serde_json::from_value(command.payload.clone())
