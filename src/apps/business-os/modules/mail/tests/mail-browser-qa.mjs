@@ -563,7 +563,8 @@ mailQa: try {
   const visibleContent = editorFrame.locator('[contenteditable="true"]:visible')
     .filter({ hasText: 'Echter visueller Kampagneninhalt' }).first();
   await editable.waitFor({ state: 'visible' });
-  await editable.fill('Echter visueller Kampagneninhalt');
+  await editable.click();
+  await editable.pressSequentially('Echter visueller Kampagneninhalt', { delay: 15 });
   await visibleContent.waitFor({ state: 'visible', timeout: 5000 });
   await page.locator('[data-mail-content-title]').click();
   await page.waitForTimeout(500);
@@ -834,14 +835,17 @@ mailQa: try {
         .map((button) => ({ name: button.dataset.mailEditorViewport, pressed: button.getAttribute('aria-pressed') })),
       editorFrames: document.querySelectorAll('[data-mail-easy-email-host] iframe').length,
       contentSurfaceVisible: Boolean(document.querySelector('[data-mail-content-surface]')?.getClientRects().length),
-      editorText: [...(document.querySelector('[data-mail-easy-email-host] iframe')?.contentDocument?.querySelectorAll('[contenteditable="true"]') || [])]
-        .map((element) => ({ text: element.textContent?.slice(0, 120), html: element.outerHTML.slice(0, 260) })),
       readAttempts: (window.__mailReadAttempts?.get('communication_threads') || 0) - (window.__mailReadAttemptBaseline || 0),
       pendingReads: window.__mailPendingReads?.get('communication_threads') || 0,
       maxPendingReads: window.__mailMaxPendingReads?.get('communication_threads') || 0,
       abortedReads: window.__mailAbortedReads?.get('communication_threads') || 0,
     }));
     console.error('[mail QA] failure state', JSON.stringify({ ...state, browserErrors }));
+    if (state.editorFrames) {
+      const frame = page.frameLocator('[data-mail-easy-email-host] iframe');
+      console.error('[mail QA] editor contenteditables', JSON.stringify(await frame.locator('[contenteditable="true"]').allTextContents()));
+      console.error('[mail QA] editor body', (await frame.locator('body').textContent())?.slice(0, 500));
+    }
   } catch (diagnosticError) {
     console.error('[mail QA] state capture failed', diagnosticError);
   }
