@@ -62,9 +62,9 @@
   const doc = (value) => value ? {...value,toJSON:()=>({...value}),async incrementalPatch(patch){Object.assign(value,patch);persist();return doc(value);},async remove(){value.is_deleted=true;persist();}} : null;
   const collection = (name) => {
     const table=rows[name] ||= [];
-    return { $:{subscribe(observer){observers.add(observer);return {unsubscribe(){observers.delete(observer);}};}}, findOne(id){return {async exec(){return doc(table.find(row=>row.id===id));}};},find(query={}){return {async exec(){return table.filter(row=>matches(row,query.selector)).map(doc);}};},async insert(value){table.push(value);persist();return doc(value);},async upsert(value){const row=table.find(row=>row.id===value.id);row?Object.assign(row,value):table.push(value);persist();return doc(value);},async bulkUpsert(values){for(const value of values){const row=table.find(row=>row.id===value.id);row?Object.assign(row,value):table.push(value);}persist();return values.map(doc);}};
+    return { $:{subscribe(observer){observers.add(observer);return {unsubscribe(){observers.delete(observer);}};}}, findOne(id){return {async exec(){return doc(table.find(row=>row.id===id));}};},find(query={}){return {async exec(){return table.filter(row=>matches(row,query.selector)).map(doc);}};},async insert(value){table.push(value);persist();return doc(value);},async upsert(value){const row=table.find(row=>row.id===value.id);row?Object.assign(row,value):table.push(value);persist();return doc(value);},async bulkUpsert(values){const stored=[];for(const value of values){const row=table.find(row=>row.id===value.id);const stamped={...value,_meta:{...value._meta,lwt:Date.now()}};if(row) Object.assign(row,stamped);else table.push(stamped);stored.push(doc(row||stamped));}persist();return stored;}};
   };
-  const syncState={awaitInSync:async()=>{},awaitInitialReplication:async()=>{},pushToRemotePeers:async()=>{}};
+  const syncState={awaitInSync:async()=>{},awaitInitialReplication:async()=>{},pushToRemotePeers:async()=>{},waitForOpenPeerId:async()=> 'office-lab-peer',pushDocumentsToPeer:async()=>true,pushToPeer:async()=>true};
   const commands=[];
   const completedCommits=[];
   let firstCommitReleased=false;
