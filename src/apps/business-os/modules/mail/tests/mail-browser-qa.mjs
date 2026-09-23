@@ -523,17 +523,19 @@ mailQa: try {
   await page.locator('[data-mail-content-surface]').waitFor({ state: 'visible' });
   const editorFrame = page.frameLocator('[data-mail-easy-email-host] iframe');
   const editable = editorFrame.locator('[contenteditable="true"]').first();
+  const visibleContent = editorFrame.locator('[contenteditable="true"]:visible')
+    .filter({ hasText: 'Echter visueller Kampagneninhalt' }).first();
   await editable.waitFor({ state: 'visible' });
   await editable.dblclick();
   await page.keyboard.press('Meta+A');
   await page.keyboard.insertText('Echter visueller Kampagneninhalt');
-  await editable.filter({ hasText: 'Echter visueller Kampagneninhalt' }).waitFor({ state: 'visible' });
+  await visibleContent.waitFor({ state: 'visible' });
   await page.locator('[data-mail-content-title]').click();
   await page.waitForTimeout(500);
   await page.locator('[data-mail-editor-history="undo"]').click();
   await page.waitForTimeout(300);
   await page.locator('[data-mail-editor-history="redo"]').click();
-  await editable.filter({ hasText: 'Echter visueller Kampagneninhalt' }).waitFor({ state: 'visible' });
+  await visibleContent.waitFor({ state: 'visible' });
   await page.locator('[data-mail-editor-viewport="desktop"]').click();
   assert.equal(await page.locator('[data-mail-editor-viewport="desktop"]').getAttribute('aria-pressed'), 'true');
   await page.locator('[data-mail-editor-viewport="mobile"]').click();
@@ -610,7 +612,7 @@ mailQa: try {
   }
   await page.evaluate(() => document.documentElement.dataset.theme = 'light');
   await page.waitForTimeout(100);
-  await editable.filter({ hasText: 'Echter visueller Kampagneninhalt' }).waitFor({ state: 'visible' });
+  await visibleContent.waitFor({ state: 'visible' });
   await page.locator('[data-mail-save-content]').click();
   await page.waitForFunction(() => {
     const campaign = window.__mailRows.outbound_campaigns.find((item) => item.id === 'campaign-1');
@@ -627,7 +629,7 @@ mailQa: try {
   await page.locator('[data-mail-content-surface]').waitFor({ state: 'hidden' });
   await page.locator('[data-mail-action="edit-group-content"]').click();
   await editorFrame.locator('[contenteditable="true"]').first().waitFor({ state: 'visible' });
-  await editable.filter({ hasText: 'Echter visueller Kampagneninhalt' }).waitFor({ state: 'visible' });
+  await visibleContent.waitFor({ state: 'visible' });
   await page.locator('[data-mail-close-content-editor]').click();
 
   await page.locator('[data-mail-compose]').click();
