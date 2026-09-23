@@ -982,6 +982,42 @@ fn native_project_task_needs_no_app_crew_or_executor_and_replays_one_task() -> a
         None
     );
 
+    let cancel_request = json!({
+        "target_command_id":command_id,
+        "idempotency_key":"cancel-native-project-1",
+        "reason":"stop requested from Workjet",
+        "_context":{"actor":"owner","workspace":"project-test"}
+    });
+    let cancel = |request: Value| {
+        mcp_channel::call_tool(root.path(), "business_os.cancel_project_task", request)
+    };
+    let cancelled = cancel(cancel_request.clone())?;
+    assert_eq!(cancelled["target_command_id"], command_id);
+    assert_eq!(cancelled["task_id"], task_id);
+    assert_eq!(cancelled["status"], "completed");
+    assert_eq!(cancelled["target_status"], "cancelled");
+    assert_eq!(cancelled["side_effects_may_have_started"], false);
+    let replay_cancel = cancel(cancel_request.clone())?;
+    assert_eq!(cancelled["command_id"], replay_cancel["command_id"]);
+    assert_eq!(cancelled["task_id"], replay_cancel["task_id"]);
+    let mut second_cancel = cancel_request.clone();
+    second_cancel["idempotency_key"] = json!("cancel-native-project-2");
+    assert!(cancel(second_cancel).is_err());
+    let mut changed_cancel = cancel_request.clone();
+    changed_cancel["reason"] = json!("a different reason");
+    assert!(cancel(changed_cancel).is_err());
+    let mut foreign_cancel = cancel_request.clone();
+    foreign_cancel["idempotency_key"] = json!("cancel-native-project-2");
+    foreign_cancel["_context"]["actor"] = json!("other-user");
+    assert!(cancel(foreign_cancel).is_err());
+    let mut unrelated_cancel = cancel_request.clone();
+    unrelated_cancel["target_command_id"] = json!("bind");
+    assert!(cancel(unrelated_cancel).is_err());
+    assert_eq!(
+        channels::business_command_projection(root.path(), command_id)?["status"],
+        "cancelled"
+    );
+
     let mut changed = request.clone();
     changed["instruction"] = json!("A different task");
     assert!(start(changed).is_err());

@@ -1193,6 +1193,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
     let mut tools = vec![
         project_crew_request::descriptor(),
         project_crew_request::native_project_descriptor(),
+        project_crew_request::native_project_cancel_descriptor(),
         read_tool(
             "business_os.list_crew_executions",
             "List current external Crew offers for an owned command and executor. Returns exact attempt identifiers and state, never credentials or prompts.",
@@ -2871,6 +2872,9 @@ fn call_tool_inner(
     let result = match tool_name {
         "business_os.start_project_task" => {
             project_crew_request::start_native_project(root, &context, &arguments)?
+        }
+        "business_os.cancel_project_task" => {
+            project_crew_request::cancel_native_project(root, &context, &arguments)?
         }
         "business_os.start_crew_execution" => {
             project_crew_request::start(root, &context, &arguments)?
@@ -6519,6 +6523,7 @@ fn tool_policy_class(tool_name: &str) -> McpToolPolicyClass {
         "business_os.reject" | "business_os.request_changes" => McpToolPolicyClass::Approval,
         "web_browser_prepare"
         | "business_os.start_project_task"
+        | "business_os.cancel_project_task"
         | "business_os.start_crew_execution"
         | "business_os.claim_crew_execution"
         | "business_os.report_crew_execution"
@@ -6685,6 +6690,7 @@ fn argument_business_scope_metadata(tool_name: &str, arguments: &Value) -> Value
             "kind",
             "id",
             "command_id",
+            "target_command_id",
             "run_id",
             "artifact_id",
             "approval_id",
@@ -6827,7 +6833,9 @@ fn enforce_internal_command_session_scope(
         .filter_map(|action| string_field(action, "module_id"))
         .collect::<BTreeSet<_>>();
     match tool_name {
-        "business_os.start_project_task" | "business_os.start_crew_execution" => {
+        "business_os.start_project_task"
+        | "business_os.cancel_project_task"
+        | "business_os.start_crew_execution" => {
             anyhow::bail!("a command-scoped session cannot admit independent project work")
         }
         "business_os.list_crew_executions" | "business_os.claim_crew_execution" => {

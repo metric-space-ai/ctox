@@ -25,6 +25,170 @@ struct StartNativeProjectRequest {
     _context: Option<Value>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CancelNativeProjectRequest {
+    target_command_id: String,
+    idempotency_key: String,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default, rename = "_context")]
+    _context: Option<Value>,
+}
+
+pub(super) fn native_project_cancel_descriptor() -> BusinessOsMcpToolDescriptor {
+    write_tool(
+        "business_os.cancel_project_task",
+        "Cancel an owned native Workjet project task admitted by start_project_task. A repeated key returns the same cancellation command and native task result; cancellation may not undo side effects already started.",
+        serde_json::json!({"type":"object","additionalProperties":false,
+            "required":["target_command_id","idempotency_key"],
+            "properties":{
+                "target_command_id":{"type":"string","minLength":1,"maxLength":256},
+                "idempotency_key":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"},
+                "reason":{"type":"string","maxLength":512}
+            }}),
+    )
+}
+
+pub(super) fn cancel_native_project(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    let request: CancelNativeProjectRequest = serde_json::from_value(arguments.clone())?;
+    let target_command_id = request.target_command_id.trim();
+    anyhow::ensure!(
+        target_command_id.starts_with("workjet_project_native_") && target_command_id.len() <= 256,
+        "native project target command is required"
+    );
+    let key = request.idempotency_key.as_bytes();
+    anyhow::ensure!(
+        !key.is_empty()
+            && key.len() <= 256
+            && key[0].is_ascii_alphanumeric()
+            && key
+                .iter()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(*b, b'.' | b'_' | b':' | b'-')),
+        "invalid project cancellation idempotency key"
+    );
+    let reason = request
+        .reason
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("cancelled by user");
+    anyhow::ensure!(
+        reason.len() <= 512,
+        "project cancellation reason exceeds limit"
+    );
+    let actor = resolved_mcp_actor_context(root, context)?;
+    anyhow::ensure!(
+        actor.get("active").and_then(Value::as_bool) == Some(true),
+        "project task actor is inactive"
+    );
+    let owner = required_arg(&actor, "id")?;
+    enforce_collection_policy(root, "business_commands")?;
+    enforce_module_policy(root, "ctox")?;
+    let target = crate::mission::channels::inspect_business_command(root, target_command_id)?
+        .context("native project target command was not found")?;
+    let canonical = &target["command"];
+    anyhow::ensure!(
+        canonical["module"] == "ctox"
+            && canonical["command_type"] == "business_os.chat.task"
+            && canonical
+                .pointer("/payload/workjet_request_fingerprint")
+                .and_then(Value::as_str)
+                .is_some()
+            && canonical
+                .pointer("/client_context/actor/id")
+                .and_then(Value::as_str)
+                == Some(owner.as_str()),
+        "native project command is not owned by this actor"
+    );
+    let task_id = target
+        .get("execution_task_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("native project command has no task")?;
+    let mut authorized = context.clone();
+    authorized.actor = owner.clone();
+    authorized.trusted_role = actor
+        .get("role")
+        .and_then(Value::as_str)
+        .map(normalize_role);
+    let decision = trusted_mcp_actor_policy_decision(
+        root,
+        &authorized,
+        BusinessOsPermission::CtoxTaskManage,
+        BusinessOsScopeType::Task,
+        Some(task_id),
+    )?;
+    anyhow::ensure!(
+        decision.allowed,
+        "project task management denied: {}",
+        decision.display_reason
+    );
+    let identity = serde_json::to_vec(&(&owner, target_command_id, &request.idempotency_key))?;
+    let command_id = format!(
+        "workjet_project_cancel_{}",
+        URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, &identity).as_ref())
+    );
+    let payload = serde_json::json!({"target_command_id":target_command_id,"reason":reason});
+    let replay = crate::mission::channels::inspect_business_command(root, &command_id)?.is_some();
+    if replay {
+        let existing = crate::mission::channels::business_command_projection(root, &command_id)?;
+        anyhow::ensure!(
+            existing["payload"] == payload,
+            "project cancellation key conflicts with existing intent"
+        );
+    } else {
+        anyhow::ensure!(
+            !matches!(
+                canonical["status"].as_str(),
+                Some("completed" | "failed" | "cancelled")
+            ),
+            "native project task is already terminal"
+        );
+    }
+    let accepted = store::accept_rxdb_business_command(
+        root,
+        serde_json::json!({
+            "id":command_id,"command_id":command_id,"module":"ctox",
+            "command_type":"ctox.command.cancel","payload":payload,
+            "client_context":{"actor":actor,"channel":context.channel,"surface":context.surface,
+                "workspace":context.workspace,"mcp_actor":context.actor,"request_id":command_id}
+        }),
+    )?;
+    anyhow::ensure!(
+        accepted.get("ok").and_then(Value::as_bool) != Some(false),
+        "native project cancellation was rejected: {}",
+        accepted.get("status").unwrap_or(&Value::Null)
+    );
+    let cancellation = crate::mission::channels::business_command_projection(root, &command_id)?;
+    anyhow::ensure!(
+        cancellation["payload"] == payload
+            && cancellation["result"]["target_command_id"] == target_command_id
+            && cancellation["result"]["execution_task_id"] == task_id
+            && cancellation["status"] == "completed",
+        "project cancellation has no matching native receipt"
+    );
+    let target_after =
+        crate::mission::channels::business_command_projection(root, target_command_id)?;
+    anyhow::ensure!(
+        target_after["status"] == "cancelled",
+        "native project task is not cancelled"
+    );
+    Ok(serde_json::json!({
+        "schema":"ctox.native_project_cancel.v1",
+        "command_id":command_id,
+        "target_command_id":target_command_id,
+        "task_id":task_id,
+        "status":cancellation["status"],
+        "target_status":target_after["status"],
+        "side_effects_may_have_started":cancellation["result"]["side_effects_may_have_started"]
+    }))
+}
+
 pub(super) fn native_project_descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(
         "business_os.start_project_task",

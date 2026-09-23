@@ -252,3 +252,14 @@ project, recover a lost reply with the same key and display CTOX's actual
 command/task status. The source test checks admission, replay, changed intent,
 foreign ownership and archived-project denial; it does not prove a full worker
 turn or an installed Dev/Ops user path. Those are required before release.
+
+`business_os.cancel_project_task` accepts only the native command ID returned
+by that ingress, a stable cancellation retry key and an optional bounded reason.
+The MCP actor must still own the canonical command and pass `ctox.task.manage`
+on its actual linked native task; a caller cannot provide a task, actor, module
+or policy scope. The tool submits the existing `ctox.command.cancel` control
+command with deterministic identity, compares retry intent with the canonical
+payload, and acknowledges only a matching completed native receipt and cancelled
+target. A lost response can be retried with the same key. The result includes
+the target task and `side_effects_may_have_started`; cancellation does not claim
+to undo effects already started. Command-scoped sessions cannot invoke it.
