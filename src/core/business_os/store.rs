@@ -11974,6 +11974,54 @@ impl RxdbCollectionWriter {
     }
 }
 
+/// Repair documents written by older native projections before RxDB opens.
+/// Missing envelope fields make an entire collection query fail with
+/// DOC_CACHE_LWT, even when only one command is malformed.
+pub(super) fn repair_missing_rxdb_command_envelopes(root: &Path) -> anyhow::Result<usize> {
+    let Some(mut writer) = RxdbCollectionWriter::open(root, "business_commands")? else {
+        return Ok(0);
+    };
+    let rows = {
+        let mut statement = writer
+            .conn
+            .prepare(&format!("SELECT id, data FROM {}", writer.table))?;
+        let mapped = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        mapped.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut repaired = 0;
+    for (id, raw) in rows {
+        let document: Value = serde_json::from_str(&raw)
+            .with_context(|| format!("parse projected business_command {id}"))?;
+        let valid_envelope = document
+            .pointer("/_meta/lwt")
+            .and_then(Value::as_f64)
+            .is_some()
+            && document.get("_deleted").and_then(Value::as_bool).is_some()
+            && document.get("_attachments").is_some_and(Value::is_object);
+        if valid_envelope {
+            continue;
+        }
+        let source_updated_at_ms = document
+            .get("updated_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| now_ms().min(i64::MAX as u128) as i64);
+        let deleted = document
+            .get("_deleted")
+            .or_else(|| document.get("is_deleted"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if deleted {
+            writer.replace_source(&id, source_updated_at_ms, document, true)?;
+        } else {
+            writer.upsert_source_projection(&id, source_updated_at_ms, document)?;
+        }
+        repaired += 1;
+    }
+    Ok(repaired)
+}
+
 fn upsert_rxdb_collection_record_with_writer(
     conn: &Connection,
     table: &str,
@@ -12010,13 +12058,32 @@ fn upsert_rxdb_collection_record_with_writer(
     if let Some(object) = payload.as_object_mut() {
         object.insert("id".to_string(), Value::String(record_id.to_string()));
         object.insert("_rev".to_string(), Value::String(rev.clone()));
+        if deleted {
+            object.insert("_deleted".to_string(), Value::Bool(true));
+        } else {
+            object
+                .entry("_deleted".to_string())
+                .or_insert(Value::Bool(false));
+        }
+        let meta = object
+            .entry("_meta".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if !meta.is_object() {
+            *meta = serde_json::json!({});
+        }
+        meta.as_object_mut().expect("_meta is an object").insert(
+            "lwt".to_string(),
+            Value::Number(serde_json::Number::from(replication_lwt_ms)),
+        );
+        if !object.get("_attachments").is_some_and(Value::is_object) {
+            object.insert("_attachments".to_string(), serde_json::json!({}));
+        }
         object.insert(
             "updated_at_ms".to_string(),
             Value::Number(serde_json::Number::from(payload_updated_at_ms)),
         );
         if deleted {
             object.insert("is_deleted".to_string(), Value::Bool(true));
-            object.insert("_deleted".to_string(), Value::Bool(true));
         }
     }
     // SECURITY: strip bearer credentials from client_context on the FINAL merged
@@ -39029,6 +39096,67 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(last_write_time, 1_004.0);
+        let document: Value = serde_json::from_str(&conn.query_row(
+            &format!("SELECT data FROM {table} WHERE id = 'probe-4'"),
+            [],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert_eq!(
+            document.pointer("/_meta/lwt"),
+            Some(&serde_json::json!(1_004))
+        );
+        assert_eq!(document.get("_deleted"), Some(&Value::Bool(false)));
+        assert_eq!(document.get("_attachments"), Some(&serde_json::json!({})));
+        Ok(())
+    }
+
+    #[test]
+    fn repair_missing_command_envelopes_preserves_result_and_advances_checkpoint(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = format!(
+            "ctox_business_os__business_commands__v{}",
+            rxdb_schema_version("business_commands")
+        );
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            &format!("CREATE TABLE {table} (id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"),
+            [],
+        )?;
+        let original = serde_json::json!({
+            "id": "writeback_probe", "_rev": "4-old", "status": "completed",
+            "updated_at_ms": 42, "result": {"count": 7}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["writeback_probe", "4-old", original.to_string()],
+        )?;
+        drop(conn);
+
+        assert_eq!(repair_missing_rxdb_command_envelopes(root)?, 1);
+        assert_eq!(repair_missing_rxdb_command_envelopes(root)?, 0);
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let (revision, lwt, raw): (String, f64, String) = conn.query_row(
+            &format!(
+                "SELECT revision, lastWriteTime, data FROM {table} WHERE id='writeback_probe'"
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let repaired: Value = serde_json::from_str(&raw)?;
+        assert_eq!(repaired["result"], original["result"]);
+        assert_eq!(repaired["updated_at_ms"], original["updated_at_ms"]);
+        assert_eq!(repaired["_rev"], revision);
+        assert!(revision.starts_with("5-"));
+        assert!(lwt > 42.0);
+        assert_eq!(
+            repaired.pointer("/_meta/lwt").and_then(Value::as_f64),
+            Some(lwt)
+        );
+        assert_eq!(repaired["_deleted"], false);
+        assert_eq!(repaired["_attachments"], serde_json::json!({}));
         Ok(())
     }
 

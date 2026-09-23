@@ -2665,6 +2665,13 @@ async fn run_native_peer(
     if repaired_revisions > 0 {
         eprintln!("[business-os] repaired {repaired_revisions} legacy business_commands revisions");
     }
+    let repaired_envelopes = store::repair_missing_rxdb_command_envelopes(&root)
+        .context("repair malformed Business OS command envelopes")?;
+    if repaired_envelopes > 0 {
+        eprintln!(
+            "[business-os] repaired {repaired_envelopes} malformed business_commands envelopes"
+        );
+    }
     let clamped_documents = clamp_oversized_projected_documents(&root, &database_path)
         .context("clamp oversized projected Business OS documents")?;
     if clamped_documents > 0 {
