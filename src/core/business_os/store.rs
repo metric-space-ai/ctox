@@ -39819,7 +39819,7 @@ pub(super) mod tests {
         let payload: Value = serde_json::from_str(&payload)?;
         assert_eq!(payload["name"], "Restored");
         assert_eq!(payload["_deleted"], false);
-        assert_eq!(payload["is_deleted"], false);
+        assert!(payload.get("is_deleted").is_none());
         Ok(())
     }
 
