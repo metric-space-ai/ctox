@@ -1288,11 +1288,18 @@ pub(super) fn next_projected_rxdb_revision(previous: Option<&str>) -> String {
 
 fn next_direct_rxdb_revision(previous: Option<&str>) -> String {
     let height = previous
-        .and_then(|revision| revision.split_once('-').map(|(height, _)| height))
-        .and_then(|height| height.parse::<u64>().ok())
+        .and_then(direct_rxdb_revision_height)
         .unwrap_or(0)
         .saturating_add(1);
     format!("{height}-{}", Uuid::new_v4().simple())
+}
+
+fn direct_rxdb_revision_height(revision: &str) -> Option<u64> {
+    let (height, suffix) = revision.split_once('-')?;
+    if suffix.is_empty() {
+        return None;
+    }
+    height.parse::<u64>().ok()
 }
 
 fn upsert_attached_rxdb_record(
@@ -12191,6 +12198,74 @@ impl RxdbCollectionWriter {
     }
 }
 
+/// Repair documents written by older native projections before RxDB opens.
+/// Missing envelope fields can break collection queries and replication even
+/// when only one projected document is malformed.
+pub(super) fn repair_missing_rxdb_envelopes(
+    root: &Path,
+    collection: &str,
+) -> anyhow::Result<usize> {
+    let Some(mut writer) = RxdbCollectionWriter::open(root, collection)? else {
+        return Ok(0);
+    };
+    let deleted_column = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column));
+    let rows = {
+        let mut statement = writer.conn.prepare(&format!(
+            "SELECT id, data, {} FROM {}",
+            deleted_column.unwrap_or("NULL"),
+            writer.table
+        ))?;
+        let mapped = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        })?;
+        mapped.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut repaired = 0;
+    for (id, raw, sql_deleted) in rows {
+        let document: Value = serde_json::from_str(&raw)
+            .with_context(|| format!("parse projected {collection} document {id}"))?;
+        let json_deleted = document.get("_deleted").and_then(Value::as_bool);
+        // A legacy SQLite tombstone must never become live because its JSON
+        // deletion marker was lost or contradicted during projection.
+        let deleted = sql_deleted.is_some_and(|value| value != 0)
+            || json_deleted
+                .or_else(|| document.get("is_deleted").and_then(Value::as_bool))
+                .unwrap_or(false);
+        let valid_envelope = document
+            .pointer("/_meta/lwt")
+            .and_then(Value::as_f64)
+            .is_some()
+            && document
+                .get("_rev")
+                .and_then(Value::as_str)
+                .is_some_and(|revision| direct_rxdb_revision_height(revision).is_some())
+            && json_deleted.is_some()
+            && document.get("_attachments").is_some_and(Value::is_object)
+            && json_deleted == Some(deleted)
+            && sql_deleted.is_none_or(|value| (value != 0) == deleted);
+        if valid_envelope {
+            continue;
+        }
+        let source_updated_at_ms = document
+            .get("updated_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| now_ms().min(i64::MAX as u128) as i64);
+        if deleted {
+            writer.replace_source(&id, source_updated_at_ms, document, true)?;
+        } else {
+            writer.upsert_source_projection(&id, source_updated_at_ms, document)?;
+        }
+        repaired += 1;
+    }
+    Ok(repaired)
+}
+
 fn upsert_rxdb_collection_record_with_writer(
     conn: &Connection,
     table: &str,
@@ -12204,6 +12279,7 @@ fn upsert_rxdb_collection_record_with_writer(
     merge_existing: bool,
 ) -> anyhow::Result<()> {
     let mut previous_revision = None;
+    let mut existing_row = false;
     if let Some(existing_json) = conn
         .query_row(
             &format!("SELECT data FROM {table} WHERE id = ?1"),
@@ -12212,10 +12288,12 @@ fn upsert_rxdb_collection_record_with_writer(
         )
         .optional()?
     {
+        existing_row = true;
         if let Ok(mut existing) = serde_json::from_str::<Value>(&existing_json) {
             previous_revision = existing
                 .get("_rev")
                 .and_then(Value::as_str)
+                .filter(|revision| direct_rxdb_revision_height(revision).is_some())
                 .map(str::to_string);
             if merge_existing {
                 merge_json_object_values(&mut existing, &payload);
@@ -12223,17 +12301,53 @@ fn upsert_rxdb_collection_record_with_writer(
             }
         }
     }
+    if existing_row && previous_revision.is_none() {
+        if let Some(revision_column) = ["revision", "_rev"]
+            .into_iter()
+            .find(|column| table_columns.contains(*column))
+        {
+            previous_revision = conn
+                .query_row(
+                    &format!("SELECT {revision_column} FROM {table} WHERE id = ?1"),
+                    [record_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten()
+                .filter(|revision| direct_rxdb_revision_height(revision).is_some());
+        }
+    }
     let rev = next_direct_rxdb_revision(previous_revision.as_deref());
     if let Some(object) = payload.as_object_mut() {
         object.insert("id".to_string(), Value::String(record_id.to_string()));
         object.insert("_rev".to_string(), Value::String(rev.clone()));
+        object.insert("_deleted".to_string(), Value::Bool(deleted));
+        // A live re-projection must clear legacy deletion aliases left by a
+        // merged tombstone, or readers can still treat the revived row as dead.
+        for alias in ["deleted", "is_deleted"] {
+            if object.contains_key(alias) {
+                object.insert(alias.to_string(), Value::Bool(deleted));
+            }
+        }
+        let meta = object
+            .entry("_meta".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if !meta.is_object() {
+            *meta = serde_json::json!({});
+        }
+        meta.as_object_mut().expect("_meta is an object").insert(
+            "lwt".to_string(),
+            Value::Number(serde_json::Number::from(replication_lwt_ms)),
+        );
+        if !object.get("_attachments").is_some_and(Value::is_object) {
+            object.insert("_attachments".to_string(), serde_json::json!({}));
+        }
         object.insert(
             "updated_at_ms".to_string(),
             Value::Number(serde_json::Number::from(payload_updated_at_ms)),
         );
         if deleted {
             object.insert("is_deleted".to_string(), Value::Bool(true));
-            object.insert("_deleted".to_string(), Value::Bool(true));
         }
     }
     // SECURITY: strip bearer credentials from client_context on the FINAL merged
@@ -39400,6 +39514,185 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(last_write_time, 1_004.0);
+        let document: Value = serde_json::from_str(&conn.query_row(
+            &format!("SELECT data FROM {table} WHERE id = 'probe-4'"),
+            [],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert_eq!(
+            document.pointer("/_meta/lwt"),
+            Some(&serde_json::json!(1_004))
+        );
+        assert_eq!(document.get("_deleted"), Some(&Value::Bool(false)));
+        assert_eq!(document.get("_attachments"), Some(&serde_json::json!({})));
+        Ok(())
+    }
+
+    #[test]
+    fn repair_missing_command_envelopes_preserves_result_and_advances_checkpoint(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = format!(
+            "ctox_business_os__business_commands__v{}",
+            rxdb_schema_version("business_commands")
+        );
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            &format!("CREATE TABLE {table} (id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"),
+            [],
+        )?;
+        let original = serde_json::json!({
+            "id": "writeback_probe", "_rev": "4-old", "status": "completed",
+            "updated_at_ms": 42, "result": {"count": 7}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["writeback_probe", "4-old", original.to_string()],
+        )?;
+        let malformed_live = serde_json::json!({
+            "id": "malformed_live", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": "false", "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["malformed_live", "1-old", malformed_live.to_string()],
+        )?;
+        let missing_revision = serde_json::json!({
+            "id": "missing_revision", "_meta": {"lwt": 42},
+            "_deleted": false, "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["missing_revision", "1-old", missing_revision.to_string()],
+        )?;
+        for (id, json_revision) in [("empty_revision", ""), ("malformed_revision", "broken")] {
+            let document = serde_json::json!({
+                "id": id, "_rev": json_revision, "_meta": {"lwt": 42},
+                "_deleted": false, "_attachments": {}, "updated_at_ms": 42,
+                "result": {"preserve": true}
+            });
+            conn.execute(
+                &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+                params![id, "4-old", document.to_string()],
+            )?;
+        }
+        let malformed_tombstone = serde_json::json!({
+            "id": "malformed_tombstone", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": "invalid", "is_deleted": true, "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["malformed_tombstone", "1-old", malformed_tombstone.to_string()],
+        )?;
+        let sql_tombstone_without_json_flag = serde_json::json!({
+            "id": "sql_tombstone_without_json_flag", "_rev": "2-old",
+            "_meta": {"lwt": 42}, "_attachments": {}, "updated_at_ms": 42,
+            "result": {"preserve": true}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 1, 42, ?3)"),
+            params!["sql_tombstone_without_json_flag", "2-old", sql_tombstone_without_json_flag.to_string()],
+        )?;
+        let sql_tombstone_with_live_json_flag = serde_json::json!({
+            "id": "sql_tombstone_with_live_json_flag", "_rev": "3-old",
+            "_meta": {"lwt": 42}, "_deleted": false, "_attachments": {},
+            "updated_at_ms": 42, "result": {"preserve": true}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 1, 42, ?3)"),
+            params!["sql_tombstone_with_live_json_flag", "3-old", sql_tombstone_with_live_json_flag.to_string()],
+        )?;
+        drop(conn);
+
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 8);
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 0);
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let (revision, lwt, raw): (String, f64, String) = conn.query_row(
+            &format!(
+                "SELECT revision, lastWriteTime, data FROM {table} WHERE id='writeback_probe'"
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let repaired: Value = serde_json::from_str(&raw)?;
+        assert_eq!(repaired["result"], original["result"]);
+        assert_eq!(repaired["updated_at_ms"], original["updated_at_ms"]);
+        assert_eq!(repaired["_rev"], revision);
+        assert!(revision.starts_with("5-"));
+        assert!(lwt > 42.0);
+        assert_eq!(
+            repaired.pointer("/_meta/lwt").and_then(Value::as_f64),
+            Some(lwt)
+        );
+        assert_eq!(repaired["_deleted"], false);
+        assert_eq!(repaired["_attachments"], serde_json::json!({}));
+        for (id, expected_deleted) in [
+            ("malformed_live", false),
+            ("missing_revision", false),
+            ("empty_revision", false),
+            ("malformed_revision", false),
+            ("malformed_tombstone", true),
+            ("sql_tombstone_without_json_flag", true),
+            ("sql_tombstone_with_live_json_flag", true),
+        ] {
+            let (revision_column, deleted_column, raw): (String, i64, String) = conn.query_row(
+                &format!("SELECT revision, deleted, data FROM {table} WHERE id = ?1"),
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            let repaired: Value = serde_json::from_str(&raw)?;
+            assert_eq!(repaired["_deleted"], expected_deleted);
+            assert_eq!(deleted_column != 0, expected_deleted);
+            assert!(repaired["_rev"]
+                .as_str()
+                .is_some_and(|revision| !revision.is_empty()));
+            assert_eq!(repaired["_rev"], revision_column);
+            if id == "missing_revision" {
+                assert!(revision_column.starts_with("2-"));
+            }
+            if id == "empty_revision" || id == "malformed_revision" {
+                assert!(revision_column.starts_with("5-"));
+                assert_eq!(repaired["result"], serde_json::json!({"preserve": true}));
+            }
+            if id.starts_with("sql_tombstone") {
+                assert_eq!(repaired["result"], serde_json::json!({"preserve": true}));
+                let expected_revision = if id.ends_with("without_json_flag") {
+                    "3-"
+                } else {
+                    "4-"
+                };
+                assert!(repaired["_rev"]
+                    .as_str()
+                    .is_some_and(|revision| revision.starts_with(expected_revision)));
+            }
+        }
+
+        let chats_table = format!(
+            "ctox_business_os__business_chats__v{}",
+            rxdb_schema_version("business_chats")
+        );
+        conn.execute(
+            &format!("CREATE TABLE {chats_table} (id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"),
+            [],
+        )?;
+        let chat = serde_json::json!({
+            "id": "chat_probe", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": false, "updated_at_ms": 42, "title": "Preserved"
+        });
+        conn.execute(
+            &format!("INSERT INTO {chats_table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["chat_probe", "1-old", chat.to_string()],
+        )?;
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_chats")?, 1);
+        let repaired_chat: Value = serde_json::from_str(&conn.query_row(
+            &format!("SELECT data FROM {chats_table} WHERE id='chat_probe'"),
+            [],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert_eq!(repaired_chat["title"], "Preserved");
+        assert_eq!(repaired_chat["_attachments"], serde_json::json!({}));
         Ok(())
     }
 
@@ -39457,6 +39750,76 @@ pub(super) mod tests {
         let payload: Value = serde_json::from_str(&payload)?;
         assert_eq!(payload["_deleted"], true);
         assert_eq!(payload["is_deleted"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn source_projection_revives_tombstone_without_stale_deletion_flags() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = "ctox_business_os__writer_delete_probe__v0";
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            &format!(
+                "CREATE TABLE {table} (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    revision TEXT,
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    lastWriteTime REAL NOT NULL DEFAULT 0,
+                    data TEXT NOT NULL
+                )"
+            ),
+            [],
+        )?;
+        drop(conn);
+
+        let mut writer = BusinessProjectionWriter::open(root)?;
+        writer.upsert_source_projection(
+            "writer_delete_probe",
+            "probe-1",
+            1_000,
+            serde_json::json!({"id":"probe-1","name":"Old"}),
+        )?;
+        writer.tombstone_source_projection("writer_delete_probe", "probe-1", 2_000)?;
+        writer.upsert_source_projection(
+            "writer_delete_probe",
+            "probe-1",
+            3_000,
+            serde_json::json!({"id":"probe-1","name":"Restored"}),
+        )?;
+        drop(writer);
+
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let (revision, deleted, raw): (String, i64, String) = conn.query_row(
+            &format!("SELECT revision,deleted,data FROM {table} WHERE id='probe-1'"),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let document: Value = serde_json::from_str(&raw)?;
+        assert_eq!(deleted, 0);
+        assert_eq!(document["_deleted"], false);
+        assert_eq!(document["is_deleted"], false);
+        assert_eq!(document["name"], "Restored");
+        assert_eq!(document["_rev"], revision);
+        assert!(revision.starts_with("3-"));
+        assert_eq!(
+            repair_missing_rxdb_envelopes(root, "writer_delete_probe")?,
+            0
+        );
+
+        let conn = open_store(root)?;
+        let (deleted, payload): (i64, String) = conn.query_row(
+            "SELECT deleted,payload_json FROM business_records
+             WHERE collection='writer_delete_probe' AND record_id='probe-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(deleted, 0);
+        let payload: Value = serde_json::from_str(&payload)?;
+        assert_eq!(payload["name"], "Restored");
+        assert_eq!(payload["_deleted"], false);
+        assert_eq!(payload["is_deleted"], false);
         Ok(())
     }
 
