@@ -11,6 +11,29 @@ cluster: research
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
 - Everything you do goes through the `ctox` CLI. There is no other data path: the CLI runs inside the daemon and writes to the CTOX SQLite stores; the Business OS UI receives results through replication of the collection the command bus writes.
+- **Inside a worker turn the shell sandbox cannot open the CTOX stores** (`ctox … ` from `exec_command` ends with a permission error on `~/.local/state/ctox`). Use the tools instead: `business_os.*` (MCP) for the command, record and writeback; `ctox_web_search` / `ctox_web_read` for the open web; **`ctox_web_scrape` with `mode: "execute"` for every registered source adapter.**
+
+## 0. Mandatory first step: run the registered adapters
+
+Before any open-web search, call `ctox_web_scrape` once for every entry of `source_policy.sources` that has a `target_key` and fits the lead's country:
+
+```json
+{"mode": "execute", "target_key": "<entry.target_key>", "timeout_seconds": 180,
+ "input": {"source_id": "<entry.id>", "company": "<company>", "country": "<DE|AT|CH>",
+           "city": "<city>", "domain": "<domain if known>", "task_id": "<command id>"}}
+```
+
+- `linkedin-com` and `xing-com` need a person: add `"person": {"first_name": "…", "last_name": "…"}` (from the register/Impressum) and give LinkedIn `timeout_seconds: 400`. `mailtester-com` / `experte-de` need `"email"`.
+- Adapters with a credential (D&B Hoovers, Leadfeeder, XING) sign in with the stored login by themselves; `task_id` must be the command id and `timeout_seconds: 400` (a login may wait for an e-mail one-time code).
+- A record from an adapter is a source: `source_id` = the entry id, `url` = the record's `source_url`, `quote` = the record's value. `blocked`, `authorization_required` or `temporary_unreachable` prove nothing — note the status and continue with the next source.
+- **Minimum set per lead** (skip only what `source_policy` does not list):
+  - DE: `handelsregister-de`, `northdata-de`, `bundesanzeiger-de`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum` (with `"domain"` once known).
+  - AT: `firmenabc-at`, `northdata-de`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum`. CH: `zefix-ch`, `moneyhouse-ch`, `shab-ch`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum`.
+  - Persons: run `linkedin-com` (Bright Data, `timeout_seconds: 400`) and `xing-com` with `"person"` for the **priority persons only** — at most one per category in the order of the research procedure (Geschäftsführung, Prokura, Finanzen, Einkauf, SCM, Operations, Technik, Entwicklung), **at most 6 LinkedIn searches per lead**. One name search costs about a minute; a lead with 17 register persons otherwise spends the whole turn there and never reaches the writeback. Never open `linkedin.com` or `xing.com` pages with `ctox_web_read` — LinkedIn answers bots with HTTP 999 and XING with its login wall; only the adapters get through.
+  - E-mail: once an address pattern is known, `mailtester-com` with `"email"`.
+- Only then fill the remaining gaps with `ctox_web_search` / `ctox_web_read`. In `result`, list every adapter you ran with its status.
+- **Write back early.** As soon as the register/identity adapters have delivered, send a first writeback with what is proven, then continue and send the rest. A turn that ends after research but before the writeback loses everything (22.09.2026: the command failed with "no successful outbound.lead.research_writeback receipt").
+- Authenticated sources handle a second factor by e-mail themselves (D&B sends its code to the crew mailbox; CTOX reads it and finishes the login). Only `authorization_required` after that is a real stop.
 
 ## 1. Wie die App, der Harness und der Web-Stack zusammenspielen
 
@@ -156,13 +179,19 @@ ctox scrape semantic-search --target-key <key> --query <text> [--limit <n>]
 ctox scrape upsert-target --input <json-path>
 ctox scrape register-script --target-key <key> --script-file <path> [--language <lang>] [--change-reason <text>] [--notes <text>]
 ctox scrape register-source-module --target-key <key> --source-key <key> --module-file <path> [--language <lang>] [--change-reason <text>] [--notes <text>]
-ctox scrape execute --target-key <key> [--trigger-kind <manual|scheduled|repair>] [--timeout-seconds <n>] [--allow-heal] [--thread-key <key>] [--queue-priority <urgent|high|normal|low>]
+ctox scrape execute --target-key <key> --input-json <json> [--trigger-kind <manual|scheduled|repair>] [--timeout-seconds <n>] [--allow-heal] [--thread-key <key>] [--queue-priority <urgent|high|normal|low>]
 ctox scrape record-template-example --target-key <key> --template-key <template> --script-file <path> [--language <lang>] [--result-count <n>] [--challenge-score <n>] [--reason <text>]
 ctox scrape promote-template --template-key <template> --script-file <path> [--language <lang>] --reason <text>
 ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]
 ```
 
-Where things are: `ctox.sqlite3` holds `scrape_target` (key, start URL, `target_kind`, config, output schema), `scrape_script_revision` (revision number, script body, sha256, change reason), `scrape_source_revision` (per-source extractor modules), `scrape_run` (status, classification, timing), `scrape_record_latest` (the extracted records). Working files (inputs, outputs, artifacts) live under `~/.local/state/ctox/scraping/targets/<target-key>/`. Registered targets today: `handelsregister-de`, `northdata-de`, `bundesanzeiger-de`, `companyhouse-de` (`target_kind = prospect-research`).
+Where things are: `ctox.sqlite3` holds `scrape_target` (key, start URL, `target_kind`, config, output schema), `scrape_script_revision` (revision number, script body, sha256, change reason), `scrape_source_revision` (per-source extractor modules), `scrape_run` (status, classification, timing), `scrape_record_latest` (the extracted records). Working files (inputs, outputs, artifacts) live under `~/.local/state/ctox/scraping/targets/<target-key>/`. Registered targets (`target_kind = prospect-research`): `ctox scrape list-targets` is authoritative; the outbound sources map to `handelsregister-de`, `northdata-de`, `bundesanzeiger-de`, `companyhouse-de`, `dnbhoovers-com`, `leadfeeder-com`, `linkedin-com` (Bright Data API), `xing-com`, `google-de`, `maps-google-com`, `impressum`, `rocketreach-com`, `firmenabc-at`, `moneyhouse-ch`, `zefix-ch`, `shab-ch`, `evi-gv-at`, `justizonline-gv-at`, `experte-de`, `mailtester-com`.
+
+**Run adapters through the tool, not the shell.** Inside a worker turn the shell sandbox cannot open the CTOX state store, so `ctox scrape execute` from `exec_command` fails with a permission error. Use the tool `ctox_web_scrape` with `mode: "execute"`, `target_key`, `input` (the object below) and `timeout_seconds`; it runs the registered adapter in the CTOX process, with stored credentials, and returns status, records and the run manifest. The CLI form above is for operators.
+
+**Input for `execute`.** Every run gets the lead as `input` (CLI: `--input-json`):
+`{"source_id":"<provider id, e.g. northdata.de>","company":"<registered name>","country":"DE|AT|CH","city":"<Ort>","domain":"<firma_domain if known>","task_id":"<research_command_id of this run>"}`.
+Person sources (`linkedin-com`, `xing-com`) also need `"person":{"first_name":"…","last_name":"…"}` or a `"profile_url"`; LinkedIn without a known URL runs a Bright Data name search that takes about four minutes, so give it `--timeout-seconds 400`. E-mail checks (`mailtester-com`, `experte-de`) need `"email"`. `task_id` is mandatory for authenticated targets (D&B Hoovers, Leadfeeder, XING, RocketReach): without it CTOX cannot tie the stored login to the requesting user, the run ends with `auth assist owner unresolved`, and the stored credential is never used.
 
 When to write a script: a source you will hit again for many leads (register lists, company directories) or one whose page needs structured extraction. Look at `show-api`/`show-target` first; if the target exists, `execute --allow-heal`; if the run classifies `portal_drift`, the repair task is already queued — record it and move on, do not retry the same source in this run. If no target exists and the source will recur, write the script (`universal-scraping` skill explains authoring, fixtures and `upsert-target`), register it, run it. For a one-off page, just read or capture it.
 
