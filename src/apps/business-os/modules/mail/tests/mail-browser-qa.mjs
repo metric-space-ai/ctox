@@ -415,6 +415,41 @@ mailQa: try {
   assert.equal(await page.locator('[data-mail-account]').inputValue(), 'all');
   assert.match(await page.locator('[data-mail-account]').textContent(), /alice@example\.test/);
   assert.match(await page.locator('[data-mail-scope-id="outbound"]').textContent(), /Gesendet/);
+  // A provider can reuse a thread ID in another mailbox. The newer message
+  // must never replace Alice's row or leak into her opened conversation.
+  await page.evaluate(() => {
+    window.__mailRows.communication_accounts.push({
+      account_key: 'email:bob@example.test', channel: 'email', address: 'bob@example.test',
+      provider: 'ctox-mailserver', profile_json: { owner_user_id: 'bob' },
+    });
+    window.__mailRows.communication_messages.push({
+      message_key: 'bob-shared-thread', thread_key: 'thread-1', channel: 'email',
+      account_key: 'email:bob@example.test', direction: 'outbound', folder_hint: 'sent',
+      sender_address: 'bob@example.test', subject: 'Bob private subject', body_text: 'Bob private body',
+      external_created_at: '2026-08-06T10:00:00Z', observed_at: '2026-08-06T10:00:01Z',
+    });
+    window.__mailNotify('communication_accounts');
+    window.__mailNotify('communication_messages');
+  });
+  await page.waitForFunction(() => document.querySelector('[data-mail-account]')?.textContent.includes('bob@example.test'));
+  const aliceSharedRow = page.locator('[data-mail-record-kind="thread"][data-mail-record-id="thread-1"]');
+  assert.match(await aliceSharedRow.textContent(), /Projektstatus August/);
+  assert.doesNotMatch(await aliceSharedRow.textContent(), /Bob private/);
+  await aliceSharedRow.click();
+  await page.locator('[data-mail-detail]').getByText('Können Sie uns den aktuellen Stand schicken?', { exact: true }).waitFor({ state: 'visible' });
+  assert.doesNotMatch(await page.locator('[data-mail-detail]').textContent(), /Bob private/);
+  await page.locator('[data-mail-account]').selectOption('email:bob@example.test');
+  assert.equal(await page.locator('[data-mail-record-kind="thread"]').count(), 0);
+  await page.locator('[data-mail-detail]').getByText('Keine Mail ausgewählt', { exact: true }).waitFor({ state: 'visible' });
+  assert.doesNotMatch(await page.locator('[data-mail-detail]').textContent(), /Können Sie uns den aktuellen Stand schicken/);
+  await page.locator('[data-mail-account]').selectOption('all');
+  await page.evaluate(() => {
+    window.__mailRows.communication_accounts = window.__mailRows.communication_accounts.filter((account) => account.account_key !== 'email:bob@example.test');
+    window.__mailRows.communication_messages = window.__mailRows.communication_messages.filter((message) => message.message_key !== 'bob-shared-thread');
+    window.__mailNotify('communication_accounts');
+    window.__mailNotify('communication_messages');
+  });
+  await page.waitForFunction(() => !document.querySelector('[data-mail-account]')?.textContent.includes('bob@example.test'));
   await page.locator('[data-mail-list-pane] [data-pg-band="outbound"]').click();
   await assertVisibleText(page, 'Versandter Bericht');
   assert.deepEqual(

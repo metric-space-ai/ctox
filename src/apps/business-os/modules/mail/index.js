@@ -244,6 +244,7 @@ export async function mount(ctx) {
     listGrammar: { search: '', view: 'cards', band: 'all', filters: { status: 'all', sort: 'recent' } },
     selectedKind: '',
     selectedId: '',
+    selectedAccountKey: '',
     loading: true,
     mailReadComplete: false,
     mailReadError: '',
@@ -326,6 +327,7 @@ export async function mount(ctx) {
       view.accountKey = refs.account.value === 'all' ? '' : refs.account.value;
       view.selectedKind = '';
       view.selectedId = '';
+      view.selectedAccountKey = '';
       render();
     });
     refs.compose?.addEventListener('click', () => {
@@ -370,7 +372,14 @@ export async function mount(ctx) {
     refs.leftPane?.addEventListener('ctox-pane-grammar-change', (event) => {
       if (event.target !== refs.leftPane) return;
       view.leftGrammar = normalizePaneGrammar(event.detail, view.leftGrammar);
-      view.accountKey = view.leftGrammar.filters.account === 'all' ? '' : view.leftGrammar.filters.account;
+      const nextAccountKey = view.leftGrammar.filters.account === 'all' ? '' : view.leftGrammar.filters.account;
+      if (nextAccountKey !== view.accountKey) {
+        view.selectedKind = '';
+        view.selectedId = '';
+        view.selectedAccountKey = '';
+        view.accountKey = nextAccountKey;
+        renderDetail();
+      }
       view.page = 0;
       renderNavigation();
       renderList();
@@ -418,6 +427,7 @@ export async function mount(ctx) {
         view.scopeId = scope.dataset.mailScopeId || '';
         view.selectedKind = '';
         view.selectedId = '';
+        view.selectedAccountKey = '';
         view.page = 0;
         view.listGrammar = { ...view.listGrammar, band: 'all' };
         refs.listPane.querySelectorAll('[data-pg-band]').forEach((tab) => {
@@ -439,6 +449,7 @@ export async function mount(ctx) {
       if (record) {
         view.selectedKind = record.dataset.mailRecordKind || '';
         view.selectedId = record.dataset.mailRecordId || '';
+        view.selectedAccountKey = record.dataset.mailRecordAccount || '';
         revealInspector('detail');
         renderListSelection();
         renderDetail();
@@ -584,8 +595,9 @@ export async function mount(ctx) {
       if (accounts && threads && communicationMessages) {
         // Keep the required collections consistent through a reconnect.
         view.accounts = visibleEmailAccounts(accounts, ctx.session?.user || {});
-        view.threads = threads.filter((thread) => thread.channel === 'email' && !isDeleted(thread));
-        view.communicationMessages = communicationMessages.filter((message) => message.channel === 'email' && !isDeleted(message));
+        const visibleAccountKeys = new Set(view.accounts.map((account) => account.account_key));
+        view.threads = threads.filter((thread) => thread.channel === 'email' && !isDeleted(thread) && visibleAccountKeys.has(thread.account_key));
+        view.communicationMessages = communicationMessages.filter((message) => message.channel === 'email' && !isDeleted(message) && visibleAccountKeys.has(message.account_key));
         view.lastSuccessfulMailSequence = sequence;
         view.mailReadComplete = true;
         view.mailReadError = '';
@@ -657,7 +669,7 @@ export async function mount(ctx) {
       inboxThreads: inboxAccountThreads(),
       sentThreads: sentAccountThreads(),
       outboundMessages: filteredAccountOutboundMessages(),
-      communicationMessages: view.communicationMessages,
+      communicationMessages: filteredAccountMessages(),
       commands: view.commands,
       t,
     });
@@ -736,7 +748,7 @@ export async function mount(ctx) {
       all: globalRecords.length,
       inbound: inboxAccountThreads().length,
       outbound: sentAccountThreads().length,
-      attention: listBandCounts(globalRecords, view.commands, view.communicationMessages).attention,
+      attention: listBandCounts(globalRecords, view.commands, filteredAccountMessages()).attention,
     };
     const scopeLabel = currentScopeLabel();
     refs.listKicker.textContent = view.scopeType === 'campaign' ? t('campaign', 'Kampagne') : t('mailbox', 'Postfach');
@@ -780,7 +792,7 @@ export async function mount(ctx) {
     const asList = view.listGrammar.view === 'list';
     const shape = asList ? 'mail-record-row--line' : 'mail-record-row--shard';
     if (record.__kind === 'thread') {
-      const latest = latestMessageForThread(record.thread_key, view.communicationMessages);
+      const latest = latestMessageForThread(record, filteredAccountMessages());
       const sender = latest?.direction === 'outbound'
         ? (latest.recipient_addresses_json?.[0] || record.participant_keys_json?.[0] || record.account_key)
         : (latest?.sender_display || latest?.sender_address || record.participant_keys_json?.[0] || record.account_key);
@@ -790,7 +802,7 @@ export async function mount(ctx) {
       const route = routeCommandForRecord(record, view.commands);
       const unread = Number(record.unread_count || 0);
       const status = route ? routeTargetLabel(route) : (unread ? `${unread} neu` : latest?.direction === 'outbound' ? t('sent', 'Gesendet') : t('inbound', 'Eingang'));
-      const open = `<div class="mail-record-row ${shape}${unread > 0 ? ' is-unread' : ''}" role="option" tabindex="0" data-mail-record-kind="thread" data-mail-record-id="${escapeAttribute(record.thread_key)}" data-context-record-id="${escapeAttribute(record.thread_key)}" data-context-record-type="communication_thread" data-context-record-label="${escapeAttribute(subject)}" data-context-label="${escapeAttribute(subject)}">
+      const open = `<div class="mail-record-row ${shape}${unread > 0 ? ' is-unread' : ''}" role="option" tabindex="0" data-mail-record-kind="thread" data-mail-record-id="${escapeAttribute(record.thread_key)}" data-mail-record-account="${escapeAttribute(record.account_key)}" data-context-record-id="${escapeAttribute(record.thread_key)}" data-context-record-type="communication_thread" data-context-record-label="${escapeAttribute(subject)}" data-context-label="${escapeAttribute(subject)}">
         <input class="mail-record-select" type="checkbox" data-mail-select-record="${escapeAttribute(selectionKey)}" aria-label="${escapeAttribute(subject)} auswählen" ${view.selectedRecords.has(selectionKey) ? 'checked' : ''} />`;
       const time = `<span class="mail-record-time">${escapeHtml(formatRecordTime(record.last_message_at))}</span>`;
       if (asList) {
@@ -832,8 +844,8 @@ export async function mount(ctx) {
 
   function renderListSelection() {
     refs.recordList.querySelectorAll('[data-mail-record-kind]').forEach((row) => {
-      row.classList.toggle('is-selected', row.dataset.mailRecordKind === view.selectedKind && row.dataset.mailRecordId === view.selectedId);
-      const key = `${row.dataset.mailRecordKind}:${row.dataset.mailRecordId}`;
+      row.classList.toggle('is-selected', row.dataset.mailRecordKind === view.selectedKind && row.dataset.mailRecordId === view.selectedId && (row.dataset.mailRecordAccount || '') === view.selectedAccountKey);
+      const key = row.querySelector('[data-mail-select-record]')?.dataset.mailSelectRecord || '';
       const bulkSelected = view.selectedRecords.has(key);
       row.classList.toggle('is-bulk-selected', bulkSelected);
       const checkbox = row.querySelector('[data-mail-select-record]');
@@ -845,7 +857,7 @@ export async function mount(ctx) {
     if (view.selectedKind && view.selectedId && !view.route.open) revealInspector('detail');
     if (view.selectedKind === 'thread') {
       refs.detailTitle.textContent = t('thread', 'Thread');
-      renderThreadDetail(view.selectedId);
+      renderThreadDetail(view.selectedId, view.selectedAccountKey);
       return;
     }
     if (view.selectedKind === 'outbound') {
@@ -863,11 +875,11 @@ export async function mount(ctx) {
     renderMissingDetail();
   }
 
-  function renderThreadDetail(threadKey) {
-    const thread = view.threads.find((item) => item.thread_key === threadKey);
+  function renderThreadDetail(threadKey, accountKey = '') {
+    const thread = filteredAccountThreads().find((item) => item.thread_key === threadKey && (!accountKey || item.account_key === accountKey));
     if (!thread) return renderMissingDetail();
     const timeline = view.communicationMessages
-      .filter((message) => message.thread_key === threadKey)
+      .filter((message) => messageBelongsToThread(message, thread))
       .sort((a, b) => timeOf(a.external_created_at) - timeOf(b.external_created_at));
     const participants = (thread.participant_keys_json || []).join(', ') || thread.account_key;
     const replyTo = [...timeline].reverse().find((message) => message.direction === 'inbound')?.sender_address || '';
@@ -958,8 +970,9 @@ export async function mount(ctx) {
       return;
     }
     if (action === 'reply') {
-      const thread = view.threads.find((item) => item.thread_key === id);
-      const timeline = view.communicationMessages.filter((message) => message.thread_key === id);
+      const thread = filteredAccountThreads().find((item) => item.thread_key === id && (!view.selectedAccountKey || item.account_key === view.selectedAccountKey));
+      if (!thread) return;
+      const timeline = view.communicationMessages.filter((message) => messageBelongsToThread(message, thread));
       const inbound = [...timeline].sort((a, b) => timeOf(b.external_created_at) - timeOf(a.external_created_at)).find((message) => message.direction === 'inbound');
       openComposer({
         to: inbound?.sender_address || thread?.participant_keys_json?.[0] || '',
@@ -969,8 +982,8 @@ export async function mount(ctx) {
       return;
     }
     if (action === 'route') {
-      const record = view.threads.find((item) => item.thread_key === id)
-        || view.outboundMessages.find((item) => item.id === id);
+      const record = filteredAccountThreads().find((item) => item.thread_key === id && (!view.selectedAccountKey || item.account_key === view.selectedAccountKey))
+        || filteredAccountOutboundMessages().find((item) => item.id === id);
       if (record) {
         view.selectedRecords.add(mailRecordKey({ ...record, __kind: record.thread_key ? 'thread' : 'outbound' }));
         renderBulkBar(currentPageRecords(), currentRecords());
@@ -1709,19 +1722,25 @@ export async function mount(ctx) {
     ));
   }
 
+  function filteredAccountMessages() {
+    return view.accountKey
+      ? view.communicationMessages.filter((message) => message.account_key === view.accountKey)
+      : view.communicationMessages;
+  }
+
   function sentAccountThreads() {
-    const sentKeys = new Set(view.communicationMessages
-      .filter((message) => message.direction === 'outbound' || ['sent', 'sentitems'].includes(String(message.folder_hint || '').toLowerCase()))
-      .map((message) => message.thread_key));
-    return filteredAccountThreads().filter((thread) => sentKeys.has(thread.thread_key));
+    const messages = filteredAccountMessages();
+    return filteredAccountThreads().filter((thread) => messages.some((message) => messageBelongsToThread(message, thread)
+      && (message.direction === 'outbound' || ['sent', 'sentitems'].includes(String(message.folder_hint || '').toLowerCase()))));
   }
 
   function inboxAccountThreads() {
-    const sentKeys = new Set(sentAccountThreads().map((thread) => thread.thread_key));
-    const inboundKeys = new Set(view.communicationMessages
-      .filter((message) => message.direction === 'inbound' || ['inbox', 'incoming'].includes(String(message.folder_hint || '').toLowerCase()))
-      .map((message) => message.thread_key));
-    return filteredAccountThreads().filter((thread) => inboundKeys.has(thread.thread_key) || !sentKeys.has(thread.thread_key));
+    const messages = filteredAccountMessages();
+    return filteredAccountThreads().filter((thread) => {
+      const threadMessages = messages.filter((message) => messageBelongsToThread(message, thread));
+      return threadMessages.some((message) => message.direction === 'inbound' || ['inbox', 'incoming'].includes(String(message.folder_hint || '').toLowerCase()))
+        || !threadMessages.some((message) => message.direction === 'outbound' || ['sent', 'sentitems'].includes(String(message.folder_hint || '').toLowerCase()));
+    });
   }
 
   function filteredAccountOutboundMessages() {
@@ -1769,7 +1788,7 @@ export async function mount(ctx) {
     if (grammar.band === 'outbound' && view.scopeType === 'campaign') {
       records = records.filter((record) => record.__kind === 'outbound');
     } else if (grammar.band !== 'all') {
-      records = records.filter((record) => recordMatchesBand(record, grammar.band, view.communicationMessages, view.commands));
+      records = records.filter((record) => recordMatchesBand(record, grammar.band, filteredAccountMessages(), view.commands));
     }
     const status = grammar.filters.status || 'all';
     if (status !== 'all') records = records.filter((record) => recordMatchesStatus(record, status, view.commands));
@@ -2286,7 +2305,9 @@ function userDisplayName(user) {
 
 function mailRecordKey(record) {
   const kind = record?.__kind || (record?.thread_key ? 'thread' : 'outbound');
-  return `${kind}:${String(record?.thread_key || record?.id || '')}`;
+  return kind === 'thread'
+    ? `${kind}:${String(record?.account_key || '')}:${String(record?.thread_key || '')}`
+    : `${kind}:${String(record?.id || '')}`;
 }
 
 function mailRecordId(record) {
@@ -2488,9 +2509,9 @@ function listBandCounts(records, commands = [], messages = []) {
 
 function recordMatchesBand(record, band, messages, commands = []) {
   if (band === 'inbound') return record.__kind === 'thread'
-    && (!messages.some((message) => message.thread_key === record.thread_key)
-      || messages.some((message) => message.thread_key === record.thread_key && message.direction === 'inbound'));
-  if (band === 'outbound') return record.__kind === 'thread' && messages.some((message) => message.thread_key === record.thread_key
+    && (!messages.some((message) => messageBelongsToThread(message, record))
+      || messages.some((message) => messageBelongsToThread(message, record) && message.direction === 'inbound'));
+  if (band === 'outbound') return record.__kind === 'thread' && messages.some((message) => messageBelongsToThread(message, record)
       && (message.direction === 'outbound' || ['sent', 'sentitems'].includes(String(message.folder_hint || '').toLowerCase())));
   if (band === 'attention') return recordNeedsAttention(record) || routeCommandForRecord(record, commands)?.status === 'failed';
   return true;
@@ -2664,7 +2685,7 @@ function accountProfile(account) {
 
 function filterThreadsForFolder(threads, folder, messages) {
   return (threads || []).filter((thread) => {
-    const threadMessages = (messages || []).filter((message) => message.thread_key === thread.thread_key);
+    const threadMessages = (messages || []).filter((message) => messageBelongsToThread(message, thread));
     if (folder === 'unread') return Number(thread.unread_count || 0) > 0;
     if (folder === 'sent') return threadMessages.some((message) => message.direction === 'outbound');
     return threadMessages.length === 0
@@ -2906,9 +2927,13 @@ function messageEventTimeline(message) {
   return events;
 }
 
-function latestMessageForThread(threadKey, messages) {
+function messageBelongsToThread(message, thread) {
+  return message.thread_key === thread.thread_key && message.account_key === thread.account_key;
+}
+
+function latestMessageForThread(thread, messages) {
   return (messages || [])
-    .filter((message) => message.thread_key === threadKey)
+    .filter((message) => messageBelongsToThread(message, thread))
     .sort((a, b) => timeOf(b.external_created_at) - timeOf(a.external_created_at))[0] || null;
 }
 
@@ -3076,6 +3101,8 @@ function escapeAttribute(value) {
 export const __mailTestHooks = {
   visibleEmailAccounts,
   visibleMailCampaigns,
+  messageBelongsToThread,
+  latestMessageForThread,
   filterThreadsForFolder,
   folderCounts,
   campaignStats,

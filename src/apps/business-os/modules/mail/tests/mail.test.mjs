@@ -190,16 +190,30 @@ test('content revision hashes are stable across object key order', async () => {
 
 test('mail folders derive from canonical thread and message direction', () => {
   const threads = [
-    { thread_key: 'inbox', unread_count: 2, last_message_at: '2026-08-06T08:00:00Z' },
-    { thread_key: 'sent', unread_count: 0, last_message_at: '2026-08-06T09:00:00Z' },
+    { thread_key: 'inbox', account_key: 'email:alice@example.test', unread_count: 2, last_message_at: '2026-08-06T08:00:00Z' },
+    { thread_key: 'sent', account_key: 'email:alice@example.test', unread_count: 0, last_message_at: '2026-08-06T09:00:00Z' },
   ];
   const messages = [
-    { thread_key: 'inbox', direction: 'inbound', folder_hint: 'inbox' },
-    { thread_key: 'sent', direction: 'outbound', folder_hint: 'sent' },
+    { thread_key: 'inbox', account_key: 'email:alice@example.test', direction: 'inbound', folder_hint: 'inbox' },
+    { thread_key: 'sent', account_key: 'email:alice@example.test', direction: 'outbound', folder_hint: 'sent' },
   ];
   assert.deepEqual(hooks.filterThreadsForFolder(threads, 'inbox', messages).map((row) => row.thread_key), ['inbox']);
   assert.deepEqual(hooks.filterThreadsForFolder(threads, 'unread', messages).map((row) => row.thread_key), ['inbox']);
   assert.deepEqual(hooks.filterThreadsForFolder(threads, 'sent', messages).map((row) => row.thread_key), ['sent']);
+});
+
+test('a shared provider thread ID never mixes messages from different accounts', () => {
+  const alice = { thread_key: 'shared-id', account_key: 'email:alice@example.test' };
+  const bob = { thread_key: 'shared-id', account_key: 'email:bob@example.test' };
+  const messages = [
+    { thread_key: 'shared-id', account_key: bob.account_key, direction: 'outbound', folder_hint: 'sent', body_text: 'Bob private body', external_created_at: '2026-08-06T10:00:00Z' },
+    { thread_key: 'shared-id', account_key: alice.account_key, direction: 'inbound', folder_hint: 'inbox', body_text: 'Alice private body', external_created_at: '2026-08-06T09:00:00Z' },
+  ];
+  assert.equal(hooks.messageBelongsToThread(messages[0], alice), false);
+  assert.equal(hooks.latestMessageForThread(alice, messages)?.body_text, 'Alice private body');
+  assert.equal(hooks.latestMessageForThread(bob, messages)?.body_text, 'Bob private body');
+  assert.deepEqual(hooks.filterThreadsForFolder([alice], 'sent', messages), []);
+  assert.deepEqual(hooks.filterThreadsForFolder([bob], 'inbox', messages), []);
 });
 
 test('composer builds the native Outbound command chain', () => {
