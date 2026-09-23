@@ -1123,7 +1123,11 @@ function renderDetail(threads) {
   updateThreadPresenceHint(thread);
   if (!thread) {
     if (els.title) els.title.textContent = state.t('noSelection', 'Kein Thread ausgewählt.');
-    if (els.source) els.source.textContent = 'Threads';
+    if (els.source) {
+      els.source.textContent = 'Threads';
+      els.source.disabled = true;
+      els.source.dataset.threadDeepLink = '';
+    }
     if (els.status) els.status.textContent = state.status || 'bereit';
     if (els.timeline) els.timeline.innerHTML = `<div class="ctox-empty">${escapeHtml(state.t('noSelection', 'Kein Thread ausgewählt.'))}</div>`;
     if (els.context) els.context.innerHTML = '';
@@ -1137,8 +1141,11 @@ function renderDetail(threads) {
     els.source.textContent = contextLabel(thread);
     const sourceLink = sourceDeepLinkFor(thread);
     els.source.dataset.threadDeepLink = sourceLink;
+    els.source.disabled = !sourceLink;
     els.source.classList.toggle('is-linked', Boolean(sourceLink));
-    els.source.title = sourceLink ? (sourceFocusSupported(thread) ? 'Objekt in der Quell-App öffnen' : 'Quell-App öffnen') : '';
+    const sourceAction = sourceFocusSupported(thread) ? 'Objekt in der Quell-App öffnen' : 'Quell-App öffnen';
+    els.source.title = sourceLink ? sourceAction : '';
+    els.source.setAttribute('aria-label', sourceLink ? sourceAction : 'Kein verknüpfter Datensatz');
   }
   if (els.status) {
     const command = linkedCommandsForThread(thread.id).at(-1);
