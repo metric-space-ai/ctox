@@ -1025,6 +1025,21 @@ fn native_project_task_needs_no_app_crew_or_executor_and_replays_one_task() -> a
     );
     let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
         root.path(),
+        "other-user",
+        "Other user",
+        "admin",
+        chrono::Utc::now().timestamp_millis(),
+    )?;
+    let mut foreign_cancel = cancel_request.clone();
+    foreign_cancel["idempotency_key"] = json!("cancel-native-project-foreign");
+    foreign_cancel["_context"]["actor"] = json!("other-user");
+    assert!(cancel(foreign_cancel).is_err());
+    assert_eq!(
+        channels::business_command_projection(root.path(), command_id)?["status"],
+        "accepted"
+    );
+    let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
         "owner",
         "Owner",
         "admin",
@@ -1045,10 +1060,6 @@ fn native_project_task_needs_no_app_crew_or_executor_and_replays_one_task() -> a
     let mut changed_cancel = cancel_request.clone();
     changed_cancel["reason"] = json!("a different reason");
     assert!(cancel(changed_cancel).is_err());
-    let mut foreign_cancel = cancel_request.clone();
-    foreign_cancel["idempotency_key"] = json!("cancel-native-project-2");
-    foreign_cancel["_context"]["actor"] = json!("other-user");
-    assert!(cancel(foreign_cancel).is_err());
     let mut unrelated_cancel = cancel_request.clone();
     unrelated_cancel["target_command_id"] = json!("bind");
     assert!(cancel(unrelated_cancel).is_err());
