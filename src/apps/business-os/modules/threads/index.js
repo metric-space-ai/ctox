@@ -314,7 +314,7 @@ function wireUi() {
     // resets the scroll position under the operator's pointer.
     applyThreadSelection();
     renderMobileState();
-    renderDetail(visibleThreads());
+    renderDetail();
     hydrateSelectedThread(state.selectedId).catch(showError);
   });
   els.context?.addEventListener('click', (event) => {
@@ -547,15 +547,16 @@ async function refreshOnce(options = {}) {
     approvalCandidates.filter((item) => !verifiedIds.has(item.id || item.approval_request_id)),
     verifiedPendingCandidates,
   );
-  const personalThreadIds = [
+  const actionableThreadIds = [
     ...approvals.filter((item) => item.status === 'pending' && item.reviewer_user_id === me)
       .map((item) => item.thread_id),
     ...states.filter((item) => Number(item.attention_score || 0) > 0).map((item) => item.thread_id),
-    state.requestedThreadId,
   ].filter(Boolean);
+  const personalThreadIds = [...actionableThreadIds, state.requestedThreadId].filter(Boolean);
   const personalThreads = await loadRecordsByIds('user_threads', personalThreadIds, { strict: true });
+  const availableThreadIds = new Set(personalThreads.map((item) => item.id));
   state.personalComplete = Boolean(me)
-    && new Set(personalThreadIds).size === personalThreads.length;
+    && actionableThreadIds.every((id) => availableThreadIds.has(id));
   updateConnectivity();
   const threads = mergeRecords(recentThreads, personalThreads);
   const threadIds = threads.map((item) => item.id || item.thread_id).filter(Boolean);
@@ -692,7 +693,7 @@ function render(options = {}) {
   renderNotificationPreferences();
   syncGrammarSurfaces(threads.length);
   renderList(threads, options);
-  renderDetail(threads);
+  renderDetail();
 }
 
 function renderMobileState() {
@@ -912,16 +913,22 @@ function visibleThreads() {
 }
 
 function syncSelection() {
-  const visible = visibleThreads();
   if (state.requestedThreadId) {
-    const requested = visible.find((thread) => thread.id === state.requestedThreadId);
+    const requested = state.data.threads.find((thread) => thread.id === state.requestedThreadId);
     if (requested) {
+      if (!visibleThreads().some((thread) => thread.id === requested.id)) {
+        state.filter = requested.status === 'archived' ? 'archived'
+          : isSnoozed(requested) ? 'snoozed' : 'all';
+      }
       state.selectedId = requested.id;
       state.mobileView = 'detail';
       state.requestedThreadId = '';
       return;
     }
+    state.selectedId = '';
+    return;
   }
+  const visible = visibleThreads();
   if (!visible.some((thread) => thread.id === state.selectedId)) {
     state.selectedId = visible[0]?.id || '';
   }
@@ -1112,8 +1119,8 @@ function applyThreadSelection() {
   });
 }
 
-function renderDetail(threads) {
-  const thread = threads.find((item) => item.id === state.selectedId) || null;
+function renderDetail() {
+  const thread = state.data.threads.find((item) => item.id === state.selectedId) || null;
   // Publish the open thread as an advisory presence entry (id only).
   try {
     state.ctx?.presence?.set(thread
@@ -1122,14 +1129,16 @@ function renderDetail(threads) {
   } catch {}
   updateThreadPresenceHint(thread);
   if (!thread) {
-    if (els.title) els.title.textContent = state.t('noSelection', 'Kein Thread ausgewählt.');
+    const missingRequested = state.requestedThreadId && state.personalComplete;
+    const emptyTitle = missingRequested ? 'Thread nicht verfügbar.' : state.t('noSelection', 'Kein Thread ausgewählt.');
+    if (els.title) els.title.textContent = emptyTitle;
     if (els.source) {
       els.source.textContent = 'Threads';
       els.source.disabled = true;
       els.source.dataset.threadDeepLink = '';
     }
     if (els.status) els.status.textContent = state.status || 'bereit';
-    if (els.timeline) els.timeline.innerHTML = `<div class="ctox-empty">${escapeHtml(state.t('noSelection', 'Kein Thread ausgewählt.'))}</div>`;
+    if (els.timeline) els.timeline.innerHTML = `<div class="ctox-empty">${escapeHtml(emptyTitle)}</div>`;
     if (els.context) els.context.innerHTML = '';
     if (els.messageBody) els.messageBody.disabled = true;
     setThreadActionState(null);
