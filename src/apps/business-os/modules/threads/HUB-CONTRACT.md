@@ -230,7 +230,11 @@ bridge. Native role and version checks authorize approval decisions.
 Recorded against `threads.rs` and the module as of 2026-09-23:
 
 1. **Broad-view query window.** The personal inbox uses paged attention and
-   approval records, and the selected timeline pages its own records. Team,
+   approval records, unread notifications are paged per user, and the selected
+   timeline pages its own messages, links, approvals and notifications. The
+   list no longer reads a global message/link window; unselected previews use
+   the native next-step/source summary, and search covers title and source.
+   Team,
    system and all-thread views still start from a bounded recent thread window;
    their counts are marked as lower bounds when that window is full.
 2. **Notification type vocabulary.** The refactor plan names five short types

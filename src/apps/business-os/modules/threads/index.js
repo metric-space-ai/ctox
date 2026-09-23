@@ -11,7 +11,6 @@ import {
 } from './commands.js';
 
 const THREAD_LIST_LIMIT = 200;
-const THREAD_DETAIL_LIMIT = 600;
 const APPROVAL_LIST_LIMIT = 200;
 const NOTIFICATION_LIST_LIMIT = 50;
 const PERSONAL_PAGE_SIZE = 100;
@@ -137,6 +136,7 @@ export async function mount(ctx) {
       try { fn?.(); } catch {}
     });
     state.cleanup = [];
+    if (state.ctx === ctx) state.ctx = null;
   };
 }
 
@@ -528,17 +528,22 @@ async function refresh(options = {}) {
 }
 
 async function refreshOnce(options = {}) {
+  const mountCtx = state.ctx;
   if (options.restartSync) startSync().catch((error) => showError(error));
   const me = currentUserId();
-  const [recentThreads, pendingApprovals, recentApprovals, states] = await Promise.all([
+  const [recentThreads, pendingApprovals, recentApprovals, states, preferences] = await Promise.all([
     loadCollection('user_threads', recentQuery(THREAD_LIST_LIMIT)),
     me ? loadPersonalPages('ctox_task_approval_requests', { status: 'pending', reviewer_user_id: me })
       : Promise.resolve([]),
     loadCollection('ctox_task_approval_requests', recentQuery(APPROVAL_LIST_LIMIT)),
     me ? loadPersonalPages('user_thread_states', { user_id: me, attention_score: { $gt: 0 } })
       : Promise.resolve([]),
+    me ? loadCollection('user_thread_states', { selector: { user_id: me, thread_id: '__preferences__' }, limit: 1 })
+      : Promise.resolve([]),
   ]);
-  state.personalStateByThread = new Map(states.filter((item) => item.user_id === me).map((item) => [item.thread_id, item]));
+  if (state.ctx !== mountCtx) return;
+  const personalStates = mergeRecords(states, preferences);
+  state.personalStateByThread = new Map(personalStates.filter((item) => item.user_id === me).map((item) => [item.thread_id, item]));
   state.recentThreadsComplete = recentThreads.length < THREAD_LIST_LIMIT;
   updateConnectivity();
   const approvalCandidates = mergeRecords(pendingApprovals, recentApprovals);
@@ -563,45 +568,54 @@ async function refreshOnce(options = {}) {
   ].filter(Boolean);
   const personalThreadIds = [...actionableThreadIds, state.requestedThreadId].filter(Boolean);
   const personalThreads = await loadRecordsByIds('user_threads', personalThreadIds, { strict: true });
+  if (state.ctx !== mountCtx) return;
   const availableThreadIds = new Set(personalThreads.map((item) => item.id));
   state.personalComplete = Boolean(me)
     && actionableThreadIds.every((id) => availableThreadIds.has(id));
   updateConnectivity();
   const threads = mergeRecords(recentThreads, personalThreads);
-  const threadIds = threads.map((item) => item.id || item.thread_id).filter(Boolean);
-  const [messages, links, notifications] = await Promise.all([
-    loadCollection('user_thread_messages', relatedQuery('thread_id', threadIds, THREAD_DETAIL_LIMIT)),
-    loadCollection('user_thread_links', relatedQuery('thread_id', threadIds, THREAD_DETAIL_LIMIT)),
-    loadCollection('user_notifications', recentQuery(
-      NOTIFICATION_LIST_LIMIT,
-      me ? { user_id: me } : {},
-    )),
-  ]);
-  const base = { threads, messages, links, notifications, approvals, states };
-  notifyActionRequired(notifications);
-  // Render the collaborative state before optional command/task enrichment.
-  // Historical tracking lookups must never hold the inbox or an approval
-  // decision card behind dozens of unrelated command-id demand reads.
+  // The inbox needs native attention and approval state, not a global slice
+  // of messages/links from up to 200 unrelated threads. Detail loads below
+  // are scoped to the selected thread only.
+  const base = { threads, messages: [], links: [], notifications: [], approvals, states: personalStates };
+  state.detailCompleteThreadId = '';
   state.data = { ...base, commands: [], queue: [] };
   syncSelection();
   render();
 
-  await hydrateSelectedThread(state.selectedId);
+  await Promise.all([
+    hydrateSelectedThread(state.selectedId),
+    Promise.all([
+      me ? loadPersonalPages('user_notifications', { user_id: me, status: 'unread' }) : Promise.resolve([]),
+      loadCollection('user_notifications', recentQuery(
+        NOTIFICATION_LIST_LIMIT, me ? { user_id: me } : {},
+      )),
+    ]).then(([unreadNotifications, recentNotifications]) => {
+      if (state.ctx !== mountCtx) return;
+      state.data.notifications = mergeRecords(state.data.notifications, unreadNotifications, recentNotifications);
+      notifyActionRequired(recentNotifications);
+      render();
+    }),
+  ]);
 }
 
 async function hydrateSelectedThread(threadId) {
   if (!threadId) return;
-  const [messages, links, approvals] = await Promise.all([
+  const mountCtx = state.ctx;
+  const me = currentUserId();
+  const [messages, links, approvals, notifications] = await Promise.all([
     loadPersonalPages('user_thread_messages', { thread_id: threadId }),
     loadPersonalPages('user_thread_links', { thread_id: threadId }),
     loadPersonalPages('ctox_task_approval_requests', { thread_id: threadId }),
+    me ? loadPersonalPages('user_notifications', { thread_id: threadId, user_id: me }) : Promise.resolve([]),
   ]);
-  if (state.selectedId !== threadId) return;
+  if (state.ctx !== mountCtx || state.selectedId !== threadId) return;
   state.data = {
     ...state.data,
-    messages: mergeRecords(state.data.messages, messages),
-    links: mergeRecords(state.data.links, links),
+    messages,
+    links,
     approvals: mergeRecords(state.data.approvals, approvals),
+    notifications: mergeRecords(state.data.notifications, notifications),
   };
   const selectedBase = {
     threads: state.data.threads.filter((item) => item.id === threadId),
@@ -614,7 +628,7 @@ async function hydrateSelectedThread(threadId) {
   const commands = await loadRecordsByIds('business_commands', commandIds);
   const taskIds = linkedTaskIds(selectedBase, commands);
   const queue = await loadRecordsByIds('ctox_queue_tasks', taskIds);
-  if (state.selectedId !== threadId) return;
+  if (state.ctx !== mountCtx || state.selectedId !== threadId) return;
   state.data = { ...state.data, commands, queue };
   state.detailCompleteThreadId = threadId;
   render();
@@ -672,16 +686,6 @@ async function loadRecordsByIds(name, ids, options = {}) {
 function recentQuery(limit, selector = {}) {
   return {
     selector,
-    sort: [{ updated_at_ms: 'desc' }],
-    limit,
-  };
-}
-
-function relatedQuery(field, ids, limit) {
-  const uniqueIds = [...new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean))];
-  if (!uniqueIds.length) return { selector: { id: '__ctox_no_record__' }, limit: 1 };
-  return {
-    selector: { [field]: { $in: uniqueIds } },
     sort: [{ updated_at_ms: 'desc' }],
     limit,
   };
@@ -859,7 +863,7 @@ function syncGrammarSurfaces(visibleCount) {
   pg?.refreshDot?.();
   const who = state.ctx?.session?.user?.display_name || currentUserId() || '';
   const exact = state.filter === 'inbox' ? personalCollectionsReady() : state.recentThreadsComplete;
-  const footerText = `${exact ? '' : 'Mindestens '}${visibleCount} ${visibleCount === 1 ? 'Thread' : 'Threads'} · ${FILTER_LABELS[state.filter] || state.filter}${exact ? '' : ' · weitere Daten möglich'}${who ? ` · als ${who}` : ''}`;
+  const footerText = `${exact ? '' : 'Mindestens '}${visibleCount} ${visibleCount === 1 ? 'Thread' : 'Threads'} · ${FILTER_LABELS[state.filter] || state.filter}${exact ? '' : ' · weitere Daten möglich'}${state.search ? ' · Suche in Titel und Quellobjekt' : ''}${who ? ` · als ${who}` : ''}`;
   if (pg?.setFooter) pg.setFooter(footerText);
   else {
     const node = pane.querySelector('[data-pg-footer]');
@@ -927,7 +931,6 @@ function visibleThreads() {
         thread.source_module,
         thread.source_label,
         thread.source_record_id,
-        ...messagesForThread(thread.id).map((item) => item.body),
       ].join(' ').toLowerCase();
       return haystack.includes(search);
     })
@@ -995,8 +998,8 @@ function whyMeLine(thread, pendingApprovals) {
   return parts.join(' · ');
 }
 
-// The preview must inform: the latest message from someone OTHER than me,
-// prefixed with its sender — my own reply tells me nothing.
+// Only the selected thread has loaded messages. Its preview prefers the latest
+// foreign contribution; other rows use the native next step/source summary.
 function foreignPreview(thread) {
   const me = currentUserId();
   const messages = messagesForThread(thread.id);
@@ -1789,9 +1792,9 @@ function threadRelevantToUser(thread, userId) {
     || thread.assigned_user_id === userId
     || arrayField(thread.participant_ids).includes(userId)
     || arrayField(thread.watcher_user_ids).includes(userId)
+    || thread.created_by_id === userId
     || notificationsForThread(thread.id).some((item) => item.user_id === userId && item.status !== 'dismissed')
-    || approvalsForThread(thread.id).some((item) => item.reviewer_user_id === userId || item.requester_user_id === userId)
-    || messagesForThread(thread.id).some((item) => item.author_user_id === userId || arrayField(item.target_user_ids).includes(userId));
+    || approvalsForThread(thread.id).some((item) => item.reviewer_user_id === userId || item.requester_user_id === userId);
 }
 
 function threadMentionsUser(threadId, userId) {
@@ -1807,7 +1810,6 @@ function threadWaitingOnUser(threadId, userId, isAdmin) {
 function threadDelegatedByUser(thread, userId) {
   if (!userId) return false;
   return thread.created_by_id === userId
-    || messagesForThread(thread.id).some((item) => item.author_user_id === userId)
     || approvalsForThread(thread.id).some((item) => item.requester_user_id === userId);
 }
 
