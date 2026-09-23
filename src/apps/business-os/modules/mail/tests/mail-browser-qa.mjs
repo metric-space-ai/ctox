@@ -385,6 +385,11 @@ mailQa: try {
 
   await page.locator('[data-mail-root]').waitFor({ state: 'visible' });
   await assertVisibleText(page, 'Projektstatus August');
+  assert.deepEqual(
+    await page.locator('[data-mail-scope="queue"]').evaluateAll((nodes) => nodes.slice(0, 3).map((node) => node.dataset.mailScopeId)),
+    ['inbound', 'outbound', 'all'],
+  );
+  assert.deepEqual(await page.locator('.mail-scope-section-title').allTextContents(), ['Ordner', 'Arbeitsabläufe']);
   if (process.env.CTOX_MAIL_QA_INBOX_SCREENSHOT) {
     await page.screenshot({ path: resolve(process.env.CTOX_MAIL_QA_INBOX_SCREENSHOT), fullPage: true });
   }

@@ -647,19 +647,26 @@ export async function mount(ctx) {
       })
       : queueRows;
     let rows = sources.filter((item) => !search || `${item.title} ${item.meta}`.toLowerCase().includes(search));
-    rows = [...rows].sort((a, b) => sort === 'name'
-      ? a.title.localeCompare(b.title)
-      : sort === 'count'
-        ? b.count - a.count
-        : Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
+    const folderOrder = ['inbound', 'outbound', 'all', 'approval', 'failed', 'routed'];
+    rows = [...rows].sort((a, b) => view.leftGrammar.band === 'queues' && sort === 'recent'
+      ? folderOrder.indexOf(a.id) - folderOrder.indexOf(b.id)
+      : sort === 'name'
+        ? a.title.localeCompare(b.title)
+        : sort === 'count'
+          ? b.count - a.count
+          : Number(b.updatedAt || 0) - Number(a.updatedAt || 0));
     // Shards carry title plus meta line; the list is one dense line per entry
     // with a single short meta on the right.
     const scopeAsList = view.leftGrammar.view === 'list';
+    const showFolderSections = view.leftGrammar.band === 'queues' && sort === 'recent' && !search;
     refs.scopeList.innerHTML = rows.length ? rows.map((item) => {
       const scopeType = view.leftGrammar.band === 'campaigns' ? 'campaign' : 'queue';
       const shape = scopeAsList ? 'mail-scope-card--line' : 'mail-scope-card--shard';
       const meta = scopeAsList ? '' : `<span class="mail-scope-meta">${escapeHtml(item.meta)}</span>`;
-      return `<button class="mail-scope-card ${shape}${view.scopeType === scopeType && view.scopeId === item.id ? ' is-active' : ''}" type="button" data-mail-scope="${scopeType}" data-mail-scope-id="${escapeAttribute(item.id)}" data-context-record-id="${escapeAttribute(item.id)}" data-context-record-type="${scopeType}" data-context-record-label="${escapeAttribute(item.title)}" data-context-label="${escapeAttribute(item.title)}">
+      const section = showFolderSections && (item.id === 'inbound' || item.id === 'approval')
+        ? `<div class="mail-scope-section-title">${escapeHtml(item.id === 'inbound' ? t('folders', 'Ordner') : t('workflows', 'Arbeitsabläufe'))}</div>`
+        : '';
+      return `${section}<button class="mail-scope-card ${shape}${view.scopeType === scopeType && view.scopeId === item.id ? ' is-active' : ''}" type="button" data-mail-scope="${scopeType}" data-mail-scope-id="${escapeAttribute(item.id)}" data-context-record-id="${escapeAttribute(item.id)}" data-context-record-type="${scopeType}" data-context-record-label="${escapeAttribute(item.title)}" data-context-label="${escapeAttribute(item.title)}">
         <span class="mail-scope-title">${escapeHtml(item.title)}</span>${meta}<span class="mail-scope-count">${escapeHtml(item.countLabel ?? item.count)}</span>
       </button>`;
     }).join('') : `<div class="ctox-empty"><span>${escapeHtml(view.leftGrammar.band === 'campaigns' ? t('noGroups', 'Noch keine E-Mail-Gruppen') : t('noResults', 'Keine passenden Ordner'))}</span></div>`;

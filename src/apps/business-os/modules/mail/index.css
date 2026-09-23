@@ -75,6 +75,15 @@
   gap: 2px;
 }
 
+.mail-scope-section-title {
+  padding: 12px 12px 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
 .mail-scope-card {
   position: relative;
   display: grid;
