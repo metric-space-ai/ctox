@@ -1524,12 +1524,13 @@ pub(super) fn field_accepts_single_authoritative_source(field_key: &str) -> bool
 }
 
 /// How many independent source hosts a field needs before it counts as verified.
+/// Owner rule 23.09.2026: one matching, cited source is enough for every
+/// field. More independent sources strengthen a value (the app colours 0/1/2+)
+/// but are no longer required. Sellify alone still proves nothing, a quote
+/// must state the value, and conflicting sources stay action_required.
 pub(super) fn required_independent_sources(field_key: &str) -> usize {
-    if field_accepts_single_authoritative_source(field_key) {
-        1
-    } else {
-        2
-    }
+    let _ = field_accepts_single_authoritative_source(field_key);
+    1
 }
 
 pub(super) fn independent_research_evidence_count(evidence: &[Value], field_key: &str) -> usize {
