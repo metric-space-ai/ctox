@@ -41,13 +41,18 @@ export function loadBusinessOsAppInventory() {
   const coreApps = sourceApps.filter((app) => app.installScope === 'core');
   assertExactIds(systemAppIds, coreApps.map((app) => app.id), 'system-apps.json', 'core module manifests');
 
-  // Creator, Explorer and File Viewer are now registered core modules.
-  // Keep exact counts in addition to the registry/source/core ID parity guards.
-  if (sourceApps.length !== 39) {
-    throw new Error(`Business OS source inventory must contain exactly 39 apps; found ${sourceApps.length}`);
+  // A tripwire, not the invariant: registry, module manifests and
+  // system-apps.json are already cross-checked above. Bump these two counts in
+  // the same change that adds or removes an app. They stood at 36/18 while the
+  // tree carried 39/21 (explorer, file-viewer and appsec-pentest had landed),
+  // which left CI red on main for every commit (found 09.09.2026).
+  const EXPECTED_SOURCE_APPS = 39;
+  const EXPECTED_CORE_APPS = 21;
+  if (sourceApps.length !== EXPECTED_SOURCE_APPS) {
+    throw new Error(`Business OS source inventory must contain exactly ${EXPECTED_SOURCE_APPS} apps; found ${sourceApps.length}`);
   }
-  if (coreApps.length !== 21) {
-    throw new Error(`Business OS system inventory must contain exactly 21 apps; found ${coreApps.length}`);
+  if (coreApps.length !== EXPECTED_CORE_APPS) {
+    throw new Error(`Business OS system inventory must contain exactly ${EXPECTED_CORE_APPS} apps; found ${coreApps.length}`);
   }
 
   return Object.freeze({

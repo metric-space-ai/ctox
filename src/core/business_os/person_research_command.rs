@@ -104,6 +104,7 @@ pub(super) fn start(root: &Path, command: BusinessCommand) -> anyhow::Result<Val
 }
 
 pub(crate) fn recover_once(root: &Path) -> anyhow::Result<usize> {
+    super::contact_email_validation::sweep_unchecked_leads(root);
     let terminal_candidates = store::terminal_person_research_projection_candidates(root)?;
     let mut recovered = 0;
     for candidate in terminal_candidates {
@@ -118,6 +119,7 @@ pub(crate) fn recover_once(root: &Path) -> anyhow::Result<usize> {
             &candidate.terminal_status,
             &candidate.result,
             candidate.error_message.as_deref(),
+            &mut store::RxdbProjectionWriterCache::new(root),
         )?;
         let mut recovered_result = candidate.result.clone();
         let (lead_status, lead_error) = if candidate.terminal_status == "completed" {
@@ -455,7 +457,13 @@ fn project_outbound_lead_generation_lead_state(
         record_id,
         now,
         lead_document,
-    )
+    )?;
+    if result.is_some() {
+        // A research result may bring contact addresses; the daemon checks
+        // them itself because nobody else can (see contact_email_validation).
+        super::contact_email_validation::spawn_contact_email_validation(root, record_id);
+    }
+    Ok(())
 }
 
 fn outbound_lead_generation_lead_state_document(
@@ -490,6 +498,12 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
     command_result: &Value,
     now: i64,
 ) -> Value {
+    // Phase A reads the tool result directly, and that result carries the same
+    // XML-shaped list carriers the writeback does: on the Aeroxon lead
+    // 09.09.2026 `person_records` and `evidence` arrived as {"item": [...]}
+    // and were read as an empty list, so the lead lost every contact.
+    let command_result =
+        &super::person_research_gap_closure::unwrap_item_carriers(command_result.clone());
     let outcome = command_result
         .get("result")
         .filter(|value| value.is_object())
@@ -553,10 +567,15 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             continue;
         };
         researched_field_keys.push(field_key.clone());
+        let value = &restore_german_spelling(value, field);
         if field_key.starts_with("person_") && !has_person_records {
             contact[field_key] = value.clone();
         } else if !field_key.starts_with("person_") {
-            data[field_key] = value.clone();
+            data[field_key] = match field_key.as_str() {
+                "firma_land" => normalize_country_to_iso2(value),
+                "firma_domain" => normalize_domain(value),
+                _ => value.clone(),
+            };
         }
         for candidate in field
             .get("candidates")
@@ -589,6 +608,11 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             }));
         }
     }
+
+    let person_records = person_records
+        .into_iter()
+        .map(restore_german_spelling_in_person_record)
+        .collect::<Vec<_>>();
 
     for record in &person_records {
         for candidate in record
@@ -654,6 +678,7 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             contacts.push(normalized);
         }
     }
+    deduplicate_contacts(&mut contacts);
     let contact_ids = contacts
         .iter()
         .filter_map(|contact| contact.get("id").and_then(Value::as_str))
@@ -669,7 +694,10 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
         .collect::<Vec<_>>();
     let unverified_field_keys = researched_field_keys
         .iter()
-        .filter(|field_key| independent_research_evidence_count(&evidence, field_key) < 2)
+        .filter(|field_key| {
+            independent_research_evidence_count(&evidence, field_key)
+                < required_independent_sources(field_key)
+        })
         .cloned()
         .collect::<Vec<_>>();
     let verified_field_keys = researched_field_keys
@@ -699,6 +727,45 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
     })
 }
 
+/// Collapse contact rows that are the same record. Measured on the AKEMI lead
+/// 09.09.2026: "Gunter-Torsten Hamann" stood six times in the contact list,
+/// five of them byte-identical down to the same `id` and `person_key`. Whoever
+/// appended them, a list that carries one person five times is wrong at the
+/// point it is stored, so the guard sits here rather than at each writer.
+fn deduplicate_contacts(contacts: &mut Vec<Value>) {
+    let identity = |contact: &Value, key: &str| {
+        contact
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_lowercase)
+    };
+    let mut kept: Vec<Value> = Vec::with_capacity(contacts.len());
+    for contact in std::mem::take(contacts) {
+        // Incoming placeholders are already refused; these are the ones that
+        // were stored before that rule existed. Carbosulf still carried
+        // "test test" and "n/a n/a" on 09.09.2026, and they stood in the
+        // release list like real people.
+        if contact_name_is_placeholder(&contact) {
+            continue;
+        }
+        let id = identity(&contact, "id");
+        let person_key = identity(&contact, "person_key");
+        let duplicate_of = kept.iter().position(|existing| {
+            (id.is_some() && identity(existing, "id") == id)
+                || (person_key.is_some() && identity(existing, "person_key") == person_key)
+        });
+        if let Some(index) = duplicate_of {
+            // The later row may carry a field the first one lacked.
+            merge_json_object_values(&mut kept[index], &contact);
+            continue;
+        }
+        kept.push(contact);
+    }
+    *contacts = kept;
+}
+
 fn merge_researched_person_records(
     lead_id: &str,
     contacts: &mut Vec<Value>,
@@ -718,15 +785,33 @@ fn merge_researched_person_records_with_context(
         else {
             continue;
         };
+        // Ein Platzhaltername ist kein Ansprechpartner. thesen 09.09.2026:
+        // Carbosulf trug neun Kontakte "test test" und "n/a n/a" aus einem
+        // Probelauf; sie standen in der Freigabeliste wie echte Personen.
+        if contact_name_is_placeholder(&normalized) {
+            continue;
+        }
         normalized = with_stable_contact_id(lead_id, normalized, index);
+        let person_key = |contact: &Value| {
+            contact
+                .get("person_key")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .map(str::to_string)
+        };
+        let normalized_key = person_key(&normalized);
         let existing_index = contacts.iter().position(|existing| {
             existing.get("id").and_then(Value::as_str)
                 == normalized.get("id").and_then(Value::as_str)
+                || (normalized_key.is_some() && person_key(existing) == normalized_key)
                 || profiles_match(existing, &normalized)
+                || same_person_by_name(existing, &normalized)
                 || (existing.get("crm_known").and_then(Value::as_bool) == Some(true)
                     && contacts_match(existing, &normalized))
         });
         if let Some(existing_index) = existing_index {
+            keep_email_verdict(&contacts[existing_index], &mut normalized);
             if contacts[existing_index]
                 .get("crm_known")
                 .and_then(Value::as_bool)
@@ -742,6 +827,28 @@ fn merge_researched_person_records_with_context(
     }
 }
 
+/// A checked address keeps its verdict: a later writeback that only carries
+/// the worker's `no_match` for the same person must not wipe the daemon's
+/// `valid`/`invalid`.
+fn keep_email_verdict(existing: &Value, incoming: &mut Value) {
+    let Some(incoming) = incoming.as_object_mut() else {
+        return;
+    };
+    for key in ["person_email_validation", "email_validation"] {
+        let existing_is_verdict = existing
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(super::contact_email_validation::is_email_verdict);
+        let incoming_is_verdict = incoming
+            .get(key)
+            .and_then(Value::as_str)
+            .is_some_and(super::contact_email_validation::is_email_verdict);
+        if existing_is_verdict && !incoming_is_verdict {
+            incoming.remove(key);
+        }
+    }
+}
+
 fn set_known_person_contacts(
     lead_id: &str,
     contacts: &mut Vec<Value>,
@@ -752,9 +859,13 @@ fn set_known_person_contacts(
         let Some(mut contact) = known_person_contact(lead_id, known, locations) else {
             continue;
         };
-        let existing_index = contacts
-            .iter()
-            .position(|existing| contacts_match(existing, &contact));
+        // The imported "Mark H. Breitenfelder" and Sellify's "Mark
+        // Breitenfelder" share neither e-mail nor phone; the name rule (same
+        // surname and first name, no conflicting address or profile) is what
+        // makes them one person (Sasol, 11.09.2026).
+        let existing_index = contacts.iter().position(|existing| {
+            contacts_match(existing, &contact) || same_person_by_name(existing, &contact)
+        });
         if let Some(existing_index) = existing_index {
             merge_known_contact_values(&mut contact, &contacts[existing_index]);
             contacts[existing_index] = contact;
@@ -770,13 +881,18 @@ fn known_person_contact(lead_id: &str, known: Value, locations: &[String]) -> Op
     let function = contact_string(&known, &["funktion", "person_funktion", "role"]);
     let email = contact_string(&known, &["email", "person_email"]);
     let phone = contact_string(&known, &["telefon", "person_telefon", "phone"]);
-    let sellify_contact_id = contact_string(&known, &["sellify_contact_id"]);
-    let sellify_contact_id = sellify_contact_id
-        .bytes()
-        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-        .then_some(sellify_contact_id)
-        .filter(|value| !value.is_empty() && value.len() <= 64)
-        .unwrap_or_default();
+    let safe_id = |value: String| {
+        value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            .then_some(value)
+            .filter(|value| !value.is_empty() && value.len() <= 64)
+            .unwrap_or_default()
+    };
+    let sellify_contact_id = safe_id(contact_string(&known, &["sellify_contact_id"]));
+    // The app's handover finds the CRM person by this id; without it a known
+    // Sellify person would be created a second time.
+    let sellify_person_id = safe_id(contact_string(&known, &["sellify_person_id"]));
     let known_source_url = contact_string(&known, &["source"]);
     let known_source_url = url::Url::parse(&known_source_url)
         .ok()
@@ -787,10 +903,12 @@ fn known_person_contact(lead_id: &str, known: Value, locations: &[String]) -> Op
     if name.is_empty() && email.is_empty() && phone.is_empty() {
         return None;
     }
-    let id_suffix = if sellify_contact_id.is_empty() {
-        javascript_fingerprint(&format!("{lead_id}|{name}|{email}|{phone}"))
-    } else {
+    let id_suffix = if !sellify_contact_id.is_empty() {
         sellify_contact_id.clone()
+    } else if !sellify_person_id.is_empty() {
+        sellify_person_id.clone()
+    } else {
+        javascript_fingerprint(&format!("{lead_id}|{name}|{email}|{phone}"))
     };
     let mut contact = serde_json::json!({
         "id": format!("contact_sellify_{id_suffix}"),
@@ -804,6 +922,10 @@ fn known_person_contact(lead_id: &str, known: Value, locations: &[String]) -> Op
         "source": "sellify",
         "crm_known": true,
     });
+    if !sellify_person_id.is_empty() {
+        contact["sellify_person_id"] = Value::String(sellify_person_id.clone());
+        contact["person_key"] = Value::String(sellify_person_id);
+    }
     contact = normalize_researched_contact_with_context(contact, locations)?;
     contact["source"] = Value::String("sellify".to_string());
     contact["crm_known"] = Value::Bool(true);
@@ -942,6 +1064,331 @@ fn normalized_profile(value: &str) -> String {
     value.trim().trim_end_matches('/').to_lowercase()
 }
 
+/// Ein Kontakt, dessen Name nur aus Platzhaltern besteht, ist ein Artefakt und
+/// kein Ansprechpartner — er darf nicht in die Freigabeliste geraten. Traegt der
+/// Datensatz eine echte E-Mail, Telefonnummer oder ein Profil, bleibt er: dann
+/// ist nur der Name unbrauchbar, nicht der Kontakt.
+fn contact_name_is_placeholder(contact: &Value) -> bool {
+    const PLACEHOLDERS: &[&str] = &[
+        "test",
+        "testtest",
+        "na",
+        "n/a",
+        "nn",
+        "xxx",
+        "xx",
+        "unbekannt",
+        "unknown",
+        "dummy",
+        "muster",
+        "beispiel",
+        "example",
+        "todo",
+        "tbd",
+        "keine",
+        "none",
+        "null",
+    ];
+    let first = contact_string(contact, &["person_vorname", "first_name"]);
+    let last = contact_string(contact, &["person_nachname", "last_name"]);
+    let combined = if first.is_empty() && last.is_empty() {
+        contact_string(contact, &["name"])
+    } else {
+        format!("{first} {last}")
+    };
+    let tokens = combined
+        .split_whitespace()
+        .map(|token| {
+            token
+                .chars()
+                .filter(|c| c.is_alphanumeric() || *c == '/')
+                .collect::<String>()
+                .to_lowercase()
+        })
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return false;
+    }
+    if !tokens
+        .iter()
+        .all(|token| PLACEHOLDERS.contains(&token.as_str()))
+    {
+        return false;
+    }
+    // Ohne jede weitere Kennung ist nichts zu retten.
+    contact_string(contact, &["person_email", "email"]).is_empty()
+        && contact_string(contact, &["person_telefon", "phone"]).is_empty()
+        && contact_string(
+            contact,
+            &["person_linkedin", "person_xing", "linkedin", "xing"],
+        )
+        .is_empty()
+}
+
+/// Zwei Datensaetze beschreiben dieselbe Person, wenn der Nachname gleich ist
+/// und die Vornamen sich nicht widersprechen: einer fehlt, oder der erste
+/// Vorname stimmt ueberein. thesen 09.09.2026: "Bail" neben "Alena Bail",
+/// "Wild" neben "Jana Wild", "Moritz Schleyer" neben "Moritz Fabian Schleyer".
+/// Bewusst NICHT zusammengefuehrt werden verschiedene Vornamen zum selben
+/// Nachnamen ("Olivier" und "Philippe Blondeau" sind zwei Menschen).
+fn same_person_by_name(left: &Value, right: &Value) -> bool {
+    // Zwei verschiedene Profile oder E-Mails sind zwei Datensaetze, auch bei
+    // gleichem Namen: die Beiersdorf-Fixture haelt zwei "Frederic Heilmann"
+    // mit unterschiedlichen XING-Profilen bewusst getrennt.
+    let profile = |contact: &Value| {
+        normalized_profile(&contact_string(
+            contact,
+            &[
+                "person_linkedin",
+                "person_xing",
+                "linkedin",
+                "xing",
+                "source_url",
+            ],
+        ))
+    };
+    let (left_profile, right_profile) = (profile(left), profile(right));
+    if !left_profile.is_empty() && !right_profile.is_empty() && left_profile != right_profile {
+        return false;
+    }
+    let email =
+        |contact: &Value| normalized_email(&contact_string(contact, &["person_email", "email"]));
+    let (left_email, right_email) = (email(left), email(right));
+    if !left_email.is_empty() && !right_email.is_empty() && left_email != right_email {
+        return false;
+    }
+    let last = |contact: &Value| {
+        normalize_person_name_for_match(&contact_string(contact, &["person_nachname", "last_name"]))
+    };
+    // Split before normalizing: the normalizer joins the tokens, so "Mark H."
+    // became "markh" and never met "Mark Henryk" ("markhenryk") - one Sasol
+    // managing director stood twice in the recipient list (11.09.2026).
+    let first_token = |contact: &Value| {
+        contact_string(contact, &["person_vorname", "first_name"])
+            .split_whitespace()
+            .next()
+            .map(normalize_person_name_for_match)
+            .unwrap_or_default()
+    };
+    let (left_last, right_last) = (last(left), last(right));
+    if left_last.is_empty() || left_last != right_last {
+        return false;
+    }
+    let (left_first, right_first) = (first_token(left), first_token(right));
+    left_first.is_empty() || right_first.is_empty() || left_first == right_first
+}
+
+/// Return a candidate personal e-mail address already found by research for
+/// targets that validate a single address. Without this input, those targets
+/// report `CTOX_SCRAPE_INPUT_JSON.email missing`, leaving
+/// `person_email_validation` at `no_match`. Supplying the candidate allows
+/// validation to run; downstream release still requires a validated address.
+fn candidate_person_email(result: &Value) -> Option<String> {
+    let looks_like_address = |value: &str| {
+        let value = value.trim();
+        value.contains('@') && value.contains('.') && !value.contains(char::is_whitespace)
+    };
+    if let Some(address) = result
+        .pointer("/fields/person_email/value")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| looks_like_address(value))
+    {
+        return Some(address.to_string());
+    }
+    result
+        .get("person_records")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|record| {
+            record
+                .get("person_email")
+                .or_else(|| record.get("email"))
+                .and_then(Value::as_str)
+        })
+        .map(str::trim)
+        .find(|value| looks_like_address(value))
+        .map(str::to_string)
+}
+
+/// A domain is a host, not a URL. Measured 09.09.2026: Aeroxon was stored as
+/// "www.aeroxon.de" while Beiersdorf was "beiersdorf.de", and Sellify would
+/// have received two spellings of the same kind of value. Anything that is not
+/// recognisably a host is left untouched.
+fn normalize_domain(value: &Value) -> Value {
+    let Some(text) = value.as_str() else {
+        return value.clone();
+    };
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        return value.clone();
+    }
+    let host = url::Url::parse(trimmed)
+        .ok()
+        .or_else(|| url::Url::parse(&format!("https://{trimmed}")).ok())
+        .and_then(|url| url.host_str().map(str::to_string))
+        .unwrap_or_else(|| trimmed.to_string());
+    let host = host
+        .trim()
+        .trim_end_matches('.')
+        .trim_start_matches("www.")
+        .to_ascii_lowercase();
+    if host.is_empty() || !host.contains('.') {
+        return value.clone();
+    }
+    Value::String(host)
+}
+
+/// Der Importer verlangt einen zweistelligen ISO-Code, die Recherche lieferte
+/// "Deutschland" (Kreussler, 09.09.2026). Zwei Schreibweisen fuer dasselbe Land
+/// machen jede Auswertung nach Land unbrauchbar.
+/// Umlauts and eszett folded to their ASCII spelling, so "Nürnberg" and
+/// "Nuernberg" compare equal.
+fn german_fold(value: &str) -> String {
+    let mut folded = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            'ä' | 'Ä' => folded.push_str("ae"),
+            'ö' | 'Ö' => folded.push_str("oe"),
+            'ü' | 'Ü' => folded.push_str("ue"),
+            'ß' => folded.push_str("ss"),
+            _ => folded.extend(character.to_lowercase()),
+        }
+    }
+    folded
+}
+
+fn has_german_diacritics(value: &str) -> bool {
+    value
+        .chars()
+        .any(|character| matches!(character, 'ä' | 'ö' | 'ü' | 'Ä' | 'Ö' | 'Ü' | 'ß'))
+}
+
+/// Give a transliterated value its German spelling back, but only when a cited
+/// quote carries it. Measured on the AKEMI lead 09.09.2026: the quote read
+/// "D-90451 Nürnberg" while the stored city was "Nuernberg", and Sellify would
+/// have received the transliteration. The correction is never invented — it is
+/// literally the spelling of the source the worker cited.
+pub(super) fn restore_german_spelling_from_quotes(value: &str, quotes: &[&str]) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || has_german_diacritics(trimmed) {
+        return None;
+    }
+    let folded = german_fold(trimmed);
+    if folded.is_empty() {
+        return None;
+    }
+    for quote in quotes {
+        if quote.len() > 2_000 || !has_german_diacritics(quote) {
+            continue;
+        }
+        let characters = quote.chars().collect::<Vec<_>>();
+        for start in 0..characters.len() {
+            for end in (start + 1)..=characters.len() {
+                if end - start > folded.chars().count() {
+                    break;
+                }
+                let candidate = characters[start..end].iter().collect::<String>();
+                if has_german_diacritics(&candidate) && german_fold(&candidate) == folded {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A person record carries its own quotes, so a surname stored as "Mueller"
+/// can take back the "Müller" its evidence spells out. Same rule as for company
+/// fields: without a quote that carries the German form, nothing changes.
+fn restore_german_spelling_in_person_record(mut record: Value) -> Value {
+    let quotes = record
+        .get("evidence")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .get("quote")
+                .or_else(|| entry.get("note"))
+                .and_then(Value::as_str)
+        })
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    if quotes.is_empty() {
+        return record;
+    }
+    let quotes = quotes.iter().map(String::as_str).collect::<Vec<_>>();
+    let Some(fields) = record.as_object_mut() else {
+        return record;
+    };
+    for (key, value) in fields.iter_mut() {
+        // Machine-readable values are never respelled.
+        if key == "evidence"
+            || key == "person_key"
+            || key.ends_with("_url")
+            || key.contains("email")
+            || key.contains("linkedin")
+            || key.contains("xing")
+            || key.contains("telefon")
+            || key.contains("phone")
+        {
+            continue;
+        }
+        let Some(text) = value.as_str() else { continue };
+        if let Some(restored) = restore_german_spelling_from_quotes(text, &quotes) {
+            *value = Value::String(restored);
+        }
+    }
+    record
+}
+
+/// Applies [`restore_german_spelling_from_quotes`] to a researched field value,
+/// using the quotes the worker cited for that very field.
+fn restore_german_spelling(value: &Value, field: &Value) -> Value {
+    let Some(text) = value.as_str() else {
+        return value.clone();
+    };
+    let quotes = field
+        .get("candidates")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|candidate| {
+            candidate
+                .get("quote")
+                .or_else(|| candidate.get("snippet"))
+                .and_then(Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    match restore_german_spelling_from_quotes(text, &quotes) {
+        Some(restored) => Value::String(restored),
+        None => value.clone(),
+    }
+}
+
+fn normalize_country_to_iso2(value: &Value) -> Value {
+    let Some(text) = value.as_str() else {
+        return value.clone();
+    };
+    let key = text.trim().to_lowercase();
+    let code = match key.as_str() {
+        "de" | "deutschland" | "germany" | "bundesrepublik deutschland" => "DE",
+        "at" | "österreich" | "oesterreich" | "austria" => "AT",
+        "ch" | "schweiz" | "switzerland" | "suisse" | "svizzera" => "CH",
+        other => {
+            let trimmed = other.trim();
+            if trimmed.len() == 2 && trimmed.chars().all(|c| c.is_ascii_alphabetic()) {
+                return Value::String(trimmed.to_uppercase());
+            }
+            return value.clone();
+        }
+    };
+    Value::String(code.to_string())
+}
+
 fn normalized_contact_name(contact: &Value) -> String {
     let first = contact_string(contact, &["person_vorname", "first_name"]);
     let last = contact_string(contact, &["person_nachname", "last_name"]);
@@ -1045,8 +1492,49 @@ fn deduplicate_research_evidence(entries: Vec<Value>) -> Vec<Value> {
         .collect()
 }
 
+/// Facts a company states about itself: its switchboard number, its own mail
+/// address, the profile links of its own staff. The company's own site is the
+/// record of truth for these, and no second independent host can be expected to
+/// repeat them. Demanding two hosts here does not raise quality, it only pushes
+/// a correct value into `no_match`; the field still needs a source with a URL
+/// and a verbatim quote, and the review UI marks a single source as weak.
+pub(super) fn field_accepts_single_authoritative_source(field_key: &str) -> bool {
+    matches!(
+        field_key.trim(),
+        "firma_domain"
+            | "firma_email"
+            | "firma_telefon"
+            | "firma_fax"
+            | "firma_postfach"
+            | "firma_besucheranschrift"
+            | "firma_postanschrift"
+            | "firma_homepage_fact_sheet"
+            | "person_geschlecht"
+            | "person_titel"
+            | "person_vorname"
+            | "person_nachname"
+            | "person_funktion"
+            | "person_position"
+            | "person_email"
+            | "person_email_validation"
+            | "person_telefon"
+            | "person_linkedin"
+            | "person_xing"
+    )
+}
+
+/// How many independent source hosts a field needs before it counts as verified.
+/// Owner rule 23.09.2026: one matching, cited source is enough for every
+/// field. More independent sources strengthen a value (the app colours 0/1/2+)
+/// but are no longer required. Sellify alone still proves nothing, a quote
+/// must state the value, and conflicting sources stay action_required.
+pub(super) fn required_independent_sources(field_key: &str) -> usize {
+    let _ = field_accepts_single_authoritative_source(field_key);
+    1
+}
+
 pub(super) fn independent_research_evidence_count(evidence: &[Value], field_key: &str) -> usize {
-    evidence
+    let providers = evidence
         .iter()
         .filter(|entry| {
             entry
@@ -1056,21 +1544,78 @@ pub(super) fn independent_research_evidence_count(evidence: &[Value], field_key:
                 == Some(field_key)
         })
         .filter_map(research_evidence_source_key)
-        .collect::<HashSet<_>>()
-        .len()
+        .collect::<HashSet<_>>();
+    crm_aware_provider_count(providers.len(), providers.iter().map(String::as_str))
+}
+
+/// Sellify counts as one source but proves nothing alone — not even for a
+/// self-reported field, where a single source is otherwise enough.
+pub(super) fn crm_aware_provider_count<'a>(
+    count: usize,
+    mut providers: impl Iterator<Item = &'a str>,
+) -> usize {
+    if providers.all(|provider| provider == super::person_research_gap_closure::CRM_SOURCE_SCHEME) {
+        0
+    } else {
+        count
+    }
+}
+
+/// Suffixes whose second-to-last label is not the provider.
+const COMPOUND_TLDS: &[&str] = &[
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "co.at", "or.at", "ac.at", "com.au", "net.au", "org.au",
+    "co.jp", "com.br", "com.tr", "co.nz", "com.pl",
+];
+
+/// The provider behind a host, not the host itself. `northdata.de` and
+/// `northdata.com` are one company, and so are `linkedin.com` and
+/// `de.linkedin.com`. Counting hosts turns two pages of one provider into two
+/// independent sources, which is exactly what the evidence rule forbids.
+pub(super) fn research_evidence_provider(host: &str) -> String {
+    let host = host.trim().trim_start_matches("www.").to_ascii_lowercase();
+    let labels = host
+        .split('.')
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>();
+    if labels.len() < 2 {
+        return labels.join(".");
+    }
+    let last_two = labels[labels.len() - 2..].join(".");
+    if COMPOUND_TLDS.contains(&last_two.as_str()) {
+        return labels
+            .get(labels.len().wrapping_sub(3))
+            .map(|label| (*label).to_string())
+            .unwrap_or(last_two);
+    }
+    labels[labels.len() - 2].to_string()
 }
 
 fn research_evidence_source_key(entry: &Value) -> Option<String> {
     let source_url = entry
         .get("source_url")
         .or_else(|| entry.get("url"))
-        .and_then(Value::as_str);
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    // `sellify://company/…` and `sellify://person/…` are one provider: the CRM.
+    // Read as URLs they would count as the hosts `company` and `person`.
+    if source_url.is_some_and(|value| {
+        value.to_ascii_lowercase().starts_with(&format!(
+            "{}://",
+            super::person_research_gap_closure::CRM_SOURCE_SCHEME
+        ))
+    }) {
+        return Some(super::person_research_gap_closure::CRM_SOURCE_SCHEME.to_string());
+    }
     if let Some(host) = source_url
-        .and_then(|source_url| url::Url::parse(source_url).ok())
-        .and_then(|url| {
-            url.host_str()
-                .map(|host| host.trim_start_matches("www.").to_ascii_lowercase())
+        .and_then(|source_url| {
+            url::Url::parse(source_url)
+                .ok()
+                // Evidence without a scheme is common; without this the same
+                // provider counts twice, once with and once without a path.
+                .or_else(|| url::Url::parse(&format!("https://{source_url}")).ok())
         })
+        .and_then(|url| url.host_str().map(research_evidence_provider))
         .filter(|host| !host.is_empty())
     {
         return Some(host);
@@ -1080,7 +1625,14 @@ fn research_evidence_source_key(entry: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_ascii_lowercase)
+        .map(|value| {
+            let provider = research_evidence_provider(value);
+            if provider.is_empty() {
+                value.to_ascii_lowercase()
+            } else {
+                provider
+            }
+        })
 }
 
 fn normalize_researched_contact(contact: Value) -> Option<Value> {
@@ -1553,6 +2105,7 @@ fn execute(
             company,
             country,
             owner_user_id,
+            candidate_person_email(&result).as_deref(),
         );
         ctox_web_stack::person_research::merge_runtime_scrape_result(
             &mut result,
@@ -2267,12 +2820,187 @@ mod tests {
         assert!(patch["contacts"][0]["id"]
             .as_str()
             .is_some_and(|id| id.starts_with("contact_")));
-        assert_eq!(patch["research_status"], "needs_review");
+        // The person fields carry one source each, the XING profile itself.
+        // That is the only host that can carry them, so they count as verified
+        // and the lead has nothing left open.
+        assert_eq!(patch["research_status"], "completed");
         assert_eq!(patch["research_error"], Value::Null);
         assert_eq!(patch["payload"]["research_tool"], "ctox_person_research");
         assert_eq!(
             patch["payload"]["verified_field_keys"],
-            serde_json::json!(["firma_domain"])
+            serde_json::json!([
+                "firma_domain",
+                "person_vorname",
+                "person_nachname",
+                "person_xing"
+            ])
+        );
+    }
+
+    #[test]
+    fn a_domain_is_stored_as_a_bare_host() {
+        let d = |value: &str| normalize_domain(&serde_json::json!(value));
+        assert_eq!(d("www.aeroxon.de"), serde_json::json!("aeroxon.de"));
+        assert_eq!(
+            d("https://www.aeroxon.de/"),
+            serde_json::json!("aeroxon.de")
+        );
+        assert_eq!(
+            d("https://beiersdorf.de/impressum"),
+            serde_json::json!("beiersdorf.de")
+        );
+        assert_eq!(d("Beiersdorf.DE"), serde_json::json!("beiersdorf.de"));
+        // Nothing that fails to look like a host is rewritten.
+        assert_eq!(
+            d("keine Domain bekannt"),
+            serde_json::json!("keine Domain bekannt")
+        );
+        assert_eq!(d("intranet"), serde_json::json!("intranet"));
+    }
+
+    #[test]
+    fn a_person_record_takes_the_spelling_of_its_own_quotes() {
+        let record = serde_json::json!({
+            "person_key": "p1",
+            "person_vorname": "Juergen",
+            "person_nachname": "Mueller",
+            "person_funktion": "Geschaeftsfuehrer",
+            "person_email": "j.mueller@example.test",
+            "evidence": [
+                {"field": "person_nachname", "quote": "Geschäftsführer Jürgen Müller"}
+            ]
+        });
+        let restored = restore_german_spelling_in_person_record(record);
+        assert_eq!(restored["person_vorname"], "Jürgen");
+        assert_eq!(restored["person_nachname"], "Müller");
+        assert_eq!(restored["person_funktion"], "Geschäftsführer");
+        // An address is not a word to be respelled.
+        assert_eq!(restored["person_email"], "j.mueller@example.test");
+        assert_eq!(restored["person_key"], "p1");
+    }
+
+    #[test]
+    fn a_checked_address_keeps_its_verdict() {
+        let existing = serde_json::json!({"person_email_validation": "valid"});
+        let mut incoming =
+            serde_json::json!({"person_email_validation": "no_match", "person_telefon": "+49 1"});
+        keep_email_verdict(&existing, &mut incoming);
+        assert!(incoming.get("person_email_validation").is_none());
+        assert_eq!(incoming["person_telefon"], "+49 1");
+        // A new real verdict still replaces the old one.
+        let mut newer = serde_json::json!({"person_email_validation": "invalid"});
+        keep_email_verdict(&existing, &mut newer);
+        assert_eq!(newer["person_email_validation"], "invalid");
+    }
+
+    #[test]
+    fn the_same_person_is_stored_once() {
+        // Measured on the AKEMI lead 09.09.2026: five byte-identical rows for
+        // one managing director, plus the CRM row for the same person_key.
+        let repeated = serde_json::json!({
+            "id": "contact_2ksd",
+            "person_key": "person_hamann_torsten",
+            "name": "Gunter-Torsten Hamann",
+            "person_nachname": "Hamann"
+        });
+        let mut contacts = vec![
+            serde_json::json!({"id": "contact_ka6iyb", "person_key": "sellify-person-59812", "name": "Gunter-Torsten Hamann", "person_email": "t.hamann@akemi.de"}),
+            repeated.clone(),
+            repeated.clone(),
+            repeated.clone(),
+            serde_json::json!({"id": "contact_cj1rmz", "person_key": "sellify-person-59813", "name": "Dirk C. Hamann"}),
+        ];
+        deduplicate_contacts(&mut contacts);
+        assert_eq!(contacts.len(), 3);
+        assert_eq!(contacts[1]["id"], "contact_2ksd");
+        // A later row still contributes what the first one was missing.
+        let mut with_extra = vec![
+            serde_json::json!({"id": "c1", "name": "Ada Lovelace"}),
+            serde_json::json!({"id": "c1", "name": "Ada Lovelace", "person_email": "ada@example.test"}),
+        ];
+        deduplicate_contacts(&mut with_extra);
+        assert_eq!(with_extra.len(), 1);
+        assert_eq!(with_extra[0]["person_email"], "ada@example.test");
+        // A stored placeholder from an old probe is dropped on the next write.
+        let mut with_placeholder = vec![
+            serde_json::json!({"id": "c1", "name": "test test", "person_key": "test"}),
+            serde_json::json!({"id": "c2", "name": "n/a n/a", "person_key": "placeholder"}),
+            serde_json::json!({"id": "c3", "name": "Joppe Smit", "person_nachname": "Smit"}),
+        ];
+        deduplicate_contacts(&mut with_placeholder);
+        assert_eq!(with_placeholder.len(), 1);
+        assert_eq!(with_placeholder[0]["name"], "Joppe Smit");
+    }
+
+    #[test]
+    fn a_transliterated_value_takes_the_spelling_of_its_own_quote() {
+        // Measured on the AKEMI lead 09.09.2026.
+        assert_eq!(
+            restore_german_spelling_from_quotes("Nuernberg", &["D-90451 Nürnberg"]),
+            Some("Nürnberg".to_string())
+        );
+        assert_eq!(
+            restore_german_spelling_from_quotes(
+                "Lechstrasse 28, 90451 Nuernberg",
+                &["Anschrift: Lechstraße 28, 90451 Nürnberg"]
+            ),
+            Some("Lechstraße 28, 90451 Nürnberg".to_string())
+        );
+        // Without a quote carrying the spelling nothing is invented.
+        assert_eq!(
+            restore_german_spelling_from_quotes("Nuernberg", &["Seat: Nuremberg"]),
+            None
+        );
+        // A value that already reads German is left alone.
+        assert_eq!(
+            restore_german_spelling_from_quotes("Nürnberg", &["Nürnberg"]),
+            None
+        );
+        // A Swiss address keeps its "ss" when no quote says otherwise.
+        assert_eq!(
+            restore_german_spelling_from_quotes("Bahnhofstrasse 1", &["Bahnhofstrasse 1, Zürich"]),
+            None
+        );
+    }
+
+    #[test]
+    fn two_pages_of_one_provider_are_one_source() {
+        let evidence = |url: &str| serde_json::json!({"field_key": "firma_ort", "source_id": "northdata.de", "source_url": url});
+        // Measured on the AKEMI lead 09.09.2026: `Ort` counted three sources
+        // although two of them were northdata under different top-level domains.
+        let same_house = vec![
+            evidence("https://www.northdata.de/Akemi"),
+            evidence("https://www.northdata.com/AKEMI/HRB%201834"),
+        ];
+        assert_eq!(
+            independent_research_evidence_count(&same_house, "firma_ort"),
+            1
+        );
+        let two_houses = vec![
+            evidence("https://www.northdata.de/Akemi"),
+            evidence("https://akemi.de/impressum"),
+        ];
+        assert_eq!(
+            independent_research_evidence_count(&two_houses, "firma_ort"),
+            2
+        );
+        // A subdomain is not a second source either.
+        let one_platform = vec![
+            evidence("https://de.linkedin.com/company/akemi"),
+            evidence("https://linkedin.com/company/akemi"),
+        ];
+        assert_eq!(
+            independent_research_evidence_count(&one_platform, "firma_ort"),
+            1
+        );
+        // Evidence without a scheme still resolves to its provider.
+        let no_scheme = vec![
+            evidence("northdata.de/Akemi"),
+            evidence("https://www.northdata.de/Akemi/2"),
+        ];
+        assert_eq!(
+            independent_research_evidence_count(&no_scheme, "firma_ort"),
+            1
         );
     }
 
@@ -2409,6 +3137,84 @@ mod tests {
     }
 
     #[test]
+    fn placeholder_contacts_are_dropped_and_partial_names_merge() {
+        let mut contacts = Vec::new();
+        merge_researched_person_records(
+            "lead-x",
+            &mut contacts,
+            vec![
+                serde_json::json!({"person_vorname": "test", "person_nachname": "test", "person_funktion": "test"}),
+                serde_json::json!({"person_vorname": "n/a", "person_nachname": "n/a"}),
+                serde_json::json!({"person_nachname": "Bail", "person_funktion": "Prokura"}),
+                serde_json::json!({"person_vorname": "Alena", "person_nachname": "Bail", "person_funktion": "Prokura"}),
+                serde_json::json!({"person_vorname": "Olivier", "person_nachname": "Blondeau"}),
+                serde_json::json!({"person_vorname": "Philippe", "person_nachname": "Blondeau"}),
+            ],
+        );
+        let namen = contacts
+            .iter()
+            .map(|c| {
+                format!(
+                    "{} {}",
+                    c.get("person_vorname")
+                        .and_then(Value::as_str)
+                        .unwrap_or(""),
+                    c.get("person_nachname")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                )
+                .trim()
+                .to_string()
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !namen
+                .iter()
+                .any(|n| n.to_lowercase().contains("test") || n.contains("n/a")),
+            "Platzhalternamen duerfen keinen Kontakt erzeugen: {namen:?}"
+        );
+        assert_eq!(
+            namen.iter().filter(|n| n.contains("Bail")).count(),
+            1,
+            "`Bail` und `Alena Bail` sind eine Person: {namen:?}"
+        );
+        assert_eq!(
+            namen.iter().filter(|n| n.contains("Blondeau")).count(),
+            2,
+            "Olivier und Philippe Blondeau sind zwei Menschen: {namen:?}"
+        );
+    }
+
+    #[test]
+    fn country_is_stored_as_a_two_letter_code() {
+        assert_eq!(
+            normalize_country_to_iso2(&serde_json::json!("Deutschland")),
+            serde_json::json!("DE")
+        );
+        assert_eq!(
+            normalize_country_to_iso2(&serde_json::json!("germany")),
+            serde_json::json!("DE")
+        );
+        assert_eq!(
+            normalize_country_to_iso2(&serde_json::json!("Österreich")),
+            serde_json::json!("AT")
+        );
+        assert_eq!(
+            normalize_country_to_iso2(&serde_json::json!("ch")),
+            serde_json::json!("CH")
+        );
+        assert_eq!(
+            normalize_country_to_iso2(&serde_json::json!("DE")),
+            serde_json::json!("DE")
+        );
+        // Unbekanntes bleibt unveraendert statt falsch geraten zu werden.
+        assert_eq!(
+            normalize_country_to_iso2(&serde_json::json!("Vereinigtes Koenigreich")),
+            serde_json::json!("Vereinigtes Koenigreich")
+        );
+    }
+
+    #[test]
     fn contacts_match_requires_more_than_a_shared_name() {
         let first = serde_json::json!({
             "person_vorname": "Michael",
@@ -2430,6 +3236,62 @@ mod tests {
 
         assert!(!contacts_match(&first, &namesake));
         assert!(contacts_match(&first, &same_email));
+    }
+
+    #[test]
+    fn an_initial_and_the_full_middle_name_are_one_person_on_one_lead() {
+        let imported = serde_json::json!({
+            "person_vorname": "Mark H.",
+            "person_nachname": "Breitenfelder"
+        });
+        let researched = serde_json::json!({
+            "person_vorname": "Mark Henryk",
+            "person_nachname": "Breitenfelder",
+            "person_email": "mark.breitenfelder@de.sasol.com"
+        });
+        let other = serde_json::json!({
+            "person_vorname": "Markus",
+            "person_nachname": "Breitenfelder"
+        });
+        assert!(same_person_by_name(&imported, &researched));
+        assert!(!same_person_by_name(&imported, &other));
+        let mut contacts = vec![imported];
+        merge_researched_person_records(
+            "lead-sasol",
+            &mut contacts,
+            vec![serde_json::json!({
+                "person_key": "sellify-person-58494",
+                "person_vorname": "Mark Henryk",
+                "person_nachname": "Breitenfelder",
+                "person_email": "mark.breitenfelder@de.sasol.com"
+            })],
+        );
+        assert_eq!(contacts.len(), 1, "{contacts:?}");
+    }
+
+    #[test]
+    fn a_known_sellify_person_absorbs_the_imported_initial_form() {
+        let mut contacts = vec![serde_json::json!({
+            "id": "contact_8f0cix",
+            "person_key": "person_breitenfelder_mark",
+            "person_vorname": "Mark H.",
+            "person_nachname": "Breitenfelder",
+            "person_funktion": "Geschäftsführer"
+        })];
+        set_known_person_contacts(
+            "lead-sasol",
+            &mut contacts,
+            vec![serde_json::json!({
+                "sellify_person_id": "sellify-person-58494",
+                "person_vorname": "Mark",
+                "person_nachname": "Breitenfelder",
+                "person_email": "mark.breitenfelder@de.sasol.com"
+            })],
+            &[],
+        );
+        assert_eq!(contacts.len(), 1, "{contacts:?}");
+        assert_eq!(contacts[0]["sellify_person_id"], "sellify-person-58494");
+        assert_eq!(contacts[0]["crm_known"], true);
     }
 
     #[test]

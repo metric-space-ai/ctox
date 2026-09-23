@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { CollectionSyncRegistry } from './sync-collection-registry.js';
 import assert from 'node:assert/strict';
 
 import {
@@ -679,9 +680,12 @@ test('createDocx retries explicitly retryable native peer lease failures', async
 
 test('createDocx replaces a follower lease with a direct bridge before publishing dependencies', async () => {
   const calls = [];
+  const registry = new CollectionSyncRegistry();
   const replication = {
+    getTransportStatus() { return { activePeerCount: 1 }; },
     async pushDocumentsToRemotePeers(documents) {
       calls.push(`push:${documents.length}`);
+      return true;
     },
   };
   const documents = createDocumentsFacade({
@@ -689,15 +693,14 @@ test('createDocx replaces a follower lease with a direct bridge before publishin
     sync: {
       async leaseCollection(collection) {
         calls.push(`lease:${collection}`);
-        return {
-          collection,
-          bridge: { mode: 'follower', state: null },
-          async release() { calls.push(`release:${collection}`); },
-        };
+        registry.set(collection, Promise.resolve({ mode: 'follower', state: null }));
+        return registry.acquire(collection, 'document-test', async () => { calls.push(`release:${collection}`); });
       },
       async startCollection(collection, options) {
         calls.push(`direct:${collection}:${options?.forceDirect === true}`);
-        return { mode: 'leader', state: replication };
+        const bridge = { mode: 'leader', state: replication };
+        registry.set(collection, Promise.resolve(bridge));
+        return bridge;
       },
     },
   });

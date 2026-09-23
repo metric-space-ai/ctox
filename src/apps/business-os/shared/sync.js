@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20260909-shell-v2-workjet-computer-schema-v364';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260909-shell-v2-workjet-computer-schema-v364';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260909-shell-v2-workjet-computer-schema-v364';
+} from './sync-contract.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20260909-shell-v2-workjet-computer-schema-v364';
+const MULTI_TAB_COORDINATOR_EPOCH = '20260913-shell-v2-authoritative-pin-retry-v384';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -146,19 +146,21 @@ const RETRYABLE_CONTROL_PLANE_CODES = new Set([
 const signalingErrorHandlers = new Set();
 let signalingErrorObserverInstalled = false;
 
+import { CollectionSyncRegistry } from './sync-collection-registry.js?v=1';
+
 export function createSyncRuntime({
   db,
   config,
   onDiagnostic,
   capabilityTokenProvider = getBusinessOsCapabilityToken,
+  onNativeQueryReady = null,
 }) {
-  const bridges = new Map();
+  const bridges = new CollectionSyncRegistry();
   const activeCollections = new Set();
   // Direct shell/service consumers pin a bridge until they explicitly stop
   // it. App windows use reference-counted leases instead, so closing the last
   // window can return the sync runtime to its pre-launch resource baseline.
   const pinnedCollections = new Set();
-  const collectionLeaseCounts = new Map();
   const suspendedCollections = new Set();
   let globalRestartTimer = null;
   let unregisteredSweepTimer = null;
@@ -180,6 +182,7 @@ export function createSyncRuntime({
   const multiTabUnsubscribers = [];
   let suspensionReason = '';
   let stopped = false;
+  let nativeReadSequence = 0;
   const publishResourceBudget = () => {
     const root = globalThis.document?.documentElement;
     if (!root?.dataset) return;
@@ -187,7 +190,7 @@ export function createSyncRuntime({
     root.dataset.syncBridgeCount = String(bridges.size);
     root.dataset.syncPinnedCollectionCount = String(pinnedCollections.size);
     root.dataset.syncLeaseCount = String(
-      [...collectionLeaseCounts.values()].reduce((sum, count) => sum + count, 0),
+      bridges.leaseCounts().reduce((sum, [, count]) => sum + count, 0),
     );
   };
   publishResourceBudget();
@@ -318,10 +321,10 @@ export function createSyncRuntime({
   };
   const stopAllBridges = async () => {
     const bridgePromises = [...bridges.values()];
+    bridges.revokeAllLeases();
     bridges.clear();
     activeCollections.clear();
     pinnedCollections.clear();
-    collectionLeaseCounts.clear();
     publishResourceBudget();
     const states = await Promise.allSettled(bridgePromises);
     for (const state of states) {
@@ -689,52 +692,38 @@ export function createSyncRuntime({
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       const normalized = normalizeCollectionName(collection);
       if (!normalized) throw new Error('collection is required.');
-      collectionLeaseCounts.set(normalized, (collectionLeaseCounts.get(normalized) || 0) + 1);
-      publishResourceBudget();
-      let released = false;
-      let bridge = null;
-      try {
-        bridge = await this.startCollection(normalized, { pin: false });
-      } catch (error) {
-        releaseCollectionLease(normalized);
-        if (!pinnedCollections.has(normalized)) {
-          await this.stopCollection(normalized, { preservePin: true }).catch(() => null);
+      const lease = bridges.acquire(normalized, reason, async (remaining) => {
+        publishResourceBudget();
+        if (remaining <= 0 && !pinnedCollections.has(normalized)) {
+          await syncRuntime.stopCollection(normalized, { preservePin: true }).catch(() => null);
+          if (isModuleDemandOnlyCollection(normalized)) {
+            recordCollection(normalized, {
+              status: 'skipped',
+              connectionStatus: 'demand-only',
+              reason: 'demand-only-lease-released',
+              active: false,
+              frameTransport: null,
+              lastError: null,
+              reconnectingSince: null,
+            });
+          }
         }
+      });
+      publishResourceBudget();
+      try {
+        await this.startCollection(normalized, { pin: false });
+        return lease;
+      } catch (error) {
+        await lease.release();
         throw error;
       }
-      return {
-        mode: 'leased',
-        collection: normalized,
-        reason,
-        bridge,
-        async release() {
-          if (released) return false;
-          released = true;
-          const remaining = releaseCollectionLease(normalized);
-          if (remaining <= 0 && !pinnedCollections.has(normalized)) {
-            await syncRuntime.stopCollection(normalized, { preservePin: true }).catch(() => null);
-            if (isModuleDemandOnlyCollection(normalized)) {
-              recordCollection(normalized, {
-                status: 'skipped',
-                connectionStatus: 'demand-only',
-                reason: 'demand-only-lease-released',
-                active: false,
-                frameTransport: null,
-                lastError: null,
-                reconnectingSince: null,
-              });
-            }
-          }
-          return true;
-        },
-      };
     },
     async startCollection(collection, options = {}) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       collection = normalizeCollectionName(collection);
       if (!collection) throw new Error('collection is required.');
       const coordinator = await ensureMultiTabCoordinator();
-      if (isModuleDemandOnlyCollection(collection) && !collectionLeaseCounts.get(collection)) {
+      if (isModuleDemandOnlyCollection(collection) && !bridges.leaseCount(collection)) {
         const error = new Error(`${collection} is demand-only and must be started through leaseCollection().`);
         error.code = DEMAND_ONLY_COLLECTION_START_ERROR;
         recordCollection(collection, {
@@ -846,6 +835,7 @@ export function createSyncRuntime({
           collection,
           recordCollection,
           capabilityTokenProvider,
+          onNativeQueryReady,
           onFatalPeerError: (error) => scheduleGlobalRestart(collection, error),
           // Passed down explicitly: startWebRtcReplication is a module-level
           // function, so it cannot see this closure. The previous direct call
@@ -887,7 +877,7 @@ export function createSyncRuntime({
         });
         return bridge;
       } catch (error) {
-        bridges.delete(collection);
+        if (bridges.get(collection) === bridgePromise) bridges.delete(collection);
         publishResourceBudget();
         const serialized = serializeError(error);
         recordCollection(collection, { status: 'failed', lastError: serialized });
@@ -898,7 +888,7 @@ export function createSyncRuntime({
     async stopCollection(collection, options = {}) {
       collection = normalizeCollectionName(collection);
       activeCollections.delete(collection);
-      if (!options?.preserveLeases) collectionLeaseCounts.delete(collection);
+      if (!options?.preserveLeases) bridges.revokeLeases(collection);
       if (!options?.preservePin) pinnedCollections.delete(collection);
       const bridgePromise = bridges.get(collection);
       bridges.delete(collection);
@@ -936,7 +926,7 @@ export function createSyncRuntime({
         .map(normalizeCollectionName)
         .filter(Boolean))];
       const restartable = requested.filter((collection) => (
-        !isModuleDemandOnlyCollection(collection) || collectionLeaseCounts.get(collection) > 0
+        !isModuleDemandOnlyCollection(collection) || bridges.leaseCount(collection) > 0
       ));
       for (const collection of requested) {
         if (restartable.includes(collection)) continue;
@@ -1071,6 +1061,65 @@ export function createSyncRuntime({
       if (!suspendedCollections.size) suspensionReason = '';
       return this.restartCollections(requested);
     },
+    async readCollectionNativeDocument(collection, documentId, options = {}) {
+      if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      const normalized = normalizeCollectionName(collection);
+      if (!normalized) throw new Error('collection is required.');
+      const id = String(documentId || '').trim();
+      if (!id) throw new Error('documentId is required.');
+      const budgetMs = Math.max(250, Number(options.timeoutMs) || 15_000);
+      const startedAt = Date.now();
+      const remainingMs = () => Math.max(1, budgetMs - (Date.now() - startedAt));
+      const controller = typeof AbortController === 'function' ? new AbortController() : null;
+      nativeReadSequence = (nativeReadSequence + 1) % Number.MAX_SAFE_INTEGER;
+      const lease = await withRejectingTimeout(
+        () => this.leaseCollection(normalized, 'authoritative-native-read'),
+        remainingMs(),
+        `Native read lease for ${normalized} exceeded ${budgetMs}ms.`,
+      );
+      let timer = null;
+      try {
+        let bridge = lease.bridge;
+        if (!bridge?.state && bridge?.ready) {
+          bridge = await withRejectingTimeout(
+            () => bridge.ready,
+            remainingMs(),
+            `Native read bridge for ${normalized} exceeded ${budgetMs}ms.`,
+          );
+        }
+        const state = bridge?.state;
+        if (!state?.awaitQueryReady) {
+          throw new Error(`Native query readiness is unavailable for ${normalized}.`);
+        }
+        await state.awaitQueryReady(remainingMs());
+        const generation = state.collectionQueryGenerationToken?.(state.activeRemotePeerId);
+        if (!generation) throw new Error(`Native query generation is unavailable for ${normalized}.`);
+        const primaryPath = state.collection?.schema?.primaryPath || 'id';
+        const requireRevision = `authority:${normalized}:${id}:${nativeReadSequence}`;
+        const query = {
+          selector: { [primaryPath]: id },
+          requireRevision,
+        };
+        if (controller) query.signal = controller.signal;
+        const read = state.collection.findOne(query).exec();
+        timer = setTimeout(() => controller?.abort?.(), remainingMs());
+        const document = await read;
+        const currentBridge = lease.bridge;
+        if (currentBridge?.state !== state || state.cancelled) {
+          throw new Error(`Native read generation for ${normalized} was replaced.`);
+        }
+        const currentGeneration = state.collectionQueryGenerationToken?.(state.activeRemotePeerId);
+        if (!currentGeneration || currentGeneration !== generation) {
+          throw new Error(`Native read generation for ${normalized} changed.`);
+        }
+        return document;
+      } finally {
+        if (timer) clearTimeout(timer);
+        controller?.abort?.();
+        await lease.release().catch(() => {});
+      }
+    },
+
     async stop() {
       stopped = true;
       if (globalRestartTimer) clearTimeout(globalRestartTimer);
@@ -1096,20 +1145,9 @@ export function createSyncRuntime({
         activeCollections: [...activeCollections].sort(),
         bridgeCollections: [...bridges.keys()].sort(),
         pinnedCollections: [...pinnedCollections].sort(),
-        leaseCounts: Object.fromEntries([...collectionLeaseCounts.entries()].sort()),
+        leaseCounts: Object.fromEntries(bridges.leaseCounts().sort()),
       };
     },
-  };
-  const releaseCollectionLease = (collection) => {
-    const current = collectionLeaseCounts.get(collection) || 0;
-    const next = Math.max(0, current - 1);
-    if (next) {
-      collectionLeaseCounts.set(collection, next);
-    } else {
-      collectionLeaseCounts.delete(collection);
-    }
-    publishResourceBudget();
-    return next;
   };
   async function waitForLeadership(coordinator, timeoutMs) {
     const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
@@ -1434,7 +1472,12 @@ async function waitForStableNativePeerOpenState(state, collection, timeoutMs, st
   await withTimeout(Promise.resolve(state?.awaitInSync?.()).catch(() => undefined), 3000);
   await delay(stableMs);
   if (hasOpenNativePeerState(state)) return true;
-  throw createNativePeerOpenTimeoutEvent(collection, stableMs);
+  // The peer DID open — it dropped again inside the stability window. Reporting
+  // that as "did not open within 1000ms" sends the reader after a deadline that
+  // is not the problem: measured on thesen 09.09.2026, the open timeout is 60 s
+  // and was never reached, while the message read "within 1000ms" and cost an
+  // afternoon of looking at the wrong number.
+  throw createNativePeerUnstableEvent(collection, stableMs);
 }
 
 function hasOpenNativePeerState(state) {
@@ -1452,6 +1495,20 @@ function hasOpenNativePeerState(state) {
     }
   }
   return false;
+}
+
+function createNativePeerUnstableEvent(collection, stableMs) {
+  return {
+    name: 'CtoxWebRtcPeerLifecycleEvent',
+    code: 'peer_unstable_after_open',
+    phase: 'peer-reconnect',
+    severity: 'recoverable',
+    retryable: true,
+    lifecycle: true,
+    collection,
+    stableMs,
+    message: `WebRTC native peer for ${collection} opened and closed again within ${stableMs}ms; reconnect repair is scheduled.`,
+  };
 }
 
 function createNativePeerOpenTimeoutEvent(collection, timeoutMs) {
@@ -1541,6 +1598,7 @@ async function startWebRtcReplication({
   collection,
   recordCollection,
   capabilityTokenProvider,
+  onNativeQueryReady,
   onFatalPeerError,
   scheduleRestart,
 }) {
@@ -1699,6 +1757,9 @@ async function startWebRtcReplication({
           queryReady: demandOnly ? queryReady : true,
           reason: null,
         });
+        if (queryReady && typeof onNativeQueryReady === 'function') {
+          try { onNativeQueryReady(collection, info); } catch (error) { console.error(error); }
+        }
       },
     },
   });

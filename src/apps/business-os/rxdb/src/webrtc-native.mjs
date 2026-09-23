@@ -21,6 +21,7 @@
 // without admission/eviction (rtc-admission-removal-smoke), and the
 // SHELL_CRITICAL_COLLECTIONS pin (rtc-critical-pool-smoke).
 import { CtoxEventEmitter } from './event-target.mjs';
+import { InboundRequestQueue } from './inbound-request-queue.mjs';
 import { buildProtocolPayload, CTOX_RXDB_PROTOCOL } from './schema.mjs';
 import {
   CTOX_FRAME_PROTOCOL,
@@ -66,6 +67,7 @@ const STALLED_INCOMING_TRANSFER_TIMEOUT_MS = FRAME_ACK_TIMEOUT_MS * 3;
 // preserving normal multiplexed traffic headroom.
 const MAX_INCOMING_FRAME_TRANSFERS = 8;
 const MAX_INCOMING_FRAME_BUFFERED_BYTES = MAX_TRANSFER_BYTES * 4;
+const MAX_INBOUND_REQUESTS = 32;
 const FRAME_RESUME_TIMEOUT_MS = 1_000;
 const COMPLETED_FRAME_ACK_TTL_MS = 60_000;
 const RTC_HANDSHAKE_TIMEOUT_MS = 60_000;
@@ -197,6 +199,11 @@ export class CtoxWebRtcNativePeer {
     // assigns a separate ephemeral peer id in init.yourPeerId.
     this.localSignalingPeerId = '';
     this.connections = new Map();
+    this.inboundRequests = new InboundRequestQueue({
+      maxCount: MAX_INBOUND_REQUESTS,
+      maxBytes: MAX_INCOMING_FRAME_BUFFERED_BYTES,
+      onError: (error) => this.events.emit('error', serializeFrameError(error, 'inbound-request')),
+    });
     // label -> { label, options }. A standing subscription, not a one-shot:
     // survives reconnects and is replayed onto every new PeerConnection.
     this.auxChannelRegistrations = new Map();
@@ -1255,10 +1262,16 @@ export class CtoxWebRtcNativePeer {
       this.attachAuxChannel(connection, channel);
       return;
     }
+    this.inboundRequests.cancel(connection.inboundRequestOwner);
+    connection.inboundRequestOwner = {};
     connection.channel = channel;
     connection.inboundFrameGeneration = Number(connection.inboundFrameGeneration || 0) + 1;
     connection.inboundFrameChain = Promise.resolve();
+    const isCurrentChannel = () => !this.closed
+      && this.connections.get(connection.remotePeerId) === connection
+      && connection.channel === channel;
     channel.onopen = () => {
+      if (!isCurrentChannel()) return;
       if (connection.handshakeTimer) {
         clearTimeout(connection.handshakeTimer);
         connection.handshakeTimer = null;
@@ -1277,11 +1290,13 @@ export class CtoxWebRtcNativePeer {
       this.enqueueInboundDataChannelFrame(connection, channel, payload);
     };
     channel.onerror = () => {
+      if (!isCurrentChannel()) return;
       connection.lastError = { code: 'ctox_data_channel_error', peerId: connection.remotePeerId };
       this.recordConnectionEvent(connection, 'datachannel-error', { readyState: channel.readyState || '' });
       this.events.emit('error', connection.lastError);
     };
     channel.onclose = () => {
+      if (!isCurrentChannel()) return;
       this.recordConnectionEvent(connection, 'datachannel-close', { readyState: channel.readyState || 'closed' });
       this.removeConnection(connection.remotePeerId, 'channel-close');
     };
@@ -1370,25 +1385,39 @@ export class CtoxWebRtcNativePeer {
       return;
     }
     if (payload?.id && payload.method) {
+      this.enqueueInboundRequest(peerId, payload);
+    }
+  }
+
+  enqueueInboundRequest(peerId, payload) {
+    const connection = this.connections.get(peerId);
+    if (!connection || this.closed) return;
+    const owner = connection.inboundRequestOwner ||= {};
+    const isCurrent = () => !this.closed
+      && this.connections.get(peerId) === connection
+      && connection.inboundRequestOwner === owner;
+    const respond = (result, error) => {
+      if (!isCurrent()) return;
+      const response = { id: payload.id, result, error };
+      if (payload.collection) response.collection = payload.collection;
+      this.send(peerId, response);
+    };
+    const admitted = this.inboundRequests.enqueue(owner, encodedSize(JSON.stringify(payload)), async (signal) => {
+      if (!isCurrent() || signal.aborted) return;
       try {
-        const result = await this.handleRequest(
-          peerId,
-          payload.method,
-          payload.params || [],
-          payload.collection || null,
-        );
-        // Echo the routing collection back so a multiplexing remote can
-        // correlate without relying solely on the request-id map.
-        const response = { id: payload.id, result, error: null };
-        if (payload.collection) response.collection = payload.collection;
-        this.send(peerId, response);
+        const result = await this.handleRequest(peerId, payload.method, payload.params || [], payload.collection || null, signal);
+        respond(result, null);
       } catch (error) {
+        if (!isCurrent() || signal.aborted) return;
         const normalized = serializeFrameError(error, payload.method);
         this.events.emit('error', normalized);
-        const response = { id: payload.id, result: null, error: normalized };
-        if (payload.collection) response.collection = payload.collection;
-        this.send(peerId, response);
+        respond(null, normalized);
       }
+    });
+    if (!admitted) {
+      const error = { code: 'ctox_webrtc_inbound_request_budget_exceeded', method: payload.method, retryable: true };
+      this.events.emit('error', error);
+      respond(null, error);
     }
   }
 
@@ -1656,19 +1685,19 @@ export class CtoxWebRtcNativePeer {
     }
   }
 
-  async handleRequest(peerId, method, params, collection = null) {
+  async handleRequest(peerId, method, params, collection = null, signal = null) {
     this.recordObservedRequest(peerId, method);
     if (method === 'token') {
       return this.options.storageToken;
     }
     if (method === 'ctoxProtocol') {
-      return this.protocolPayload(peerId, params, collection);
+      return this.protocolPayload(peerId, params, collection, signal);
     }
     const handler = this.options.requestHandlers?.[method];
     if (typeof handler === 'function') {
       // Phase 3 multiplex: pass the frame's collection so a shared peer can
       // route `masterChangesSince` / `masterWrite` to the right collection.
-      return handler({ peerId, params, collection, peer: this });
+      return handler({ peerId, params, collection, peer: this, signal });
     }
     return {
       code: 'ctox_unknown_webrtc_method',
@@ -1712,9 +1741,9 @@ export class CtoxWebRtcNativePeer {
     });
   }
 
-  async protocolPayload(peerId, params = [], collection = null) {
+  async protocolPayload(peerId, params = [], collection = null, signal = null) {
     if (typeof this.options.protocolPayload === 'function') {
-      return this.options.protocolPayload({ peerId, params, collection, peer: this });
+      return this.options.protocolPayload({ peerId, params, collection, peer: this, signal });
     }
     return buildProtocolPayload({
       role: this.options.role,
@@ -1791,6 +1820,8 @@ export class CtoxWebRtcNativePeer {
     }
     connection.auxChannels.set(label, channel);
     channel.onmessage = (event) => {
+      if (this.closed || this.connections.get(connection.remotePeerId) !== connection
+        || connection.auxChannels?.get(label) !== channel) return;
       this.handleAuxiliaryChannelMessage(connection, label, event.data).catch((error) => {
         this.events.emit("error", { code: "ctox_aux_message_failed", label, error });
       });
@@ -1906,6 +1937,8 @@ export class CtoxWebRtcNativePeer {
     const connection = this.connections.get(peerId);
     if (!connection) return;
     this.connections.delete(peerId);
+    this.inboundRequests.cancel(connection.inboundRequestOwner);
+    connection.inboundRequestOwner = null;
     connection.inboundFrameGeneration = Number(connection.inboundFrameGeneration || 0) + 1;
     connection.inboundFrameChain = null;
     if (connection.channel) connection.channel.onmessage = null;
@@ -2779,6 +2812,7 @@ export const webrtcNativeTestInternals = Object.freeze({
   classifySendPriority,
   MAX_SERIALIZED_FRAME_BYTES,
   MAX_INCOMING_FRAME_TRANSFERS,
+  MAX_INBOUND_REQUESTS,
   MAX_INCOMING_FRAME_BUFFERED_BYTES,
 });
 

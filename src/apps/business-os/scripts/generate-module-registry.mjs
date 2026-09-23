@@ -118,7 +118,7 @@ function registryEntry(manifest) {
   const icon = selectedIcons.get(manifest.id);
   if (icon) {
     entry.layout = {
-      ...entry.layout,
+      ...(entry.layout && typeof entry.layout === 'object' ? entry.layout : {}),
       icon_asset: icon.renderAsset,
       icon_asset_sha256: icon.renderSha256,
       icon_selection_sha256: icon.sha256,

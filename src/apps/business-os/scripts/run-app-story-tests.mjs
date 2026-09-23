@@ -45,6 +45,12 @@ const report = {
   started_at: startedAt,
   ended_at: endedAt,
   ok: run.status === 0 && apps.length === inventory.sourceApps.length && missing.length === 0,
+  process: {
+    exit_code: run.status,
+    signal: run.signal || null,
+    error_code: run.error?.code || null,
+    error_message: run.error?.message || null,
+  },
   source_app_count: apps.length,
   system_app_count: inventory.coreApps.length,
   test_file_count: testFiles.length,
@@ -62,7 +68,12 @@ process.stdout.write(stdout);
 process.stderr.write(stderr);
 console.log(`Business OS app story tests: ${apps.length}/${inventory.sourceApps.length} apps, ${testFiles.length} test files, ${summary.pass ?? '?'} passed.`);
 console.log(`Report: ${outputPath}`);
-if (!report.ok) process.exit(run.status || 1);
+if (!report.ok) {
+  console.error('Business OS app story process failed:', JSON.stringify(report.process));
+  // stdout/stderr may still be flushing to CI pipes. Immediate exit drops the
+  // trailing failure and summary, making the failing story impossible to locate.
+  process.exitCode = run.status || 1;
+}
 
 function walk(root, out = []) {
   if (!existsSync(root)) return out;

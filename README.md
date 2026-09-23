@@ -85,10 +85,18 @@ ctox chat "Check this CTOX installation and summarize what is configured."
 
 ```mermaid
 flowchart LR
-  Browser["Browser Business OS<br/>CTOX Sync Engine / IndexedDB"] -- "WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/ctox.sqlite3"]
+  Browser["Browser Business OS<br/>CTOX Sync Engine / IndexedDB"] -- "WebRTC collections" --> CTOX["CTOX Rust daemon<br/>rxdb-rs<br/>runtime/business-os-rxdb.sqlite3"]
   Browser -. "join room" .-> Signaling["Signaling server<br/>room password pairing"]
   CTOX -. "join room" .-> Signaling
 ```
+
+The replicated document store is `runtime/business-os-rxdb.sqlite3`.
+Canonical execution state, command lifecycle and the command-to-queue link live
+in `runtime/ctox.sqlite3`; Business OS domain persistence uses
+`runtime/business-os.sqlite3`. These files have separate transactions. Their
+presence does not imply atomic commits across stores; see the
+[command ownership and migration contract](HARNESS.md#business-os-command-architecture)
+and the [CTOX Sync persistence documentation](docs/ctox-rxdb.md).
 
 The daemon loop:
 

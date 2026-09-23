@@ -61,6 +61,7 @@ where
         let provider_root = root.to_path_buf();
         let provider_config = config.clone();
         let options = NativeSyncOptions {
+            local_session_provider: None,
             peer_role: match config.local {
                 HostMember::Voter { .. } => NativePeerRole::CtoxInstance,
                 HostMember::Worker { .. } => NativePeerRole::WorkjetExecutor,

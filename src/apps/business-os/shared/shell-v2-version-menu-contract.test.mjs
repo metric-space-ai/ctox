@@ -31,9 +31,19 @@ assert.match(appSource, /'code-editor': \[[\s\S]*?'business_module_commits'[\s\S
 assert.match(appSource, /maintenanceRemountModuleId = mod\.id/);
 assert.match(appSource, /if \(wasActive\) resumeMaintenanceInterruptedModuleMount\(\)/);
 assert.match(appSource, /mod\.id === 'desktop' && state\.maintenance\?\.active[\s\S]*?assertMaintenanceWriteAllowed\('desktop'\)/);
+// The clock widget paints once while mounting, but its second-tick must not run
+// behind a desktop that never finished: `ensureIcons` can reject during
+// maintenance. The timer therefore lives in `startClockTimer`, which is called
+// after the persistence step. Comparing the raw `setInterval` position instead
+// measured where the closure is *written*, not when it runs.
+assert.match(
+  desktopSource,
+  /startClockTimer = \(\) => \{\s*const clockInterval = setInterval\(updateClock, 1000\);/,
+  'the desktop clock timer is created inside startClockTimer',
+);
 assert.ok(
   desktopSource.indexOf('await ensureIcons(iconsCollection, launcher);')
-    < desktopSource.indexOf('const clockInterval = setInterval(updateClock, 1000);'),
+    < desktopSource.indexOf('startClockTimer?.();'),
   'desktop timers start only after maintenance-sensitive icon persistence succeeds',
 );
 assert.doesNotMatch(appSource, /<div><span>Knowledge<\/span>/);

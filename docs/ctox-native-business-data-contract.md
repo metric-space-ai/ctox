@@ -1,0 +1,382 @@
+# Native BusinessData integration contract
+
+Status: implementation boundary agreed with the Workjet consumer on 2026-09-09.
+This document specifies the remaining integration; it is not a declaration that
+an application client, production Workjet resolver or resumable subscription is
+available. A native Open/Status/Close lifecycle service and a reusable trusted
+host seam now exist; scoped query/watch/command execution remains outstanding.
+
+## Generated host-consumer API
+
+The logical request/response/event contract is now defined once in
+`src/core/rxdb/tests/fixtures/ctox_business_data_contract.json`. Generate its Rust,
+TypeScript and Effect schemas with the existing generator:
+
+```sh
+node src/core/sync/tools/generate-contracts.mjs --business-data
+node src/core/sync/tools/generate-contracts.mjs --business-data --check
+node src/core/sync/tools/generate-contracts.mjs --business-data --workjet-root /absolute/workjet/checkout
+```
+
+Rust exports `business_data_contract`; TypeScript lives in
+`src/core/sync/contracts/ctox-business-data.generated.ts` and its schema sibling.
+The Workjet destinations are `ctoxBusinessData.generated.ts` and
+`ctoxBusinessData.schema.generated.ts` inside its existing contracts package.
+Authority generation and its consumer pin are unchanged by this option.
+
+`NativeBusinessDataRequest` covers saved-target open, status/close, scoped query,
+watch/unwatch, submitCommand and observeCommand. `NativeBusinessDataResponse`
+returns session state, bounded pages, subscription references or command state.
+`NativeBusinessDataEvent` binds every subscription event to a native handle,
+generation and sequence, with SnapshotStart/Page/End, recovery vs live deltas,
+CaughtUp, Reset, Revoked and command outcomes. JSON business payloads remain
+unknown at the TypeScript boundary and require their existing domain validation.
+
+The native `business_data::decode_request` checks input shape and budgets. It
+does not resolve a target, authenticate a session, authorize a selector, confirm
+a command or mint a cursor. The generated types are an integration contract;
+there is not yet an operational application client. Their binding must reuse the
+native private IPC lifecycle, retain bounded frame assembly/backpressure and
+preserve authority framing limits. No new endpoint or transport is introduced by
+the decoder. A completed page, native ready state or SnapshotEnd must not be
+fabricated from shape validation alone.
+
+## Trusted native lifecycle service
+
+`BusinessDataService` is a connection-scoped dispatcher for the private
+`BusinessDataIpc` factory. `BusinessDataServiceDispatcher::dispatch` implements
+`Open`, `Status` and `Close`; all query, watch, command and unwatch operations
+return explicit `Unsupported` or `UnknownSession` failures without exposing
+data. One dispatcher owns one random opaque handle table and credential
+requester, so concurrent private clients cannot share a handle or lease.
+
+The host implements `BusinessDataSessionHost`. For a renderer-selected target
+ID it asynchronously supplies:
+
+* independently enrolled `public_identity` and `instance_id`;
+* the host-local `account_epoch`, which is distinct from the server principal's
+  `authorization_epoch`;
+* the current authenticated principal;
+* query-only `NativeSyncOptions` with no local session provider.
+
+The service installs the sole local session provider. Bring-up is launched as a
+connection-owned task only after its Connecting handle is registered;
+disconnect or host shutdown therefore awaits that task and its successful
+transport before returning. The native startup boundary remains bounded by the
+host-supplied bring-up deadline, followed by the same five-second owned-cleanup
+budget. After the existing channel-bound source proof, the service rechecks
+that the saved target and epoch are current before exposing the credential
+challenge. It then waits for reciprocal peer readiness, performs a second
+ready-channel proof, and accepts `Ready` only when the independently pinned
+key/instance and attested principal equal the host's current values.
+Target/account/principal changes are checked on every `Status`; a mismatch
+revokes the session and runs bounded shutdown.
+
+`Close` removes the exact handle/generation and awaits session cleanup. Cleanup
+has a five-second deadline; startup failure drains before the response, while
+startup cancellation first awaits the bounded startup task and then drains any
+successful transport. A timeout returns `LimitExceeded`, never a successful
+close. Disconnect first cancels pending lifecycle work, then the private IPC
+service awaits dispatcher shutdown. Concurrent opens each receive a fresh
+handle and own a separate native transport and credentials.
+
+This service does not add a saved-target store, policy store or Workjet
+bootstrap. It also does not authorize scoped selectors or provide subscription
+or command execution.
+
+
+## Private host credential callback
+
+The same fixture now generates NativeBusinessDataHostFrame plus credential
+challenge/reply shapes. A challenge is bound to requestId, connectionId,
+targetId and the captured account sessionEpoch. Only the native owner may send
+it, after verifying NativeSessionTarget on that same live channel. Replies must
+match the pending request, connection and epoch; unsolicited or late replies
+must never supply credentials to another session. Missing capability is failure,
+not anonymous fallback. Nonce/public coordinates/signature retain the existing
+ctox-device-proof-v1 encoding. These are private host messages, never renderer
+IPC, collection records or network control endpoints.
+
+CredentialReply and its containing HostFrame omit Rust Debug through the
+existing sensitiveTypes generator option, now also respected for unions.
+No frame budget or Authority protocol changes are implied. credential_ipc.rs now
+provides connection-owned bounded correlation (two pending requests, twenty-second
+deadline), owner-drop cancellation, strict response matching and bounded four-byte
+length-prefixed frame helpers. Serialization refuses oversized frames without
+allocating an unbounded output buffer; parse errors omit token-bearing input.
+business_data_ipc.rs now implements IpcService with a per-connection dispatcher
+factory, bounded inbound/event queues and four in-flight operations. Credential
+replies remain readable while dispatch waits; partial reads are not discarded
+when another event completes. All work is polled inside the service future, with
+no detached tasks, so closing/cancelling the stream drops pending work and its
+credential owner. Idle streams wait without a timeout; a started frame retains
+the twenty-second deadline. NativeSessionTarget::with_ipc_credentials now binds
+the requester to one exact WebRTCRsConnection plus host-owned connection ID,
+saved target ID and account epoch. Existing source proof remains ahead of that
+callback. The real WebRTC credential tests use this correlated channel, including
+wrong source pin and revocation cases; their runtime result is still pending.
+The operational Open/Status/Close lifecycle uses this resolver seam; the
+application bootstrap remains outstanding. Seven targeted tests cover framing,
+correlation, timeout and teardown, and the new real WebRTC/private-IPC lifecycle
+fixtures exercise ready, status, unsupported operations, bounded close, live
+saved-target/principal invalidation, and disconnect while connection-owned Open
+startup is pending.
+Workjet binds the generated callback to a host-owned credential lease and
+validates target/connection/epoch before reading or signing; this is not yet a
+running native service.
+
+## Existing implementation and reuse boundary
+
+- `NativeSyncSession::start_data_client` selects a query-only consumer using
+  the existing `browser`/replica wire role. It requires deferred credentials
+  and empty replicated collections. `connect_data_peer` offers from the client
+  to a currently advertised `ctox_instance`, even when its signaling ID sorts
+  after the server. The signaling descriptor must confirm this client's own
+  browser admission; absent or incompatible descriptors fail explicitly.
+  This reuses the existing offer and DataChannel implementation, not execution
+  membership or a second protocol. The client never becomes replication master
+  and cannot attach an execution group or call the execution connector.
+  Native servers retain passive browser behavior and execution peers retain
+  their lower-ID offer rule. Target proof still precedes credential release.
+  The host provides the existing browser-admitted data-room configuration and
+  awaits session shutdown. Data-client start installs owned discovery before
+  room join: at most eight advertised CTOX candidates and three connection
+  attempts per route/local signaling identity, with bounded calls and retry
+  delays. It has no idle timer once connected or exhausted, and shutdown aborts
+  and awaits its task before closing the pool. A terminal discovery failure
+  closes the transport. Source verification still belongs to NativeSessionTarget.
+  The checked signaling source includes each recipient in Joined peer summaries;
+  deployment compatibility still requires real-service verification.
+  Saved-target configuration, local BusinessData dispatch and Desktop bootstrap
+  remain outstanding. Added
+  real WebRTC tests exercise client-initiated reads/revocation and wrong target
+  pins; their CI result must be checked before treating this increment as accepted.
+
+- `src/core/sync/src/native.rs` owns the native transport session and now exposes
+  `query_page`. `query_fetch_client.rs` in the RxDB crate consumes the existing
+  `rxdb.query.fetch` acknowledgement/chunk/cancel protocol. It requires reciprocal
+  peer admission, bounds a page to 200 documents and 2 MiB, and discards incomplete
+  responses. This is the read primitive, not a logged-in Workjet data session.
+- `src/core/sync/src/ipc.rs` and `local_host.rs` currently serve execution
+  authority through `IpcService` and the shared `LocalIpcHost`. The local host
+  accepts a connection-scoped service without requiring an execution node;
+  `start_authority` installs the existing authority dispatcher on that same host.
+  All callers use this lifecycle; the former `LocalAuthorityHost` type is removed.
+  Private socket ownership, same-user check and supervised teardown are preserved.
+  The service future owns its stream and pending work; shutdown cancels and drains
+  all connection futures before releasing the endpoint. The existing 64 KiB authority frame
+  limit cannot silently carry a 2 MiB BusinessData page. A business stream needs
+  explicitly bounded frames and flow control; do not raise authority limits as
+  an incidental change or open a second HTTP/TCP data service.
+- `src/core/sync/tools/generate-contracts.mjs` generates Rust and TypeScript wire
+  types from the RxDB fixtures. Extend this single generation mechanism when the
+  BusinessData protocol is implemented. Do not hand-author competing Workjet DTOs.
+- The native `validate_device_bound_peer_session` in
+  `src/core/business_os/rxdb_peer.rs` validates incoming capabilities and device
+  proofs. A tokenless peer can complete a least-privilege handshake; collection
+  policy still restricts its reads. Consequently pool readiness alone is not a
+  proof of the current user, the chosen target instance, or a usable data grant.
+- The existing browser-live RPC in `rxdb_peer_browser.rs` carries Browser app
+  input/frame exchanges. It is not a generic collection subscription API.
+
+Workjet owns its host consumer and Web/Mobile presentation. The Sync core owns
+native session authorization, remote data access and the local IPC contract.
+The existing Project/Computer guest bridge remains a removal candidate until
+native parity and real UI acceptance are proved. New Coding UI data access must
+not depend permanently on `state.db` in a warm Business OS guest.
+
+## Source proof and principal lookup
+
+`NativeSyncSession::start_with_pool_setup` installs host-owned handlers and file
+sources before joining the signaling room. Business OS uses this boundary for
+identity, browser-live, device and lookup requests plus demand file sources.
+Setup rejection or panic tears down the transport through the existing lifecycle;
+the peer must not advertise partial readiness. The callback only registers host
+resources and must not block or launch independent workers. This closes the
+post-join registration race; it does not bypass peer or session authorization.
+
+The generated contract now includes `NativeBusinessDataIdentityRequest` and
+`NativeBusinessDataPeerIdentity`, served by `ctox.business_data.identity.v1` on
+the existing RxDB/WebRTC auxiliary channel. The server signs the fresh 32-byte
+hex challenge, its configured instance ID and optional current principal using
+the already provisioned native Sync Ed25519 identity. Missing keys fail explicitly;
+this read never creates or rotates a signing key. Anonymous requests receive no
+principal. Invalid/revoked nonempty credentials fail rather than falling back to
+an anonymous principal. Current user, authorization epoch and device binding come
+from the existing verified-capability store path, never request fields.
+
+Proofs also bind the established DTLS channel: `channelBinding` is SHA-256 of
+`ctox.sync.dtls-channel.v1` plus NUL followed by the two lexicographically sorted
+32-byte certificate fingerprints from the current local and remote SDP. Both
+endpoints derive this locally after the DataChannel opens. SHA-256 fingerprints
+must be present and unambiguous; pending descriptions and caller-provided binding
+values are not accepted. A genuine signed nonce relayed over another channel must
+fail verification. The signature covers this binding along with the principal.
+
+The signature domain is `ctox.sync.business-data.identity.v1` followed by NUL,
+then UTF-8 JSON with recursively sorted object keys and the signature field
+omitted. `NativeSyncSession::peer_identity_proof` checks the current connection,
+fresh challenge, locally derived channel binding, expected instance ID and
+independently pinned public identity.
+It bounds the exchange and response size and cancels with the native session.
+It does not create a ready BusinessData session or grant collection access.
+
+The public identity in the response is NOT a trust source. Workjet must obtain
+its pin through authenticated provisioning, confirmed enrollment or SSH, before
+releasing credentials. Its currently inspected saved targets contain logical
+instance IDs and signaling token hashes, not a proven source-key pin. Trusted key
+provisioning and the operational current-account data-handle service remain missing.
+
+`NativeSyncOptions.local_session_provider` now resolves a `NativeSessionTarget`:
+independently enrolled `public_identity`, expected `instance_id` and a deferred
+credential callback bound to that same target/account. The resolver must not read
+a bearer or sign a remote nonce. The core checks the current peer/lifetime,
+verifies a fresh channel-bound source proof, rechecks admission, and only then
+invokes credentials. The host callback must recheck its current account epoch;
+reconnection repeats target resolution and proof. Failure cannot fall back to an
+anonymous credential exchange. A weak pool reference avoids a provider/lifecycle
+ownership cycle. The original direct native credential-provider path is replaced.
+
+The existing request registry explicitly admits public `ctox.*.identity.v1`
+responders before session authentication, still behind the current peer filter.
+Protocol, collection, file and authority methods cannot register in this category.
+An unaccepted peer's identity request receives no cached capability and does not
+mark either handshake direction authenticated. Business OS installs its responder
+before room join; the same signed proof reader is reused before and after login.
+The standalone reader still requires reciprocal readiness for principal lookup.
+
+This native ordering is implemented but requires current CI acceptance. Its real
+WebRTC fixture uses independently generated fixture keys and asserts zero credential
+or signature callbacks for a wrong key/instance. It does not certify Workjet SSH/QR
+key enrollment or account-transition integration. Public source proof alone grants
+no collection access or ready data handle.
+
+## Session and identity
+
+The host resolves and authenticates the target instance and current user before
+issuing a ready session. The renderer selects an existing authorized target; it
+cannot supply an actor, bearer token, private key or trusted peer identity.
+An opaque session handle and never-reused generation identify that binding.
+Resolving, ready, disconnected and revoked are distinct observable states.
+
+Each query, subscription and command status observation belongs to the handle and
+generation. Switching instance/user closes old watches and invalidates in-flight
+results before exposing the new session. Reconnection rechecks authorization.
+Neither the signaling role nor the advertised room is sufficient target proof.
+Workjet's main-process AccountLifecycle initially awaits native authority, so
+credential admission cannot require its `isCurrent` ready predicate. The main
+owner first registers an invalidator (registration fails during invalidation),
+then captures the local epoch synchronously. A deferred credential callback checks
+that epoch and the attempt's retired state. Only confirmed native target/principal
+authority may call `confirmSession`; publishing data additionally requires
+`isCurrent`. Invalidation must await cancellation of the pending Open and disposal
+of any late handle before resolving. This describes the required handoff; the
+generic IPC service host does not itself implement Open or this account barrier.
+The production native target-proof and credential provisioning path is still
+required; the native credential test fixture does not establish it.
+
+## Query, snapshot and subscription
+
+Requests specify a permitted collection, project/thread scope, supported ordering
+and bounded page size. Native policy narrows the request and checks every read;
+client-side filtering is presentation, never authorization. Initial consumers
+need projects, working copies, computers, project chats, project workers, profile
+bindings, public crew projections, selected threads/messages, sessions/transfers
+and relevant command outcomes. They do not need whole-database renderer copies.
+
+Subscription ordering is normative for the first consumer:
+
+- The subscribed response is delivered before any event for that subscription.
+- A fresh watch delivers snapshotStart, zero or more snapshotPage events,
+  snapshotEnd, then caughtUp. Only caughtUp enters live state; snapshotEnd alone
+  completes the snapshot payload and does not assert that recovery is complete.
+- A valid resume delivers zero or more upsert/remove events with recovery=true,
+  then caughtUp. New live upsert/remove events have recovery=false and follow it.
+- A reset invalidates the prior view and cursor, then starts a fresh snapshot on
+  the same subscription. Revoked and error are terminal for that subscription;
+  reconnect requires a newly authorized subscription.
+- Sequence starts at 1 and increases by exactly one across every event, including
+  reset, for the lifetime of a subscription. Gaps or reordered events invalidate
+  the local view and require recovery; a replacement subscription starts at 1.
+
+Every event carries the session handle/generation and subscription ID. Snapshot
+IDs identify one snapshot of one query in one collection. The first version does
+not provide a shared source boundary across collections. Project chats and their
+members therefore remain independently synchronized views; consumers must show
+incomplete reconciliation instead of presenting them as one atomic snapshot.
+Partial snapshots remain visibly incomplete. Cursors are opaque and bound to the
+session authorization, collection and query; clients cannot compare cursor text
+or infer a source revision from it.
+
+The storage trait now exposes `query_snapshot_stream_into_blocking`. SQLite
+implements it with a dedicated read transaction: the first read pins the existing
+transactional collection change counter, then document batches use the same
+transaction. Internal Start/Documents/End events let cancellation or read failure
+finish without falsely completing a snapshot. The callback must run on a blocking
+worker with bounded delivery and byte/time budgets supplied by the data service.
+This primitive does not change the existing query-fetch wire or provide a watch.
+
+The counter is source-local and is NOT a durable resume token. Collection
+recreation, restored databases and a new source incarnation require a new epoch.
+The service must bind the counter to authenticated source/schema/query identity
+and still implement change retention, delivery and reset on unavailable history.
+The existing trigger counter records changes including physical deletion and
+writes with older timestamps, but it does not retain their document history.
+
+The older `query_stream_on_dedicated_connection` and
+`replication_checkpoint_status` remain separate reads. Combining those two calls
+does not establish a consistent snapshot plus resume boundary. Unsupported
+storage backends return no snapshot implementation; callers must reject the
+operation instead of manufacturing a boundary from those separate reads.
+
+The current query-fetch handler sets `authoritativeRevision` to the caller's
+`query_fingerprint`. This value describes the query, not source data. It must
+never become a snapshot revision or resume token. Until the storage/transport
+boundary is implemented, `query_page` provides a completed bounded read only.
+
+A valid resume delivers recovery deltas before new live events. An expired,
+unavailable or unauthorized cursor produces an explicit reset and fresh
+snapshot. Buffer overflow and missed events also reset; they never silently
+skip ahead. Removed records must yield remove events, including records that
+leave an authorized query because their scope or policy changed. Revocation
+invalidates data visibility and ends the subscription.
+
+Cancellation is owned by the existing native session lifecycle. A slow renderer
+gets bounded backpressure or a visible reset/error, not an unbounded queue or
+another polling supervisor. Mobile suspend persists only the necessary resume
+reference and reauthenticates before resume; it cannot preserve a stale grant.
+
+## Commands
+
+Reuse the existing typed BusinessCommand and its durable command ID. The host
+checks current actor, target scope and command policy before submission. The
+initial consumer needs the existing project/chat/profile commands, then message
+and execution operations through the same contract.
+
+Pending, completed, failed and unknown outcome must remain distinct. Disconnect
+or timeout preserves the command ID and reports uncertainty; it cannot imply
+failure or generate a new business action on retry. Observe only relevant command
+IDs. Existing domain receipts and native result recovery remain authoritative;
+IPC must not create another journal of business truth.
+
+## Integration and removal gates
+
+1. Generate one Rust/TypeScript contract and exercise real native dispatch,
+   malformed/oversized frames, cancellation and generation replacement.
+2. Prove target authentication and current policy against the real Business OS
+   host, including a ready but tokenless peer, wrong instance, revoked identity
+   and changed user. Renderer-provided identities must be rejected.
+3. Exercise writes and removals during snapshot paging, live delivery and resume;
+   source restart, missed events, slow consumers and expired cursors must produce
+   complete recovery or explicit reset. Test concurrent collection changes.
+4. Wire the actual Workjet consumer. Test Desktop and Mobile project/group-chat
+   UI, instance switching, suspend/resume and stable command outcomes. Measure
+   click-to-chat presentation separately from authoritative command completion.
+5. Run existing host budgets (warm command p50 < 300 ms; critical boot p95 < 5 s)
+   and separately measure snapshot/resume under realistic data size and WAN.
+6. Remove replaced guest data calls and their retry/status repair paths after
+   parity; retain only genuine Business OS shell consumers. Add removal guards.
+
+Passing native query tests or a presentation-model test alone satisfies none of
+these complete integration gates. This work also does not certify SSH/QR worker
+admission, harness checkpoint portability or automatic execution failover.

@@ -39,7 +39,7 @@ fn load_config(root: &Path) -> Result<Option<HostConfiguration>> {
 fn configuration(root: &Path) -> Result<HostConfiguration> {
     load_config(root)?.context("native Sync host is not configured")
 }
-fn key(root: &Path) -> Result<Arc<SigningIdentity>> {
+pub(super) fn key(root: &Path) -> Result<Arc<SigningIdentity>> {
     let encoded = crate::secrets::read_secret_value(root, SECRET_SCOPE, IDENTITY_SECRET)
         .map_err(|_| anyhow::anyhow!("native Sync identity is unavailable in the secret store"))?;
     #[derive(Deserialize)]

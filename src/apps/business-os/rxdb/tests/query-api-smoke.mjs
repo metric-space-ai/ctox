@@ -1,4 +1,5 @@
 import { createRxDatabase, ctoxRxdbTestInternals } from '../dist/ctox-rxdb-js.mjs';
+import { readFile } from "node:fs/promises";
 
 const {
   matchesSelector,
@@ -175,6 +176,49 @@ assert(retryStorage.stats.queryCalls === 3, `collection.$ must retry queue backp
 assert(retryEmissions[0].documents[0].id === 'retry-a', 'collection.$ retry must eventually emit the initial snapshot');
 retrySub.unsubscribe();
 await retryDb.close();
+
+// Actual collection observable: committed changes must remain available to an
+// opt-in invalidation listener while its initial demand snapshot is pending.
+const pendingStorage = createLiveStorage([{id:'harness',paused:false}]);
+const pendingDb = await createRxDatabase({name:'pending-initial-status',storage:{nativeStorage:{collection:()=>pendingStorage,close(){}}}});
+await pendingDb.addCollections({ctox_harness_status:{schema:{version:0,primaryKey:'id',type:'object',properties:{id:{type:'string'},paused:{type:'boolean'}}}}});
+const pendingCollection = pendingDb.ctox_harness_status;
+let releaseInitial;
+const initialDemand = new Promise(resolve => {releaseInitial = resolve;});
+pendingCollection.setDemandLoader({resolveQuery: () => initialDemand});
+const earlyChanges = [];
+const defaultSnapshots = [];
+const shellSource = await readFile(new URL("../../app.js", import.meta.url), "utf8");
+const shellFunction = name => {
+  const start = shellSource.indexOf(`function ${name}(`);
+  assert(start >= 0, `missing actual shell function ${name}`);
+  const end = shellSource.indexOf("\nfunction ", start + 1);
+  return shellSource.slice(start, end);
+};
+const shellState = {db:{collection: name => name === "ctox_harness_status" ? pendingCollection : null},maintenance:{active:false}};
+const makeScopedFacade = new Function("state", `${shellFunction("maintenanceReadOnlyCollection")}\n${shellFunction("createScopedSystemDbFacade")}\nreturn createScopedSystemDbFacade;`)(shellState);
+const scoped = makeScopedFacade("module:ctox", ["ctox_harness_status"]);
+assert(scoped.collection("business_users") === null, "shell scope must retain denied collections");
+assert(scoped.collection("ctox_harness_status") === pendingCollection, "normal shell scope must preserve the actual collection handle");
+const pendingSub = scoped.collection("ctox_harness_status").$.subscribe(event => earlyChanges.push(event), {emitPendingChanges:true});
+const defaultPendingSub = pendingCollection.$.subscribe(event => defaultSnapshots.push(event));
+pendingStorage.emitChange({harness:{id:'harness',paused:true}});
+await waitFor(() => earlyChanges.length === 1);
+assert(earlyChanges[0].initialPending === true, 'early change must explicitly retain pending initialization');
+assert(!Object.hasOwn(earlyChanges[0], 'documents'), 'early change must not masquerade as a complete/empty snapshot');
+assert(earlyChanges[0].changedDocuments[0].toJSON().paused === true, 'committed status delta must arrive before initial demand completes');
+assert(defaultSnapshots.length === 0, 'default snapshot subscribers must still wait for initialization');
+releaseInitial([{id:'harness',paused:false}]);
+await waitFor(() => defaultSnapshots.length === 1 && earlyChanges.length === 2);
+assert(defaultSnapshots[0].documents[0].toJSON().paused === true, 'initial snapshot must overlay changes committed during its read');
+assert(earlyChanges[1].documents[0].toJSON().paused === true, 'opt-in listener must eventually receive full reconciled snapshot');
+pendingStorage.emitChange({harness:{id:'harness',paused:false}});
+await waitFor(() => earlyChanges.length === 3 && defaultSnapshots.length === 2);
+assert(earlyChanges[2].documents[0].toJSON().paused === false, 'after initialization the opt-in subscription must use normal full snapshots');
+assert(!Object.hasOwn(earlyChanges[2], 'initialPending'), 'normal snapshots must not remain pending');
+pendingSub.unsubscribe();
+defaultPendingSub.unsubscribe();
+await pendingDb.close();
 
 const findOneEmissions = [];
 const findOneSub = liveDb.live_items.findOne('a').$.subscribe((value) => {

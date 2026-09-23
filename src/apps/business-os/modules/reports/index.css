@@ -245,6 +245,7 @@
    Canonical grammar rows (filterbar, tray, counted band, well, footers) +
    coding-agent delegation status. Same vocabulary as knowledge/threads.
    ========================================================================== */
+/* The single view-action button keeps its width beside the shared search. */
 .reports-module [data-reports-view-toggle] { flex: 0 0 auto; }
 /* Explizite Grammatik-Zeilen: Titel · Filter · optionale Filterablage ·
    gezaehltes Band · Well (fuellt) · Footer. Band, Well und Footer sind fest

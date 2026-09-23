@@ -92,8 +92,32 @@ where
     Ok(())
 }
 
-pub fn load_text_value(root: &Path, key: &str) -> Result<Option<String>> {
-    let conn = open_sqlite(root)?;
+// Keep only a connection, never a value or a transaction. In particular the
+// legacy secret-key check must see insertions/removals made after an earlier
+// read. One slot per calling thread bounds retention when roots change.
+#[cfg(unix)]
+struct CachedTextReader {
+    identity: (PathBuf, u64, u64),
+    connection: Connection,
+}
+
+#[cfg(unix)]
+thread_local! {
+    static TEXT_READER: std::cell::RefCell<Option<CachedTextReader>> =
+        const { std::cell::RefCell::new(None) };
+    #[cfg(test)]
+    static TEXT_READER_OPENS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(unix)]
+fn text_reader_identity(path: &Path) -> std::io::Result<(PathBuf, u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let canonical = std::fs::canonicalize(path)?;
+    let metadata = std::fs::metadata(&canonical)?;
+    Ok((canonical, metadata.dev(), metadata.ino()))
+}
+
+fn read_text_value(conn: &Connection, key: &str) -> Result<Option<String>> {
     conn.query_row(
         &format!("SELECT kv_value FROM {KV_TABLE} WHERE kv_key = ?1"),
         params![key],
@@ -101,6 +125,45 @@ pub fn load_text_value(root: &Path, key: &str) -> Result<Option<String>> {
     )
     .optional()
     .with_context(|| format!("failed to load kv value {key}"))
+}
+
+pub fn load_text_value(root: &Path, key: &str) -> Result<Option<String>> {
+    #[cfg(unix)]
+    {
+        let path = sqlite_path(root);
+        TEXT_READER.with(|slot| {
+            let mut cached = slot.borrow_mut();
+            let identity = text_reader_identity(&path).ok();
+            if identity.is_none()
+                || cached.as_ref().map(|reader| &reader.identity) != identity.as_ref()
+            {
+                // Drop the old handle before replacing its only cache slot.
+                *cached = None;
+                let connection = open_sqlite(root)?;
+                let identity = text_reader_identity(&path)?;
+                *cached = Some(CachedTextReader {
+                    identity,
+                    connection,
+                });
+                #[cfg(test)]
+                TEXT_READER_OPENS.with(|count| count.set(count.get() + 1));
+            }
+            let result = read_text_value(
+                &cached.as_ref().expect("initialized text reader").connection,
+                key,
+            );
+            if result.is_err() {
+                *cached = None;
+            }
+            result
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        // Retain the existing behavior until a stable file-identity mechanism
+        // for replacement detection is certified on this platform.
+        read_text_value(&open_sqlite(root)?, key)
+    }
 }
 
 pub fn store_text_value(root: &Path, key: &str, value: Option<&str>) -> Result<()> {
@@ -222,6 +285,10 @@ fn open_sqlite(root: &Path) -> Result<Connection> {
     }
     Ok(conn)
 }
+
+#[cfg(all(test, unix))]
+#[path = "persistence_tests.rs"]
+mod tests;
 
 fn now_epoch_secs() -> i64 {
     SystemTime::now()

@@ -182,6 +182,23 @@ test('module appbar source action follows the same source-view permission', () =
   );
 });
 
+test('module target menu exposes the production trailing pin control', () => {
+  let toggles = 0;
+  const toggle = () => { toggles += 1; };
+  const item = buildModuleTargetContextItems({
+    target: { id: 'inventory', kind: 'module', title: 'Inventory', glyph: '□' },
+    pinned: true,
+    labels,
+    actions: { togglePin: toggle },
+  }).find((candidate) => candidate.key === 'unpin');
+
+  assert.equal(item.trailingIcon, '−');
+  assert.equal(item.trailingLabel, 'Von Bar lösen');
+  assert.equal(typeof item.trailingAction, 'function');
+  item.trailingAction();
+  assert.equal(toggles, 1);
+});
+
 test('lifecycle drawer permission view uses business-facing manager and readonly copy', () => {
   const manager = buildLifecyclePermissionView({ canManage: true, canOpenSource: true });
   assert.equal(manager.state, 'manager');
@@ -458,7 +475,10 @@ test('global CTOX agent scope html uses business-facing labels and escapes value
     externalActions: 'approval_required',
   });
 
+  // The surface says "Crew", not "CTOX": the owner's wording rule replaced the
+  // system name with the crew everywhere the user reads it.
   assert.match(html, /Crew-Zugriff/);
+  assert.doesNotMatch(html, /CTOX Zugriff/);
   assert.match(html, /Nutzer/);
   assert.match(html, /App/);
   assert.match(html, /Daten/);
