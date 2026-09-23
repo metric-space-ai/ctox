@@ -734,6 +734,7 @@ const state = {
   selectedCampaignId: '',
   selectedCompanyId: '',
   selectedPipelineId: '',
+  focusedRunId: '',
   requestedRecordId: '',
   activeView: 'companies',
   filter: 'all',
@@ -776,6 +777,7 @@ const state = {
 export async function mount(ctx) {
   state.ctx = ctx;
   state.requestedRecordId = String(ctx.args?.record || ctx.args?.record_id || '').trim();
+  state.focusedRunId = '';
   await applyOutboundLanguage(ctx.locale || 'de', { render: false });
   if (!state.activeMsgByContact) state.activeMsgByContact = new Map();
   if (!state.activeNoteByContact) state.activeNoteByContact = new Map();
@@ -802,6 +804,7 @@ export async function mount(ctx) {
     state.requestedRecordId = recordId;
     focusRequestedOutboundRecord();
     render();
+    scrollFocusedOutboundRun();
   };
   ctx.host.addEventListener('ctox-business-os-app-launch', onAppLaunch);
   state.cleanup.push(() => ctx.host.removeEventListener('ctox-business-os-app-launch', onAppLaunch));
@@ -861,6 +864,7 @@ export async function mount(ctx) {
       if (disposed || state.ctx !== ctx) return;
       focusRequestedOutboundRecord();
       render();
+      scrollFocusedOutboundRun();
       scheduleCampaignKnowledgeSetup(selectedCampaign());
     })
     .catch((error) => {
@@ -1309,6 +1313,7 @@ function focusRequestedOutboundRecord() {
   const company = state.companies.find((item) => item.id === recordId || item.duplicate_company_ids?.includes(recordId));
   const pipelineItem = state.pipeline.find((item) => item.id === recordId);
   const engagement = state.engagements?.find((item) => item.id === recordId);
+  const researchRun = state.runs.find((item) => item.id === recordId);
   if (campaign) {
     state.selectedCampaignId = campaign.id;
     state.selectedCompanyId = '';
@@ -1330,11 +1335,39 @@ function focusRequestedOutboundRecord() {
     state.activeOutreach.view = ['closed', 'meeting_booked'].includes(engagement.status) ? 'done' : 'engagements';
     state.activeOutreach.selectedEngagementId = engagement.id;
     showStatus('Verknüpftes Engagement geöffnet.');
+  } else if (researchRun) {
+    const relatedCompany = state.companies.find((item) => item.id === researchRun.company_id);
+    const relatedPipeline = state.pipeline.find((item) => item.id === researchRun.pipeline_id);
+    if (!relatedCompany && !relatedPipeline) {
+      showStatus(`Recherchelauf ${recordId} hat hier keinen sichtbaren Quelldatensatz.`, true);
+      return;
+    }
+    state.selectedCampaignId = researchRun.campaign_id || relatedCompany?.campaign_id || relatedPipeline?.campaign_id;
+    state.outreachView = false;
+    state.focusedRunId = researchRun.id;
+    if (relatedCompany) {
+      state.selectedCompanyId = relatedCompany.id;
+      state.activeView = 'companies';
+    } else {
+      state.selectedPipelineId = relatedPipeline.id;
+      state.activeView = 'pipeline';
+    }
+    showStatus('Verknüpfter Recherchelauf geöffnet.');
   } else {
     showStatus(`Verknüpfter Outbound-Datensatz ${recordId} ist hier nicht verfügbar.`, true);
     return;
   }
   state.requestedRecordId = '';
+}
+
+function scrollFocusedOutboundRun() {
+  if (!state.focusedRunId) return;
+  const runId = state.focusedRunId;
+  requestAnimationFrame(() => {
+    const row = [...state.ctx.host.querySelectorAll('[data-context-record-type="outbound_research_run"]')]
+      .find((item) => item.dataset.contextRecordId === runId);
+    row?.scrollIntoView?.({ block: 'nearest' });
+  });
 }
 
 async function repairDanglingImportedSources() {
@@ -6396,7 +6429,7 @@ function renderCompanyDetail() {
       </div>
       <div class="outbound-detail-block">
         <div class="ctox-field-label">Research Runs</div>
-        ${runs.map((run) => `<div class="outbound-muted">${escapeHtml(run.run_type)} · ${escapeHtml(run.status)} · ${new Date(run.updated_at_ms).toLocaleString()}</div>`).join('') || '<div class="outbound-muted">Noch keine Research Runs.</div>'}
+        ${runs.map((run) => `<div class="outbound-muted${run.id === state.focusedRunId ? ' is-selected' : ''}" data-context-record-type="outbound_research_run" data-context-record-id="${escapeHtml(run.id)}" data-context-label="${escapeHtml(run.run_type || run.id)}" aria-current="${run.id === state.focusedRunId}">${escapeHtml(run.run_type)} · ${escapeHtml(run.status)} · ${new Date(run.updated_at_ms).toLocaleString()}</div>`).join('') || '<div class="outbound-muted">Noch keine Research Runs.</div>'}
       </div>
       <div class="outbound-detail-block">
         <div class="ctox-field-label">Details</div>
@@ -6443,6 +6476,10 @@ function renderPipelineDetail() {
           ['Kontakte', String((item.contacts || []).length)],
           ['Letzter Run', runs[0] ? `${runs[0].run_type || 'Run'} · ${runs[0].status || 'offen'}` : 'kein Run'],
         ])}
+      </div>
+      <div class="outbound-detail-block">
+        <div class="ctox-field-label">Research Runs</div>
+        ${runs.map((run) => `<div class="outbound-muted${run.id === state.focusedRunId ? ' is-selected' : ''}" data-context-record-type="outbound_research_run" data-context-record-id="${escapeHtml(run.id)}" data-context-label="${escapeHtml(run.run_type || run.id)}" aria-current="${run.id === state.focusedRunId}">${escapeHtml(run.run_type)} · ${escapeHtml(run.status)} · ${new Date(run.updated_at_ms).toLocaleString()}</div>`).join('') || '<div class="outbound-muted">Noch keine Research Runs.</div>'}
       </div>
     </div>
   `;

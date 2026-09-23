@@ -1725,7 +1725,7 @@ function sourceFocusSupported(entry) {
   const id = String(entry?.source_record_id || entry?.target_record_id || '').trim();
   if (module === 'ctox') return Boolean(entry?.task_id || entry?.command_id || (id && ['task', 'command'].includes(type)));
   if (module === 'tickets') return Boolean(id && ['ticket', 'ticket_case'].includes(type));
-  if (module === 'outbound') return Boolean(id && ['campaign', 'company', 'pipeline_item', 'engagement', 'outbound_engagement'].includes(type));
+  if (module === 'outbound') return Boolean(id && ['campaign', 'company', 'pipeline_item', 'engagement', 'outbound_engagement', 'research_run'].includes(type));
   if (module === 'mail') return Boolean(id && ['conversation', 'message'].includes(type));
   if (module === 'documents') return Boolean(id && ['document', 'file'].includes(type));
   return false;

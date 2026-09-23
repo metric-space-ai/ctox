@@ -1037,6 +1037,11 @@
   border-bottom: 0;
 }
 
+.outbound-detail [data-context-record-type="outbound_research_run"].is-selected {
+  border-left: 3px solid var(--shell-v2-local-accent, currentColor);
+  padding-left: 8px;
+}
+
 .outbound-evidence {
   margin: 8px 0 0;
   padding-left: 17px;
