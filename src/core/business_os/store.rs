@@ -12012,8 +12012,8 @@ pub(super) fn repair_missing_rxdb_envelopes(
             .unwrap_or_else(|| now_ms().min(i64::MAX as u128) as i64);
         let deleted = document
             .get("_deleted")
-            .or_else(|| document.get("is_deleted"))
             .and_then(Value::as_bool)
+            .or_else(|| document.get("is_deleted").and_then(Value::as_bool))
             .unwrap_or(false);
         if deleted {
             writer.replace_source(&id, source_updated_at_ms, document, true)?;
@@ -12063,10 +12063,8 @@ fn upsert_rxdb_collection_record_with_writer(
         object.insert("_rev".to_string(), Value::String(rev.clone()));
         if deleted {
             object.insert("_deleted".to_string(), Value::Bool(true));
-        } else {
-            object
-                .entry("_deleted".to_string())
-                .or_insert(Value::Bool(false));
+        } else if !object.get("_deleted").is_some_and(Value::is_boolean) {
+            object.insert("_deleted".to_string(), Value::Bool(false));
         }
         let meta = object
             .entry("_meta".to_string())
@@ -39136,9 +39134,25 @@ pub(super) mod tests {
             &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
             params!["writeback_probe", "4-old", original.to_string()],
         )?;
+        let malformed_live = serde_json::json!({
+            "id": "malformed_live", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": "false", "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["malformed_live", "1-old", malformed_live.to_string()],
+        )?;
+        let malformed_tombstone = serde_json::json!({
+            "id": "malformed_tombstone", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": "invalid", "is_deleted": true, "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["malformed_tombstone", "1-old", malformed_tombstone.to_string()],
+        )?;
         drop(conn);
 
-        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 1);
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 3);
         assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 0);
         let conn = Connection::open(rxdb_store_path(root))?;
         let (revision, lwt, raw): (String, f64, String) = conn.query_row(
@@ -39160,6 +39174,16 @@ pub(super) mod tests {
         );
         assert_eq!(repaired["_deleted"], false);
         assert_eq!(repaired["_attachments"], serde_json::json!({}));
+        for (id, expected_deleted) in [("malformed_live", false), ("malformed_tombstone", true)] {
+            let (deleted_column, raw): (i64, String) = conn.query_row(
+                &format!("SELECT deleted, data FROM {table} WHERE id = ?1"),
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            let repaired: Value = serde_json::from_str(&raw)?;
+            assert_eq!(repaired["_deleted"], expected_deleted);
+            assert_eq!(deleted_column != 0, expected_deleted);
+        }
 
         let chats_table = format!(
             "ctox_business_os__business_chats__v{}",
