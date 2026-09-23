@@ -1,7 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessConfirm, showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { createCtoxLauncher } from './ctoxLauncher.js';
-import { addMissingDesktopIcons, arrangeDesktopIcons, desktopIconWriteAvailability, replaceDesktopIcons, runDesktopActionOnce } from './desktopMenuActions.js';
+import { addMissingDesktopIcons, arrangeDesktopIcons, desktopIconWriteAvailability, dispatchDesktopChatOpen, replaceDesktopIcons, runDesktopActionOnce } from './desktopMenuActions.js';
 import { ensureDesktopLayoutWithAuthority } from './layout-authority.js';
 import { makeIconDraggable } from './iconDrag.js?v=20260816-browser-sync-guards-v141';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js?v=20260816-browser-sync-guards-v141';
@@ -901,7 +901,7 @@ export async function mount(ctx) {
         target_record_id: recordId,
       },
     };
-    openCtoxChat(detail);
+    return openCtoxChat(detail);
   }
 
   function desktopAgentModeConfig(mode, label) {
@@ -961,23 +961,20 @@ export async function mount(ctx) {
         target_type: 'desktop_surface',
       },
     };
-    openCtoxChat(detail);
+    return openCtoxChat(detail);
   }
 
   function openCtoxChat(detail) {
-    const chatDetail = {
-      ...detail,
-      onOpenPersistError: (error) => notify({
+    return dispatchDesktopChatOpen({
+      detail,
+      openBusinessChat: ctx.openBusinessChat,
+      dispatchEvent: (chatDetail) => window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: chatDetail })),
+      onPersistError: (error) => notify({
         type: 'error',
         title: t('chatNotSaved'),
         message: String(error?.message || error),
       }),
-    };
-    if (typeof ctx.openBusinessChat === 'function') {
-      ctx.openBusinessChat(chatDetail);
-      return;
-    }
-    window.dispatchEvent(new CustomEvent('ctox-business-os-chat-open', { detail: chatDetail }));
+    });
   }
 
   async function restoreDefaultIcons() {

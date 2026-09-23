@@ -4,6 +4,7 @@ import {
   addMissingDesktopIcons,
   arrangeDesktopIcons,
   desktopIconWriteAvailability,
+  dispatchDesktopChatOpen,
   replaceDesktopIcons,
   runDesktopActionOnce,
 } from '../desktopMenuActions.js';
@@ -102,5 +103,16 @@ assert.equal(dispatches, 1);
 resolveDispatch('done');
 assert.equal(await firstDispatch, 'done');
 assert.equal(pending.size, 0);
+
+const hostError = new Error('chat host unavailable');
+await assert.rejects(
+  dispatchDesktopChatOpen({
+    detail: { module: 'desktop' },
+    openBusinessChat: async () => { throw hostError; },
+    dispatchEvent: () => assert.fail('host must be preferred'),
+    onPersistError: () => {},
+  }),
+  hostError,
+);
 
 console.log('desktop menu action behavior ok');

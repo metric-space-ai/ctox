@@ -68,3 +68,9 @@ export async function runDesktopActionOnce(pending, key, action) {
     pending.delete(key);
   }
 }
+
+export function dispatchDesktopChatOpen({ detail, openBusinessChat, dispatchEvent, onPersistError }) {
+  const chatDetail = { ...detail, onOpenPersistError: onPersistError };
+  if (typeof openBusinessChat === 'function') return openBusinessChat(chatDetail);
+  return dispatchEvent(chatDetail);
+}
