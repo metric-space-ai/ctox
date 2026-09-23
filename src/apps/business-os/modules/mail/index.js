@@ -251,6 +251,8 @@ export async function mount(ctx) {
     readiness: null,
     refreshTimer: null,
     refreshSequence: 0,
+    lastSuccessfulMailSequence: 0,
+    lastAppliedAuxiliarySequence: 0,
     busy: false,
     mailserver: {
       open: false,
@@ -536,31 +538,45 @@ export async function mount(ctx) {
       readAll(collections.outbound_messages),
       readAll(collections.outbound_approvals),
     ]);
-    if (view.disposed || sequence !== view.refreshSequence) return;
+    if (view.disposed) return;
     const failedRead = [3, 4, 5].map((index) => snapshots[index])
       .find((snapshot) => snapshot instanceof Error);
-    view.mailReadError = failedRead ? String(failedRead.message || failedRead) : '';
     const [commands, catalogs, users, accounts, threads, communicationMessages, campaigns, engagements, outboundMessages, approvals]
       = snapshots.map((snapshot) => Array.isArray(snapshot) ? snapshot : null);
-    // A replication reconnect can cancel an RxDB query. Keep the last good
-    // snapshot until a successful read replaces it; [] would flash an empty
-    // mailbox and make counts collapse to zero on every reconnect.
-    if (commands) view.commands = commands.filter((command) => !isDeleted(command));
-    if (catalogs) view.routeDestinations = routeDestinationsFromCatalog(catalogs, ctx.permissions);
-    if (users) view.users = users.filter((user) => !isDeleted(user) && user.active !== false).sort((a, b) => userDisplayName(a).localeCompare(userDisplayName(b)));
-    if (accounts) view.accounts = visibleEmailAccounts(accounts, ctx.session?.user || {});
-    if (threads) view.threads = threads.filter((thread) => thread.channel === 'email' && !isDeleted(thread));
-    if (communicationMessages) view.communicationMessages = communicationMessages.filter((message) => message.channel === 'email' && !isDeleted(message));
-    if (campaigns || outboundMessages) view.campaigns = visibleMailCampaigns(campaigns || view.campaigns, ctx.session?.user || {}, view.accounts, outboundMessages || view.outboundMessages);
-    if (engagements) view.engagements = engagements.filter((engagement) => !isDeleted(engagement));
-    if (outboundMessages) view.outboundMessages = outboundMessages.filter((message) => (
-      !isDeleted(message) && (!message.channel || message.channel === 'email')
-    )).sort(sortUpdatedDesc);
-    if (approvals) view.approvals = approvals.filter((approval) => !isDeleted(approval));
-    if (view.accountKey && !view.accounts.some((account) => account.account_key === view.accountKey)) {
-      view.accountKey = '';
+    // A newer notification may start another read while this one is pending.
+    // A completed successful snapshot must still render, or continuous events
+    // could discard every result and leave Mail syncing forever.
+    if (sequence > view.lastSuccessfulMailSequence) {
+      if (accounts && threads && communicationMessages) {
+        // Keep the required collections consistent through a reconnect.
+        view.accounts = visibleEmailAccounts(accounts, ctx.session?.user || {});
+        view.threads = threads.filter((thread) => thread.channel === 'email' && !isDeleted(thread));
+        view.communicationMessages = communicationMessages.filter((message) => message.channel === 'email' && !isDeleted(message));
+        view.lastSuccessfulMailSequence = sequence;
+        view.mailReadComplete = true;
+        view.mailReadError = '';
+        if (view.accountKey && !view.accounts.some((account) => account.account_key === view.accountKey)) {
+          view.accountKey = '';
+        }
+      } else if (failedRead) {
+        // The first timeout remains visible even while newer reads are pending;
+        // a later successful snapshot clears it. An older failure cannot
+        // overwrite an already applied newer success.
+        view.mailReadError = String(failedRead.message || failedRead);
+      }
     }
-    if (accounts && threads && communicationMessages) view.mailReadComplete = true;
+    if (sequence >= view.lastAppliedAuxiliarySequence) {
+      if (commands) view.commands = commands.filter((command) => !isDeleted(command));
+      if (catalogs) view.routeDestinations = routeDestinationsFromCatalog(catalogs, ctx.permissions);
+      if (users) view.users = users.filter((user) => !isDeleted(user) && user.active !== false).sort((a, b) => userDisplayName(a).localeCompare(userDisplayName(b)));
+      if (campaigns || outboundMessages) view.campaigns = visibleMailCampaigns(campaigns || view.campaigns, ctx.session?.user || {}, view.accounts, outboundMessages || view.outboundMessages);
+      if (engagements) view.engagements = engagements.filter((engagement) => !isDeleted(engagement));
+      if (outboundMessages) view.outboundMessages = outboundMessages.filter((message) => (
+        !isDeleted(message) && (!message.channel || message.channel === 'email')
+      )).sort(sortUpdatedDesc);
+      if (approvals) view.approvals = approvals.filter((approval) => !isDeleted(approval));
+      view.lastAppliedAuxiliarySequence = sequence;
+    }
     view.loading = !view.mailReadComplete;
   }
 

@@ -688,10 +688,17 @@ mailQa: try {
   await page.getByText('Mail wird synchronisiert', { exact: true }).waitFor({ state: 'visible' });
   assert.equal(await page.getByText('Keine E-Mails', { exact: true }).count(), 0);
   await page.evaluate(() => {
+    window.__mailReadPulse = window.setInterval(() => window.__mailNotify('communication_threads'), 600);
+  });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
+  assert.ok(await page.evaluate(() => window.__mailReadAttempts.get('communication_threads') > 3));
+  await page.evaluate(() => {
+    window.clearInterval(window.__mailReadPulse);
     window.__mailReadFailures.delete('communication_threads');
     window.__mailNotify('communication_threads');
   });
   await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
   assert.deepEqual(browserErrors, []);
   console.log('Mail browser QA OK: inbox, sent, reconnect recovery, thread, campaign, draft, group, mailbox administration, Sellify series-email handoff, and responsive composer');
 } finally {
