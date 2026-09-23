@@ -224,6 +224,7 @@ mailQa: try {
     function collection(name) {
       return {
         find: (query = {}) => ({ exec: async () => {
+          if (query.signal && (!query.selector || Object.keys(query.selector).length)) throw new Error('Abortable Mail read must use an explicit empty selector');
           readAttempts.set(name, (readAttempts.get(name) || 0) + 1);
           if (readFailures.get(name) === 'PENDING') return new Promise((_, reject) => {
             const pending = (pendingReads.get(name) || 0) + 1;

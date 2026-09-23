@@ -2919,7 +2919,7 @@ async function readAll(collection, required = false) {
   const controller = new AbortController();
   try {
     const docs = await Promise.race([
-      collection.find({ signal: controller.signal }).exec(),
+      collection.find({ selector: {}, signal: controller.signal }).exec(),
       new Promise((_, reject) => {
         timeout = setTimeout(() => {
           timedOut = true;
