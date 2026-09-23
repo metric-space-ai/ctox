@@ -27,10 +27,13 @@ jobs:
       - name: Mail browser behavior
         env:
           CTOX_MAIL_QA_SCREENSHOT: ${{ runner.temp }}/mail-qa.png
+          CTOX_MAIL_QA_TRACE: ${{ runner.temp }}/mail-qa-trace.zip
         run: node src/apps/business-os/modules/mail/tests/mail-browser-qa.mjs
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always()
         with:
           name: mail-ui-evidence
-          path: ${{ runner.temp }}/mail-qa.png
+          path: |
+            ${{ runner.temp }}/mail-qa.png
+            ${{ runner.temp }}/mail-qa-trace.zip
           if-no-files-found: ignore

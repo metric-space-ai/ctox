@@ -45,6 +45,9 @@ const address = server.address();
 const baseUrl = `http://127.0.0.1:${address.port}`;
 const browser = await chromium.launch({ headless: true, executablePath: findChromiumExecutable() });
 const context = await browser.newContext({ viewport: { width: 1440, height: 940 } });
+if (process.env.CTOX_MAIL_QA_TRACE) {
+  await context.tracing.start({ screenshots: true, snapshots: true });
+}
 const page = await context.newPage();
 const browserErrors = [];
 page.on('pageerror', (error) => browserErrors.push(String(error?.stack || error)));
@@ -701,6 +704,28 @@ mailQa: try {
   await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
   assert.deepEqual(browserErrors, []);
   console.log('Mail browser QA OK: inbox, sent, reconnect recovery, thread, campaign, draft, group, mailbox administration, Sellify series-email handoff, and responsive composer');
+} catch (error) {
+  // Preserve the original assertion failure and capture browser state before cleanup.
+  try {
+    const state = await page.evaluate(() => ({
+      viewport: [...document.querySelectorAll('[data-mail-editor-viewport]')]
+        .map((button) => ({ name: button.dataset.mailEditorViewport, pressed: button.getAttribute('aria-pressed') })),
+      editorFrames: document.querySelectorAll('[data-mail-easy-email-host] iframe').length,
+      contentSurfaceVisible: Boolean(document.querySelector('[data-mail-content-surface]')?.getClientRects().length),
+    }));
+    console.error('[mail QA] failure state', JSON.stringify({ ...state, browserErrors }));
+  } catch (diagnosticError) {
+    console.error('[mail QA] state capture failed', diagnosticError);
+  }
+  if (process.env.CTOX_MAIL_QA_SCREENSHOT) {
+    try { await page.screenshot({ path: resolve(process.env.CTOX_MAIL_QA_SCREENSHOT), fullPage: true }); }
+    catch (diagnosticError) { console.error('[mail QA] screenshot capture failed', diagnosticError); }
+  }
+  if (process.env.CTOX_MAIL_QA_TRACE) {
+    try { await context.tracing.stop({ path: resolve(process.env.CTOX_MAIL_QA_TRACE) }); }
+    catch (diagnosticError) { console.error('[mail QA] trace capture failed', diagnosticError); }
+  }
+  throw error;
 } finally {
   await context.close();
   await browser.close();
