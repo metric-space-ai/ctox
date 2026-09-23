@@ -186,6 +186,7 @@
     "outbound.sequence.save",
     "outbound.skillbook.save",
     "outbound.skillbook.seed_defaults",
+    "outbound.update_digest.send_now",
     "support.agent.apply_suggestion",
     "support.agent.reject_suggestion",
     "support.agent.writeback",
