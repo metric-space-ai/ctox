@@ -28,6 +28,7 @@ const labels = {
     syncingThreads: 'Threads werden synchronisiert.',
     noSelection: 'Kein Thread ausgewählt.',
     commandFailed: 'Aktion konnte nicht abgeschlossen werden.',
+    loadFailed: 'Threads konnten nicht geladen werden. Mit Aktualisieren erneut versuchen.',
   },
   en: {
     refresh: 'Refresh',
@@ -41,6 +42,7 @@ const labels = {
     syncingThreads: 'Syncing threads.',
     noSelection: 'No thread selected.',
     commandFailed: 'Action could not be completed.',
+    loadFailed: 'Threads could not be loaded. Use Refresh to try again.',
   },
 };
 
@@ -79,6 +81,7 @@ export async function mount(ctx) {
   state.collectionReadiness = {};
   state.refreshInFlight = null;
   state.status = '';
+  state.statusIsLoadFailure = false;
   state.commandReceipt = null;
   state.personalComplete = false;
   state.recentThreadsComplete = false;
@@ -277,7 +280,7 @@ function applyLabels() {
 }
 
 function wireUi() {
-  els.refresh?.addEventListener('click', () => refresh({ restartSync: true }));
+  els.refresh?.addEventListener('click', () => refresh({ restartSync: true }).catch(showError));
   // Pane chrome is SHELL-owned canonical grammar (autoWirePaneGrammar wires
   // the data-pg-* markup once, debounced ~120ms after mount). The module only
   // keeps its state in sync through the bubbling grammar event and re-renders
@@ -476,11 +479,11 @@ function wireRealtime() {
   const timer = window.setInterval(() => {
     if (!moduleIsVisible()) return;
     if (state.refreshInFlight) return;
-    refresh().catch((error) => console.warn('[threads] refresh failed', error));
+    refresh().catch(showError);
   }, REALTIME_POLL_MS);
   const onVisible = () => {
     if (moduleIsVisible() && !state.refreshInFlight) {
-      refresh().catch((error) => console.warn('[threads] refresh failed', error));
+      refresh().catch(showError);
     }
   };
   document.addEventListener('visibilitychange', onVisible);
@@ -533,7 +536,22 @@ function wireReadiness() {
 async function refresh(options = {}) {
   // Single flight: overlapping refreshes multiply the demand queries below.
   if (state.refreshInFlight) return state.refreshInFlight;
-  state.refreshInFlight = refreshOnce(options).finally(() => { state.refreshInFlight = null; });
+  state.refreshInFlight = refreshOnce(options)
+    .then((result) => {
+      if (state.statusIsLoadFailure) {
+        state.statusIsLoadFailure = false;
+        state.status = '';
+        if (els.status) els.status.textContent = 'bereit';
+      }
+      return result;
+    })
+    .catch((error) => {
+      const failure = new Error('Threads data refresh failed');
+      failure.threadsLoadFailure = true;
+      failure.cause = error;
+      throw failure;
+    })
+    .finally(() => { state.refreshInFlight = null; });
   return state.refreshInFlight;
 }
 
@@ -1705,8 +1723,12 @@ function setBusy(busy) {
 }
 
 function showError(error) {
-  console.warn('[threads] action failed', error);
-  state.status = state.t('commandFailed', 'Aktion konnte nicht abgeschlossen werden.');
+  const loadFailure = error?.threadsLoadFailure === true;
+  console.warn(loadFailure ? '[threads] refresh failed' : '[threads] action failed', error?.cause || error);
+  state.statusIsLoadFailure = loadFailure;
+  state.status = loadFailure
+    ? state.t('loadFailed', 'Threads konnten nicht geladen werden. Mit Aktualisieren erneut versuchen.')
+    : state.t('commandFailed', 'Aktion konnte nicht abgeschlossen werden.');
   if (els.status) els.status.textContent = state.status;
 }
 
