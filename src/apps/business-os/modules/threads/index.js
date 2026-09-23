@@ -477,6 +477,8 @@ function openActionPanel(name, focusTarget) {
 // aborted on its 120 s Sellify pre-flight. Polling therefore only runs while
 // the module is actually visible, never overlaps itself, and backs off.
 const REALTIME_POLL_MS = 30000;
+const REALTIME_CHANGE_DEBOUNCE_MS = 300;
+const REALTIME_CHANGE_COOLDOWN_MS = 10000;
 
 function moduleIsVisible() {
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return false;
@@ -488,23 +490,61 @@ function moduleIsVisible() {
 
 function wireRealtime() {
   // Demand-query writes also emit collection changes. Subscribing a refresh
-  // to those same queries creates a fetch -> change -> refresh feedback loop
-  // and continuously replaces clickable approval controls. A bounded poll,
-  // gated on visibility, keeps cross-profile updates visible without churn.
-  const timer = window.setInterval(() => {
-    if (!moduleIsVisible()) return;
-    if (state.refreshInFlight || state.searchScanInFlight) return;
-    refresh().catch(showError);
-  }, REALTIME_POLL_MS);
-  const onVisible = () => {
-    if (moduleIsVisible() && !state.refreshInFlight && !state.searchScanInFlight) {
-      refresh().catch(showError);
-    }
+  // to those same queries without a cooldown creates a fetch -> change ->
+  // refresh feedback loop. Keep the bounded poll as a fallback when a change
+  // arrives during a refresh or the module is hidden.
+  let changeTimer = null;
+  let lastQueryAt = Date.now();
+  const runRefresh = () => {
+    if (!moduleIsVisible() || state.refreshInFlight || state.searchScanInFlight) return;
+    lastQueryAt = Date.now();
+    refresh().catch(showError).finally(() => { lastQueryAt = Date.now(); });
   };
+  const subscriptions = [
+    'user_threads', 'user_thread_states', 'ctox_task_approval_requests',
+    'user_thread_messages', 'user_thread_links', 'user_notifications',
+  ].map((name) => {
+    const collection = collectionFor(name);
+    if (!collection?.$?.subscribe) return null;
+    return collection.$.subscribe((change) => {
+      if (!moduleIsVisible()) return;
+      const doc = change?.documentData || change?.document || null;
+      if (name === 'user_threads' && state.search.trim() && doc?.id) {
+        const cached = state.searchCorpus.find((item) => item.id === doc.id);
+        if (!cached || cached.updated_at_ms !== doc.updated_at_ms
+          || doc._deleted === true || doc.is_deleted === true) {
+          state.searchCorpusComplete = false;
+          scheduleSearchScan();
+        }
+      }
+      if (state.refreshInFlight || state.searchScanInFlight) {
+        lastQueryAt = Date.now();
+        return;
+      }
+      const me = currentUserId();
+      if (name === 'user_thread_states' && doc?.user_id && doc.user_id !== me) return;
+      if (name === 'user_notifications' && doc?.user_id && doc.user_id !== me) return;
+      if (name === 'ctox_task_approval_requests' && doc?.reviewer_user_id
+        && doc.reviewer_user_id !== me && doc.thread_id !== state.selectedId) return;
+      if ((name === 'user_thread_messages' || name === 'user_thread_links')
+        && doc?.thread_id && doc.thread_id !== state.selectedId) return;
+      if (Date.now() - lastQueryAt < REALTIME_CHANGE_COOLDOWN_MS || changeTimer) return;
+      changeTimer = window.setTimeout(() => {
+        changeTimer = null;
+        runRefresh();
+      }, REALTIME_CHANGE_DEBOUNCE_MS);
+    }) || null;
+  }).filter(Boolean);
+  const timer = window.setInterval(() => {
+    runRefresh();
+  }, REALTIME_POLL_MS);
+  const onVisible = () => runRefresh();
   document.addEventListener('visibilitychange', onVisible);
   return () => {
     window.clearInterval(timer);
+    if (changeTimer) window.clearTimeout(changeTimer);
     document.removeEventListener('visibilitychange', onVisible);
+    for (const subscription of subscriptions) subscription.unsubscribe?.();
   };
 }
 
@@ -622,7 +662,7 @@ async function refreshOnce(options = {}) {
   state.personalComplete = Boolean(me)
     && actionableThreadIds.every((id) => availableThreadIds.has(id));
   updateConnectivity();
-  const threads = mergeRecords(recentThreads, personalThreads, state.searchCorpus);
+  const threads = mergeRecords(state.searchCorpus, recentThreads, personalThreads);
   // The inbox needs native attention and approval state, not a global slice
   // of messages/links from up to 200 unrelated threads. Detail loads below
   // are scoped to the selected thread only.
@@ -1272,7 +1312,15 @@ function renderList(threads, { resetScroll = false } = {}) {
     unreadNotificationsForThread(thread.id, me).length,
     foreignPreview(thread).text,
   ])));
-  renderHtmlIfChanged(els.list, html, { signature, preserveScroll: !resetScroll });
+  const focusedThreadId = els.list.contains(document.activeElement)
+    ? document.activeElement?.closest?.('[data-thread-id]')?.getAttribute('data-thread-id')
+    : null;
+  const changed = renderHtmlIfChanged(els.list, html, { signature, preserveScroll: !resetScroll });
+  if (changed && focusedThreadId) {
+    [...els.list.querySelectorAll('[data-thread-id]')]
+      .find((row) => row.getAttribute('data-thread-id') === focusedThreadId)
+      ?.focus({ preventScroll: true });
+  }
   if (resetScroll) els.list.scrollTop = 0;
   applyThreadSelection();
 }
@@ -1307,8 +1355,8 @@ function renderDetail() {
       els.source.dataset.threadDeepLink = '';
     }
     if (els.status) els.status.textContent = state.status || 'bereit';
-    if (els.timeline) els.timeline.innerHTML = `<div class="ctox-empty">${escapeHtml(emptyTitle)}</div>`;
-    if (els.context) els.context.innerHTML = '';
+    renderHtmlIfChanged(els.timeline, `<div class="ctox-empty">${escapeHtml(emptyTitle)}</div>`);
+    renderHtmlIfChanged(els.context, '');
     if (els.messageBody) els.messageBody.disabled = true;
     setThreadActionState(null);
     return;
@@ -1374,11 +1422,11 @@ function renderTimeline(thread) {
     ...approvals.map((item) => ({ type: 'approval', at: Number(item.requested_at_ms || item.created_at_ms || 0), item })),
   ].sort((left, right) => left.at - right.at);
   if (!timeline.length) {
-    els.timeline.innerHTML = loadingNote || '<div class="ctox-empty">Noch keine Nachrichten.</div>';
+    renderHtmlIfChanged(els.timeline, loadingNote || '<div class="ctox-empty">Noch keine Nachrichten.</div>');
     return;
   }
   const me = currentUserId();
-  els.timeline.innerHTML = loadingNote + timeline.map((entry) => {
+  const html = loadingNote + timeline.map((entry) => {
     if (entry.type === 'approval') return renderApproval(entry.item);
     const message = entry.item;
     const mine = message.author_user_id && message.author_user_id === me;
@@ -1411,6 +1459,7 @@ function renderTimeline(thread) {
       </article>
     `;
   }).join('');
+  renderHtmlIfChanged(els.timeline, html);
 }
 
 function renderApproval(approval) {
@@ -1494,7 +1543,7 @@ function renderContext(thread) {
         </div>
       `).join('')}</div>`
     : '';
-  els.context.innerHTML = rowHtml + notificationHtml;
+  renderHtmlIfChanged(els.context, rowHtml + notificationHtml);
 }
 
 async function submitMessage() {
