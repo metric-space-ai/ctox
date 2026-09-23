@@ -152,6 +152,23 @@ Object deep links are hash routes into the source app:
   as module navigation. A `module` of `threads` (or empty) yields no object link.
 - `return_thread_id` opens `#threads?thread_id=<id>` from the shell window.
 
+**Source ownership matrix.** Threads owns the conversation, personal
+attention and explicit `threads.ctox_approval.*` decision. A source record's
+business state changes only through its owning app and native command policy.
+
+| Source | Focus argument | Business action owner | Receipt shown in Threads |
+| --- | --- | --- | --- |
+| CTOX task/command | `task_id` / `command_id` | CTOX queue and command policy owns review, retry and completion | Referenced task/command ID and projected status |
+| Tickets ticket/case | `record` | Tickets owns clarification, ticket status and ticket assignment; a Threads handoff changes only the conversation assignment | Threads handoff receipt; ticket command receipt stays with Tickets |
+| Mail conversation/message | `thread_key` / `message_id` | Mail owns reply, send and mail read state | Threads decision receipt, with Mail's source status linked |
+| Documents file | `record` | Documents owns file, version and edit state | Threads decision receipt, with the document link retained |
+| Outbound campaign/company/pipeline/engagement/research run | `record` | Outbound owns delivery, research and engagement lifecycle; native approval checks the request version and target policy | Approval receipt with produced command/task ID and later source status |
+
+The source app confirms a visible record after its scoped CTOX-DB read. A
+missing or inaccessible record yields `unavailable`; an explicit policy denial
+may yield `forbidden` without disclosing foreign record metadata. Neither
+outcome changes the source object or completes the thread.
+
 **Record-approval banner contract.** A pending approval MUST be able to surface
 **at the object** (the shell banner over the source record), not only inside
 Threads. The decision dispatches the same commands Threads uses:
