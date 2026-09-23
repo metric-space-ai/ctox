@@ -452,7 +452,17 @@ export function parseDelimitedText(text, options = {}) {
   const header = rows[0].map(normalizeHeader);
   const hasHeader = header.some((name) => COMPANY_HEADER_KEYS.has(name) || DOMAIN_HEADER_KEYS.has(name));
   if (!hasHeader) {
-    return rows.map((cells, index) => ({ __rowIndex: index, company: cleanCell(cells[0]), domain: cleanCell(cells[1]), raw: cells }));
+    // Ohne Kopfzeile gilt die Reihenfolge Firma; Website; Ort; Land. Vorher
+    // wurden nur die ersten zwei Spalten gelesen und der Ort ging still
+    // verloren (Klicktest Outbound P1 IMP-07d, 11.09.2026).
+    return rows.map((cells, index) => ({
+      __rowIndex: index,
+      company: cleanCell(cells[0]),
+      domain: cleanCell(cells[1]),
+      ...(cleanCell(cells[2]) ? { city: cleanCell(cells[2]) } : {}),
+      ...(cleanCell(cells[3]) ? { country: cleanCell(cells[3]) } : {}),
+      raw: cells,
+    }));
   }
   return rows.slice(1).map((cells, index) => {
     const row = { __rowIndex: index, raw: cells };

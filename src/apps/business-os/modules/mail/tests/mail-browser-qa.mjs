@@ -12,13 +12,18 @@ const businessOsRoot = join(repoRoot, 'src/apps/business-os');
 const browserPackage = join(businessOsRoot, 'package.json');
 const require = createRequire(browserPackage);
 const { chromium } = require('playwright');
+const iconProviderMode = process.env.CTOX_MAIL_ICON_PROVIDER_MODE || 'shell';
+if (!['shell', 'absent', 'empty'].includes(iconProviderMode)) {
+  throw new Error('CTOX_MAIL_ICON_PROVIDER_MODE must be shell, absent, or empty');
+}
+const mailIconOnly = process.env.CTOX_MAIL_ICON_QA_ONLY === '1';
 
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url || '/', 'http://127.0.0.1');
     if (url.pathname === '/' || url.pathname === '/mail-qa.html') {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-      response.end(`<!doctype html><html lang="de" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="icon" href="data:,"><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/shared/base.css"><style>html,body,#host{width:100%;height:100%;margin:0}body{overflow:hidden}#host{display:grid}</style></head><body><div id="host"></div></body></html>`);
+      response.end(`<!doctype html><html lang="de" data-theme="light"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><link rel="icon" href="data:,"><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/shared/base.css"><style>html,body,#host{width:100%;height:100%;margin:0}body{overflow:hidden}#host{display:grid}</style></head><body><div class="shell-window-content"><div id="host"></div></div></body></html>`);
       return;
     }
     const relative = normalize(decodeURIComponent(url.pathname)).replace(/^[/\\]+/, '');
@@ -47,9 +52,9 @@ page.on('console', (message) => {
   if (message.type() === 'error') browserErrors.push(message.text());
 });
 
-try {
+mailQa: try {
   await page.goto(`${baseUrl}/mail-qa.html`, { waitUntil: 'domcontentloaded' });
-  await page.evaluate(async () => {
+  await page.evaluate(async (iconProviderMode) => {
     const rows = {
       business_commands: [],
       business_module_catalog: [{
@@ -235,7 +240,7 @@ try {
       },
       storageScope: { get: () => null, set: () => {} },
       permissions: { canReadCollection: () => true, canWriteCollection: () => true },
-      getActionIcon,
+      ...(iconProviderMode === 'empty' ? { getActionIcon: () => '' } : iconProviderMode === 'shell' ? { getActionIcon } : {}),
       commandBus: { dispatch: async (command) => {
         window.__dispatchedCommands.push(structuredClone(command));
         const now = Date.now();
@@ -353,13 +358,19 @@ try {
     for (const pane of document.querySelectorAll('[data-mail-left-pane], [data-mail-list-pane]')) {
       pane.__ctoxPaneGrammar = wirePaneGrammar(pane);
     }
-  });
+  }, iconProviderMode);
 
   await page.locator('[data-mail-root]').waitFor({ state: 'visible' });
   assert.equal(await page.locator('[data-mail-navigation-title]').textContent(), 'E-Mail-Queues');
   assert.equal(await page.locator('[data-mail-account]').inputValue(), 'all');
   assert.match(await page.locator('[data-mail-account]').textContent(), /alice@example\.test/);
   await assertVisibleText(page, 'Projektstatus August');
+  await assertMailIconAcceptance(page, iconProviderMode);
+  if (mailIconOnly) {
+    assert.deepEqual(browserErrors, [], `Mail icon QA must not emit page or console errors (${iconProviderMode} provider)`);
+    console.log(`Mail icon QA OK (${iconProviderMode} provider): toolbar, progress, navigation/close, and both toggle directions`);
+    break mailQa;
+  }
 
   await page.locator('[data-mail-select-record="thread:thread-1"]').check();
   await page.locator('[data-mail-select-record="thread:thread-2"]').check();
@@ -614,6 +625,77 @@ try {
   await context.close();
   await browser.close();
   await new Promise((resolveClose) => server.close(resolveClose));
+}
+
+async function iconState(locator) {
+  await locator.waitFor({ state: 'visible' });
+  return locator.evaluate((node) => {
+    const box = node.getBoundingClientRect();
+    return {
+      html: node.innerHTML,
+      svgCount: node.querySelectorAll('svg').length,
+      width: box.width,
+      height: box.height,
+    };
+  });
+}
+
+function assertIconState(state, className, label) {
+  assert.equal(state.svgCount, 1, `${label} must contain exactly one SVG`);
+  assert.match(state.html, new RegExp(className), `${label} must use ${className}`);
+  assert.ok(state.width > 0 && state.height > 0, `${label} must be visible`);
+}
+
+async function assertMailIconAcceptance(page, providerMode) {
+  const fallback = providerMode !== 'shell';
+  const compose = await iconState(page.locator('[data-mail-compose]'));
+  assertIconState(compose, fallback ? 'mail-action-edit' : 'ctox-action-edit', 'compose');
+
+  const toggle = page.locator('[data-mail-left-pane] [data-mail-view-toggle]');
+  let toggleState = await iconState(toggle);
+  assertIconState(toggleState, fallback ? 'mail-action-list' : 'ctox-action-list', 'cards-to-list toggle');
+  assert.equal(await toggle.getAttribute('data-pg-view'), 'cards');
+  assert.equal(await toggle.getAttribute('aria-label'), 'Als Liste anzeigen');
+  assert.equal(await toggle.getAttribute('title'), 'Als Liste anzeigen');
+  assert.equal(await toggle.getAttribute('aria-pressed'), null);
+  await toggle.click();
+  toggleState = await iconState(toggle);
+  assertIconState(toggleState, fallback ? 'mail-action-grid' : 'ctox-action-grid', 'list-to-cards toggle');
+  assert.equal(await toggle.getAttribute('data-pg-view'), 'list');
+  assert.equal(await toggle.getAttribute('aria-label'), 'Als Karten anzeigen');
+  assert.equal(await toggle.getAttribute('title'), 'Als Karten anzeigen');
+  assert.equal(await toggle.getAttribute('aria-pressed'), null);
+  await toggle.click();
+  toggleState = await iconState(toggle);
+  assertIconState(toggleState, fallback ? 'mail-action-list' : 'ctox-action-list', 'toggle restored');
+
+  await page.locator('[data-mail-left-pane] [data-pg-band="campaigns"]').click();
+  await page.locator('[data-mail-scope-id="campaign-1"]').click();
+  const progressSteps = page.locator('[data-mail-record-id="message-delivered-1"] .mail-progress-step');
+  await progressSteps.first().waitFor({ state: 'visible' });
+  const expectedProgressIcons = ['edit', 'check', 'send', 'check', 'eye', 'link'];
+  for (const [index, name] of expectedProgressIcons.entries()) {
+    const state = await iconState(progressSteps.nth(index));
+    assertIconState(state, fallback ? `mail-action-${name}` : `ctox-action-${name}`, `progress ${name}`);
+  }
+
+  await page.locator('[data-mail-close-detail]').click();
+  await page.setViewportSize({ width: 700, height: 820 });
+  await page.waitForTimeout(100);
+  const openNav = await iconState(page.locator('[data-mail-open-nav]'));
+  assertIconState(openNav, fallback ? 'mail-action-columns' : 'ctox-action-columns', 'navigation open');
+  await page.locator('[data-mail-open-nav]').click();
+  const sidebar = page.locator('[data-mail-left-pane]');
+  await sidebar.waitFor({ state: 'visible' });
+  const closeNav = await iconState(page.locator('[data-mail-close-nav]'));
+  assertIconState(closeNav, fallback ? 'mail-action-close' : 'ctox-action-close', 'navigation close');
+  await page.locator('[data-mail-close-nav]').click();
+  await sidebar.waitFor({ state: 'hidden' });
+  await page.setViewportSize({ width: 1440, height: 940 });
+  await page.waitForTimeout(100);
+  await page.locator('[data-mail-left-pane] [data-pg-band="queues"]').click();
+  await page.locator('[data-mail-scope-id="inbound"]').click();
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
 }
 
 async function assertVisibleText(page, text) {

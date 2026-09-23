@@ -60,6 +60,38 @@ results, runtime projections and files continue through CTOX Sync/WebRTC.
 The immutable address mechanism alone does not certify bootstrap performance,
 mobile suspend/resume, or full runtime compatibility across all hosts.
 
+### Desktop pin hydration
+
+The shell may paint UI-only defaults before Sync starts. Cached pin state is
+read from the scoped localStorage entry; a missing or malformed entry is
+unknown, while a valid array — including `[]` — is a known local selection.
+Startup has no initialization timestamp and performs no pin-cache or layout
+write for unknown state.
+
+Authoritative reconciliation uses the existing collection lease and
+query-demand-loader with an opaque `requireRevision` hydration token. Query
+readiness means the negotiated peer has query-fetch capability and the actual
+loader finished installation; registration, transport activity and
+`active$` are not sufficient. Strict required-revision reads are keyed by that
+token plus the actual database/bridge/negotiation/connection generation and
+reject timeout, consumer cancellation, broker closure, loader cancellation and
+generation replacement. They never fall back to local data. A completed native
+query may return no document (confirmed absence) or an explicit `[]` selection.
+Only a strictly newer genuine local edit wins and writes back; ties, older
+locals, remote empty arrays and confirmed absence never create an
+initialization timestamp or layout mutation. Replaced database/runtime/auth
+storage scopes discard pending edits and late results; a reconnect within the
+same identity preserves them until the new authority settles.
+
+The full-host critical-reload fixture additionally runs a separate fresh-context
+pin-preservation story after the 30 timing samples. It confirms a seeded layout
+in native SQLite, withholds real signaling messages past the former startup
+read timeout, and rejects any cache timestamp created before the native answer.
+It then checks native/browser pin equality, visible pinned controls and another
+reload. `desktop-pin-reload.json` records registration, signaling release and
+pin convergence separately from the warm critical-collection percentile. The
+new story still requires an actual CI execution before it is acceptance evidence.
+
 
 ## Native BusinessData source identity
 
@@ -116,6 +148,23 @@ Consequences (all from `src/apps/business-os/rxdb/README.md`):
   `RTCPeerConnection`, native `WebSocket`.
 - No feature gates, paid-tier checks, or runtime add-on unlocks.
   `addRxPlugin()` exists only as a transition shim for old bootstrap code.
+
+### Collection notifications during initial demand
+
+`collection.$.subscribe(listener)` continues to emit complete collection
+snapshots as `{ collectionName, documents }`, starting only after its initial
+query succeeds. Committed changes during that query are merged into the first
+snapshot; a pending or failed query is never presented as an empty ready list.
+
+An invalidation-only consumer may explicitly opt into
+`subscribe(listener, { emitPendingChanges: true })`. While initialization is
+pending, debounced committed changes additionally emit
+`{ collectionName, initialPending: true, changedDocuments }`. This event has
+**no `documents` field** and does not certify collection readiness. Consumers
+must distinguish it from a complete snapshot. The built-in Crew subscribes this
+way only for harness status and triggers its existing authoritative row read;
+it does not render the changed-document payload as a fully loaded collection.
+The shell's scoped collection facade preserves this subscription option.
 
 The Rust side is a byte-correct port of RxDB 16.20.0 (upstream pin
 `c69c94bb…`, see `src/core/rxdb/PORTING.md` and `vendor/rxdb.version`),
@@ -490,6 +539,14 @@ already exist always render regardless of readiness.
 
 Explicit non-goal: readiness is a **render hint, never a mount blocker**. The OS
 stays snappy; a module must not wait for sync to appear.
+
+A stricter authority-readiness barrier is separate from the render hint. It
+requires query-fetch capability plus a successfully installed demand loader for
+the current connection generation. `requireRevision` reads use this barrier and
+are never satisfied by ordinary stale-while-revalidate state, a closed
+multi-tab broker, a timeout, or another connection generation. The opaque token
+is carried through the existing in-flight identity and sidecar satisfied-token
+fields; it is not a server revision or new transport.
 
 ### 3.2 Shell integration
 
@@ -1716,6 +1773,8 @@ persisted even on failure. This is the retained-profile browser cohort only;
 | `projection-window-gc-smoke` | Stale projection windows are garbage-collected. |
 | `query-api-smoke` | Query API surface. |
 | `query-fetch-capability-smoke` | Capability negotiation surface. |
+| `query-demand-authoritative-generation-smoke` | Strict authority tokens reject absent/replaced/cancelled generations, accept native empty, and reuse only the same token/generation. |
+| `webrtc-authority-generation-smoke` | Transport renegotiation with identical native session/storage/checkpoint/schema keeps strict query generation stable; changed peer identity or any native-authority input rejects it. |
 | `query-fingerprint-corpus-smoke` | JS fingerprints match the shared JS/Rust corpus byte-for-byte. |
 | `quota-recovery-smoke` | Sidecar behaviour under quota pressure. |
 | `replication-demand-race-smoke` | Concurrent `masterChangesSince` vs query-fetch does not corrupt state. |

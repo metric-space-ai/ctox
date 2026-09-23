@@ -38,6 +38,7 @@ function startNativeSymbolProfile(child, {
   let timer, durationTimer, killTimer, recorder, finished = false, stopping = false;
   let interruptRequested = false;
   let recordError = '', stderr = '', stderrTruncated = false, startTicks;
+  let stdout = '', stdoutTruncated = false;
   let resolveCompletion;
   const completion = new Promise(resolve => { resolveCompletion = resolve; });
   const write = () => fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2) + '\n');
@@ -86,7 +87,13 @@ function startNativeSymbolProfile(child, {
       metadata.recordArgs = args;
       metadata.perfExecutable = perfExecutable;
       metadata.startedAtMs = Date.now(); metadata.state = 'recording'; write();
-      recorder = spawnRecord(perfExecutable, args, { stdio: ['ignore', 'ignore', 'pipe'], env: perfEnvironment });
+      recorder = spawnRecord(perfExecutable, args, { stdio: ['ignore', 'pipe', 'pipe'], env: perfEnvironment });
+      recorder.stdout.on('data', chunk => {
+        const text = chunk.toString();
+        const room = Math.max(0, 16384 - stdout.length);
+        stdout += text.slice(0, room);
+        if (text.length > room) stdoutTruncated = true;
+      });
       recorder.stderr.on('data', chunk => {
         const text = chunk.toString();
         const room = Math.max(0, 16384 - stderr.length);
@@ -97,6 +104,7 @@ function startNativeSymbolProfile(child, {
       recorder.once('close', async (code, signal) => {
         clearTimeout(durationTimer); clearTimeout(killTimer);
         metadata.recordCode = code; metadata.recordSignal = signal;
+        metadata.recordStdout = stdout; metadata.recordStdoutTruncated = stdoutTruncated;
         metadata.recordStderr = stderr; metadata.recordStderrTruncated = stderrTruncated;
         metadata.recordStoppedAtMs = Date.now();
         // Linux perf re-raises SIGINT after flushing a controlled recording.

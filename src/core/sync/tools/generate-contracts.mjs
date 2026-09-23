@@ -90,7 +90,8 @@ for (const [name, fields] of Object.entries(fixture.types)) {
   dependencies.set(name, fieldDependencies(fields));
 }
 for (const [name, variants] of Object.entries(unions)) {
-  rust += `\n#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]\n#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]\npub enum ${name} {\n`;
+  const debug = (fixture.sensitiveTypes ?? []).includes(name) ? '' : 'Debug, ';
+  rust += `\n#[derive(${debug}Clone, PartialEq, Eq, Serialize, Deserialize)]\n#[serde(tag = "type", rename_all = "camelCase", rename_all_fields = "camelCase", deny_unknown_fields)]\npub enum ${name} {\n`;
   const tsVariants = [];
   const schemaVariants = [];
   for (const [variant, fields] of Object.entries(variants)) {
@@ -140,7 +141,7 @@ if (workjetIndex >= 0) {
     throw new Error('Install the pinned Workjet contracts dependencies before generating or checking its contracts');
   }
   const format = (path, content) => [path, execFileSync(process.execPath, [
-    formatter, 'fmt', '--stdin-filepath', path,
+    formatter, 'fmt', '--threads', '2', '--stdin-filepath', path,
   ], { input: content, encoding: 'utf8', cwd: resolve(workjet) })];
   outputs.push(format(resolve(workjet, `packages/contracts/src/${workjetBasename}.generated.ts`), ts));
   outputs.push(format(resolve(workjet, `packages/contracts/src/${workjetBasename}.schema.generated.ts`),

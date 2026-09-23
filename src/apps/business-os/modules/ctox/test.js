@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { build } from 'esbuild';
 import './tests/data-state.test.mjs';
+import './tests/terminal-endpoint.test.mjs';
 
 async function importBrowserBundle(relativePath) {
   const bundledModule = await build({

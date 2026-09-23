@@ -7,7 +7,21 @@
     "CTOX_BUSINESS_DATA_MAX_SNAPSHOT_BYTES": 2097152,
     "CTOX_BUSINESS_DATA_IDENTITY_METHOD": "ctox.business_data.identity.v1"
   },
+  "sensitiveTypes": ["NativeBusinessDataCredentialReply", "NativeBusinessDataHostFrame"],
   "types": {
+    "NativeBusinessDataCredentialChallenge": {
+      "version": "u32", "requestId": "string", "connectionId": "string",
+      "targetId": "string", "sessionEpoch": "u64", "nonce": "optional:string"
+    },
+    "NativeBusinessDataDeviceProof": {
+      "publicX": "string", "publicY": "string", "signature": "string"
+    },
+    "NativeBusinessDataCredentialReply": {
+      "version": "u32", "requestId": "string", "connectionId": "string",
+      "sessionEpoch": "u64", "capabilityToken": "optional:string",
+      "deviceProof": "optional:NativeBusinessDataDeviceProof"
+    },
+
     "NativeBusinessDataIdentityRequest": { "version": "u32", "challenge": "string" },
     "NativeBusinessDataDeviceIdentity": {
       "pairingId": "string", "deviceId": "string", "proofKeyThumbprint": "string"
@@ -50,6 +64,14 @@
     ]
   },
   "unions": {
+    "NativeBusinessDataHostFrame": {
+      "request": { "request": "NativeBusinessDataRequest" },
+      "response": { "response": "NativeBusinessDataResponse" },
+      "event": { "event": "NativeBusinessDataEvent" },
+      "credentialChallenge": { "challenge": "NativeBusinessDataCredentialChallenge" },
+      "credentialReply": { "reply": "NativeBusinessDataCredentialReply" }
+    },
+
     "NativeBusinessDataScope": {
       "instance": {}, "project": { "projectId": "string" },
       "thread": { "projectId": "string", "threadId": "string" }

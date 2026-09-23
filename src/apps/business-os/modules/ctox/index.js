@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260909-shell-v2-crew-chat-guards-v370';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
@@ -20,7 +20,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260909-shell-v2-crew-chat-guards-v370';
+const CTOX_STYLE_BUILD = '20260913-shell-v2-authoritative-pin-retry-v384';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -907,23 +907,23 @@ async function renderFromLocalCache(state) {
 // One load path. Every collection is a bounded RxDB read; there is no HTTP
 // fallback and no poll loop — subscriptions (wireLocalRealtime) call this.
 async function hydrateFromLocal(state) {
+  // Status must not wait for task lists or selected-task event queries.
+  refreshConfirmedHarnessStatus(state);
   // The two task sources fail loudly: a failed read must never look like an
   // idle harness (showDataError keeps the last good model). Secondary sources
   // degrade quietly.
-  const [commands, queueTasks, bugReports, webStack, blobFlow, crewMembers, harnessStatus, channelAccounts] = await Promise.all([
+  const [commands, queueTasks, bugReports, webStack, blobFlow, crewMembers, channelAccounts] = await Promise.all([
     loadLocalCommands(state.ctx),
     loadLocalQueueTasks(state.ctx),
     loadLocalBugReports(state.ctx).catch(() => []),
     loadLocalWebStackOverview(state.ctx).catch((error) => ({ ok: false, error: error.message || String(error) })),
     loadHarnessFlowSnapshot(state.ctx).catch(() => emptyHarnessFlow('harness_flow_unavailable')),
     loadLocalCrewMembers(state.ctx).catch(() => []),
-    loadLocalHarnessStatus(state.ctx).catch(() => null),
     loadLocalChannelAccounts(state.ctx).catch(() => null),
   ]);
   if (state.disposed) return;
   state.crewMembers = crewMembers;
   state.channelAccounts = channelAccounts;
-  state.harnessStatus = harnessStatus;
   armExpressionRefresh(state);
   state.webStack = {
     loading: false,
@@ -994,8 +994,9 @@ function wireLocalRealtime(state) {
       if (!collection?.$?.subscribe) return null;
       return collection.$.subscribe((change) => {
         if (selectedTaskOnly.has(collectionName) && !changeConcernsSelectedTask(state, change)) return;
+        if (collectionName === "ctox_harness_status") refreshConfirmedHarnessStatus(state, true);
         scheduleRender();
-      }) || null;
+      }, {emitPendingChanges: collectionName === "ctox_harness_status"}) || null;
     })
     .filter(Boolean);
   state.realtimeCollectionCount = subscriptions.length;
@@ -1111,6 +1112,8 @@ function render(state) {
   // flow canvas / drawer as before.
   renderTaskList(state);
   if (mainIsBusy(state)) {
+    // Confirmed control status must remain live even while the menu/editor is in use.
+    syncHarnessControlStatus(state);
     state.mainRenderPending = true;
   } else {
     state.mainRenderPending = false;
@@ -1346,7 +1349,7 @@ function buildTaskColumn(state, options = {}) {
   wireCompactMenus(left);
 }
 
-function wireCompactMenus(container) {
+function wireCompactMenus(container, onClose = null) {
   for (const details of container.querySelectorAll('.ctox-more-actions')) {
     const summary = details.querySelector('summary');
     const panel = details.querySelector('.ctox-more-actions-body');
@@ -1366,6 +1369,7 @@ function wireCompactMenus(container) {
       if (event.newState === 'closed') {
         details.open = false;
         summary.setAttribute('aria-expanded', 'false');
+        onClose?.();
       }
     });
     panel.addEventListener('keydown', (event) => {
@@ -2380,7 +2384,7 @@ function renderMain(state) {
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
           <h2 class="ctox-pane-title">${escapeHtml(selectedTask ? taskDisplayTitle(selectedTask, state) : t.doingNow)}</h2>
-          ${state.harnessStatus?.paused ? `<small class="ctox-paused-note">${escapeHtml(t.harnessPaused)}</small>` : ''}
+          <small class="ctox-paused-note" ${state.harnessStatus?.paused ? '' : 'hidden'}>${escapeHtml(t.harnessPaused)}</small>
         </div>
         <div class="ctox-pane-actions">
           ${selectedTask ? `<button type="button" class="ctox-button ctox-job-toggle" data-job-toggle aria-expanded="${Boolean(state.jobEditorOpen)}">${escapeHtml(t.editTask)}</button>` : ''}
@@ -2418,7 +2422,7 @@ function renderMain(state) {
   `;
   restoreFlowViewport(state, previousViewport);
   const editor = main.querySelector('[data-job-panel]');
-  wireCompactMenus(main);
+  wireCompactMenus(main, () => flushPendingMainRender(state));
   main.querySelector('[data-manage-channels]')?.addEventListener('click', () => {
     window.CTOX_BUSINESS_OS_APP?.openSettingsDrawer?.({ initialTab: 'channels' });
   });
@@ -2435,12 +2439,7 @@ function renderMain(state) {
   main.querySelector('.ctox-history-fold')?.addEventListener('toggle', (event) => {
     state.historyOpen = event.currentTarget.open;
   });
-  main.querySelector('[data-harness-pause]')?.addEventListener('click', () => {
-    runHarnessControl(state, 'pause', !state.harnessStatus?.paused);
-  });
-  main.querySelector('[data-harness-capacity]')?.addEventListener('change', (event) => {
-    runHarnessControl(state, 'capacity', event.currentTarget.value);
-  });
+  wireHarnessControls(state, main);
   main.querySelector('[data-webstack-toggle]')?.addEventListener('click', () => {
     if (state.detailDrawer?.type === 'webstack') {
       closeDetailDrawer(state);
@@ -2876,7 +2875,7 @@ function inboundEndpointForTask(task, state) {
 
 function outboundEndpointForTask(task, selectedNode, state) {
   const t = labels[state.lang];
-  const status = normalizeCommandStatus(task?.status || '');
+  const status = authoritativeTaskStatus(task) || normalizeCommandStatus(task?.status || '');
   const terminalNode = terminalNodeForTask(task, selectedNode, state);
   const terminalLabels = {
     passed: state.lang === 'en' ? 'Delivered / closed' : 'Ausgeliefert / geschlossen',
@@ -2902,6 +2901,13 @@ function outboundEndpointForTask(task, selectedNode, state) {
 }
 
 function terminalNodeForTask(task, selectedNode, state) {
+  // Retained flow events may be absent or describe a previous attempt. Use
+  // the same durable execution state as the task card before that history.
+  const authoritative = authoritativeTaskStatus(task);
+  if (authoritative === 'completed') return 'passed';
+  if (['failed', 'cancelled'].includes(authoritative)) return 'model-failed';
+  if (authoritative) return null;
+
   const status = normalizeCommandStatus(task?.status || '');
   if (selectedNode && ['passed', 'model-failed', 'infra-failed'].includes(selectedNode.id) && selectedNode.status === 'done') return selectedNode.id;
   if (taskMatchesHarnessFlow(task, state)) {
@@ -4752,6 +4758,44 @@ function crewMemberById(state, memberId) {
   return (state?.crewMembers || []).find((member) => member.id === memberId) || null;
 }
 
+// One independent, coalesced read lane. Events arriving during a read invalidate
+// its result and request one follow-up; task hydration never assigns status.
+function refreshConfirmedHarnessStatus(state, invalidate = false) {
+  if (state.disposed) return Promise.resolve();
+  if (state.harnessStatusRead) {
+    // General hydration joins the current read; only a newer status event
+    // invalidates it. Busy task updates must not starve confirmed status.
+    if (invalidate) state.harnessStatusRequest += 1;
+    return state.harnessStatusRead;
+  }
+  state.harnessStatusRequest = (state.harnessStatusRequest || 0) + 1;
+  let request;
+  state.harnessStatusRead = (async () => {
+    do {
+      request = state.harnessStatusRequest;
+      try {
+        const status = await loadLocalHarnessStatus(state.ctx);
+        if (state.disposed) return;
+        if (request !== state.harnessStatusRequest) continue;
+        if (status) {
+          state.harnessStatus = status;
+          state.harnessHealth = deriveHarnessHealth(state);
+          syncHarnessControlStatus(state);
+          syncHarnessHealthUiState(state);
+        }
+      } catch (error) {
+        if (!state.disposed) console.warn('[ctox] harness status read failed', error);
+      }
+    } while (!state.disposed && request !== state.harnessStatusRequest);
+  })().finally(() => {
+    state.harnessStatusRead = null;
+    // A subscriber may have queued work after the loop settled but before this
+    // finalizer. Serve that request too; no retry exists without a new request.
+    if (!state.disposed && request !== state.harnessStatusRequest) return refreshConfirmedHarnessStatus(state);
+  });
+  return state.harnessStatusRead;
+}
+
 async function loadLocalHarnessStatus(ctx) {
   const collection = ctoxCollection(ctx, 'ctox_harness_status');
   if (!collection) return null;
@@ -5926,6 +5970,45 @@ function harnessStatusText(state) {
   return bits.join(' · ');
 }
 
+// Patch only facts from the hydrated native projection. Never infer acceptance
+// from a dispatched command, and do not replace the active menu/editor DOM.
+function syncHarnessControlStatus(state) {
+  const main = state.ctx?.host?.querySelector?.('[data-ctox-main]');
+  if (!main || !state.harnessStatus) return;
+  const paused = state.harnessStatus.paused === true;
+  const t = labels[state.lang];
+  if (!main.querySelector('[data-harness-pause]') && mayManageWorkspace(state)) {
+    const menu = main.querySelector('.ctox-more-actions-body');
+    if (menu) {
+      menu.insertAdjacentHTML('afterbegin', harnessControlsMarkup(state));
+      wireHarnessControls(state, main);
+    }
+  }
+  const capacity = main.querySelector('[data-harness-capacity]');
+  if (capacity && document.activeElement !== capacity) capacity.value = String(Number(state.harnessStatus.worker_capacity) || 1);
+  else if (capacity) state.mainRenderPending = true;
+  const button = main.querySelector('[data-harness-pause]');
+  if (button) {
+    button.textContent = paused ? t.resumeHarness : t.pauseHarness;
+    button.setAttribute('aria-pressed', String(paused));
+    button.classList.toggle('is-active', paused);
+  }
+  const note = main.querySelector('.ctox-paused-note');
+  if (note) {
+    note.textContent = t.harnessPaused;
+    note.hidden = !paused;
+  }
+}
+
+function wireHarnessControls(state, main) {
+  main.querySelector('[data-harness-pause]')?.addEventListener('click', () => {
+    runHarnessControl(state, 'pause', !state.harnessStatus?.paused);
+  });
+  main.querySelector('[data-harness-capacity]')?.addEventListener('change', (event) => {
+    runHarnessControl(state, 'capacity', event.currentTarget.value);
+  });
+}
+
 function harnessControlsMarkup(state) {
   const t = labels[state.lang];
   const h = state.harnessStatus;
@@ -6901,6 +6984,7 @@ function escapeAttr(value) {
 }
 
 export const __ctoxTestHooks = {
+  outboundEndpointForTask,
   taskCardMarkup,
   displayStatus,
   taskLeaseLineMarkup,
@@ -6972,4 +7056,6 @@ export const __ctoxTestHooks = {
   taskCrewNodeId,
   taskCrewStatus,
   wireTaskSourceReadiness,
+  wireLocalRealtime,
+  renderFromLocalCache,
 };

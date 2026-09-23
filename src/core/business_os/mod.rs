@@ -8,6 +8,7 @@ mod browser_control;
 mod browser_runtime;
 mod capability;
 mod command_plane;
+mod contact_email_validation;
 mod control_command_types;
 mod crew_commands;
 mod customer_apps;
@@ -29,6 +30,7 @@ mod module_manifest_loader;
 pub mod office_cli;
 pub mod office_engine;
 pub(crate) mod office_staging_repair;
+mod outbound_update_digest;
 mod person_research_command;
 mod person_research_gap_closure;
 pub mod policy;
@@ -91,6 +93,7 @@ pub fn audit_customer_apps(root: &std::path::Path) -> anyhow::Result<serde_json:
     }))
 }
 pub(crate) use browser_runtime::BrowserSessionAutomationRequest;
+pub use outbound_update_digest::tick as outbound_update_digest_tick;
 pub use rxdb_peer::enqueue_business_command_document;
 pub use rxdb_peer::native_peer_status;
 pub use rxdb_peer::repair_optional_rxdb_collection_schema_drift;

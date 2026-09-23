@@ -16,8 +16,7 @@ use ring::{
     signature::{self, EcdsaKeyPair, KeyPair},
 };
 use rxdb::plugins::replication_webrtc::{
-    send_message_and_await_answer, webrtc_types::WebRTCPeerSessionValidation, LocalDeviceProof,
-    LocalSessionCredentials, WebRTCMessage,
+    send_message_and_await_answer, webrtc_types::WebRTCPeerSessionValidation, WebRTCMessage,
 };
 use serde_json::{json, Value};
 use std::{
@@ -42,19 +41,19 @@ fn key() -> Arc<EcdsaKeyPair> {
     )
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_device_credentials_unlock_real_webrtc_reads_and_obey_current_revocation() {
-    exercise(false, false, TargetFault::None).await;
+    exercise(false, false, TargetFault::None, false).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_device_credentials_from_another_key_cannot_unlock_replication() {
-    exercise(true, false, TargetFault::None).await;
+    exercise(true, false, TargetFault::None, false).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_peer_filter_revocation_denies_real_webrtc_reads_with_valid_credentials() {
-    exercise(false, true, TargetFault::None).await;
+    exercise(false, true, TargetFault::None, false).await;
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -64,17 +63,34 @@ enum TargetFault {
     Instance,
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wrong_source_pin_or_instance_never_requests_credentials_over_real_webrtc() {
     for fault in [TargetFault::Key, TargetFault::Instance] {
-        exercise(false, false, fault).await;
+        exercise(false, false, fault, false).await;
     }
 }
 
-async fn exercise(wrong_key: bool, revoke_peer_only: bool, target_fault: TargetFault) {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn data_client_offers_to_passive_source_without_execution_membership() {
+    exercise(false, false, TargetFault::None, true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn data_client_wrong_target_never_obtains_credentials() {
+    for fault in [TargetFault::Key, TargetFault::Instance] {
+        exercise(false, false, fault, true).await;
+    }
+}
+
+async fn exercise(
+    wrong_key: bool,
+    revoke_peer_only: bool,
+    target_fault: TargetFault,
+    data_client: bool,
+) {
     tokio::time::timeout(Duration::from_secs(35), async {
         let signaling =
-            signaling_fixture::SignalingFixture::with_roles(["ctox_instance", "workjet_executor"])
+            signaling_fixture::SignalingFixture::with_roles(["ctox_instance", if data_client { "browser" } else { "workjet_executor" }])
                 .await;
         let expected_key = key();
         let signer = if wrong_key {
@@ -108,6 +124,7 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool, target_fault: TargetF
         server_options.admission.session = Arc::new(move |payload, challenge| {
             use WebRTCPeerSessionValidation::{Accept, Defer, Reject};
             if policy_revoked.load(Ordering::SeqCst)
+                || payload["peerSession"]["role"] != if data_client { "browser" } else { "workjet_executor" }
                 || payload
                     .pointer("/peerSession/sessionId")
                     .and_then(Value::as_str)
@@ -197,63 +214,96 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool, target_fault: TargetF
         let counter = signed_challenges.clone();
         let credential_counter = credential_requests.clone();
         let public_seen = public_identity_seen.clone();
-        let credentials: rxdb::plugins::replication_webrtc::LocalSessionProvider<
-            rxdb::plugins::replication_webrtc::WebRTCRsConnection,
-        > = Arc::new(move |_connection, nonce| {
-            assert!(public_seen.load(Ordering::SeqCst), "credentials accessed before source proof");
-            credential_counter.fetch_add(1, Ordering::SeqCst);
-            let signer = signer.clone();
-            let counter = counter.clone();
-            Box::pin(async move {
-                let device_proof = nonce.map(|nonce| {
+        let (mut credential_channel, requester) = ctox_sync::credential_ipc::credential_channel();
+        let mut credential_tasks = tokio::task::JoinSet::new();
+        credential_tasks.spawn(async move {
+            while let Some(challenge) = credential_channel.next_challenge().await {
+                assert!(public_seen.load(Ordering::SeqCst), "credentials accessed before source proof");
+                credential_counter.fetch_add(1, Ordering::SeqCst);
+                let device_proof = challenge.nonce.map(|nonce| {
                     counter.fetch_add(1, Ordering::SeqCst);
                     let signature = signer.sign(&SystemRandom::new(), nonce.as_bytes()).unwrap();
                     let public = signer.public_key().as_ref();
-                    LocalDeviceProof {
+                    ctox_sync::business_data_contract::NativeBusinessDataDeviceProof {
                         public_x: URL_SAFE_NO_PAD.encode(&public[1..33]),
                         public_y: URL_SAFE_NO_PAD.encode(&public[33..65]),
                         signature: URL_SAFE_NO_PAD.encode(signature.as_ref()),
                     }
                 });
-                Ok(LocalSessionCredentials {
-                    capability_token: "fixture-private-read".into(),
-                    device_proof,
-                })
-            })
+                credential_channel.accept_reply(ctox_sync::business_data_contract::NativeBusinessDataCredentialReply {
+                    version: 1, request_id: challenge.request_id, connection_id: challenge.connection_id,
+                    session_epoch: challenge.session_epoch,
+                    capability_token: Some("fixture-private-read".into()), device_proof,
+                }).unwrap();
+            }
         });
         let pinned_key = if target_fault == TargetFault::Key {
             ctox_sync::authority::auth::SigningIdentity::from_pkcs8(
                 &ctox_sync::authority::auth::SigningIdentity::generate_pkcs8().unwrap()
             ).unwrap().public_identity()
         } else { source_pin.clone() };
-        client_options.local_session_provider = Some(Arc::new(move |_connection| {
+        client_options.local_session_provider = Some(Arc::new(move |connection| {
             let public_identity = pinned_key.clone();
-            let credentials = credentials.clone();
+            let requester = requester.clone();
             Box::pin(async move {
-                Ok(ctox_sync::native::NativeSessionTarget {
+                let binding = ctox_sync::native::NativeCredentialBinding {
+                    target_id: "saved-fixture".into(),
+                    connection_id: format!("fixture-{}", connection.generation()),
+                    account_epoch: 1,
+                    connection,
+                };
+                Ok(ctox_sync::native::NativeSessionTarget::with_ipc_credentials(
                     public_identity,
-                    instance_id: if target_fault == TargetFault::Instance { "wrong-instance" } else { "fixture-instance" }.into(),
-                    credentials,
-                })
+                    if target_fault == TargetFault::Instance { "wrong-instance" } else { "fixture-instance" }.into(),
+                    binding, requester,
+                ))
             })
         }));
-        let client = NativeSyncSession::start(client_options).await.unwrap();
-        let mut client_errors = client.pool().error_subject.subscribe();
-        // Wait for role-bearing signaling membership; only the lower ID offers.
-        loop {
-            if server
-                .pool()
-                .connection_handler
-                .connect_native_execution_peer("native000002".into())
-                .await
-                .is_ok()
-            {
-                break;
+        let mut client_errors = None;
+        let setup = |pool: &ctox_sync::native::NativePool| {
+            client_errors = Some(pool.error_subject.subscribe());
+            Ok(())
+        };
+        let client = if data_client {
+            NativeSyncSession::start_data_client_with_pool_setup(client_options, setup).await.unwrap()
+        } else {
+            NativeSyncSession::start_with_pool_setup(client_options, setup).await.unwrap()
+        };
+        let mut client_errors = client_errors.expect("observer installed before join");
+        if data_client {
+            assert!(server.connect_data_peer("native000002".into()).await.is_err());
+            assert!(client.connect_data_peer("native000002".into()).await.is_err());
+            assert!(client.pool().connection_handler
+                .connect_native_execution_peer("native000001".into()).await.is_err());
+        }
+        // No manual offer for data clients: the owned discovery must establish
+        // the actual channel, including with the larger signaling ID.
+        if !data_client {
+            loop {
+                let connected = server
+                    .pool()
+                    .connection_handler
+                    .connect_native_execution_peer("native000002".into())
+                    .await
+                    .is_ok();
+                if connected {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
         }
         if target_fault != TargetFault::None {
-            assert!(client_errors.next().await.is_some(), "wrong target must fail the handshake");
+            // Signaling/transport diagnostics share this stream. Only the
+            // credential-admission rejection proves that the target check ran;
+            // an unrelated first event cannot stand in for that boundary.
+            // The enclosing 35-second deadline still bounds this wait.
+            loop {
+                let error = client_errors.next().await
+                    .expect("peer error stream closed before credential-admission rejection");
+                if error.parameters()["code"] == "local_session_credentials_unavailable" {
+                    break;
+                }
+            }
             assert!(public_identity_seen.load(Ordering::SeqCst), "public proof traversed WebRTC");
             assert_eq!(credential_requests.load(Ordering::SeqCst), 0);
             assert_eq!(signed_challenges.load(Ordering::SeqCst), 0);
@@ -406,6 +456,10 @@ async fn exercise(wrong_key: bool, revoke_peer_only: bool, target_fault: TargetF
             }
         }
         client.shutdown().await;
+        credential_tasks.abort_all();
+        while let Some(result) = credential_tasks.join_next().await {
+            if let Err(error) = result { assert!(error.is_cancelled(), "credential fixture panicked: {error}"); }
+        }
         server.shutdown().await;
         client_db.close().await.unwrap();
         server_db.close().await.unwrap();

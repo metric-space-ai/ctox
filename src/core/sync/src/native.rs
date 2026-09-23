@@ -1,4 +1,6 @@
 //! Host-independent native RxDB/WebRTC lifecycle. Hosts supply data and policy.
+mod data_client;
+
 use futures_util::FutureExt;
 use rxdb::{
     plugins::replication_webrtc::{
@@ -25,6 +27,70 @@ pub struct NativeSessionTarget {
     pub credentials: rxdb::plugins::replication_webrtc::LocalSessionProvider<
         rxdb::plugins::replication_webrtc::WebRTCRsConnection,
     >,
+}
+
+impl NativeSessionTarget {
+    /// Attach the private host callback to this exact native connection.
+    /// Pins are supplied by saved-target enrollment; the existing install_target_provider
+    /// still verifies their channel proof before this callback can run.
+    pub fn with_ipc_credentials(
+        public_identity: String,
+        instance_id: String,
+        binding: NativeCredentialBinding,
+        requester: crate::credential_ipc::CredentialRequester,
+    ) -> Self {
+        let credentials: rxdb::plugins::replication_webrtc::LocalSessionProvider<
+            rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+        > = Arc::new(move |connection, nonce| {
+            let requester = requester.clone();
+            let target_id = binding.target_id.clone();
+            let connection_id = binding.connection_id.clone();
+            let epoch = binding.account_epoch;
+            let same_connection = connection == binding.connection;
+            Box::pin(async move {
+                let unavailable = || {
+                    rxdb::rx_error::new_rx_error(
+                        "RC_WEBRTC_PEER",
+                        Some(
+                            serde_json::json!({"code":"local_session_credentials_unavailable",
+                        "message":"native host credentials unavailable"}),
+                        ),
+                    )
+                };
+                if !same_connection {
+                    return Err(unavailable());
+                }
+                let reply = requester
+                    .request(&target_id, &connection_id, epoch, nonce)
+                    .await
+                    .map_err(|_| unavailable())?;
+                Ok(rxdb::plugins::replication_webrtc::LocalSessionCredentials {
+                    capability_token: reply.capability_token.ok_or_else(unavailable)?,
+                    device_proof: reply.device_proof.map(|proof| {
+                        rxdb::plugins::replication_webrtc::LocalDeviceProof {
+                            public_x: proof.public_x,
+                            public_y: proof.public_y,
+                            signature: proof.signature,
+                        }
+                    }),
+                })
+            })
+        });
+        Self {
+            public_identity,
+            instance_id,
+            credentials,
+        }
+    }
+}
+
+/// Allocated by the private connection's dispatcher, never from signaling claims.
+/// A new WebRTC generation requires a new binding; Main retains its captured epoch.
+pub struct NativeCredentialBinding {
+    pub target_id: String,
+    pub connection_id: String,
+    pub account_epoch: u64,
+    pub connection: rxdb::plugins::replication_webrtc::WebRTCRsConnection,
 }
 
 /// Resolve public pins without reading a token or signing a remote nonce.
@@ -75,10 +141,12 @@ pub struct NativeSyncOptions {
 pub struct NativeSyncSession {
     resources: Resources,
     room: String,
+    data_client: bool,
 }
 
 #[derive(Default)]
 struct Resources {
+    data_discovery: Option<data_client::DataClientDiscovery>,
     execution: Option<ExecutionAttachment>,
     signaling: Option<Arc<SignalingClient>>,
     handler: Option<Arc<WebRTCRsConnectionHandler>>,
@@ -98,6 +166,9 @@ impl ExecutionAttachment {
 }
 impl Resources {
     async fn close(&self) {
+        if let Some(discovery) = &self.data_discovery {
+            discovery.shutdown().await;
+        }
         if let Some(execution) = &self.execution {
             let _ = execution.shutdown().await;
         }
@@ -110,6 +181,7 @@ impl Resources {
         }
     }
     fn disarm(&mut self) {
+        self.data_discovery = None;
         self.execution = None;
         self.pool = None;
         self.handler = None;
@@ -125,10 +197,14 @@ impl Drop for Resources {
         let execution = self.execution.take();
         let handler = self.handler.take();
         let pool = self.pool.take();
+        let discovery = self.data_discovery.take();
         // Dropping outside a runtime cannot drive asynchronous IO. During a
         // runtime shutdown Tokio also destroys its tasks; no new runtime is made.
         if let Ok(runtime) = tokio::runtime::Handle::try_current() {
             runtime.spawn(async move {
+                if let Some(discovery) = discovery {
+                    discovery.shutdown().await;
+                }
                 if let Some(execution) = execution {
                     let _ = execution.shutdown().await;
                 }
@@ -149,11 +225,51 @@ impl NativeSyncSession {
         Self::start_with_pool_setup(options, |_| Ok(())).await
     }
 
+    /// Start a query-only consumer on an existing browser-admitted data room.
+    /// The caller retains the database and credential owner. No execution
+    /// attachment or replicated collection is installed by this mode.
+    pub async fn start_data_client(options: NativeSyncOptions) -> io::Result<Self> {
+        Self::start_data_client_with_pool_setup(options, |_| Ok(())).await
+    }
+
+    /// Register host observers before automatic discovery can offer or reject
+    /// a source. As with native host setup, the callback must only register
+    /// resources; it must not block or start independent workers.
+    pub async fn start_data_client_with_pool_setup<F>(
+        options: NativeSyncOptions,
+        setup: F,
+    ) -> io::Result<Self>
+    where
+        F: FnOnce(&NativePool) -> Result<(), rxdb::rx_error::RxError> + Send,
+    {
+        if options.local_session_provider.is_none()
+            || !options.collections.is_empty()
+            || !options.database.collections.lock().is_empty()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "data client requires deferred credentials and query-only storage",
+            ));
+        }
+        Self::start_mode(options, setup, true).await
+    }
+
     /// Install host-owned request handlers and file sources before advertising
     /// this peer. Setup runs once, inside the supervised bring-up boundary;
     /// rejection or panic closes the transport without joining the room.
     /// The callback must only register resources, never block or start workers.
     pub async fn start_with_pool_setup<F>(options: NativeSyncOptions, setup: F) -> io::Result<Self>
+    where
+        F: FnOnce(&NativePool) -> Result<(), rxdb::rx_error::RxError> + Send,
+    {
+        Self::start_mode(options, setup, false).await
+    }
+
+    async fn start_mode<F>(
+        options: NativeSyncOptions,
+        setup: F,
+        data_client: bool,
+    ) -> io::Result<Self>
     where
         F: FnOnce(&NativePool) -> Result<(), rxdb::rx_error::RxError> + Send,
     {
@@ -184,6 +300,7 @@ impl NativeSyncSession {
                 resources.signaling = Some(signaling.clone());
                 let mut config = WebRTCRsConfig::new(signaling.clone(), options.room.clone());
                 config.peer_role = options.peer_role;
+                config.data_client = data_client;
                 if !options.ice_servers.is_empty() {
                     config.ice_servers = options.ice_servers;
                 }
@@ -213,8 +330,19 @@ impl NativeSyncSession {
                     .await?,
                 );
                 let pool = resources.pool.as_ref().expect("prepared native pool");
-                install_target_provider(pool, options.local_session_provider, local_peer_gate);
+                install_target_provider(
+                    pool,
+                    options.local_session_provider,
+                    local_peer_gate.clone(),
+                );
                 setup(pool)?;
+                if data_client {
+                    resources.data_discovery = Some(data_client::DataClientDiscovery::start(
+                        pool,
+                        signaling.clone(),
+                        local_peer_gate,
+                    ));
+                }
                 // Only advertise this peer after every pool request/connect
                 // subscriber and host handler exists. Peers may offer on join.
                 signaling.join(options.room).await?;
@@ -224,7 +352,13 @@ impl NativeSyncSession {
         )
         .await;
         let failure = match result {
-            Ok(Ok(Ok(()))) => return Ok(Self { resources, room }),
+            Ok(Ok(Ok(()))) => {
+                return Ok(Self {
+                    resources,
+                    room,
+                    data_client,
+                })
+            }
             Ok(Ok(Err(error))) => io::Error::other(format!("native sync bring-up failed: {error}")),
             Ok(Err(_)) => io::Error::other("native sync bring-up panicked"),
             Err(_) => io::Error::new(
@@ -242,6 +376,28 @@ impl NativeSyncSession {
             .pool
             .as_ref()
             .expect("a started native session owns its pool")
+    }
+
+    /// Offer to a current, browser-admitted data route using existing WebRTC.
+    /// This is transport setup only. It never issues a ready user-data handle.
+    /// The host owns bounded discovery/retry and must await session shutdown.
+    pub async fn connect_data_peer(&self, route: String) -> io::Result<()> {
+        if !self.data_client {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "data connections require a data-client session",
+            ));
+        }
+        self.pool()
+            .connection_handler
+            .connect_data_peer(route)
+            .await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "data route is unavailable or has incompatible admission",
+                )
+            })
     }
 
     /// Read a bounded page through the already admitted data connection. The
@@ -283,7 +439,8 @@ impl NativeSyncSession {
     }
 
     fn ensure_attachable(&self) -> io::Result<()> {
-        if self.resources.execution.is_some()
+        if self.data_client
+            || self.resources.execution.is_some()
             || self
                 .pool()
                 .canceled

@@ -1910,6 +1910,7 @@ fn native_peer_health_error(
 }
 
 pub fn ensure_native_peer(root: &Path) -> anyhow::Result<()> {
+    store::install_replicated_secret_sanitizer();
     let config = store::sync_config(root)?;
     spawn_native_peer(
         root,
@@ -1955,6 +1956,7 @@ pub fn restart_native_peer(root: &Path) -> anyhow::Result<Value> {
 }
 
 pub fn run_native_peer_foreground(root: &Path) -> anyhow::Result<()> {
+    store::install_replicated_secret_sanitizer();
     let config = store::sync_config(root)?;
     let root = root.to_path_buf();
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1983,6 +1985,7 @@ pub fn spawn_native_peer(
     signaling_urls: Vec<String>,
     signaling_room_password: String,
 ) {
+    store::install_replicated_secret_sanitizer();
     let claimed = with_native_peer_lifecycle_mut(NativePeerLifecycle::supervisor_start);
     match claimed {
         Ok(true) => {}
@@ -2772,6 +2775,14 @@ async fn run_native_peer(
         .context("materialize exact legacy collection grants")
     {
         return Err(release_database_after_failed_bring_up(&database, err).await);
+    }
+    if let Err(err) = store::ensure_first_party_catalog_collection_grants(
+        &root,
+        &resolve_business_os_installed_app_root_for_native_peer(&root),
+    ) {
+        // Optional: a missing grant only leaves a first-party app without
+        // data, it must not take the peer down.
+        eprintln!("[business-os] first-party catalog collection grants skipped: {err:#}");
     }
     let collection_list: Vec<Arc<RxCollection>> = collections
         .into_iter()
@@ -5316,7 +5327,13 @@ async fn sync_business_record_projections_slice_with_database(
         let clock_proves_collection_unchanged = projection_clocks.is_some()
             && after_record_id.is_empty()
             && match current_clock {
-                None => true,
+                // Channel-backed collections (mail, threads, accounts) live in
+                // the channel store and never get a row in
+                // `business_records_projection_clock`. "No clock" meant
+                // "unchanged" for them, so from 19.08.2026 on no new mail
+                // reached the Mail app (thesen: newest projected message
+                // 19.08, 38 newer inbound mails in the channel store).
+                None => !is_channel_backed_projection_collection(&collection_name),
                 Some((version, latest_updated_at_ms)) => {
                     stored_clock_version == Some(version)
                         || (stored_clock_version.is_none() && since_ms > latest_updated_at_ms)
@@ -9237,6 +9254,16 @@ fn business_record_projection_collections() -> Vec<String> {
         .collect()
 }
 
+/// Collections whose source rows live in the communication channel store, not
+/// in `business_records`; they have no projection clock and must be pulled by
+/// their own `updated_at_ms` cursor.
+fn is_channel_backed_projection_collection(collection: &str) -> bool {
+    matches!(
+        collection,
+        "communication_accounts" | "communication_threads" | "communication_messages"
+    )
+}
+
 fn business_record_projection_collections_for_root(root: &Path) -> Vec<String> {
     let mut collections = business_record_projection_collections();
     collections.extend(
@@ -9845,6 +9872,20 @@ fn sqlite_table_latest_updated_at_ms(
 
 #[cfg(test)]
 pub(in crate::business_os) mod tests {
+    #[test]
+    fn channel_backed_collections_are_never_skipped_for_a_missing_clock() {
+        for name in [
+            "communication_accounts",
+            "communication_threads",
+            "communication_messages",
+        ] {
+            assert!(super::is_channel_backed_projection_collection(name));
+        }
+        assert!(!super::is_channel_backed_projection_collection(
+            "business_commands"
+        ));
+    }
+
     use super::*;
     use crate::business_os::rxdb_peer_intake::{
         BusinessCommandsSourceStamp, BusinessCommandsTableStamp,

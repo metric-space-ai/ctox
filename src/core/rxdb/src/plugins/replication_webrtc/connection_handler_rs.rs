@@ -237,6 +237,20 @@ impl WebRTCRsConnectionHandler {
             .map(|entry| WebRTCRsConnection::new(peer_id.to_owned(), entry.generation))
     }
 
+    /// Enumerate exact open transport handles for connection-owned callers.
+    /// Route strings alone are not identities and generations are never reused.
+    pub fn current_connections(&self) -> Vec<WebRTCRsConnection> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Vec::new();
+        }
+        self.peers
+            .lock()
+            .iter()
+            .filter(|(_, entry)| entry.data_channel_open)
+            .map(|(peer_id, entry)| WebRTCRsConnection::new(peer_id.clone(), entry.generation))
+            .collect()
+    }
+
     /// Bind an application identity proof to this established DTLS channel.
     /// A nonce/signature alone can be relayed through another connection.
     pub async fn channel_binding(&self, connection: &WebRTCRsConnection) -> RxResult<String> {
@@ -343,6 +357,9 @@ struct PeerPresenceReport {
 pub struct WebRTCRsConfig {
     pub signaling: Arc<SignalingClient>,
     pub peer_role: super::NativePeerRole,
+    /// Explicit consumer mode, using the existing browser wire role.
+    /// Its signaling admission must also identify it as a browser client.
+    pub data_client: bool,
     pub room: RoomId,
     pub ice_servers: Vec<RTCIceServer>,
     pub data_channel_label: String,
@@ -355,6 +372,7 @@ impl WebRTCRsConfig {
             signaling,
             room: room.into(),
             peer_role: super::NativePeerRole::CtoxInstance,
+            data_client: false,
             ice_servers: vec![RTCIceServer {
                 urls: vec!["stun:stun.l.google.com:19302".to_string()],
                 ..Default::default()
@@ -909,6 +927,7 @@ pub(crate) fn publish_best_effort_send_error(error_subject: &RxSubject<RxError>,
 /// WebRTC connection-handler implementation backed by `webrtc-rs`.
 pub struct WebRTCRsConnectionHandler {
     peer_role: super::NativePeerRole,
+    data_client: bool,
     local_session_provider: Mutex<Option<super::LocalSessionProvider<WebRTCRsConnection>>>,
     connect_subject: RxSubject<WebRTCRsConnection>,
     disconnect_subject: RxSubject<WebRTCRsConnection>,
@@ -1007,6 +1026,7 @@ impl WebRTCRsConnectionHandler {
             &config.udp_bind_addr,
         );
         handler.peer_role = config.peer_role;
+        handler.data_client = config.data_client;
         let handler = Arc::new(handler);
         wait_for_own_peer_id(&config.signaling).await?;
         handler.start_signaling_tasks();
@@ -1022,11 +1042,11 @@ impl WebRTCRsConnectionHandler {
         self: &Arc<Self>,
         remote_peer_id: PeerId,
     ) -> RxResult<()> {
-        if self.closed.load(Ordering::Acquire) {
+        if self.closed.load(Ordering::Acquire) || self.data_client {
             return Err(new_rx_error(
                 "RC_WEBRTC_PEER",
                 Some(serde_json::json!({
-                    "message": "closed native handler cannot start execution connections"
+                    "message": "execution connections require an open execution-capable native handler"
                 })),
             ));
         }
@@ -1074,6 +1094,36 @@ impl WebRTCRsConnectionHandler {
         Ok(())
     }
 
+    /// Connect a query-only native consumer to an advertised CTOX instance.
+    /// The browser/replica role has one offerer: the consumer, regardless of ID.
+    /// Source proof and deferred credentials still authorize the data channel.
+    pub async fn connect_data_peer(self: &Arc<Self>, remote_peer_id: PeerId) -> RxResult<()> {
+        let unavailable = || {
+            new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({
+                    "code": "data_client_route_unavailable",
+                    "message": "data client requires current browser admission and a CTOX instance route"
+                })),
+            )
+        };
+        if self.closed.load(Ordering::Acquire) || !self.data_client {
+            return Err(unavailable());
+        }
+        let signaling = self.signaling.as_ref().ok_or_else(unavailable)?;
+        let own_peer_id = signaling.own_peer_id().ok_or_else(unavailable)?;
+        // Do not infer the signaling role from a token or a remote protocol
+        // answer. Unknown/mismatched admission must fail before offering.
+        if own_peer_id == remote_peer_id
+            || signaling.peer_role(&own_peer_id).as_deref() != Some("browser")
+            || signaling.peer_role(&remote_peer_id).as_deref() != Some("ctox_instance")
+        {
+            return Err(unavailable());
+        }
+        self.ensure_peer_connection(remote_peer_id, true).await?;
+        Ok(())
+    }
+
     fn empty(
         signaling: Option<Arc<SignalingClient>>,
         ice_servers: Vec<RTCIceServer>,
@@ -1083,6 +1133,7 @@ impl WebRTCRsConnectionHandler {
         Self {
             connect_subject: RxSubject::new(),
             peer_role: super::NativePeerRole::CtoxInstance,
+            data_client: false,
             disconnect_subject: RxSubject::new(),
             message_subject: RxSubject::new(),
             response_subject: RxSubject::new(),
@@ -1822,6 +1873,10 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
 
     fn local_peer_role(&self) -> super::NativePeerRole {
         self.peer_role
+    }
+
+    fn is_data_client(&self) -> bool {
+        self.data_client
     }
 
     async fn local_session_credentials(

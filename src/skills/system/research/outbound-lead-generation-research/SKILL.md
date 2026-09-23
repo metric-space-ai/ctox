@@ -11,6 +11,29 @@ cluster: research
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
 - Everything you do goes through the `ctox` CLI. There is no other data path: the CLI runs inside the daemon and writes to the CTOX SQLite stores; the Business OS UI receives results through replication of the collection the command bus writes.
+- **Inside a worker turn the shell sandbox cannot open the CTOX stores** (`ctox … ` from `exec_command` ends with a permission error on `~/.local/state/ctox`). Use the tools instead: `business_os.*` (MCP) for the command, record and writeback; `ctox_web_search` / `ctox_web_read` for the open web; **`ctox_web_scrape` with `mode: "execute"` for every registered source adapter.**
+
+## 0. Mandatory first step: run the registered adapters
+
+Before any open-web search, call `ctox_web_scrape` once for every entry of `source_policy.sources` that has a `target_key` and fits the lead's country:
+
+```json
+{"mode": "execute", "target_key": "<entry.target_key>", "timeout_seconds": 180,
+ "input": {"source_id": "<entry.id>", "company": "<company>", "country": "<DE|AT|CH>",
+           "city": "<city>", "domain": "<domain if known>", "task_id": "<command id>"}}
+```
+
+- `linkedin-com` and `xing-com` need a person: add `"person": {"first_name": "…", "last_name": "…"}` (from the register/Impressum) and give LinkedIn `timeout_seconds: 400`. `mailtester-com` / `experte-de` need `"email"`.
+- Adapters with a credential (D&B Hoovers, Leadfeeder, XING) sign in with the stored login by themselves; `task_id` must be the command id and `timeout_seconds: 400` (a login may wait for an e-mail one-time code).
+- A record from an adapter is a source: `source_id` = the entry id, `url` = the record's `source_url`, `quote` = the record's value. `blocked`, `authorization_required` or `temporary_unreachable` prove nothing — note the status and continue with the next source.
+- **Minimum set per lead** (skip only what `source_policy` does not list):
+  - DE: `handelsregister-de`, `northdata-de`, `bundesanzeiger-de`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum` (with `"domain"` once known).
+  - AT: `firmenabc-at`, `northdata-de`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum`. CH: `zefix-ch`, `moneyhouse-ch`, `shab-ch`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum`.
+  - Persons: run `linkedin-com` (Bright Data, `timeout_seconds: 400`) and `xing-com` with `"person"` for the **priority persons only** — at most one per category in the order of the research procedure (Geschäftsführung, Prokura, Finanzen, Einkauf, SCM, Operations, Technik, Entwicklung), **at most 6 LinkedIn searches per lead**. One name search costs about a minute; a lead with 17 register persons otherwise spends the whole turn there and never reaches the writeback. Never open `linkedin.com` or `xing.com` pages with `ctox_web_read` — LinkedIn answers bots with HTTP 999 and XING with its login wall; only the adapters get through.
+  - E-mail: once an address pattern is known, `mailtester-com` with `"email"`.
+- Only then fill the remaining gaps with `ctox_web_search` / `ctox_web_read`. In `result`, list every adapter you ran with its status.
+- **Write back early.** As soon as the register/identity adapters have delivered, send a first writeback with what is proven, then continue and send the rest. A turn that ends after research but before the writeback loses everything (22.09.2026: the command failed with "no successful outbound.lead.research_writeback receipt").
+- Authenticated sources handle a second factor by e-mail themselves (D&B sends its code to the crew mailbox; CTOX reads it and finishes the login). Only `authorization_required` after that is a real stop.
 
 ## 1. Wie die App, der Harness und der Web-Stack zusammenspielen
 
@@ -156,13 +179,19 @@ ctox scrape semantic-search --target-key <key> --query <text> [--limit <n>]
 ctox scrape upsert-target --input <json-path>
 ctox scrape register-script --target-key <key> --script-file <path> [--language <lang>] [--change-reason <text>] [--notes <text>]
 ctox scrape register-source-module --target-key <key> --source-key <key> --module-file <path> [--language <lang>] [--change-reason <text>] [--notes <text>]
-ctox scrape execute --target-key <key> [--trigger-kind <manual|scheduled|repair>] [--timeout-seconds <n>] [--allow-heal] [--thread-key <key>] [--queue-priority <urgent|high|normal|low>]
+ctox scrape execute --target-key <key> --input-json <json> [--trigger-kind <manual|scheduled|repair>] [--timeout-seconds <n>] [--allow-heal] [--thread-key <key>] [--queue-priority <urgent|high|normal|low>]
 ctox scrape record-template-example --target-key <key> --template-key <template> --script-file <path> [--language <lang>] [--result-count <n>] [--challenge-score <n>] [--reason <text>]
 ctox scrape promote-template --template-key <template> --script-file <path> [--language <lang>] --reason <text>
 ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]
 ```
 
-Where things are: `ctox.sqlite3` holds `scrape_target` (key, start URL, `target_kind`, config, output schema), `scrape_script_revision` (revision number, script body, sha256, change reason), `scrape_source_revision` (per-source extractor modules), `scrape_run` (status, classification, timing), `scrape_record_latest` (the extracted records). Working files (inputs, outputs, artifacts) live under `~/.local/state/ctox/scraping/targets/<target-key>/`. Registered targets today: `handelsregister-de`, `northdata-de`, `bundesanzeiger-de`, `companyhouse-de` (`target_kind = prospect-research`).
+Where things are: `ctox.sqlite3` holds `scrape_target` (key, start URL, `target_kind`, config, output schema), `scrape_script_revision` (revision number, script body, sha256, change reason), `scrape_source_revision` (per-source extractor modules), `scrape_run` (status, classification, timing), `scrape_record_latest` (the extracted records). Working files (inputs, outputs, artifacts) live under `~/.local/state/ctox/scraping/targets/<target-key>/`. Registered targets (`target_kind = prospect-research`): `ctox scrape list-targets` is authoritative; the outbound sources map to `handelsregister-de`, `northdata-de`, `bundesanzeiger-de`, `companyhouse-de`, `dnbhoovers-com`, `leadfeeder-com`, `linkedin-com` (Bright Data API), `xing-com`, `google-de`, `maps-google-com`, `impressum`, `rocketreach-com`, `firmenabc-at`, `moneyhouse-ch`, `zefix-ch`, `shab-ch`, `evi-gv-at`, `justizonline-gv-at`, `experte-de`, `mailtester-com`.
+
+**Run adapters through the tool, not the shell.** Inside a worker turn the shell sandbox cannot open the CTOX state store, so `ctox scrape execute` from `exec_command` fails with a permission error. Use the tool `ctox_web_scrape` with `mode: "execute"`, `target_key`, `input` (the object below) and `timeout_seconds`; it runs the registered adapter in the CTOX process, with stored credentials, and returns status, records and the run manifest. The CLI form above is for operators.
+
+**Input for `execute`.** Every run gets the lead as `input` (CLI: `--input-json`):
+`{"source_id":"<provider id, e.g. northdata.de>","company":"<registered name>","country":"DE|AT|CH","city":"<Ort>","domain":"<firma_domain if known>","task_id":"<research_command_id of this run>"}`.
+Person sources (`linkedin-com`, `xing-com`) also need `"person":{"first_name":"…","last_name":"…"}` or a `"profile_url"`; LinkedIn without a known URL runs a Bright Data name search that takes about four minutes, so give it `--timeout-seconds 400`. E-mail checks (`mailtester-com`, `experte-de`) need `"email"`. `task_id` is mandatory for authenticated targets (D&B Hoovers, Leadfeeder, XING, RocketReach): without it CTOX cannot tie the stored login to the requesting user, the run ends with `auth assist owner unresolved`, and the stored credential is never used.
 
 When to write a script: a source you will hit again for many leads (register lists, company directories) or one whose page needs structured extraction. Look at `show-api`/`show-target` first; if the target exists, `execute --allow-heal`; if the run classifies `portal_drift`, the repair task is already queued — record it and move on, do not retry the same source in this run. If no target exists and the source will recur, write the script (`universal-scraping` skill explains authoring, fixtures and `upsert-target`), register it, run it. For a one-off page, just read or capture it.
 
@@ -176,6 +205,7 @@ When to write a script: a source you will hit again for many leads (register lis
 ## 6. Evidence rules
 
 - A field is `verified` only with a value and **two independent sources on different hosts**; each source has `source_id`, `url` and a verbatim `quote`. Two pages of one host are one source. Sellify alone proves nothing, but counts as one source.
+- **Sellify as a source.** When a field's value equals what `sellify_company` / `known_person_records` hold, and **one** independent external source confirms it, report the field `verified` with that one external source. The server compares the value with the Sellify record itself and adds Sellify as the second source (`sellify://company/<contact_id>`, `sellify://person/<sellify_person_id>`). Do **not** mark such a field `no_match` for having "only one source". For person fields use the Sellify id (`sellify-person-…`) as `person_key`. Sellify is never enough on its own: without an external source the field stays open. You may cite `sellify://…` yourself; the server accepts it only for the carried record and the stored value.
 - `no_match` only after at least one documented search and two documented page reads for that field.
 - `action_required` only for a login or approval you could not get: reference the auth-assist (`source_id` and your command id) or a source with `requires_credential=true`. Also for conflicts: keep both candidates with their sources, leave the value empty, reason `conflict`.
 - `unsupported` only when the field cannot be researched under this contract (e.g. AT-only field on a DE lead).
@@ -184,7 +214,7 @@ When to write a script: a source you will hit again for many leads (register lis
 
 ## 7. Writeback — the only way results reach the lead
 
-One writeback per lead, sent through the **MCP tool `business_os.execute_writeback`** of the
+The writeback goes through the **MCP tool `business_os.execute_writeback`** of the
 `ctox-business-os` server. The server binds `module` and `research_command_id` to your task
 itself, validates the payload with the native handler, writes the lead collection, and the UI
 updates through replication. Nothing else counts: **do not** run `ctox business-os commands
@@ -225,22 +255,51 @@ until a retry succeeds.
 
 ### Validation rules the daemon enforces (get them right on the first attempt)
 
-Build the writeback in this order, then send it once: (1) collect the terminal status per field, (2) copy each verified value **identically** into `result.fields`, (3) attach sources with absolute URLs, (4) give every person value and its evidence the same `person_key`, (5) check that the key set equals `payload.fields`. These five are the reasons live runs were rejected.
+Build the writeback in this order: (1) collect the terminal status per field, (2) copy each verified value **identically** into `result.fields`, (3) attach sources with absolute URLs, (4) give every person value and its evidence the same `person_key`, (5) check that the key set equals `payload.fields`. These five are the reasons live runs were rejected.
 
-- `field_status` covers **every field of `payload.fields`** (normally all 32) with a terminal status; a missing or extra field is rejected. Reporting only the fields you worked on is not accepted — an untouched field is `no_match` (with its evidence) or keeps the status it had.
+- Across all parts, `field_status` covers **every field of `payload.fields`** (normally all 32) with a terminal status; a field that was not requested is rejected. One part may carry a subset — the server fills the rest from earlier parts. An untouched field is `no_match` (with its evidence) or keeps the status it had.
 - Every `field_status` entry is an object with `status`; `value` only for `verified`.
 - For a `verified` field the value in `result.fields.<field>.value` must be **identical** to `field_status.<field>.value` — same string, no reformatting, no added prefix.
 - Every populated `person_*` value, in `result.fields` and in `person_records`, needs the `person_key` of the person it belongs to. Keep the `person_key` from `known_person_records` for a Sellify person; invent a stable one only for a new person.
 - `result.fields` holds objects (`{"value": …, "sources": [...]}`), never bare strings.
 - Every evidence entry needs `field_key`, `source_id`, `url`; person evidence also `person_key`, and it must be **the same `person_key`** the value in `result.fields` carries.
-- Every `url` — in sources and in evidence — is an absolute `http(s)://` URL. A file path, a note or an empty string is rejected.
+- Every `url` — in sources and in evidence — is an absolute `http(s)://` URL, or a Sellify citation `sellify://company/<contact_id>` / `sellify://person/<sellify_person_id>` (§6). A file path, a note or an empty string is rejected.
 - A **non-verified** field (`no_match`, `unsupported`, `action_required`) must NOT carry a populated `value`. State the reason instead.
 - Person fields describe the priority contact(s) you actually found: when you report persons in `person_records`, set the matching `person_*` fields `verified` with their `person_key` instead of `no_match`. `no_match` on a person field means you found no such person at all.
 - Person fields carry a `person_key`; `result.fields` holds structured objects only, never free text.
-- **Exactly one writeback call per lead.** Never dispatch read commands (`outbound.task.readback`, `outbound.lead.read`, `outbound.queue_task.read`, `outbound.lead.show` or anything similar) to check your own result, and never enqueue Business OS actions (`business_os.execute_action`, `business_os.propose_action`) for the writeback — they are not the writeback and are rejected outside the task contract. Every dispatched command becomes its own queue task and its own agent turn — twelve such reads once blocked a whole campaign for three hours.
+- **Send large results in parts.** A tool call is limited by the model's output size: a 50 KB writeback (all 32 fields with sources) breaks off and the turn ends without a receipt (Sasol, 11.09.2026, twice). Send at most about 10 fields per `execute_writeback` call; the server merges the parts, a field missing from one part keeps the status an earlier part gave it, and the response lists `open_fields` still to send. Do not re-send fields that are already stored.
+- Never dispatch read commands (`outbound.task.readback`, `outbound.lead.read`, `outbound.queue_task.read`, `outbound.lead.show` or anything similar) to check your own result, and never enqueue Business OS actions (`business_os.execute_action`, `business_os.propose_action`) for the writeback — they are not the writeback and are rejected outside the task contract. Every dispatched command becomes its own queue task and its own agent turn — twelve such reads once blocked a whole campaign for three hours.
 - Done means `business_os.execute_writeback` returned status `accepted` or `completed`. Report the counts (verified / no_match / action_required / unsupported) and the persons found in one short chat message.
 
 ## 8. Unblocking across turns (login, captcha, MFA)
+
+**First: try the stored credential yourself. Do not hand a login to the human
+that you can perform.** Owner finding 18.09.2026 (thesen): every auth-assist
+request for dnbhoovers.com, leadfeeder.com and firmenabc.at sat at
+`blocked / waiting_external` with **attempt 0** — since 11.09., for D&B since
+July. Fresh credentials were in the secret store the whole time and were never
+used, so those sources delivered nothing for weeks.
+
+So, before raising `auth-assist-request`:
+
+1. Read the source's `credential_ref` (`ctox-secret://credentials/<NAME>`) from
+   the target config or the app's source record. If it is set, check the secret
+   catalogue (`ctox secret list`) for that name and its date. Never read, print
+   or store the value itself — pass the reference.
+2. Open a browser session for that source with the credential reference and
+   perform the sign-in yourself, then verify it (a page that only a signed-in
+   session shows).
+3. Only when that genuinely fails, raise `auth-assist-request` — and name the
+   **exact** reason in the same sentence: MFA prompt, captcha, lockout, wrong
+   password, changed login URL, HTTP status. "Blocked" without that reason is
+   not a result.
+4. Never report a blocker from memory. A stored blocker catalogue ("DNS
+   sandbox broken", "five-wedge inventory") is a claim about the past; measure
+   it again in this turn (`getent hosts <host>`, `curl -o /dev/null -w
+   '%{http_code}' <url>`) and quote the measurement. If the measurement
+   contradicts the memory, the measurement wins.
+
+Only after that do the two paths below apply.
 
 The human is not always at the keyboard, and your turn is bounded. The system therefore has two paths — use both correctly:
 
@@ -264,7 +323,7 @@ The human is not always at the keyboard, and your turn is bounded. The system th
 | Scrape target classifies `temporary_unreachable` / `blocked` | Fall back to another source; do not queue a repair. |
 | No adapter for a recurring source | Write the extraction script, `register-script`, `execute --allow-heal`. For a one-off page use `web read` or `browser-capture` instead — do not build a target for a single lead. |
 | Two sources contradict each other | Leave the value empty, keep both in `candidates` with their sources, status `action_required`, reason `conflict`. Never average, never pick the prettier one. |
-| Sellify already holds a value | It is the starting value and counts as one source. Confirm it with one independent source (then `verified`), or contradict it with two (then take the new value and say so in `reason`). |
+| Sellify already holds a value | It is the starting value and counts as one source (the server adds it, see §6). Confirm it with one independent source (then `verified` with that source), or contradict it with two (then take the new value and say so in `reason`). A value found only in Sellify and one external page is `verified`, not `no_match`. |
 | A Sellify person is outdated (left the company) | Keep the `person_key`, set the function to the documented state (for example "Geschäftsführung (ausgeschieden)"), and add the current holder as a new person. Never delete a Sellify person. |
 | Two persons look like one (same name, different profile) | Distinct `person_key` each; only merge with a document that shows they are the same person. |
 | A profile URL as `person_key` | Do not do it. `person_key` is a stable key (Sellify id or a key you keep for this lead), not a URL — profile URLs change and produce duplicates. |

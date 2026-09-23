@@ -86,8 +86,9 @@ use super::store_projections::tests::{create_repair_rxdb_tables, insert_rxdb_tes
 pub(super) use super::store_projections::upsert_business_record;
 use super::store_projections::{
     business_chat_id, business_chat_owner_user_id, business_chat_payload, business_chat_title,
-    business_command_queue_task_payload, enrich_queue_projection_payload, is_business_chat_command,
-    materialize_pending_business_chat, normalize_queue_status,
+    business_command_queue_task_payload, enrich_queue_projection_payload,
+    existing_business_chat_owner, initial_pending_business_chat_payload, is_business_chat_command,
+    is_placeholder_business_chat_owner, materialize_pending_business_chat, normalize_queue_status,
     persist_terminal_business_chat_command_projection, queue_projection_command_id,
     queue_projection_execution_phase, queue_projection_structured_status,
     queue_projection_terminal_status, queue_task_payload, refresh_queue_task_projection,
@@ -113,6 +114,7 @@ use rusqlite::types::Value as SqlValue;
 use rusqlite::Connection;
 use rusqlite::OpenFlags;
 use rusqlite::OptionalExtension;
+use rusqlite::TransactionBehavior;
 use security_projections::*;
 pub(crate) use security_projections::{
     appsec_business_command_requires_data_write, project_all_iot,
@@ -1426,6 +1428,19 @@ fn refresh_attached_queue_projections(
     if !attached {
         return Ok(());
     }
+    // The store file is attached whenever it exists, but its schema may not
+    // be there yet: the hooks are registered process-wide by the first
+    // open_store, so a root whose store was never opened attaches an empty
+    // file. Without the table there is nothing to refresh.
+    let has_records: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_os_projection.sqlite_master
+                       WHERE type = 'table' AND name = 'business_records')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_records {
+        return Ok(());
+    }
     let updated_at_ms = now_ms() as i64;
     for task in tasks {
         let row = conn
@@ -1505,6 +1520,15 @@ fn refresh_attached_queue_projections(
             continue;
         };
         let mut command_payload = serde_json::from_str::<Value>(&command_raw)?;
+        if task.route_status == "leased" {
+            mark_outbound_lead_running_attached(
+                conn,
+                &command_payload,
+                &command_id,
+                &task.message_key,
+                updated_at_ms,
+            )?;
+        }
         let command_projection_changed =
             !command_projection_status_fields_match(&command_payload, task);
         if command_projection_changed {
@@ -1551,6 +1575,80 @@ fn refresh_attached_queue_projections(
             command_payload,
         )?;
     }
+    Ok(())
+}
+
+/// A lead whose research task a worker has picked up says "Läuft".
+///
+/// A leased research task kept showing "Wartet" until the first writeback, because the
+/// only transition to `running` happened there. The queue-to-command sync
+/// already sees the lease, so it moves the lead along — only a lead that is
+/// still `queued` and belongs to this very command, read from the live RxDB
+/// document so no browser edit is overwritten.
+fn mark_outbound_lead_running_attached(
+    conn: &Connection,
+    command: &Value,
+    command_id: &str,
+    task_id: &str,
+    now: i64,
+) -> anyhow::Result<()> {
+    if command.get("module").and_then(Value::as_str) != Some("outbound-lead-generation")
+        || command.get("command_type").and_then(Value::as_str) != Some("business_os.chat.task")
+    {
+        return Ok(());
+    }
+    let Some(record_id) = command
+        .get("record_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !value.starts_with("campaign:"))
+    else {
+        return Ok(());
+    };
+    let Some(table) = attached_rxdb_collection_table(conn, "outbound_lead_generation_leads")?
+    else {
+        return Ok(());
+    };
+    let raw = conn
+        .query_row(
+            &format!(
+                "SELECT data FROM business_os_rxdb_projection.{} WHERE id = ?1",
+                sqlite_quote_identifier(&table)
+            ),
+            params![record_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let Some(raw) = raw else {
+        return Ok(());
+    };
+    let Ok(mut lead) = serde_json::from_str::<Value>(&raw) else {
+        return Ok(());
+    };
+    if lead.get("_deleted").and_then(Value::as_bool) == Some(true)
+        || lead.get("research_status").and_then(Value::as_str) != Some("queued")
+    {
+        return Ok(());
+    }
+    let owner = lead
+        .get("command_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if !owner.is_empty() && owner != command_id {
+        return Ok(());
+    }
+    lead["research_status"] = Value::String("running".to_string());
+    lead["task_id"] = Value::String(task_id.to_string());
+    lead["research_updated_at_ms"] = Value::from(now);
+    upsert_attached_business_record(
+        conn,
+        "outbound_lead_generation_leads",
+        record_id,
+        now,
+        lead.clone(),
+    )?;
+    upsert_attached_rxdb_record(conn, "outbound_lead_generation_leads", record_id, now, lead)?;
     Ok(())
 }
 
@@ -6332,6 +6430,12 @@ pub fn record_command(
         });
     }
     let native_authorization = queue_command_native_authorization(root, &command)?;
+    {
+        let conn = open_store(root)?;
+        if let Some(denied) = claim_or_reject_business_chat(root, &conn, &command_id, &command)? {
+            return Ok(denied);
+        }
+    }
     let missing_dependencies = missing_business_command_dependencies(root, &command)?;
     if !missing_dependencies.is_empty() {
         let evidence = Value::Array(missing_dependencies);
@@ -6485,6 +6589,12 @@ pub fn record_command(
     )? {
         return Ok(completed);
     }
+    project_outbound_lead_queued(
+        root,
+        &command,
+        &command_id,
+        queue_task.as_ref().map(|task| task.message_key.as_str()),
+    )?;
     Ok(CommandAccepted {
         ok: true,
         command_id,
@@ -6496,6 +6606,47 @@ pub fn record_command(
         chat_id,
         ..CommandAccepted::default()
     })
+}
+
+/// A lead whose research has been accepted says "Wartet", and it says so
+/// because the daemon wrote it, not because a browser tab got around to it.
+///
+/// Measured on a customer instance on 09.09.2026: three research commands were accepted for
+/// Aeroxon, Beiersdorf and Carbosulf, and all three leads kept showing their
+/// previous state. The only writer of `queued` was an optimistic patch from
+/// the tab that pressed the button, and that write is lost whenever the tab is
+/// slow, throttled or closed. Then the screen contradicts the queue, and a
+/// user who believes the screen starts the same research twice.
+fn project_outbound_lead_queued(
+    root: &Path,
+    command: &BusinessCommand,
+    command_id: &str,
+    task_id: Option<&str>,
+) -> anyhow::Result<()> {
+    if command.module != "outbound-lead-generation"
+        || command.command_type != "business_os.chat.task"
+    {
+        return Ok(());
+    }
+    let record_id = command.record_id.as_deref().unwrap_or_default().trim();
+    if record_id.is_empty() {
+        return Ok(());
+    }
+    let Some(mut lead) =
+        load_rxdb_collection_record(root, "outbound_lead_generation_leads", record_id)?
+    else {
+        return Ok(());
+    };
+    lead["research_status"] = Value::String("queued".to_string());
+    lead["research_error"] = Value::String(String::new());
+    lead["command_id"] = Value::String(command_id.to_string());
+    if let Some(task_id) = task_id.map(str::trim).filter(|value| !value.is_empty()) {
+        lead["task_id"] = Value::String(task_id.to_string());
+    }
+    let now = now_ms() as i64;
+    lead["research_updated_at_ms"] = Value::from(now);
+    upsert_rxdb_collection_record(root, "outbound_lead_generation_leads", record_id, now, lead)?;
+    Ok(())
 }
 
 fn missing_business_command_dependencies(
@@ -7488,6 +7639,459 @@ fn write_text(path: &Path, value: &str) -> anyhow::Result<()> {
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
     fs::write(path, value).with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn authorized_business_chat_actor_id(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<Option<String>> {
+    if matches!(command.origin, CommandOrigin::ReplicatedPeer) {
+        let session = rxdb_authenticated_session(root, command)?;
+        return Ok(session_user_id(&session)
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && !is_placeholder_business_chat_owner(value))
+            .map(str::to_string));
+    }
+    let claimed = business_chat_owner_user_id(command);
+    Ok((!is_placeholder_business_chat_owner(&claimed)).then_some(claimed))
+}
+
+fn chat_owner_mismatch_accepted(command_id: &str, chat_id: &str) -> CommandAccepted {
+    CommandAccepted {
+        ok: false,
+        command_id: command_id.to_string(),
+        status: "failed",
+        execution_mode: "queue",
+        task_status: Some("failed".to_string()),
+        chat_id: Some(chat_id.to_string()),
+        result: Some(serde_json::json!({
+            "error_code": "chat_owner_mismatch",
+            "error": "Business chat belongs to another user."
+        })),
+        ..CommandAccepted::default()
+    }
+}
+
+pub(super) fn trusted_native_chat_owner(
+    conn: &Connection,
+    chat_id: &str,
+    exclude_command_id: &str,
+) -> anyhow::Result<Option<String>> {
+    // Bind recovery to the same canonical chat target as admission/materialization
+    // (`business_chat_id`). Do not OR caller-controlled candidate fields: an ignored
+    // record_id, payload.chat_id, or client_context value can point at a foreign
+    // legacy chat while the command's real target is elsewhere.
+    let mut stmt = conn.prepare(
+        "SELECT c.command_id,
+                c.module,
+                c.command_type,
+                c.record_id,
+                c.payload_json,
+                c.client_context_json,
+                json_extract(e.payload_json, '$.actor.id')
+         FROM business_events e
+         INNER JOIN business_commands c ON c.command_id = e.record_id
+         WHERE e.collection = 'business_commands'
+           AND e.command_type = 'business_os.policy.allowed'
+           AND (?1 = '' OR c.command_id != ?1)
+           AND CAST(COALESCE(json_extract(e.payload_json, '$.actor.trusted'), 0) AS INTEGER) = 1",
+    )?;
+    let mut owners = Vec::new();
+    let mut rows = stmt.query(params![exclude_command_id])?;
+    while let Some(row) = rows.next()? {
+        let command_id: String = row.get(0)?;
+        let module: String = row.get(1)?;
+        let command_type: String = row.get(2)?;
+        let record_id: Option<String> = row.get(3)?;
+        let payload_json: String = row.get(4)?;
+        let client_context_json: String = row.get(5)?;
+        let actor_id: Option<String> = row.get(6)?;
+        let Some(actor) = actor_id
+            .map(|item| item.trim().to_string())
+            .filter(|item| !is_placeholder_business_chat_owner(item))
+        else {
+            continue;
+        };
+        let payload = if payload_json.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&payload_json).with_context(|| {
+                format!("invalid payload_json for trusted chat receipt {command_id}")
+            })?
+        };
+        let client_context = if client_context_json.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&client_context_json).with_context(|| {
+                format!("invalid client_context_json for trusted chat receipt {command_id}")
+            })?
+        };
+        let command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some(command_id.clone()),
+            module,
+            command_type,
+            record_id,
+            payload,
+            client_context,
+        };
+        if !is_business_chat_command(&command) {
+            continue;
+        }
+        if business_chat_id(&command, &command_id) != chat_id {
+            continue;
+        }
+        owners.push(actor);
+    }
+    let Some(first) = owners.first().cloned() else {
+        return Ok(None);
+    };
+    if owners.iter().any(|item| item != &first) {
+        return Ok(None);
+    }
+    Ok(Some(first))
+}
+
+fn business_chat_owner_from_payload(payload: &Value) -> String {
+    payload
+        .get("owner_user_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string()
+}
+
+enum RxdbBusinessChatProjection {
+    Absent,
+    Tombstone,
+    Live(Value),
+}
+
+fn rxdb_collection_row_deleted(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<bool> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(false);
+    }
+    let conn = Connection::open(&path)?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+        return Ok(false);
+    };
+    Ok(
+        match conn.query_row(
+            &format!("SELECT deleted FROM {table} WHERE id = ?1"),
+            [record_id],
+            |row| row.get::<_, i64>(0),
+        ) {
+            Ok(value) => value != 0,
+            Err(rusqlite::Error::QueryReturnedNoRows) => false,
+            Err(_) => false,
+        },
+    )
+}
+
+fn load_rxdb_business_chat_projection(
+    root: &Path,
+    chat_id: &str,
+) -> anyhow::Result<RxdbBusinessChatProjection> {
+    let Some(record) = load_rxdb_collection_record(root, "business_chats", chat_id)? else {
+        return Ok(RxdbBusinessChatProjection::Absent);
+    };
+    if is_rxdb_deleted_document(&record)
+        || rxdb_collection_row_deleted(root, "business_chats", chat_id)?
+    {
+        return Ok(RxdbBusinessChatProjection::Tombstone);
+    }
+    Ok(RxdbBusinessChatProjection::Live(record))
+}
+
+fn rxdb_business_chat_owner_is_placeholder_or_missing(
+    root: &Path,
+    chat_id: &str,
+) -> anyhow::Result<bool> {
+    Ok(match load_rxdb_business_chat_projection(root, chat_id)? {
+        RxdbBusinessChatProjection::Absent => true,
+        RxdbBusinessChatProjection::Tombstone => false,
+        RxdbBusinessChatProjection::Live(record) => {
+            is_placeholder_business_chat_owner(&business_chat_owner_from_payload(&record))
+        }
+    })
+}
+
+#[cfg(test)]
+thread_local! {
+    static RXDB_CHAT_OWNER_REPAIR_INTERLEAVE: RefCell<Option<Box<dyn FnMut(&Path, &str)>>> =
+        RefCell::new(None);
+}
+
+#[cfg(test)]
+pub(crate) struct RxdbChatOwnerRepairInterleaveGuard;
+
+#[cfg(test)]
+impl Drop for RxdbChatOwnerRepairInterleaveGuard {
+    fn drop(&mut self) {
+        RXDB_CHAT_OWNER_REPAIR_INTERLEAVE.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn set_rxdb_chat_owner_repair_interleave<F>(
+    hook: F,
+) -> RxdbChatOwnerRepairInterleaveGuard
+where
+    F: FnMut(&Path, &str) + 'static,
+{
+    RXDB_CHAT_OWNER_REPAIR_INTERLEAVE.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(hook));
+    });
+    RxdbChatOwnerRepairInterleaveGuard
+}
+
+#[cfg(test)]
+fn invoke_rxdb_chat_owner_repair_interleave(root: &Path, chat_id: &str) {
+    RXDB_CHAT_OWNER_REPAIR_INTERLEAVE.with(|slot| {
+        if let Some(hook) = slot.borrow_mut().as_mut() {
+            hook(root, chat_id);
+        }
+    });
+}
+
+pub(super) fn repair_placeholder_business_chat_owners(
+    root: &Path,
+    conn: &Connection,
+    rxdb_writers: &mut RxdbProjectionWriterCache,
+    apply: bool,
+    now: i64,
+    counters: &mut BTreeMap<&'static str, usize>,
+    actions: &mut Vec<Value>,
+) -> anyhow::Result<()> {
+    let chats = {
+        let mut stmt = conn.prepare(
+            "SELECT record_id, payload_json
+             FROM business_records
+             WHERE collection = 'business_chats' AND deleted = 0
+             ORDER BY record_id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    for (chat_id, payload_json) in chats {
+        let payload: Value = serde_json::from_str(&payload_json)
+            .with_context(|| format!("invalid business_chats payload for repair {chat_id}"))?;
+        let existing_owner = business_chat_owner_from_payload(&payload);
+        let proven = trusted_native_chat_owner(conn, &chat_id, "")?;
+        let native_placeholder = is_placeholder_business_chat_owner(&existing_owner);
+        let expected_owner = if native_placeholder {
+            proven.clone()
+        } else if proven.as_deref() == Some(existing_owner.as_str()) {
+            Some(existing_owner.clone())
+        } else {
+            None
+        };
+        let Some(expected_owner) = expected_owner else {
+            continue;
+        };
+        let rxdb_stale = rxdb_business_chat_owner_is_placeholder_or_missing(root, &chat_id)?;
+        if !native_placeholder && !rxdb_stale {
+            continue;
+        }
+        if !apply {
+            *counters.entry("chat_owner_repaired").or_insert(0) += 1;
+            push_repair_action(
+                actions,
+                "chat_owner_repaired",
+                &chat_id,
+                None,
+                &existing_owner,
+                &expected_owner,
+                Some("placeholder chat owner repaired from trusted native policy receipt"),
+            );
+            continue;
+        }
+
+        let mut repaired = false;
+        let mut native_payload = payload;
+        if native_placeholder {
+            let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+            let current_payload = tx
+                .query_row(
+                    "SELECT payload_json FROM business_records
+                     WHERE collection = 'business_chats' AND record_id = ?1 AND deleted = 0",
+                    params![chat_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            let Some(current_payload) = current_payload else {
+                tx.rollback()?;
+                continue;
+            };
+            let mut current: Value = serde_json::from_str(&current_payload)?;
+            let current_owner = business_chat_owner_from_payload(&current);
+            if is_placeholder_business_chat_owner(&current_owner) {
+                let Some(owner) = trusted_native_chat_owner(&tx, &chat_id, "")? else {
+                    tx.rollback()?;
+                    continue;
+                };
+                if let Some(obj) = current.as_object_mut() {
+                    obj.insert("owner_user_id".to_string(), Value::String(owner.clone()));
+                }
+                upsert_business_record(&tx, "business_chats", &chat_id, now, current.clone())?;
+                tx.commit()?;
+                native_payload = current;
+                repaired = true;
+            } else {
+                tx.rollback()?;
+                native_payload = current;
+            }
+        }
+
+        let native_owner = business_chat_owner_from_payload(&native_payload);
+        if native_owner == expected_owner {
+            #[cfg(test)]
+            invoke_rxdb_chat_owner_repair_interleave(root, &chat_id);
+            if rxdb_writers.repair_business_chat_placeholder_owner(
+                &chat_id,
+                &expected_owner,
+                native_payload,
+                now,
+            )? {
+                repaired = true;
+            }
+        }
+        if repaired {
+            *counters.entry("chat_owner_repaired").or_insert(0) += 1;
+            push_repair_action(
+                actions,
+                "chat_owner_repaired",
+                &chat_id,
+                None,
+                &existing_owner,
+                &expected_owner,
+                Some("placeholder chat owner repaired from trusted native policy receipt"),
+            );
+        }
+    }
+    Ok(())
+}
+
+fn proven_existing_business_chat_owner(
+    conn: &Connection,
+    chat_id: &str,
+    existing_owner: &str,
+    exclude_command_id: &str,
+) -> anyhow::Result<Option<String>> {
+    if !is_placeholder_business_chat_owner(existing_owner) {
+        return Ok(Some(existing_owner.trim().to_string()));
+    }
+    trusted_native_chat_owner(conn, chat_id, exclude_command_id)
+}
+
+fn insert_business_chat_owner_claim(
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+    chat_id: &str,
+    owner: &str,
+) -> anyhow::Result<()> {
+    let now = now_ms() as i64;
+    let mut payload =
+        initial_pending_business_chat_payload(command, command_id, owner, now, command_id);
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("id".to_string(), Value::String(chat_id.to_string()));
+        obj.insert(
+            "owner_user_id".to_string(),
+            Value::String(owner.to_string()),
+        );
+    }
+    upsert_business_record(conn, "business_chats", chat_id, now, payload)
+}
+
+fn stamp_business_chat_owner(conn: &Connection, chat_id: &str, owner: &str) -> anyhow::Result<()> {
+    let payload = conn
+        .query_row(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'business_chats' AND record_id = ?1 AND deleted = 0",
+            params![chat_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let mut value = payload
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .unwrap_or_else(|| serde_json::json!({ "id": chat_id, "messages": [] }));
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "owner_user_id".to_string(),
+            Value::String(owner.to_string()),
+        );
+    }
+    upsert_business_record(conn, "business_chats", chat_id, now_ms() as i64, value)
+}
+
+pub(super) fn claim_or_reject_business_chat(
+    root: &Path,
+    conn: &Connection,
+    command_id: &str,
+    command: &BusinessCommand,
+) -> anyhow::Result<Option<CommandAccepted>> {
+    if !is_business_chat_command(command) {
+        return Ok(None);
+    }
+    let chat_id = business_chat_id(command, command_id);
+    let actor_id = authorized_business_chat_actor_id(root, command)?;
+    let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let existing_owner = existing_business_chat_owner(&tx, &chat_id)?;
+    let denied = match existing_owner {
+        None => {
+            let owner = match actor_id.as_deref() {
+                Some(actor) => actor.to_string(),
+                None if matches!(command.origin, CommandOrigin::TrustedLocal) => {
+                    business_chat_owner_user_id(command)
+                }
+                None => {
+                    tx.rollback()?;
+                    return Ok(Some(chat_owner_mismatch_accepted(command_id, &chat_id)));
+                }
+            };
+            insert_business_chat_owner_claim(&tx, command_id, command, &chat_id, &owner)?;
+            None
+        }
+        Some(existing_owner) => {
+            let proven =
+                proven_existing_business_chat_owner(&tx, &chat_id, &existing_owner, command_id)?;
+            match (proven, actor_id.as_deref()) {
+                (Some(owner), Some(actor)) if owner == actor => {
+                    if is_placeholder_business_chat_owner(&existing_owner) {
+                        stamp_business_chat_owner(&tx, &chat_id, actor)?;
+                    }
+                    None
+                }
+                (None, None)
+                    if matches!(command.origin, CommandOrigin::TrustedLocal)
+                        && is_placeholder_business_chat_owner(&existing_owner) =>
+                {
+                    None
+                }
+                _ => Some(chat_owner_mismatch_accepted(command_id, &chat_id)),
+            }
+        }
+    };
+    if denied.is_some() {
+        tx.rollback()?;
+    } else {
+        tx.commit()?;
+    }
+    Ok(denied)
 }
 
 fn reject_app_build_command_if_denied(
@@ -9900,7 +10504,7 @@ pub fn complete_ready_documents_report_commands(
     })
 }
 
-fn process_business_chat_reply(
+pub(super) fn process_business_chat_reply(
     root: &Path,
     conn: &Connection,
     command_id: &str,
@@ -10013,6 +10617,68 @@ fn process_business_chat_reply(
         target_task_id: None,
         target_record_id: command.record_id.clone(),
     })
+}
+
+/// Complete source snapshot for the coding owner. Select the same collection
+/// plane as `pull_collection_records`, before filtering by module, and never
+/// splice an RxDB snapshot into a partially populated native collection.
+pub(crate) fn pull_coding_module_source_records(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<Vec<Value>> {
+    let native = with_store_connection(root, |conn| {
+        let tx = conn.unchecked_transaction()?;
+        let has_collection: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM business_records
+             WHERE collection = 'business_module_source_files')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !has_collection {
+            return Ok(None);
+        }
+        let mut statement = tx.prepare(
+            "SELECT payload_json FROM business_records
+             WHERE collection = 'business_module_source_files'
+               AND deleted = 0 AND json_extract(payload_json, '$.module_id') = ?1
+             ORDER BY record_id",
+        )?;
+        let rows = statement.query_map([module_id], |row| row.get::<_, String>(0))?;
+        let mut documents = Vec::new();
+        for row in rows {
+            documents.push(serde_json::from_str::<Value>(&row?)?);
+        }
+        Ok(Some(documents))
+    })?;
+    if let Some(documents) = native {
+        return Ok(documents);
+    }
+
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let tx = conn.unchecked_transaction()?;
+    for version in (0..=1).rev() {
+        let table = format!("ctox_business_os__business_module_source_files__v{version}");
+        if !rxdb_table_exists_cached(&path, &tx, &table)? {
+            continue;
+        }
+        let mut statement = tx.prepare(&format!(
+            "SELECT data FROM {table}
+             WHERE json_extract(data, '$.module_id') = ?1
+               AND COALESCE(json_extract(data, '$._deleted'), 0) = 0
+             ORDER BY id"
+        ))?;
+        let rows = statement.query_map([module_id], |row| row.get::<_, String>(0))?;
+        let mut documents = Vec::new();
+        for row in rows {
+            documents.push(serde_json::from_str::<Value>(&row?)?);
+        }
+        return Ok(documents);
+    }
+    Ok(Vec::new())
 }
 
 pub fn pull_collection_records(
@@ -10894,6 +11560,32 @@ impl RxdbProjectionWriterCache {
         Ok(())
     }
 
+    pub(super) fn repair_business_chat_placeholder_owner(
+        &mut self,
+        record_id: &str,
+        expected_owner: &str,
+        absent_payload: Value,
+        updated_at_ms: i64,
+    ) -> anyhow::Result<bool> {
+        if !matches!(self.writers.get("business_chats"), Some(Some(_))) {
+            let writer = RxdbCollectionWriter::open(&self.root, "business_chats")?;
+            self.writers.insert("business_chats".to_string(), writer);
+        }
+        if let Some(Some(writer)) = self.writers.get_mut("business_chats") {
+            let result = writer.repair_placeholder_chat_owner(
+                record_id,
+                expected_owner,
+                absent_payload,
+                updated_at_ms,
+            );
+            if result.is_err() {
+                self.writers.remove("business_chats");
+            }
+            return result;
+        }
+        Ok(false)
+    }
+
     fn upsert_source_projection(
         &mut self,
         collection: &str,
@@ -11088,6 +11780,93 @@ impl RxdbCollectionWriter {
         )?;
         self.notify_committed_change();
         Ok(())
+    }
+
+    fn repair_placeholder_chat_owner(
+        &mut self,
+        record_id: &str,
+        expected_owner: &str,
+        mut absent_payload: Value,
+        updated_at_ms: i64,
+    ) -> anyhow::Result<bool> {
+        if let Some(obj) = absent_payload.as_object_mut() {
+            obj.insert("id".to_string(), Value::String(record_id.to_string()));
+            obj.insert(
+                "owner_user_id".to_string(),
+                Value::String(expected_owner.to_string()),
+            );
+        }
+        let table = self.table.clone();
+        let columns = self.columns.clone();
+        let demand_file_storage = self.demand_file_storage;
+        let deleted_column = ["deleted", "_deleted"]
+            .into_iter()
+            .find_map(|column| columns.contains(column).then_some(column));
+        let tx = rusqlite::Transaction::new_unchecked(&self.conn, TransactionBehavior::Immediate)?;
+        let current = if let Some(deleted_column) = deleted_column {
+            tx.query_row(
+                &format!("SELECT data, {deleted_column} FROM {table} WHERE id = ?1"),
+                [record_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .optional()?
+        } else {
+            tx.query_row(
+                &format!("SELECT data FROM {table} WHERE id = ?1"),
+                [record_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|raw| (raw, 0))
+        };
+        let payload_to_write = match current {
+            None => Some(absent_payload),
+            Some((raw, row_deleted)) => {
+                let mut record: Value = serde_json::from_str(&raw)?;
+                if let Some(object) = record.as_object_mut() {
+                    object
+                        .entry("id".to_string())
+                        .or_insert_with(|| Value::String(record_id.to_string()));
+                }
+                if row_deleted != 0 || is_rxdb_deleted_document(&record) {
+                    None
+                } else {
+                    let owner = business_chat_owner_from_payload(&record);
+                    if owner == expected_owner {
+                        None
+                    } else if is_placeholder_business_chat_owner(&owner) {
+                        if let Some(obj) = record.as_object_mut() {
+                            obj.insert(
+                                "owner_user_id".to_string(),
+                                Value::String(expected_owner.to_string()),
+                            );
+                        }
+                        Some(record)
+                    } else {
+                        None
+                    }
+                }
+            }
+        };
+        let Some(payload) = payload_to_write else {
+            tx.rollback()?;
+            return Ok(false);
+        };
+        upsert_rxdb_collection_record_with_writer(
+            &tx,
+            &table,
+            &columns,
+            record_id,
+            updated_at_ms,
+            updated_at_ms,
+            payload,
+            demand_file_storage,
+            false,
+            false,
+        )?;
+        tx.commit()?;
+        self.notify_committed_change();
+        Ok(true)
     }
 
     fn read(&self, record_id: &str) -> anyhow::Result<Option<Value>> {
@@ -12419,6 +13198,122 @@ fn list_credentials_command(root: &Path) -> anyhow::Result<Value> {
 
 /// Store/rotate a credential value in the encrypted secret store. The value is
 /// never echoed back; the caller redacts it from the persisted command record.
+/// Secret values detached from `ctox.secret.put` at intake, keyed by command
+/// id, with the time they were detached. Previously the
+/// handler redacted its own writes, but intake had already persisted the
+/// original payload in business_command_aggregates (claim intent),
+/// business_records, business_commands, ctox_process_events and the RxDB
+/// document; later re-projections from the aggregate wrote the plaintext back.
+/// The value now leaves the command before intake persists anything and
+/// reaches the handler only through this in-memory map. A restart between
+/// intake and handler loses the value; the put then fails with "credential
+/// value must not be empty" and the app asks to save again.
+static SECRET_INTAKE_VALUES: OnceLock<Mutex<HashMap<(String, &'static str), (String, Instant)>>> =
+    OnceLock::new();
+const SECRET_INTAKE_VALUE_TTL: Duration = Duration::from_secs(10 * 60);
+
+/// Payload fields that carry a secret, per command type.
+fn secret_payload_field(command_type: &str) -> Option<&'static str> {
+    match command_type {
+        "ctox.secret.put" => Some("value"),
+        "ctox.mailserver.save_user" => Some("password"),
+        _ => None,
+    }
+}
+
+pub(super) fn detach_secret_intake_value(command_id: &str, command: &mut BusinessCommand) {
+    let Some(field) = secret_payload_field(&command.command_type) else {
+        return;
+    };
+    let Some(value) = command
+        .payload
+        .as_object_mut()
+        .and_then(|payload| payload.remove(field))
+    else {
+        return;
+    };
+    if let Some(value) = value.as_str() {
+        stash_secret_intake_value(command_id, field, value.to_string());
+    }
+}
+
+fn stash_secret_intake_value(command_id: &str, field: &'static str, value: String) {
+    let mut values = SECRET_INTAKE_VALUES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    values.retain(|_, (_, detached_at)| detached_at.elapsed() < SECRET_INTAKE_VALUE_TTL);
+    values.insert((command_id.to_string(), field), (value, Instant::now()));
+}
+
+/// Master-write sanitizer for replicated documents (installed on the native
+/// RxDB peer). A browser pushes its `business_commands` document with the
+/// secret in the payload; the native store would hold it — and replicate it to
+/// every other browser — until intake overwrote the document. Seconds, but
+/// measured live (UI-Test 11.09.2026, P0-04/P0-08). The value is taken out
+/// before the document is persisted and reaches intake through the stash.
+pub(crate) fn detach_secret_from_replicated_document(collection: &str, document: &mut Value) {
+    if collection != "business_commands" {
+        return;
+    }
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    let Some(field) = ["command_type", "type"]
+        .iter()
+        .filter_map(|key| object.get(*key).and_then(Value::as_str))
+        .find_map(secret_payload_field)
+    else {
+        return;
+    };
+    let Some(command_id) = ["command_id", "id"]
+        .iter()
+        .filter_map(|key| object.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Some(value) = object
+        .get_mut("payload")
+        .and_then(Value::as_object_mut)
+        .and_then(|payload| payload.remove(field))
+    else {
+        return;
+    };
+    if let Some(value) = value.as_str() {
+        stash_secret_intake_value(&command_id, field, value.to_string());
+    }
+}
+
+pub(crate) fn install_replicated_secret_sanitizer() {
+    rxdb::replication_protocol::index_mod::set_master_write_sanitizer(Arc::new(
+        detach_secret_from_replicated_document,
+    ));
+}
+
+/// The secret a handler needs: the value detached at intake, or — for callers
+/// that bypass RxDB intake (CLI, tests) — the value still in the payload.
+fn take_secret_intake_value(command: &BusinessCommand) -> Option<String> {
+    let field = secret_payload_field(&command.command_type)?;
+    let detached = command.id.as_deref().and_then(|command_id| {
+        SECRET_INTAKE_VALUES
+            .get()?
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&(command_id.to_string(), field))
+            .map(|(value, _)| value)
+    });
+    detached.or_else(|| {
+        command
+            .payload
+            .get(field)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    })
+}
+
 fn put_credential_command(root: &Path, mutation: &CtoxSecretPutMutation) -> anyhow::Result<Value> {
     let name = mutation.name.trim();
     anyhow::ensure!(
@@ -13793,10 +14688,7 @@ pub(super) fn handle_mailserver_command(
                 .filter(|value| !value.is_empty())
                 .unwrap_or(&username)
                 .to_string();
-            let password = command
-                .payload
-                .get("password")
-                .and_then(Value::as_str)
+            let password = take_secret_intake_value(&command)
                 .unwrap_or_default()
                 .trim()
                 .to_string();
@@ -14418,8 +15310,11 @@ pub(super) fn handle_secret_command(
         }
         "ctox.secret.put" => {
             let session = rxdb_authenticated_session(root, &command)?;
-            let mutation: CtoxSecretPutMutation =
+            let mut mutation: CtoxSecretPutMutation =
                 serde_json::from_value(command.payload.clone()).unwrap_or_default();
+            if let Some(value) = take_secret_intake_value(command) {
+                mutation.value = value;
+            }
             // Redact the secret value before ANY persistence path runs: the
             // business_commands table, the re-projected RxDB document, the
             // policy-denied outcome, and the policy-decision audit event all
@@ -15276,6 +16171,16 @@ pub(super) fn is_outbound_active_command(command_type: &str) -> bool {
             | "outbound.research_source.test"
             | "outbound.research_source.auth_assist"
             | "outbound.sellify.lookup"
+            // Has a native handler. Without this entry the command fell
+            // through to the harness queue and cost a full worker turn per
+            // save; research tasks waited behind it.
+            | "outbound.research_policy.publish"
+            // Same: the outbound app reads the registry whenever its source
+            // panel opens, and every read became a worker task that mostly
+            // failed.
+            | "outbound.research_source.registry_read"
+            // "Jetzt testen" of the Update-Verteiler: native, deterministic.
+            | "outbound.update_digest.send_now"
     )
 }
 
@@ -15846,6 +16751,98 @@ pub(super) fn ensure_legacy_collection_grants(
     }
     tx.commit()?;
     Ok(())
+}
+
+/// First-party catalog apps (Mail, Documents, Auth-Handoff) run as installed
+/// modules, and the browser shell gives installed apps only collections with
+/// an explicit, reviewed grant. Their shared collections (mail, commands) only
+/// ever had `migration.sync.*` grants for founder/user, which the shell
+/// deliberately ignores, so the Mail app could read nothing — not even for an
+/// admin (thesen 22.09.2026: "Mail konnte nicht geladen werden", then 0 mails).
+/// Server policy already lets admin/chef read and write all business data;
+/// this materialises exactly that for the collections the first-party apps
+/// declare. Third-party apps and ordinary roles are unchanged.
+pub(super) fn ensure_first_party_catalog_collection_grants(
+    root: &Path,
+    installed_app_root: &Path,
+) -> anyhow::Result<usize> {
+    let modules_dir = installed_app_root.join("installed-modules");
+    let Ok(entries) = fs::read_dir(&modules_dir) else {
+        return Ok(0);
+    };
+    let mut declared: Vec<(String, String)> = Vec::new();
+    for entry in entries.flatten() {
+        let manifest_path = entry.path().join("module.json");
+        let Ok(raw) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if manifest.get("source").and_then(Value::as_str) != Some("catalog") {
+            continue;
+        }
+        let Some(module_id) = manifest
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        for collection in manifest
+            .get("collections")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if collection == "ctox_queue_tasks" || policy::is_cockpit_projection(collection) {
+                continue;
+            }
+            declared.push((module_id.to_string(), collection.to_string()));
+        }
+    }
+    if declared.is_empty() {
+        return Ok(0);
+    }
+    let server_owned_collections =
+        super::external_sql_sync::server_owned_projection_collections(root)?;
+    let mut conn = open_store(root)?;
+    let tx = conn.transaction()?;
+    let now = now_ms() as i64;
+    let mut inserted = 0usize;
+    for (module_id, collection) in &declared {
+        let server_owned_write = super::threads::is_threads_owned_collection(collection)
+            || server_owned_collections.contains(collection.as_str());
+        for role in ["admin", "chef"] {
+            for permission in [
+                BusinessOsPermission::DataRead,
+                BusinessOsPermission::DataWrite,
+            ] {
+                if permission == BusinessOsPermission::DataWrite && server_owned_write {
+                    continue;
+                }
+                let grant_id = format!(
+                    "catalog.first_party.{module_id}.{role}.{}.{collection}",
+                    permission.as_str().replace('.', "_")
+                );
+                inserted += tx.execute(
+                    "INSERT OR IGNORE INTO business_permission_grants
+                        (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                         active, reason, created_by, created_at_ms, updated_at_ms)
+                     VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
+                             'First-party catalog app data access for administrators',
+                             'business-os-first-party-catalog', ?5, ?5)",
+                    params![grant_id, role, permission.as_str(), collection, now],
+                )?;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(inserted)
 }
 
 fn business_os_collection_names_for_legacy_grants() -> Vec<String> {
@@ -16876,10 +17873,22 @@ pub(crate) fn persist_business_command_lifecycle_projection(
         )
         .optional()?
         .is_some();
-    anyhow::ensure!(
-        exists,
-        "cannot persist lifecycle projection before canonical intake"
-    );
+    // Owner-Befund 18.09.2026 (thesen): JEDER Recherchestart scheiterte hier.
+    // `business_os.chat.task` ist kein Kontrollbefehl und durchlaeuft die
+    // Kontrollbefehl-Aufnahme nicht; endet die Aufgabe terminal, bevor die
+    // kanonische Zeile geschrieben ist, lehnte dieser Waechter die Projektion
+    // ab. Der Aufnahme-Wiederholer gab nach fuenf Versuchen in zwei Sekunden
+    // auf, der Befehl war verbrannt, und die EIGENTLICHE Fehlermeldung wurde
+    // durch "cannot persist lifecycle projection before canonical intake"
+    // ersetzt — die Recherche lief nicht mehr und niemand sah warum.
+    //
+    // Wer hier ankommt, haelt das vollstaendige Lebenszyklus-Dokument in der
+    // Hand. Fehlt die Zeile, wird sie daraus angelegt — genau das, was die
+    // Aufnahme getan haette. Der Waechter bleibt fuer Dokumente ohne
+    // Kennzeichnung bestehen, damit keine leeren Projektionen entstehen.
+    if !exists {
+        seed_canonical_business_command_row(&conn, command_id, document)?;
+    }
     let updated_at_ms = document
         .get("updated_at_ms")
         .and_then(Value::as_i64)
@@ -16891,6 +17900,65 @@ pub(crate) fn persist_business_command_lifecycle_projection(
         updated_at_ms,
         document.clone(),
     )
+}
+
+/// Legt die kanonische `business_commands`-Zeile aus einem Lebenszyklus-
+/// Dokument an. Nur fuer Dokumente mit Modul und Befehlstyp: ohne diese
+/// Angaben waere die Zeile wertlos und der Fehler bleibt richtig.
+fn seed_canonical_business_command_row(
+    conn: &Connection,
+    command_id: &str,
+    document: &Value,
+) -> anyhow::Result<()> {
+    let module = document
+        .get("module")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("cannot persist lifecycle projection before canonical intake")?;
+    let command_type = document
+        .get("command_type")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("cannot persist lifecycle projection before canonical intake")?;
+    let record_id = document
+        .get("record_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let status = document
+        .get("status")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("accepted");
+    let payload = document.get("payload").cloned().unwrap_or(Value::Null);
+    let client_context = document
+        .get("client_context")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let observed_at_ms = document
+        .get("updated_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| now_ms() as i64);
+    conn.execute(
+        "INSERT INTO business_commands
+            (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(command_id) DO UPDATE SET
+            status = excluded.status,
+            observed_at_ms = excluded.observed_at_ms",
+        params![
+            command_id,
+            module,
+            command_type,
+            record_id,
+            status,
+            serde_json::to_string(&payload)?,
+            serde_json::to_string(&client_context)?,
+            observed_at_ms,
+        ],
+    )?;
+    Ok(())
 }
 
 /// Deliver canonical command lifecycle changes from the core SQLite outbox.
@@ -22991,6 +24059,19 @@ pub(super) fn redact_document_client_context_secrets(payload: &mut Value) {
         if context.is_object() || context.is_array() {
             let redacted = redact_client_context_secrets(context);
             object.insert("client_context".to_string(), redacted);
+        }
+    }
+    // A ctox.secret.put document arrives from the browser carrying the value.
+    // Every native projection of the command merges into that document, so a
+    // redacted command payload alone leaves the browser's value in place
+    // after writeback. Strip it from the final document.
+    let secret_field = ["command_type", "type"]
+        .iter()
+        .filter_map(|key| object.get(*key).and_then(Value::as_str))
+        .find_map(secret_payload_field);
+    if let Some(field) = secret_field {
+        if let Some(command_payload) = object.get_mut("payload").and_then(Value::as_object_mut) {
+            command_payload.remove(field);
         }
     }
 }
@@ -29411,6 +30492,58 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(founder_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn first_party_catalog_apps_get_admin_grants_for_declared_collections_only(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        drop(conn);
+        let installed = root.join("runtime/business-os");
+        let write_manifest = |id: &str, source: &str, collections: &[&str]| -> anyhow::Result<()> {
+            let dir = installed.join("installed-modules").join(id);
+            fs::create_dir_all(&dir)?;
+            fs::write(
+                dir.join("module.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "id": id, "source": source, "collections": collections
+                }))?,
+            )?;
+            Ok(())
+        };
+        write_manifest(
+            "mail",
+            "catalog",
+            &["communication_messages", "business_commands"],
+        )?;
+        write_manifest("thirdparty", "user", &["customer_accounts"])?;
+
+        let inserted = ensure_first_party_catalog_collection_grants(root, &installed)?;
+        assert!(inserted > 0);
+        let conn = open_store(root)?;
+        let count = |role: &str, permission: &str, collection: &str| -> anyhow::Result<i64> {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM business_permission_grants
+                 WHERE subject_type='role' AND subject_id=?1 AND permission=?2
+                   AND scope_type='collection' AND scope_id=?3 AND active=1
+                   AND grant_id NOT LIKE 'migration.sync.%'",
+                params![role, permission, collection],
+                |row| row.get(0),
+            )?)
+        };
+        let read = BusinessOsPermission::DataRead.as_str();
+        assert_eq!(count("admin", read, "communication_messages")?, 1);
+        assert_eq!(count("chef", read, "business_commands")?, 1);
+        assert_eq!(count("user", read, "communication_messages")?, 0);
+        assert_eq!(count("admin", read, "customer_accounts")?, 0);
+        // Idempotent across restarts.
+        assert_eq!(
+            ensure_first_party_catalog_collection_grants(root, &installed)?,
+            0
+        );
         Ok(())
     }
 
@@ -39621,6 +40754,222 @@ pub(super) mod tests {
             crate::secrets::credential_scope(),
             "OPENAI_API_KEY"
         )?);
+        Ok(())
+    }
+
+    /// Every text cell of every table in every SQLite file below `root` that
+    /// contains `needle`, as "file table count". The secret store is encrypted,
+    /// so the plaintext must not appear anywhere.
+    fn sqlite_cells_containing(root: &Path, needle: &str) -> anyhow::Result<Vec<String>> {
+        fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, files);
+                } else if path.extension().and_then(|ext| ext.to_str()) == Some("sqlite3") {
+                    files.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(root, &mut files);
+        let mut hits = Vec::new();
+        for file in files {
+            let conn = Connection::open(&file)?;
+            let tables: Vec<String> = conn
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")?
+                .query_map([], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            for table in tables {
+                let columns: Vec<String> = conn
+                    .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?
+                    .query_map([], |row| row.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                if columns.is_empty() {
+                    continue;
+                }
+                let condition = columns
+                    .iter()
+                    .map(|column| format!("instr(CAST(\"{column}\" AS TEXT), ?1) > 0"))
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+                let Ok(count) = conn.query_row(
+                    &format!("SELECT count(*) FROM \"{table}\" WHERE {condition}"),
+                    params![needle],
+                    |row| row.get::<_, i64>(0),
+                ) else {
+                    continue;
+                };
+                if count > 0 {
+                    hits.push(format!("{} {table} {count}", file.display()));
+                }
+            }
+        }
+        Ok(hits)
+    }
+
+    // A credential saved from the Outbound app
+    // stood in plaintext in business_commands, business_records,
+    // business_command_aggregates, ctox_process_events and the replicated RxDB
+    // business_commands document. The handler redacted only its own writes;
+    // intake had already persisted the original payload.
+    // UI-Test 11.09.2026 (P0-04/P0-08): the browser's pushed document held the
+    // value in the native store for seconds after "gespeichert". The
+    // master-write sanitizer takes it out before persistence; intake must still
+    // store the credential from the stash.
+    #[test]
+    fn replicated_secret_put_document_is_stripped_before_persistence_and_still_applied(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        seed_business_user(root, "global_admin", "admin")?;
+        let value = r#"{"username":"uitest-user","password":"REPLICATED_PLAINTEXT"}"#;
+        let mut document = serde_json::json!({
+            "id": "cmd_outbound_secret_put_replicated",
+            "command_id": "cmd_outbound_secret_put_replicated",
+            "module": "outbound-lead-generation",
+            "command_type": "ctox.secret.put",
+            "record_id": "OUTBOUND_REPLICATED_LOGIN",
+            "payload": { "name": "OUTBOUND_REPLICATED_LOGIN", "value": value },
+            "client_context": {
+                "actor": { "id": "global_admin", "display_name": "Global Admin" }
+            }
+        });
+        detach_secret_from_replicated_document("business_commands", &mut document);
+        assert!(document.pointer("/payload/value").is_none());
+        assert_eq!(
+            document.pointer("/payload/name").and_then(Value::as_str),
+            Some("OUTBOUND_REPLICATED_LOGIN")
+        );
+        {
+            let conn = Connection::open(rxdb_store_path(root))?;
+            rxdb::storage::sqlite::sql::ensure_collection_table(
+                &conn,
+                "ctox_business_os__business_commands__v2",
+            )?;
+            conn.execute(
+                "INSERT INTO ctox_business_os__business_commands__v2
+                    (id, revision, deleted, lastWriteTime, data)
+                 VALUES (?1, '1-browser', 0, ?2, ?3)",
+                params![
+                    "cmd_outbound_secret_put_replicated",
+                    now_ms() as f64,
+                    serde_json::to_string(&document)?,
+                ],
+            )?;
+        }
+        let put = accept_rxdb_business_command(root, document)?;
+        assert_eq!(put.get("status").and_then(Value::as_str), Some("completed"));
+        assert_eq!(
+            crate::secrets::read_secret_value(
+                root,
+                crate::secrets::credential_scope(),
+                "OUTBOUND_REPLICATED_LOGIN"
+            )?,
+            value
+        );
+        let hits = sqlite_cells_containing(root, "REPLICATED_PLAINTEXT")?;
+        assert!(
+            hits.is_empty(),
+            "secret value persisted in plaintext: {hits:#?}"
+        );
+
+        // Other collections and non-secret commands pass untouched.
+        let mut lead = serde_json::json!({
+            "id": "lead_x",
+            "command_type": "ctox.secret.put",
+            "payload": { "value": "kept" }
+        });
+        detach_secret_from_replicated_document("outbound_lead_generation_leads", &mut lead);
+        assert_eq!(
+            lead.pointer("/payload/value").and_then(Value::as_str),
+            Some("kept")
+        );
+        let mut other = serde_json::json!({
+            "id": "cmd_other",
+            "command_type": "outbound.sellify.lookup",
+            "payload": { "value": "kept" }
+        });
+        detach_secret_from_replicated_document("business_commands", &mut other);
+        assert_eq!(
+            other.pointer("/payload/value").and_then(Value::as_str),
+            Some("kept")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ctox_secret_put_value_reaches_no_table_in_any_store() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_test_business_os_app_root(root)?;
+        fs::create_dir_all(root.join("runtime"))?;
+        seed_business_user(root, "global_admin", "admin")?;
+        let value = r#"{"username":"probe-user","password":"PLAINTEXT_MUST_NOT_PERSIST"}"#;
+        let command = serde_json::json!({
+            "id": "cmd_outbound_secret_put_probe",
+            "command_id": "cmd_outbound_secret_put_probe",
+            "module": "outbound-lead-generation",
+            "command_type": "ctox.secret.put",
+            "record_id": "OUTBOUND_PROBE_LOGIN",
+            "payload": { "name": "OUTBOUND_PROBE_LOGIN", "value": value },
+            "client_context": {
+                "actor": { "id": "global_admin", "display_name": "Global Admin" }
+            }
+        });
+        // The browser's document reaches the native RxDB store by replication
+        // before intake runs; intake must overwrite it.
+        {
+            let conn = Connection::open(rxdb_store_path(root))?;
+            rxdb::storage::sqlite::sql::ensure_collection_table(
+                &conn,
+                "ctox_business_os__business_commands__v2",
+            )?;
+            conn.execute(
+                "INSERT INTO ctox_business_os__business_commands__v2
+                    (id, revision, deleted, lastWriteTime, data)
+                 VALUES (?1, '1-browser', 0, ?2, ?3)",
+                params![
+                    "cmd_outbound_secret_put_probe",
+                    now_ms() as f64,
+                    serde_json::to_string(&command)?,
+                ],
+            )?;
+        }
+        let put = accept_rxdb_business_command(root, command)?;
+        assert_eq!(put.get("status").and_then(Value::as_str), Some("completed"));
+        assert_eq!(
+            crate::secrets::read_secret_value(
+                root,
+                crate::secrets::credential_scope(),
+                "OUTBOUND_PROBE_LOGIN"
+            )?,
+            value
+        );
+        let hits = sqlite_cells_containing(root, "PLAINTEXT_MUST_NOT_PERSIST")?;
+        assert!(
+            hits.is_empty(),
+            "secret value persisted in plaintext: {hits:#?}"
+        );
+        // The scan must actually see the stores the command went through.
+        let command_hits = sqlite_cells_containing(root, "cmd_outbound_secret_put_probe")?;
+        for store in [
+            "business-os-rxdb.sqlite3",
+            "business-os.sqlite3",
+            "ctox.sqlite3",
+        ] {
+            assert!(
+                command_hits
+                    .iter()
+                    .any(|hit| hit.contains(&format!("/{store} "))),
+                "scan did not reach {store}: {command_hits:#?}"
+            );
+        }
         Ok(())
     }
 

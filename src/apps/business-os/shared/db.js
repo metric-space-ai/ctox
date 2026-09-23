@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260909-shell-v2-crew-chat-guards-v370';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

@@ -14,6 +14,7 @@ import {
 
 const CHAT_STYLE_ID = 'ctox-business-chat-style';
 const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
+const CHAT_SUBMISSIONS = new WeakMap();
 const CHAT_CHANNEL = 'business_os.llm.chat';
 const CHAT_COLLECTION = 'business_chats';
 const CHAT_OPEN_EVENT = 'ctox-business-os-chat-open';
@@ -571,7 +572,11 @@ export function initBusinessChat({
           crewChangeSubscription = db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
             if (crewPoolDisposed) return;
             loadCrewMembers({ state, db }).then((next) => {
-              if (next && !crewPoolDisposed) renderChatRoot({ root, state, commandBus, db, getActiveModule });
+              // The app-presence subscriber can load the shared member state
+              // first. Compare the rendered pool as well as the loader's delta.
+              if (!crewPoolDisposed && (next || root.dataset?.crewPoolSignature !== crewPoolSignature(state))) {
+                renderChatRoot({ root, state, commandBus, db, getActiveModule });
+              }
             }).catch(() => {});
           }) || null;
         } catch {}
@@ -1334,7 +1339,9 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const matchesCurrentDate = datePickerEl && datePickerEl.value === selectedDate;
   const existingWindows = Array.from(root.querySelectorAll('.ctox-chat-window'));
   for (const win of existingWindows) {
-    const chat = visibleWindowChats.find(item => item.id === win.dataset.chatId);
+    // A minimized or off-date window is about to leave the DOM, but its
+    // inspection choice still belongs to the retained conversation.
+    const chat = state.chats.find(item => item.id === win.dataset.chatId);
     if (chat) chat.inspectionOpen = Boolean(win.querySelector('.ctox-chat-inspection')?.open);
   }
   const hasBusyPanel = Boolean(root.querySelector('[data-chat-busy-panel]'));
@@ -1542,7 +1549,10 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         inPlaceDomChanged = true;
       }
 
-      if (taskState === 'queued' || taskState === 'running' || taskState === 'blocked') {
+      // Existing progress remains visible after completion; update its final
+      // revision too, so the ring cannot contradict the completed title.
+      if (win.querySelector('.ctox-chat-delegation-card')
+        || taskState === 'queued' || taskState === 'running' || taskState === 'blocked') {
         const trackingMessage = latestTrackingMessage(chat);
         const taskId = trackingMessage?.taskId || '';
         const commandId = trackingMessage?.commandId || chat.lastTrackingId || '';
@@ -1661,6 +1671,21 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   const previousStripScrollLeft = previousStrip?.scrollLeft || 0;
   const previousActiveChatId = root.dataset?.activeChatId || '';
   const hadRenderedDock = Boolean(root.querySelector('[data-chat-dock]'));
+  // Crew expression changes rebuild the dock. Preserve the reader's position
+  // and the composer selection across that rebuild, just as on in-place ticks.
+  const retainedWindows = new Map(existingWindows.map((win) => {
+    const input = win.querySelector('[name="message"]');
+    const messages = win.querySelector('.ctox-chat-messages');
+    return [win.dataset.chatId, {
+      scrollTop: messages?.scrollTop || 0,
+      atBottom: messages ? isScrolledToBottom(messages) : true,
+      focused: Boolean(input && (win.ownerDocument || document).activeElement === input),
+      selectionStart: input?.selectionStart,
+      selectionEnd: input?.selectionEnd,
+      selectionDirection: input?.selectionDirection,
+      inputScrollTop: input?.scrollTop || 0,
+    }];
+  }));
 
   if (root.dataset) root.dataset.crewPoolSignature = crewPoolSignature(state);
   root.innerHTML = `
@@ -1976,7 +2001,9 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         textarea.style.height = `${textarea.scrollHeight}px`;
       };
       textarea.addEventListener('input', (event) => {
-        chat.draft = event.currentTarget.value;
+        // Hydration can replace the chat object while retaining this textarea.
+        const currentChat = state.chats.find((item) => item.id === node.dataset.chatId);
+        if (currentChat) currentChat.draft = event.currentTarget.value;
         adjustHeight();
       });
       textarea.addEventListener('paste', async (e) => {
@@ -2039,6 +2066,18 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   });
   updateChatStripOverflowState(root);
   publishChatLayout(root, state);
+  root.querySelectorAll('.ctox-chat-window').forEach((win) => {
+    const retained = retainedWindows.get(win.dataset.chatId);
+    if (!retained) return;
+    const messages = win.querySelector('.ctox-chat-messages');
+    if (messages) messages.scrollTop = retained.atBottom ? messages.scrollHeight : retained.scrollTop;
+    const input = win.querySelector('[name="message"]');
+    if (input && retained.focused && win.dataset.chatId === activeExpandedChat?.id) {
+      input.focus({ preventScroll: true });
+      input.setSelectionRange(retained.selectionStart, retained.selectionEnd, retained.selectionDirection);
+      input.scrollTop = retained.inputScrollTop;
+    }
+  });
   window.requestAnimationFrame(() => {
     root.querySelectorAll('.ctox-chat-window.no-left-transition').forEach((win) => {
       win.classList.remove('no-left-transition');
@@ -2048,7 +2087,12 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
 }
 
 async function submitChatForm({ root, state, chat, node, commandBus, db, sync, getActiveModule }) {
-  if (chat.__submitting) return;
+  // A retained form must submit the current hydrated chat, not its old closure.
+  chat = state.chats.find((item) => item.id === chat.id);
+  if (!chat) return;
+  let submitting = CHAT_SUBMISSIONS.get(state);
+  if (!submitting) CHAT_SUBMISSIONS.set(state, submitting = new Set());
+  if (submitting.has(chat.id)) return;
   captureDrafts(root, state);
   const input = node.querySelector('[name="message"]');
   const text = String(input?.value || chat.draft || '').trim();
@@ -2059,7 +2103,7 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
 
   const isFuture = chat.createdAt > Date.now();
   if (isFuture) {
-    chat.__submitting = true;
+    submitting.add(chat.id);
     chat.draft = '';
     chat.showFollowUp = false;
     if (input) input.value = '';
@@ -2100,12 +2144,12 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
       await persistChatState({ state, db });
       renderChatRoot({ root, state, commandBus, db, getActiveModule });
     } finally {
-      delete chat.__submitting;
+      submitting.delete(chat.id);
     }
     return;
   }
 
-  chat.__submitting = true;
+  submitting.add(chat.id);
   chat.draft = '';
   const isFollowUpSubmission = chat.showFollowUp === true || Boolean(chat.lastTrackingId);
   chat.showFollowUp = false; // Reset follow-up container state
@@ -2128,12 +2172,18 @@ async function submitChatForm({ root, state, chat, node, commandBus, db, sync, g
         root.__ctoxChatOnTrackingStateChanged?.();
       },
     });
-    if (delivered) chat.attachments = [];
+    const currentChat = state.chats.find((item) => item.id === chat.id);
+    if (delivered && currentChat) {
+      const submitted = new Set(attachments.map((attachment) => attachmentSignature({ attachments: [attachment] })));
+      currentChat.attachments = (currentChat.attachments || []).filter((attachment) => (
+        !submitted.has(attachmentSignature({ attachments: [attachment] }))
+      ));
+    }
     await persistChatState({ state, db });
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
     root.__ctoxChatOnTrackingStateChanged?.();
   } finally {
-    delete chat.__submitting;
+    submitting.delete(chat.id);
   }
 }
 
@@ -2238,13 +2288,13 @@ function getTaskState(chat) {
     (m.taskId && m.taskId === chat.lastTrackingId)
   );
   if (!trackingMsg) return 'idle';
-  const status = String(trackingMsg.status || '').toLowerCase();
+  const status = canonicalTrackingStatus(trackingMsg.status);
   if (status === 'scheduled') return 'scheduled';
   if (!status) return 'idle';
   if (status === 'success' || status === 'completed' || status === 'handled' || status === 'done' || status === 'erledigt') return 'success';
   if (isBlockedTrackingStatus(status)) return 'blocked';
   if (['failed', 'error'].includes(status)) return 'failed';
-  if (['queued', 'pending', 'pending_sync', 'waiting'].includes(status)) return 'queued';
+  if (['queued', 'pending', 'pending_sync', 'waiting', 'terminal'].includes(status)) return 'queued';
   if (['running', 'processing', 'executing', 'active'].includes(status)) return 'running';
   return 'idle';
 }
@@ -2400,9 +2450,12 @@ function preferredChatForDockOpen(state) {
 }
 
 function moveEmptyHistoricalChatToToday(state, chat) {
-  if (!state || !chat || !isChatEmptyForDeletion(chat)) return false;
+  // A typed draft (or its attachments) is the new request, not prior history.
+  // Keep the stricter deletion predicate separate from first-submission dating.
+  if (!state || !chat || chat.messages?.length || String(chat.lastTrackingId || '').trim()
+    || hasScheduledChatAttachments(chat.scheduledAttachmentsByCommand)) return false;
   const today = getLocalDateString(Date.now());
-  if (getLocalDateString(chat.createdAt) === today) return false;
+  if (getLocalDateString(chat.createdAt) >= today) return false;
   const now = Date.now();
   chat.createdAt = now;
   chat.updated_at_ms = now;
@@ -2789,7 +2842,8 @@ function executionProgressForChat(chat) {
 
 function executionProgressSignature(chat) {
   const progress = executionProgressForChat(chat);
-  if (!progress) return 'planning';
+  const status = canonicalTrackingStatus(latestTrackingMessage(chat)?.status || getTaskState(chat) || '');
+  if (!progress) return `planning:${status}`;
   return [
     progress.revision,
     progress.percent,
@@ -2798,6 +2852,7 @@ function executionProgressSignature(chat) {
     progress.activity_turns.total,
     progress.activity_turns.last_kind,
     progress.updated_at_ms,
+    status,
   ].join(':');
 }
 
@@ -2817,9 +2872,9 @@ function executionStepStatusLabel(status) {
   return 'Offen';
 }
 
-function executionProgressTooltip(progress) {
+function executionProgressTooltip(progress, taskStatus = '') {
   if (!progress) return chatUiIsGerman() ? 'Plan wird erstellt' : 'Creating plan';
-  const isReviewPhase = progress.phase === 'review' || progress.phase === 'completed';
+  const isReviewPhase = progressShowsActiveReview(progress, taskStatus);
   const current = isReviewPhase
     ? null
     : progress.steps.find((step) => step.position === progress.current_step)
@@ -2843,6 +2898,13 @@ function executionProgressTooltip(progress) {
   return lines.join('\n');
 }
 
+function progressShowsActiveReview(progress, taskStatus = '') {
+  if (!progress) return false;
+  const status = canonicalTrackingStatus(taskStatus);
+  if (isFailureStatus(status) || isCancelledTrackingStatus(status)) return false;
+  return progress.phase === 'review' || progress.phase === 'completed';
+}
+
 function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskStatus = 'queued' } = {}) {
   const progress = executionProgressForChat(chat);
   if (!progress) {
@@ -2851,7 +2913,7 @@ function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskSta
       ? (chatUiIsGerman() ? 'Plan wird erstellt' : 'Creating plan')
       : (chatUiIsGerman() ? 'Noch kein Ausführungsplan' : 'No execution plan yet');
     return `
-      <div class="ctox-chat-delegation-card ${isPlanning ? 'is-planning' : 'is-dormant'}" data-progress-signature="planning">
+      <div class="ctox-chat-delegation-card ${isPlanning ? 'is-planning' : 'is-dormant'}" data-progress-signature="${escapeAttr(executionProgressSignature(chat))}">
         <button class="ctox-progress-visual ${isPlanning ? 'is-planning' : 'is-dormant'}" type="button" style="--ctox-progress-percent:0" data-track-task ${taskId ? '' : 'disabled'} data-task-id="${escapeAttr(taskId)}" data-command-id="${escapeAttr(commandId)}" data-task-status="${escapeAttr(taskStatus)}" aria-label="${escapeAttr(tooltip)}" title="${escapeAttr(tooltip)}">
           <span class="ctox-progress-activity" style="--ctox-turn-angle:0deg" aria-hidden="true"><i></i></span>
           <span class="ctox-progress-track">
@@ -2863,7 +2925,7 @@ function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskSta
     `;
   }
 
-  const isReviewPhase = progress.phase === 'review' || progress.phase === 'completed';
+  const isReviewPhase = progressShowsActiveReview(progress, taskStatus);
   const current = isReviewPhase
     ? null
     : progress.steps.find((step) => step.position === progress.current_step)
@@ -2880,7 +2942,7 @@ function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskSta
   const workSegments = progress.steps.map((step) => `
     <span class="ctox-progress-segment is-${escapeAttr(step.status)}" title="${escapeAttr(`${step.position}. ${step.label}: ${executionStepStatusLabel(step.status)}`)}"></span>
   `).join('');
-  const tooltip = executionProgressTooltip(progress);
+  const tooltip = executionProgressTooltip(progress, taskStatus);
 
   return `
     <div class="ctox-chat-delegation-card ${activityClass}" data-progress-signature="${escapeAttr(executionProgressSignature(chat))}">
@@ -2917,7 +2979,7 @@ function chatWindowTitle(chat) {
   return [
     `${crewIdentity(chat).name} · ${chat.title || (chatUiIsGerman() ? 'Neue Aufgabe' : 'New task')}`,
     chatDockStatusText(chat, getTaskState(chat)),
-    executionProgressTooltip(executionProgressForChat(chat)),
+    executionProgressTooltip(executionProgressForChat(chat), getTaskState(chat)),
   ].filter(Boolean).join('\n');
 }
 
@@ -4016,6 +4078,14 @@ async function submitChatMessage({
         module: sourceModule,
         source_module: sourceModule,
         source_title: sourceTitle,
+        owner_user_id: canonicalChatOwnerUserId(
+          extraClientContext.owner_user_id,
+          extraClientContext.owner,
+          extraClientContext.actor?.id,
+          extraClientContext.actor?.user_id,
+          chat.owner_user_id,
+          state.ownerUserId,
+        ),
         inbound_channel: meta.inbound_channel || CHAT_CHANNEL,
         outbound_channel: 'business_os_chat',
         chat_id: chat.id,
@@ -4170,7 +4240,7 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         chatChanged = true;
       }
       const takeoverKey = nextTaskId || commandId;
-      if (member && takeoverKey && !chat.messages.some((item) => item.takeoverFor === takeoverKey)) {
+      if (member && takeoverKey && !hasTrackingMarker(chat, 'takeoverFor', { commandId, taskId: nextTaskId })) {
         const reasonTitle = await crewSelectionReason(db?.raw?.ctox_harness_events, String(taskDoc?.task_id || taskDoc?.id || nextTaskId).replace(/^queue-/, ''));
         chat.messages.push({
           id: `takeover_${crypto.randomUUID()}`,
@@ -4194,7 +4264,8 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         || commandDoc?.executionProgress
         || null;
       const normalizedProgress = normalizeExecutionProgress(nextProgress);
-      if (JSON.stringify(message.executionProgress || null) !== JSON.stringify(normalizedProgress)) {
+      if (normalizedProgress
+        && JSON.stringify(message.executionProgress || null) !== JSON.stringify(normalizedProgress)) {
         message.executionProgress = normalizedProgress;
         changed = true;
         chatChanged = true;
@@ -4218,7 +4289,9 @@ async function syncTrackedMessages({ state, db, sync = null }) {
         changed = true;
         chatChanged = true;
       }
-      const outbound = extractOutboundText(commandDoc) || extractOutboundText(taskDoc);
+      const outbound = shouldDeliverTrackedOutbound(nextStatus, commandDoc, taskDoc)
+        ? (extractOutboundText(commandDoc) || extractOutboundText(taskDoc))
+        : '';
       // A tracked message starts with only its command id and gains its task id
       // the moment the queue admits it. Matching the marker against the current
       // identity alone therefore missed a reply that had been filed under the
@@ -4300,6 +4373,9 @@ function trackedMessageNeedsSync(chat, message) {
   const status = message?.status || 'queued';
   if (isActiveTrackingStatus(status)) return true;
   if (!isTerminalTrackingStatus(status)) return false;
+  if ((isFailureStatus(status) || isCancelledTrackingStatus(status)) && !trackingIdFromMessage(message, 'task')) {
+    return true;
+  }
   return !hasTerminalReplyForTracking(chat, message);
 }
 
@@ -4310,7 +4386,12 @@ function hasTerminalReplyForTracking(chat, trackedMessage) {
   ].filter(Boolean);
   if (!refs.length) return false;
   return (Array.isArray(chat?.messages) ? chat.messages : []).some((message) => {
-    if (!message || message === trackedMessage) return false;
+    if (!message) return false;
+    if (message === trackedMessage && !['reply', 'interim'].includes(message.kind)) return false;
+    // Completion of the task and delivery of its answer are separate updates.
+    // A receipt/plan promoted to completed must not stop answer hydration.
+    if (canonicalTrackingStatus(trackedMessage?.status) === 'completed'
+      && isChatInspectionMessage(message)) return false;
     if (String(message.role || '').toLowerCase() !== 'ctox') return false;
     if (!String(message.text || '').trim()) return false;
     if (!isTerminalTrackingStatus(message.status || 'completed')) return false;
@@ -4402,11 +4483,16 @@ async function findDoc(collection, id) {
 }
 
 function preferredTrackingStatus(commandDoc, taskDoc, currentStatus = '') {
-  const commandStatus = firstStatusValue(commandDoc, ['execution_phase', 'task_status', 'status', 'route_status', 'terminal_status']);
-  const taskStatus = firstStatusValue(taskDoc, ['execution_phase', 'task_status', 'status', 'route_status', 'terminal_status']);
-  const terminalStatus = [commandStatus, taskStatus].find(isTerminalTrackingStatus);
+  const commandOutcome = firstStatusValue(commandDoc, ['terminal_status', 'task_status', 'status', 'route_status']);
+  const taskOutcome = firstStatusValue(taskDoc, ['terminal_status', 'task_status', 'status', 'route_status']);
+  const commandPhase = firstStatusValue(commandDoc, ['execution_phase']);
+  const taskPhase = firstStatusValue(taskDoc, ['execution_phase']);
+  const outcomes = [commandOutcome, taskOutcome].map(canonicalTrackingStatus).filter(Boolean);
+  const terminalStatus = outcomes.find(isTerminalTrackingStatus);
   if (terminalStatus) return canonicalTrackingStatus(terminalStatus);
-  return canonicalTrackingStatus(commandStatus || taskStatus || currentStatus || '');
+  const phases = [commandPhase, taskPhase, currentStatus].map(canonicalTrackingStatus);
+  if (phases.some((status) => status === 'running')) return 'running';
+  return canonicalTrackingStatus(commandOutcome || taskOutcome || commandPhase || taskPhase || currentStatus || '');
 }
 
 async function flushChatTrackingCollections({ sync, db } = {}) {
@@ -4430,8 +4516,8 @@ function firstStatusValue(doc, fields) {
   if (!doc || typeof doc !== 'object') return '';
   for (const field of fields) {
     const value = String(doc[field] || '').trim();
-    if (value === 'none') continue;
-    if (value) return value;
+    if (!value || value === 'none' || value === 'terminal') continue;
+    return value;
   }
   return '';
 }
@@ -4461,11 +4547,15 @@ function isTerminalTrackingStatus(status) {
 // measured on welsch 09.09.2026, where every completed chat carried its reply
 // twice.
 export function hasReplyAlready(chat, message, outbound) {
-  if (hasTrackingMarker(chat, 'replyFor', message)) return true;
   const text = String(outbound || '').trim();
   if (!text) return false;
+  // Admission receipts from older clients also carry replyFor. They belong
+  // to inspection and must not silence the worker's later actual answer.
+  const replies = (chat?.messages || []).filter(item => item?.role === 'ctox'
+    && (!isChatInspectionMessage(item) || String(item.text || '').trim() === text));
+  if (hasTrackingMarker({ messages: replies }, 'replyFor', message)) return true;
   const keys = [message?.taskId, message?.commandId].map((value) => String(value || '').trim()).filter(Boolean);
-  return (chat?.messages || []).some((item) => {
+  return replies.some((item) => {
     if (item?.role !== 'ctox' || String(item?.text || '').trim() !== text) return false;
     const itemKeys = [item?.taskId, item?.commandId].map((value) => String(value || '').trim()).filter(Boolean);
     return !itemKeys.length || !keys.length || itemKeys.some((key) => keys.includes(key));
@@ -4504,8 +4594,23 @@ function extractOutboundText(doc) {
   return String(candidates.find((value) => String(value || '').trim()) || '').trim();
 }
 
+function shouldDeliverTrackedOutbound(status, commandDoc, taskDoc) {
+  const value = canonicalTrackingStatus(status);
+  if (isFailureStatus(value) || isCancelledTrackingStatus(value) || value === 'terminal') return false;
+  if (!isTerminalTrackingStatus(value)) {
+    const rawPhase = String(commandDoc?.execution_phase || taskDoc?.execution_phase || '').trim().toLowerCase();
+    if (rawPhase === 'terminal') return false;
+  }
+  return true;
+}
+
 function isFailureStatus(status) {
   return ['failed', 'error'].includes(String(status || '').toLowerCase());
+}
+
+function isCancelledTrackingStatus(status) {
+  const value = canonicalTrackingStatus(status);
+  return value === 'cancelled' || value === 'canceled';
 }
 
 // Every other Business OS surface (ctox, conversations, outbound) reports
@@ -4518,6 +4623,7 @@ function isBlockedTrackingStatus(status) {
 function isActiveTrackingStatus(status) {
   const value = String(status || '').toLowerCase();
   if (isBlockedTrackingStatus(value)) return true;
+  if (value === 'terminal') return true;
   return ['accepted', 'queued', 'pending', 'pending_sync', 'waiting', 'retry_wait', 'retry-wait', 'review_rework', 'review-rework', 'running', 'processing', 'executing', 'active'].includes(value);
 }
 
@@ -4527,9 +4633,9 @@ function trackingMessageAgeMs(message) {
 }
 
 function isTransientCommandTrackingError(error) {
-  if (error?.code === 'peer_connect_timeout') return true;
+  if (error?.code === 'peer_connect_timeout' || error?.code === 'peer_unstable_after_open') return true;
   const text = String(error?.message || error || '');
-  return /WebRTC native peer did not open|Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21|wartet noch auf die Rueckmeldung|Die Rückmeldung steht noch aus/i.test(text);
+  return /WebRTC native peer did not open|opened and closed again within|Timed out waiting for WebRTC response|rxdb\.query\.fetch|masterWrite|masterChangesSince|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21|wartet noch auf die Rueckmeldung|Die Rückmeldung steht noch aus/i.test(text);
 }
 
 function failureText(commandDoc, taskDoc) {
@@ -4761,7 +4867,7 @@ function readChatState(session) {
       deletedChatIds: normalizeChatDeletionMap(parsed.deletedChatIds),
       remoteHydrationComplete: chats.length > 0,
       chats: chats
-        .filter((chat) => !chat.owner_user_id || chat.owner_user_id === owner)
+        .filter((chat) => isOwnedChat(chat, owner))
         .map((chat) => ({
           ...chatCrewSnapshot(chat),
           id: chat.id || `chat_${crypto.randomUUID()}`,
@@ -4919,6 +5025,11 @@ async function persistChatDocsRemote(collection, docs) {
       const existing = await withChatPersistenceTimeout(collection.findOne(doc.id).exec());
       if (existing) {
         const existingJson = existing.toJSON?.() || {};
+        const existingOwner = String(existingJson.owner_user_id || '').trim();
+        const docOwner = String(doc.owner_user_id || '').trim();
+        if (existingOwner && existingOwner !== docOwner) {
+          continue;
+        }
         const owner = doc.owner_user_id || existingJson.owner_user_id || '';
         const merged = mergeChatPair(doc, existingJson, owner);
         await withChatPersistenceTimeout(existing.incrementalPatch(merged));
@@ -5253,8 +5364,23 @@ function ownerUserId(session) {
   return String(session?.user?.id || 'local-dev').trim() || 'local-dev';
 }
 
+function isPlaceholderChatOwner(ownerId) {
+  const value = String(ownerId || '').trim();
+  return !value || value === 'local-dev';
+}
+
+function canonicalChatOwnerUserId(...candidates) {
+  const values = candidates
+    .filter((candidate) => candidate == null || typeof candidate !== 'object')
+    .map((candidate) => String(candidate || '').trim())
+    .filter(Boolean);
+  return values.find((value) => !isPlaceholderChatOwner(value)) || values[0] || '';
+}
+
 function isOwnedChat(chat, owner) {
-  return !owner || !chat?.owner_user_id || chat.owner_user_id === owner;
+  if (!owner) return true;
+  const chatOwner = String(chat?.owner_user_id || '').trim();
+  return !chatOwner || chatOwner === String(owner).trim();
 }
 
 function compactConversation(messages) {
@@ -5536,7 +5662,7 @@ function installChatStyles() {
       max-width: none;
     }
     .ctox-chat-dock.is-collapsed {
-      grid-template-columns: 88px var(--ctox-date-pill-width);
+      grid-template-columns: max-content var(--ctox-date-pill-width);
       width: auto;
     }
     .ctox-chat-dock.is-collapsed .ctox-chat-nav,
@@ -7689,6 +7815,18 @@ ${CREW_CREATURE_BASE_CSS}
     .ctox-chat-window:not(:has(.ctox-chat-form)):not(:has(.ctox-followup-container)):not(:has(.ctox-chat-scheduler-card)) {
       grid-template-rows: 64px minmax(0, 1fr);
     }
+    /* The task inspection is a fourth grid child between header and
+       messages. With the three-row templates it took the flexible row: on
+       an affected layout it stood 402px tall and empty while the messages got
+       56px and the user's own task sat clipped behind the input. */
+    .ctox-chat-window:has(> .ctox-chat-inspection),
+    .ctox-chat-window.is-active:has(> .ctox-chat-inspection),
+    .ctox-chat-window[class*="is-task-"]:has(> .ctox-chat-inspection) {
+      grid-template-rows: 64px auto minmax(0, 1fr) 56px;
+    }
+    .ctox-chat-window:has(> .ctox-chat-inspection):not(:has(.ctox-chat-form)):not(:has(.ctox-followup-container)):not(:has(.ctox-chat-scheduler-card)) {
+      grid-template-rows: 64px auto minmax(0, 1fr);
+    }
     .ctox-chat-window header {
       position: relative;
       box-sizing: border-box;
@@ -7931,8 +8069,9 @@ ${CREW_CREATURE_BASE_CSS}
       100% { width: 58%; opacity: 0.9; }
     }
     .ctox-chat-dock {
-      --ctox-date-pill-width: 42px;
-      grid-template-columns: 108px var(--ctox-date-pill-width) 36px;
+      /* Two 24px day arrows, a 30px calendar, gaps, padding and border. */
+      --ctox-date-pill-width: 88px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) 36px;
       gap: 6px;
       padding: 5px;
       border-color: color-mix(in srgb, var(--line) 48%, transparent);
@@ -7940,20 +8079,21 @@ ${CREW_CREATURE_BASE_CSS}
       background: var(--surface);
     }
     .ctox-chat-dock.has-visible-chats {
-      grid-template-columns: 108px var(--ctox-date-pill-width) minmax(48px, auto) 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) minmax(48px, auto) 36px;
     }
     .ctox-chat-dock.has-nav {
-      grid-template-columns: 108px var(--ctox-date-pill-width) 26px minmax(0, auto) 26px 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) 26px minmax(0, auto) 26px 36px;
     }
     .ctox-chat-dock.has-many-chats {
-      grid-template-columns: 108px var(--ctox-date-pill-width) 26px minmax(0, min(350px, 36dvw)) 26px 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) 26px minmax(0, min(350px, 36dvw)) 26px 36px;
     }
     .ctox-chat-fab {
       display: grid;
       grid-template-columns: auto 1fr;
       align-items: center;
       gap: 6px;
-      width: 108px;
+      /* Reserve the full overlapping member row, including all six portraits. */
+      width: max-content;
       min-width: 108px;
       height: 42px;
       padding: 0 8px;
@@ -7964,7 +8104,7 @@ ${CREW_CREATURE_BASE_CSS}
       display: flex;
       align-items: center;
       justify-content: flex-end;
-      width: 100%;
+      width: max-content;
       height: 34px;
       padding-left: 8px;
     }
@@ -7989,6 +8129,14 @@ ${CREW_CREATURE_BASE_CSS}
     }
     .ctox-chat-fab-creatures.is-members .ctox-crew-creature {
       margin-left: 0;
+    }
+    /* Keep five/six full-size portraits within the four-member row width,
+       leaving both date controls and the reporter reservation their space. */
+    .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) {
+      padding-left: 16px;
+    }
+    .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) .ctox-chat-crew-slot {
+      margin-left: -16px;
     }
     /* A member at work on an app: small portrait in the corner of the window
        icon and on the desktop icon. Pure presence, no text. */
@@ -8168,11 +8316,11 @@ ${CREW_CREATURE_BASE_CSS}
       max-width: 100%;
     }
     .ctox-chat-dock.has-visible-chats:not(.is-collapsed) {
-      grid-template-columns: 108px var(--ctox-date-pill-width) minmax(48px, auto) 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) minmax(48px, auto) 36px;
     }
     .ctox-chat-dock.has-few-chats:not(.is-collapsed),
     .ctox-chat-dock.has-many-chats:not(.is-collapsed) {
-      grid-template-columns: 108px var(--ctox-date-pill-width) 26px minmax(0, 1fr) 26px 36px;
+      grid-template-columns: max-content var(--ctox-date-pill-width) 26px minmax(0, 1fr) 26px 36px;
       justify-self: stretch;
       width: 100%;
       max-width: 100%;
@@ -8891,6 +9039,13 @@ async function dispatchScheduledChat({ chat, scheduledMsg, commandBus, db, sync 
       module: chat.contextMeta?.module || 'ctox',
       source_module: chat.contextMeta?.module || 'ctox',
       source_title: chat.contextMeta?.source_title || 'Crew',
+      owner_user_id: canonicalChatOwnerUserId(
+        chatClientContext.owner_user_id,
+        chatClientContext.owner,
+        chatClientContext.actor?.id,
+        chatClientContext.actor?.user_id,
+        chat.owner_user_id,
+      ),
       inbound_channel: CHAT_CHANNEL,
       outbound_channel: 'business_os_chat',
       chat_id: chat.id,
@@ -8994,6 +9149,7 @@ export const __businessChatTestInternals = Object.freeze({
   chatWindow,
   chatComposerSignature,
   mergeChatPair,
+  mergeChats,
   mergeChatMessages,
   claimChatOpenOwnership,
   currentChatOpenOwnership,
@@ -9012,6 +9168,7 @@ export const __businessChatTestInternals = Object.freeze({
   hasTrackedMessagesNeedingSync,
   flushChatTrackingCollections,
   hydrateChatsFromRxDb,
+  isOwnedChat,
   initSchedulerLoop,
   isChatEmptyForDeletion,
   isScrolledToBottom,
@@ -9038,8 +9195,11 @@ export const __businessChatTestInternals = Object.freeze({
   isTransientCommandTrackingError,
   withChatPersistenceTimeout,
   isBlockedTrackingStatus,
+  isCancelledTrackingStatus,
   isFailureStatus,
   isTerminalTrackingStatus,
   isActiveTrackingStatus,
   getTaskState,
+  preferredTrackingStatus,
+  progressShowsActiveReview,
 });

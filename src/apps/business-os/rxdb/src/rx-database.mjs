@@ -343,7 +343,7 @@ class CtoxRxCollection {
 
   get $() {
     return {
-      subscribe: (listener) => {
+      subscribe: (listener, { emitPendingChanges = false } = {}) => {
         let active = true;
         // Phase 2: a live collection subscription marks this collection as
         // foreground in the RxDB layer so replication prioritizes it on the
@@ -359,6 +359,7 @@ class CtoxRxCollection {
         let initialRetryAttempt = 0;
         let initialized = false;
         let pendingSuccess = {};
+        let pendingChanges = {};
         const documentsById = new Map();
         const debounceMs = OBSERVABLE_DEBOUNCE_MS;
         const emitSnapshot = () => {
@@ -405,12 +406,26 @@ class CtoxRxCollection {
           }
           applySuccess(pendingSuccess);
           pendingSuccess = {};
+          pendingChanges = {};
+          if (pendingTimer != null) clearTimeout(pendingTimer);
+          pendingTimer = null;
           initialized = true;
           emitSnapshot();
         };
         const flushDelta = () => {
           pendingTimer = null;
-          if (!active || !initialized) return;
+          if (!active) return;
+          if (!initialized) {
+            // An explicit invalidation event, never a partial collection snapshot.
+            const changes = Object.values(pendingChanges);
+            pendingChanges = {};
+            if (emitPendingChanges && changes.length) listener({
+              collectionName: this.name,
+              initialPending: true,
+              changedDocuments: changes.map(doc => new CtoxRxDocument(this, doc)),
+            });
+            return;
+          }
           applySuccess(pendingSuccess);
           pendingSuccess = {};
           emitSnapshot();
@@ -420,7 +435,10 @@ class CtoxRxCollection {
             ...pendingSuccess,
             ...successPayloadFromChangeEvent(event),
           };
-          if (!initialized) return;
+          if (!initialized) {
+            if (!emitPendingChanges) return;
+            pendingChanges = {...pendingChanges, ...successPayloadFromChangeEvent(event)};
+          }
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushDelta, debounceMs);
         };
@@ -478,6 +496,7 @@ class CtoxRxQuery {
   constructor(collection, query, single) {
     this.collection = collection;
     this.query = normalizeQuery(query, collection.schema.primaryPath);
+    this.signal = query?.signal && typeof query.signal.addEventListener === 'function' ? query.signal : null;
     this.single = single;
     this.$ = {
       subscribe: (listener) => {
@@ -646,7 +665,8 @@ class CtoxRxQuery {
     if (this.collection.demandLoader) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit))
         ? { window: { offset: Number(this.query.skip || 0), limit: 1 } }
-        : undefined;
+        : {};
+      demandOptions.signal = this.signal;
       docs = await this.collection.demandLoader.resolveQuery(this.query, demandOptions);
     } else if (typeof this.collection.storageCollection.queryDocuments === 'function') {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {

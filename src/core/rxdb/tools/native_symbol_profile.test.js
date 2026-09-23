@@ -20,7 +20,7 @@ function temporary(t) {
 }
 function fakeRecorder(outputPath, { exitCode = 0, exitSignal = null, ignoreInterrupt = false } = {}) {
   const recorder = Object.assign(new EventEmitter(), { exitCode: null, signalCode: null,
-    stderr: new PassThrough(), signals: [] });
+    stdout: new PassThrough(), stderr: new PassThrough(), signals: [] });
   recorder.kill = signal => {
     recorder.signals.push(signal);
     if (signal === 'SIGINT' && ignoreInterrupt) return true;
@@ -73,7 +73,7 @@ test('bounded flat sampling targets only the supplied native PID without stack d
     platform: 'linux', readStart: () => 10,
     spawnRecord(executable, args, options) {
       assert.equal(executable, 'perf'); recordArgs = args;
-      assert.deepEqual(options.stdio, ['ignore', 'ignore', 'pipe']);
+      assert.deepEqual(options.stdio, ['ignore', 'pipe', 'pipe']);
       assert.equal(options.env.PERF_CONFIG, '/dev/null');
       recorder = fakeRecorder(outputPrefix + '.perf.data');
       return recorder;
@@ -168,6 +168,35 @@ test('perf permission failure preserves diagnostics without claiming a sample', 
   assert.equal(result.available, false);
   assert.equal(result.reason, 'perf-record-failed');
   assert.match(result.recordStderr, /Permission denied/);
+});
+
+test('recording failures retain bounded stdout and stderr without accepting data', async t => {
+  const outputPrefix = temporary(t);
+  const profile = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0 }, {
+    platform: 'linux', readStart: () => 10,
+    spawnRecord() {
+      const recorder = fakeRecorder(outputPrefix + '.perf.data');
+      setImmediate(() => {
+        recorder.stdout.write('stdout diagnostic\n' + 'x'.repeat(20000));
+        recorder.stdout.write('must not grow the retained buffer');
+        recorder.stderr.write('stderr diagnostic\n' + 'y'.repeat(20000));
+        recorder.exitCode = 255;
+        recorder.emit('close', 255, null);
+      });
+      return recorder;
+    },
+    async runReport() { assert.fail('diagnostic output cannot validate a failed recording'); },
+  });
+  const result = await profile.completion;
+  assert.equal(result.reason, 'perf-record-failed');
+  assert.equal(result.available, false);
+  assert.equal(result.recordCode, 255);
+  assert.match(result.recordStdout, /^stdout diagnostic/);
+  assert.match(result.recordStderr, /^stderr diagnostic/);
+  assert.equal(result.recordStdout.length, 16384);
+  assert.equal(result.recordStderr.length, 16384);
+  assert.equal(result.recordStdoutTruncated, true);
+  assert.equal(result.recordStderrTruncated, true);
 });
 
 test('empty sample reports are explicitly unavailable', async t => {

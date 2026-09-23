@@ -100,11 +100,18 @@
       "requiredCapabilities": "set:string",
       "credentialReferences": "set:string"
     },
+    "GitWorkspaceState": {
+      "baseCommit": "string",
+      "indexPatch": "ArtifactRef",
+      "worktreePatch": "ArtifactRef",
+      "requiredUntracked": "list:WorkspaceEntry",
+      "deletedPaths": "set:string"
+    },
     "CheckpointManifest": {
       "version": "u32",
       "session": "SessionManifest",
       "sequence": "u64",
-      "baseCommit": "optional:string",
+      "workspaceState": "GitWorkspaceState",
       "history": "list:ArtifactRef",
       "attachments": "list:ArtifactRef",
       "workspace": "list:WorkspaceEntry",
