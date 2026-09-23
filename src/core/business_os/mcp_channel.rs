@@ -8871,7 +8871,7 @@ mod tests {
             serde_json::json!({
                 "collection": "customer_accounts",
                 "documents": [
-                    {"id": "stale", "name": "Old live shadow", "updated_at_ms": 100},
+                    {"id": "stale", "name": "Newer live shadow", "updated_at_ms": 500},
                     {"id": "fallback", "name": "Shadow only", "updated_at_ms": 90},
                     {"id": "recent-fallback", "name": "Recent shadow only", "updated_at_ms": 375}
                 ]
