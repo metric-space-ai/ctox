@@ -20,6 +20,11 @@ const labels = {
     refresh: 'Aktualisieren',
     search: 'Threads suchen',
     noThreads: 'Keine relevanten Threads vorhanden.',
+    noPersonalWork: 'Keine Arbeit für dich.',
+    noSearchResults: 'Keine Treffer in Titel und Quellobjekt.',
+    partialSearchResults: 'Keine lokalen Treffer · weitere Daten möglich.',
+    noFilterResults: 'Keine Threads in dieser Ansicht.',
+    offlinePending: 'Offline · lokaler Datenstand noch unvollständig.',
     syncingThreads: 'Threads werden synchronisiert.',
     noSelection: 'Kein Thread ausgewählt.',
     commandFailed: 'Aktion konnte nicht abgeschlossen werden.',
@@ -28,6 +33,11 @@ const labels = {
     refresh: 'Refresh',
     search: 'Search threads',
     noThreads: 'No relevant threads.',
+    noPersonalWork: 'No work assigned to you.',
+    noSearchResults: 'No matches in titles and source records.',
+    partialSearchResults: 'No local matches · more data may follow.',
+    noFilterResults: 'No threads in this view.',
+    offlinePending: 'Offline · local data is still incomplete.',
     syncingThreads: 'Syncing threads.',
     noSelection: 'No thread selected.',
     commandFailed: 'Action could not be completed.',
@@ -1065,22 +1075,35 @@ function renderList(threads, { resetScroll = false } = {}) {
   // because the content set changed). Prefer skipping the write entirely when
   // the data signature is unchanged; selection is an in-place class flip.
   if (!threads.length) {
-    // Data-driven empty: only when the UNFILTERED source (user_threads) is
-    // empty. While that collection has not finished its initial replication
-    // (ready === false), this is a sync state, not "no threads". A filtered
-    // or searched-out list (source non-empty) stays a plain filter empty.
+    // An empty result is final only after the relevant personal or recent
+    // query and the source collection have completed. Searches over a partial
+    // local window must not claim that no matching thread exists.
     const readiness = state.threadsReadiness || readThreadsReadiness();
-    if (!state.data.threads.length && (readiness?.ready === false || !personalCollectionsReady())) {
+    const complete = state.filter === 'inbox'
+      ? personalCollectionsReady()
+      : state.recentThreadsComplete && readiness?.ready === true;
+    if (!complete) {
+      const offline = navigator.onLine === false;
+      const message = state.search
+        ? state.t('partialSearchResults', 'Keine lokalen Treffer · weitere Daten möglich.')
+        : offline
+          ? state.t('offlinePending', 'Offline · lokaler Datenstand noch unvollständig.')
+          : state.t('syncingThreads', 'Threads werden synchronisiert.');
       renderHtmlIfChanged(
         els.list,
-        `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(state.t('syncingThreads', 'Threads werden synchronisiert.'))}</div>`,
-        { signature: 'state:syncing', preserveScroll: !resetScroll },
+        `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(message)}</div>`,
+        { signature: `state:incomplete:${offline}:${Boolean(state.search)}`, preserveScroll: !resetScroll },
       );
     } else {
+      const emptyMessage = state.search
+        ? state.t('noSearchResults', 'Keine Treffer in Titel und Quellobjekt.')
+        : state.filter === 'inbox'
+          ? state.t('noPersonalWork', 'Keine Arbeit für dich.')
+          : state.t('noFilterResults', 'Keine Threads in dieser Ansicht.');
       renderHtmlIfChanged(
         els.list,
-        `<div class="ctox-empty">${escapeHtml(state.t('noThreads', 'Keine relevanten Threads vorhanden.'))}</div>`,
-        { signature: 'state:empty', preserveScroll: !resetScroll },
+        `<div class="ctox-empty">${escapeHtml(emptyMessage)}</div>`,
+        { signature: `state:empty:${state.filter}:${Boolean(state.search)}`, preserveScroll: !resetScroll },
       );
     }
     if (resetScroll) els.list.scrollTop = 0;
