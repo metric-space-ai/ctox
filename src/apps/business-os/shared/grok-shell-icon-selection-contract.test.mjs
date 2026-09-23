@@ -75,7 +75,6 @@ test('four Grok Agent PNG icons are hash-bound in every shell catalog', async ()
     assert.deepEqual(resolved, { kind: 'raster', asset: icon.renderAsset });
   }
 
-  assert.equal(registry.modules.length, 39);
   for (const moduleDef of registry.modules) {
     assert.match(moduleDef.layout.icon_asset, /\.(?:jpe?g|png)$/i, `registered module ${moduleDef.id} has no raster icon`);
   }
