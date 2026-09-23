@@ -734,6 +734,7 @@ const state = {
   selectedCampaignId: '',
   selectedCompanyId: '',
   selectedPipelineId: '',
+  requestedRecordId: '',
   activeView: 'companies',
   filter: 'all',
   search: '',
@@ -774,6 +775,7 @@ const state = {
 
 export async function mount(ctx) {
   state.ctx = ctx;
+  state.requestedRecordId = String(ctx.args?.record || ctx.args?.record_id || '').trim();
   await applyOutboundLanguage(ctx.locale || 'de', { render: false });
   if (!state.activeMsgByContact) state.activeMsgByContact = new Map();
   if (!state.activeNoteByContact) state.activeNoteByContact = new Map();
@@ -793,6 +795,16 @@ export async function mount(ctx) {
   ctx.right?.replaceChildren?.();
   configureActiveOutreach({ state, t, escapeHtml, rerender: () => render() });
   wireEvents(ctx.host);
+  const onAppLaunch = (event) => {
+    const args = event?.detail?.args || {};
+    const recordId = String(args.record || args.record_id || '').trim();
+    if (!recordId) return;
+    state.requestedRecordId = recordId;
+    focusRequestedOutboundRecord();
+    render();
+  };
+  ctx.host.addEventListener('ctox-business-os-app-launch', onAppLaunch);
+  state.cleanup.push(() => ctx.host.removeEventListener('ctox-business-os-app-launch', onAppLaunch));
   wireRealtime();
   wireCollectionReadiness();
   let disposed = false;
@@ -847,6 +859,7 @@ export async function mount(ctx) {
       if (disposed || state.ctx !== ctx) return;
       await loadActiveOutreachData().catch((error) => console.warn('[outbound] active outreach load failed', error));
       if (disposed || state.ctx !== ctx) return;
+      focusRequestedOutboundRecord();
       render();
       scheduleCampaignKnowledgeSetup(selectedCampaign());
     })
@@ -1279,6 +1292,49 @@ async function loadAll(options = {}) {
   if (state.selectedPipelineId && !currentPipeline().some((item) => item.id === state.selectedPipelineId)) {
     state.selectedPipelineId = '';
   }
+  focusRequestedOutboundRecord();
+}
+
+function focusRequestedOutboundRecord() {
+  const recordId = state.requestedRecordId;
+  if (!recordId) return;
+  const status = state.ctx?.host?.querySelector('[data-outbound-record-status]');
+  const showStatus = (message, isError = false) => {
+    if (!status) return;
+    status.hidden = false;
+    status.textContent = message;
+    status.dataset.state = isError ? 'error' : 'info';
+  };
+  const campaign = state.campaigns.find((item) => item.id === recordId);
+  const company = state.companies.find((item) => item.id === recordId || item.duplicate_company_ids?.includes(recordId));
+  const pipelineItem = state.pipeline.find((item) => item.id === recordId);
+  const engagement = state.engagements?.find((item) => item.id === recordId);
+  if (campaign) {
+    state.selectedCampaignId = campaign.id;
+    state.selectedCompanyId = '';
+    state.selectedPipelineId = '';
+    showStatus('Verknüpfte Kampagne geöffnet.');
+  } else if (company) {
+    state.selectedCampaignId = company.campaign_id;
+    state.selectedCompanyId = company.id;
+    state.activeView = 'companies';
+    showStatus('Verknüpftes Unternehmen geöffnet.');
+  } else if (pipelineItem) {
+    state.selectedCampaignId = pipelineItem.campaign_id;
+    state.selectedPipelineId = pipelineItem.id;
+    state.activeView = 'pipeline';
+    showStatus('Verknüpfter Pipeline-Eintrag geöffnet.');
+  } else if (engagement) {
+    state.selectedCampaignId = engagement.campaign_id;
+    state.outreachView = true;
+    state.activeOutreach.view = ['closed', 'meeting_booked'].includes(engagement.status) ? 'done' : 'engagements';
+    state.activeOutreach.selectedEngagementId = engagement.id;
+    showStatus('Verknüpftes Engagement geöffnet.');
+  } else {
+    showStatus(`Verknüpfter Outbound-Datensatz ${recordId} ist hier nicht verfügbar.`, true);
+    return;
+  }
+  state.requestedRecordId = '';
 }
 
 async function repairDanglingImportedSources() {

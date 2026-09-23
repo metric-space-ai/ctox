@@ -3494,6 +3494,7 @@ fn refresh_thread_states(
 
     let assigned_user_id = value_string(&thread, "assigned_user_id");
     let thread_status = value_string(&thread, "status").to_ascii_lowercase();
+    let machine_work = value_string(&thread, "kind") == "ctox_task";
     if thread_status == "needs_review" {
         for notification in &notifications {
             if matches!(
@@ -3546,24 +3547,36 @@ fn refresh_thread_states(
         }
         let unread_count = unread_by_user.get(&user_id).copied().unwrap_or(0);
         let mut attention_reasons = Vec::new();
-        let mut attention_score = if unread_count > 0 { 40 } else { 0 };
+        let mut attention_score = 0;
+        let actionable_thread = !matches!(
+            thread_status.as_str(),
+            "archived" | "completed" | "closed" | "cancelled" | "canceled"
+        );
+        if unread_count > 0 && actionable_thread && !machine_work {
+            attention_reasons.push("Ungelesen".to_owned());
+            attention_score = 40;
+        }
         if pending_reviewers.contains(&user_id) {
             attention_reasons.push("Freigabe nötig".to_owned());
             attention_score = attention_score.max(80);
         }
-        if unread_mentions.contains(&user_id) {
+        if unread_mentions.contains(&user_id) && actionable_thread {
             attention_reasons.push("Erwähnung".to_owned());
             attention_score = attention_score.max(60);
+        }
+        if assigned_user_id == user_id && actionable_thread && !machine_work {
+            attention_reasons.push("Zugewiesen".to_owned());
+            attention_score = attention_score.max(50);
         }
         if open_handoff_targets.contains(&user_id) {
             attention_reasons.push("Übergabe an dich".to_owned());
             attention_score = attention_score.max(65);
         }
-        if blocked {
+        if blocked && assigned_user_id == user_id {
             attention_reasons.push("Blockiert".to_owned());
             attention_score = attention_score.max(70);
         }
-        if latest_ctox_failed {
+        if latest_ctox_failed && assigned_user_id == user_id {
             attention_reasons.push("Fehlgeschlagen".to_owned());
             attention_score = attention_score.max(70);
         }

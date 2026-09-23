@@ -67,7 +67,7 @@
     <div class="ctox-pane-body threads-well">
       <div class="ctox-list threads-list" data-thread-list tabindex="-1"></div>
     </div>
-    <footer class="threads-footer"><span data-pg-footer></span></footer>
+    <footer class="threads-footer"><span data-pg-footer></span><span class="threads-sync-state" data-sync-state role="status" aria-live="polite">Daten werden geprüft</span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="240" data-resizer-max="480" aria-label="Linke Spaltenbreite anpassen"></button>
@@ -79,10 +79,14 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
         </button>
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-thread-source>Kontext</span>
+          <button type="button" class="ctox-pane-kicker threads-source-link" data-thread-source aria-label="Verknüpften Datensatz öffnen">Kontext</button>
           <h2 class="ctox-pane-title" data-thread-title>Kein Thread ausgewählt</h2>
+          <span class="threads-status" data-thread-status role="status" aria-live="polite"></span>
         </div>
         <div class="ctox-pane-actions">
+          <button type="button" class="ctox-pane-icon" data-thread-claim title="Abstimmung übernehmen" aria-label="Abstimmung übernehmen">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg>
+          </button>
           <!-- Timeline view: same one-button law as the left rail. -->
           <button type="button" class="ctox-pane-icon threads-view-toggle" data-pg-view="cards" data-threads-view-toggle aria-label="Als Liste anzeigen" title="Als Liste anzeigen"><svg data-view-glyph="list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg><svg data-view-glyph="cards" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
           <button type="button" class="ctox-pane-icon" data-thread-delegate title="An Teammitglied übergeben" aria-label="An Teammitglied übergeben">
@@ -103,6 +107,7 @@
         </div>
       </div>
     </header>
+    <div class="threads-command-receipt" data-thread-command-receipt role="status" aria-live="polite" hidden></div>
     <div class="threads-timeline" data-thread-timeline></div>
     <form class="threads-composer" data-message-form>
       <div class="threads-mention-popup" data-mention-popup hidden></div>

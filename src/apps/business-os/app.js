@@ -4778,6 +4778,7 @@ async function openDesktopApp(appId, options = {}) {
   if (existing) {
     restoreAndFocusWindow(existing);
     const launchDelivered = dispatchDesktopAppLaunch(existing, appId, options.args);
+    setThreadReturnAction(existing, options.args);
     if (options.args && !launchDelivered) {
       throw new Error(`Desktop app launch arguments could not be delivered: ${appId}`);
     }
@@ -4868,6 +4869,7 @@ async function openDesktopApp(appId, options = {}) {
       }
     });
   }
+  setThreadReturnAction(win, options.args);
   return win.id;
 }
 
@@ -4878,6 +4880,7 @@ async function openWindowedModule(mod, options = {}) {
   if (existing) {
     restoreAndFocusWindow(existing);
     const launchDelivered = dispatchDesktopAppLaunch(existing, mod.id, options.args);
+    setThreadReturnAction(existing, options.args);
     if (options.args?.openFile) {
       state.eventBus?.emitAsync?.('desktop-app:open-file', {
         appId: mod.id,
@@ -4967,6 +4970,7 @@ async function openWindowedModule(mod, options = {}) {
     }
     wireShellV2ModuleTitle(mod, win, content);
     state.windowManager?.refreshV2Chrome?.(win.id);
+    setThreadReturnAction(win, options.args);
     const windowResizers = [];
     cleanupWindowResizers = setupModuleResizers(mod, {
       scope: root,
@@ -5129,6 +5133,25 @@ function dispatchDesktopAppLaunch(win, appId, args = {}) {
     },
   }));
   return true;
+}
+
+function setThreadReturnAction(win, args = {}) {
+  const actions = win?.element?.querySelector?.('[data-window-actions]');
+  if (!actions) return;
+  actions.querySelector('[data-thread-return]')?.remove();
+  const threadId = String(args?.return_thread_id || '').trim();
+  if (!threadId || threadId.length > 256) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'shell-window-header-action';
+  button.dataset.threadReturn = threadId;
+  button.dataset.windowHeaderAction = '';
+  button.textContent = '↩ Threads';
+  button.setAttribute('aria-label', 'Zurück zur Abstimmung in Threads');
+  button.addEventListener('click', () => {
+    window.location.hash = `#threads?thread_id=${encodeURIComponent(threadId)}`;
+  });
+  actions.prepend(button);
 }
 
 function openBusinessChat(detail = {}) {
@@ -15910,8 +15933,20 @@ async function maybeShowRecordApprovalBanner() {
     `;
     const decide = async (decision) => {
       const note = decision === 'reject' ? (window.prompt('Begründung oder Änderungswunsch:') || '') : '';
+      if (decision === 'reject' && !note.trim()) return;
+      const actionButtons = [...banner.querySelectorAll('[data-record-approval-approve], [data-record-approval-reject]')];
+      actionButtons.forEach((button) => { button.disabled = true; });
+      let status = banner.querySelector('[data-record-approval-status]');
+      if (!status) {
+        status = document.createElement('span');
+        status.dataset.recordApprovalStatus = '';
+        status.setAttribute('role', 'status');
+        banner.querySelector('.ctox-record-approval-copy')?.append(status);
+      }
+      status.textContent = 'Entscheidung wird übermittelt…';
       try {
-        await state.commandBus?.dispatch?.({
+        if (!state.commandBus?.dispatch) throw new Error('Freigabe ist derzeit nicht verfügbar.');
+        const outcome = await state.commandBus.dispatch({
           command_type: decision === 'approve' ? 'threads.ctox_approval.approve' : 'threads.ctox_approval.reject',
           module: 'threads',
           record_id: pending.id,
@@ -15920,11 +15955,16 @@ async function maybeShowRecordApprovalBanner() {
             expected_updated_at_ms: Number(pending.updated_at_ms || 0),
             decision_note: note,
           },
-        });
+        }, { until: 'terminal' });
+        if (['failed', 'rejected', 'blocked'].includes(outcome?.status)) {
+          throw new Error(outcome?.error || 'Die Entscheidung wurde nicht übernommen.');
+        }
+        banner.remove();
       } catch (error) {
         console.warn('[record-approval] decision dispatch failed', error);
+        status.textContent = error?.message || 'Die Entscheidung konnte nicht übernommen werden.';
+        actionButtons.forEach((button) => { button.disabled = false; });
       }
-      banner.remove();
     };
     banner.querySelector('[data-record-approval-approve]')?.addEventListener('click', () => { decide('approve'); });
     banner.querySelector('[data-record-approval-reject]')?.addEventListener('click', () => { decide('reject'); });

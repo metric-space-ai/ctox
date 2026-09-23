@@ -207,6 +207,7 @@ const state = {
   lang: 'de',
   t: (key, fallback) => fallback || key,
   selectedId: '',
+  requestedRecordId: '',
   search: '',
   status: 'all',
   band: 'all',
@@ -342,6 +343,7 @@ export function resolveTicketListState({ loading = false, sourceCount = 0, readi
 
 export async function mount(ctx) {
   state.ctx = ctx;
+  state.requestedRecordId = String(ctx.args?.record || ctx.args?.record_id || ctx.args?.case_id || '').trim();
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
   const messages = await loadModuleMessages(import.meta.url, state.lang, labels);
   state.t = (key, fallback) => messages[key] ?? fallback ?? key;
@@ -359,6 +361,15 @@ export async function mount(ctx) {
   applyStaticLabels();
   seedGrammarState();
   wireUi();
+  const onAppLaunch = (event) => {
+    const args = event?.detail?.args || {};
+    const recordId = String(args.record || args.record_id || args.case_id || '').trim();
+    if (!recordId) return;
+    state.requestedRecordId = recordId;
+    focusRequestedTicket();
+    render();
+  };
+  ctx.host.addEventListener('ctox-business-os-app-launch', onAppLaunch);
   const stopReadiness = wireTicketReadiness();
   state.cleanup = stopReadiness;
   render();
@@ -367,6 +378,7 @@ export async function mount(ctx) {
   state.cleanup = () => {
     stopReadiness();
     stopRealtime();
+    ctx.host.removeEventListener('ctox-business-os-app-launch', onAppLaunch);
   };
   return () => {
     state.cleanup?.();
@@ -571,7 +583,30 @@ async function refreshTickets() {
   state.crew = await loadCrewForTickets();
   state.loading = false;
   syncSelectionToVisible();
+  focusRequestedTicket();
   render();
+}
+
+function focusRequestedTicket() {
+  const recordId = state.requestedRecordId;
+  if (!recordId || state.loading) return;
+  const ticket = state.data.ctox_ticket_items.find((item) => item.id === recordId || item.ticket_key === recordId)
+    || (() => {
+      const ticketCase = state.data.ctox_ticket_cases.find((item) => item.id === recordId || item.case_id === recordId);
+      return ticketCase && state.data.ctox_ticket_items.find((item) => item.ticket_key === ticketCase.ticket_key);
+    })();
+  if (!ticket) {
+    setCommandStatus(`Verknüpftes Ticket ${recordId} ist hier nicht verfügbar.`, true);
+    return;
+  }
+  state.search = '';
+  state.band = 'all';
+  state.status = 'all';
+  const search = root()?.querySelector('[data-pg-search]');
+  if (search) search.value = '';
+  state.selectedId = ticket.id;
+  state.requestedRecordId = '';
+  setCommandStatus('Verknüpftes Ticket geöffnet.');
 }
 
 // --- Crew on tickets: the member holding a ticket's queue task -----------------
