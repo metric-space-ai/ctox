@@ -86,6 +86,11 @@ export async function mount(ctx) {
   state.personalComplete = false;
   state.recentThreadsComplete = false;
   state.detailCompleteThreadId = '';
+  state.searchCorpus = [];
+  state.searchCorpusComplete = false;
+  state.searchScanError = false;
+  state.searchScanInFlight = null;
+  state.searchScanTimer = null;
 
   const messages = await loadModuleMessages(import.meta.url, ctx.locale || 'de', labels);
   state.t = (key, fallback) => messages[key] ?? fallback ?? key;
@@ -145,6 +150,7 @@ export async function mount(ctx) {
   });
 
   return () => {
+    if (state.searchScanTimer) window.clearTimeout(state.searchScanTimer);
     state.cleanup.forEach((fn) => {
       try { fn?.(); } catch {}
     });
@@ -280,7 +286,10 @@ function applyLabels() {
 }
 
 function wireUi() {
-  els.refresh?.addEventListener('click', () => refresh({ restartSync: true }).catch(showError));
+  els.refresh?.addEventListener('click', () => {
+    state.searchScanError = false;
+    refresh({ restartSync: true }).catch(showError);
+  });
   // Pane chrome is SHELL-owned canonical grammar (autoWirePaneGrammar wires
   // the data-pg-* markup once, debounced ~120ms after mount). The module only
   // keeps its state in sync through the bubbling grammar event and re-renders
@@ -478,11 +487,11 @@ function wireRealtime() {
   // gated on visibility, keeps cross-profile updates visible without churn.
   const timer = window.setInterval(() => {
     if (!moduleIsVisible()) return;
-    if (state.refreshInFlight) return;
+    if (state.refreshInFlight || state.searchScanInFlight) return;
     refresh().catch(showError);
   }, REALTIME_POLL_MS);
   const onVisible = () => {
-    if (moduleIsVisible() && !state.refreshInFlight) {
+    if (moduleIsVisible() && !state.refreshInFlight && !state.searchScanInFlight) {
       refresh().catch(showError);
     }
   };
@@ -519,8 +528,13 @@ function wireReadiness() {
   const unsubscribe = subscribe.call(state.ctx.sync, 'user_threads', (snapshot) => {
     state.threadsReadiness = snapshot;
     state.collectionReadiness.user_threads = snapshot;
+    if (snapshot?.ready !== true) {
+      state.searchCorpusComplete = false;
+      state.recentThreadsComplete = false;
+    }
     updateConnectivity();
     render();
+    scheduleSearchScan();
   });
   const stops = [unsubscribe];
   for (const name of ['user_thread_states', 'ctox_task_approval_requests']) {
@@ -536,13 +550,11 @@ function wireReadiness() {
 async function refresh(options = {}) {
   // Single flight: overlapping refreshes multiply the demand queries below.
   if (state.refreshInFlight) return state.refreshInFlight;
+  let succeeded = false;
   state.refreshInFlight = refreshOnce(options)
     .then((result) => {
-      if (state.statusIsLoadFailure) {
-        state.statusIsLoadFailure = false;
-        state.status = '';
-        if (els.status) els.status.textContent = 'bereit';
-      }
+      succeeded = true;
+      clearLoadError();
       return result;
     })
     .catch((error) => {
@@ -551,7 +563,10 @@ async function refresh(options = {}) {
       failure.cause = error;
       throw failure;
     })
-    .finally(() => { state.refreshInFlight = null; });
+    .finally(() => {
+      state.refreshInFlight = null;
+      if (succeeded) scheduleSearchScan();
+    });
   return state.refreshInFlight;
 }
 
@@ -572,7 +587,7 @@ async function refreshOnce(options = {}) {
   if (state.ctx !== mountCtx) return;
   const personalStates = mergeRecords(states, preferences);
   state.personalStateByThread = new Map(personalStates.filter((item) => item.user_id === me).map((item) => [item.thread_id, item]));
-  state.recentThreadsComplete = recentThreads.length < THREAD_LIST_LIMIT;
+  state.recentThreadsComplete = state.searchCorpusComplete || recentThreads.length < THREAD_LIST_LIMIT;
   updateConnectivity();
   const approvalCandidates = mergeRecords(pendingApprovals, recentApprovals);
   const pendingCandidateIds = approvalCandidates
@@ -601,7 +616,7 @@ async function refreshOnce(options = {}) {
   state.personalComplete = Boolean(me)
     && actionableThreadIds.every((id) => availableThreadIds.has(id));
   updateConnectivity();
-  const threads = mergeRecords(recentThreads, personalThreads);
+  const threads = mergeRecords(recentThreads, personalThreads, state.searchCorpus);
   // The inbox needs native attention and approval state, not a global slice
   // of messages/links from up to 200 unrelated threads. Detail loads below
   // are scoped to the selected thread only.
@@ -674,17 +689,75 @@ async function loadCollection(name, query = {}) {
 // The personal inbox is keyed by native per-user attention and approval
 // records, not by an arbitrary most-recent global thread window. Query pages
 // until exhausted so an old pending review remains reachable and counted.
-async function loadPersonalPages(name, selector) {
-  const records = await collectUniquePages(
+async function loadPersonalPages(name, selector, options = {}) {
+  const result = await collectUniquePages(
     ({ skip, limit }) => loadCollection(name, {
       selector,
       sort: [{ updated_at_ms: 'desc' }],
       skip,
       limit,
     }),
-    { pageSize: PERSONAL_PAGE_SIZE, idOf: (item) => item.id || item.approval_request_id },
+    {
+      pageSize: PERSONAL_PAGE_SIZE,
+      idOf: (item) => item.id || item.approval_request_id,
+      onPage: options.onPage,
+      shouldContinue: options.shouldContinue,
+    },
   );
-  return mergeRecords(records);
+  const records = mergeRecords(result.records);
+  return options.withCompletion ? { records, complete: result.complete } : records;
+}
+
+// A search explicitly scans the accessible thread collection once, in serial
+// pages. The ordinary refresh keeps its small recent window and personal
+// records, so typing or background polling never starts a broad query loop.
+function scheduleSearchScan() {
+  if (state.searchScanTimer) window.clearTimeout(state.searchScanTimer);
+  state.searchScanTimer = null;
+  if (!state.search.trim() || state.searchCorpusComplete || state.searchScanError || state.searchScanInFlight
+    || (state.threadsReadiness || readThreadsReadiness())?.ready !== true || !moduleIsVisible()
+    || !collectionFor('user_threads')?.find) return;
+  state.searchScanTimer = window.setTimeout(() => {
+    state.searchScanTimer = null;
+    if (!state.search.trim() || state.searchCorpusComplete || state.searchScanError
+      || state.searchScanInFlight || state.refreshInFlight
+      || (state.threadsReadiness || readThreadsReadiness())?.ready !== true || !moduleIsVisible()) return;
+    const mountCtx = state.ctx;
+    let cancelled = false;
+    state.searchScanInFlight = loadPersonalPages('user_threads', {}, {
+      withCompletion: true,
+      shouldContinue: () => {
+        const active = state.ctx === mountCtx && Boolean(state.search.trim())
+          && moduleIsVisible() && (state.threadsReadiness || readThreadsReadiness())?.ready === true;
+        if (!active) cancelled = true;
+        return active;
+      },
+      onPage: (page) => {
+        if (state.ctx !== mountCtx) return;
+        state.searchCorpus = mergeRecords(state.searchCorpus, page);
+        state.data.threads = mergeRecords(state.data.threads, page);
+        syncSelection();
+        render();
+      },
+    }).then(({ records, complete }) => {
+      if (state.ctx !== mountCtx || !complete || !state.search.trim()
+        || !moduleIsVisible() || (state.threadsReadiness || readThreadsReadiness())?.ready !== true) return;
+      state.searchCorpus = mergeRecords(state.searchCorpus, records);
+      state.searchCorpusComplete = true;
+      state.recentThreadsComplete = true;
+      clearLoadError();
+      render();
+    }).catch((error) => {
+      if (state.ctx === mountCtx) {
+        state.searchScanError = true;
+        showError({ threadsLoadFailure: true, cause: error });
+      }
+    }).finally(() => {
+      if (state.ctx !== mountCtx) return;
+      state.searchScanInFlight = null;
+      if (cancelled) scheduleSearchScan();
+    });
+  }, 350);
 }
 
 function collectionFor(name) {
@@ -772,7 +845,9 @@ function syncViewToggle(button) {
 
 function onLeftGrammarChange(event) {
   const detail = event?.detail || {};
-  state.search = String(detail.search ?? '');
+  const nextSearch = String(detail.search ?? '');
+  if (state.search !== nextSearch) state.searchScanError = false;
+  state.search = nextSearch;
   state.listView = detail.view === 'list';
   els.root?.classList.toggle('is-list-view', state.listView);
   syncViewToggle(els.viewToggle);
@@ -789,6 +864,7 @@ function onLeftGrammarChange(event) {
     state.filter = band || 'inbox';
   }
   syncSelection();
+  scheduleSearchScan();
   // Intentional reset: search/view/filter changes move the content set, so the
   // list scrolls back to the top (the shell scroll guard also clears its
   // recorded offsets on this event).
@@ -865,10 +941,12 @@ function syncGrammarSurfaces(visibleCount) {
   for (const filter of PRIMARY_FILTERS) {
     counts[filter] = state.data.threads.filter((thread) => threadMatchesFilter(thread, filter, me, isAdmin)).length;
   }
+  const recentComplete = state.recentThreadsComplete
+    && (state.threadsReadiness || readThreadsReadiness())?.ready === true;
   const displayCounts = Object.fromEntries(
     Object.entries(counts).map(([filter, count]) => [
       filter,
-      (filter === 'inbox' ? personalCollectionsReady() : state.recentThreadsComplete)
+      (filter === 'inbox' ? personalCollectionsReady() : recentComplete)
         ? count : `≥${count}`,
     ]),
   );
@@ -890,8 +968,13 @@ function syncGrammarSurfaces(visibleCount) {
   // programmatic sync above (dot = search active or secondary view set).
   pg?.refreshDot?.();
   const who = state.ctx?.session?.user?.display_name || currentUserId() || '';
-  const exact = state.filter === 'inbox' ? personalCollectionsReady() : state.recentThreadsComplete;
-  const footerText = `${exact ? '' : 'Mindestens '}${visibleCount} ${visibleCount === 1 ? 'Thread' : 'Threads'} · ${FILTER_LABELS[state.filter] || state.filter}${exact ? '' : ' · weitere Daten möglich'}${state.search ? ' · Suche in Titel und Quellobjekt' : ''}${who ? ` · als ${who}` : ''}`;
+  const exact = state.filter === 'inbox' ? personalCollectionsReady() : recentComplete;
+  const searchScope = state.search
+    ? state.searchCorpusComplete && recentComplete
+      ? ' · Suche über alle zugänglichen Threads (Titel und Quellobjekt)'
+      : ' · Suche in geladenen Threads (Titel und Quellobjekt)'
+    : '';
+  const footerText = `${exact ? '' : 'Mindestens '}${visibleCount} ${visibleCount === 1 ? 'Thread' : 'Threads'} · ${FILTER_LABELS[state.filter] || state.filter}${exact ? '' : ' · weitere Daten möglich'}${searchScope}${who ? ` · als ${who}` : ''}`;
   if (pg?.setFooter) pg.setFooter(footerText);
   else {
     const node = pane.querySelector('[data-pg-footer]');
@@ -1730,6 +1813,13 @@ function showError(error) {
     ? state.t('loadFailed', 'Threads konnten nicht geladen werden. Mit Aktualisieren erneut versuchen.')
     : state.t('commandFailed', 'Aktion konnte nicht abgeschlossen werden.');
   if (els.status) els.status.textContent = state.status;
+}
+
+function clearLoadError() {
+  if (!state.statusIsLoadFailure) return;
+  state.statusIsLoadFailure = false;
+  state.status = '';
+  if (els.status) els.status.textContent = 'bereit';
 }
 
 function selectedThread() {

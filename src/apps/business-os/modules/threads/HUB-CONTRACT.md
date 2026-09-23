@@ -257,10 +257,13 @@ Recorded against `threads.rs` and the module as of 2026-09-23:
    approval records, unread notifications are paged per user, and the selected
    timeline pages its own messages, links, approvals and notifications. The
    list no longer reads a global message/link window; unselected previews use
-   the native next-step/source summary, and search covers title and source.
-   Team,
-   system and all-thread views still start from a bounded recent thread window;
-   their counts are marked as lower bounds when that window is full.
+   the native next-step/source summary. An active search waits for thread
+   collection readiness, then scans accessible threads in serial pages and
+   matches title/source locally. Partial pages retain lower-bound counts;
+   leaving the search or hiding the app stops the scan between pages. Team,
+   system and all-thread views without an active search still start from a
+   bounded recent thread window; their counts are marked as lower bounds when
+   that window is full.
 2. **Notification type vocabulary.** The refactor plan names five short types
    (`approval`, `mention`, `note`, `handoff`, `escalation`). The code emits the
    concrete strings in §6 instead: approvals as `approval_request` /

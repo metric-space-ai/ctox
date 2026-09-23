@@ -43,12 +43,22 @@ assert.equal(normalizeInternalDeepLink('#tickets?record=1', 'thread-1', new Set(
 
 const manyRecords = Array.from({ length: 235 }, (_, index) => ({ id: `thread-${index}` }));
 const requestedOffsets = [];
+const pageSizes = [];
 const complete = await collectUniquePages(({ skip, limit }) => {
   requestedOffsets.push(skip);
   return Promise.resolve(manyRecords.slice(skip, skip + limit));
-});
-assert.equal(complete.length, 235);
+}, { onPage: (page) => pageSizes.push(page.length) });
+assert.equal(complete.records.length, 235);
+assert.equal(complete.complete, true);
 assert.deepEqual(requestedOffsets, [0, 100, 200]);
+assert.deepEqual(pageSizes, [100, 100, 35]);
+let deliveredPages = 0;
+const cancelled = await collectUniquePages(({ skip, limit }) => Promise.resolve(manyRecords.slice(skip, skip + limit)), {
+  onPage: () => { deliveredPages += 1; },
+  shouldContinue: () => deliveredPages < 1,
+});
+assert.equal(cancelled.records.length, 100);
+assert.equal(cancelled.complete, false);
 await assert.rejects(
   collectUniquePages(({ skip }) => Promise.resolve(skip ? manyRecords.slice(0, 100) : manyRecords.slice(0, 100))),
   /doppelten Datensatz/,
