@@ -11975,10 +11975,13 @@ impl RxdbCollectionWriter {
 }
 
 /// Repair documents written by older native projections before RxDB opens.
-/// Missing envelope fields make an entire collection query fail with
-/// DOC_CACHE_LWT, even when only one command is malformed.
-pub(super) fn repair_missing_rxdb_command_envelopes(root: &Path) -> anyhow::Result<usize> {
-    let Some(mut writer) = RxdbCollectionWriter::open(root, "business_commands")? else {
+/// Missing envelope fields can break collection queries and replication even
+/// when only one projected document is malformed.
+pub(super) fn repair_missing_rxdb_envelopes(
+    root: &Path,
+    collection: &str,
+) -> anyhow::Result<usize> {
+    let Some(mut writer) = RxdbCollectionWriter::open(root, collection)? else {
         return Ok(0);
     };
     let rows = {
@@ -11993,7 +11996,7 @@ pub(super) fn repair_missing_rxdb_command_envelopes(root: &Path) -> anyhow::Resu
     let mut repaired = 0;
     for (id, raw) in rows {
         let document: Value = serde_json::from_str(&raw)
-            .with_context(|| format!("parse projected business_command {id}"))?;
+            .with_context(|| format!("parse projected {collection} document {id}"))?;
         let valid_envelope = document
             .pointer("/_meta/lwt")
             .and_then(Value::as_f64)
@@ -39135,8 +39138,8 @@ pub(super) mod tests {
         )?;
         drop(conn);
 
-        assert_eq!(repair_missing_rxdb_command_envelopes(root)?, 1);
-        assert_eq!(repair_missing_rxdb_command_envelopes(root)?, 0);
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 1);
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 0);
         let conn = Connection::open(rxdb_store_path(root))?;
         let (revision, lwt, raw): (String, f64, String) = conn.query_row(
             &format!(
@@ -39157,6 +39160,31 @@ pub(super) mod tests {
         );
         assert_eq!(repaired["_deleted"], false);
         assert_eq!(repaired["_attachments"], serde_json::json!({}));
+
+        let chats_table = format!(
+            "ctox_business_os__business_chats__v{}",
+            rxdb_schema_version("business_chats")
+        );
+        conn.execute(
+            &format!("CREATE TABLE {chats_table} (id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"),
+            [],
+        )?;
+        let chat = serde_json::json!({
+            "id": "chat_probe", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": false, "updated_at_ms": 42, "title": "Preserved"
+        });
+        conn.execute(
+            &format!("INSERT INTO {chats_table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["chat_probe", "1-old", chat.to_string()],
+        )?;
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_chats")?, 1);
+        let repaired_chat: Value = serde_json::from_str(&conn.query_row(
+            &format!("SELECT data FROM {chats_table} WHERE id='chat_probe'"),
+            [],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert_eq!(repaired_chat["title"], "Preserved");
+        assert_eq!(repaired_chat["_attachments"], serde_json::json!({}));
         Ok(())
     }
 
