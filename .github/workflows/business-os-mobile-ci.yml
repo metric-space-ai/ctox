@@ -214,7 +214,8 @@ jobs:
           script: |
             adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity
-            adb shell cmd window user-rotation lock 1
+            # Nexus 9 is natively landscape (2048x1536); rotation 1 turns it portrait.
+            adb shell cmd window user-rotation lock 0
             adb shell cmd window user-rotation
             sleep 2
             adb exec-out screencap -p > "$RUNNER_TEMP/android-tablet-4x3.png"
