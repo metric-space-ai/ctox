@@ -170,14 +170,16 @@ assert.doesNotMatch(css, /--kit-fill:\s|--kit-hover:\s|--kit-fill-strong:\s|--fo
 
 // Personal counts and empty state must wait for the thread, state and approval
 // collections. A partial replication cannot claim the inbox is complete.
-// Selection/filter empties stay ungated ctox-empty.
+// Search and filter empties also stay provisional until their window is ready.
 assert.match(js, /collectionReadiness/);
 assert.match(js, /subscribeCollectionReadiness/);
 assert.match(js, /subscribe\.call\(state\.ctx\.sync, 'user_threads'/);
 assert.match(js, /state\.cleanup\.push\(wireReadiness\(\)\)/);
 assert.match(js, /ctox-syncing" role="status" aria-live="polite"/);
 assert.match(js, /syncingThreads/);
-assert.match(js, /!state\.data\.threads\.length && \(readiness\?\.ready === false \|\| !personalCollectionsReady\(\)\)/);
+assert.match(js, /const complete = state\.filter === 'inbox'/);
+assert.match(js, /state\.recentThreadsComplete && readiness\?\.ready === true/);
+assert.match(js, /partialSearchResults/);
 assert.match(js, /loadPersonalPages\('user_thread_states'/);
 assert.match(js, /loadPersonalPages\('ctox_task_approval_requests'/);
 assert.match(js, /filter === 'inbox' \? personalCollectionsReady\(\)/);
