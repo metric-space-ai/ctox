@@ -534,15 +534,19 @@ async function refreshOnce(options = {}) {
   updateConnectivity();
   const approvalCandidates = mergeRecords(pendingApprovals, recentApprovals);
   const pendingCandidateIds = approvalCandidates
-    .filter((item) => item.status === 'pending')
-    .slice(0, 20)
+    .filter((item) => item.status === 'pending' && item.reviewer_user_id === me)
     .map((item) => item.id || item.approval_request_id)
     .filter(Boolean);
   const verifiedPendingCandidates = await loadRecordsByIds(
     'ctox_task_approval_requests',
     pendingCandidateIds,
+    { strict: true },
   );
-  const approvals = mergeRecords(approvalCandidates, verifiedPendingCandidates);
+  const verifiedIds = new Set(pendingCandidateIds);
+  const approvals = mergeRecords(
+    approvalCandidates.filter((item) => !verifiedIds.has(item.id || item.approval_request_id)),
+    verifiedPendingCandidates,
+  );
   const personalThreadIds = [
     ...approvals.filter((item) => item.status === 'pending' && item.reviewer_user_id === me)
       .map((item) => item.thread_id),
