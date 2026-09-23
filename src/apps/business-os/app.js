@@ -10567,17 +10567,19 @@ function renderShellCtoxVersion(status = state.ctoxHealth) {
   }
   const platform = status?.runtime_settings?.platform || null;
   const version = platformDisplayVersion(platform?.version || platform?.release_tag || '');
+  const labelEl = container.querySelector('[data-ctox-version-label]');
+  const button = container.querySelector('[data-ctox-update-button]');
   if (!version) {
-    container.hidden = true;
-    container.removeAttribute('title');
+    if (labelEl) labelEl.textContent = 'CTOX —';
+    container.title = 'Backend-Version derzeit nicht verfügbar; Runtime-Status über Sync prüfen';
+    container.hidden = false;
+    if (button) button.hidden = true;
     return;
   }
   maybeRefreshCtoxUpdateCheck(platform);
   const check = currentCtoxUpdateCheck();
   const updateAvailable = check?.update_available === true;
   const latest = platformDisplayVersion(check?.latest_release || '');
-  const labelEl = container.querySelector('[data-ctox-version-label]');
-  const button = container.querySelector('[data-ctox-update-button]');
   const parts = [`CTOX ${version}`];
   // Die Versionsnummer stammt aus Cargo.toml und wird auf main nie
   // hochgezaehlt: sie zeigt seit Monaten 0.3.22, egal wie oft aktualisiert
