@@ -736,8 +736,13 @@ function scheduleSearchScan() {
         if (state.ctx !== mountCtx) return;
         state.searchCorpus = mergeRecords(state.searchCorpus, page);
         state.data.threads = mergeRecords(state.data.threads, page);
+        const previousSelectedId = state.selectedId;
         syncSelection();
         render();
+        if (state.selectedId && state.selectedId !== previousSelectedId) {
+          hydrateSelectedThread(state.selectedId)
+            .catch((error) => showError({ threadsLoadFailure: true, cause: error }));
+        }
       },
     }).then(({ records, complete }) => {
       if (state.ctx !== mountCtx || !complete || !state.search.trim()
@@ -863,12 +868,17 @@ function onLeftGrammarChange(event) {
     const band = els.leftPane?.querySelector('[data-pg-band][aria-selected="true"]')?.dataset.pgBand;
     state.filter = band || 'inbox';
   }
+  const previousSelectedId = state.selectedId;
   syncSelection();
   scheduleSearchScan();
   // Intentional reset: search/view/filter changes move the content set, so the
   // list scrolls back to the top (the shell scroll guard also clears its
   // recorded offsets on this event).
   render({ resetScroll: true });
+  if (state.selectedId && state.selectedId !== previousSelectedId) {
+    hydrateSelectedThread(state.selectedId)
+      .catch((error) => showError({ threadsLoadFailure: true, cause: error }));
+  }
 }
 
 function onCenterGrammarChange(event) {
