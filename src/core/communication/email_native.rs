@@ -4396,8 +4396,8 @@ mod tests {
         acquire_graph_access_token, build_ews_file_attachments_xml, effective_graph_password,
         effective_graph_username, extract_address, imap_fetch_message_id_headers_command,
         imap_search_message_id_command, latest_imap_uids, latest_known_imap_uid,
-        parse_rfc822_headers, require_provider_credentials, synced_message_direction, EmailOptions,
-        LATEST_KNOWN_IMAP_UID_SQL,
+        parse_rfc822_headers, require_provider_credentials, synced_message_direction,
+        synced_message_direction_in_folder, EmailOptions, LATEST_KNOWN_IMAP_UID_SQL,
     };
     use crate::communication_store::{
         open_channel_db, upsert_communication_message, UpsertMessage,
