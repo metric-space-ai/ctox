@@ -335,6 +335,14 @@ export async function createMailContentEditor(options = {}) {
       return;
     }
     const alreadyVisible = activeHtmlPanel === name && !drawer.hidden;
+    if (name === 'logic' && !alreadyVisible && logicEditor) {
+      // Visual edits may still be waiting for an onChange bridge event when
+      // the user opens Logic. Capture the frame's current document once before
+      // Logic starts writing against the ordered source mirror.
+      await logicEditor.flush();
+      htmlDocument = cloneJson(await editor.getDocument());
+      await logicEditor.reload();
+    }
     if (!alreadyVisible) {
       for (const [panelName, panelHost] of Object.entries(panelHosts)) {
         const selected = panelName === name;
