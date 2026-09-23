@@ -1,5 +1,6 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { renderHtmlIfChanged } from '../../shared/stable-dom.js';
+import { collectUniquePages } from './paging.js';
 import {
   THREAD_COLLECTIONS,
   buildApprovalRequestPayload,
@@ -618,23 +619,16 @@ async function loadCollection(name, query = {}) {
 // records, not by an arbitrary most-recent global thread window. Query pages
 // until exhausted so an old pending review remains reachable and counted.
 async function loadPersonalPages(name, selector) {
-  const records = [];
-  const seen = new Set();
-  for (let skip = 0; ; skip += PERSONAL_PAGE_SIZE) {
-    const page = await loadCollection(name, {
+  const records = await collectUniquePages(
+    ({ skip, limit }) => loadCollection(name, {
       selector,
       sort: [{ updated_at_ms: 'desc' }],
       skip,
-      limit: PERSONAL_PAGE_SIZE,
-    });
-    for (const record of page) {
-      const id = String(record.id || record.approval_request_id || '').trim();
-      if (id && seen.has(id)) throw new Error(`${name}: paginierte Abfrage lieferte einen doppelten Datensatz.`);
-      if (id) seen.add(id);
-      records.push(record);
-    }
-    if (page.length < PERSONAL_PAGE_SIZE) return mergeRecords(records);
-  }
+      limit,
+    }),
+    { pageSize: PERSONAL_PAGE_SIZE, idOf: (item) => item.id || item.approval_request_id },
+  );
+  return mergeRecords(records);
 }
 
 function collectionFor(name) {

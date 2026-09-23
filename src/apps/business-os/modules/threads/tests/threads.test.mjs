@@ -7,6 +7,20 @@ import {
   splitUserIds,
 } from '../commands.js';
 import { collections } from '../schema.js';
+import { collectUniquePages } from '../paging.js';
+
+const manyRecords = Array.from({ length: 235 }, (_, index) => ({ id: `thread-${index}` }));
+const requestedOffsets = [];
+const complete = await collectUniquePages(({ skip, limit }) => {
+  requestedOffsets.push(skip);
+  return Promise.resolve(manyRecords.slice(skip, skip + limit));
+});
+assert.equal(complete.length, 235);
+assert.deepEqual(requestedOffsets, [0, 100, 200]);
+await assert.rejects(
+  collectUniquePages(({ skip }) => Promise.resolve(skip ? manyRecords.slice(0, 100) : manyRecords.slice(0, 100))),
+  /doppelten Datensatz/,
+);
 
 assert.ok(THREAD_COLLECTIONS.includes('user_threads'));
 assert.ok(collections.user_threads);
