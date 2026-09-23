@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260923-control-plane-post-read-guard-v389';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260923-shell-v2-control-plane-post-read-guard-v390';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
