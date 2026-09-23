@@ -140,6 +140,13 @@ Object deep links are hash routes into the source app:
   `thread_key` or `message_id`; CTOX uses `task_id` or `command_id`.
 - The source module MUST confirm the record in its own data. If missing, it
   MUST show an unavailable state instead of silently focusing the first row.
+- Source modules report confirmed navigation through the bubbling
+  `ctox-business-os-record-focus` event with `module`, `recordId`,
+  `returnThreadId` and `status`. The shell accepts a report only from the
+  matching module window and the current return action's thread and record.
+  `record_focused` measures time since the Threads navigation; `unavailable`
+  remains distinct from a synchronized empty collection. Each source module
+  reports an unavailable record after its required collections are ready.
 - An internal `source_deep_link` on the entry takes precedence. Its module must
   be registered in the current shell. External paths and URLs are not accepted
   as module navigation. A `module` of `threads` (or empty) yields no object link.

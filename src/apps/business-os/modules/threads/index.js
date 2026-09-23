@@ -1749,6 +1749,7 @@ function navigateDeepLink(value) {
   const link = normalizeInternalDeepLink(value, state.selectedId, registeredModuleIds());
   if (!link) return;
   persistNavigationState();
+  performance.mark('ctox.threads.source_navigation_started');
   window.location.hash = link;
 }
 

@@ -230,6 +230,9 @@ export async function mount(ctx) {
     knowledgeTables: [],
     selectedId: '',
     requestedSelectedId: requestedDocumentId,
+    requestedSourceFocus: requestedDocumentId && ctx.args?.return_thread_id
+      ? { recordId: requestedDocumentId, returnThreadId: String(ctx.args.return_thread_id) }
+      : null,
     selectedVersion: null,
     requestedVersionId,
     requestedVersionDocumentId: requestedVersionId ? requestedDocumentId : '',
@@ -320,6 +323,7 @@ export async function mount(ctx) {
       renderLeft(state);
       renderRight(state);
       renderCenter(state);
+      reportRequestedDocumentFocus(state);
     })
     .catch((error) => {
       if (!state.disposed) renderError(state, error?.message || String(error));
@@ -427,11 +431,17 @@ function wireModule(state) {
   const refreshLeft = () => renderLeft(state);
   const handleAppLaunch = (event) => {
     if (event?.detail?.appId && event.detail.appId !== state.ctx.module?.id) return;
-    const documentId = documentIdFromLaunchArgs(event?.detail?.args);
-    const versionId = versionIdFromLaunchArgs(event?.detail?.args);
+    const args = event?.detail?.args || {};
+    const documentId = documentIdFromLaunchArgs(args);
+    const versionId = versionIdFromLaunchArgs(args);
     if (!documentId) return;
+    state.requestedSourceFocus = args.return_thread_id
+      ? { recordId: documentId, returnThreadId: String(args.return_thread_id) }
+      : null;
     if (state.documents.some((record) => record.id === documentId)) {
-      switchSelectedDocument(state, documentId, { versionId }).catch((error) => {
+      switchSelectedDocument(state, documentId, { versionId }).then(() => {
+        reportRequestedDocumentFocus(state);
+      }).catch((error) => {
         console.error('[documents] requested document could not be opened', error);
       });
       return;
@@ -771,6 +781,36 @@ async function refreshDocumentsFromLocal(state, changed = null, isActive = () =>
   renderRight(state);
   renderDocumentStrip(state);
   if (selectedVersionLoaded) renderCenter(state);
+  reportRequestedDocumentFocus(state);
+}
+
+function reportRequestedDocumentFocus(state) {
+  const request = state.requestedSourceFocus;
+  if (!request || state.disposed) return;
+  const recordExists = state.documents.some((record) => record.id === request.recordId);
+  const focused = recordExists && state.selectedId === request.recordId;
+  const ready = state.ctx.sync?.collectionReadiness?.('documents')?.ready === true;
+  if (!focused && (recordExists || !ready || request.reportedUnavailable)) return;
+  const root = state.ctx.host.querySelector('[data-documents-module]') || state.ctx.host;
+  let status = root.querySelector('[data-documents-source-focus-status]');
+  if (focused) status?.remove();
+  else {
+    if (!status) {
+      status = document.createElement('div');
+      status.dataset.documentsSourceFocusStatus = '';
+      status.className = 'ctox-callout';
+      status.setAttribute('role', 'status');
+      root.prepend(status);
+    }
+    status.textContent = 'Verknüpftes Dokument ist hier nicht verfügbar. Die Dokumentenübersicht bleibt geöffnet.';
+  }
+  if (focused) state.requestedSourceFocus = null;
+  else request.reportedUnavailable = true;
+  state.ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
+    bubbles: true,
+    detail: { module: 'documents', status: focused ? 'record_focused' : 'unavailable',
+      recordId: request.recordId, returnThreadId: request.returnThreadId },
+  }));
 }
 
 async function refreshDocuments(state) {

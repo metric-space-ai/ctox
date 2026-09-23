@@ -208,6 +208,7 @@ const state = {
   t: (key, fallback) => fallback || key,
   selectedId: '',
   requestedRecordId: '',
+  returnThreadId: '',
   focusedCaseId: '',
   search: '',
   status: 'all',
@@ -345,6 +346,7 @@ export function resolveTicketListState({ loading = false, sourceCount = 0, readi
 export async function mount(ctx) {
   state.ctx = ctx;
   state.requestedRecordId = String(ctx.args?.record || ctx.args?.record_id || ctx.args?.case_id || '').trim();
+  state.returnThreadId = String(ctx.args?.return_thread_id || '').trim();
   state.focusedCaseId = '';
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
   const messages = await loadModuleMessages(import.meta.url, state.lang, labels);
@@ -368,6 +370,7 @@ export async function mount(ctx) {
     const recordId = String(args.record || args.record_id || args.case_id || '').trim();
     if (!recordId) return;
     state.requestedRecordId = recordId;
+    state.returnThreadId = String(args.return_thread_id || '').trim();
     focusRequestedTicket();
     render();
     scrollFocusedTicketCase();
@@ -609,6 +612,10 @@ function focusRequestedTicket() {
     || (ticketCase && state.data.ctox_ticket_items.find((item) => item.ticket_key === ticketCase.ticket_key));
   if (!ticket) {
     setCommandStatus(`Verknüpftes Ticket ${recordId} ist hier nicht verfügbar.`, true);
+    if (['ctox_ticket_items', 'ctox_ticket_cases'].every((name) =>
+      state.ctx?.sync?.collectionReadiness?.(name)?.ready === true)) {
+      reportTicketFocus('unavailable', recordId);
+    }
     return;
   }
   state.search = '';
@@ -621,6 +628,15 @@ function focusRequestedTicket() {
   if (ticketCase) state.opsMode = 'open';
   state.requestedRecordId = '';
   setCommandStatus(ticketCase ? 'Verknüpfter Ticket-Fall geöffnet.' : 'Verknüpftes Ticket geöffnet.');
+  queueMicrotask(() => reportTicketFocus('record_focused', recordId));
+}
+
+function reportTicketFocus(status, recordId) {
+  if (!state.returnThreadId) return;
+  state.ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
+    bubbles: true,
+    detail: { module: 'tickets', status, recordId, returnThreadId: state.returnThreadId },
+  }));
 }
 
 // --- Crew on tickets: the member holding a ticket's queue task -----------------

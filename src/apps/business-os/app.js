@@ -4777,8 +4777,8 @@ async function openDesktopApp(appId, options = {}) {
   const existing = findDesktopWindow(appId);
   if (existing) {
     restoreAndFocusWindow(existing);
-    const launchDelivered = dispatchDesktopAppLaunch(existing, appId, options.args);
     setThreadReturnAction(existing, options.args);
+    const launchDelivered = dispatchDesktopAppLaunch(existing, appId, options.args);
     if (options.args && !launchDelivered) {
       throw new Error(`Desktop app launch arguments could not be delivered: ${appId}`);
     }
@@ -4800,6 +4800,7 @@ async function openDesktopApp(appId, options = {}) {
     iconSrcSet: entry.iconSrcSet,
     iconAnchorRect: () => desktopIconAnchorRect(entry.id),
   });
+  setThreadReturnAction(win, options.args);
   applyWorkjetCategory(win.element, entry.category || 'imported');
   let teardown = null;
   try {
@@ -4879,8 +4880,8 @@ async function openWindowedModule(mod, options = {}) {
   const existing = descriptor.multiInstance ? null : findDesktopWindow(mod.id);
   if (existing) {
     restoreAndFocusWindow(existing);
-    const launchDelivered = dispatchDesktopAppLaunch(existing, mod.id, options.args);
     setThreadReturnAction(existing, options.args);
+    const launchDelivered = dispatchDesktopAppLaunch(existing, mod.id, options.args);
     if (options.args?.openFile) {
       state.eventBus?.emitAsync?.('desktop-app:open-file', {
         appId: mod.id,
@@ -4911,6 +4912,7 @@ async function openWindowedModule(mod, options = {}) {
     iconAnchorRect: () => desktopIconAnchorRect(mod.id),
     ...windowHeaderOptionsForModule(mod),
   });
+  setThreadReturnAction(win, options.args);
   applyWorkjetCategory(win.element, descriptor.category);
   // Apply the declared presentation before the asynchronous module mount.
   // Shell controls are interactive as soon as the window exists; applying the
@@ -5138,13 +5140,22 @@ function dispatchDesktopAppLaunch(win, appId, args = {}) {
 function setThreadReturnAction(win, args = {}) {
   const actions = win?.element?.querySelector?.('[data-window-actions]');
   if (!actions) return;
-  actions.querySelector('[data-thread-return]')?.remove();
+  const existing = actions.querySelector('[data-thread-return]');
   const threadId = String(args?.return_thread_id || '').trim();
-  if (!threadId || threadId.length > 256) return;
+  const targetRecordId = String(args?.record || args?.record_id || args?.case_id
+    || args?.task_id || args?.command_id || args?.message_id || args?.thread_key || '').trim();
+  if (!threadId || threadId.length > 256) {
+    existing?.remove();
+    return;
+  }
+  if (existing?.dataset.threadReturn === threadId
+    && existing?.dataset.targetRecordId === targetRecordId) return;
+  existing?.remove();
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'shell-window-header-action';
   button.dataset.threadReturn = threadId;
+  button.dataset.targetRecordId = targetRecordId;
   button.dataset.windowHeaderAction = '';
   button.textContent = '↩ Threads';
   button.setAttribute('aria-label', 'Zurück zur Abstimmung in Threads');
@@ -5153,6 +5164,27 @@ function setThreadReturnAction(win, args = {}) {
   });
   actions.prepend(button);
 }
+
+document.addEventListener('ctox-business-os-record-focus', (event) => {
+  const detail = event.detail || {};
+  if (!['record_focused', 'unavailable', 'forbidden'].includes(detail.status)) return;
+  const windowElement = event.target?.closest?.('.shell-window');
+  const returnButton = windowElement?.querySelector?.('[data-thread-return]');
+  if (!returnButton || windowElement?.dataset.ownerId !== `desktop-app:${detail.module}`
+    || returnButton.dataset.threadReturn !== detail.returnThreadId
+    || returnButton.dataset.targetRecordId !== detail.recordId) return;
+  returnButton.dataset.sourceFocusStatus = detail.status;
+  returnButton.title = detail.status === 'record_focused'
+    ? 'Datensatz in der Quell-App fokussiert · Zurück zu Threads'
+    : detail.status === 'forbidden'
+      ? 'Kein Zugriff auf den verknüpften Datensatz · Zurück zu Threads'
+      : 'Verknüpfter Datensatz nicht verfügbar · Zurück zu Threads';
+  if (detail.status !== 'record_focused'
+    || !performance.getEntriesByName('ctox.threads.source_navigation_started', 'mark').length) return;
+  performance.mark('ctox.threads.source_record_focused');
+  performance.measure('ctox.threads.source_record_focus',
+    'ctox.threads.source_navigation_started', 'ctox.threads.source_record_focused');
+});
 
 function openBusinessChat(detail = {}) {
   const moduleId = detail.module || detail.source_module || '';

@@ -243,6 +243,7 @@ export async function mount(ctx) {
     listGrammar: { search: '', view: 'cards', band: 'all', filters: { status: 'all', sort: 'recent' } },
     selectedKind: '',
     selectedId: '',
+    requestedSourceFocus: null,
     loading: true,
     disposed: false,
     readiness: null,
@@ -280,7 +281,7 @@ export async function mount(ctx) {
   wireCollectionSubscriptions();
   wireReadiness();
   await refreshData();
-  applyDeepLink();
+  applyDeepLink(ctx.args);
   render();
 
   return () => {
@@ -430,6 +431,12 @@ export async function mount(ctx) {
     };
     window.addEventListener('hashchange', hashHandler);
     cleanups.push(() => window.removeEventListener('hashchange', hashHandler));
+    const onAppLaunch = (event) => {
+      applyDeepLink(event?.detail?.args);
+      render();
+    };
+    ctx.host.addEventListener('ctox-business-os-app-launch', onAppLaunch);
+    cleanups.push(() => ctx.host.removeEventListener('ctox-business-os-app-launch', onAppLaunch));
   }
 
   function wireCollectionSubscriptions() {
@@ -514,6 +521,7 @@ export async function mount(ctx) {
     renderNavigation();
     renderList();
     renderDetail();
+    reportRequestedSourceFocus();
     renderMailboxAdmin();
     if (view.pendingSeriesHandoff) {
       const seed = view.pendingSeriesHandoff;
@@ -753,7 +761,7 @@ export async function mount(ctx) {
     const party = outbound
       ? (message.recipient_addresses_json?.join(', ') || message.account_key)
       : (message.sender_display || message.sender_address || '—');
-    return `<section class="mail-message${outbound ? ' is-outbound' : ''}">
+    return `<section class="mail-message${outbound ? ' is-outbound' : ''}" tabindex="-1" data-context-record-id="${escapeAttribute(message.id)}" data-context-record-type="communication_message">
       <div class="mail-message-head"><strong>${escapeHtml(party)}</strong><span>${escapeHtml(formatRecordTime(message.external_created_at))}</span></div>
       <div class="mail-message-body">${escapeHtml(message.body_text || message.preview || '')}</div>
     </section>`;
@@ -815,6 +823,16 @@ export async function mount(ctx) {
   }
 
   function renderMissingDetail() {
+    if (view.requestedSourceFocus) {
+      const ready = ['communication_threads', 'communication_messages', 'outbound_messages']
+        .every((name) => ctx.sync?.collectionReadiness?.(name)?.ready === true);
+      const title = ready ? 'Verknüpfte Mail nicht verfügbar' : 'Verknüpfte Mail wird synchronisiert';
+      const body = ready
+        ? 'Der Datensatz ist in diesem Postfach nicht sichtbar. Die Mail-Übersicht bleibt verfügbar.'
+        : 'Der Datensatz wird geöffnet, sobald die Mail-Daten bereit sind.';
+      refs.detail.innerHTML = `<div class="ctox-empty mail-detail-empty" role="status"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></div>`;
+      return;
+    }
     refs.detail.innerHTML = `<div class="ctox-empty mail-detail-empty"><strong>${escapeHtml(t('noSelectionTitle', 'Keine Mail ausgewählt'))}</strong><span>${escapeHtml(t('noSelectionBody', 'Wähle eine Nachricht oder Kampagne aus.'))}</span></div>`;
   }
 
@@ -1887,15 +1905,16 @@ export async function mount(ctx) {
     return account?.address || accountKey;
   }
 
-  function applyDeepLink() {
+  function applyDeepLink(args = null) {
     const raw = String(location.hash || '');
     const query = raw.includes('?') ? raw.slice(raw.indexOf('?') + 1) : '';
     const params = new URLSearchParams(query);
     const campaignId = params.get('campaign_id') || '';
     const action = params.get('action') || '';
     const recipients = parseRecipientAddresses(params.get('recipients') || '');
-    const messageId = params.get('message_id') || '';
-    const threadKey = params.get('thread_key') || '';
+    const messageId = String(args?.message_id || params.get('message_id') || '').trim();
+    const threadKey = String(args?.thread_key || params.get('thread_key') || '').trim();
+    const returnThreadId = String(args?.return_thread_id || params.get('return_thread_id') || '').trim();
     if (campaignId && view.campaigns.some((campaign) => campaign.id === campaignId)) {
       view.scopeType = 'campaign';
       view.scopeId = campaignId;
@@ -1910,12 +1929,53 @@ export async function mount(ctx) {
       };
     }
     if (messageId) {
-      view.selectedKind = 'outbound';
-      view.selectedId = messageId;
+      const communicationMessage = view.communicationMessages.find((item) => item.id === messageId);
+      view.selectedKind = communicationMessage?.thread_key ? 'thread' : 'outbound';
+      view.selectedId = communicationMessage?.thread_key || messageId;
     } else if (threadKey) {
       view.selectedKind = 'thread';
       view.selectedId = threadKey;
     }
+    if (returnThreadId && (messageId || threadKey)) {
+      view.requestedSourceFocus = { returnThreadId, recordId: messageId || threadKey,
+        kind: messageId ? 'message' : 'thread' };
+    }
+  }
+
+  function reportRequestedSourceFocus() {
+    const request = view.requestedSourceFocus;
+    if (!request || view.loading) return;
+    const communicationMessage = request.kind === 'message'
+      ? view.communicationMessages.find((item) => item.id === request.recordId
+        && view.threads.some((thread) => thread.thread_key === item.thread_key))
+      : null;
+    if (communicationMessage && (view.selectedKind !== 'thread'
+      || view.selectedId !== communicationMessage.thread_key)) {
+      view.selectedKind = 'thread';
+      view.selectedId = communicationMessage.thread_key;
+      renderListSelection();
+      renderDetail();
+    }
+    const recordElement = [...refs.detail.querySelectorAll('[data-context-record-id]')]
+      .find((item) => item.dataset.contextRecordId === request.recordId
+        && (request.kind === 'thread'
+          ? item.dataset.contextRecordType === 'communication_thread'
+          : ['communication_message', 'outbound_message'].includes(item.dataset.contextRecordType)));
+    const focused = Boolean(recordElement);
+    const ready = ['communication_threads', 'communication_messages', 'outbound_messages']
+      .every((name) => ctx.sync?.collectionReadiness?.(name)?.ready === true);
+    if (!focused && (!ready || request.reportedUnavailable)) return;
+    if (focused) {
+      recordElement.focus?.({ preventScroll: true });
+      recordElement.scrollIntoView?.({ block: 'nearest' });
+    }
+    if (focused) view.requestedSourceFocus = null;
+    else request.reportedUnavailable = true;
+    ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
+      bubbles: true,
+      detail: { module: 'mail', status: focused ? 'record_focused' : 'unavailable',
+        recordId: request.recordId, returnThreadId: request.returnThreadId },
+    }));
   }
 }
 

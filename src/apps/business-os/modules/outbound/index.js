@@ -736,6 +736,8 @@ const state = {
   selectedPipelineId: '',
   focusedRunId: '',
   requestedRecordId: '',
+  returnThreadId: '',
+  unavailableFocusReportedId: '',
   activeView: 'companies',
   filter: 'all',
   search: '',
@@ -777,6 +779,8 @@ const state = {
 export async function mount(ctx) {
   state.ctx = ctx;
   state.requestedRecordId = String(ctx.args?.record || ctx.args?.record_id || '').trim();
+  state.returnThreadId = String(ctx.args?.return_thread_id || '').trim();
+  state.unavailableFocusReportedId = '';
   state.focusedRunId = '';
   await applyOutboundLanguage(ctx.locale || 'de', { render: false });
   if (!state.activeMsgByContact) state.activeMsgByContact = new Map();
@@ -802,9 +806,12 @@ export async function mount(ctx) {
     const recordId = String(args.record || args.record_id || '').trim();
     if (!recordId) return;
     state.requestedRecordId = recordId;
+    state.returnThreadId = String(args.return_thread_id || '').trim();
+    state.unavailableFocusReportedId = '';
     focusRequestedOutboundRecord();
     render();
     scrollFocusedOutboundRun();
+    if (state.requestedRecordId) scheduleDataRefresh(0);
   };
   ctx.host.addEventListener('ctox-business-os-app-launch', onAppLaunch);
   state.cleanup.push(() => ctx.host.removeEventListener('ctox-business-os-app-launch', onAppLaunch));
@@ -860,11 +867,15 @@ export async function mount(ctx) {
       if (disposed || state.ctx !== ctx) return;
       await loadAll({ hydrateKnowledge: false });
       if (disposed || state.ctx !== ctx) return;
-      await loadActiveOutreachData().catch((error) => console.warn('[outbound] active outreach load failed', error));
+      const activeLoaded = await loadActiveOutreachData().then(() => true).catch((error) => {
+        console.warn('[outbound] active outreach load failed', error);
+        return false;
+      });
       if (disposed || state.ctx !== ctx) return;
       focusRequestedOutboundRecord();
       render();
       scrollFocusedOutboundRun();
+      if (activeLoaded) reportUnavailableOutboundFocus();
       scheduleCampaignKnowledgeSetup(selectedCampaign());
     })
     .catch((error) => {
@@ -1358,6 +1369,26 @@ function focusRequestedOutboundRecord() {
     return;
   }
   state.requestedRecordId = '';
+  queueMicrotask(() => reportOutboundFocus('record_focused', recordId));
+}
+
+function reportOutboundFocus(status, recordId) {
+  if (!state.returnThreadId) return;
+  state.ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
+    bubbles: true,
+    detail: { module: 'outbound', status, recordId, returnThreadId: state.returnThreadId },
+  }));
+}
+
+function reportUnavailableOutboundFocus() {
+  const recordId = state.requestedRecordId;
+  if (!recordId || !state.returnThreadId || state.unavailableFocusReportedId === recordId) return;
+  const ready = ['outbound_campaigns', 'outbound_companies', 'outbound_pipeline_items',
+    'outbound_research_runs', 'outbound_engagements']
+    .every((name) => outboundCollectionReadiness(name)?.ready === true);
+  if (!ready) return;
+  state.unavailableFocusReportedId = recordId;
+  reportOutboundFocus('unavailable', recordId);
 }
 
 function scrollFocusedOutboundRun() {
@@ -1906,8 +1937,12 @@ function scheduleDataRefresh(delay = 80) {
   state.refreshTimer = window.setTimeout(async () => {
     state.refreshTimer = null;
     await loadAll({ hydrateKnowledge: false });
-    await loadActiveOutreachData().catch((error) => console.warn('[outbound] active outreach refresh failed', error));
+    const activeLoaded = await loadActiveOutreachData().then(() => true).catch((error) => {
+      console.warn('[outbound] active outreach refresh failed', error);
+      return false;
+    });
     render();
+    if (activeLoaded) reportUnavailableOutboundFocus();
   }, delay);
 }
 

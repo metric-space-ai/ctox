@@ -778,6 +778,10 @@ export async function mount(ctx) {
     dataLoaded: false,
     dataError: '',
     focusTask: launchFocusTask || readFocusTask(),
+    requestedSourceFocus: ctx.args?.return_thread_id && launchFocusTask
+      ? { recordId: launchFocusTask.taskId || launchFocusTask.commandId,
+        returnThreadId: String(ctx.args.return_thread_id) }
+      : null,
     detailDrawer: null,
     taskSearch: '',
     taskViewMode: 'cards',
@@ -1124,6 +1128,38 @@ function render(state) {
   // telemetry, so arm or disarm the clock to match what is actually running.
   syncLiveTicker(state);
   updateHarnessHealthAlerts(state);
+  reportRequestedCtoxFocus(state);
+}
+
+function reportRequestedCtoxFocus(state) {
+  const request = state.requestedSourceFocus;
+  if (!request || mainIsBusy(state)) return;
+  const focused = state.focusTaskConsumed
+    && isFocusedTask(getSelectedTask(state), state.focusTask);
+  const ready = state.dataLoaded
+    && [...TASK_SOURCE_COLLECTIONS, 'ctox_crew_members', 'ctox_harness_status'].every((name) =>
+      state.ctx.sync?.collectionReadiness?.(name)?.ready === true);
+  if (!focused && (!ready || request.reportedUnavailable)) return;
+  const header = state.ctx.host.querySelector('[data-ctox-main] > .ctox-pane-header');
+  let notice = header?.querySelector('[data-ctox-source-focus-status]');
+  if (focused) notice?.remove();
+  else if (header) {
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.dataset.ctoxSourceFocusStatus = '';
+      notice.className = 'ctox-callout';
+      notice.setAttribute('role', 'status');
+      header.append(notice);
+    }
+    notice.textContent = 'Verknüpfter CTOX-Auftrag ist hier nicht verfügbar. Die Aufgabenübersicht bleibt geöffnet.';
+  }
+  if (focused) state.requestedSourceFocus = null;
+  else request.reportedUnavailable = true;
+  state.ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
+    bubbles: true,
+    detail: { module: 'ctox', status: focused ? 'record_focused' : 'unavailable',
+      recordId: request.recordId, returnThreadId: request.returnThreadId },
+  }));
 }
 
 // Arms the 1s clock only while a real anchor exists, and disarms it the moment
@@ -6109,13 +6145,25 @@ function wireShellMessages(state) {
     centerSelectedNode(state);
     syncDetailDrawer(state);
   };
+  const launchHandler = (event) => {
+    const args = event?.detail?.args || {};
+    const focusTask = normalizeFocusTask(args);
+    if (!focusTask) return;
+    state.requestedSourceFocus = args.return_thread_id
+      ? { recordId: focusTask.taskId || focusTask.commandId,
+        returnThreadId: String(args.return_thread_id) }
+      : null;
+    focusHandler({ detail: args });
+  };
   window.addEventListener('message', messageHandler);
   window.addEventListener('ctox-business-os-preferences', preferenceHandler);
   window.addEventListener('ctox-business-os-focus-task', focusHandler);
+  state.ctx.host.addEventListener('ctox-business-os-app-launch', launchHandler);
   return () => {
     window.removeEventListener('message', messageHandler);
     window.removeEventListener('ctox-business-os-preferences', preferenceHandler);
     window.removeEventListener('ctox-business-os-focus-task', focusHandler);
+    state.ctx.host.removeEventListener('ctox-business-os-app-launch', launchHandler);
   };
 }
 
