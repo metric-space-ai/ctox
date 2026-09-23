@@ -13,6 +13,7 @@ import {
 
 const STYLE_BUILD = '20260806-mail-v5';
 const MAIL_PAGE_SIZE = 50;
+const MAIL_READ_TIMEOUT_MS = 10_000;
 const TERMINAL_COMMAND_STATUSES = new Set(['completed', 'failed', 'cancelled', 'blocked']);
 const DRAFT_SEND_STATUSES = new Set([
   '',
@@ -283,9 +284,20 @@ export async function mount(ctx) {
   wireEvents();
   wireCollectionSubscriptions();
   wireReadiness();
-  await refreshData();
-  applyDeepLink();
   render();
+  // Keep the app responsive when a local RxDB query stalls during reconnect.
+  // The first snapshot can finish after mount; later subscription updates use
+  // the same refresh path and retain the last successful rows.
+  void refreshData().then(() => {
+    if (view.disposed) return;
+    applyDeepLink();
+    render();
+  }).catch((error) => {
+    if (view.disposed) return;
+    view.mailReadError = String(error?.message || error);
+    view.loading = false;
+    render();
+  });
 
   return () => {
     view.disposed = true;
@@ -2854,13 +2866,21 @@ function isPermissionDenied(error) {
 
 async function readAll(collection, required = false) {
   if (!collection) return required ? new Error('Mail collection unavailable') : [];
+  let timeout;
   try {
-    const docs = await collection.find().exec();
+    const docs = await Promise.race([
+      collection.find().exec(),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => reject(new Error('Mail collection read timed out')), MAIL_READ_TIMEOUT_MS);
+      }),
+    ]);
     return docs.map((doc) => doc?.toJSON?.() || doc).filter(Boolean);
   } catch (error) {
     if (isTransientCollectionReadError(error)) return null;
     console.warn('[mail] collection read failed', error);
     return error instanceof Error ? error : new Error(String(error));
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

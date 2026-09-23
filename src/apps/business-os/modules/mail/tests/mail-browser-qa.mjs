@@ -219,6 +219,7 @@ mailQa: try {
       return {
         find: () => ({ exec: async () => {
           readAttempts.set(name, (readAttempts.get(name) || 0) + 1);
+          if (readFailures.get(name) === 'PENDING') return new Promise(() => {});
           if (readFailures.has(name)) throw new Error(readFailures.get(name));
           return rows[name].map((record) => ({ toJSON: () => ({ ...record }) }));
         } }),
@@ -380,10 +381,10 @@ mailQa: try {
   }, iconProviderMode);
 
   await page.locator('[data-mail-root]').waitFor({ state: 'visible' });
+  await assertVisibleText(page, 'Projektstatus August');
   assert.equal(await page.locator('[data-mail-navigation-title]').textContent(), 'Postfach');
   assert.equal(await page.locator('[data-mail-account]').inputValue(), 'all');
   assert.match(await page.locator('[data-mail-account]').textContent(), /alice@example\.test/);
-  await assertVisibleText(page, 'Projektstatus August');
   assert.match(await page.locator('[data-mail-scope-id="outbound"]').textContent(), /Gesendet/);
   await page.locator('[data-mail-list-pane] [data-pg-band="outbound"]').click();
   await assertVisibleText(page, 'Versandter Bericht');
@@ -681,7 +682,7 @@ mailQa: try {
   await page.evaluate(async () => {
     location.hash = '';
     window.__unmountMail();
-    window.__mailReadFailures.set('communication_threads', 'QUERY_CANCELLED');
+    window.__mailReadFailures.set('communication_threads', 'PENDING');
     window.__unmountMail = await window.__mailMount(window.__mailMountContext);
   });
   await page.getByText('Mail wird synchronisiert', { exact: true }).waitFor({ state: 'visible' });
