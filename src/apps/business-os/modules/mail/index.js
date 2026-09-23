@@ -2323,7 +2323,11 @@ function routeCommandForRecord(record, commands = []) {
       const sourceIds = arrayStrings(payload.source_record_ids || payload.sourceRecordIds);
       const isRoute = payload.route_kind === 'mail.bulk.route'
         || command?.client_context?.surface === 'mail.bulk.route';
-      return isRoute && (sourceIds.includes(recordId) || String(command?.record_id || '') === recordId);
+      if (!isRoute || (!sourceIds.includes(recordId) && String(command?.record_id || '') !== recordId)) return false;
+      if (!record?.thread_key) return true;
+      const snapshot = payload.record_snapshot;
+      const snapshots = Array.isArray(snapshot?.records) ? snapshot.records : [snapshot];
+      return snapshots.some((item) => item?.thread_key === recordId && item?.account_key === record.account_key);
     })
     .sort((a, b) => Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0))[0] || null;
 }

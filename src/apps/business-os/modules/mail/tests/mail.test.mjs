@@ -216,6 +216,16 @@ test('a shared provider thread ID never mixes messages from different accounts',
   assert.deepEqual(hooks.filterThreadsForFolder([bob], 'inbox', messages), []);
 });
 
+test('route status for a shared thread ID stays with its source account', () => {
+  const alice = { __kind: 'thread', thread_key: 'shared-id', account_key: 'email:alice@example.test' };
+  const bob = { __kind: 'thread', thread_key: 'shared-id', account_key: 'email:bob@example.test' };
+  const [route] = hooks.buildMailRouteCommands({
+    batchId: 'batch-1', destinationModule: 'support', records: [bob], actor: { id: 'admin' },
+  });
+  assert.equal(hooks.routeCommandForRecord(alice, [route]), null);
+  assert.equal(hooks.routeCommandForRecord(bob, [route])?.id, route.id);
+});
+
 test('composer builds the native Outbound command chain', () => {
   const bundle = hooks.buildComposeCommandBundle({
     accountKey: 'email:alice@example.test',
@@ -397,7 +407,7 @@ test('bulk routing uses native Support handoff and chunked app tasks', () => {
 });
 
 test('mail queues expose operational volume and routed evidence', () => {
-  const thread = { thread_key: 'thread-1', unread_count: 3, last_message_at: '2026-08-06T09:00:00Z' };
+  const thread = { thread_key: 'thread-1', account_key: 'email:alice@example.test', unread_count: 3, last_message_at: '2026-08-06T09:00:00Z' };
   const outbound = { id: 'message-1', approval_status: 'awaiting_approval', send_status: 'not_scheduled', updated_at_ms: 2 };
   const commands = hooks.buildMailRouteCommands({ batchId: 'route', destinationModule: 'support', records: [{ ...thread, __kind: 'thread' }] });
   const queues = hooks.mailQueueDefinitions({ threads: [thread], sentThreads: [thread], outboundMessages: [outbound], commands });
