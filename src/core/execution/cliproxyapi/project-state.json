@@ -324,7 +324,7 @@
       "title": "Pi/Claude/Codex Harness- und Business-OS-Integration",
       "owner": "root",
       "status": "complete",
-      "detail": "40/40 Punkte: Neben dem expliziten Codex-Preset besitzt CTOX jetzt einen service-überwachten loopback-only Hauptgateway auf :12434. Ein echter Node/Pi-AI-Inherit-Turn traversiert /v1/responses, serverseitige Main-Modellüberschreibung, Daemon-Credential-Injektion und Responses-SSE; lokale Modelle nutzen denselben privaten IPC-Vertrag wie der Fork-Harness."
+      "detail": "Historischer Abschlussstand, keine aktuelle Laufzeitabnahme: Die Behauptung eines service-überwachten :12434-Hauptgateways ist für Basis 9dab76e73d2949bf011914e38a3becdb3db24267 überholt. Pi inherit_ctox nutzt prepare_inherited_coding_model und eine native Bridge pro Turn mit gleichem Root, Modellbindung und Capability; Port 12434 wird ausdrücklich abgelehnt. Bestehende Quelltests sind kein Nachweis für das installierte Binary oder den realen Mail-Turn. Siehe aktuelle Quellkorrektur bei Worker 12h in PORTING.md."
     },
     {
       "id": "pi-main-model-capabilities",
@@ -1030,10 +1030,10 @@
     },
     {
       "id": "checkpoint-12h",
-      "title": "Echter Pi-Inherit-Turn über den CTOX-Hauptgateway",
+      "title": "Historischer Pi-Inherit-Gateway-Bericht; aktuelle Bridge siehe Quellkorrektur",
       "completed": "2026-08-03",
       "points": 5,
-      "evidence": "service-überwachter 127.0.0.1:12434 Listener · dynamische GatewayConfig pro Request · Client-Provider verboten und Client-Modell serverseitig überschrieben · lokale ResponsesCreate-IPC-Route · Remote-Credentials nur aus CTOX Secret/Runtime Store · OpenAI/Subscription/Provideradapter-Routen · echter Node/Pi-AI→Rust→kontrollierter Upstream→SSE-Turn · 9/9 Gateway + 153 Proxy-Unit + 25 Proxy-Integration + Sidecar strict/security/smoke grün"
+      "evidence": "Historische Punkte/Datum bleiben erhalten, keine aktuelle Gültigkeitsbehauptung: :12434-Service-Wiring und damalige Testzahlen sind auf Basis 9dab76e73d2949bf011914e38a3becdb3db24267 nicht erneut belegt. Der konsumierte Pfad ist prepare_inherited_coding_model → AnthropicCodingBridge::spawn_responses/spawn_chat_completions; same-root Modell/Credential, per-turn Capability und Drop/Join. Quelltests vorhanden, in dieser Korrektur nicht ausgeführt. Installierte Provenienz, gleiche Root-Autorität und realer Mail-Turn bleiben separat zu prüfen."
     },
     {
       "id": "checkpoint-12i",
@@ -1061,7 +1061,7 @@
       "title": "Typed Request-Logging-Policy im Produktionslistener",
       "completed": "2026-08-03",
       "points": 5,
-      "evidence": "server_middleware.go als aktive partielle Rust-Fassade · explizite full/error-only Policy · POST-Header/Query/Body-Capture · Zstd-Limit · client-first Response-Capture · spawn_blocking Finalize · Main :12434 und Codex :12435 produktiv verdrahtet · realer TCP 429→redigierte Datei+Counter · 170 Proxy-Unit + 25 Integration · Clippy -D warnings · Root cargo check · Tracking grün"
+      "evidence": "Historischer Bericht: server_middleware.go als partielle Rust-Fassade, full/error-only Policy, POST-Header/Query/Body-Capture, Zstd-Limit, client-first Response-Capture, spawn_blocking Finalize und TCP-429-Test. Die frühere Behauptung Main :12434 produktiv verdrahtet ist durch die Quellkorrektur bei Worker 12h in PORTING.md überholt; keine daraus abgeleitete Logging-Abnahme der heutigen per-turn Bridge. Damalige 170 Proxy-Unit/25 Integration/Clippy/Root-check-Gates wurden für diese Korrektur nicht wiederholt."
     },
     {
       "id": "checkpoint-12m",
@@ -2722,7 +2722,7 @@
     "Nach 70% wird nicht die Zahl aktiver Spiegeldateien maximiert: Der nächste Vertikalschnitt integriert das Gateway in Pi/Claude/Codex und Business OS, wobei Provider und Modell getrennte getypte Dimensionen bleiben und Capabilities serverseitig entdeckt werden.",
     "ChatGPT-Subscription-Refresh rotiert ausschließlich den verschlüsselten CTOX-Instanzsnapshot; die Projektion in ein Harness-Codex-Home ist eine explizite Lifecycle-Aktion und kein Seiteneffekt des portablen Secret Stores.",
     "Provider-Transportfeatures werden einzeln gegatet. Kein Codex- oder Antigravity-Build darf Streaming-Abhängigkeiten nur transitiv über das Claude-Defaultfeature erhalten.",
-    "Das Hauptmodellgateway auf :12434 und providergebundene Subscription-Endpunkte bleiben getrennte Lifecycle-Grenzen, bis ein gemeinsamer Router beide Semantiken ohne Verlust von CTOX-inherit tragen kann.",
+    "Aktuelle Pi-Inherit-Autorität liegt in der nativen Bridge pro Turn; :12434 ist kein erforderlicher Service-Endpunkt. Providergebundene Subscription-Endpunkte haben einen separaten Lifecycle. Installierte Binary-Provenienz und gleiche Root-Autorität müssen vor realer Mail-Abnahme geprüft werden.",
     "Browser-Capabilities spiegeln tatsächliche same-root Listener-Readiness; gespeicherte Credentials oder erfolgreich gebaute Clients allein autorisieren keine auswählbare Providerroute.",
     "Upstream-Promotion akzeptiert keine manuell gesetzten Gate-Booleans mehr: jeder Gate muss über record_upstream_gate.sh ausgeführt, als Log gehasht und beim Review erneut verifiziert werden.",
     "Pi-AI erhält niemals Subscription-Secrets. Für den lokalen CTOX-Responses-Client wird nur auf einer validierten HTTP-Loopback-URL ein öffentlicher API-key-förmiger Sentinel bereitgestellt; Remote-URLs und andere Provider bleiben ohne Schlüssel.",

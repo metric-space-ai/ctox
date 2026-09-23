@@ -153,9 +153,9 @@ where
                 if !status.is_object() {
                     continue;
                 }
-                let parsed = serde_json::from_value::<FieldStatus>(status)
-                    .map_err(|error| D::Error::custom(format!("field_status.{field}: {error}")))?;
-                entries.insert(field, parsed);
+                if let Some(parsed) = parse_field_status_entry(status) {
+                    entries.insert(field, parsed);
+                }
             }
         }
         Value::Array(list) => {
@@ -174,9 +174,9 @@ where
                 for key in ["field", "key", "name", "field_key"] {
                     status.remove(key);
                 }
-                let parsed = serde_json::from_value::<FieldStatus>(Value::Object(status))
-                    .map_err(|error| D::Error::custom(format!("field_status.{field}: {error}")))?;
-                entries.insert(field, parsed);
+                if let Some(parsed) = parse_field_status_entry(Value::Object(status)) {
+                    entries.insert(field, parsed);
+                }
             }
         }
         Value::Null => {}
@@ -189,9 +189,20 @@ where
     Ok(entries)
 }
 
+/// One malformed field entry must not cost the whole writeback. On the
+/// Carbosulf lead 23.09.2026 four of six writebacks were rejected, one of them
+/// carrying the only person record, because a single entry had no `status` or
+/// a source said `"requires_credential": "false"`. An entry that still cannot
+/// be read, or names no status, is dropped: the field then shows up as open
+/// and the rest of the payload lands.
+fn parse_field_status_entry(entry: Value) -> Option<FieldStatus> {
+    let parsed = serde_json::from_value::<FieldStatus>(entry).ok()?;
+    (!parsed.status.trim().is_empty()).then_some(parsed)
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct FieldStatus {
-    #[serde(deserialize_with = "lenient_string")]
+    #[serde(default, deserialize_with = "lenient_string")]
     status: String,
     #[serde(default)]
     value: Value,
@@ -363,7 +374,7 @@ struct RawFieldSource {
     quote: String,
     #[serde(default)]
     person_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_bool")]
     requires_credential: bool,
     #[serde(default, deserialize_with = "lenient_string")]
     task_id: String,
@@ -407,6 +418,23 @@ fn host_of_url(url: &str) -> String {
         .unwrap_or("")
         .trim_start_matches("www.");
     host.to_ascii_lowercase()
+}
+
+/// Flags that arrive as strings (`"false"`, `"true"`, `"ja"`, `"1"`) or numbers
+/// are read by meaning; null and anything unrecognised count as false.
+fn lenient_bool<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Bool(flag) => flag,
+        Value::Number(number) => number.as_f64().is_some_and(|value| value != 0.0),
+        Value::String(text) => matches!(
+            text.trim().to_ascii_lowercase().as_str(),
+            "true" | "1" | "yes" | "ja" | "y" | "j"
+        ),
+        _ => false,
+    })
 }
 
 /// Strings that arrive as numbers or booleans are rendered; null becomes "".
@@ -1238,7 +1266,7 @@ pub(super) fn handle_research_writeback(
         // Auftrag nachliefern statt die ganze Firma neu zu recherchieren.
         "rejections": rejections,
         "summary": format!(
-            "{} Feld(er) gespeichert, {} Beleg(e) verworfen, {} Feld(er) noch offen. Ein Feld gilt erst als beantwortet, wenn es verifiziert ist (zwei unabhaengige Quell-Hosts; bei Selbstauskuenften wie Telefon, E-Mail, Domain und allen person_-Feldern genuegt ein Beleg von der Unternehmensseite bzw. dem Profil) oder als no_match belegt wurde. Offene Felder sind keine Ablehnung: hole die fehlende Zweitquelle bzw. den Wert und sende sie gesammelt in einem weiteren Aufruf; gespeicherte Felder nicht erneut senden.",
+            "{} Feld(er) gespeichert, {} Beleg(e) verworfen, {} Feld(er) noch offen. Ein Feld gilt erst als beantwortet, wenn es verifiziert ist (eine passende externe Quelle, deren Zitat den Wert nennt; Sellify allein belegt nichts; widersprechen sich Quellen, bleibt das Feld action_required) oder als no_match belegt wurde. Offene Felder sind keine Ablehnung: hole die fehlende externe Quelle bzw. den Wert und sende sie gesammelt in einem weiteren Aufruf; gespeicherte Felder nicht erneut senden.",
             accepted_count,
             rejections.len(),
             open_count
@@ -1480,6 +1508,34 @@ fn sanitize_research_writeback(
         verworfene_felder.insert(field);
     }
 
+    // A value next to a non-verified status (action_required, no_match, …)
+    // must not be stored. It used to reject the whole writeback, so one
+    // disputed firma_name threw away every proven field of the lead
+    // (thesen 22.09.2026: three writebacks in a row failed on it). Drop the
+    // value, keep the status and its reason, accept the rest.
+    for (field, status) in request.field_status.iter_mut() {
+        if status.status == "verified" {
+            continue;
+        }
+        let mut dropped = false;
+        if research_value_is_populated(&status.value) {
+            status.value = Value::Null;
+            dropped = true;
+        }
+        if let Some(entry) = fields.get_mut(field).and_then(Value::as_object_mut) {
+            if entry.get("value").is_some_and(research_value_is_populated) {
+                entry.insert("value".to_string(), Value::Null);
+                dropped = true;
+            }
+        }
+        if dropped {
+            rejections.push(format!(
+                "result.fields.{field}: Wert ohne verifizierten Status verworfen ({})",
+                status.status
+            ));
+        }
+    }
+
     let vorher = request.result.person_records.len();
     request.result.person_records.retain(|person| {
         person
@@ -1528,6 +1584,30 @@ fn sanitize_research_writeback(
             }
             Some(field) if verworfene_felder.contains(field) => {
                 Some(format!("Feld {field} wurde bereits verworfen"))
+            }
+            Some(field)
+                if !quote_backs_value(
+                    field,
+                    &evidence
+                        .get("value")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            request.field_status.get(field).and_then(|status| {
+                                match &status.value {
+                                    Value::String(text) => Some(text.clone()),
+                                    Value::Number(number) => Some(number.to_string()),
+                                    _ => None,
+                                }
+                            })
+                        })
+                        .unwrap_or_default(),
+                    evidence.get("quote").and_then(Value::as_str).unwrap_or(""),
+                ) =>
+            {
+                Some(format!(
+                    "Zitat stuetzt den Wert von {field} nicht (nur Spanne oder andere Zahl)"
+                ))
             }
             Some(field) if parse_requested_fields(&[field.to_string()]).is_err() => {
                 Some(format!("Feld {field} ist kein bekanntes Recherchefeld"))
@@ -1595,7 +1675,21 @@ fn sanitize_research_writeback(
                 }
             },
         );
-        let dropped = before - status.sources.len();
+        // A figure needs a quote that states it. Carbosulf, 23.09.2026:
+        // mitarbeiter "30 Vollzeitmitarbeiter" carried Leadfeeder's quote
+        // "employee range 11-100" as its second source; a size class proves
+        // no exact headcount. Checked for every source, not only Sellify.
+        let vor_mengenpruefung = status.sources.len();
+        status
+            .sources
+            .retain(|source| quote_backs_value(field, &value, &source.quote));
+        let mengen_verworfen = vor_mengenpruefung - status.sources.len();
+        if mengen_verworfen > 0 {
+            rejections.push(format!(
+                "field_status.{field}: {mengen_verworfen} Beleg(e) verworfen (Zitat nennt den Wert nicht, nur eine Spanne oder eine andere Zahl)"
+            ));
+        }
+        let dropped = before - vor_mengenpruefung;
         if dropped > 0 {
             rejections.push(format!(
                 "field_status.{field}: {dropped} Sellify-Beleg(e) verworfen ({})",
@@ -1611,6 +1705,11 @@ fn sanitize_research_writeback(
         let Some(person) = person.as_object_mut() else {
             continue;
         };
+        let person_email = person
+            .get("person_email")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
         for list in ["evidence", "sources"] {
             let Some(entries) = person.get_mut(list).and_then(Value::as_array_mut) else {
                 continue;
@@ -1629,10 +1728,11 @@ fn sanitize_research_writeback(
                     .unwrap_or("");
                 let quote = entry.get("quote").and_then(Value::as_str).unwrap_or("");
                 crm.check(field, url, quote) != Some(false)
+                    && email_quote_backs(field, &person_email, quote)
             });
             if entries.len() != before {
                 rejections.push(format!(
-                    "result.person_records: {} Sellify-Beleg(e) verworfen ({})",
+                    "result.person_records: {} Beleg(e) verworfen (Sellify ohne Deckung oder Zitat nennt die E-Mail-Adresse nicht; {})",
                     before - entries.len(),
                     crm.hint()
                 ));
@@ -1867,6 +1967,105 @@ fn sanitize_research_writeback(
     }
 
     Ok(rejections)
+}
+
+/// Fields whose value is a figure. Only for these is a quote's number checked.
+const QUANTITY_FIELDS: &[&str] = &["mitarbeiter", "umsatz"];
+
+/// Numbers in a text, German or English notation ("1.500", "50,87",
+/// "50.870.000", "1,500"), in order of appearance, each with its byte span.
+fn numbers_in(text: &str) -> Vec<(f64, std::ops::Range<usize>)> {
+    let pattern = regex::Regex::new(r"\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d+(?:[.,]\d+)?")
+        .expect("number pattern");
+    pattern
+        .find_iter(text)
+        .filter_map(|found| {
+            let raw = found.as_str();
+            let grouped = regex::Regex::new(r"^\d{1,3}(?:([.,])\d{3})+(?:[.,]\d+)?$")
+                .expect("group pattern")
+                .captures(raw)
+                .and_then(|caps| caps.get(1).map(|sep| sep.as_str().to_string()));
+            let normalized = match grouped.as_deref() {
+                // Thousands separator: drop it; the other mark is the decimal.
+                Some(".") => raw.replace('.', "").replace(',', "."),
+                Some(",") => raw.replace(',', ""),
+                _ => raw.replace(',', "."),
+            };
+            normalized
+                .parse::<f64>()
+                .ok()
+                .map(|number| (number, found.range()))
+        })
+        .collect()
+}
+
+/// Whether a source quote states the field's figure. Not a quantity field, no
+/// figure in the value, or no number in the quote: nothing to check (true).
+/// Numbers that only bound a range ("11-100", "11 bis 100") do not count: a
+/// size class never proves an exact value.
+/// A quote backs a value only when it states it: figures by number
+/// ([`quantity_quote_backs`]), a personal e-mail address by the address
+/// itself ([`email_quote_backs`]).
+fn quote_backs_value(field: &str, value: &str, quote: &str) -> bool {
+    quantity_quote_backs(field, value, quote) && email_quote_backs(field, value, quote)
+}
+
+/// BNT, 23.09.2026: `person_email` robert.suesse@bnt-chemicals.de was
+/// "verified" by a Kontakt-page quote naming info(at)bnt-chemicals.de and four
+/// other people, never Robert. An address pattern or a sibling's address is
+/// no evidence for this address. The quote must contain the exact address;
+/// the obfuscations first-party pages use ((at), [at], " at ", (dot)) count.
+fn email_quote_backs(field: &str, value: &str, quote: &str) -> bool {
+    if field != "person_email" {
+        return true;
+    }
+    let wanted = value.trim().to_ascii_lowercase();
+    if !wanted.contains('@') {
+        return true;
+    }
+    normalized_email_text(quote).contains(&wanted)
+}
+
+fn normalized_email_text(text: &str) -> String {
+    let lower = text.to_lowercase();
+    let at = regex::Regex::new(r"\s*(?:\(at\)|\[at\]|\{at\}|\(@\)|\[@\]|\sat\s)\s*")
+        .expect("at pattern");
+    let dot = regex::Regex::new(r"\s*(?:\(dot\)|\[dot\]|\{dot\}|\(punkt\)|\[punkt\]|\sdot\s)\s*")
+        .expect("dot pattern");
+    let lower = at.replace_all(&lower, "@");
+    dot.replace_all(&lower, ".").into_owned()
+}
+
+fn quantity_quote_backs(field: &str, value: &str, quote: &str) -> bool {
+    if !QUANTITY_FIELDS.contains(&field) {
+        return true;
+    }
+    let Some((wanted, _)) = numbers_in(value).into_iter().next() else {
+        return true;
+    };
+    let in_quote = numbers_in(quote);
+    if in_quote.is_empty() {
+        return true;
+    }
+    let range =
+        regex::Regex::new(r"(?i)\d[\d.,]*\s*(?:-|–|—|bis|to)\s*\d[\d.,]*").expect("range pattern");
+    let range_spans: Vec<std::ops::Range<usize>> =
+        range.find_iter(quote).map(|found| found.range()).collect();
+    let same = |a: f64, b: f64| (a - b).abs() <= 0.005 * a.abs().max(b.abs()).max(1e-9);
+    in_quote
+        .iter()
+        .filter(|(_, span)| {
+            !range_spans
+                .iter()
+                .any(|outer| outer.start <= span.start && span.end <= outer.end)
+        })
+        .any(|(number, _)| {
+            same(*number, wanted)
+                || same(*number, wanted * 1_000.0)
+                || same(*number, wanted * 1_000_000.0)
+                || same(*number * 1_000.0, wanted)
+                || same(*number * 1_000_000.0, wanted)
+        })
 }
 
 fn validate_field_status_keys(
@@ -2854,6 +3053,62 @@ pub(super) fn seed_rxdb_collection_table_for_tests(
 mod tests {
     use super::*;
 
+    #[test]
+    fn a_size_class_or_other_number_never_backs_an_exact_figure() {
+        // Carbosulf 23.09.2026: Leadfeeder's range cited for "30".
+        assert!(!quantity_quote_backs(
+            "mitarbeiter",
+            "30 Vollzeitmitarbeiter (Stand 31.12.2024)",
+            "Leadfeeder employee range 11-100"
+        ));
+        assert!(!quantity_quote_backs(
+            "mitarbeiter",
+            "30",
+            "D&B Hoovers: 31 Mitarbeiter"
+        ));
+        assert!(!quantity_quote_backs(
+            "mitarbeiter",
+            "100",
+            "Größenklasse 11 bis 100"
+        ));
+        assert!(quantity_quote_backs(
+            "mitarbeiter",
+            "30",
+            "30 Mitarbeiter (Größenklasse 11-100)"
+        ));
+        assert!(quantity_quote_backs(
+            "mitarbeiter",
+            "1.500",
+            "rund 1500 Beschäftigte"
+        ));
+        assert!(quantity_quote_backs(
+            "umsatz",
+            "50,87 Mio. EUR",
+            "Umsatzerlöse 50.870.000 EUR"
+        ));
+        assert!(quantity_quote_backs(
+            "umsatz",
+            "50,87 Mio. EUR",
+            "Umsatz: 50,87 Mio. €"
+        ));
+        assert!(!quantity_quote_backs(
+            "umsatz",
+            "50,87 Mio. EUR",
+            "Umsatz 38,3 Mio. €"
+        ));
+        // Nothing to judge: no figure in the quote, or not a quantity field.
+        assert!(quantity_quote_backs(
+            "mitarbeiter",
+            "30",
+            "Mitarbeiterzahl laut Registerauszug"
+        ));
+        assert!(quantity_quote_backs(
+            "firma_plz",
+            "50735",
+            "Postleitzahl 12345"
+        ));
+    }
+
     fn create_gap_fixture(
         root: &Path,
         research_command_id: &str,
@@ -3491,7 +3746,7 @@ mod tests {
     }
 
     #[test]
-    fn a_field_rejected_for_a_single_source_stays_open() -> anyhow::Result<()> {
+    fn a_field_with_one_external_source_is_accepted() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let record_id = "lead-einzelquelle";
         let research_command_id = "research-einzelquelle";
@@ -3521,30 +3776,15 @@ mod tests {
         );
         let result = handle_research_writeback(temp.path(), &command)?;
         assert_eq!(result["ok"], true);
-        let rejections = result["rejections"]
-            .as_array()
-            .context("rejections fehlen")?;
-        assert!(
-            rejections.iter().any(|entry| entry
-                .as_str()
-                .is_some_and(|text| text.contains("unabhaengige Quell-Hosts"))),
-            "the single-host claim must be rejected: {rejections:?}"
-        );
+        // Owner rule 23.09.2026: one external provider is enough. Two pages of
+        // northdata.de are still ONE source, and that one source now carries
+        // the field.
         assert_eq!(
             result["accepted_fields"],
-            serde_json::json!([]),
-            "a rejected field was never stored, so it is not accepted"
-        );
-        assert_eq!(
-            result["open_fields"],
             serde_json::json!(["umsatz"]),
-            "a rejected field stays open so the worker fetches a second source"
+            "one external source is enough: {result}"
         );
-        assert!(result["summary"]
-            .as_str()
-            .is_some_and(|text| text.contains("0 Feld(er) gespeichert")
-                && text.contains("1 Feld(er) noch offen")));
-        assert_eq!(result["research_status"], "needs_review");
+        assert_eq!(result["open_fields"], serde_json::json!([]), "{result}");
         Ok(())
     }
 
@@ -3772,7 +4012,7 @@ mod tests {
     /// Gemessen am 03.09.2026: 100 von 265 "verified" Feldern hatten weniger
     /// als zwei verschiedene Quell-Hosts. Auf dem Chatweg pruefte das niemand.
     #[test]
-    fn verified_mit_nur_einem_quell_host_wird_nicht_als_belegt_uebernommen() -> anyhow::Result<()> {
+    fn verified_mit_einem_externen_quell_host_wird_uebernommen() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let record_id = "lead-eine-quelle";
         let research_command_id = "research-eine-quelle";
@@ -3808,19 +4048,10 @@ mod tests {
         let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
             .context("lead missing after writeback")?;
         assert_eq!(
-            lead["field_status"]["umsatz"]["status"], "unsupported",
-            "ein einziger Quell-Host darf nicht als belegt durchgehen"
+            lead["field_status"]["umsatz"]["status"], "verified",
+            "ein externer Quell-Host genuegt seit 23.09.2026"
         );
-        assert_eq!(result["research_status"], "needs_review");
-        let ablehnungen = result["rejections"]
-            .as_array()
-            .context("rejections fehlen")?;
-        assert!(
-            ablehnungen.iter().any(|entry| entry
-                .as_str()
-                .is_some_and(|text| text.contains("unabhaengige Quell-Hosts"))),
-            "der Grund muss benannt sein: {ablehnungen:?}"
-        );
+        assert_eq!(result["research_status"], "completed");
         Ok(())
     }
 
@@ -3960,8 +4191,10 @@ mod tests {
             lead["field_status"]["umsatz"]["status"], "unsupported",
             "{result}"
         );
+        // One external source (northdata) is enough since 23.09.2026; the
+        // forged Sellify citation next to it is still dropped.
         assert_eq!(
-            lead["field_status"]["wz_code"]["status"], "unsupported",
+            lead["field_status"]["wz_code"]["status"], "verified",
             "{result}"
         );
         assert_eq!(
@@ -3972,8 +4205,11 @@ mod tests {
             lead["field_status"]["person_vorname"]["status"], "verified",
             "{result}"
         );
+        // Sellify (192) is the old CRM value, not evidence; the external
+        // source (205) carries the field, the contradicting CRM citation is
+        // dropped and named in the rejections.
         assert_eq!(
-            lead["field_status"]["mitarbeiter"]["status"], "unsupported",
+            lead["field_status"]["mitarbeiter"]["status"], "verified",
             "{result}"
         );
         assert!(
@@ -4091,7 +4327,7 @@ mod tests {
         let status = |field: &str| lead["field_status"][field]["status"].clone();
         assert_eq!(status("firma_plz"), "verified", "{result}");
         assert_eq!(status("umsatz"), "verified", "{result}");
-        assert_eq!(status("wz_code"), "unsupported", "{result}");
+        assert_eq!(status("wz_code"), "verified", "{result}");
         assert_eq!(status("firma_telefon"), "unsupported", "{result}");
         assert_eq!(status("person_email"), "verified", "{result}");
         let sellify_urls = |field: &str| {
@@ -4471,7 +4707,7 @@ mod tests {
     }
 
     #[test]
-    fn verified_sources_must_use_different_hosts() {
+    fn one_verified_host_is_enough() {
         let status = |second_url: &str| FieldStatus {
             status: "verified".to_string(),
             value: serde_json::json!("example.test"),
@@ -4500,13 +4736,14 @@ mod tests {
             extra: BTreeMap::new(),
         };
         let temp = tempfile::tempdir().unwrap();
+        // One host is enough since 23.09.2026.
         assert!(validate_terminal_field(
             "umsatz",
             &status("https://example.test/b"),
             temp.path(),
             &serde_json::json!({})
         )
-        .is_err());
+        .is_ok());
         assert!(validate_terminal_field(
             "umsatz",
             &status("https://other.test/b"),
@@ -4571,6 +4808,69 @@ mod tests {
         let merged = merge_field_status(Some(&earlier), probe);
         assert_eq!(merged["firma_domain"]["status"], "verified");
         assert_eq!(merged["firma_domain"]["value"], "aeroxon.de");
+    }
+
+    #[test]
+    fn an_email_quote_must_name_the_exact_address() {
+        // BNT, 23.09.2026: Robert's address was "verified" by a Kontakt-page
+        // quote that names info(at) and four colleagues, never Robert.
+        let bnt = "info(at)bnt-chemicals.de; firmeneigenes Adressmuster vorname.nachname@bnt-chemicals.de: Norman Quandt, Birgit Hessler, Sina Helfer, Grit Hartmann";
+        assert!(!quote_backs_value(
+            "person_email",
+            "robert.suesse@bnt-chemicals.de",
+            bnt
+        ));
+        assert!(quote_backs_value(
+            "person_email",
+            "norman.quandt@bnt-chemicals.de",
+            "Norman Quandt, Vertrieb, E-Mail: norman.quandt(at)bnt-chemicals.de"
+        ));
+        assert!(quote_backs_value(
+            "person_email",
+            "Grit.Hartmann@bnt-chemicals.de",
+            "grit.hartmann [at] bnt-chemicals [dot] de"
+        ));
+        // Other fields are not affected.
+        assert!(quote_backs_value("person_vorname", "Robert", bnt));
+    }
+
+    #[test]
+    fn one_malformed_field_entry_does_not_cost_the_person_records() {
+        // Carbosulf, 23.09.2026: four of six writebacks were rejected whole,
+        // one of them carrying the only person record, because a source said
+        // "requires_credential": "false" or an entry had no status.
+        let payload = serde_json::json!({
+            "record_id": "lead-a",
+            "module": "outbound-lead-generation",
+            "research_command_id": "cmd-a",
+            "field_status": {
+                "firma_name": {
+                    "status": "verified",
+                    "value": "Carbosulf Chemische Werke GmbH",
+                    "sources": {"item": [{
+                        "source_id": "online-handelsregister.de",
+                        "url": "https://www.online-handelsregister.de/x",
+                        "quote": "Carbosulf Chemische Werke GmbH HRB 1797",
+                        "requires_credential": "false",
+                        "person_key": ""
+                    }]}
+                },
+                "mitarbeiter": {"attempts": {"item": [{"kind": "web_read"}]}}
+            },
+            "result": {
+                "person_records": {"item": {
+                    "person_key": "p1",
+                    "person_vorname": "Hans-Robert",
+                    "person_nachname": "Jacob"
+                }}
+            }
+        });
+        let request: ResearchWritebackRequest =
+            serde_json::from_value(hoist_top_level_field_entries(unwrap_item_carriers(payload)))
+                .expect("a single malformed entry must not reject the payload");
+        assert_eq!(request.result.person_records.len(), 1);
+        assert!(!request.field_status["firma_name"].sources[0].requires_credential);
+        assert!(!request.field_status.contains_key("mitarbeiter"));
     }
 
     #[test]

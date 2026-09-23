@@ -892,6 +892,8 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                     smtp_port: port("smtp_port"),
                     username: field("username"),
                     owner_user_id: owner,
+                    owa_url: field("owa_url"),
+                    ews_url: field("ews_url"),
                 };
                 let password = field("password");
                 let password = if password.is_empty() {

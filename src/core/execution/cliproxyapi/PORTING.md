@@ -1784,7 +1784,42 @@ Forensic correction after the strict compiler gate:
    the synchronous in-memory filesystem calls in use, making upstream API drift
    visible without claiming a complete type model for `virtualfs` 2.2.0.
 
-Evidence for worker 12h:
+Current-source correction (2026-09-20, base `9dab76e73d2949bf011914e38a3becdb3db24267`):
+
+The worker 12h account below is historical and is **not evidence that the
+current service owns a listener on `:12434`**. `GatewayConfig.listen_port` and
+the main-gateway status cell do not establish socket ownership. Do not start a
+replacement listener or point Pi at another process on that port to satisfy
+this historical claim.
+
+The current embedded Pi inherit path is owned by each coding turn:
+
+- `coding_agents/pi_sidecar.rs::gateway_model` returns an `inherit_ctox`
+  descriptor with an intentionally unusable public endpoint. Before invoking
+  Pi, `prepare_coding_turn_model` resolves that descriptor through
+  `prepare_inherited_coding_model`.
+- `resolve_inherited_coding_route` resolves the main provider, active model,
+  endpoint and credential selector from the supplied root. It explicitly
+  rejects port `12434`; unsupported providers fail closed.
+- `prepare_inherited_coding_model_route` loads the same-root credential and
+  creates an `AnthropicCodingBridge` using Responses or Chat Completions.
+  Pi receives its ephemeral loopback URL and per-turn capability header, not
+  the provider credential. The bridge validates the selected model and owns
+  upstream credential injection. Its `Drop` stops and joins its worker.
+- Existing source regressions include
+  `inherited_responses_bridge_authenticates_scopes_streams_and_stops`,
+  `inherited_ctox_proxy_route_keeps_credentials_and_configuration_native`,
+  `inherited_minimax_route_drives_real_pi_tools_through_native_bridge`, and
+  `gateway_model_defers_private_route_resolution_to_the_turn_owner`.
+
+This correction is source inspection only. These tests were not rerun for this
+correction; an installed binary, same-root route readiness, real Mail module
+turn and bounded shutdown under stalled I/O still require exact-source runtime
+evidence. Neither the historical counts below nor the mere presence of these
+tests establish that evidence.
+
+Historical worker 12h report (superseded for current inherit wiring; gate
+results have not been re-established on the revision above):
 
 - The CTOX service now supervises a dedicated loopback-only main Responses
   listener on `127.0.0.1:12434`. It resolves `GatewayConfig` per request, so an
@@ -1958,9 +1993,11 @@ Evidence for worker 12l:
   Final file assembly and streaming-thread join run on a blocking worker; a
   logging failure updates its counter but never changes the already determined
   model response.
-- Both daemon-owned production supervisors now inject retention-limited
-  error-only policies: main CTOX inherit on `:12434` and Codex subscription on
-  `:12435`. A real TCP test proves a provider 429 becomes a redacted file and
+- The historical report claimed error-only policies on main CTOX inherit
+  `:12434` and Codex subscription `:12435`. The `:12434` production-wiring
+  claim is superseded by the current-source correction above; do not infer
+  logging coverage for the per-turn coding bridge from it. The reported TCP
+  test exercised a provider 429 becoming a redacted file and
   exactly one forced-error metric without leaking query or Authorization
   credentials.
 - Gates pass 170 proxy unit tests, all 25 integrations, all-target Clippy with
