@@ -39249,7 +39249,9 @@ pub(super) mod tests {
             let repaired: Value = serde_json::from_str(&raw)?;
             assert_eq!(repaired["_deleted"], expected_deleted);
             assert_eq!(deleted_column != 0, expected_deleted);
-            assert!(repaired["_rev"].as_str().is_some_and(|revision| !revision.is_empty()));
+            assert!(repaired["_rev"]
+                .as_str()
+                .is_some_and(|revision| !revision.is_empty()));
             assert_eq!(repaired["_rev"], revision_column);
             if id == "missing_revision" {
                 assert!(revision_column.starts_with("2-"));
@@ -39261,11 +39263,9 @@ pub(super) mod tests {
                 } else {
                     "4-"
                 };
-                assert!(
-                    repaired["_rev"]
-                        .as_str()
-                        .is_some_and(|revision| revision.starts_with(expected_revision))
-                );
+                assert!(repaired["_rev"]
+                    .as_str()
+                    .is_some_and(|revision| revision.starts_with(expected_revision)));
             }
         }
 
