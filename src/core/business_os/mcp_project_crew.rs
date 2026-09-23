@@ -14,6 +14,128 @@ struct StartRequest {
     _context: Option<Value>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartNativeProjectRequest {
+    project_id: String,
+    title: String,
+    instruction: String,
+    idempotency_key: String,
+    #[serde(default, rename = "_context")]
+    _context: Option<Value>,
+}
+
+pub(super) fn native_project_descriptor() -> BusinessOsMcpToolDescriptor {
+    write_tool(
+        "business_os.start_project_task",
+        "Start one durable native CTOX task for an owned Workjet project without requiring a Business OS app, Crew member, execution computer or external harness. Repeating the same request key returns the same command and task.",
+        serde_json::json!({"type":"object","additionalProperties":false,
+            "required":["project_id","title","instruction","idempotency_key"],
+            "properties":{
+                "project_id":{"type":"string","minLength":1,"maxLength":128},
+                "title":{"type":"string","minLength":1,"maxLength":256},
+                "instruction":{"type":"string","minLength":1,"maxLength":16000},
+                "idempotency_key":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"}
+            }}),
+    )
+}
+
+pub(super) fn start_native_project(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    let request: StartNativeProjectRequest = serde_json::from_value(arguments.clone())?;
+    anyhow::ensure!(
+        !request.title.trim().is_empty()
+            && request.title.len() <= 256
+            && !request.instruction.trim().is_empty()
+            && request.instruction.len() <= 16000,
+        "project task text is empty or exceeds limits"
+    );
+    let key = request.idempotency_key.as_bytes();
+    anyhow::ensure!(
+        !key.is_empty()
+            && key.len() <= 256
+            && key[0].is_ascii_alphanumeric()
+            && key
+                .iter()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(*b, b'.' | b'_' | b':' | b'-')),
+        "invalid project request idempotency key"
+    );
+    let actor = resolved_mcp_actor_context(root, context)?;
+    anyhow::ensure!(
+        actor.get("active").and_then(Value::as_bool) == Some(true),
+        "project task actor is inactive"
+    );
+    let owner = required_arg(&actor, "id")?;
+    enforce_collection_policy(root, "workjet_projects")?;
+    enforce_module_policy(root, "ctox")?;
+    let mut conn = rusqlite::Connection::open_with_flags(
+        store::business_os_store_path(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let tx = conn.transaction()?;
+    let project =
+        super::super::project_chats::owned_project(&tx, &request.project_id, &owner, true)?;
+    tx.commit()?;
+    let project_id = required_arg(&project, "id")?;
+    let identity = serde_json::to_vec(&(&owner, &project_id, &request.idempotency_key))?;
+    let command_id = format!(
+        "workjet_project_native_{}",
+        URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, &identity).as_ref())
+    );
+    let mut payload = serde_json::json!({
+        "project_id":project_id,
+        "title":request.title,
+        "instruction":request.instruction,
+        "mode":"data"
+    });
+    let fingerprint = URL_SAFE_NO_PAD
+        .encode(digest::digest(&digest::SHA256, &serde_json::to_vec(&payload)?).as_ref());
+    payload["workjet_request_fingerprint"] = Value::String(fingerprint.clone());
+    if crate::mission::channels::inspect_business_command(root, &command_id)?.is_some() {
+        let existing = crate::mission::channels::business_command_projection(root, &command_id)?;
+        anyhow::ensure!(
+            existing
+                .pointer("/payload/workjet_request_fingerprint")
+                .and_then(Value::as_str)
+                == Some(fingerprint.as_str()),
+            "project request key conflicts with existing intent"
+        );
+    }
+    let accepted = store::accept_rxdb_business_command(
+        root,
+        serde_json::json!({
+            "id":command_id,"command_id":command_id,"module":"ctox",
+            "command_type":"business_os.chat.task","payload":payload,
+            "client_context":{"actor":actor,"channel":context.channel,"surface":context.surface,
+                "workspace":context.workspace,"mcp_actor":context.actor,"request_id":command_id}
+        }),
+    )?;
+    anyhow::ensure!(
+        accepted.get("ok").and_then(Value::as_bool) != Some(false),
+        "native project command was rejected: {}",
+        accepted.get("status").unwrap_or(&Value::Null)
+    );
+    let canonical = crate::mission::channels::business_command_projection(root, &command_id)?;
+    anyhow::ensure!(
+        canonical
+            .pointer("/payload/workjet_request_fingerprint")
+            .and_then(Value::as_str)
+            == Some(fingerprint.as_str()),
+        "project request key conflicts with admitted intent"
+    );
+    Ok(serde_json::json!({
+        "schema":"ctox.native_project_task.v1",
+        "project_id":project_id,
+        "command_id":command_id,
+        "task_id":accepted.get("task_id"),
+        "status":accepted.get("status")
+    }))
+}
+
 pub(super) fn descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool("business_os.start_crew_execution",
         "Start an idempotent external Crew task in an existing private Workjet project chat. Crew identity and executor computer come from native bindings. This enqueues work; native admission and review own execution and completion.",

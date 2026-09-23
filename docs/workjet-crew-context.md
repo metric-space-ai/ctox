@@ -231,3 +231,24 @@ and the command plane returns that request's existing receipt. The ingress must
 not acknowledge a competing intent as its own success. Current sequential retry
 coverage does not constitute a deterministic concurrent-intake regression; that
 additional runtime evidence remains outstanding.
+
+## Native task from a general Workjet project (pending runtime verification)
+
+`business_os.start_project_task` admits a native `business_os.chat.task` for an
+existing active `workjet_projects` record owned by the authenticated MCP actor.
+It does not require an app link, private worker chat, Crew member, execution
+computer or external harness. It creates no Business OS app. The caller sends a
+project ID, title, instruction and retry key; neither module, actor nor command
+identity is caller-selectable. The command and queue task are owned by CTOX's
+existing command plane. A retry for the same actor, project and key returns the
+same command/task references, while changed intent fails against the canonical
+fingerprint even if another caller wins admission concurrently.
+
+This native ingress is distinct from external Crew execution and carries no
+`thread_id` or `external_executor`, so it follows the native queue worker path.
+Command-scoped sessions cannot start another project task. Workjet must still
+persist its local intent before transport, call this tool for an app-free native
+project, recover a lost reply with the same key and display CTOX's actual
+command/task status. The source test checks admission, replay, changed intent,
+foreign ownership and archived-project denial; it does not prove a full worker
+turn or an installed Dev/Ops user path. Those are required before release.

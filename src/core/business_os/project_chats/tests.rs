@@ -941,3 +941,62 @@ fn project_crew_admission_uses_native_chat_binding_and_rejects_revocation() -> a
     );
     Ok(())
 }
+
+#[test]
+fn native_project_task_needs_no_app_crew_or_executor_and_replays_one_task() -> anyhow::Result<()> {
+    use crate::mission::channels;
+    let root = fixture()?;
+    let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner",
+        "Owner",
+        "admin",
+        chrono::Utc::now().timestamp_millis(),
+    )?;
+    let request = json!({
+        "project_id":"project",
+        "title":"Native project task",
+        "instruction":"Work on the project without an app",
+        "idempotency_key":"native-project-1",
+        "_context":{"actor":"owner","workspace":"project-test"}
+    });
+    let start = |request: Value| {
+        mcp_channel::call_tool(root.path(), "business_os.start_project_task", request)
+    };
+    let accepted = start(request.clone())?;
+    let replay = start(request.clone())?;
+    assert_eq!(accepted["command_id"], replay["command_id"]);
+    assert_eq!(accepted["task_id"], replay["task_id"]);
+    let command_id = accepted["command_id"].as_str().context("command id")?;
+    let task_id = accepted["task_id"].as_str().context("native task id")?;
+    let canonical = channels::business_command_projection(root.path(), command_id)?;
+    assert_eq!(canonical["module"], "ctox");
+    assert_eq!(canonical["command_type"], "business_os.chat.task");
+    assert_eq!(canonical["payload"]["project_id"], "project");
+    assert!(canonical["payload"].get("module_id").is_none());
+    assert!(canonical["payload"].get("thread_id").is_none());
+    assert!(canonical["payload"].get("external_executor").is_none());
+    assert_eq!(
+        super::super::project_crew_member_for_task(root.path(), task_id)?,
+        None
+    );
+
+    let mut changed = request.clone();
+    changed["instruction"] = json!("A different task");
+    assert!(start(changed).is_err());
+    let mut spoofed = request.clone();
+    spoofed["crew_member_id"] = json!("someone-else");
+    assert!(start(spoofed).is_err());
+    let mut foreign = request.clone();
+    foreign["_context"]["actor"] = json!("other-user");
+    assert!(start(foreign).is_err());
+    let conn = open_store(root.path())?;
+    let mut project =
+        outbound_load_record(&conn, "workjet_projects", "project")?.context("project record")?;
+    project["status"] = json!("archived");
+    store::upsert_business_record(&conn, "workjet_projects", "project", 2, project)?;
+    let mut archived = request;
+    archived["idempotency_key"] = json!("native-project-2");
+    assert!(start(archived).is_err());
+    Ok(())
+}
