@@ -11337,7 +11337,7 @@ pub fn pull_mcp_app_collection_records(
                 .with_context(|| format!("shadow document `{collection}/{id}` is not an object"))?;
             object
                 .entry("id".to_string())
-                .or_insert_with(|| Value::String(id));
+                .or_insert_with(|| Value::String(id.clone()));
             object.insert("_deleted".to_string(), Value::Bool(deleted != 0));
             object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
             fallback.push((updated_at_ms as f64, id, document));
