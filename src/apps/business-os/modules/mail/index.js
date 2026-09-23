@@ -289,6 +289,14 @@ export async function mount(ctx) {
   wireCollectionSubscriptions();
   wireReadiness();
   render();
+  // A cancelled first read can settle immediately and never emit another
+  // collection event. Do not leave an empty mailbox in "syncing" indefinitely.
+  const initialReadWatchdog = window.setTimeout(() => {
+    if (view.disposed || view.mailReadError || (view.mailReadComplete && view.readiness?.ready !== false)) return;
+    view.mailReadError = 'Initial mail sync did not complete';
+    view.loading = false;
+    renderList();
+  }, MAIL_READ_TIMEOUT_MS);
   // Keep the app responsive when a local RxDB query stalls during reconnect.
   // The first snapshot can finish after mount; later subscription updates use
   // the same refresh path and retain the last successful rows.
@@ -305,6 +313,7 @@ export async function mount(ctx) {
 
   return () => {
     view.disposed = true;
+    window.clearTimeout(initialReadWatchdog);
     void view.contentEditor?.destroy?.();
     if (view.refreshTimer) window.clearTimeout(view.refreshTimer);
     for (const cleanup of cleanups) {

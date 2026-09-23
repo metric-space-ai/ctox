@@ -759,6 +759,18 @@ mailQa: try {
   });
   await assertVisibleText(page, 'Projektstatus nach Sync');
   await page.evaluate(() => window.clearInterval(window.__mailFastPulse));
+  await page.evaluate(async () => {
+    window.__unmountMail();
+    window.__mailReadFailures.set('communication_threads', 'QUERY_CANCELLED');
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await page.getByText('Mail wird synchronisiert', { exact: true }).waitFor({ state: 'visible' });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
+  await page.getByText('Postfach derzeit nicht verfügbar', { exact: true }).waitFor({ state: 'visible' });
+  await page.evaluate(() => window.__mailReadFailures.delete('communication_threads'));
+  await page.locator('[data-mail-retry-read]').click();
+  await assertVisibleText(page, 'Projektstatus nach Sync');
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
   assert.deepEqual(browserErrors, []);
   console.log('Mail browser QA OK: inbox, sent, reconnect recovery, thread, campaign, draft, group, mailbox administration, Sellify series-email handoff, and responsive composer');
 } catch (error) {
