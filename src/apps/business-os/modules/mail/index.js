@@ -330,10 +330,12 @@ export async function mount(ctx) {
       view.selectedAccountKey = '';
       render();
     });
-    refs.compose?.addEventListener('click', () => {
+    const openNewMail = () => {
       closeMobileNavigation();
       openComposer();
-    });
+    };
+    refs.compose?.addEventListener('click', openNewMail);
+    refs.composePrimary?.addEventListener('click', openNewMail);
     refs.importButtons.forEach((button) => button?.addEventListener('click', openMailImporter));
     refs.exportButtons.forEach((button) => button?.addEventListener('click', exportVisibleMail));
     refs.settings?.addEventListener('click', openMailboxAdmin);
@@ -2100,6 +2102,7 @@ function collectRefs(root) {
     account: one('[data-mail-account]'),
     search: one('[data-mail-search]'),
     compose: one('[data-mail-compose]'),
+    composePrimary: one('[data-mail-compose-primary]'),
     composerTitle: one('[data-mail-composer-title]'),
     composerKicker: one('[data-mail-composer-kicker]'),
     importButtons: [...root.querySelectorAll('[data-mail-import], [data-mail-list-import]')],
@@ -2592,6 +2595,7 @@ function applyStaticLabels(root, t) {
     '[data-mail-detail-empty-title]': t('noSelectionTitle', 'Keine Mail ausgewählt'),
     '[data-mail-detail-empty-body]': t('noSelectionBody', 'Wähle eine Nachricht oder Kampagne aus.'),
     '[data-mail-composer-title]': t('compose', 'Neue Mail'),
+    '[data-mail-compose-primary]': t('compose', 'Neue Mail'),
     '[data-mail-from-label]': t('from', 'Von'),
     '[data-mail-to-label]': t('to', 'An'),
     '[data-mail-group-label]': t('group', 'Gruppe / Kampagne'),
