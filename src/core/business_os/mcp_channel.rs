@@ -5697,6 +5697,13 @@ fn business_os_mcp_policy_decision(
     arguments: &Value,
 ) -> anyhow::Result<Option<PolicyDecision>> {
     match tool_name {
+        "business_os.start_project_task" => Ok(Some(trusted_mcp_actor_policy_decision(
+            root,
+            context,
+            BusinessOsPermission::CtoxTaskCreate,
+            BusinessOsScopeType::Record,
+            Some(&required_arg(arguments, "project_id")?),
+        )?)),
         "meeting.status" | "meeting.get_transcript" => Ok(Some(trusted_mcp_actor_policy_decision(
             root,
             context,
@@ -9128,6 +9135,27 @@ mod tests {
             assert_eq!(decision.scope_type, "workspace");
             assert_eq!(decision.scope_id, None);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn native_project_task_uses_ctox_task_create_on_the_requested_project() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_default_mcp_admin(root)?;
+        let tool = "business_os.start_project_task";
+        assert_eq!(tool_policy_class(tool), McpToolPolicyClass::Write);
+        let decision = business_os_mcp_policy_decision(
+            root,
+            &test_context(tool),
+            tool,
+            &serde_json::json!({"project_id":"project-alpha"}),
+        )?
+        .context("native project policy decision")?;
+        assert!(decision.allowed);
+        assert_eq!(decision.permission, "ctox.task.create");
+        assert_eq!(decision.scope_type, "record");
+        assert_eq!(decision.scope_id.as_deref(), Some("project-alpha"));
         Ok(())
     }
 

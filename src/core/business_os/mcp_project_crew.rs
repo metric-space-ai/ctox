@@ -81,6 +81,18 @@ pub(super) fn start_native_project(
         super::super::project_chats::owned_project(&tx, &request.project_id, &owner, true)?;
     tx.commit()?;
     let project_id = required_arg(&project, "id")?;
+    let mut authorized = context.clone();
+    authorized.actor = owner.clone();
+    authorized.trusted_role = actor
+        .get("role")
+        .and_then(Value::as_str)
+        .map(normalize_role);
+    enforce_business_os_mcp_policy(
+        root,
+        &authorized,
+        "business_os.start_project_task",
+        arguments,
+    )?;
     let identity = serde_json::to_vec(&(&owner, &project_id, &request.idempotency_key))?;
     let command_id = format!(
         "workjet_project_native_{}",
