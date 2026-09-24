@@ -3673,17 +3673,54 @@ pub(crate) fn repersist_augmented_person_research(
             serde_json::Value::String("person-research workspace path is unavailable".to_string());
         return;
     };
-    match ctox_web_stack::persist_person_research_workspace(&workspace, request, payload) {
-        Ok(summary) => {
-            payload["workspace"] = summary;
-            if let Some(object) = payload.as_object_mut() {
-                object.remove("workspace_error");
-            }
-        }
+    let mut snapshot = payload.clone();
+    if let Some(object) = snapshot.as_object_mut() {
+        object.remove("workspace_error");
+    }
+    let persisted = (|| -> anyhow::Result<()> {
+        let summary =
+            ctox_web_stack::persist_person_research_workspace(&workspace, request, &snapshot)?;
+        snapshot["workspace"] = summary;
+        // The pinned Web Stack writes scrape_runs.jsonl but omits it from its
+        // manifest. Keep this native augmentation next to the command evidence;
+        // the excluded historical src/tools/web-stack tree is not compiled.
+        let manifest_path = workspace.join("manifest.json");
+        let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
+        let files = manifest
+            .get_mut("files")
+            .and_then(serde_json::Value::as_object_mut)
+            .context("person-research manifest is missing its files object")?;
+        files.insert("scrape_runs".into(), serde_json::json!("scrape_runs.jsonl"));
+        write_person_research_evidence_file(&manifest_path, &manifest)?;
+        // Persist after attaching the actual workspace summary and clearing a
+        // recovered error. The returned successful payload must equal the final
+        // envelope, including Sellify/runtime/capture outcomes and summary.
+        write_person_research_evidence_file(&workspace.join("envelope.json"), &snapshot)?;
+        Ok(())
+    })();
+    match persisted {
+        Ok(()) => *payload = snapshot,
         Err(error) => {
             payload["workspace_error"] = serde_json::Value::String(error.to_string());
         }
     }
+}
+
+fn write_person_research_evidence_file(
+    path: &Path,
+    value: &serde_json::Value,
+) -> anyhow::Result<()> {
+    use std::io::Write;
+    let parent = path
+        .parent()
+        .context("research evidence needs a parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&serde_json::to_vec_pretty(value)?)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path)?;
+    #[cfg(unix)]
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
 }
 
 fn business_os_web_stack_workspace(root: &Path, args: &[String]) -> Option<PathBuf> {
@@ -7077,6 +7114,76 @@ pub(super) fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn research_evidence_request(workspace: PathBuf) -> ctox_web_stack::PersonResearchRequest {
+        ctox_web_stack::PersonResearchRequest {
+            company: "Example GmbH".into(),
+            country: ctox_web_stack::sources::Country::De,
+            mode: ctox_web_stack::sources::ResearchMode::UpdateFirm,
+            fields: Vec::new(),
+            include_private: Vec::new(),
+            person_priorities: Vec::new(),
+            known_person_records: Vec::new(),
+            workspace: Some(workspace),
+            persist_workspace: true,
+        }
+    }
+
+    #[test]
+    fn augmented_research_envelope_matches_returned_payload_and_manifest() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let workspace = temp.path().join("research");
+        let request = research_evidence_request(workspace.clone());
+        let mut payload = serde_json::json!({
+            "company": "Example GmbH", "country": "DE", "mode": "update_firm",
+            "fields": {"firma_name": {"value": "Example GmbH"}},
+            "plan": [{"source_id": "runtime-source"}],
+            "scrape_runs": [{"source_id": "runtime-source", "run_id": "fixture-run", "classification": "completed_empty"}],
+            "sellify_lookup_runs": [{"source_id": "sellify", "classification": "failed", "returned_record_count": null}],
+            "authenticated_source_capture_runs": [{"source_id": "fixture-private", "status": "failed"}],
+            "summary": "Final augmented summary",
+            "workspace_error": "previous attempt failed"
+        });
+        repersist_augmented_person_research(&request, &mut payload);
+        assert!(payload.get("workspace_error").is_none());
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(workspace.join("envelope.json"))?)?;
+        assert_eq!(saved, payload);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(workspace.join("manifest.json"))?)?;
+        assert_eq!(manifest["files"]["scrape_runs"], "scrape_runs.jsonl");
+        for key in ["plan", "fields"] {
+            let saved: serde_json::Value = serde_json::from_slice(&fs::read(
+                workspace.join(manifest["files"][key].as_str().unwrap()),
+            )?)?;
+            assert_eq!(saved, payload[key]);
+        }
+        let runs = fs::read_to_string(workspace.join("scrape_runs.jsonl"))?
+            .lines()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(serde_json::json!(runs), payload["scrape_runs"]);
+        Ok(())
+    }
+
+    #[test]
+    fn augmented_research_persistence_failure_is_not_reported_as_success() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let workspace = temp.path().join("not-a-directory");
+        fs::write(&workspace, b"keep existing file")?;
+        let request = research_evidence_request(workspace.clone());
+        let mut payload = serde_json::json!({"summary": "final", "sellify_lookup_runs": []});
+        repersist_augmented_person_research(&request, &mut payload);
+        assert!(payload["workspace_error"].is_string());
+        assert!(payload.get("workspace").is_none());
+        assert_eq!(fs::read(&workspace)?, b"keep existing file");
+        let mut disabled = request;
+        disabled.persist_workspace = false;
+        let before = payload.clone();
+        repersist_augmented_person_research(&disabled, &mut payload);
+        assert_eq!(payload, before);
+        Ok(())
+    }
 
     #[test]
     fn business_os_usage_documents_atomic_authenticated_automation() {
