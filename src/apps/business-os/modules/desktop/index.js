@@ -1111,15 +1111,21 @@ export async function mount(ctx) {
     return `${moduleTitle ? `[${moduleTitle}] ` : ''}${doc.command_type || ''}`.trim() || doc.command_id || '';
   }
   async function ensureLayout(collection, launcherRef) {
-    return ensureDesktopLayoutWithAuthority({
-      collection,
-      documentId: LAYOUT_DOC_ID,
-      defaultLayout: () => defaultLayout(launcherRef),
-      readNativeDocument: ctx.readNativeCollectionDocument
-        ? () => ctx.readNativeCollectionDocument('desktop_layout', LAYOUT_DOC_ID, { timeoutMs: 5000 })
-        : null,
-      insertMissingSeed,
-    });
+    try {
+      return await ensureDesktopLayoutWithAuthority({
+        collection,
+        documentId: LAYOUT_DOC_ID,
+        defaultLayout: () => defaultLayout(launcherRef),
+        readNativeDocument: ctx.readNativeCollectionDocument
+          ? () => ctx.readNativeCollectionDocument('desktop_layout', LAYOUT_DOC_ID, { timeoutMs: 5000 })
+          : null,
+        insertMissingSeed,
+      });
+    } catch (error) {
+      if (!isDatabaseClosingError(error)) throw error;
+      console.info('[desktop] layout read skipped during database restart; using default layout');
+      return defaultLayout(launcherRef);
+    }
   }
 
   function defaultLayout(launcherRef) {
