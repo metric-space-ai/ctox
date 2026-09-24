@@ -744,7 +744,11 @@ mailQa: try {
   await page.locator('[data-mail-close-mailbox-admin]').click();
 
   await page.setViewportSize({ width: 700, height: 820 });
-  await page.locator('[data-mail-close-detail]').click();
+  // Account changes may already have closed the inspector. Use the mobile
+  // back control only when the inspector still owns the view.
+  if (await page.locator('[data-mail-root]').evaluate((node) => node.classList.contains('is-inspector-open'))) {
+    await page.locator('[data-mail-close-detail]').click();
+  }
   await page.locator('[data-mail-open-nav]').click();
   await page.locator('.mail-sidebar').waitFor({ state: 'visible' });
   await page.locator('[data-mail-settings]').click();
