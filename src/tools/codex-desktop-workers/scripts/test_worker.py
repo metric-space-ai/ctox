@@ -69,6 +69,8 @@ class WorkerGuards(unittest.TestCase):
                  patch.object(w, 'validate_worktree', return_value=(root, args.worktree, 'codex/prep', 'owner/repo')), \
                  patch.object(w, 'read', side_effect=lambda p: '' if p.name == 'config.toml' else 'Bounded assignment'), \
                  patch.object(w, 'run', return_value=json.dumps({'url': args.issue, 'state': 'OPEN'})), \
+                 patch.object(w.context_config, 'install', return_value=str(root / '.codex/config.toml')), \
+                 patch.object(w.context_config, 'verify'), \
                  patch.object(w.subprocess, 'Popen', return_value=process), \
                  patch.object(w.selectors, 'DefaultSelector'), \
                  patch.object(w.preparation, 'Client', return_value=client):
@@ -80,6 +82,9 @@ class WorkerGuards(unittest.TestCase):
             self.assertEqual(saved['project_id'], 'parent-project')
             start = next(call for call in client.request.call_args_list if call.args[1] == 'thread/start')
             self.assertEqual(start.args[2]['projectId'], 'parent-project')
+            self.assertEqual(start.args[2]['historyMode'], 'paginated')
+            self.assertEqual(start.args[2]['config']['model_context_window'], 256000)
+            self.assertEqual(start.args[2]['config']['model_auto_compact_token_limit'], 230400)
             self.assertEqual(saved['preparation_turn_id'], 'turn-1')
             self.assertIn('Do not rerun create', saved['recovery'])
             client.interrupt.assert_called_once_with(thread)
