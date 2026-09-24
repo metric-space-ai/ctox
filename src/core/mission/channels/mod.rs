@@ -1858,6 +1858,10 @@ fn load_strategic_directive_authority_events(
 pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
+        "email-account" => print_json(&crate::communication::email_account_cli::run(
+            root,
+            &args[1..],
+        )?),
         "init" => {
             let db_path = resolve_db_path(root, find_flag_value(args, "--db"));
             let conn = open_channel_db(&db_path)?;
@@ -2043,7 +2047,7 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
         }
         _ => {
             anyhow::bail!(
-                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] [--reason <text>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send] [--reviewed-communication-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
+                "usage:\n  ctox channel email-account list | upsert --stdin | sync --address <address> [--limit <1..100>]\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] [--reason <text>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send] [--reviewed-communication-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
             )
         }
     }

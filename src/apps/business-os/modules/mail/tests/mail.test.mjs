@@ -70,15 +70,45 @@ test('ordinary users only see assigned or shared email accounts', () => {
     { account_key: 'email:bob@example.test', channel: 'email', address: 'bob@example.test', profile_json: { owner_user_id: 'bob' } },
     { account_key: 'email:team@example.test', channel: 'email', address: 'team@example.test', profile_json: { owner_user_id: 'ops', shared_user_ids: ['alice'] } },
     { account_key: 'email:legacy@example.test', channel: 'email', address: 'legacy@example.test', profile_json: {} },
+    { account_key: 'email:shared@example.test', channel: 'email', address: 'shared@example.test', profile_json: { shared_user_ids: ['alice'] } },
     { account_key: 'whatsapp:alice', channel: 'whatsapp', address: '+49123', profile_json: { owner_user_id: 'alice' } },
   ];
   assert.deepEqual(
     hooks.visibleEmailAccounts(accounts, { id: 'alice', role: 'member' }).map((account) => account.account_key),
-    ['email:alice@example.test', 'email:legacy@example.test', 'email:team@example.test'],
+    ['email:alice@example.test', 'email:shared@example.test', 'email:team@example.test'],
   );
-  assert.equal(hooks.visibleEmailAccounts(accounts, { id: 'root', role: 'admin' }).length, 4);
-  assert.equal(hooks.isGlobalMailAdmin({ role: 'founder' }), true);
+  assert.equal(hooks.visibleEmailAccounts(accounts, { id: 'root', role: 'admin' }).length, 5);
+  assert.deepEqual(
+    hooks.visibleEmailAccounts(accounts, { id: 'other', email: 'alice', login: 'alice', role: 'user' }),
+    [],
+    'mail account access follows the native user ID, not email or login aliases',
+  );
+  assert.equal(hooks.isGlobalMailAdmin({ role: 'founder' }), false);
   assert.equal(hooks.isGlobalMailAdmin({ role: 'member' }), false);
+});
+
+test('native account authority overrides a previously authorized browser cache', async () => {
+  const user = { id: 'alice', role: 'member' };
+  const cached = [{
+    account_key: 'email:team@example.test', channel: 'email', address: 'team@example.test',
+    profile_json: { owner_user_id: 'bob', shared_user_ids: ['alice'] },
+  }];
+  const allowed = async (_collection, accountKey) => ({
+    toJSON: () => ({ ...cached[0], account_key: accountKey }),
+  });
+  assert.equal((await hooks.authoritativeVisibleEmailAccounts(cached, user, allowed)).length, 1);
+  const revoked = async () => ({
+    toJSON: () => ({ ...cached[0], profile_json: { owner_user_id: 'bob', shared_user_ids: [] } }),
+  });
+  assert.deepEqual(await hooks.authoritativeVisibleEmailAccounts(cached, user, revoked), []);
+  assert.deepEqual(await hooks.authoritativeVisibleEmailAccounts(cached, user, async () => null), []);
+  assert.deepEqual(await hooks.authoritativeVisibleEmailAccounts(cached, user, async () => ({
+    ...cached[0], account_key: 'email:wrong@example.test',
+  })), []);
+  await assert.rejects(
+    hooks.authoritativeVisibleEmailAccounts(cached, user, null),
+    /Mail account verification is unavailable/i,
+  );
 });
 
 test('mailserver configuration values are normalized without exposing secrets', () => {
@@ -190,16 +220,54 @@ test('content revision hashes are stable across object key order', async () => {
 
 test('mail folders derive from canonical thread and message direction', () => {
   const threads = [
-    { thread_key: 'inbox', unread_count: 2, last_message_at: '2026-08-06T08:00:00Z' },
-    { thread_key: 'sent', unread_count: 0, last_message_at: '2026-08-06T09:00:00Z' },
+    { thread_key: 'inbox', account_key: 'email:alice@example.test', unread_count: 2, last_message_at: '2026-08-06T08:00:00Z' },
+    { thread_key: 'sent', account_key: 'email:alice@example.test', unread_count: 0, last_message_at: '2026-08-06T09:00:00Z' },
   ];
   const messages = [
-    { thread_key: 'inbox', direction: 'inbound', folder_hint: 'inbox' },
-    { thread_key: 'sent', direction: 'outbound', folder_hint: 'sent' },
+    { thread_key: 'inbox', account_key: 'email:alice@example.test', direction: 'inbound', folder_hint: 'inbox' },
+    { thread_key: 'sent', account_key: 'email:alice@example.test', direction: 'outbound', folder_hint: 'sent' },
   ];
   assert.deepEqual(hooks.filterThreadsForFolder(threads, 'inbox', messages).map((row) => row.thread_key), ['inbox']);
   assert.deepEqual(hooks.filterThreadsForFolder(threads, 'unread', messages).map((row) => row.thread_key), ['inbox']);
   assert.deepEqual(hooks.filterThreadsForFolder(threads, 'sent', messages).map((row) => row.thread_key), ['sent']);
+});
+
+test('folder identity keeps delegated Sent mail and self-authored Inbox mail separate', () => {
+  const account_key = 'email:owner@example.test';
+  const sent = { __kind: 'thread', thread_key: 'delegated', account_key, last_message_at: '2026-08-06T09:00:00Z' };
+  const inbox = { __kind: 'thread', thread_key: 'self', account_key, last_message_at: '2026-08-06T08:00:00Z' };
+  const messages = [
+    { thread_key: 'delegated', account_key, direction: 'inbound', folder_hint: 'sent' },
+    { thread_key: 'self', account_key, direction: 'outbound', folder_hint: 'inbox' },
+  ];
+  assert.deepEqual(hooks.filterThreadsForFolder([sent, inbox], 'sent', messages).map((row) => row.thread_key), ['delegated']);
+  assert.deepEqual(hooks.filterThreadsForFolder([sent, inbox], 'inbox', messages).map((row) => row.thread_key), ['self']);
+  assert.equal(hooks.listBandCounts([sent, inbox], [], messages).outbound, 1);
+  assert.equal(hooks.listBandCounts([sent, inbox], [], messages).inbound, 1);
+});
+
+test('a shared provider thread ID never mixes messages from different accounts', () => {
+  const alice = { thread_key: 'shared-id', account_key: 'email:alice@example.test' };
+  const bob = { thread_key: 'shared-id', account_key: 'email:bob@example.test' };
+  const messages = [
+    { thread_key: 'shared-id', account_key: bob.account_key, direction: 'outbound', folder_hint: 'sent', body_text: 'Bob private body', external_created_at: '2026-08-06T10:00:00Z' },
+    { thread_key: 'shared-id', account_key: alice.account_key, direction: 'inbound', folder_hint: 'inbox', body_text: 'Alice private body', external_created_at: '2026-08-06T09:00:00Z' },
+  ];
+  assert.equal(hooks.messageBelongsToThread(messages[0], alice), false);
+  assert.equal(hooks.latestMessageForThread(alice, messages)?.body_text, 'Alice private body');
+  assert.equal(hooks.latestMessageForThread(bob, messages)?.body_text, 'Bob private body');
+  assert.deepEqual(hooks.filterThreadsForFolder([alice], 'sent', messages), []);
+  assert.deepEqual(hooks.filterThreadsForFolder([bob], 'inbox', messages), []);
+});
+
+test('route status for a shared thread ID stays with its source account', () => {
+  const alice = { __kind: 'thread', thread_key: 'shared-id', account_key: 'email:alice@example.test' };
+  const bob = { __kind: 'thread', thread_key: 'shared-id', account_key: 'email:bob@example.test' };
+  const [route] = hooks.buildMailRouteCommands({
+    batchId: 'batch-1', destinationModule: 'support', records: [bob], actor: { id: 'admin' },
+  });
+  assert.equal(hooks.routeCommandForRecord(alice, [route]), null);
+  assert.equal(hooks.routeCommandForRecord(bob, [route])?.id, route.id);
 });
 
 test('composer builds the native Outbound command chain', () => {
@@ -383,11 +451,25 @@ test('bulk routing uses native Support handoff and chunked app tasks', () => {
 });
 
 test('mail queues expose operational volume and routed evidence', () => {
-  const thread = { thread_key: 'thread-1', unread_count: 3, last_message_at: '2026-08-06T09:00:00Z' };
+  const thread = { thread_key: 'thread-1', account_key: 'email:alice@example.test', unread_count: 3, last_message_at: '2026-08-06T09:00:00Z' };
   const outbound = { id: 'message-1', approval_status: 'awaiting_approval', send_status: 'not_scheduled', updated_at_ms: 2 };
   const commands = hooks.buildMailRouteCommands({ batchId: 'route', destinationModule: 'support', records: [{ ...thread, __kind: 'thread' }] });
-  const queues = hooks.mailQueueDefinitions({ threads: [thread], outboundMessages: [outbound], commands });
+  const queues = hooks.mailQueueDefinitions({ threads: [thread], sentThreads: [thread], outboundMessages: [outbound], commands });
   assert.equal(queues.find((queue) => queue.id === 'all').count, 2);
+  assert.equal(queues.find((queue) => queue.id === 'outbound').count, 1);
+  assert.equal(queues.find((queue) => queue.id === 'outbound').title, 'Gesendet');
   assert.equal(queues.find((queue) => queue.id === 'approval').count, 1);
   assert.equal(queues.find((queue) => queue.id === 'routed').count, 1);
+});
+
+test('sent mail from the communication store appears in the sent band', () => {
+  const received = { __kind: 'thread', thread_key: 'inbox' };
+  const sent = { __kind: 'thread', thread_key: 'sent' };
+  const messages = [
+    { thread_key: 'inbox', direction: 'inbound', folder_hint: 'inbox' },
+    { thread_key: 'sent', direction: 'outbound', folder_hint: 'sent' },
+  ];
+  const counts = hooks.listBandCounts([received, sent], [], messages);
+  assert.equal(counts.inbound, 1);
+  assert.equal(counts.outbound, 1);
 });

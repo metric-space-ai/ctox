@@ -98,6 +98,100 @@ test('document chunk refresh does not re-query the file library, runbooks or Kno
   assert.deepEqual(queried, ['documents']);
 });
 
+test('document library distinguishes pending sync, a completed empty read, and a failed read', async () => {
+  const state = {
+    documents: [],
+    documentsReadComplete: false,
+    documentsReadError: null,
+    documentsReadiness: { state: 'catching-up', ready: false },
+    selectedId: '',
+    ctx: {
+      host: { querySelector: () => null },
+      db: { collection: () => ({ find: () => ({ exec: async () => [] }) }) },
+    },
+  };
+  assert.equal(hooks.documentListState(state, []), 'loading');
+  state.documentsReadiness = { state: 'offline-pending', ready: false };
+  assert.equal(hooks.documentListState(state, []), 'offline-pending');
+
+  state.documentsReadiness = { state: 'live', ready: true };
+  assert.equal(hooks.documentListState(state, []), 'loading', 'readiness alone cannot prove an empty local read');
+  await hooks.refreshDocuments(state);
+  assert.equal(state.documentsReadComplete, true);
+  assert.equal(hooks.documentListState(state, []), 'empty');
+  state.ctx.sync = { collectionReadiness: () => null };
+  state.documentsReadiness = null;
+  assert.equal(hooks.documentListState(state, []), 'loading', 'a readiness-capable shell must affirm live before empty');
+  state.documentsReadiness = { state: 'live', ready: true };
+
+  state.ctx.db = { collection: () => ({ find: () => ({ exec: async () => { throw new Error('local read failed'); } }) }) };
+  await assert.rejects(hooks.refreshDocuments(state), /local read failed/);
+  assert.equal(hooks.documentListState(state, []), 'error');
+  state.documents = [{ id: 'cached' }];
+  assert.equal(hooks.documentListState(state, [{ id: 'cached' }]), 'rows', 'cached rows stay usable while a refresh fails');
+  assert.equal(hooks.documentListState(state, []), 'filtered', 'filters describe existing local rows');
+});
+
+test('readiness event recovers a collection missing at mount and stops after disposal', async () => {
+  let collectionPresent = false;
+  let reads = 0;
+  let listener;
+  let unsubscribed = false;
+  let localCleanups = 0;
+  const doc = { id: 'doc1', title: 'Recovered', filename: 'recovered.md', current_version_id: 'v1' };
+  const state = {
+    documents: [], documentsReadComplete: false, documentsReadiness: null,
+    selectedId: '', selectedVersion: null, disposed: false,
+    localSubscriptionCleanup: () => { localCleanups += 1; },
+    ctx: {
+      host: { querySelector: () => null },
+      db: { collection(name) {
+        return name === 'documents' && collectionPresent
+          ? { find: () => ({ exec: async () => { reads += 1; return [{ toJSON: () => doc }]; } }) }
+          : null;
+      } },
+      sync: {
+        collectionReadiness: () => ({ state: 'never-synced', ready: false }),
+        subscribeCollectionReadiness: (_name, callback) => {
+          listener = callback;
+          return () => { unsubscribed = true; };
+        },
+      },
+    },
+  };
+  await hooks.refreshDocuments(state);
+  assert.equal(state.documentsReadComplete, false);
+  const cleanup = hooks.wireDocumentReadiness(state);
+  state.selectedId = 'doc1';
+  state.selectedVersion = { id: 'v1' };
+  collectionPresent = true;
+  listener({ state: 'live', ready: true });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(state.documentsReadComplete, true);
+  assert.equal(state.documents[0]?.id, 'doc1');
+  assert.equal(reads, 1);
+  assert.equal(localCleanups, 1, 'the old subscription is replaced when the collection arrives');
+
+  state.disposed = true;
+  cleanup();
+  listener({ state: 'offline-pending', ready: false });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(unsubscribed, true);
+  assert.equal(reads, 1, 'disposed modules cannot trigger another read');
+});
+
+test('missing documents collection is never reported as an empty library', async () => {
+  const state = {
+    documents: [], documentsReadComplete: false, selectedId: '',
+    ctx: { host: { querySelector: () => null }, db: { collection: () => null } },
+  };
+  await hooks.refreshDocuments(state);
+  assert.equal(hooks.documentListState(state, []), 'loading');
+  state.documents = [{ id: 'cached' }];
+  await hooks.refreshDocuments(state);
+  assert.equal(state.documents[0].id, 'cached', 'a missing collection cannot erase previously visible rows');
+});
+
 test('Knowledge refresh reads only changed collections and preserves other cached context', async () => {
   const queried = [];
   const items = [{ id: 'cached-item' }];

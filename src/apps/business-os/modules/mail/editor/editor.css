@@ -441,6 +441,10 @@
 }
 
 @media (max-width: 620px) {
+  .mail-content-editor-commandbar.is-integrated {
+    gap: 2px;
+  }
+
   .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button {
     width: 28px;
     min-width: 28px;

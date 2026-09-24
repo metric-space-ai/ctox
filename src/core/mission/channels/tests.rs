@@ -17,6 +17,91 @@ fn unique_test_db_path(prefix: &str) -> PathBuf {
 }
 
 #[test]
+fn email_send_profile_keeps_account_access_until_explicit_revocation() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = resolve_db_path(dir.path(), None);
+    let mut conn = open_channel_db(&db_path)?;
+    let account_key = "email:team@example.test";
+    let profile = |conn: &Connection| -> Result<Value> {
+        let raw: String = conn.query_row(
+            "SELECT profile_json FROM communication_accounts WHERE account_key = ?1",
+            [account_key],
+            |row| row.get(0),
+        )?;
+        Ok(serde_json::from_str(&raw)?)
+    };
+    upsert_communication_account(
+        &mut conn,
+        account_key,
+        "email",
+        "team@example.test",
+        "owa",
+        json!({ "ownerUserId": "alice", "shared_user_ids": ["bob"], "folder": "INBOX" }),
+    )?;
+    // Native send and provider self-test pass connector-only profiles through
+    // this same upsert path. Neither may erase Business OS access metadata.
+    upsert_communication_account(
+        &mut conn,
+        account_key,
+        "email",
+        "team@example.test",
+        "owa",
+        json!({ "folder": "Sent" }),
+    )?;
+    let after_send = profile(&conn)?;
+    assert_eq!(after_send["ownerUserId"], "alice");
+    assert_eq!(after_send["shared_user_ids"], json!(["bob"]));
+    assert_eq!(after_send["folder"], "Sent");
+
+    upsert_communication_account(
+        &mut conn,
+        account_key,
+        "email",
+        "team@example.test",
+        "owa",
+        json!({ "ownerUserId": "", "shared_user_ids": [] }),
+    )?;
+    upsert_communication_account(
+        &mut conn,
+        account_key,
+        "email",
+        "team@example.test",
+        "owa",
+        json!({ "folder": "Sent" }),
+    )?;
+    let after_revoke = profile(&conn)?;
+    assert_eq!(after_revoke["ownerUserId"], "");
+    assert_eq!(after_revoke["shared_user_ids"], json!([]));
+
+    // The email-only rule must not silently change another provider's profile
+    // replacement semantics.
+    upsert_communication_account(
+        &mut conn,
+        "jami:team",
+        "jami",
+        "team",
+        "jami",
+        json!({ "ownerUserId": "alice" }),
+    )?;
+    upsert_communication_account(
+        &mut conn,
+        "jami:team",
+        "jami",
+        "team",
+        "jami",
+        json!({ "folder": "inbox" }),
+    )?;
+    let jami_raw: String = conn.query_row(
+        "SELECT profile_json FROM communication_accounts WHERE account_key = 'jami:team'",
+        [],
+        |row| row.get(0),
+    )?;
+    let jami_profile: Value = serde_json::from_str(&jami_raw)?;
+    assert!(jami_profile.get("ownerUserId").is_none());
+    Ok(())
+}
+
+#[test]
 fn cockpit_release_guard_checks_all_links_in_either_order() -> Result<()> {
     // Production currently enforces task_id UNIQUE. Model a legacy/multi-link
     // store here to test the shared guard without weakening that invariant.

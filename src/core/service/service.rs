@@ -912,6 +912,8 @@ enum ServiceIpcRequest {
     /// daemon process that owns the persistent browser runtime.
     BusinessOsWebStack {
         argv: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<String>,
     },
     /// Validate and persist a typed Business OS command inside the daemon.
     /// Sandboxed workers may connect to the service socket, but cannot write
@@ -3337,6 +3339,7 @@ pub fn dispatch_business_command(
 pub(crate) fn run_business_os_web_stack_via_service(
     root: &Path,
     argv: &[String],
+    source: Option<&str>,
 ) -> Result<Option<Value>> {
     let socket_path = service_socket_path(root);
     if !socket_path.exists() {
@@ -3347,6 +3350,7 @@ pub(crate) fn run_business_os_web_stack_via_service(
         root,
         ServiceIpcRequest::BusinessOsWebStack {
             argv: argv.to_vec(),
+            source: source.map(str::to_owned),
         },
         timeout,
     ) {
@@ -3371,6 +3375,7 @@ pub(crate) fn run_business_os_web_stack_via_service(
 pub(crate) fn run_business_os_web_stack_via_service(
     _root: &Path,
     _argv: &[String],
+    _source: Option<&str>,
 ) -> Result<Option<Value>> {
     Ok(None)
 }
@@ -3984,9 +3989,12 @@ fn handle_service_ipc_request(
                 payload: dispatch_sandboxed_cli_capturing(root, &argv),
             })
         }
-        ServiceIpcRequest::BusinessOsWebStack { argv } => {
-            match crate::service::business_os::run_business_os_web_stack_cli_json_local(root, &argv)
-            {
+        ServiceIpcRequest::BusinessOsWebStack { argv, source } => {
+            match crate::service::business_os::run_business_os_web_stack_cli_json_local(
+                root,
+                &argv,
+                source.as_deref(),
+            ) {
                 Ok(payload) => Ok(ServiceIpcResponse::Json {
                     status: 200,
                     payload,
@@ -4710,7 +4718,7 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
         // cancel the daemon-side work and therefore only produces a false
         // failure. Keep the client wait bounded, but long enough for a complete
         // command run.
-        ServiceIpcRequest::BusinessOsWebStack { argv } => web_stack_ipc_timeout(argv),
+        ServiceIpcRequest::BusinessOsWebStack { argv, .. } => web_stack_ipc_timeout(argv),
         ServiceIpcRequest::BusinessCommandDispatch { .. } => BUSINESS_COMMAND_IPC_TIMEOUT,
     }
 }
@@ -5199,17 +5207,45 @@ fn prepare_admitted_worker_attempt(root: &Path, job: &QueuedPrompt) -> Result<Pr
     };
     let judge: Option<&dyn crate::crew::RouterJudge> =
         if cfg!(test) { None } else { Some(&model_judge) };
-    let crew = crate::crew::prepare_attempt_or_continue(
-        root,
-        &job.leased_message_keys,
-        CHANNEL_ROUTER_LEASE_OWNER,
-        &attempt_id,
-        job.thread_key.as_deref(),
-        &job.queue_task_metadata,
-        job.suggested_skill.as_deref(),
-        &job.prompt,
-        judge,
-    );
+    // A private project worker is an explicit identity choice. Lookup failures
+    // and revoked bindings must not enter the optional-Crew fallback.
+    let mut project_crew_required = false;
+    for task_id in &job.leased_message_keys {
+        project_crew_required |=
+            crate::business_os::project_crew_member_for_task(root, task_id)?.is_some();
+    }
+    let crew = if project_crew_required {
+        anyhow::ensure!(
+            job.leased_message_keys.len() == 1,
+            "private project Crew cannot share a batch attempt"
+        );
+        Some(
+            crate::crew::prepare_attempt(
+                root,
+                &job.leased_message_keys,
+                CHANNEL_ROUTER_LEASE_OWNER,
+                &attempt_id,
+                job.thread_key.as_deref(),
+                &job.queue_task_metadata,
+                job.suggested_skill.as_deref(),
+                &job.prompt,
+                judge,
+            )?
+            .context("private project work requires its bound Crew identity")?,
+        )
+    } else {
+        crate::crew::prepare_attempt_or_continue(
+            root,
+            &job.leased_message_keys,
+            CHANNEL_ROUTER_LEASE_OWNER,
+            &attempt_id,
+            job.thread_key.as_deref(),
+            &job.queue_task_metadata,
+            job.suggested_skill.as_deref(),
+            &job.prompt,
+            judge,
+        )
+    };
     Ok(PreparedCrewAttempt {
         attempt_id,
         recoverable_attempt,
@@ -6421,6 +6457,20 @@ fn start_prompt_worker(
                         &mut session_options,
                     )?;
                     configure_business_os_app_file_system_scope(&root, &job, &mut session_options)?;
+                    if let Some(command_id) =
+                        metadata_string(&job.queue_task_metadata, "business_os_command_id")
+                    {
+                        if let Some(reply) =
+                            crate::business_os::mcp_channel::run_external_crew_turn(
+                                &root,
+                                &command_id,
+                                &job.prompt,
+                                session_options.business_os_mcp_command_session.as_deref(),
+                            )?
+                        {
+                            return Ok(reply);
+                        }
+                    }
                     if queue_job_reuses_persistent_session(&session_options) {
                         let session_slot = {
                             let shared = lock_shared_state(&state);
@@ -11192,16 +11242,22 @@ fn configure_business_os_mcp_session_for_queue_job(
     if command.get("command_type").and_then(Value::as_str) != Some("business_os.chat.task") {
         return Ok(false);
     }
-    let Some(writeback_contract) = command.pointer("/payload/writeback_contract") else {
-        return Ok(false);
-    };
-    validate_command_writeback_contract(&command, writeback_contract)?;
-    if !crate::business_os::mcp_channel::supports_command_writeback(writeback_contract)
-        && !writeback_contract
-            .get("allowed_actions")
-            .and_then(Value::as_array)
-            .is_some_and(|actions| !actions.is_empty())
-    {
+    let empty_contract = serde_json::json!({});
+    let writeback_contract = command.pointer("/payload/writeback_contract");
+    if let Some(contract) = writeback_contract {
+        validate_command_writeback_contract(&command, contract)?;
+    }
+    let writeback_contract = writeback_contract.unwrap_or(&empty_contract);
+    let has_writeback =
+        crate::business_os::mcp_channel::supports_command_writeback(writeback_contract)
+            || writeback_contract
+                .get("allowed_actions")
+                .and_then(Value::as_array)
+                .is_some_and(|actions| !actions.is_empty());
+    let crew_only = !has_writeback
+        && command.pointer("/payload/external_executor").is_some()
+        && options.crew_persona.is_some();
+    if !has_writeback && !crew_only {
         return Ok(false);
     }
     let payload_hash = command
@@ -11237,6 +11293,25 @@ fn configure_business_os_mcp_session_for_queue_job(
         &workspace,
         &writeback_contract,
     )?;
+    let token = if crew_only {
+        crate::business_os::mcp_channel::restrict_internal_command_session_to_crew(root, &token)?
+    } else {
+        token
+    };
+    let token = if options.crew_persona.is_some() {
+        let attempt = options
+            .worker_attempt
+            .as_ref()
+            .context("crew command session requires an admitted worker attempt")?;
+        crate::business_os::mcp_channel::bind_internal_command_session_to_crew_attempt(
+            root,
+            &token,
+            &attempt.attempt_id,
+            &attempt.work_key,
+        )?
+    } else {
+        token
+    };
     options.disable_mcp_servers = false;
     options.enable_business_os_mcp = true;
     options.business_os_mcp_command_session = Some(token);
@@ -24016,6 +24091,208 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn authenticated_automation_cli_reader_forwards_source_to_daemon_socket() {
+        assert_authenticated_automation_socket_forwarding(false);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn authenticated_automation_public_dispatcher_forwards_source_to_daemon_socket() {
+        assert_authenticated_automation_socket_forwarding(true);
+    }
+
+    #[cfg(unix)]
+    fn assert_authenticated_automation_socket_forwarding(public_dispatcher: bool) {
+        let root = temp_root("aa-ipc");
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let listener = UnixListener::bind(service_socket_path(&root)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let source = "return { text: 'Grüße\n世界' };";
+        let server = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "CLI never contacted daemon"
+                        );
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("socket accept failed: {error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut line = String::new();
+            BufReader::new(stream.try_clone().unwrap())
+                .read_line(&mut line)
+                .unwrap();
+            let request: ServiceIpcRequest = serde_json::from_str(&line).unwrap();
+            match request {
+                ServiceIpcRequest::BusinessOsWebStack {
+                    argv,
+                    source: Some(actual),
+                } => {
+                    assert_eq!(argv, vec!["authenticated-automation"]);
+                    assert_eq!(actual, source);
+                }
+                other => panic!("unexpected request: {other:?}"),
+            }
+            let response = ServiceIpcResponse::Json {
+                status: 200,
+                payload: serde_json::json!({"receipt": "daemon"}),
+            };
+            writeln!(stream, "{}", serde_json::to_string(&response).unwrap()).unwrap();
+        });
+        let args = ["authenticated-automation".into()];
+        if public_dispatcher {
+            crate::service::business_os::handle_business_os_web_stack_with_reader(
+                &root,
+                &args,
+                source.as_bytes(),
+            )
+            .unwrap();
+        } else {
+            let result =
+                crate::service::business_os::run_business_os_web_stack_cli_json_with_reader(
+                    &root,
+                    &args,
+                    source.as_bytes(),
+                )
+                .unwrap();
+            assert_eq!(result["receipt"], "daemon");
+        }
+        server.join().unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn authenticated_automation_ipc_preserves_source_and_auth_gate() {
+        let source = "return { text: 'Grüße\n世界' };";
+        let request = ServiceIpcRequest::BusinessOsWebStack {
+            argv: vec![
+                "authenticated-automation".into(),
+                "--source-id".into(),
+                "example.test".into(),
+            ],
+            source: Some(source.to_owned()),
+        };
+        let wire = serde_json::to_vec(&request).unwrap();
+        let decoded: ServiceIpcRequest = serde_json::from_slice(&wire).unwrap();
+        match &decoded {
+            ServiceIpcRequest::BusinessOsWebStack {
+                source: Some(actual),
+                ..
+            } => assert_eq!(actual, source),
+            other => panic!("unexpected request: {other:?}"),
+        }
+        // The forwarded script reaches the existing login authorization path;
+        // it cannot execute without the required credential reference.
+        let root = temp_root("authenticated-automation-auth-gate");
+        let response = handle_service_ipc_request(
+            decoded,
+            &root,
+            Arc::new(Mutex::new(SharedState::default())),
+        )
+        .unwrap();
+        match response {
+            ServiceIpcResponse::Error { message } => {
+                assert!(message.contains("auth-assist-login requires --credential-ref"))
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn authenticated_automation_ipc_does_not_bypass_command_session_validation() {
+        let root = temp_root("authenticated-automation-command-session");
+        let response = handle_service_ipc_request(
+            ServiceIpcRequest::BusinessOsWebStack {
+                argv: vec![
+                    "authenticated-automation".into(),
+                    "--source-id".into(),
+                    "example.test".into(),
+                    "--credential-ref".into(),
+                    "ctox-secret://credentials/TEST_ONLY".into(),
+                    "--command-session".into(),
+                    "malformed-token".into(),
+                ],
+                source: Some("throw new Error('must never execute');".into()),
+            },
+            &root,
+            Arc::new(Mutex::new(SharedState::default())),
+        )
+        .unwrap();
+        match response {
+            ServiceIpcResponse::Error { message } => {
+                assert!(message.contains("malformed Business OS internal command-session token"))
+            }
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn authenticated_automation_ipc_rejects_missing_oversize_and_misrouted_source() {
+        let root = temp_root("authenticated-automation-source-rejection");
+        let missing: ServiceIpcRequest = serde_json::from_value(serde_json::json!({
+            "kind": "business_os_web_stack", "argv": ["authenticated-automation"]
+        }))
+        .unwrap();
+        let cases = [
+            (missing, "requires forwarded script source"),
+            (
+                ServiceIpcRequest::BusinessOsWebStack {
+                    argv: vec!["authenticated-automation".into()],
+                    source: Some("x".repeat(
+                        crate::service::business_os::AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES + 1,
+                    )),
+                },
+                "exceeds 1 MiB",
+            ),
+            (
+                ServiceIpcRequest::BusinessOsWebStack {
+                    argv: vec!["auth-assist-status".into()],
+                    source: Some("return {};".into()),
+                },
+                "only allowed for authenticated-automation",
+            ),
+        ];
+        for (request, expected) in cases {
+            let response = handle_service_ipc_request(
+                request,
+                &root,
+                Arc::new(Mutex::new(SharedState::default())),
+            )
+            .unwrap();
+            match response {
+                ServiceIpcResponse::Error { message } => {
+                    assert!(message.contains(expected), "{message}")
+                }
+                other => panic!("unexpected response: {other:?}"),
+            }
+        }
+        // Legacy requests for other commands still deserialize without source.
+        let request: ServiceIpcRequest = serde_json::from_value(serde_json::json!({
+            "kind": "business_os_web_stack", "argv": ["auth-assist-status"]
+        }))
+        .unwrap();
+        let response = handle_service_ipc_request(
+            request,
+            &root,
+            Arc::new(Mutex::new(SharedState::default())),
+        )
+        .unwrap();
+        match response {
+            ServiceIpcResponse::Error { message } => assert!(message.contains("--session-id")),
+            other => panic!("unexpected response: {other:?}"),
+        }
+    }
+
     #[test]
     fn sandboxed_cli_ipc_rejects_non_allowlisted_command() {
         let root = temp_root("sandboxed-cli-rejection");
@@ -31767,6 +32044,92 @@ Business OS command:
     }
 
     #[test]
+    fn external_crew_job_without_writeback_gets_only_a_bound_crew_session() -> anyhow::Result<()> {
+        use base64::Engine as _;
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let command_id = "external_crew_without_writeback";
+        let (capability, _) =
+            crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                root,
+                "operator",
+                "Operator",
+                "admin",
+                chrono::Utc::now().timestamp_millis(),
+            )?;
+        let accepted = crate::business_os::store::accept_rxdb_business_command_with_origin(
+            root,
+            serde_json::json!({
+                "id": command_id, "module": "outbound-lead-generation",
+                "command_type": "business_os.chat.task", "record_id": "lead-a",
+                "payload": {"instruction": "Inspect the project", "mode": "data",
+                    "external_executor": {"executor_id":"test-codex", "harness":"codex", "timeout_seconds":10}},
+                "client_context": {"capability_token": capability}
+            }),
+            crate::business_os::store::CommandOrigin::ReplicatedPeer,
+        )?;
+        let key = accepted["task_id"].as_str().context("missing task")?;
+        let task = channels::load_queue_task(root, key)?.context("missing queued task")?;
+        let job = queued_prompt_from_queue_task(task);
+        let mut options = chat_turn_session_options_for_queue_job(&job);
+        // Merely selecting an external executor does not admit a Crew attempt.
+        assert!(!configure_business_os_mcp_session_for_queue_job(
+            root,
+            &job,
+            &mut options
+        )?);
+        assert!(options.business_os_mcp_command_session.is_none());
+        channels::lease_queue_task(root, key, "crew-session-worker")?;
+        let crew = crate::crew::prepare_attempt(
+            root,
+            &[key.to_owned()],
+            "crew-session-worker",
+            "crew-session-attempt",
+            Some("crew-session-thread"),
+            &serde_json::json!({}),
+            None,
+            "Inspect the project",
+            None,
+        )?
+        .context("missing admitted Crew")?;
+        options.crew_persona = Some(crew.persona);
+        assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut options).is_err());
+        assert!(options.business_os_mcp_command_session.is_none());
+        options.worker_attempt = Some(turn_loop::WorkerAttemptContext {
+            attempt_id: "crew-session-attempt".to_owned(),
+            work_key: worker_attempt_work_key(&job),
+            source_label: job.source_label.clone(),
+            progress_error: Arc::new(Mutex::new(None::<String>)),
+        });
+        assert!(configure_business_os_mcp_session_for_queue_job(
+            root,
+            &job,
+            &mut options
+        )?);
+        assert!(options.enable_business_os_mcp && !options.disable_mcp_servers);
+        assert!(options.force_isolated_session);
+        let token = options
+            .business_os_mcp_command_session
+            .as_deref()
+            .context("missing session")?;
+        let (payload, _) = token.split_once('.').context("malformed session")?;
+        let claims: Value = serde_json::from_slice(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload)?,
+        )?;
+        assert_eq!(claims["crew_only"], true);
+        assert_eq!(claims["command_id"], command_id);
+        assert_eq!(claims["crew_binding"]["attempt_id"], "crew-session-attempt");
+        assert_eq!(claims["crew_binding"]["task_id"], key);
+        assert_eq!(claims["crew_work_key"], worker_attempt_work_key(&job));
+        assert_eq!(claims["allowed_actions"], serde_json::json!([]));
+        // Expired admission cannot mint another session at the service entry.
+        let conn = rusqlite::Connection::open(crate::paths::core_db(root))?;
+        conn.execute("UPDATE communication_routing_state SET lease_expires_at='2001-01-01T00:00:00Z' WHERE message_key=?1", [key])?;
+        assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut options).is_err());
+        Ok(())
+    }
+
+    #[test]
     fn business_os_writeback_job_gets_a_scoped_mcp_session() -> anyhow::Result<()> {
         let root = temp_root("business-os-writeback-mcp-session");
         let command_id = "cmd_writeback_mcp_session";
@@ -31791,6 +32154,10 @@ Business OS command:
                     "instruction": "Run the bounded action.",
                     "mode": "data",
                     "writeback_contract": {
+                        "mechanism": "business_command",
+                        "command_type": "outbound.lead.research_writeback",
+                        "collection": "outbound_lead_generation_leads",
+                        "record_ids": ["lead_1"],
                         "allowed_collections": ["outbound_lead_generation_leads"],
                         "allowed_actions": [{
                             "module_id": "outbound-lead-generation",

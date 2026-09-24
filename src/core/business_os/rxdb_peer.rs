@@ -2665,6 +2665,15 @@ async fn run_native_peer(
     if repaired_revisions > 0 {
         eprintln!("[business-os] repaired {repaired_revisions} legacy business_commands revisions");
     }
+    for collection in ["business_commands", "business_chats"] {
+        let repaired_envelopes = store::repair_missing_rxdb_envelopes(&root, collection)
+            .with_context(|| format!("repair malformed Business OS {collection} envelopes"))?;
+        if repaired_envelopes > 0 {
+            eprintln!(
+                "[business-os] repaired {repaired_envelopes} malformed {collection} envelopes"
+            );
+        }
+    }
     let clamped_documents = clamp_oversized_projected_documents(&root, &database_path)
         .context("clamp oversized projected Business OS documents")?;
     if clamped_documents > 0 {
@@ -4292,6 +4301,7 @@ async fn sync_business_record_projections_background_loop(
     let mut next_collection_index = persisted_progress.next_collection_index;
     let mut chat_tracking_repair_stamp = None;
     let mut last_source_stamp = None;
+    let mut last_rewound_communication_stamp = None::<channels::CommunicationIntakeSourceStamp>;
     let mut consecutive_idle_rounds = 0u32;
     let mut consecutive_failure_rounds = 0u32;
     loop {
@@ -4301,6 +4311,20 @@ async fn sync_business_record_projections_background_loop(
             let source_stamp = business_record_projection_source_stamp(&root).await?;
             if last_source_stamp.as_ref() == Some(&source_stamp) {
                 return Ok(0);
+            }
+
+            // Message bodies and routing state can change without advancing
+            // observed_at. Revisit the bounded message pages when their source
+            // changes, including once after loading a persisted cursor. Finish
+            // an in-progress slice first so a busy mailbox cannot starve it.
+            if next_collection_index == 0
+                && last_rewound_communication_stamp.as_ref() != Some(&source_stamp.communication)
+            {
+                since_by_collection.remove("communication_messages");
+                after_record_id_by_collection.remove("communication_messages");
+                clock_version_by_collection.remove("communication_messages");
+                next_collection_index = 0;
+                last_rewound_communication_stamp = Some(source_stamp.communication.clone());
             }
 
             let (synced, caught_up) = sync_business_record_projections_slice_with_database(
@@ -4316,7 +4340,11 @@ async fn sync_business_record_projections_background_loop(
             )
             .await?;
             if caught_up {
-                last_source_stamp = Some(source_stamp);
+                // A resumed partial slice has not rewound its persisted
+                // message cursor yet; keep the loop active for that pass.
+                last_source_stamp = (last_rewound_communication_stamp.as_ref()
+                    == Some(&source_stamp.communication))
+                .then_some(source_stamp);
             } else {
                 slice_incomplete = true;
             }
@@ -5072,6 +5100,11 @@ async fn sync_business_record_projections_with_database_if_changed(
     if last_source_stamp.as_ref() == Some(&source_stamp) {
         return Ok(0);
     }
+    if last_source_stamp.as_ref().map(|stamp| &stamp.communication)
+        != Some(&source_stamp.communication)
+    {
+        since_by_collection.remove("communication_messages");
+    }
 
     let synced = sync_business_record_projections_with_database(
         root,
@@ -5324,21 +5357,23 @@ async fn sync_business_record_projections_slice_with_database(
             .as_ref()
             .and_then(|clocks| clocks.get(&collection_name).copied());
         let stored_clock_version = clock_version_by_collection.get(&collection_name).copied();
-        let clock_proves_collection_unchanged = projection_clocks.is_some()
-            && after_record_id.is_empty()
-            && match current_clock {
-                // Channel-backed collections (mail, threads, accounts) live in
-                // the channel store and never get a row in
-                // `business_records_projection_clock`. "No clock" meant
-                // "unchanged" for them, so from 19.08.2026 on no new mail
-                // reached the Mail app (thesen: newest projected message
-                // 19.08, 38 newer inbound mails in the channel store).
-                None => !is_channel_backed_projection_collection(&collection_name),
-                Some((version, latest_updated_at_ms)) => {
-                    stored_clock_version == Some(version)
-                        || (stored_clock_version.is_none() && since_ms > latest_updated_at_ms)
-                }
-            };
+        let clock_proves_collection_unchanged =
+            !is_channel_backed_projection_collection(&collection_name)
+                && projection_clocks.is_some()
+                && after_record_id.is_empty()
+                && match current_clock {
+                    // Channel-backed collections (mail, threads, accounts) live in
+                    // the channel store and never get a row in
+                    // `business_records_projection_clock`. "No clock" meant
+                    // "unchanged" for them, so from 19.08.2026 on no new mail
+                    // reached the Mail app (thesen: newest projected message
+                    // 19.08, 38 newer inbound mails in the channel store).
+                    None => !is_channel_backed_projection_collection(&collection_name),
+                    Some((version, latest_updated_at_ms)) => {
+                        stored_clock_version == Some(version)
+                            || (stored_clock_version.is_none() && since_ms > latest_updated_at_ms)
+                    }
+                };
         if clock_proves_collection_unchanged {
             clock_version_by_collection.insert(
                 collection_name,
@@ -8896,7 +8931,7 @@ fn native_rxdb_version_migration_entries(
     entries.retain(|entry| {
         !matches!(
             entry.name.as_str(),
-            "business_commands" | "ctox_queue_tasks" | "ctox_runs"
+            "business_commands" | "ctox_queue_tasks" | "ctox_runs" | "workjet_computers"
         )
     });
     // Packaged cockpit schema upgrades use the same copy/verify transaction as installed modules.
@@ -8904,7 +8939,12 @@ fn native_rxdb_version_migration_entries(
     let packaged: Value = serde_json::from_str(include_str!(
         "../../apps/business-os/modules/ctox/collections.schema.json"
     ))?;
-    for name in ["business_commands", "ctox_queue_tasks", "ctox_runs"] {
+    for name in [
+        "business_commands",
+        "ctox_queue_tasks",
+        "ctox_runs",
+        "workjet_computers",
+    ] {
         let schema = schema_from_json(
             business_os_schema_contract()
                 .get(name)
@@ -11537,6 +11577,187 @@ pub(in crate::business_os) mod tests {
             &conn,
             &rxdb_collection_version_table_name(collection, 0)
         )?);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn workjet_computer_schema_migration_reopens_the_deployed_v0_database(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = store::rxdb_store_path(root.path());
+        fs::create_dir_all(path.parent().unwrap())?;
+        let name = RXDB_SQLITE_DATABASE_NAME.to_string();
+        let creator = |schema| {
+            HashMap::from([(
+                "workjet_computers".to_string(),
+                RxCollectionCreator {
+                    schema,
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )])
+        };
+        let old_schema: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/workjet-computers-v0-67e44b11d.json"
+        ))?;
+        let legacy = json!({
+            "id": "retained-workstation", "display_name": "Existing workstation",
+            "hosting_mode": "workstation", "status": "assigned", "capabilities": ["coding"],
+            "self_hosted_colocation": false, "owner_user_id": "owner",
+            "created_at_ms": 100, "updated_at_ms": 100
+        });
+        let old = open_test_database_with_name(path.clone(), name.clone()).await?;
+        old.add_collections(creator(schema_from_json(old_schema)))
+            .await?;
+        let old_collection = old.collection("workjet_computers").unwrap();
+        // 67e44b11d introduced the deployed v0 schema. Welsch retained this
+        // hash in RxDB metadata while later source changed v0 in place (DB6).
+        assert_eq!(
+            old_collection.schema.as_ref().unwrap().hash().await,
+            "039a86246af89f137f1a9646cd6f58b9200c1203175a7c9671a440f8919c2250"
+        );
+        old_collection.insert(legacy.clone()).await?;
+        drop(old_collection);
+        old.close().await?;
+        drop(old);
+
+        // Reproduce the deployed failure: changed fields at the original version.
+        let current_schema = business_os_schema("workjet_computers", "id");
+        let mut drifted = current_schema.clone();
+        drifted.version = 0;
+        let broken = open_test_database_with_name(path.clone(), name.clone()).await?;
+        let (_, failures) = broken.add_collections_tolerant(creator(drifted)).await?;
+        assert_eq!(failures.len(), 1);
+        assert!(failures
+            .iter()
+            .any(|(name, error)| name == "workjet_computers" && error.to_string().contains("DB6")));
+        assert!(broken.collection("workjet_computers").is_none());
+        broken.close().await?;
+        drop(broken);
+
+        let upgraded = open_test_database_with_name(path.clone(), name.clone()).await?;
+        register_collections_tolerant(&upgraded, creator(current_schema.clone())).await?;
+        let migration = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(migration["verified_rows"], 1);
+        repair_stale_rxdb_collection_schema_versions(root.path())?;
+        upgraded.close().await?;
+        drop(upgraded);
+
+        let reopened = open_test_database_with_name(path, name).await?;
+        register_collections_tolerant(&reopened, creator(current_schema)).await?;
+        let document = reopened
+            .collection("workjet_computers")
+            .unwrap()
+            .find_one(Some(MangoQuery {
+                selector: Some(json!({"id": {"$eq": "retained-workstation"}})),
+                ..Default::default()
+            }))?
+            .exec(false)
+            .await?;
+        assert_eq!(
+            document.get("display_name"),
+            Some(&json!("Existing workstation"))
+        );
+        assert_eq!(document.get("owner_user_id"), Some(&json!("owner")));
+        assert_eq!(document.get("device_binding_id"), Some(&json!("")));
+        assert_eq!(document.get("replication_up"), Some(&json!(false)));
+        reopened.close().await?;
+        Ok(())
+    }
+
+    #[test]
+    fn workjet_computer_schema_migration_preserves_rows_and_binding_authority() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        let collection = "workjet_computers";
+        let version = expected_rxdb_collection_version(collection);
+        assert_eq!(version, 1);
+        create_runtime_migration_source_table(root.path(), collection, 0)?;
+        let legacy = json!({
+            "id": "legacy-computer", "display_name": "Existing workstation",
+            "hosting_mode": "workstation", "status": "assigned", "capabilities": ["coding"],
+            "self_hosted_colocation": false, "owner_user_id": "owner",
+            "created_at_ms": 100, "updated_at_ms": 100
+        });
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "legacy-computer",
+            100.0,
+            legacy.clone(),
+        )?;
+        let bound = json!({
+            "id": "bound-computer", "display_name": "Bound workstation",
+            "hosting_mode": "workstation", "status": "unassigned", "capabilities": ["coding"],
+            "self_hosted_colocation": false, "owner_user_id": "owner",
+            "created_at_ms": 100, "updated_at_ms": 200, "unassigned_at_ms": 200,
+            "device_binding_id": "existing-binding", "actor_epoch": 7,
+            "last_seen_at_ms": 190, "replication_up": true, "is_deleted": true
+        });
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "bound-computer",
+            200.0,
+            bound.clone(),
+        )?;
+
+        // Bring-up must fail before cleanup when the destination was not registered.
+        let error = migrate_additive_native_rxdb_collection_versions(root.path()).unwrap_err();
+        assert!(format!("{error:#}").contains("was not registered"));
+        create_runtime_migration_source_table(root.path(), collection, version)?;
+        let migration = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(migration["verified_rows"], 2);
+        let target = rxdb_collection_version_table_name(collection, version);
+        let read = |id: &str| -> anyhow::Result<Value> {
+            // A fresh connection proves the committed copy survives reopening.
+            let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+            let raw: String = conn.query_row(
+                &format!(
+                    "SELECT data FROM {} WHERE id = ?1",
+                    sqlite_quote_identifier(&target)
+                ),
+                params![id],
+                |row| row.get(0),
+            )?;
+            Ok(serde_json::from_str(&raw)?)
+        };
+        let migrated = read("legacy-computer")?;
+        for (key, value) in legacy.as_object().unwrap() {
+            assert_eq!(&migrated[key], value, "legacy field {key} is retained");
+        }
+        assert_eq!(migrated["device_binding_id"], "");
+        assert_eq!(migrated["actor_epoch"], 0);
+        assert_eq!(migrated["last_seen_at_ms"], 0);
+        assert_eq!(migrated["replication_up"], false);
+        assert_eq!(migrated["is_deleted"], false);
+        assert_eq!(read("bound-computer")?, bound);
+
+        // Replaying a retained source after a restart must not overwrite a newer destination.
+        let mut newer = migrated.clone();
+        newer["display_name"] = json!("Renamed after migration");
+        newer["updated_at_ms"] = json!(300);
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        conn.execute(
+            &format!(
+                "UPDATE {} SET data = ?1, lastWriteTime = 300 WHERE id = 'legacy-computer'",
+                sqlite_quote_identifier(&target)
+            ),
+            params![newer.to_string()],
+        )?;
+        drop(conn);
+        let retry = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(retry["verified_rows"], 2);
+        assert_eq!(read("legacy-computer")?, newer);
+        assert_eq!(read("bound-computer")?, bound);
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        assert_eq!(
+            sqlite_table_row_count(&conn, &rxdb_collection_version_table_name(collection, 0))?,
+            2
+        );
         Ok(())
     }
 
@@ -16075,6 +16296,116 @@ pub(in crate::business_os) mod tests {
             )
             .expect("count paged document projections");
         assert_eq!(projected_count, record_count);
+    }
+
+    #[test]
+    fn hydrated_communication_body_reaches_rxdb_without_new_observation_time() {
+        let root = tempfile::tempdir().expect("temp root");
+        channels::list_communication_accounts_for_business_os(root.path())
+            .expect("initialize channel schema");
+        let channel_path = root.path().join("runtime/ctox.sqlite3");
+        let conn = Connection::open(&channel_path).expect("open channel sqlite");
+        conn.execute_batch(
+            r#"
+            INSERT INTO communication_accounts
+                (account_key, channel, address, provider, profile_json, created_at, updated_at)
+            VALUES ('email:mail@example.test', 'email', 'mail@example.test', 'owa', '{}',
+                    '2026-09-21T08:00:00Z', '2026-09-21T08:00:00Z');
+            INSERT INTO communication_threads
+                (thread_key, channel, account_key, subject, participant_keys_json,
+                 last_message_key, last_message_at, message_count, unread_count,
+                 metadata_json, updated_at)
+            VALUES ('hydrated-thread', 'email', 'email:mail@example.test', 'Mail projection',
+                    '[]', 'hydrated-message', '2026-09-21T08:00:00Z', 1, 1, '{}',
+                    '2026-09-21T08:00:00Z');
+            INSERT INTO communication_messages
+                (message_key, channel, account_key, thread_key, remote_id, direction,
+                 folder_hint, sender_display, sender_address, recipient_addresses_json,
+                 cc_addresses_json, bcc_addresses_json, subject, preview, body_text,
+                 body_html, raw_payload_ref, trust_level, status, seen, has_attachments,
+                 external_created_at, observed_at, metadata_json)
+            VALUES ('hydrated-message', 'email', 'email:mail@example.test', 'hydrated-thread',
+                    'remote-hydration', 'inbound', 'INBOX', 'Sender', 'sender@example.test',
+                    '[]', '[]', '[]', 'Mail projection', 'Preview', '', '', '', 'normal',
+                    'received', 0, 0, '2026-09-21T08:00:00Z', '2026-09-21T08:00:00Z', '{}');
+            "#,
+        )
+        .expect("insert channel message with missing body");
+        drop(conn);
+
+        let projection_root = root.path().to_path_buf();
+        with_business_os_database(
+            root.path(),
+            "failed to create Mail body projection test runtime",
+            true,
+            TemporaryDatabaseLockScope::EntireOperation,
+            move |_peer, database| async move {
+                let database_write_lock = Arc::new(AsyncMutex::new(()));
+                let mut since_by_collection = HashMap::new();
+                let mut chat_tracking_repair_stamp = None;
+                let mut last_source_stamp = None;
+                sync_business_record_projections_with_database_if_changed(
+                    &projection_root,
+                    &database,
+                    &database_write_lock,
+                    &mut since_by_collection,
+                    &mut chat_tracking_repair_stamp,
+                    &mut last_source_stamp,
+                )
+                .await?;
+                let cursor = since_by_collection
+                    .get("communication_messages")
+                    .copied()
+                    .unwrap_or_default();
+                assert!(cursor > 0, "initial message projection must retain a cursor");
+
+                let conn = Connection::open(projection_root.join("runtime/ctox.sqlite3"))?;
+                conn.execute(
+                    "UPDATE communication_messages SET body_text = 'Hydrated body' WHERE message_key = 'hydrated-message'",
+                    [],
+                )?;
+                let observed_at: String = conn.query_row(
+                    "SELECT observed_at FROM communication_messages WHERE message_key = 'hydrated-message'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(observed_at, "2026-09-21T08:00:00Z");
+                drop(conn);
+
+                let changed = sync_business_record_projections_with_database_if_changed(
+                    &projection_root,
+                    &database,
+                    &database_write_lock,
+                    &mut since_by_collection,
+                    &mut chat_tracking_repair_stamp,
+                    &mut last_source_stamp,
+                )
+                .await?;
+                assert!(changed >= 1, "body hydration must update RxDB");
+                let rxdb = Connection::open(store::rxdb_store_path(&projection_root))?;
+                let data: String = rxdb.query_row(
+                    "SELECT data FROM ctox_business_os__communication_messages__v0 WHERE id = 'hydrated-message'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let message: Value = serde_json::from_str(&data)?;
+                assert_eq!(message["body_text"], "Hydrated body");
+                assert_eq!(message["observed_at"], observed_at);
+
+                let unchanged = sync_business_record_projections_with_database_if_changed(
+                    &projection_root,
+                    &database,
+                    &database_write_lock,
+                    &mut since_by_collection,
+                    &mut chat_tracking_repair_stamp,
+                    &mut last_source_stamp,
+                )
+                .await?;
+                assert_eq!(unchanged, 0);
+                Ok(())
+            },
+        )
+        .expect("project newly hydrated Mail text");
     }
 
     #[test]

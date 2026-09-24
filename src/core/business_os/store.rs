@@ -1288,11 +1288,18 @@ pub(super) fn next_projected_rxdb_revision(previous: Option<&str>) -> String {
 
 fn next_direct_rxdb_revision(previous: Option<&str>) -> String {
     let height = previous
-        .and_then(|revision| revision.split_once('-').map(|(height, _)| height))
-        .and_then(|height| height.parse::<u64>().ok())
+        .and_then(direct_rxdb_revision_height)
         .unwrap_or(0)
         .saturating_add(1);
     format!("{height}-{}", Uuid::new_v4().simple())
+}
+
+fn direct_rxdb_revision_height(revision: &str) -> Option<u64> {
+    let (height, suffix) = revision.split_once('-')?;
+    if suffix.is_empty() {
+        return None;
+    }
+    height.parse::<u64>().ok()
 }
 
 fn upsert_attached_rxdb_record(
@@ -3868,13 +3875,27 @@ pub fn load_module_source_records(
         left_path.cmp(right_path)
     });
     let now = now_ms() as i64;
-    let conn = open_store(root)?;
+    let current_ids = files
+        .iter()
+        .filter_map(|file| file.get("id").and_then(Value::as_str))
+        .collect::<HashSet<_>>();
+    let previous = pull_coding_module_source_records(root, &module_id)?;
+    let mut writer = BusinessProjectionWriter::open(root)?;
+    for file in previous {
+        let id = file
+            .get("id")
+            .and_then(Value::as_str)
+            .context("source projection id missing")?;
+        if !current_ids.contains(id) {
+            writer.tombstone_source_projection("business_module_source_files", id, now)?;
+        }
+    }
     let mut file_ids = Vec::with_capacity(files.len());
     for file in &files {
         let Some(id) = file.get("id").and_then(Value::as_str) else {
             continue;
         };
-        upsert_business_record(&conn, "business_module_source_files", id, now, file.clone())?;
+        writer.upsert_source_projection("business_module_source_files", id, now, file.clone())?;
         file_ids.push(id.to_string());
     }
     Ok(serde_json::json!({
@@ -3944,7 +3965,7 @@ fn save_module_source_record_inner(
     let app_root = resolve_business_os_app_root(root)?;
     let module_id = source_sanitize_slug(&mutation.module_id);
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
-    let (module_root, source_app_root) =
+    let (module_root, _source_app_root) =
         resolve_module_source_root_for_root(root, &app_root, &module_id)?;
     let rel = normalize_source_relative_path(&mutation.path)?;
     anyhow::ensure!(
@@ -4017,7 +4038,7 @@ fn save_module_source_record_inner(
     )?;
     drop(conn);
     if changed {
-        record_module_version(root, &source_app_root, &module_id, "edit", "", "")?;
+        super::module_lifecycle::record_module_version_at(root, &module_root, &module_id)?;
     }
     Ok(serde_json::json!({
         "ok": true,
@@ -4025,6 +4046,7 @@ fn save_module_source_record_inner(
         "path": rel_display,
         "source_file_id": file_id,
         "source_file_ids": [file_id],
+        "app_directory": module_root.strip_prefix(root).unwrap_or(&module_root).to_string_lossy().replace('\\', "/"),
         "size_bytes": metadata.len(),
         "modified_at_ms": modified_at_ms(&metadata),
         "sha256": next_sha256,
@@ -4975,6 +4997,10 @@ fn collect_module_source_files(
 ) -> anyhow::Result<()> {
     for entry in fs::read_dir(current)? {
         let entry = entry?;
+        // Source reads must not follow file symlinks out of the app either.
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -5045,13 +5071,13 @@ pub(super) fn resolve_module_source_root(
     app_root: &Path,
     module_id: &str,
 ) -> anyhow::Result<PathBuf> {
-    let core = app_root.join("modules").join(module_id);
-    if core.join("module.json").is_file() {
-        return Ok(core);
-    }
-    let installed = app_root.join("installed-modules").join(module_id);
-    if installed.join("module.json").is_file() {
-        return Ok(installed);
+    for namespace in ["modules", "installed-modules", "local-modules"] {
+        if let Some(manifest) = checked_module_manifest_candidate(app_root, namespace, module_id)? {
+            return Ok(manifest
+                .parent()
+                .context("module manifest parent missing")?
+                .to_path_buf());
+        }
     }
     anyhow::bail!("module `{module_id}` was not found")
 }
@@ -5061,9 +5087,42 @@ pub(super) fn resolve_module_source_root_for_root(
     app_root: &Path,
     module_id: &str,
 ) -> anyhow::Result<(PathBuf, PathBuf)> {
-    let manifest_path = module_manifest_path(root, app_root, module_id)?;
+    // The served catalog excludes store templates from the bundled namespace.
+    // Resolve its native selection rather than letting a same-id template shadow
+    // an installed app. Never trust a caller/projection supplied filesystem path.
+    let installed_root = resolve_business_os_installed_app_root(root);
+    let catalog = load_module_manifests(root, app_root, &installed_root)?;
+    let manifest_path = if let Some(selected) = catalog.manifests.iter().find(|m| m.id == module_id)
+    {
+        let selected_path = PathBuf::from(&selected.local_manifest_path);
+        let namespace = selected_path
+            .parent()
+            .and_then(Path::parent)
+            .context("selected module namespace missing")?;
+        let base = namespace.parent().context("selected module root missing")?;
+        let namespace = namespace
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("selected module namespace invalid")?;
+        let checked = checked_module_manifest_candidate(base, namespace, module_id)?
+            .context("selected module source disappeared")?;
+        anyhow::ensure!(checked == selected_path, "selected module source changed");
+        anyhow::ensure!(
+            hex_sha256(&fs::read(&checked)?) == selected.manifest_sha256,
+            "selected module manifest changed; reload before editing"
+        );
+        checked
+    } else {
+        // Preserve source-only lifecycle operations before catalog publication.
+        module_manifest_path(root, app_root, module_id)?
+    };
     let source_app_root = app_root_for_module_manifest(app_root, &manifest_path);
-    let module_root = resolve_module_source_root(&source_app_root, module_id)?;
+    // Keep the exact selected manifest; re-searching another root can pick a
+    // shadowed module with the same id instead of the authorized source.
+    let module_root = manifest_path
+        .parent()
+        .context("module manifest parent missing")?
+        .to_path_buf();
     Ok((module_root, source_app_root))
 }
 
@@ -5258,7 +5317,10 @@ pub(super) fn compute_module_bundle(
 /// Deterministic bundle hash over an explicit module directory (used for the
 /// live install dir, a catalog source, and a freshly fetched github archive so
 /// they are all comparable).
-fn compute_module_bundle_at(module_root: &Path, module_id: &str) -> anyhow::Result<ModuleBundle> {
+pub(super) fn compute_module_bundle_at(
+    module_root: &Path,
+    module_id: &str,
+) -> anyhow::Result<ModuleBundle> {
     let mut raw = Vec::new();
     collect_module_source_files(module_id, module_root, module_root, &mut raw)?;
     let mut files: Vec<Value> = raw
@@ -5961,23 +6023,88 @@ pub(super) fn module_manifest_path(
     let module_id = module_id.trim();
     let installed_app_root = resolve_business_os_installed_app_root(root);
     let mut candidates = vec![
-        app_root.join("modules").join(module_id).join("module.json"),
-        app_root
-            .join("installed-modules")
-            .join(module_id)
-            .join("module.json"),
-        installed_app_root
-            .join("installed-modules")
-            .join(module_id)
-            .join("module.json"),
+        (app_root, "modules"),
+        (app_root, "installed-modules"),
+        (installed_app_root.as_path(), "installed-modules"),
+        (app_root, "local-modules"),
+        (installed_app_root.as_path(), "local-modules"),
     ];
     candidates.dedup();
-    for candidate in candidates {
-        if candidate.is_file() {
+    for (base, namespace) in candidates {
+        if let Some(candidate) = checked_module_manifest_candidate(base, namespace, module_id)? {
+            let module_dir = candidate
+                .parent()
+                .context("module manifest parent missing")?;
+            let manifest: Value = serde_json::from_slice(&fs::read(&candidate)?)?;
+            if namespace == "modules" {
+                super::customer_apps::authorize_global_module(module_dir, &manifest)?;
+            } else {
+                super::customer_apps::authorize_runtime_module(root, module_dir, &manifest)?;
+            }
             return Ok(candidate);
         }
     }
     anyhow::bail!("module manifest not found: {module_id}")
+}
+
+fn checked_module_manifest_candidate(
+    app_root: &Path,
+    namespace: &str,
+    module_id: &str,
+) -> anyhow::Result<Option<PathBuf>> {
+    anyhow::ensure!(
+        !module_id.is_empty()
+            && module_id
+                .bytes()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == b'-' || ch == b'_'),
+        "unsafe module id"
+    );
+    // A shared namespace may be symlinked without containing this module.
+    // Skip only an absent module directory, not a present (even dangling)
+    // module symlink, so lower-priority installed sources remain reachable
+    // without relaxing the checks on an actual source candidate.
+    let module_directory = app_root.join(namespace).join(module_id);
+    match fs::symlink_metadata(&module_directory) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
+    let relative = PathBuf::from(namespace).join(module_id).join("module.json");
+    ensure_source_path_has_no_symlink_components(app_root, &relative)?;
+    let candidate = app_root.join(relative);
+    if !candidate.is_file() {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        candidate
+            .canonicalize()?
+            .starts_with(app_root.canonicalize()?),
+        "module manifest escapes its source root"
+    );
+    let manifest: Value = serde_json::from_slice(&fs::read(&candidate)?)?;
+    anyhow::ensure!(
+        manifest.get("id").and_then(Value::as_str) == Some(module_id),
+        "module manifest id does not match source directory"
+    );
+    Ok(Some(candidate))
+}
+
+/// Source tools can resolve operator-owned local modules, but delegated app
+/// authoring currently only has installed/source sandbox and validator modes.
+/// Resolve the authorized source, never a caller-supplied install_target/path:
+/// admitting a local app here would create an installed-module shadow.
+pub(super) fn ensure_delegated_app_modify_target_supported(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<()> {
+    let app_root = resolve_business_os_app_root(root)?;
+    let (module_root, _) = resolve_module_source_root_for_root(root, &app_root, module_id)?;
+    anyhow::ensure!(
+        module_root.parent().and_then(Path::file_name).and_then(|name| name.to_str())
+            != Some("local-modules"),
+        "local_app_authoring_unsupported: module `{module_id}` is operator-owned under local-modules; delegated modify_app has no local sandbox/validation lifecycle contract and must not create an installed-module shadow"
+    );
+    Ok(())
 }
 
 pub(super) fn app_root_for_module_manifest(
@@ -5993,7 +6120,7 @@ pub(super) fn app_root_for_module_manifest(
     if collection_dir
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| matches!(name, "modules" | "installed-modules"))
+        .is_some_and(|name| matches!(name, "modules" | "installed-modules" | "local-modules"))
     {
         return collection_dir
             .parent()
@@ -6410,16 +6537,34 @@ pub fn list_revoked_business_peers(root: &Path) -> anyhow::Result<Vec<Value>> {
     Ok(rows)
 }
 
-pub fn record_command(
+pub fn record_command(root: &Path, command: BusinessCommand) -> anyhow::Result<CommandAccepted> {
+    record_command_inner(root, command, None)
+}
+
+pub(super) fn record_mcp_app_command(
+    root: &Path,
+    authority: Option<super::mcp_channel::AuthenticatedMcpAppCommand>,
+    command: BusinessCommand,
+) -> anyhow::Result<CommandAccepted> {
+    record_command_inner(root, command, authority.as_ref())
+}
+
+fn record_command_inner(
     root: &Path,
     mut command: BusinessCommand,
+    authority: Option<&super::mcp_channel::AuthenticatedMcpAppCommand>,
 ) -> anyhow::Result<CommandAccepted> {
     let command_id = command
         .id
         .clone()
         .unwrap_or_else(|| format!("cmd_{}", Uuid::new_v4()));
     command.id = Some(command_id.clone());
-    if let Some(_decision) = reject_app_build_command_if_denied(root, &command)? {
+    let authenticated_session = authority
+        .map(|authority| authority.session(root, &command))
+        .transpose()?;
+    if let Some(_decision) =
+        reject_app_build_command_if_denied(root, &command, authenticated_session.as_ref())?
+    {
         return Ok(CommandAccepted {
             ok: false,
             command_id,
@@ -6429,7 +6574,16 @@ pub fn record_command(
             ..CommandAccepted::default()
         });
     }
-    let native_authorization = queue_command_native_authorization(root, &command)?;
+    if command.command_type == "ctox.business_os.app.modify" {
+        let (_, module_id) = app_build_command_policy_target(&command)
+            .context("app modification target is missing")?;
+        ensure_delegated_app_modify_target_supported(root, &module_id)?;
+    }
+    let mut native_authorization =
+        queue_command_native_authorization(root, &command, authenticated_session.as_ref())?;
+    if let (Some(authority), Some(receipt)) = (authority, native_authorization.as_mut()) {
+        receipt["managed_mcp_authority"] = authority.receipt()?;
+    }
     {
         let conn = open_store(root)?;
         if let Some(denied) = claim_or_reject_business_chat(root, &conn, &command_id, &command)? {
@@ -8097,11 +8251,15 @@ pub(super) fn claim_or_reject_business_chat(
 fn reject_app_build_command_if_denied(
     root: &Path,
     command: &BusinessCommand,
+    authenticated_session: Option<&BusinessOsSession>,
 ) -> anyhow::Result<Option<PolicyDecision>> {
     let Some((permission, module_id)) = app_build_command_policy_target(command) else {
         return Ok(None);
     };
-    let session = rxdb_authenticated_session(root, command)?;
+    let session = match authenticated_session {
+        Some(session) => session.clone(),
+        None => rxdb_authenticated_session(root, command)?,
+    };
     let decision = match permission {
         BusinessOsPermission::AppsModify => {
             module_policy_decision(root, &session, permission, &module_id)?
@@ -8114,7 +8272,16 @@ fn reject_app_build_command_if_denied(
         )?,
     };
     if decision.allowed {
-        record_business_policy_decision_event(root, command, &decision)?;
+        if let Some(session) = authenticated_session {
+            record_business_policy_decision_event_with_actor(
+                root,
+                command,
+                &decision,
+                session_audit_actor_context(session),
+            )?;
+        } else {
+            record_business_policy_decision_event(root, command, &decision)?;
+        }
         return Ok(None);
     }
     reject_command_if_policy_denied(root, command, &decision)?;
@@ -8145,11 +8312,15 @@ pub(super) fn queue_command_policy_target(
 fn queue_command_native_authorization(
     root: &Path,
     command: &BusinessCommand,
+    authenticated_session: Option<&BusinessOsSession>,
 ) -> anyhow::Result<Option<Value>> {
-    if !matches!(command.origin, CommandOrigin::ReplicatedPeer) {
+    if authenticated_session.is_none() && !matches!(command.origin, CommandOrigin::ReplicatedPeer) {
         return Ok(None);
     }
-    let session = rxdb_authenticated_session(root, command)?;
+    let session = match authenticated_session {
+        Some(session) => session.clone(),
+        None => rxdb_authenticated_session(root, command)?,
+    };
     let decision = queue_command_policy_decision(root, &session, command)?;
     anyhow::ensure!(
         decision.allowed,
@@ -8181,7 +8352,14 @@ fn revalidate_queue_native_authorization(
         authorization.get("allowed").and_then(Value::as_bool) == Some(true),
         "Business OS command was not authorized at admission"
     );
-    let (permission, module_id, _) = queue_command_policy_target(command);
+    let control_permission = recoverable_background_control_permission(&command.command_type);
+    let (permission, module_id) = match control_permission {
+        Some(permission) => (permission, command.module.clone()),
+        None => {
+            let (permission, module_id, _) = queue_command_policy_target(command);
+            (permission, module_id)
+        }
+    };
     anyhow::ensure!(
         authorization.get("permission").and_then(Value::as_str) == Some(permission.as_str()),
         "Business OS command authorization permission changed"
@@ -8206,6 +8384,30 @@ fn revalidate_queue_native_authorization(
         .and_then(Value::as_str)
         .map(normalize_business_role)
         .context("Business OS command authorized actor role is missing")?;
+    if let Some(receipt) = authorization.get("managed_mcp_authority") {
+        let authority =
+            super::mcp_channel::AuthenticatedMcpAppCommand::from_native_receipt(receipt)?;
+        let session = authority.session(root, command)?;
+        let user = session
+            .user
+            .as_ref()
+            .context("managed MCP app actor is missing")?;
+        anyhow::ensure!(
+            user.id == actor_id && user.role == authorized_role,
+            "native managed MCP authorization actor changed"
+        );
+        let decision = if control_permission.is_some() {
+            module_policy_decision(root, &session, permission, &module_id)?
+        } else {
+            queue_command_policy_decision(root, &session, command)?
+        };
+        anyhow::ensure!(
+            decision.allowed,
+            "Business OS execution permission was revoked: {}",
+            decision.display_reason
+        );
+        return Ok((session, decision));
+    }
     let conn = open_store(root)?;
     seed_configured_business_users(&conn)?;
     let user = active_business_user(&conn, actor_id)?
@@ -8227,7 +8429,11 @@ fn revalidate_queue_native_authorization(
         login_url: None,
         reason: None,
     };
-    let decision = queue_command_policy_decision(root, &session, command)?;
+    let decision = if control_permission.is_some() {
+        module_policy_decision(root, &session, permission, &module_id)?
+    } else {
+        queue_command_policy_decision(root, &session, command)?
+    };
     anyhow::ensure!(
         decision.allowed,
         "Business OS execution permission was revoked: {}",
@@ -8259,6 +8465,11 @@ pub(crate) fn revalidate_business_command_execution_authorization(
         session.authenticated,
         "Business OS actor is no longer authenticated at harness lease"
     );
+    if command.command_type == "ctox.business_os.app.modify" {
+        let (_, module_id) = app_build_command_policy_target(&command)
+            .context("app modification target is missing")?;
+        ensure_delegated_app_modify_target_supported(root, &module_id)?;
+    }
     let missing_dependencies = missing_business_command_dependencies(root, &command)?;
     anyhow::ensure!(
         missing_dependencies.is_empty(),
@@ -8391,6 +8602,20 @@ pub(super) fn record_business_policy_decision_event(
     command: &BusinessCommand,
     decision: &PolicyDecision,
 ) -> anyhow::Result<()> {
+    record_business_policy_decision_event_with_actor(
+        root,
+        command,
+        decision,
+        policy_audit_actor_context(root, command),
+    )
+}
+
+fn record_business_policy_decision_event_with_actor(
+    root: &Path,
+    command: &BusinessCommand,
+    decision: &PolicyDecision,
+    actor: Value,
+) -> anyhow::Result<()> {
     let command_id = command.id.as_deref().context("command id is required")?;
     let event_type = if decision.allowed {
         "business_os.policy.allowed"
@@ -8398,7 +8623,6 @@ pub(super) fn record_business_policy_decision_event(
         "business_os.policy.denied"
     };
     let observed_at_ms = now_ms() as i64;
-    let actor = policy_audit_actor_context(root, command);
     let client_context = policy_audit_client_context(command);
     let conn = open_store(root)?;
     insert_business_event(
@@ -10964,6 +11188,184 @@ pub fn pull_latest_collection_records(
     }))
 }
 
+fn mcp_rxdb_document(record_id: &str, raw: &str, sql_deleted: i64) -> anyhow::Result<Value> {
+    let mut document: Value = serde_json::from_str(raw)
+        .with_context(|| format!("parse native RxDB document `{record_id}` for MCP read"))?;
+    let deleted = sql_deleted != 0 || is_rxdb_deleted_document(&document);
+    let object = document
+        .as_object_mut()
+        .with_context(|| format!("native RxDB document `{record_id}` is not an object"))?;
+    if object
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| id != record_id)
+    {
+        anyhow::bail!("native RxDB document `{record_id}` has a different payload id");
+    }
+    object.insert("id".to_string(), Value::String(record_id.to_string()));
+    object.insert("_deleted".to_string(), Value::Bool(deleted));
+    for alias in ["deleted", "is_deleted"] {
+        if object.contains_key(alias) {
+            object.insert(alias.to_string(), Value::Bool(deleted));
+        }
+    }
+    Ok(document)
+}
+
+/// MCP app reads prefer the native RxDB row that the browser sees. A tombstone
+/// is a present row; falling back to an older shadow would resurrect it.
+pub fn pull_mcp_app_collection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let path = rxdb_store_path(root);
+    if path.is_file() {
+        let conn = Connection::open(&path)?;
+        if let Some(table) = rxdb_collection_table_name(&path, &conn, collection) {
+            let columns = rxdb_table_columns(&conn, &table)?;
+            let deleted_column = if columns.contains("deleted") {
+                "deleted"
+            } else if columns.contains("_deleted") {
+                "_deleted"
+            } else {
+                "0"
+            };
+            let row = conn
+                .query_row(
+                    &format!("SELECT data, {deleted_column} FROM {table} WHERE id = ?1"),
+                    [record_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .optional()?;
+            if let Some((raw, deleted)) = row {
+                return Ok(Some(mcp_rxdb_document(record_id, &raw, deleted)?));
+            }
+        }
+    }
+    pull_collection_record(root, collection, record_id)
+}
+
+/// RxDB owns each ID it contains. Merge shadow-only IDs by write time before
+/// applying the limit so a recent fallback cannot disappear behind older rows.
+pub fn pull_mcp_app_collection_records(
+    root: &Path,
+    collection: &str,
+    limit: Option<usize>,
+) -> anyhow::Result<Value> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let path = rxdb_store_path(root);
+    let rxdb = if path.is_file() {
+        let conn = Connection::open(&path)?;
+        rxdb_collection_table_name(&path, &conn, collection).map(|table| (conn, table))
+    } else {
+        None
+    };
+    let mut documents = Vec::new();
+    if let Some((conn, table)) = rxdb.as_ref() {
+        let columns = rxdb_table_columns(conn, table)?;
+        let deleted_column = if columns.contains("deleted") {
+            "deleted"
+        } else if columns.contains("_deleted") {
+            "_deleted"
+        } else {
+            "0"
+        };
+        let write_clock = if columns.contains("lastWriteTime") {
+            "lastWriteTime"
+        } else {
+            "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
+        };
+        let mut statement = conn.prepare(&format!(
+            "SELECT id, data, {deleted_column}, {write_clock} AS write_clock FROM {table}
+             ORDER BY {write_clock} DESC, id DESC LIMIT ?1"
+        ))?;
+        let rows = statement.query_map([limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, raw, deleted, write_time) = row?;
+            documents.push((
+                write_time,
+                id.clone(),
+                mcp_rxdb_document(&id, &raw, deleted)?,
+            ));
+        }
+    }
+    let shadow_only = with_store_connection(root, |conn| {
+        let mut statement = conn.prepare(
+            "SELECT record_id, deleted, updated_at_ms, payload_json
+                 FROM business_records WHERE collection = ?1
+                 ORDER BY updated_at_ms DESC, record_id DESC",
+        )?;
+        let mut rows = statement.query([collection])?;
+        let mut fallback = Vec::new();
+        while fallback.len() < limit {
+            let Some(row) = rows.next()? else { break };
+            let id: String = row.get(0)?;
+            if let Some((rxdb_conn, table)) = rxdb.as_ref() {
+                let exists = rxdb_conn
+                    .query_row(
+                        &format!("SELECT 1 FROM {table} WHERE id = ?1"),
+                        [&id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()?
+                    .is_some();
+                if exists {
+                    continue;
+                }
+            }
+            let deleted: i64 = row.get(1)?;
+            let updated_at_ms: i64 = row.get(2)?;
+            let raw: String = row.get(3)?;
+            let mut document: Value = serde_json::from_str(&raw)
+                .with_context(|| format!("parse shadow document `{collection}/{id}`"))?;
+            let object = document
+                .as_object_mut()
+                .with_context(|| format!("shadow document `{collection}/{id}` is not an object"))?;
+            object
+                .entry("id".to_string())
+                .or_insert_with(|| Value::String(id.clone()));
+            object.insert("_deleted".to_string(), Value::Bool(deleted != 0));
+            object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+            fallback.push((updated_at_ms as f64, id, document));
+        }
+        Ok(fallback)
+    })?;
+    documents.extend(shadow_only);
+    documents.sort_by(|left, right| {
+        right
+            .0
+            .total_cmp(&left.0)
+            .then_with(|| right.1.cmp(&left.1))
+    });
+    documents.truncate(limit);
+    let documents: Vec<Value> = documents
+        .into_iter()
+        .map(|(_, _, document)| document)
+        .collect();
+    Ok(serde_json::json!({
+        "ok": true,
+        "collection": collection,
+        "count": documents.len(),
+        "documents": documents,
+        "since_ms": 0,
+        "source": "mcp_rxdb_priority"
+    }))
+}
+
 pub fn pull_business_command_status_record(
     root: &Path,
     command_id: &str,
@@ -11974,6 +12376,74 @@ impl RxdbCollectionWriter {
     }
 }
 
+/// Repair documents written by older native projections before RxDB opens.
+/// Missing envelope fields can break collection queries and replication even
+/// when only one projected document is malformed.
+pub(super) fn repair_missing_rxdb_envelopes(
+    root: &Path,
+    collection: &str,
+) -> anyhow::Result<usize> {
+    let Some(mut writer) = RxdbCollectionWriter::open(root, collection)? else {
+        return Ok(0);
+    };
+    let deleted_column = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column));
+    let rows = {
+        let mut statement = writer.conn.prepare(&format!(
+            "SELECT id, data, {} FROM {}",
+            deleted_column.unwrap_or("NULL"),
+            writer.table
+        ))?;
+        let mapped = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        })?;
+        mapped.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut repaired = 0;
+    for (id, raw, sql_deleted) in rows {
+        let document: Value = serde_json::from_str(&raw)
+            .with_context(|| format!("parse projected {collection} document {id}"))?;
+        let json_deleted = document.get("_deleted").and_then(Value::as_bool);
+        // A legacy SQLite tombstone must never become live because its JSON
+        // deletion marker was lost or contradicted during projection.
+        let deleted = sql_deleted.is_some_and(|value| value != 0)
+            || json_deleted
+                .or_else(|| document.get("is_deleted").and_then(Value::as_bool))
+                .unwrap_or(false);
+        let valid_envelope = document
+            .pointer("/_meta/lwt")
+            .and_then(Value::as_f64)
+            .is_some()
+            && document
+                .get("_rev")
+                .and_then(Value::as_str)
+                .is_some_and(|revision| direct_rxdb_revision_height(revision).is_some())
+            && json_deleted.is_some()
+            && document.get("_attachments").is_some_and(Value::is_object)
+            && json_deleted == Some(deleted)
+            && sql_deleted.is_none_or(|value| (value != 0) == deleted);
+        if valid_envelope {
+            continue;
+        }
+        let source_updated_at_ms = document
+            .get("updated_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| now_ms().min(i64::MAX as u128) as i64);
+        if deleted {
+            writer.replace_source(&id, source_updated_at_ms, document, true)?;
+        } else {
+            writer.upsert_source_projection(&id, source_updated_at_ms, document)?;
+        }
+        repaired += 1;
+    }
+    Ok(repaired)
+}
+
 fn upsert_rxdb_collection_record_with_writer(
     conn: &Connection,
     table: &str,
@@ -11987,6 +12457,7 @@ fn upsert_rxdb_collection_record_with_writer(
     merge_existing: bool,
 ) -> anyhow::Result<()> {
     let mut previous_revision = None;
+    let mut existing_row = false;
     if let Some(existing_json) = conn
         .query_row(
             &format!("SELECT data FROM {table} WHERE id = ?1"),
@@ -11995,10 +12466,12 @@ fn upsert_rxdb_collection_record_with_writer(
         )
         .optional()?
     {
+        existing_row = true;
         if let Ok(mut existing) = serde_json::from_str::<Value>(&existing_json) {
             previous_revision = existing
                 .get("_rev")
                 .and_then(Value::as_str)
+                .filter(|revision| direct_rxdb_revision_height(revision).is_some())
                 .map(str::to_string);
             if merge_existing {
                 merge_json_object_values(&mut existing, &payload);
@@ -12006,17 +12479,53 @@ fn upsert_rxdb_collection_record_with_writer(
             }
         }
     }
+    if existing_row && previous_revision.is_none() {
+        if let Some(revision_column) = ["revision", "_rev"]
+            .into_iter()
+            .find(|column| table_columns.contains(*column))
+        {
+            previous_revision = conn
+                .query_row(
+                    &format!("SELECT {revision_column} FROM {table} WHERE id = ?1"),
+                    [record_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten()
+                .filter(|revision| direct_rxdb_revision_height(revision).is_some());
+        }
+    }
     let rev = next_direct_rxdb_revision(previous_revision.as_deref());
     if let Some(object) = payload.as_object_mut() {
         object.insert("id".to_string(), Value::String(record_id.to_string()));
         object.insert("_rev".to_string(), Value::String(rev.clone()));
+        object.insert("_deleted".to_string(), Value::Bool(deleted));
+        // A live re-projection must clear legacy deletion aliases left by a
+        // merged tombstone, or readers can still treat the revived row as dead.
+        for alias in ["deleted", "is_deleted"] {
+            if object.contains_key(alias) {
+                object.insert(alias.to_string(), Value::Bool(deleted));
+            }
+        }
+        let meta = object
+            .entry("_meta".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if !meta.is_object() {
+            *meta = serde_json::json!({});
+        }
+        meta.as_object_mut().expect("_meta is an object").insert(
+            "lwt".to_string(),
+            Value::Number(serde_json::Number::from(replication_lwt_ms)),
+        );
+        if !object.get("_attachments").is_some_and(Value::is_object) {
+            object.insert("_attachments".to_string(), serde_json::json!({}));
+        }
         object.insert(
             "updated_at_ms".to_string(),
             Value::Number(serde_json::Number::from(payload_updated_at_ms)),
         );
         if deleted {
             object.insert("is_deleted".to_string(), Value::Bool(true));
-            object.insert("_deleted".to_string(), Value::Bool(true));
         }
     }
     // SECURITY: strip bearer credentials from client_context on the FINAL merged
@@ -13719,39 +14228,47 @@ pub(super) fn handle_workspace_control_command(
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .context("target command has no cancellable execution task")?;
-            let actor = session_user_id(&session).unwrap_or("unknown");
-            let cancellation = serde_json::json!({
-                "ok": true,
-                "target_command_id": target_command_id,
-                "execution_task_id": task_id,
-                "cancelled_by": actor,
-                "cancelled_at_ms": now_ms(),
-                "reason": reason,
-                "side_effects_may_have_started": target
-                    .pointer("/command/execution_phase")
-                    .and_then(Value::as_str)
-                    .is_some_and(|phase| !matches!(phase, "accepted" | "queued" | "waiting_dependencies")),
-            });
-            channels::transition_business_command_for_task(
-                root,
-                task_id,
-                "cancelled",
-                Some(&cancellation),
-                None,
-                None,
-                &format!("cancelled by {actor}: {reason}"),
-            )?;
-            return write_rxdb_control_command_outcome(
-                root,
-                &command,
-                "completed",
-                Some(task_id),
-                Some("cancelled"),
-                cancellation,
-            );
-            },
-        )?
-        .into_outcome();
+                    let actor = session_user_id(&session).unwrap_or("unknown");
+                    // Leasing hands the task to a worker before the command projection
+                    // necessarily advances. Once leased, side effects may have begun
+                    // even if the projected execution phase still says "accepted".
+                    let side_effects_may_have_started = target
+                        .pointer("/command/execution_phase")
+                        .and_then(Value::as_str)
+                        .is_some_and(|phase| {
+                            !matches!(phase, "accepted" | "queued" | "waiting_dependencies")
+                        })
+                        || channels::load_queue_task(root, task_id)?
+                            .is_some_and(|task| task.attempt > 0);
+                    let cancellation = serde_json::json!({
+                        "ok": true,
+                        "target_command_id": target_command_id,
+                        "execution_task_id": task_id,
+                        "cancelled_by": actor,
+                        "cancelled_at_ms": now_ms(),
+                        "reason": reason,
+                        "side_effects_may_have_started": side_effects_may_have_started,
+                    });
+                    channels::transition_business_command_for_task(
+                        root,
+                        task_id,
+                        "cancelled",
+                        Some(&cancellation),
+                        None,
+                        None,
+                        &format!("cancelled by {actor}: {reason}"),
+                    )?;
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "completed",
+                        Some(task_id),
+                        Some("cancelled"),
+                        cancellation,
+                    );
+                },
+            )?
+            .into_outcome();
         }
         "ctox.runtime_settings.save" => {
             let mutation: RuntimeSettingsRequest = serde_json::from_value(command.payload.clone())
@@ -14150,10 +14667,32 @@ pub(super) fn handle_app_lifecycle_command(
                         "permission must be data.read or data.write"
                     );
                     let owned_prefix = format!("{}_", module_id.replace('-', "_"));
-                    anyhow::ensure!(
-                        !module_id.is_empty() && collection.starts_with(&owned_prefix),
-                        "collection must be owned by the target module"
-                    );
+                    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+                    if !collection.starts_with(&owned_prefix) {
+                        // Shared operational views (for example Mail) do not
+                        // own the canonical collections they display. Their
+                        // read grants need an explicit operator review; app
+                        // installation or a manifest declaration is not consent.
+                        anyhow::ensure!(
+                            permission == "data.read"
+                                && command.payload.get("reviewed_shared_read")
+                                    .and_then(Value::as_bool) == Some(true)
+                                && command.payload.get("reason")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|reason| !reason.trim().is_empty()),
+                            "shared collection access requires an explicit reviewed read grant and reason"
+                        );
+                        let decision = scoped_policy_decision(
+                            root,
+                            &session,
+                            BusinessOsPermission::DataRead,
+                            BusinessOsScope::collection(collection),
+                        )?;
+                        anyhow::ensure!(
+                            decision.allowed,
+                            "reviewing operator cannot read the requested shared collection"
+                        );
+                    }
                     let inspection = app_runtime::inspect_module(root, module_id)?;
                     anyhow::ensure!(
                         inspection
@@ -27500,6 +28039,138 @@ pub(super) mod tests {
         Ok(())
     }
 
+    #[test]
+    fn app_shared_read_grant_requires_review_and_preserves_write_boundary() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let module_id = "sharedreadapp";
+        fs::write(root.path().join("index.html"), "<main></main>\n")?;
+        write_minimal_runtime_app_artifacts(root.path(), module_id)?;
+        seed_business_user(root.path(), "admin1", "admin")?;
+        seed_business_user(root.path(), "user1", "user")?;
+        // The fixture declares business_commands, which is shared and remains
+        // server-owned. A read review must never authorize writes or other data.
+        for (id, actor, role, permission, collection, reviewed, reason) in [
+            (
+                "missing-review",
+                "admin1",
+                "admin",
+                "data.read",
+                "business_commands",
+                false,
+                "review",
+            ),
+            (
+                "missing-reason",
+                "admin1",
+                "admin",
+                "data.read",
+                "business_commands",
+                true,
+                "  ",
+            ),
+            (
+                "shared-write",
+                "admin1",
+                "admin",
+                "data.write",
+                "business_commands",
+                true,
+                "review",
+            ),
+            (
+                "undeclared",
+                "admin1",
+                "admin",
+                "data.read",
+                "business_users",
+                true,
+                "review",
+            ),
+            (
+                "unprivileged",
+                "user1",
+                "user",
+                "data.read",
+                "business_commands",
+                true,
+                "review",
+            ),
+        ] {
+            let outcome = accept_rxdb_business_command(
+                root.path(),
+                serde_json::json!({
+                    "id": id, "command_id": id, "module": module_id,
+                    "command_type": "ctox.app.access.grant",
+                    "payload": {
+                        "module_id": module_id, "subject_type": "user", "subject_id": "admin1",
+                        "permission": permission, "collection": collection,
+                        "reviewed_shared_read": reviewed, "reason": reason
+                    },
+                    "client_context": {"actor": {"id": actor, "role": role}}
+                }),
+            );
+            assert!(
+                outcome
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.get("status"))
+                    .and_then(Value::as_str)
+                    != Some("completed"),
+                "{id} must fail closed"
+            );
+        }
+        let conn = open_store(root.path())?;
+        let unexpected: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_permission_grants WHERE grant_id LIKE 'app-access:sharedreadapp:%' AND active=1",
+            [], |row| row.get(0),
+        )?;
+        assert_eq!(unexpected, 0);
+        for (id, action, active) in [
+            ("reviewed-read", "ctox.app.access.grant", true),
+            ("revoke-read", "ctox.app.access.revoke", false),
+        ] {
+            let outcome = accept_rxdb_business_command(
+                root.path(),
+                serde_json::json!({
+                    "id": id, "command_id": id, "module": module_id,
+                    "command_type": action,
+                    "payload": {
+                        "module_id": module_id, "subject_type": "user", "subject_id": "admin1",
+                        "permission": "data.read", "collection": "business_commands",
+                        "reviewed_shared_read": true, "reason": "Operator reviewed command-status display"
+                    },
+                    "client_context": {"actor": {"id": "admin1", "role": "admin"}}
+                }),
+            )?;
+            assert_eq!(
+                outcome.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
+            let stored: bool = conn.query_row(
+                "SELECT active FROM business_permission_grants WHERE grant_id='app-access:sharedreadapp:user:admin1:data.read:business_commands'",
+                [], |row| row.get(0),
+            )?;
+            assert_eq!(stored, active);
+            let catalog = load_rxdb_collection_record(
+                root.path(),
+                "business_module_catalog",
+                "module-catalog",
+            )?
+            .context("catalog missing")?;
+            let grants = catalog
+                .pointer("/governance/permission_model/explicit_grants")
+                .and_then(Value::as_array)
+                .context("governance grants missing")?;
+            let projected_active = grants.iter().any(|grant| {
+                grant.get("grant_id").and_then(Value::as_str)
+                    == Some("app-access:sharedreadapp:user:admin1:data.read:business_commands")
+                    && grant.get("active").and_then(Value::as_bool) == Some(true)
+            });
+            assert_eq!(projected_active, active);
+        }
+        Ok(())
+    }
+
     fn build_test_app_module_zip(module_id: &str) -> anyhow::Result<Vec<u8>> {
         let mut buffer = Cursor::new(Vec::new());
         {
@@ -39029,6 +39700,185 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(last_write_time, 1_004.0);
+        let document: Value = serde_json::from_str(&conn.query_row(
+            &format!("SELECT data FROM {table} WHERE id = 'probe-4'"),
+            [],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert_eq!(
+            document.pointer("/_meta/lwt"),
+            Some(&serde_json::json!(1_004))
+        );
+        assert_eq!(document.get("_deleted"), Some(&Value::Bool(false)));
+        assert_eq!(document.get("_attachments"), Some(&serde_json::json!({})));
+        Ok(())
+    }
+
+    #[test]
+    fn repair_missing_command_envelopes_preserves_result_and_advances_checkpoint(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = format!(
+            "ctox_business_os__business_commands__v{}",
+            rxdb_schema_version("business_commands")
+        );
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            &format!("CREATE TABLE {table} (id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"),
+            [],
+        )?;
+        let original = serde_json::json!({
+            "id": "writeback_probe", "_rev": "4-old", "status": "completed",
+            "updated_at_ms": 42, "result": {"count": 7}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["writeback_probe", "4-old", original.to_string()],
+        )?;
+        let malformed_live = serde_json::json!({
+            "id": "malformed_live", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": "false", "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["malformed_live", "1-old", malformed_live.to_string()],
+        )?;
+        let missing_revision = serde_json::json!({
+            "id": "missing_revision", "_meta": {"lwt": 42},
+            "_deleted": false, "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["missing_revision", "1-old", missing_revision.to_string()],
+        )?;
+        for (id, json_revision) in [("empty_revision", ""), ("malformed_revision", "broken")] {
+            let document = serde_json::json!({
+                "id": id, "_rev": json_revision, "_meta": {"lwt": 42},
+                "_deleted": false, "_attachments": {}, "updated_at_ms": 42,
+                "result": {"preserve": true}
+            });
+            conn.execute(
+                &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+                params![id, "4-old", document.to_string()],
+            )?;
+        }
+        let malformed_tombstone = serde_json::json!({
+            "id": "malformed_tombstone", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": "invalid", "is_deleted": true, "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["malformed_tombstone", "1-old", malformed_tombstone.to_string()],
+        )?;
+        let sql_tombstone_without_json_flag = serde_json::json!({
+            "id": "sql_tombstone_without_json_flag", "_rev": "2-old",
+            "_meta": {"lwt": 42}, "_attachments": {}, "updated_at_ms": 42,
+            "result": {"preserve": true}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 1, 42, ?3)"),
+            params!["sql_tombstone_without_json_flag", "2-old", sql_tombstone_without_json_flag.to_string()],
+        )?;
+        let sql_tombstone_with_live_json_flag = serde_json::json!({
+            "id": "sql_tombstone_with_live_json_flag", "_rev": "3-old",
+            "_meta": {"lwt": 42}, "_deleted": false, "_attachments": {},
+            "updated_at_ms": 42, "result": {"preserve": true}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 1, 42, ?3)"),
+            params!["sql_tombstone_with_live_json_flag", "3-old", sql_tombstone_with_live_json_flag.to_string()],
+        )?;
+        drop(conn);
+
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 8);
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 0);
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let (revision, lwt, raw): (String, f64, String) = conn.query_row(
+            &format!(
+                "SELECT revision, lastWriteTime, data FROM {table} WHERE id='writeback_probe'"
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let repaired: Value = serde_json::from_str(&raw)?;
+        assert_eq!(repaired["result"], original["result"]);
+        assert_eq!(repaired["updated_at_ms"], original["updated_at_ms"]);
+        assert_eq!(repaired["_rev"], revision);
+        assert!(revision.starts_with("5-"));
+        assert!(lwt > 42.0);
+        assert_eq!(
+            repaired.pointer("/_meta/lwt").and_then(Value::as_f64),
+            Some(lwt)
+        );
+        assert_eq!(repaired["_deleted"], false);
+        assert_eq!(repaired["_attachments"], serde_json::json!({}));
+        for (id, expected_deleted) in [
+            ("malformed_live", false),
+            ("missing_revision", false),
+            ("empty_revision", false),
+            ("malformed_revision", false),
+            ("malformed_tombstone", true),
+            ("sql_tombstone_without_json_flag", true),
+            ("sql_tombstone_with_live_json_flag", true),
+        ] {
+            let (revision_column, deleted_column, raw): (String, i64, String) = conn.query_row(
+                &format!("SELECT revision, deleted, data FROM {table} WHERE id = ?1"),
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            let repaired: Value = serde_json::from_str(&raw)?;
+            assert_eq!(repaired["_deleted"], expected_deleted);
+            assert_eq!(deleted_column != 0, expected_deleted);
+            assert!(repaired["_rev"]
+                .as_str()
+                .is_some_and(|revision| !revision.is_empty()));
+            assert_eq!(repaired["_rev"], revision_column);
+            if id == "missing_revision" {
+                assert!(revision_column.starts_with("2-"));
+            }
+            if id == "empty_revision" || id == "malformed_revision" {
+                assert!(revision_column.starts_with("5-"));
+                assert_eq!(repaired["result"], serde_json::json!({"preserve": true}));
+            }
+            if id.starts_with("sql_tombstone") {
+                assert_eq!(repaired["result"], serde_json::json!({"preserve": true}));
+                let expected_revision = if id.ends_with("without_json_flag") {
+                    "3-"
+                } else {
+                    "4-"
+                };
+                assert!(repaired["_rev"]
+                    .as_str()
+                    .is_some_and(|revision| revision.starts_with(expected_revision)));
+            }
+        }
+
+        let chats_table = format!(
+            "ctox_business_os__business_chats__v{}",
+            rxdb_schema_version("business_chats")
+        );
+        conn.execute(
+            &format!("CREATE TABLE {chats_table} (id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"),
+            [],
+        )?;
+        let chat = serde_json::json!({
+            "id": "chat_probe", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": false, "updated_at_ms": 42, "title": "Preserved"
+        });
+        conn.execute(
+            &format!("INSERT INTO {chats_table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["chat_probe", "1-old", chat.to_string()],
+        )?;
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_chats")?, 1);
+        let repaired_chat: Value = serde_json::from_str(&conn.query_row(
+            &format!("SELECT data FROM {chats_table} WHERE id='chat_probe'"),
+            [],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert_eq!(repaired_chat["title"], "Preserved");
+        assert_eq!(repaired_chat["_attachments"], serde_json::json!({}));
         Ok(())
     }
 
@@ -39086,6 +39936,76 @@ pub(super) mod tests {
         let payload: Value = serde_json::from_str(&payload)?;
         assert_eq!(payload["_deleted"], true);
         assert_eq!(payload["is_deleted"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn source_projection_revives_tombstone_without_stale_deletion_flags() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = "ctox_business_os__writer_delete_probe__v0";
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            &format!(
+                "CREATE TABLE {table} (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    revision TEXT,
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    lastWriteTime REAL NOT NULL DEFAULT 0,
+                    data TEXT NOT NULL
+                )"
+            ),
+            [],
+        )?;
+        drop(conn);
+
+        let mut writer = BusinessProjectionWriter::open(root)?;
+        writer.upsert_source_projection(
+            "writer_delete_probe",
+            "probe-1",
+            1_000,
+            serde_json::json!({"id":"probe-1","name":"Old"}),
+        )?;
+        writer.tombstone_source_projection("writer_delete_probe", "probe-1", 2_000)?;
+        writer.upsert_source_projection(
+            "writer_delete_probe",
+            "probe-1",
+            3_000,
+            serde_json::json!({"id":"probe-1","name":"Restored"}),
+        )?;
+        drop(writer);
+
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let (revision, deleted, raw): (String, i64, String) = conn.query_row(
+            &format!("SELECT revision,deleted,data FROM {table} WHERE id='probe-1'"),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let document: Value = serde_json::from_str(&raw)?;
+        assert_eq!(deleted, 0);
+        assert_eq!(document["_deleted"], false);
+        assert_eq!(document["is_deleted"], false);
+        assert_eq!(document["name"], "Restored");
+        assert_eq!(document["_rev"], revision);
+        assert!(revision.starts_with("3-"));
+        assert_eq!(
+            repair_missing_rxdb_envelopes(root, "writer_delete_probe")?,
+            0
+        );
+
+        let conn = open_store(root)?;
+        let (deleted, payload): (i64, String) = conn.query_row(
+            "SELECT deleted,payload_json FROM business_records
+             WHERE collection='writer_delete_probe' AND record_id='probe-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(deleted, 0);
+        let payload: Value = serde_json::from_str(&payload)?;
+        assert_eq!(payload["name"], "Restored");
+        assert_eq!(payload["_deleted"], false);
+        assert!(payload.get("is_deleted").is_none());
         Ok(())
     }
 
@@ -39822,6 +40742,63 @@ pub(super) mod tests {
         assert!(!is_recoverable_background_control_command_type(
             "office.document.create"
         ));
+    }
+
+    #[test]
+    fn research_control_revalidation_uses_native_actor_and_original_permission(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "operator", "chef")?;
+        for command_type in [
+            "outbound.research_source.generate_adapter",
+            "outbound.research_source.test",
+        ] {
+            // Reactivation changes capability_epoch; it cannot resurrect the
+            // previous case's token. Each admission needs a fresh capability.
+            let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+            assert_eq!(
+                verify_capability_actor(root, &token),
+                Some(("operator".into(), "chef".into()))
+            );
+            let mut command = BusinessCommand {
+                origin: CommandOrigin::ReplicatedPeer,
+                id: Some(format!("cmd_{command_type}")),
+                module: "outbound".into(),
+                command_type: command_type.into(),
+                record_id: None,
+                payload: serde_json::json!({"company":"Fixture GmbH"}),
+                client_context: serde_json::json!({"capability_token":token.clone()}),
+            };
+            let receipt = recoverable_background_control_authorization(root, &command)
+                .with_context(|| format!("authorization receipt for {command_type}"))?;
+            command.client_context = serde_json::json!({"actor":{"id":"forged","role":"admin"}, "owner_user_id":"forged"});
+            let (session, decision) =
+                revalidate_queue_native_authorization(root, &command, &receipt)?;
+            assert_eq!(session.user.as_ref().unwrap().id, "operator");
+            assert_eq!(decision.permission, receipt["permission"].as_str().unwrap());
+            let mut wrong = receipt.clone();
+            wrong["permission"] = Value::String("data.read".into());
+            assert!(revalidate_queue_native_authorization(root, &command, &wrong).is_err());
+            wrong = receipt.clone();
+            wrong["actor"]["role"] = Value::String("user".into());
+            assert!(revalidate_queue_native_authorization(root, &command, &wrong).is_err());
+            let conn = open_store(root)?;
+            conn.execute(
+                "UPDATE business_users SET active=0 WHERE user_id='operator'",
+                [],
+            )?;
+            assert!(revalidate_queue_native_authorization(root, &command, &receipt).is_err());
+            conn.execute(
+                "UPDATE business_users SET active=1 WHERE user_id='operator'",
+                [],
+            )?;
+            assert!(
+                verify_capability_actor(root, &token).is_none(),
+                "reactivation must not resurrect a revoked capability"
+            );
+        }
+        Ok(())
     }
 
     #[test]
