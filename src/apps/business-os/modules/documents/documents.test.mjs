@@ -124,7 +124,7 @@ test('document library distinguishes pending sync, a completed empty read, and a
   assert.equal(hooks.documentListState(state, []), 'loading', 'a readiness-capable shell must affirm live before empty');
   state.documentsReadiness = { state: 'live', ready: true };
 
-  state.ctx.db.collection = () => ({ find: () => ({ exec: async () => { throw new Error('local read failed'); } }) });
+  state.ctx.db = { collection: () => ({ find: () => ({ exec: async () => { throw new Error('local read failed'); } }) }) };
   await assert.rejects(hooks.refreshDocuments(state), /local read failed/);
   assert.equal(hooks.documentListState(state, []), 'error');
   state.documents = [{ id: 'cached' }];
