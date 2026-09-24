@@ -45,6 +45,8 @@ export function createMultiTabSyncCoordinator({
   let lockRequestRunning = false;
   let releaseWaitAbort = null;
   let retryReleaseElection = false;
+  let lifecycleSuspended = false;
+  let resumeReleasedLeader = false;
 
   const emitRole = () => {
     const status = snapshot();
@@ -135,7 +137,7 @@ export function createMultiTabSyncCoordinator({
   };
 
   const tryWebLock = async (waitForRelease = false) => {
-    if (closed || !globalThis.navigator?.locks?.request) return false;
+    if (closed || lifecycleSuspended || !globalThis.navigator?.locks?.request) return false;
     if (lockRequestRunning) {
       if (waitForRelease) retryReleaseElection = true;
       return false;
@@ -158,7 +160,7 @@ export function createMultiTabSyncCoordinator({
       ? { mode: 'exclusive', signal: abort.signal }
       : { mode: 'exclusive', ifAvailable: true };
     navigator.locks.request(lockName, options, async (lock) => {
-      if (!lock || closed) {
+      if (!lock || closed || lifecycleSuspended) {
         finishFailedAttempt();
         return;
       }
@@ -170,12 +172,18 @@ export function createMultiTabSyncCoordinator({
       releaseLock = null;
       lockRequestRunning = false;
       becomeFollower('', 'web-lock-released');
+      if (retryReleaseElection && !closed && !lifecycleSuspended && !leaderTabId) {
+        retryReleaseElection = false;
+        tryWebLock(true).catch(() => {});
+      } else {
+        retryReleaseElection = false;
+      }
     }).catch(finishFailedAttempt);
     return attempted;
   };
 
   const attemptElection = async () => {
-    if (closed || role === 'leader') return;
+    if (closed || lifecycleSuspended || role === 'leader') return;
     if (clock() - leaderSeenAtMs < LEASE_TTL_MS) return;
     if (globalThis.navigator?.locks?.request) {
       await tryWebLock();
@@ -211,8 +219,10 @@ export function createMultiTabSyncCoordinator({
         leaderTabId = '';
         // Queue behind the releasing Web Lock: its broadcast can arrive before
         // the browser has actually completed the old lock callback.
-        if (globalThis.navigator?.locks?.request) tryWebLock(true).catch(() => {});
-        else attemptElection().catch(() => {});
+        if (!lifecycleSuspended) {
+          if (globalThis.navigator?.locks?.request) tryWebLock(true).catch(() => {});
+          else attemptElection().catch(() => {});
+        }
       } else if (message.type === 'dirty' && role === 'leader') {
         handleDirty(message).catch(() => {});
       } else if (message.type === 'dirty-ack' && String(message.targetTabId || '') === tabId) {
@@ -243,15 +253,25 @@ export function createMultiTabSyncCoordinator({
   }
 
   const lifecycleRelease = () => {
+    lifecycleSuspended = true;
     retryReleaseElection = false;
     releaseWaitAbort?.abort();
     if (role === 'leader') {
+      resumeReleasedLeader = true;
+      leaderSeenAtMs = 0;
+      leaderTabId = '';
       post({ type: 'leader-release' });
       releaseLock?.();
     }
     becomeFollower('', 'page-lifecycle');
   };
-  const lifecycleResume = () => attemptElection().catch(() => {});
+  const lifecycleResume = () => {
+    lifecycleSuspended = false;
+    const reacquireReleasedLine = resumeReleasedLeader && !leaderTabId;
+    resumeReleasedLeader = false;
+    if (reacquireReleasedLine && globalThis.navigator?.locks?.request) tryWebLock(true).catch(() => {});
+    else attemptElection().catch(() => {});
+  };
 
   function start() {
     if (started) return Promise.resolve(snapshot());
@@ -350,6 +370,8 @@ export function createMultiTabSyncCoordinator({
     async close() {
       if (role === 'leader') post({ type: 'leader-release' });
       closed = true;
+      lifecycleSuspended = true;
+      resumeReleasedLeader = false;
       retryReleaseElection = false;
       releaseWaitAbort?.abort();
       releaseLock?.();

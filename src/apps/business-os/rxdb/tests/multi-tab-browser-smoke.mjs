@@ -35,19 +35,7 @@ try {
     first.goto(`http://127.0.0.1:${port}/`),
     second.goto(`http://127.0.0.1:${port}/`),
   ]);
-  await first.evaluate(() => {
-    if (!navigator.locks?.request) throw new Error('Web Locks are required for this handover case');
-    const request = navigator.locks.request.bind(navigator.locks);
-    Object.defineProperty(navigator.locks, 'request', {
-      configurable: true,
-      value: (name, options, callback) => request(name, options, async (lock) => {
-        const result = await callback(lock);
-        // A releasing tab can announce pagehide before the browser frees its lock.
-        if (lock) await new Promise((resolve) => setTimeout(resolve, 200));
-        return result;
-      }),
-    });
-  });
+  await first.evaluate(delayWebLockRelease);
   const room = `browser-room-${Date.now()}`;
   await first.evaluate(async ({ room }) => {
     const { createMultiTabSyncCoordinator } = await import('/bundle.mjs');
@@ -93,6 +81,30 @@ try {
     first.evaluate(() => globalThis.__coord.close()),
     second.evaluate(() => globalThis.__coord.close()),
   ]);
+
+  // A page restored from bfcache must reacquire its own released line promptly.
+  const solo = await context.newPage();
+  await solo.goto(`http://127.0.0.1:${port}/`);
+  await solo.evaluate(delayWebLockRelease);
+  await solo.evaluate(async ({ room }) => {
+    const { createMultiTabSyncCoordinator } = await import('/bundle.mjs');
+    globalThis.__solo = createMultiTabSyncCoordinator({ databaseName: 'multi-tab-browser', room, tabId: 'tab-solo' });
+    await globalThis.__solo.start();
+  }, { room: `solo-resume-${Date.now()}` });
+  await waitFor(solo, () => globalThis.__solo?.isLeader?.() === true, 'sole tab initial leader');
+  await solo.evaluate(() => globalThis.dispatchEvent(new Event('pagehide')));
+  await waitFor(solo, () => globalThis.__solo?.isLeader?.() === false, 'sole tab pagehide release');
+  await solo.evaluate(() => globalThis.dispatchEvent(new Event('pageshow')));
+  await waitFor(solo, () => globalThis.__solo?.isLeader?.() === true, 'sole tab pageshow reacquisition', 3_000).catch(async (error) => {
+    const state = await solo.evaluate(async () => ({
+      coordinator: globalThis.__solo.snapshot(),
+      locks: await navigator.locks.query(),
+    }));
+    throw new Error(`${error.message}; state=${JSON.stringify(state)}`, { cause: error });
+  });
+  await solo.evaluate(() => globalThis.__solo.close());
+  await solo.close();
+
   await context.close();
   console.log('ctox-rxdb real-browser multi-tab leader smoke OK');
 } finally {
@@ -108,4 +120,18 @@ async function waitFor(page, predicate, label, timeoutMs = 5_000) {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
+}
+
+function delayWebLockRelease() {
+  if (!navigator.locks?.request) throw new Error('Web Locks are required for this handover case');
+  const request = navigator.locks.request.bind(navigator.locks);
+  Object.defineProperty(navigator.locks, 'request', {
+    configurable: true,
+    value: (name, options, callback) => request(name, options, async (lock) => {
+      const result = await callback(lock);
+      // A tab can announce pagehide before the browser frees its lock.
+      if (lock) await new Promise((resolve) => setTimeout(resolve, 200));
+      return result;
+    }),
+  });
 }

@@ -11950,6 +11950,8 @@ function createMultiTabSyncCoordinator({
   let lockRequestRunning = false;
   let releaseWaitAbort = null;
   let retryReleaseElection = false;
+  let lifecycleSuspended = false;
+  let resumeReleasedLeader = false;
   const emitRole = () => {
     const status = snapshot();
     for (const listener of listeners) {
@@ -12034,7 +12036,7 @@ function createMultiTabSyncCoordinator({
     if (reason) post({ type: "follower", reason });
   };
   const tryWebLock = async (waitForRelease = false) => {
-    if (closed || !globalThis.navigator?.locks?.request) return false;
+    if (closed || lifecycleSuspended || !globalThis.navigator?.locks?.request) return false;
     if (lockRequestRunning) {
       if (waitForRelease) retryReleaseElection = true;
       return false;
@@ -12058,7 +12060,7 @@ function createMultiTabSyncCoordinator({
     };
     const options = waitForRelease ? { mode: "exclusive", signal: abort.signal } : { mode: "exclusive", ifAvailable: true };
     navigator.locks.request(lockName, options, async (lock) => {
-      if (!lock || closed) {
+      if (!lock || closed || lifecycleSuspended) {
         finishFailedAttempt();
         return;
       }
@@ -12072,11 +12074,18 @@ function createMultiTabSyncCoordinator({
       releaseLock = null;
       lockRequestRunning = false;
       becomeFollower("", "web-lock-released");
+      if (retryReleaseElection && !closed && !lifecycleSuspended && !leaderTabId) {
+        retryReleaseElection = false;
+        tryWebLock(true).catch(() => {
+        });
+      } else {
+        retryReleaseElection = false;
+      }
     }).catch(finishFailedAttempt);
     return attempted;
   };
   const attemptElection = async () => {
-    if (closed || role === "leader") return;
+    if (closed || lifecycleSuspended || role === "leader") return;
     if (clock() - leaderSeenAtMs < LEASE_TTL_MS) return;
     if (globalThis.navigator?.locks?.request) {
       await tryWebLock();
@@ -12107,10 +12116,12 @@ function createMultiTabSyncCoordinator({
       } else if (message.type === "leader-release" && String(message.tabId || "") && (!leaderTabId || String(message.tabId) === leaderTabId)) {
         leaderSeenAtMs = 0;
         leaderTabId = "";
-        if (globalThis.navigator?.locks?.request) tryWebLock(true).catch(() => {
-        });
-        else attemptElection().catch(() => {
-        });
+        if (!lifecycleSuspended) {
+          if (globalThis.navigator?.locks?.request) tryWebLock(true).catch(() => {
+          });
+          else attemptElection().catch(() => {
+          });
+        }
       } else if (message.type === "dirty" && role === "leader") {
         handleDirty(message).catch(() => {
         });
@@ -12145,16 +12156,27 @@ function createMultiTabSyncCoordinator({
     };
   }
   const lifecycleRelease = () => {
+    lifecycleSuspended = true;
     retryReleaseElection = false;
     releaseWaitAbort?.abort();
     if (role === "leader") {
+      resumeReleasedLeader = true;
+      leaderSeenAtMs = 0;
+      leaderTabId = "";
       post({ type: "leader-release" });
       releaseLock?.();
     }
     becomeFollower("", "page-lifecycle");
   };
-  const lifecycleResume = () => attemptElection().catch(() => {
-  });
+  const lifecycleResume = () => {
+    lifecycleSuspended = false;
+    const reacquireReleasedLine = resumeReleasedLeader && !leaderTabId;
+    resumeReleasedLeader = false;
+    if (reacquireReleasedLine && globalThis.navigator?.locks?.request) tryWebLock(true).catch(() => {
+    });
+    else attemptElection().catch(() => {
+    });
+  };
   function start() {
     if (started) return Promise.resolve(snapshot());
     started = true;
@@ -12256,6 +12278,8 @@ function createMultiTabSyncCoordinator({
     async close() {
       if (role === "leader") post({ type: "leader-release" });
       closed = true;
+      lifecycleSuspended = true;
+      resumeReleasedLeader = false;
       retryReleaseElection = false;
       releaseWaitAbort?.abort();
       releaseLock?.();
