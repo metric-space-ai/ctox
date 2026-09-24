@@ -703,7 +703,10 @@ export function initBusinessChat({
     state.preCollapseExpandedChatIds = [];
     touchChats(state, [chat]);
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
-    await persistChatState({ state, db });
+    await persistExternalChatOpen(
+      () => persistChatState({ state, db, onRemoteError: detail.onOpenPersistError }),
+      detail.onOpenPersistError,
+    );
     if (!ownsChatOpenOwnership(state, presentationTicket)) return;
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
   };
@@ -4978,7 +4981,26 @@ function isChatLocallyDeleted(state, chat) {
   return !remoteUpdatedAt || deletedAt >= remoteUpdatedAt;
 }
 
-async function persistChatState({ state, db, remote = true }) {
+async function persistExternalChatOpen(persist, onError) {
+  try {
+    await persist();
+    return true;
+  } catch (error) {
+    console.warn?.('[business-chat] chat-open persistence failed', error);
+    reportChatOpenPersistenceError(onError, error);
+    return false;
+  }
+}
+
+function reportChatOpenPersistenceError(onError, error) {
+  try {
+    onError?.(error);
+  } catch (notificationError) {
+    console.error?.('[business-chat] chat-open error notification failed', notificationError);
+  }
+}
+
+async function persistChatState({ state, db, remote = true, onRemoteError = null }) {
   const now = Date.now();
   const ownedChats = state.chats.filter((item) => isOwnedChat(item, state.ownerUserId));
   for (const chat of ownedChats) {
@@ -5001,15 +5023,16 @@ async function persistChatState({ state, db, remote = true }) {
       ? chat.scheduledAttachmentsByCommand
       : {},
   }));
-  scheduleChatRemotePersistence(collection, docs);
+  scheduleChatRemotePersistence(collection, docs, onRemoteError);
 }
 
-function scheduleChatRemotePersistence(collection, docs) {
+function scheduleChatRemotePersistence(collection, docs, onError = null) {
   const timerApi = typeof window !== 'undefined' ? window : globalThis;
   const run = () => {
     persistChatDocsRemote(collection, docs).catch((error) => {
       if (isVolatileChatPersistenceError(error)) return;
       console.warn?.('[business-chat] chat persistence failed', error);
+      reportChatOpenPersistenceError(onError, error);
     });
   };
   if (typeof timerApi.setTimeout === 'function') {
@@ -9179,7 +9202,9 @@ export const __businessChatTestInternals = Object.freeze({
   stopCrewProceduralMotion,
   syncCrewProceduralMotion,
   persistChatDocsRemote,
+  persistExternalChatOpen,
   persistChatState,
+  scheduleChatRemotePersistence,
   schedulerDelayMs,
   setAttrIfChanged,
   setClassNameIfChanged,

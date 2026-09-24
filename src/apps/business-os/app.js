@@ -69,6 +69,7 @@ import {
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
 import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260924-threads-mail-scope-v399';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
 import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260924-threads-mail-scope-v399';
 import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260924-threads-mail-scope-v399';
 import {
@@ -879,8 +880,8 @@ function getRegisteredSvgIcon(id, size, strokeWidth) {
   // which may carry tooling prefixes (bench_contracts_... -> B).
   const normalized = String(id || '').replace(/^module:|^desktop-app:/, '');
   const moduleDef = state.modules?.find?.((mod) => mod.id === normalized);
-  const operatorIcon = operatorIconFor(normalized);
-  const rasterAsset = String(operatorIcon?.asset || moduleDef?.layout?.icon_asset || '').trim();
+  const selectedIcon = operatorIconFor(normalized) || grokShellIconFor(normalized);
+  const rasterAsset = String(selectedIcon?.asset || moduleDef?.layout?.icon_asset || '').trim();
   const rasterSrcSet = String(moduleDef?.layout?.icon_asset_srcset || '').trim();
   if (rasterAsset && !rasterAsset.includes('..') && !/^[a-z][a-z0-9+.-]*:/i.test(rasterAsset)) {
     const srcset = rasterSrcSet && !rasterSrcSet.includes('..') && !/[<>]/.test(rasterSrcSet)
@@ -4676,7 +4677,7 @@ function moduleAppearsAsWindowTarget(mod) {
 function desktopAppDescriptorForModule(mod) {
   const presentation = resolvePresentation(mod);
   const shell = resolveShellWindowContract(mod);
-  const operatorIcon = operatorIconFor(mod.id);
+  const selectedIcon = operatorIconFor(mod.id) || grokShellIconFor(mod.id);
   return {
     id: mod.id,
     title: moduleDisplayTitle(mod),
@@ -4692,7 +4693,7 @@ function desktopAppDescriptorForModule(mod) {
     shellGeometryContract: shell?.geometryContract || '',
     shellHeaderRows: Math.max(2, Number.parseInt(mod?.layout?.shell_header_rows, 10) || 2),
     shellIconRows: Math.max(2, Number.parseInt(mod?.layout?.shell_icon_rows, 10) || 2),
-    iconAsset: String(operatorIcon?.asset || mod?.layout?.icon_asset || '').trim(),
+    iconAsset: String(selectedIcon?.asset || mod?.layout?.icon_asset || '').trim(),
     iconSrcSet: String(mod?.layout?.icon_asset_srcset || '').trim(),
     framePalette: mod?.layout?.frame_palette || null,
   };
@@ -11455,6 +11456,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       ],
       "layout": {
         "shell": "full-workspace",
+        "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/desktop.png",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-desktop\"><defs><linearGradient id=\"grad-desktop\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#94a3b8\" /><stop offset=\"100%\" stop-color=\"#3b82f6\" /></linearGradient></defs><rect x=\"2\" y=\"3\" width=\"20\" height=\"14\" rx=\"3\" ry=\"3\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.12\" stroke=\"url(#grad-desktop)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M12 17v4M8 21h8\" stroke=\"url(#grad-desktop)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><rect x=\"5\" y=\"6\" width=\"6\" height=\"4\" rx=\"1\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect><rect x=\"13\" y=\"6\" width=\"6\" height=\"8\" rx=\"1\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect><rect x=\"5\" y=\"12\" width=\"6\" height=\"2\" rx=\"0.5\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect></svg>",
         "left": "desktop scopes",
         "center": "desktop surface",
@@ -11566,6 +11568,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       ],
       "layout": {
         "shell": "windowed",
+        "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/creator.png",
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-creator\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-creator\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#8b5cf6\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"4\" fill=\"url(#grad-creator)\" fill-opacity=\"0.12\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M12 7v10M7 12h10\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M16.5 5.5l2 2\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
@@ -11637,6 +11640,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       ],
       "layout": {
         "shell": "windowed",
+        "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/explorer.png",
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-explorer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-explorer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#06b6d4\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><path d=\"M3 7.5h7l2-2h9v13.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5Z\" fill=\"url(#grad-explorer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-explorer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M3 10h18\" stroke=\"url(#grad-explorer)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
@@ -11700,6 +11704,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       ],
       "layout": {
         "shell": "windowed",
+        "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/file-viewer.png",
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-file-viewer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-file-viewer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#f59e0b\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><path d=\"M6 3h8l4 4v14H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z\" fill=\"url(#grad-file-viewer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M14 3v5h4\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M8 14s1.5-2 4-2 4 2 4 2-1.5 2-4 2-4-2-4-2Z\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"1.7\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"14\" r=\"1\" fill=\"url(#grad-file-viewer)\"></circle></svg>",

@@ -9,6 +9,7 @@
   ],
   "layout": {
     "shell": "windowed",
+    "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/file-viewer.png",
     "shell_contract": "v2",
     "shell_geometry_contract": "business-os-v2-global-1",
     "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-file-viewer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-file-viewer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#f59e0b\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><path d=\"M6 3h8l4 4v14H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z\" fill=\"url(#grad-file-viewer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M14 3v5h4\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M8 14s1.5-2 4-2 4 2 4 2-1.5 2-4 2-4-2-4-2Z\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"1.7\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"14\" r=\"1\" fill=\"url(#grad-file-viewer)\"></circle></svg>",
