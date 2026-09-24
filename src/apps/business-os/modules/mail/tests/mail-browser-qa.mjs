@@ -259,6 +259,8 @@ mailQa: try {
       import('/shared/icons.js'),
     ]);
     window.__mailRows = rows;
+    window.__mailNativeAccounts = new Map(rows.communication_accounts.map((account) => [account.account_key, structuredClone(account)]));
+    window.__mailNativeUnavailable = false;
     window.__mailReadFailures = readFailures;
     window.__mailReadAttempts = readAttempts;
     window.__mailPendingReads = pendingReads;
@@ -273,6 +275,12 @@ mailQa: try {
       locale: 'de',
       session: { user: { id: 'alice', email: 'alice@example.test', role: 'admin' } },
       db: { collection },
+      readNativeCollectionDocument: async (name, accountKey) => {
+        if (name !== 'communication_accounts') throw new Error('unexpected native Mail collection');
+        if (window.__mailNativeUnavailable) throw new Error('native account verification unavailable');
+        const record = window.__mailNativeAccounts.get(accountKey);
+        return record ? { toJSON: () => structuredClone(record) } : null;
+      },
       sync: {
         startCollection: async () => {},
         collectionReadiness: () => ({ ready: true, state: 'live' }),
@@ -856,8 +864,103 @@ mailQa: try {
   await page.evaluate(() => window.__mailReadinessListener({ ready: true, state: 'live' }));
   await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
   await page.getByText('Keine E-Mails', { exact: true }).waitFor({ state: 'visible' });
+  await page.evaluate(async () => {
+    window.__unmountMail();
+    window.__mailRows.communication_threads = window.__savedMailThreads;
+    window.__mailRows.communication_messages = window.__savedMailMessages;
+    window.__mailMountContext.session.user.role = 'member';
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    const account = {
+      account_key: 'email:second@example.test', channel: 'email', address: 'second@example.test',
+      profile_json: { owner_user_id: 'alice' },
+    };
+    window.__mailRows.communication_accounts.push(account);
+    window.__mailNativeAccounts.set(account.account_key, structuredClone(account));
+    window.__mailRows.outbound_messages.push({
+      id: 'message-revoked-b', channel: 'email', direction: 'outbound',
+      sender_account_id: account.account_key, recipient_email: 'private@example.test',
+      subject: 'Second account private mail', body_text: 'PRIVATE SECOND ACCOUNT BODY',
+      approval_status: 'approved', send_status: 'sent', created_at_ms: Date.now(), updated_at_ms: Date.now(),
+    });
+    window.__mailNotify('communication_accounts');
+    window.__mailNotify('outbound_messages');
+  });
+  await page.waitForFunction(() => document.querySelector('[data-mail-account]')?.textContent.includes('second@example.test'));
+  await page.locator('[data-mail-scope-id="all"]').click();
+  await page.locator('[data-mail-record-id="message-revoked-b"]').click();
+  await page.getByText('PRIVATE SECOND ACCOUNT BODY', { exact: true }).waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    const key = 'email:second@example.test';
+    const native = window.__mailNativeAccounts.get(key);
+    window.__mailNativeAccounts.set(key, { ...native, profile_json: { owner_user_id: 'bob' } });
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.getByText('PRIVATE SECOND ACCOUNT BODY', { exact: true }).waitFor({ state: 'hidden', timeout: 8_000 });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    const key = 'email:alice@example.test';
+    const native = window.__mailNativeAccounts.get(key);
+    window.__mailNativeAccounts.set(key, { ...native, profile_json: { owner_user_id: 'bob' } });
+    window.__mailReadFailures.set('business_module_catalog', 'PENDING');
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.getByText('Keine E-Mails', { exact: true }).waitFor({ state: 'visible', timeout: 8_000 });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
+  await page.evaluate(() => {
+    const key = 'email:alice@example.test';
+    const native = window.__mailNativeAccounts.get(key);
+    window.__mailNativeAccounts.set(key, { ...native, profile_json: { owner_user_id: 'alice' } });
+    window.__mailReadFailures.delete('business_module_catalog');
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    // An unrelated slow query must not delay hiding a mailbox whose native
+    // account can no longer be verified.
+    window.__mailReadFailures.set('outbound_engagements', 'PENDING');
+    window.__mailNativeUnavailable = true;
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 8_000 });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
+  assert.equal(await page.locator('[data-mail-record-id="thread-sent"]').count(), 0);
+  await page.evaluate(() => {
+    window.__mailReadFailures.delete('outbound_engagements');
+    window.__mailNativeUnavailable = false;
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    const key = 'email:alice@example.test';
+    const native = window.__mailNativeAccounts.get(key);
+    window.__mailNativeAccounts.set(key, { ...native, profile_json: { owner_user_id: 'bob' } });
+    // Keep the old owner, threads, and bodies in local RxDB. Only native
+    // authority changes, as happens when a user's share is revoked.
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.getByText('Keine E-Mails', { exact: true }).waitFor({ state: 'visible', timeout: 8_000 });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
+  assert.equal(await page.locator('[data-mail-record-id="thread-sent"]').count(), 0);
+  await page.evaluate(async () => {
+    window.__unmountMail();
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await page.getByText('Keine E-Mails', { exact: true }).waitFor({ state: 'visible' });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
+  assert.equal(await page.locator('[data-mail-record-id="thread-sent"]').count(), 0);
+  assert.ok(await page.evaluate(() => window.__mailRows.communication_messages.length > 0));
+  await page.evaluate(async () => {
+    window.__unmountMail();
+    window.__mailNativeUnavailable = true;
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
   assert.deepEqual(browserErrors, []);
-  console.log('Mail browser QA OK: inbox, sent, reconnect recovery, thread, campaign, draft, group, mailbox administration, Sellify series-email handoff, and responsive composer');
+  console.log('Mail browser QA OK: inbox, sent, native account revocation, reconnect recovery, thread, campaign, draft, group, mailbox administration, Sellify series-email handoff, and responsive composer');
 } catch (error) {
   // Preserve the original assertion failure and capture browser state before cleanup.
   try {
