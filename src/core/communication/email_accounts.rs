@@ -11,10 +11,11 @@
 //! Passwörter liegen ausschließlich im CTOX-Secret-Store
 //! (Scope `email-account`, Name = normalisierte Adresse).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
+use rusqlite::OptionalExtension;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -56,6 +57,11 @@ pub(crate) struct EmailAccountConfig {
     /// Business-OS-Benutzer, dem dieses Konto gehört.
     #[serde(default)]
     pub owner_user_id: String,
+    /// Explizit freigegebene Business-OS-Benutzer. `None` bedeutet bei einem
+    /// Upsert: die bisherige Freigabe unverändert lassen; `Some([])` widerruft
+    /// alle Freigaben. Neue Konten beginnen ohne Freigabe.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shared_user_ids: Option<Vec<String>>,
 }
 
 pub(crate) fn normalize_address(value: &str) -> String {
@@ -104,14 +110,21 @@ pub(crate) fn upsert_account(
         config.provider = "imap".to_owned();
     }
     let mut accounts = load_accounts(root)?;
-    if let Some(existing) = accounts
-        .iter_mut()
-        .find(|item| item.address == config.address)
-    {
+    if let Some(existing) = accounts.iter().find(|item| item.address == config.address) {
         // Owner bleibt stabil; leere Felder überschreiben Bestehendes nicht.
         if config.owner_user_id.trim().is_empty() {
             config.owner_user_id = existing.owner_user_id.clone();
         }
+        if config.shared_user_ids.is_none() {
+            config.shared_user_ids = existing.shared_user_ids.clone();
+        }
+    }
+    config.shared_user_ids.get_or_insert_with(Vec::new);
+    validate_account_users(root, &mut config)?;
+    if let Some(existing) = accounts
+        .iter_mut()
+        .find(|item| item.address == config.address)
+    {
         *existing = config.clone();
     } else {
         accounts.push(config.clone());
@@ -143,6 +156,7 @@ pub(crate) fn upsert_account(
             "owaUrl": config.owa_url,
             "ewsUsername": config.username,
             "ownerUserId": config.owner_user_id,
+            "shared_user_ids": config.shared_user_ids,
             "displayName": config.display_name,
             "source": "mail-app-account",
         });
@@ -156,6 +170,39 @@ pub(crate) fn upsert_account(
         )?;
     }
     Ok(config)
+}
+
+fn validate_account_users(root: &Path, config: &mut EmailAccountConfig) -> Result<()> {
+    config.owner_user_id = config.owner_user_id.trim().to_owned();
+    let mut users = BTreeSet::new();
+    if !config.owner_user_id.is_empty() {
+        users.insert(config.owner_user_id.clone());
+    }
+    if let Some(shares) = &mut config.shared_user_ids {
+        for shared_id in shares.iter_mut() {
+            *shared_id = shared_id.trim().to_owned();
+            if shared_id.is_empty() || !users.insert(shared_id.clone()) {
+                bail!("shared_user_ids must contain distinct, nonempty users other than the owner");
+            }
+        }
+    }
+    if users.is_empty() {
+        return Ok(());
+    }
+    let conn = crate::business_os::store::open_store(root)?;
+    for user_id in users {
+        let active = conn
+            .query_row(
+                "SELECT active FROM business_users WHERE user_id = ?1",
+                [&user_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if active != Some(1) {
+            bail!("mail account user is not an active Business OS user: {user_id}");
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn delete_account(root: &Path, address: &str) -> Result<bool> {
@@ -302,6 +349,7 @@ pub(crate) fn public_json(root: &Path, config: &EmailAccountConfig) -> Value {
         "ews_auth_type": config.ews_auth_type,
         "ews_version": config.ews_version,
         "owner_user_id": config.owner_user_id,
+        "shared_user_ids": config.shared_user_ids.clone().unwrap_or_default(),
         "has_password": has_password,
     })
 }
@@ -310,11 +358,24 @@ pub(crate) fn public_json(root: &Path, config: &EmailAccountConfig) -> Value {
 mod tests {
     use super::*;
 
+    fn seed_user(root: &Path, user_id: &str) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis() as i64;
+        crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+            root, user_id, user_id, "user", now,
+        )?;
+        Ok(())
+    }
+
     #[test]
     fn exchange_account_roundtrip_preserves_other_accounts_and_hides_password() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let root = dir.path();
         std::fs::create_dir_all(root.join("runtime"))?;
+        for user_id in ["crew-owner", "crew-reader", "lena-owner"] {
+            seed_user(root, user_id)?;
+        }
         let crew = upsert_account(
             root,
             EmailAccountConfig {
@@ -322,6 +383,7 @@ mod tests {
                 provider: "imap".into(),
                 imap_host: "crew.example.test".into(),
                 owner_user_id: "crew-owner".into(),
+                shared_user_ids: Some(vec!["crew-reader".into()]),
                 ..Default::default()
             },
             Some("crew-fixture"),
@@ -367,6 +429,7 @@ mod tests {
         assert_eq!(public["has_password"], true);
         assert_eq!(public["username"], "DOMAIN\\lena");
         assert_eq!(public["owa_url"], lena.owa_url);
+        assert_eq!(public["shared_user_ids"], json!([]));
         assert!(!public.to_string().contains("lena-fixture"));
         assert!(!serde_json::to_string(&accounts)?.contains("lena-fixture"));
         // A fresh runtime must expose the assigned account immediately, not
@@ -379,6 +442,7 @@ mod tests {
         )?;
         let profile: Value = serde_json::from_str(&profile)?;
         assert_eq!(profile["ownerUserId"], "lena-owner");
+        assert_eq!(profile["shared_user_ids"], json!([]));
         assert_eq!(profile["displayName"], "");
         assert_eq!(profile["owaUrl"], "https://lena.example.test/owa/");
         Ok(())
@@ -389,6 +453,7 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let root = dir.path();
         std::fs::create_dir_all(root.join("runtime"))?;
+        seed_user(root, "local-dev")?;
         let first = upsert_account(
             root,
             EmailAccountConfig {
@@ -460,6 +525,102 @@ mod tests {
         );
         assert!(delete_account(root, "lena@example.com")?);
         assert!(load_accounts(root)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn shared_users_are_validated_preserved_and_explicitly_revoked() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        for user_id in ["owner", "reader", "inactive"] {
+            seed_user(root, user_id)?;
+        }
+        let users = crate::business_os::store::open_store(root)?;
+        users.execute(
+            "UPDATE business_users SET active = 0 WHERE user_id = ?1",
+            ["inactive"],
+        )?;
+        drop(users);
+        let initial: EmailAccountConfig = serde_json::from_value(json!({
+            "address": "team@example.test",
+            "provider": "owa",
+            "owner_user_id": "owner",
+            "shared_user_ids": ["reader"],
+        }))?;
+        let saved = upsert_account(root, initial, Some("fixture-password"))?;
+        assert_eq!(saved.shared_user_ids, Some(vec!["reader".to_owned()]));
+        assert_eq!(
+            public_json(root, &saved)["shared_user_ids"],
+            json!(["reader"])
+        );
+
+        // Omitted shares retain the prior grants while an unrelated setting
+        // changes; omitting the password retains its secret too.
+        let update: EmailAccountConfig = serde_json::from_value(json!({
+            "address": "team@example.test",
+            "provider": "owa",
+            "display_name": "Team mail",
+        }))?;
+        let saved = upsert_account(root, update, None)?;
+        assert_eq!(saved.owner_user_id, "owner");
+        assert_eq!(saved.shared_user_ids, Some(vec!["reader".to_owned()]));
+        assert_eq!(
+            account_runtime_overrides(root, &saved)["CTO_EMAIL_PASSWORD"],
+            "fixture-password"
+        );
+        let conn = crate::communication_store::open_channel_db(&root.join("runtime/ctox.sqlite3"))?;
+        let profile_raw: String = conn.query_row(
+            "SELECT profile_json FROM communication_accounts WHERE account_key = ?1",
+            ["email:team@example.test"],
+            |row| row.get(0),
+        )?;
+        let profile: Value = serde_json::from_str(&profile_raw)?;
+        assert_eq!(profile["shared_user_ids"], json!(["reader"]));
+        assert_eq!(profile["ownerUserId"], "owner");
+        drop(conn);
+
+        let duplicate = EmailAccountConfig {
+            address: saved.address.clone(),
+            shared_user_ids: Some(vec!["reader".into(), "reader".into()]),
+            ..saved.clone()
+        };
+        assert!(upsert_account(root, duplicate, None).is_err());
+        let unknown = EmailAccountConfig {
+            address: saved.address.clone(),
+            shared_user_ids: Some(vec!["unknown-user".into()]),
+            ..saved.clone()
+        };
+        assert!(upsert_account(root, unknown, None).is_err());
+        let inactive = EmailAccountConfig {
+            address: saved.address.clone(),
+            shared_user_ids: Some(vec!["inactive".into()]),
+            ..saved.clone()
+        };
+        assert!(upsert_account(root, inactive, None).is_err());
+        assert_eq!(
+            load_accounts(root)?[0].shared_user_ids,
+            saved.shared_user_ids
+        );
+
+        let revoked = upsert_account(
+            root,
+            EmailAccountConfig {
+                address: saved.address.clone(),
+                shared_user_ids: Some(Vec::new()),
+                ..saved
+            },
+            None,
+        )?;
+        assert_eq!(revoked.shared_user_ids, Some(Vec::new()));
+        assert_eq!(public_json(root, &revoked)["shared_user_ids"], json!([]));
+        let conn = crate::communication_store::open_channel_db(&root.join("runtime/ctox.sqlite3"))?;
+        let profile_raw: String = conn.query_row(
+            "SELECT profile_json FROM communication_accounts WHERE account_key = ?1",
+            ["email:team@example.test"],
+            |row| row.get(0),
+        )?;
+        let profile: Value = serde_json::from_str(&profile_raw)?;
+        assert_eq!(profile["shared_user_ids"], json!([]));
         Ok(())
     }
 }

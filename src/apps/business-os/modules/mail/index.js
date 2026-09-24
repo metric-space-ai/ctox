@@ -2642,7 +2642,6 @@ function visibleEmailAccounts(accounts, user) {
     const owner = String(profile.owner_user_id || profile.ownerUserId || '').trim();
     const shared = arrayStrings(profile.shared_user_ids || profile.sharedUserIds || profile.member_user_ids);
     const userIds = new Set([user?.id, user?.user_id, user?.email, user?.login].filter(Boolean).map(String));
-    if (!owner) return true;
     if (userIds.has(owner)) return true;
     return shared.some((id) => userIds.has(id));
   }).sort(sortAccount);
@@ -2672,7 +2671,7 @@ function accountOwnedByCurrentUser(account, user) {
 }
 
 function isGlobalMailAdmin(user) {
-  return ['admin', 'chef', 'owner', 'founder'].includes(String(user?.role || '').toLowerCase());
+  return ['admin', 'chef', 'owner'].includes(String(user?.role || '').toLowerCase());
 }
 
 function commandOutcome(command) {

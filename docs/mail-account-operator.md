@@ -18,11 +18,21 @@ as the authenticated Mail account configuration endpoint:
   1–100. Unknown accounts fail without falling back to the instance account.
 
 The account object includes `address`, `display_name`, `provider`, `username`,
-`owner_user_id`, IMAP/SMTP host/port fields, and `ews_url`, `owa_url`,
+`owner_user_id`, `shared_user_ids`, IMAP/SMTP host/port fields, and `ews_url`, `owa_url`,
 `ews_auth_type`, `ews_version`. For Exchange, `username` is the Windows login
 if it differs from the email address. An OWA URL may supply the origin from which
 the existing connector derives `/EWS/Exchange.asmx`; a successful OWA browser
 login alone does not prove the EWS endpoint accepts the same credentials.
+Set `owner_user_id` to the verified Business OS user ID before publishing a
+personal account to non-admin users. An empty owner is not an implicit team
+share. For a team mailbox, set `shared_user_ids` to an explicit list of verified,
+active Business OS user IDs. The account endpoint accepts this field only from
+an administrator. The trusted-local CLI accepts it through `upsert --stdin`.
+Omitting the field preserves existing shares; `[]` explicitly revokes every
+share. Duplicate, empty, inactive, and unknown IDs are rejected. Do not replace
+an owner with a guessed ID or write the channel SQLite profile directly.
+Preserve the current account configuration and secret when performing an
+authorized owner or share update.
 
 Nonsecret registry entries use the existing `CTO_EMAIL_ACCOUNTS` runtime setting.
 Passwords use secret scope `email-account` and the normalized address as name.

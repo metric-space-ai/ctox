@@ -882,6 +882,25 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                         return Ok(());
                     }
                 }
+                let shared_user_ids = match parse_mail_account_shares(&body, manage_all) {
+                    Ok(shared) => shared,
+                    Err(403) => {
+                        respond_status(
+                            request,
+                            403,
+                            "only an administrator may share a mail account",
+                        )?;
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        respond_status(
+                            request,
+                            400,
+                            "shared_user_ids must be an array of user IDs",
+                        )?;
+                        return Ok(());
+                    }
+                };
                 let config = crate::communication::email_accounts::EmailAccountConfig {
                     address,
                     display_name: field("display_name"),
@@ -896,6 +915,7 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
                     ews_auth_type: field("ews_auth_type"),
                     ews_version: field("ews_version"),
                     owner_user_id: owner,
+                    shared_user_ids,
                 };
                 let password = field("password");
                 let password = if password.is_empty() {
@@ -3834,6 +3854,26 @@ fn should_serve_app_shell(rel: &str) -> bool {
     matches!(rel, "app" | "login" | "settings") || rel.starts_with("app/")
 }
 
+fn parse_mail_account_shares(
+    body: &Value,
+    manage_all: bool,
+) -> std::result::Result<Option<Vec<String>>, u16> {
+    let Some(raw) = body.get("shared_user_ids") else {
+        return Ok(None);
+    };
+    if !manage_all {
+        return Err(403);
+    }
+    let Some(items) = raw.as_array() else {
+        return Err(400);
+    };
+    items
+        .iter()
+        .map(|item| item.as_str().map(str::to_owned).ok_or(400))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map(Some)
+}
+
 fn read_json(request: &mut Request) -> anyhow::Result<Value> {
     let mut text = String::new();
     request.as_reader().read_to_string(&mut text)?;
@@ -4138,6 +4178,29 @@ fn mime_for(path: &PathBuf) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mail_share_input_requires_admin_and_explicit_array() {
+        let omitted = serde_json::json!({ "address": "team@example.test" });
+        assert_eq!(parse_mail_account_shares(&omitted, false), Ok(None));
+        assert_eq!(parse_mail_account_shares(&omitted, true), Ok(None));
+        let grant = serde_json::json!({ "shared_user_ids": ["alice", "bob"] });
+        assert_eq!(parse_mail_account_shares(&grant, false), Err(403));
+        assert_eq!(
+            parse_mail_account_shares(&grant, true),
+            Ok(Some(vec!["alice".to_owned(), "bob".to_owned()])),
+        );
+        let revoke = serde_json::json!({ "shared_user_ids": [] });
+        assert_eq!(parse_mail_account_shares(&revoke, true), Ok(Some(vec![])));
+        assert_eq!(
+            parse_mail_account_shares(&serde_json::json!({ "shared_user_ids": null }), true),
+            Err(400),
+        );
+        assert_eq!(
+            parse_mail_account_shares(&serde_json::json!({ "shared_user_ids": [7] }), true),
+            Err(400),
+        );
+    }
 
     #[test]
     fn shell_root_rejects_invalid_selected_slot_even_when_source_exists() -> anyhow::Result<()> {

@@ -248,6 +248,8 @@ const NATIVE_PROJECTION_COLLECTIONS: &[&str] = &[
     // rxdb_peer::sync_channel_state_with_database — communication channel state
     // projected from native channel/account records.
     "communication_accounts",
+    "communication_threads",
+    "communication_messages",
     "channel_pairing_state",
     // Workjet project identity and local checkout bindings are native-authored
     // through exact business_commands; peers render their projections only.
@@ -397,6 +399,12 @@ fn actor_may_replicate_document_with_reader(
     if !collection_read_allowed {
         return false;
     }
+    if matches!(
+        collection,
+        "communication_accounts" | "communication_threads" | "communication_messages"
+    ) {
+        return communication_document_visible_to_actor(root, collection, document, user_id);
+    }
     if collection == "business_commands" {
         return ctox_command_document_visible_to_user(root, document, user_id);
     }
@@ -425,6 +433,78 @@ fn actor_may_replicate_document_with_reader(
         "user_thread_links" => thread_document_visible_to_user(root, document, user_id),
         _ => false,
     }
+}
+
+/// Mail accounts and their child records are native channel-store data. Read
+/// the account association from that authority, never from a browser-writable
+/// RxDB document or a UI-only owner filter. An unbound account is private to
+/// administrators until an explicit owner or share is installed.
+fn communication_document_visible_to_actor(
+    root: &Path,
+    collection: &str,
+    document: &Value,
+    user_id: &str,
+) -> bool {
+    let key_field = match collection {
+        "communication_accounts" => "account_key",
+        "communication_threads" => "thread_key",
+        "communication_messages" => "message_key",
+        _ => return false,
+    };
+    let record_id = value_string(document, key_field);
+    if record_id.is_empty() || value_string(document, "id") != record_id {
+        return false;
+    }
+    let Ok(Some(source)) = crate::mission::channels::pull_communication_record_for_business_os(
+        root, collection, &record_id,
+    ) else {
+        return false;
+    };
+    let source_channel = value_string(&source, "channel");
+    if source_channel.is_empty() || value_string(document, "channel") != source_channel {
+        return false;
+    }
+    let account_key = value_string(&source, "account_key");
+    if account_key.is_empty() || value_string(document, "account_key") != account_key {
+        return false;
+    }
+    // Other communication providers keep their existing collection-grant
+    // behavior. Mail's personal-account policy applies to email only.
+    if source_channel != "email" {
+        return true;
+    }
+    let account = if collection == "communication_accounts" {
+        source
+    } else {
+        let Ok(Some(account)) = crate::mission::channels::pull_communication_record_for_business_os(
+            root,
+            "communication_accounts",
+            &account_key,
+        ) else {
+            return false;
+        };
+        account
+    };
+    if value_string(&account, "channel") != "email" {
+        return false;
+    }
+    let Some(profile) = account.get("profile_json").and_then(Value::as_object) else {
+        return false;
+    };
+    let owner = profile
+        .get("owner_user_id")
+        .or_else(|| profile.get("ownerUserId"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default();
+    if !owner.is_empty() && owner == user_id {
+        return true;
+    }
+    let shared = profile
+        .get("shared_user_ids")
+        .or_else(|| profile.get("sharedUserIds"))
+        .or_else(|| profile.get("member_user_ids"));
+    array_strings(shared).iter().any(|id| id == user_id)
 }
 
 pub(super) fn may_accept_peer_document_write(
@@ -6242,6 +6322,194 @@ mod tests {
             &alice_session,
         ));
 
+        Ok(())
+    }
+
+    #[test]
+    fn communication_replication_uses_native_account_owner_and_shares() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        store::ensure_legacy_collection_grants(
+            root,
+            &[
+                "communication_accounts".to_owned(),
+                "communication_threads".to_owned(),
+                "communication_messages".to_owned(),
+            ],
+        )?;
+        let now = now_ms();
+        let (alice_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root, "alice", "Alice", "user", now,
+        )?;
+        let (bob_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root, "bob", "Bob", "user", now,
+        )?;
+        let (admin_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root, "admin", "Admin", "admin", now,
+        )?;
+        crate::mission::channels::list_communication_accounts_for_business_os(root)?;
+        let conn = Connection::open(root.join("runtime/ctox.sqlite3"))?;
+        let timestamp = "2026-09-24T01:00:00Z";
+        for (name, profile) in [
+            ("alice", json!({ "owner_user_id": "alice" })),
+            ("bob", json!({ "owner_user_id": "bob" })),
+            (
+                "shared",
+                json!({ "owner_user_id": "bob", "shared_user_ids": ["alice"] }),
+            ),
+            ("unbound", json!({})),
+            ("explicit", json!({ "shared_user_ids": ["alice"] })),
+        ] {
+            let account_key = format!("email:{name}@example.test");
+            let thread_key = format!("thread-{name}");
+            let message_key = format!("message-{name}");
+            conn.execute(
+                "INSERT INTO communication_accounts
+                 (account_key, channel, address, provider, profile_json, created_at, updated_at)
+                 VALUES (?1, 'email', ?2, 'owa', ?3, ?4, ?4)",
+                params![
+                    &account_key,
+                    format!("{name}@example.test"),
+                    profile.to_string(),
+                    timestamp
+                ],
+            )?;
+            conn.execute(
+                "INSERT INTO communication_threads
+                 (thread_key, channel, account_key, subject, participant_keys_json,
+                  last_message_key, last_message_at, message_count, unread_count,
+                  metadata_json, updated_at)
+                 VALUES (?1, 'email', ?2, 'Test', '[]', ?3, ?4, 1, 0, '{}', ?4)",
+                params![&thread_key, &account_key, &message_key, timestamp],
+            )?;
+            conn.execute(
+                "INSERT INTO communication_messages
+                 (message_key, channel, account_key, thread_key, remote_id, direction,
+                  folder_hint, sender_display, sender_address, recipient_addresses_json,
+                  cc_addresses_json, bcc_addresses_json, subject, preview, body_text,
+                  body_html, raw_payload_ref, trust_level, status, seen,
+                  has_attachments, external_created_at, observed_at, metadata_json)
+                 VALUES (?1, 'email', ?2, ?3, ?1, 'inbound', 'inbox', 'Sender',
+                         'sender@example.test', '[]', '[]', '[]', 'Test', 'Preview',
+                         'Private body', '', '', 'normal', 'received', 0, 0,
+                         ?4, ?4, '{}')",
+                params![&message_key, &account_key, &thread_key, timestamp],
+            )?;
+        }
+        drop(conn);
+
+        for (name, alice_allowed, bob_allowed) in [
+            ("alice", true, false),
+            ("bob", false, true),
+            ("shared", true, true),
+            ("unbound", false, false),
+            ("explicit", true, false),
+        ] {
+            for (collection, record_id) in [
+                (
+                    "communication_accounts",
+                    format!("email:{name}@example.test"),
+                ),
+                ("communication_threads", format!("thread-{name}")),
+                ("communication_messages", format!("message-{name}")),
+            ] {
+                let document = crate::mission::channels::pull_communication_record_for_business_os(
+                    root, collection, &record_id,
+                )?
+                .context("native communication document")?;
+                assert_eq!(
+                    may_replicate_document(root, &alice_token, collection, &document),
+                    alice_allowed,
+                    "alice {collection} {name}",
+                );
+                assert_eq!(
+                    may_replicate_document(root, &bob_token, collection, &document),
+                    bob_allowed,
+                    "bob {collection} {name}",
+                );
+                assert!(may_replicate_document(
+                    root,
+                    &admin_token,
+                    collection,
+                    &document
+                ));
+                assert!(!may_accept_peer_write(root, &admin_token, collection));
+                assert!(!may_accept_peer_write(root, &alice_token, collection));
+            }
+        }
+
+        let conn = Connection::open(root.join("runtime/ctox.sqlite3"))?;
+        conn.execute(
+            "INSERT INTO communication_accounts
+             (account_key, channel, address, provider, profile_json, created_at, updated_at)
+             VALUES ('jami:team', 'jami', 'team', 'jami', '{}', ?1, ?1)",
+            [timestamp],
+        )?;
+        drop(conn);
+        let mut jami_account = crate::mission::channels::pull_communication_record_for_business_os(
+            root,
+            "communication_accounts",
+            "jami:team",
+        )?
+        .context("jami account")?;
+        assert!(may_replicate_document(
+            root,
+            &alice_token,
+            "communication_accounts",
+            &jami_account,
+        ));
+        jami_account["channel"] = json!("email");
+        assert!(!may_replicate_document(
+            root,
+            &alice_token,
+            "communication_accounts",
+            &jami_account,
+        ));
+
+        let mut alice_message =
+            crate::mission::channels::pull_communication_record_for_business_os(
+                root,
+                "communication_messages",
+                "message-alice",
+            )?
+            .context("alice message")?;
+        alice_message["account_key"] = json!("email:bob@example.test");
+        assert!(!may_replicate_document(
+            root,
+            &bob_token,
+            "communication_messages",
+            &alice_message,
+        ));
+        alice_message["message_key"] = json!("message-missing");
+        alice_message["id"] = json!("message-missing");
+        assert!(!may_replicate_document(
+            root,
+            &alice_token,
+            "communication_messages",
+            &alice_message,
+        ));
+
+        let shared_message = crate::mission::channels::pull_communication_record_for_business_os(
+            root,
+            "communication_messages",
+            "message-shared",
+        )?
+        .context("shared message")?;
+        let alice_filter =
+            replication_document_filter(root, &alice_token, "communication_messages");
+        assert!(alice_filter(&shared_message));
+        let conn = Connection::open(root.join("runtime/ctox.sqlite3"))?;
+        conn.execute(
+            "UPDATE communication_accounts SET profile_json = ?1 WHERE account_key = ?2",
+            params![
+                json!({ "owner_user_id": "bob" }).to_string(),
+                "email:shared@example.test"
+            ],
+        )?;
+        assert!(
+            !alice_filter(&shared_message),
+            "share revocation must affect an existing filter"
+        );
         Ok(())
     }
 
