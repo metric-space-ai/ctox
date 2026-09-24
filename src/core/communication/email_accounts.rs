@@ -436,7 +436,7 @@ mod tests {
         let settings = account_runtime_overrides(root, &accounts[1]);
         assert_eq!(settings["CTO_EMAIL_EWS_USERNAME"], "DOMAIN\\lena");
         assert_eq!(settings["CTO_EMAIL_OWA_URL"], lena.owa_url);
-        assert_eq!(settings["CTO_EMAIL_EWS_URL"], lena.ews_url);
+        assert_eq!(settings["CTO_EMAIL_EWS_URL"], "https://lena.example.test");
         assert_eq!(settings["CTO_EMAIL_PASSWORD"], "lena-fixture");
         assert_eq!(settings["CTO_EMAIL_IMAP_HOST"], "");
         assert_eq!(settings["CTO_EMAIL_GRAPH_ACCESS_TOKEN"], "");

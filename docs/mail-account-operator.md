@@ -39,6 +39,11 @@ hide that account; retry the supported upsert after correcting the error. This
 ordering prevents a reported failed revocation from retaining the old native
 share. Previously downloaded browser copies require a separate cache/reload
 acceptance check.
+Native send and self-test connector profiles omit Business OS owner/share fields;
+their email-account upsert preserves the current native access binding. An
+explicit empty owner or share list from the account configuration path still
+revokes it. Neither operation requires sending a message to verify the
+binding: the native profile regression covers both cases.
 
 Nonsecret registry entries use the existing `CTO_EMAIL_ACCOUNTS` runtime setting.
 Passwords use secret scope `email-account` and the normalized address as name.
