@@ -895,7 +895,7 @@ export async function mount(ctx) {
       ? t('mailReadError', 'Mail-Daten konnten nicht sicher geladen werden. Bitte erneut versuchen.')
       : '';
 
-    const shouldSync = view.loading || (view.readiness && view.readiness.ready === false);
+    const shouldSync = view.loading || (view.readiness?.ready === false && (!view.mailReadComplete || view.accounts.length > 0));
     // Bound every empty syncing view, including a folder selected after mount.
     // Do not restart the deadline on each replication notification.
     if (allRows.length || !shouldSync || view.mailReadError) {
