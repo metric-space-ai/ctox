@@ -39,7 +39,7 @@ struct CancelNativeProjectRequest {
 pub(super) fn native_project_cancel_descriptor() -> BusinessOsMcpToolDescriptor {
     write_tool(
         "business_os.cancel_project_task",
-        "Cancel an owned Workjet project task admitted by start_project_task or start_crew_execution. A repeated key returns the same cancellation command and native task result; cancellation may not undo side effects already started.",
+        "Cancel an owned Workjet native task admitted by start_project_task, start_crew_execution, or a keyed ctox.delegate_task action. A repeated key returns the same cancellation command and native task result; cancellation may not undo side effects already started.",
         serde_json::json!({"type":"object","additionalProperties":false,
             "required":["target_command_id","idempotency_key"],
             "properties":{
@@ -59,7 +59,8 @@ pub(super) fn cancel_native_project(
     let target_command_id = request.target_command_id.trim();
     anyhow::ensure!(
         (target_command_id.starts_with("workjet_project_native_")
-            || target_command_id.starts_with("workjet_crew_"))
+            || target_command_id.starts_with("workjet_crew_")
+            || target_command_id.starts_with("ctox_delegate_"))
             && target_command_id.len() <= 256,
         "native project target command is required"
     );
@@ -93,7 +94,7 @@ pub(super) fn cancel_native_project(
     enforce_module_policy(root, "ctox")?;
     let target = crate::mission::channels::inspect_business_command(root, target_command_id)?
         .context("native project target command was not found")?;
-    let canonical = &target["command"];
+    let canonical = crate::mission::channels::business_command_projection(root, target_command_id)?;
     // The core command projection deliberately redacts actor identity for audit.
     // Read ownership from the admitted native command, then bind it back to the
     // projected command before authorizing cancellation.
@@ -116,16 +117,36 @@ pub(super) fn cancel_native_project(
         && canonical
             .pointer("/payload/external_executor")
             .is_some_and(Value::is_object);
+    let app_linked = if target_command_id.starts_with("ctox_delegate_")
+        && canonical["command_type"] == "ctox.delegate_task"
+        && canonical["module"]
+            .as_str()
+            .is_some_and(|module| !module.is_empty())
+    {
+        delegate_action_command_id(
+            &admitted.module,
+            &admitted.command_type,
+            &admitted.client_context,
+            &admitted.client_context["actor"],
+        )?
+        .as_deref()
+            == Some(target_command_id)
+    } else {
+        false
+    };
+    let native_chat = (native_project || project_crew)
+        && canonical["module"] == "ctox"
+        && canonical["command_type"] == "business_os.chat.task"
+        && canonical
+            .pointer("/payload/workjet_request_fingerprint")
+            .and_then(Value::as_str)
+            .is_some();
     anyhow::ensure!(
-        (native_project || project_crew)
-            && canonical["module"] == "ctox"
-            && canonical["command_type"] == "business_os.chat.task"
-            && canonical
-                .pointer("/payload/workjet_request_fingerprint")
-                .and_then(Value::as_str)
-                .is_some()
+        (native_chat || app_linked)
             && canonical["module"].as_str() == Some(admitted.module.as_str())
             && canonical["command_type"].as_str() == Some(admitted.command_type.as_str())
+            && canonical["record_id"].as_str().filter(|id| !id.is_empty())
+                == admitted.record_id.as_deref()
             && admitted.payload == canonical["payload"]
             && admitted
                 .client_context

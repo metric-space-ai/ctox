@@ -4954,7 +4954,8 @@ fn ensure_delegate_action_intent(
     anyhow::ensure!(
         canonical["module"].as_str() == Some(module_id)
             && canonical["command_type"].as_str() == Some(proposal.command_type.as_str())
-            && canonical["record_id"].as_str() == proposal.record_id.as_deref()
+            && canonical["record_id"].as_str().filter(|id| !id.is_empty())
+                == proposal.record_id.as_deref()
             && canonical["payload"] == proposal.payload,
         "delegation key conflicts with existing intent"
     );
@@ -12832,6 +12833,75 @@ mod tests {
         let scoped = submit(other_module)?;
         assert_ne!(scoped["command_id"], command_id);
         assert_ne!(scoped["command_id"], foreign["command_id"]);
+        Ok(())
+    }
+
+    #[test]
+    fn keyed_delegate_action_cancel_replays_and_warns_after_lease() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "tickets", "Tickets", &["tickets"])?;
+        seed_default_mcp_admin(root)?;
+        seed_business_user(root, "chatgpt:other", "admin")?;
+        let start = |key: &str| {
+            call_tool(
+                root,
+                "business_os.execute_action",
+                serde_json::json!({
+                    "module_id":"tickets", "action_id":"ctox.delegate_task",
+                    "title":"Resolve the ticket", "objective":"Inspect the ticket and report",
+                    "idempotency_key":key,
+                    "_context":{"actor":"chatgpt:test-user","workspace":"test-workspace"}
+                }),
+            )
+        };
+        let cancel = |request: Value| call_tool(root, "business_os.cancel_project_task", request);
+        let queued = start("app-cancel-queued")?;
+        let queued_id = queued["command_id"].as_str().context("queued command id")?;
+        let queued_task = queued["task_id"].as_str().context("queued task id")?;
+        let cancel_queued = serde_json::json!({
+            "target_command_id":queued_id,"idempotency_key":"stop-app-queued",
+            "reason":"stop before lease",
+            "_context":{"actor":"chatgpt:test-user","workspace":"test-workspace"}
+        });
+        let mut foreign = cancel_queued.clone();
+        foreign["_context"]["actor"] = serde_json::json!("chatgpt:other");
+        assert!(cancel(foreign).is_err());
+        assert_eq!(
+            crate::mission::channels::business_command_projection(root, queued_id)?["status"],
+            "accepted"
+        );
+        let stopped = cancel(cancel_queued.clone())?;
+        assert_eq!(stopped["task_id"], queued_task);
+        assert_eq!(stopped["target_status"], "cancelled");
+        assert_eq!(stopped["side_effects_may_have_started"], false);
+        assert_eq!(
+            cancel(cancel_queued.clone())?["command_id"],
+            stopped["command_id"]
+        );
+        let mut changed = cancel_queued;
+        changed["reason"] = serde_json::json!("different cancellation intent");
+        assert!(cancel(changed).is_err());
+
+        let leased = start("app-cancel-leased")?;
+        let leased_id = leased["command_id"].as_str().context("leased command id")?;
+        let leased_task = leased["task_id"].as_str().context("leased task id")?;
+        let lease =
+            crate::mission::channels::lease_queue_task(root, leased_task, "project-worker")?;
+        assert!(lease.attempt > 0);
+        let cancel_leased = serde_json::json!({
+            "target_command_id":leased_id,"idempotency_key":"stop-app-leased",
+            "reason":"stop after lease",
+            "_context":{"actor":"chatgpt:test-user","workspace":"test-workspace"}
+        });
+        let leased_stopped = cancel(cancel_leased.clone())?;
+        assert_eq!(leased_stopped["task_id"], leased_task);
+        assert_eq!(leased_stopped["target_status"], "cancelled");
+        assert_eq!(leased_stopped["side_effects_may_have_started"], true);
+        assert_eq!(
+            cancel(cancel_leased)?["command_id"],
+            leased_stopped["command_id"]
+        );
         Ok(())
     }
 
