@@ -872,13 +872,31 @@ mailQa: try {
     window.__unmountMail = await window.__mailMount(window.__mailMountContext);
   });
   await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
-  await page.evaluate(async () => {
-    window.__unmountMail();
+  await page.evaluate(() => {
+    window.__mailNativeUnavailable = true;
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 8_000 });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
+  assert.equal(await page.locator('[data-mail-record-id="thread-sent"]').count(), 0);
+  await page.evaluate(() => {
+    window.__mailNativeUnavailable = false;
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
     const key = 'email:alice@example.test';
     const native = window.__mailNativeAccounts.get(key);
     window.__mailNativeAccounts.set(key, { ...native, profile_json: { owner_user_id: 'bob' } });
     // Keep the old owner, threads, and bodies in local RxDB. Only native
     // authority changes, as happens when a user's share is revoked.
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.getByText('Keine E-Mails', { exact: true }).waitFor({ state: 'visible', timeout: 8_000 });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
+  assert.equal(await page.locator('[data-mail-record-id="thread-sent"]').count(), 0);
+  await page.evaluate(async () => {
+    window.__unmountMail();
     window.__unmountMail = await window.__mailMount(window.__mailMountContext);
   });
   await page.getByText('Keine E-Mails', { exact: true }).waitFor({ state: 'visible' });

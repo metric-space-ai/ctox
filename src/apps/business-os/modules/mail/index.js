@@ -257,7 +257,6 @@ export async function mount(ctx) {
     refreshSequence: 0,
     lastSuccessfulMailSequence: 0,
     authorityDecisionSequence: 0,
-    lastAuthorityOkAt: 0,
     lastAppliedAuxiliarySequence: 0,
     busy: false,
     mailserver: {
@@ -585,6 +584,34 @@ export async function mount(ctx) {
     return entry.promise;
   }
 
+  function hideUnverifiedMail() {
+    view.accounts = [];
+    view.threads = [];
+    view.communicationMessages = [];
+    view.campaigns = [];
+    view.engagements = [];
+    view.outboundMessages = [];
+    view.approvals = [];
+    view.accountKey = '';
+    view.scopeType = 'queue';
+    view.scopeId = 'inbound';
+    view.selectedKind = '';
+    view.selectedId = '';
+    view.selectedAccountKey = '';
+    view.selectedRecords.clear();
+    view.pendingSeriesHandoff = null;
+    view.route.open = false;
+    refs.routeDrawer.hidden = true;
+    closeComposer();
+    if (view.contentEditor || !refs.contentSurface.hidden) {
+      refs.contentSurface.hidden = true;
+      void closeGroupContentEditor().catch((error) => {
+        console.warn('[mail] content editor cleanup failed', error);
+      });
+    }
+    view.mailReadComplete = false;
+  }
+
   async function readSnapshot() {
     const sequence = ++view.refreshSequence;
     let recoveredCollection = false;
@@ -626,18 +653,10 @@ export async function mount(ctx) {
         if (sequence > view.authorityDecisionSequence) {
           view.authorityDecisionSequence = sequence;
           view.mailReadError = String(error?.message || error);
-          // An already validated snapshot can survive a short reconnect. A
-          // new mount never renders persisted mail before native authority is
-          // checked, and an extended outage cannot retain it indefinitely.
-          if (!view.lastAuthorityOkAt || Date.now() - view.lastAuthorityOkAt > 30_000) {
-            view.accounts = [];
-            view.threads = [];
-            view.communicationMessages = [];
-            view.accountKey = '';
-            view.selectedKind = '';
-            view.selectedId = '';
-            view.mailReadComplete = false;
-          }
+          // A stale local snapshot cannot prove that access still exists.
+          // Keep persisted RxDB data intact, but hide it until native authority
+          // has confirmed this account again.
+          hideUnverifiedMail();
           view.loading = false;
         }
         return;
@@ -648,8 +667,12 @@ export async function mount(ctx) {
     if (sequence > view.authorityDecisionSequence) {
       if (authorizedAccounts) {
         view.authorityDecisionSequence = sequence;
-        view.lastAuthorityOkAt = Date.now();
         view.accounts = authorizedAccounts;
+        if (!view.accounts.length) {
+          hideUnverifiedMail();
+          view.mailReadComplete = true;
+          view.mailReadError = '';
+        }
         const visibleAccountKeys = new Set(view.accounts.map((account) => account.account_key));
         if (accounts && threads && communicationMessages) {
           view.threads = threads.filter((thread) => thread.channel === 'email' && !isDeleted(thread) && visibleAccountKeys.has(thread.account_key));
@@ -684,6 +707,12 @@ export async function mount(ctx) {
       )).sort(sortUpdatedDesc);
       if (approvals) view.approvals = approvals.filter((approval) => !isDeleted(approval));
       view.lastAppliedAuxiliarySequence = sequence;
+    }
+    if (!view.accounts.length) {
+      view.campaigns = [];
+      view.engagements = [];
+      view.outboundMessages = [];
+      view.approvals = [];
     }
     view.loading = !view.mailReadComplete;
   }
@@ -831,7 +860,7 @@ export async function mount(ctx) {
 
     refs.readError.hidden = !view.mailReadError;
     refs.readErrorText.textContent = view.mailReadError
-      ? t('mailReadError', 'Postfach konnte nicht aktualisiert werden. Zuletzt geladene Nachrichten bleiben sichtbar.')
+      ? t('mailReadError', 'Mail-Daten konnten nicht sicher geladen werden. Bitte erneut versuchen.')
       : '';
 
     const shouldSync = view.loading || (view.readiness && view.readiness.ready === false);
