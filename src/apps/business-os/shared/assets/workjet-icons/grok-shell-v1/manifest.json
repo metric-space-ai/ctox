@@ -1,0 +1,56 @@
+{
+  "schema": "workjet.grok-shell-icon-selection.v1",
+  "provider": "Grok Imagine",
+  "mode": "Agent",
+  "count": 4,
+  "icons": [
+    {
+      "appId": "creator",
+      "prompt": "Mobile app icon for App Creator, an AI app-building studio. Full-bleed subtle violet to cobalt gradient background reaching all four sharp canvas corners. Central symbol: one large solid white application window whose central opening is cut into two oversized opposing code brackets; no controls, labels, lines or dots. Flat design, no 3D, no gloss. Symbol fills 78% of the square. No extra details, outer border, mask or mockup. Instantly recognizable at 60x60 pixels. Clean, modern, premium. Single 1:1 square render.",
+      "promptSha256": "4fe6ae5cddad1576e5adb37c26ce32bd9696dfabcea6de6ac3ec1115955118be",
+      "sourceJpegSha256": "278297708bf33b93cec77a03da4edb6b81eeae3409c9e0d6e31a2a62fc0b5352",
+      "sourceAsset": "shared/assets/workjet-icons/grok-shell-v1/source/creator-1408.png",
+      "sourceSha256": "21440dc6acc5da4160a57fbf4887a64569e770c672ee4671d6840303b2e7d0fb",
+      "renderAsset": "shared/assets/workjet-icons/grok-shell-v1/creator.png",
+      "renderSha256": "acb089e621a25ecdd20a6fe10f289d61f340938326c2dae1252ded10af0e0fb3",
+      "reviewed60Sha256": "285f3dc33cb265395f32cad9c2b513ac4972f2c8d1448cd75f19461fbc059e99",
+      "postUrl": "https://grok.com/imagine/post/08cdf0e3-9d10-446b-a565-dd058c8378c6"
+    },
+    {
+      "appId": "desktop",
+      "prompt": "Mobile app icon for Desktop, a workspace launcher. Full-bleed subtle midnight slate to cobalt gradient background reaching all four sharp canvas corners. Central symbol: one large solid white desktop monitor whose screen frame transforms into two offset blank window panels sharing one border above a short stand; no controls, labels or tiny icons. Flat design, no 3D, no gloss. Symbol fills 78% of the square. No text, no extra details, no outer border, no mask, no mockup. Instantly recognizable at 60x60 pixels. Clean, modern, premium. Single 1:1 square render.",
+      "promptSha256": "785dbc52b0401caba981761965a6ecff9991dae682c708442dc9d5b522d8b88d",
+      "sourceJpegSha256": "0113178c3fec7c92935cf3a3be6e6ef8e57bf813a54dbd7b74af9dc096c428e3",
+      "sourceAsset": "shared/assets/workjet-icons/grok-shell-v1/source/desktop-1408.png",
+      "sourceSha256": "eeb09d275d9efb149a8d2dff73a683e6733b8827ea58b038317243c88d465057",
+      "renderAsset": "shared/assets/workjet-icons/grok-shell-v1/desktop.png",
+      "renderSha256": "a29aad670cdcbb65e8864c81e30bb6b5713cdb5e27dc0f738a5534bf6d40c8f3",
+      "reviewed60Sha256": "f096869ec302d8e65e65eb3ebbc34ba1eed032fb94ebc80788d6c06c6eea7929",
+      "postUrl": "https://grok.com/imagine/post/78e42235-1ae7-438a-827a-8db63200c73e"
+    },
+    {
+      "appId": "explorer",
+      "prompt": "Mobile app icon for Explorer, a file manager. Full-bleed subtle deep teal to indigo gradient background reaching all four sharp canvas corners. Central symbol: one large solid white folder whose front flap transforms into one broad forward navigation arrow, with no labels or miniature interface. Flat design, no 3D, no gloss. Symbol fills 78% of the square. No text, no extra details, no outer border, no mask, no mockup. Instantly recognizable at 60x60 pixels. Clean, modern, premium. Single 1:1 square render.",
+      "promptSha256": "fce9b0c7f2f80039d55dbe9cdbf718d5581ee87d57f06f370ee566e04ece6ca5",
+      "sourceJpegSha256": "d474042f3d06bb65cddd7ed112b48bd931013dd97a1cb74241946d7b81035b62",
+      "sourceAsset": "shared/assets/workjet-icons/grok-shell-v1/source/explorer-1408.png",
+      "sourceSha256": "8bba0c4b3a0d9547979a08d68b6ccb5e2897a5a47926f57d00a4d2060f587d50",
+      "renderAsset": "shared/assets/workjet-icons/grok-shell-v1/explorer.png",
+      "renderSha256": "7ef0e24a291ce31f1bb6d86283cb0b90bd14a2023589bb9be6452553c84846b1",
+      "reviewed60Sha256": "001b0bb27876a9e363a9bceb67b1ad42a6e1be22c124c5e771dc8b2ae6af25a4",
+      "postUrl": "https://grok.com/imagine/post/116131fa-4270-4695-96c7-6429fcb4c595"
+    },
+    {
+      "appId": "file-viewer",
+      "prompt": "Mobile app icon for File Viewer, a secure file-preview app. Full-bleed subtle amber to deep plum gradient background reaching all four sharp canvas corners. Central symbol: one large solid white blank document with one folded corner and a bold eye-shaped negative-space preview aperture through its center; no writing, lines or controls. Flat design, no 3D, no gloss. Symbol fills 78% of the square. No text, no extra details, no outer border, no mask, no mockup. Instantly recognizable at 60x60 pixels. Clean, modern, premium. Single 1:1 square render.",
+      "promptSha256": "ce7ed7cd3a57cc3bae6177616cf3be2cbc19efb374c27c4dd4ee88dafd9da3bf",
+      "sourceJpegSha256": "0222c9f9a6ca93ebc65872fac2badd168d122b55f1e08b4bfe1c2bc95898dc33",
+      "sourceAsset": "shared/assets/workjet-icons/grok-shell-v1/source/file-viewer-1408.png",
+      "sourceSha256": "9c6f9867b8f7e515475a4222623997f0e37017c0e100054721038383ce929abc",
+      "renderAsset": "shared/assets/workjet-icons/grok-shell-v1/file-viewer.png",
+      "renderSha256": "78311622fe7fd9a6a63f09f39ed7cc87da3cc25c7a8449f770211b8c2d6169f8",
+      "reviewed60Sha256": "3e11c40f5643865dca88a6d447b7a75eac6d110d6a0e438b650be1ffe5ae15fd",
+      "postUrl": "https://grok.com/imagine/post/bc3fc283-e743-4f9e-81b4-8fc2fd2a132a"
+    }
+  ]
+}

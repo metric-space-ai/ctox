@@ -1,12 +1,13 @@
 import { operatorIconFor } from './operator-icon-selection.js';
+import { grokShellIconFor } from './grok-shell-icon-selection.js';
 
 export function resolveLauncherIcon(target, { fallbackSvg = '' } = {}) {
   const kind = String(target?.kind || '');
   const id = String(target?.id || '');
   const moduleLayout = target?.module?.layout || {};
-  const operatorIcon = kind === 'module' ? operatorIconFor(id) : null;
+  const selectedIcon = kind === 'module' ? operatorIconFor(id) || grokShellIconFor(id) : null;
   const rasterAsset = String(
-    operatorIcon?.asset
+    selectedIcon?.asset
       || (kind === 'module' ? moduleLayout.icon_asset : target?.app?.iconAsset)
       || '',
   ).trim();
