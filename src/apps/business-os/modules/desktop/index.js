@@ -1,7 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { createCtoxLauncher } from './ctoxLauncher.js';
-import { ensureDesktopLayoutWithAuthority } from './layout-authority.js';
+import { ensureDesktopLayoutWithAuthority, isDatabaseClosingError } from './layout-authority.js?v=20260919-layout-boundary-v2';
 import { makeIconDraggable } from './iconDrag.js?v=20260816-browser-sync-guards-v141';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js?v=20260816-browser-sync-guards-v141';
 import {
@@ -1056,10 +1056,6 @@ export async function mount(ctx) {
     return typeof unsubscribe === 'function' ? unsubscribe : () => {};
   }
 
-  function isDatabaseClosingError(error) {
-    const message = String(error?.message || error || '');
-    return /IDBDatabase.*closing|database connection is closing/i.test(message);
-  }
 
   function showManagedAuthorizationError(error) {
     const message = String(error?.message || error || '');
@@ -1119,6 +1115,7 @@ export async function mount(ctx) {
         ? () => ctx.readNativeCollectionDocument('desktop_layout', LAYOUT_DOC_ID, { timeoutMs: 5000 })
         : null,
       insertMissingSeed,
+      onDatabaseClosing: () => console.info('[desktop] layout read skipped during database restart; using default layout'),
     });
   }
 
