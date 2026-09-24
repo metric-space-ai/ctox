@@ -75,6 +75,11 @@ assert.equal(resolveWindowLayout({
   workRect,
   pointerType: 'mouse',
 }), null);
+assert.equal(resolveWindowLayout({
+  sourceRect: { left: 10, top: 180, width: 500, height: 420 },
+  workRect,
+  allowWorkspaceSnap: false,
+}), null);
 
 const previous = resolveWindowLayout({
   sourceRect: { left: 12, top: 180, width: 500, height: 420 },

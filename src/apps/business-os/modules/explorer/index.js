@@ -15,6 +15,7 @@ const DOCUMENT_EXTENSIONS = new Set(['docx', 'md', 'markdown', 'txt']);
 // language switch, so one active locale per session is sufficient).
 const MESSAGES = {
   de: {
+    selectionActions: 'Aktionen für Auswahl',
     recentCreated: 'Zuletzt erstellt',
     recentModified: 'Zuletzt geändert',
     recentCreatedMark: 'NEU',
@@ -84,6 +85,7 @@ const MESSAGES = {
     importLabel: 'Importieren',
   },
   en: {
+    selectionActions: 'Actions for selection',
     recentCreated: 'Recently created',
     recentModified: 'Recently modified',
     recentCreatedMark: 'NEW',
@@ -211,6 +213,7 @@ export async function mount(ctx) {
     refresh: container.querySelector('[data-explorer-refresh]'),
     newFolder: container.querySelector('[data-explorer-new-folder]'),
     upload: container.querySelector('[data-explorer-upload]'),
+    selectionActions: container.querySelector('[data-explorer-selection-actions]'),
     fileInput: container.querySelector('[data-explorer-file-input]'),
     sort: container.querySelector('[data-explorer-sort]'),
   };
@@ -234,6 +237,16 @@ export async function mount(ctx) {
   refs.refresh.addEventListener('click', loadRows);
   refs.newFolder.addEventListener('click', promptCreateFolder);
   refs.upload.addEventListener('click', openUploadDialog);
+  refs.selectionActions.addEventListener('click', (event) => {
+    const row = filteredRows().find((entry) => entry.id === state.selectedId);
+    if (!row) return;
+    const bounds = refs.selectionActions.getBoundingClientRect();
+    showRowActions(row, {
+      clientX: bounds.left, clientY: bounds.bottom,
+      preventDefault: () => event.preventDefault(),
+      stopPropagation: () => event.stopPropagation(),
+    });
+  });
   refs.root.addEventListener('dragover', (event) => {
     if (!canAcceptFileDrop() || !dataTransferContainsFiles(event.dataTransfer)) return;
     event.preventDefault();
@@ -290,6 +303,7 @@ export async function mount(ctx) {
   }
 
   async function loadRows() {
+    refs.selectionActions.disabled = true;
     refs.table.replaceChildren(message(T.loadingFiles));
     refs.preview.innerHTML = emptyPreview();
     revokePreviewUrl();
@@ -403,6 +417,7 @@ export async function mount(ctx) {
   }
 
   function renderRows() {
+    refs.selectionActions.disabled = true;
     const rows = filteredRows();
     refs.count.textContent = T.objectCount(rows.length);
     if (state.lastLoad && !state.lastLoad.ok) {
@@ -458,6 +473,10 @@ export async function mount(ctx) {
     item.type = 'button';
     item.className = 'app-explorer-row';
     item.dataset.id = row.id;
+    item.dataset.contextRecordId = row.id;
+    item.dataset.contextRecordType = row.isFolder ? 'folder' : row.sourceId;
+    item.dataset.contextLabel = row.label;
+    item.dataset.contextCollection = row.sourceId;
     item.setAttribute('aria-label', `${row.label}, ${row.kind}`);
     item.innerHTML = `
       <span class="app-explorer-file">
@@ -488,32 +507,34 @@ export async function mount(ctx) {
         openRow(row);
       }
     });
-    item.addEventListener('contextmenu', (event) => {
-      if (!ctx.contextMenu) return;
-      const actions = [
-        { label: row.isFolder ? T.open : T.previewLabel, icon: '↗', action: () => openRow(row) },
-      ];
-      if (row.sourceId === FILE_SOURCE.id) {
-        actions.push(
-          { type: 'separator' },
-          ...(!row.isFolder ? [{ label: T.download, icon: '↓', action: () => downloadRow(row) }] : []),
-          { label: T.rename, icon: '✎', action: () => renameFileRow(row) },
-          { label: T.toTrash, icon: '⌫', action: () => trashFileRow(row) }
-        );
-      } else {
-        actions.push(
-          { type: 'separator' },
-          { label: T.showInModule, icon: '⌁', action: () => openRow(row) }
-        );
-      }
-      ctx.contextMenu.show(event, actions);
-    });
     return item;
+  }
+
+  function showRowActions(row, event) {
+    if (!ctx.contextMenu) return;
+    const actions = [
+      { label: row.isFolder ? T.open : T.previewLabel, icon: '↗', action: () => openRow(row) },
+    ];
+    if (row.sourceId === FILE_SOURCE.id) {
+      actions.push(
+        { type: 'separator' },
+        ...(!row.isFolder ? [{ label: T.download, icon: '↓', action: () => downloadRow(row) }] : []),
+        { label: T.rename, icon: '✎', action: () => renameFileRow(row) },
+        { label: T.toTrash, icon: '⌫', action: () => trashFileRow(row) }
+      );
+    } else {
+      actions.push(
+        { type: 'separator' },
+        { label: T.showInModule, icon: '⌁', action: () => openRow(row) }
+      );
+    }
+    ctx.contextMenu.show(event, actions);
   }
 
   function selectRow(row) {
     if (!row) return;
     state.selectedId = row.id;
+    refs.selectionActions.disabled = !ctx.contextMenu;
     refs.table.querySelectorAll('.app-explorer-row').forEach((node) => {
       node.classList.toggle('is-selected', node.dataset.id === row.id);
       node.setAttribute('aria-selected', node.dataset.id === row.id ? 'true' : 'false');
@@ -1488,6 +1509,7 @@ function applyStaticMarkupLabels(container) {
     '[data-explorer-address]': ['aria-label', T.path],
     '[data-explorer-new-folder]': ['aria-label', T.newFolderCreate],
     '[data-explorer-upload]': ['aria-label', T.uploadFiles],
+    '[data-explorer-selection-actions]': ['aria-label', T.selectionActions],
     '[data-explorer-search]': ['placeholder', T.searchPlaceholder],
     '[data-explorer-sources]': ['aria-label', T.places],
     '[data-explorer-view-toggle]': ['aria-label', T.view],

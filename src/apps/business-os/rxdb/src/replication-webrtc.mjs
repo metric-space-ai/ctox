@@ -2337,6 +2337,10 @@ class CtoxWebRtcReplicationState {
       multiTabBroker: this.multiTabBroker,
       queryGeneration: () => this.collectionQueryGenerationToken(this.activeRemotePeerId),
       replicationOrigin: demandReplicationOrigin,
+      // SYNC-12: live provider — runPeerReady recomputes this digest at every
+      // handshake, so a same-session role/grant change takes effect at the
+      // next control-plane read without rebuilding the loader.
+      readPermissionDigest: () => this.readPermissionDigest || '',
     }) : null;
     if (typeof this.collection.setDemandLoader === 'function') {
       this.collection.setDemandLoader(this.demandLoader);

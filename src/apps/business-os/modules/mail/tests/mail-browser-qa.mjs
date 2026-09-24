@@ -45,6 +45,9 @@ const address = server.address();
 const baseUrl = `http://127.0.0.1:${address.port}`;
 const browser = await chromium.launch({ headless: true, executablePath: findChromiumExecutable() });
 const context = await browser.newContext({ viewport: { width: 1440, height: 940 } });
+if (process.env.CTOX_MAIL_QA_TRACE) {
+  await context.tracing.start({ screenshots: true, snapshots: true });
+}
 const page = await context.newPage();
 const browserErrors = [];
 page.on('pageerror', (error) => browserErrors.push(String(error?.stack || error)));
@@ -95,6 +98,10 @@ mailQa: try {
         thread_key: 'thread-3', channel: 'email', account_key: 'email:alice@example.test',
         subject: 'Neuer Supportfall', participant_keys_json: ['help@example.test'],
         last_message_at: '2026-08-06T08:45:00Z', unread_count: 2, updated_at: '2026-08-06T08:45:00Z',
+      }, {
+        thread_key: 'thread-sent', channel: 'email', account_key: 'email:alice@example.test',
+        subject: 'Versandter Bericht', participant_keys_json: ['kunde@example.test'],
+        last_message_at: '2026-08-06T09:10:00Z', unread_count: 0, updated_at: '2026-08-06T09:10:00Z',
       }],
       communication_messages: [{
         message_key: 'mail-1',
@@ -115,6 +122,10 @@ mailQa: try {
       }, {
         message_key: 'mail-3', thread_key: 'thread-3', channel: 'email', account_key: 'email:alice@example.test', direction: 'inbound', folder_hint: 'inbox',
         sender_display: 'Help Desk', sender_address: 'help@example.test', subject: 'Neuer Supportfall', body_text: 'Wir benötigen kurzfristig Unterstützung.', external_created_at: '2026-08-06T08:45:00Z', observed_at: '2026-08-06T08:45:01Z',
+      }, {
+        message_key: 'mail-sent', thread_key: 'thread-sent', channel: 'email', account_key: 'email:alice@example.test', direction: 'outbound', folder_hint: 'sent',
+        sender_display: 'Alice Admin', sender_address: 'alice@example.test', recipient_addresses_json: ['kunde@example.test'],
+        subject: 'Versandter Bericht', body_text: 'Der Bericht ist angehängt.', external_created_at: '2026-08-06T09:10:00Z', observed_at: '2026-08-06T09:10:01Z',
       }],
       outbound_campaigns: [{
         id: 'campaign-1',
@@ -170,6 +181,11 @@ mailQa: try {
       outbound_approvals: [],
     };
     const listeners = new Map();
+    const readFailures = new Map();
+    const readAttempts = new Map();
+    const pendingReads = new Map();
+    const maxPendingReads = new Map();
+    const abortedReads = new Map();
     const mailserver = {
       domains: [{
         domain_name: 'example.test',
@@ -207,7 +223,24 @@ mailQa: try {
     }
     function collection(name) {
       return {
-        find: () => ({ exec: async () => rows[name].map((record) => ({ toJSON: () => ({ ...record }) })) }),
+        find: (query = {}) => ({ exec: async () => {
+          if (query.signal && (!query.selector || Object.keys(query.selector).length)) throw new Error('Abortable Mail read must use an explicit empty selector');
+          readAttempts.set(name, (readAttempts.get(name) || 0) + 1);
+          if (readFailures.get(name) === 'PENDING') return new Promise((_, reject) => {
+            const pending = (pendingReads.get(name) || 0) + 1;
+            pendingReads.set(name, pending);
+            maxPendingReads.set(name, Math.max(maxPendingReads.get(name) || 0, pending));
+            const abort = () => {
+              pendingReads.set(name, (pendingReads.get(name) || 1) - 1);
+              abortedReads.set(name, (abortedReads.get(name) || 0) + 1);
+              reject(new Error('QUERY_CANCELLED'));
+            };
+            if (query.signal?.aborted) abort();
+            else query.signal?.addEventListener('abort', abort, { once: true });
+          });
+          if (readFailures.has(name)) throw new Error(readFailures.get(name));
+          return rows[name].map((record) => ({ toJSON: () => ({ ...record }) }));
+        } }),
         findOne: (id) => ({ exec: async () => {
           const record = rows[name].find((item) => item.id === id || item.command_id === id);
           return record ? { toJSON: () => ({ ...record }) } : null;
@@ -226,13 +259,28 @@ mailQa: try {
       import('/shared/icons.js'),
     ]);
     window.__mailRows = rows;
+    window.__mailNativeAccounts = new Map(rows.communication_accounts.map((account) => [account.account_key, structuredClone(account)]));
+    window.__mailNativeUnavailable = false;
+    window.__mailReadFailures = readFailures;
+    window.__mailReadAttempts = readAttempts;
+    window.__mailPendingReads = pendingReads;
+    window.__mailMaxPendingReads = maxPendingReads;
+    window.__mailAbortedReads = abortedReads;
+    window.__mailNotify = notify;
     window.__mailserver = mailserver;
     window.__dispatchedCommands = [];
-    window.__unmountMail = await mount({
+    window.__mailMount = mount;
+    window.__mailMountContext = {
       host: document.querySelector('#host'),
       locale: 'de',
       session: { user: { id: 'alice', email: 'alice@example.test', role: 'admin' } },
       db: { collection },
+      readNativeCollectionDocument: async (name, accountKey) => {
+        if (name !== 'communication_accounts') throw new Error('unexpected native Mail collection');
+        if (window.__mailNativeUnavailable) throw new Error('native account verification unavailable');
+        const record = window.__mailNativeAccounts.get(accountKey);
+        return record ? { toJSON: () => structuredClone(record) } : null;
+      },
       sync: {
         startCollection: async () => {},
         collectionReadiness: () => ({ ready: true, state: 'live' }),
@@ -353,7 +401,8 @@ mailQa: try {
         }
         return { id: command.id, status: 'completed', result: {} };
       } },
-    });
+    };
+    window.__unmountMail = await mount(window.__mailMountContext);
     const { wirePaneGrammar } = await import('/shared/pane-grammar.js');
     for (const pane of document.querySelectorAll('[data-mail-left-pane], [data-mail-list-pane]')) {
       pane.__ctoxPaneGrammar = wirePaneGrammar(pane);
@@ -361,10 +410,106 @@ mailQa: try {
   }, iconProviderMode);
 
   await page.locator('[data-mail-root]').waitFor({ state: 'visible' });
-  assert.equal(await page.locator('[data-mail-navigation-title]').textContent(), 'E-Mail-Queues');
+  await assertVisibleText(page, 'Projektstatus August');
+  assert.deepEqual(
+    await page.locator('[data-mail-scope="queue"]').evaluateAll((nodes) => nodes.slice(0, 3).map((node) => node.dataset.mailScopeId)),
+    ['inbound', 'outbound', 'all'],
+  );
+  assert.deepEqual(await page.locator('.mail-scope-section-title').allTextContents(), ['Ordner', 'Arbeitsabläufe']);
+  if (process.env.CTOX_MAIL_QA_INBOX_SCREENSHOT) {
+    await page.screenshot({ path: resolve(process.env.CTOX_MAIL_QA_INBOX_SCREENSHOT), fullPage: true });
+  }
+  assert.equal(await page.locator('[data-mail-navigation-title]').textContent(), 'Postfach');
   assert.equal(await page.locator('[data-mail-account]').inputValue(), 'all');
   assert.match(await page.locator('[data-mail-account]').textContent(), /alice@example\.test/);
+  assert.match(await page.locator('[data-mail-scope-id="outbound"]').textContent(), /Gesendet/);
+  // A provider can reuse a thread ID in another mailbox. The newer message
+  // must never replace Alice's row or leak into her opened conversation.
+  await page.evaluate(() => {
+    window.__mailRows.communication_accounts.push({
+      account_key: 'email:bob@example.test', channel: 'email', address: 'bob@example.test',
+      provider: 'ctox-mailserver', profile_json: { owner_user_id: 'bob' },
+    });
+    window.__mailRows.communication_messages.push({
+      message_key: 'bob-shared-thread', thread_key: 'thread-1', channel: 'email',
+      account_key: 'email:bob@example.test', direction: 'outbound', folder_hint: 'sent',
+      sender_address: 'bob@example.test', subject: 'Bob private subject', body_text: 'Bob private body',
+      external_created_at: '2026-08-06T10:00:00Z', observed_at: '2026-08-06T10:00:01Z',
+    });
+    window.__mailNotify('communication_accounts');
+    window.__mailNotify('communication_messages');
+  });
+  await page.waitForFunction(() => document.querySelector('[data-mail-account]')?.textContent.includes('bob@example.test'));
+  const aliceSharedRow = page.locator('[data-mail-record-kind="thread"][data-mail-record-id="thread-1"]');
+  assert.match(await aliceSharedRow.textContent(), /Projektstatus August/);
+  assert.doesNotMatch(await aliceSharedRow.textContent(), /Bob private/);
+  await aliceSharedRow.click();
+  await page.locator('[data-mail-detail]').getByText('Können Sie uns den aktuellen Stand schicken?', { exact: true }).waitFor({ state: 'visible' });
+  assert.doesNotMatch(await page.locator('[data-mail-detail]').textContent(), /Bob private/);
+  await page.locator('[data-mail-left-pane] [data-pg-tray-toggle]').click();
+  await page.locator('[data-mail-account]').selectOption('email:bob@example.test');
+  assert.equal(await page.locator('[data-mail-record-kind="thread"]').count(), 0);
+  await page.locator('[data-mail-detail]').waitFor({ state: 'hidden' });
+  assert.doesNotMatch(await page.locator('[data-mail-detail]').textContent(), /Können Sie uns den aktuellen Stand schicken/);
+  await page.locator('[data-mail-account]').selectOption('all');
+  await page.locator('[data-mail-left-pane] [data-pg-tray-toggle]').click();
+  await page.evaluate(() => {
+    window.__mailRows.communication_accounts = window.__mailRows.communication_accounts.filter((account) => account.account_key !== 'email:bob@example.test');
+    window.__mailRows.communication_messages = window.__mailRows.communication_messages.filter((message) => message.message_key !== 'bob-shared-thread');
+    window.__mailNotify('communication_accounts');
+    window.__mailNotify('communication_messages');
+  });
+  await page.waitForFunction(() => !document.querySelector('[data-mail-account]')?.textContent.includes('bob@example.test'));
+  await page.locator('[data-mail-list-pane] [data-pg-band="outbound"]').click();
+  await assertVisibleText(page, 'Versandter Bericht');
+  assert.deepEqual(
+    await page.locator('[data-mail-scope="queue"][aria-selected="true"]').evaluateAll((nodes) => nodes.map((node) => node.dataset.mailScopeId)),
+    ['outbound'],
+  );
+  assert.deepEqual(
+    await page.locator('[data-mail-scope="queue"].is-active').evaluateAll((nodes) => nodes.map((node) => node.dataset.mailScopeId)),
+    ['outbound'],
+  );
+  assert.match(await page.locator('[data-mail-record-id="thread-sent"] .mail-record-status').textContent(), /Gesendet/);
+  if (process.env.CTOX_MAIL_QA_SENT_SCREENSHOT) {
+    await page.screenshot({ path: resolve(process.env.CTOX_MAIL_QA_SENT_SCREENSHOT), fullPage: true });
+  }
+  assert.equal(await page.locator('[data-mail-list-title]').textContent(), 'Gesendet');
+  await page.locator('[data-mail-list-pane] [data-pg-band="inbound"]').click();
   await assertVisibleText(page, 'Projektstatus August');
+  await page.locator('[data-mail-scope-id="outbound"]').click();
+  await assertVisibleText(page, 'Versandter Bericht');
+  await page.locator('[data-mail-scope-id="inbound"]').click();
+  await page.locator('[data-mail-record-id="thread-1"]').click();
+  await page.evaluate(() => {
+    window.__previousThreadReads = window.__mailReadAttempts.get('communication_threads') || 0;
+    window.__mailReadFailures.set('communication_threads', 'QUERY_CANCELLED');
+    window.__mailNotify('communication_threads');
+  });
+  await page.waitForFunction(() => (window.__mailReadAttempts.get('communication_threads') || 0) > window.__previousThreadReads);
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 1);
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"].is-selected').count(), 1);
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
+  await page.evaluate(() => {
+    window.__mailReadFailures.set('communication_threads', 'mail read failed');
+    window.__mailNotify('communication_threads');
+  });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 1);
+  await page.evaluate(() => {
+    window.__mailReadFailures.delete('communication_threads');
+    window.__savedMailThreads = [...window.__mailRows.communication_threads];
+    window.__mailRows.communication_threads = [];
+    window.__mailNotify('communication_threads');
+  });
+  await page.locator('[data-mail-list-empty]').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('[data-mail-read-error]').isVisible(), false);
+  await page.evaluate(() => {
+    window.__mailRows.communication_threads = window.__savedMailThreads;
+    window.__mailNotify('communication_threads');
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.locator('[data-mail-close-detail]').click();
   await assertMailIconAcceptance(page, iconProviderMode);
   if (mailIconOnly) {
     assert.deepEqual(browserErrors, [], `Mail icon QA must not emit page or console errors (${iconProviderMode} provider)`);
@@ -372,8 +517,8 @@ mailQa: try {
     break mailQa;
   }
 
-  await page.locator('[data-mail-select-record="thread:thread-1"]').check();
-  await page.locator('[data-mail-select-record="thread:thread-2"]').check();
+  await page.locator('[data-mail-record-id="thread-1"][data-mail-record-account="email:alice@example.test"] [data-mail-select-record]').check();
+  await page.locator('[data-mail-record-id="thread-2"][data-mail-record-account="email:alice@example.test"] [data-mail-select-record]').check();
   await page.locator('[data-mail-bulkbar]').waitFor({ state: 'visible' });
   await page.locator('[data-mail-bulk-route]').click();
   await page.locator('[data-mail-route-destination]').selectOption('support');
@@ -423,16 +568,18 @@ mailQa: try {
   await page.locator('[data-mail-content-surface]').waitFor({ state: 'visible' });
   const editorFrame = page.frameLocator('[data-mail-easy-email-host] iframe');
   const editable = editorFrame.locator('[contenteditable="true"]').first();
+  const visibleContent = editorFrame.locator('[contenteditable="true"]:visible')
+    .filter({ hasText: 'Echter visueller Kampagneninhalt' }).first();
   await editable.waitFor({ state: 'visible' });
-  await editable.dblclick();
-  await page.keyboard.press('Meta+A');
-  await page.keyboard.insertText('Echter visueller Kampagneninhalt');
+  await editable.click();
+  await editable.pressSequentially('Echter visueller Kampagneninhalt', { delay: 15 });
+  await visibleContent.waitFor({ state: 'visible', timeout: 5000 });
   await page.locator('[data-mail-content-title]').click();
   await page.waitForTimeout(500);
   await page.locator('[data-mail-editor-history="undo"]').click();
   await page.waitForTimeout(300);
   await page.locator('[data-mail-editor-history="redo"]').click();
-  await page.waitForTimeout(500);
+  await visibleContent.waitFor({ state: 'visible' });
   await page.locator('[data-mail-editor-viewport="desktop"]').click();
   assert.equal(await page.locator('[data-mail-editor-viewport="desktop"]').getAttribute('aria-pressed'), 'true');
   await page.locator('[data-mail-editor-viewport="mobile"]').click();
@@ -509,6 +656,7 @@ mailQa: try {
   }
   await page.evaluate(() => document.documentElement.dataset.theme = 'light');
   await page.waitForTimeout(100);
+  await visibleContent.waitFor({ state: 'visible' });
   await page.locator('[data-mail-save-content]').click();
   await page.waitForFunction(() => {
     const campaign = window.__mailRows.outbound_campaigns.find((item) => item.id === 'campaign-1');
@@ -525,10 +673,10 @@ mailQa: try {
   await page.locator('[data-mail-content-surface]').waitFor({ state: 'hidden' });
   await page.locator('[data-mail-action="edit-group-content"]').click();
   await editorFrame.locator('[contenteditable="true"]').first().waitFor({ state: 'visible' });
-  await assertVisibleText(editorFrame, 'Echter visueller Kampagneninhalt');
+  await visibleContent.waitFor({ state: 'visible' });
   await page.locator('[data-mail-close-content-editor]').click();
 
-  await page.locator('[data-mail-compose]').click();
+  await page.locator('[data-mail-compose-primary]').click();
   await page.locator('[data-mail-compose-to]').fill('kontakt@example.test');
   await page.locator('[data-mail-compose-campaign]').selectOption('campaign-1');
   await page.locator('[data-mail-compose-subject]').fill('August Update');
@@ -619,8 +767,231 @@ mailQa: try {
     await page.evaluate(() => window.__mailRows.outbound_messages.map((message) => message.recipient_email).sort()),
     ['einkauf@example.test', 'kontakt@example.test', 'kontakt@example.test', 'kunde@example.test'],
   );
+  await page.setViewportSize({ width: 1440, height: 940 });
+  await page.evaluate(async () => {
+    location.hash = '';
+    window.__unmountMail();
+    window.__mailReadAttemptBaseline = window.__mailReadAttempts.get('communication_threads') || 0;
+    window.__mailReadFailures.set('communication_threads', 'PENDING');
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await page.getByText('Mail wird synchronisiert', { exact: true }).waitFor({ state: 'visible' });
+  assert.equal(await page.getByText('Keine E-Mails', { exact: true }).count(), 0);
+  await page.evaluate(() => {
+    window.__mailReadPulse = window.setInterval(() => window.__mailNotify('communication_threads'), 600);
+  });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
+  assert.ok(await page.evaluate(() => {
+    const attempts = (window.__mailReadAttempts.get('communication_threads') || 0) - window.__mailReadAttemptBaseline;
+    return attempts >= 2
+      && (window.__mailMaxPendingReads.get('communication_threads') || 0) <= 2
+      && (window.__mailPendingReads.get('communication_threads') || 0) <= 2
+      && (window.__mailAbortedReads.get('communication_threads') || 0) >= 1;
+  }), 'notification pulses must cancel timed-out reads and bound concurrent queries');
+  await page.waitForFunction(() => (window.__mailReadAttempts.get('communication_threads') || 0) - window.__mailReadAttemptBaseline >= 5, null, { timeout: 14_000 });
+  assert.ok(await page.evaluate(() => (
+    (window.__mailMaxPendingReads.get('communication_threads') || 0) <= 2
+    && (window.__mailPendingReads.get('communication_threads') || 0) <= 2
+    && (window.__mailAbortedReads.get('communication_threads') || 0) >= 3
+  )), 'multiple timeout windows must cancel pending queries and stay bounded');
+  await page.evaluate(() => {
+    window.clearInterval(window.__mailReadPulse);
+    window.__mailReadFailures.delete('communication_threads');
+    window.__mailNotify('communication_threads');
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
+  await page.evaluate(() => {
+    window.__mailRows.communication_messages.find((message) => message.message_key === 'mail-1').subject = 'Projektstatus nach Sync';
+    window.__mailFastPulse = window.setInterval(() => window.__mailNotify('communication_threads'), 20);
+  });
+  await assertVisibleText(page, 'Projektstatus nach Sync');
+  await page.evaluate(() => window.clearInterval(window.__mailFastPulse));
+  await page.evaluate(async () => {
+    window.__unmountMail();
+    window.__mailReadFailures.set('communication_threads', 'QUERY_CANCELLED');
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await page.getByText('Mail wird synchronisiert', { exact: true }).waitFor({ state: 'visible' });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
+  await page.getByText('Postfach derzeit nicht verfügbar', { exact: true }).waitFor({ state: 'visible' });
+  await page.evaluate(() => window.__mailReadFailures.delete('communication_threads'));
+  await page.locator('[data-mail-retry-read]').click();
+  await assertVisibleText(page, 'Projektstatus nach Sync');
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
+  await page.evaluate(async () => {
+    window.__unmountMail();
+    const catchingUp = { ready: false, state: 'catching_up' };
+    window.__mailMountContext.sync.collectionReadiness = () => catchingUp;
+    window.__mailMountContext.sync.subscribeCollectionReadiness = (_name, listener) => {
+      listener(catchingUp);
+      return () => {};
+    };
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await assertVisibleText(page, 'Projektstatus nach Sync');
+  await page.waitForTimeout(10_500);
+  await assertVisibleText(page, 'Projektstatus nach Sync');
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
+  await page.evaluate(async () => {
+    window.__unmountMail();
+    window.__savedMailMessages = [...window.__mailRows.communication_messages];
+    window.__mailRows.communication_threads = [];
+    window.__mailRows.communication_messages = [];
+    window.__mailMountContext.sync.subscribeCollectionReadiness = (_name, listener) => {
+      window.__mailReadinessListener = listener;
+      listener({ ready: false, state: 'catching_up' });
+      return () => { window.__mailReadinessListener = null; };
+    };
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await page.getByText('Mail wird synchronisiert', { exact: true }).waitFor({ state: 'visible' });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
+  await page.getByText('Postfach derzeit nicht verfügbar', { exact: true }).waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    window.__mailRows.communication_threads = window.__savedMailThreads;
+    window.__mailRows.communication_messages = window.__savedMailMessages;
+    window.__mailNotify('communication_threads');
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
+  await page.evaluate(() => {
+    window.__mailRows.communication_threads = [];
+    window.__mailRows.communication_messages = [];
+    window.__mailNotify('communication_threads');
+  });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 14_000 });
+  await page.evaluate(() => window.__mailReadinessListener({ ready: true, state: 'live' }));
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'hidden' });
+  await page.getByText('Keine E-Mails', { exact: true }).waitFor({ state: 'visible' });
+  await page.evaluate(async () => {
+    window.__unmountMail();
+    window.__mailRows.communication_threads = window.__savedMailThreads;
+    window.__mailRows.communication_messages = window.__savedMailMessages;
+    window.__mailMountContext.session.user.role = 'member';
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    const account = {
+      account_key: 'email:second@example.test', channel: 'email', address: 'second@example.test',
+      profile_json: { owner_user_id: 'alice' },
+    };
+    window.__mailRows.communication_accounts.push(account);
+    window.__mailNativeAccounts.set(account.account_key, structuredClone(account));
+    window.__mailRows.outbound_messages.push({
+      id: 'message-revoked-b', channel: 'email', direction: 'outbound',
+      sender_account_id: account.account_key, recipient_email: 'private@example.test',
+      subject: 'Second account private mail', body_text: 'PRIVATE SECOND ACCOUNT BODY',
+      approval_status: 'approved', send_status: 'sent', created_at_ms: Date.now(), updated_at_ms: Date.now(),
+    });
+    window.__mailNotify('communication_accounts');
+    window.__mailNotify('outbound_messages');
+  });
+  await page.waitForFunction(() => document.querySelector('[data-mail-account]')?.textContent.includes('second@example.test'));
+  await page.locator('[data-mail-scope-id="all"]').click();
+  await page.locator('[data-mail-record-id="message-revoked-b"]').click();
+  await page.getByText('PRIVATE SECOND ACCOUNT BODY', { exact: true }).waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    const key = 'email:second@example.test';
+    const native = window.__mailNativeAccounts.get(key);
+    window.__mailNativeAccounts.set(key, { ...native, profile_json: { owner_user_id: 'bob' } });
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.getByText('PRIVATE SECOND ACCOUNT BODY', { exact: true }).waitFor({ state: 'hidden', timeout: 8_000 });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    const key = 'email:alice@example.test';
+    const native = window.__mailNativeAccounts.get(key);
+    window.__mailNativeAccounts.set(key, { ...native, profile_json: { owner_user_id: 'bob' } });
+    window.__mailReadFailures.set('business_module_catalog', 'PENDING');
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.getByText('Keine E-Mails', { exact: true }).waitFor({ state: 'visible', timeout: 8_000 });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
+  await page.evaluate(() => {
+    const key = 'email:alice@example.test';
+    const native = window.__mailNativeAccounts.get(key);
+    window.__mailNativeAccounts.set(key, { ...native, profile_json: { owner_user_id: 'alice' } });
+    window.__mailReadFailures.delete('business_module_catalog');
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    // An unrelated slow query must not delay hiding a mailbox whose native
+    // account can no longer be verified.
+    window.__mailReadFailures.set('outbound_engagements', 'PENDING');
+    window.__mailNativeUnavailable = true;
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible', timeout: 8_000 });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
+  assert.equal(await page.locator('[data-mail-record-id="thread-sent"]').count(), 0);
+  await page.evaluate(() => {
+    window.__mailReadFailures.delete('outbound_engagements');
+    window.__mailNativeUnavailable = false;
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    const key = 'email:alice@example.test';
+    const native = window.__mailNativeAccounts.get(key);
+    window.__mailNativeAccounts.set(key, { ...native, profile_json: { owner_user_id: 'bob' } });
+    // Keep the old owner, threads, and bodies in local RxDB. Only native
+    // authority changes, as happens when a user's share is revoked.
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.getByText('Keine E-Mails', { exact: true }).waitFor({ state: 'visible', timeout: 8_000 });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
+  assert.equal(await page.locator('[data-mail-record-id="thread-sent"]').count(), 0);
+  await page.evaluate(async () => {
+    window.__unmountMail();
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await page.getByText('Keine E-Mails', { exact: true }).waitFor({ state: 'visible' });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
+  assert.equal(await page.locator('[data-mail-record-id="thread-sent"]').count(), 0);
+  assert.ok(await page.evaluate(() => window.__mailRows.communication_messages.length > 0));
+  await page.evaluate(async () => {
+    window.__unmountMail();
+    window.__mailNativeUnavailable = true;
+    window.__unmountMail = await window.__mailMount(window.__mailMountContext);
+  });
+  await page.locator('[data-mail-read-error]').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
   assert.deepEqual(browserErrors, []);
-  console.log('Mail browser QA OK: inbox, thread, campaign, draft, group, mailbox administration, Sellify series-email handoff, and responsive composer');
+  console.log('Mail browser QA OK: inbox, sent, native account revocation, reconnect recovery, thread, campaign, draft, group, mailbox administration, Sellify series-email handoff, and responsive composer');
+} catch (error) {
+  // Preserve the original assertion failure and capture browser state before cleanup.
+  try {
+    const state = await page.evaluate(() => ({
+      viewport: [...document.querySelectorAll('[data-mail-editor-viewport]')]
+        .map((button) => ({ name: button.dataset.mailEditorViewport, pressed: button.getAttribute('aria-pressed') })),
+      editorFrames: document.querySelectorAll('[data-mail-easy-email-host] iframe').length,
+      contentSurfaceVisible: Boolean(document.querySelector('[data-mail-content-surface]')?.getClientRects().length),
+      readAttempts: (window.__mailReadAttempts?.get('communication_threads') || 0) - (window.__mailReadAttemptBaseline || 0),
+      pendingReads: window.__mailPendingReads?.get('communication_threads') || 0,
+      maxPendingReads: window.__mailMaxPendingReads?.get('communication_threads') || 0,
+      abortedReads: window.__mailAbortedReads?.get('communication_threads') || 0,
+    }));
+    console.error('[mail QA] failure state', JSON.stringify({ ...state, browserErrors }));
+    if (state.editorFrames) {
+      const frame = page.frameLocator('[data-mail-easy-email-host] iframe');
+      console.error('[mail QA] editor contenteditables', JSON.stringify(await frame.locator('[contenteditable="true"]').allTextContents()));
+      console.error('[mail QA] editor body', (await frame.locator('body').textContent())?.slice(0, 500));
+    }
+  } catch (diagnosticError) {
+    console.error('[mail QA] state capture failed', diagnosticError);
+  }
+  if (process.env.CTOX_MAIL_QA_SCREENSHOT) {
+    try { await page.screenshot({ path: resolve(process.env.CTOX_MAIL_QA_SCREENSHOT), fullPage: true }); }
+    catch (diagnosticError) { console.error('[mail QA] screenshot capture failed', diagnosticError); }
+  }
+  if (process.env.CTOX_MAIL_QA_TRACE) {
+    try { await context.tracing.stop({ path: resolve(process.env.CTOX_MAIL_QA_TRACE) }); }
+    catch (diagnosticError) { console.error('[mail QA] trace capture failed', diagnosticError); }
+  }
+  throw error;
 } finally {
   await context.close();
   await browser.close();

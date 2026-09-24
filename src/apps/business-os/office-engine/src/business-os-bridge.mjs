@@ -241,6 +241,9 @@ function mergePreparedVersion(version, prepared) {
   if (!prepared?.editor_blob_id) return version;
   return {
     ...version,
+    // CSV/TSV preparation replaces the source with a canonical XLSX blob.
+    // Its hash must never be paired with the stale delimited-text blob id.
+    blob_id: prepared.blob_id || version.blob_id,
     editor_blob_id: prepared.editor_blob_id,
     editor_protocol: prepared.editor_protocol || version.editor_protocol,
     editor_protocol_version: prepared.editor_protocol_version || version.editor_protocol_version,

@@ -82,6 +82,7 @@ fn build_vendored_ggml() {
         .arg("--config")
         .arg("Release")
         .arg("-j")
+        .arg("2")
         .status()
         .expect("run cmake build")
         .success());

@@ -810,3 +810,284 @@ fn measures_real_mcp_and_replication_pages_with_repeated_execution_references() 
     );
     Ok(())
 }
+
+#[test]
+fn project_crew_admission_uses_native_chat_binding_and_rejects_revocation() -> anyhow::Result<()> {
+    use crate::mission::channels;
+    let root = fixture()?;
+    let added = add(root.path(), "crew-project-add")?;
+    let chat = added["first_chat_id"].as_str().unwrap();
+    let conn = open_store(root.path())?;
+    // Existing legacy profiles have no Crew binding: never pick a random
+    // identity and claim it is the worker shown in this private chat.
+    assert!(super::super::project_crew::member_for_chat(&conn, "owner", chat).is_err());
+    let core = Connection::open(crate::paths::core_db(root.path()))?;
+    channels::ensure_schema_once(root.path(), &core)?;
+    crate::crew::ensure_schema(&core)?;
+    let soul = json!({"gruendlichkeit_vs_tempo":50,"vorsicht_vs_mut":50,
+        "knapp_vs_ausfuehrlich":50,"regeltreu_vs_kreativ":50,"nachfragen_vs_annehmen":50,
+        "sketch":"Project identity","voice":"Concise"})
+    .to_string();
+    for member in ["project-crew", "other-project-crew"] {
+        core.execute("INSERT INTO crew_members
+            (id,name,shape,color,created_at,archived,soul_json,specialties_json,stats_json,updated_at)
+            VALUES (?1,?1,'round','#123456','2026-09-09',0,?2,'{}','{}','2026-09-09')",
+            rusqlite::params![member,soul])?;
+    }
+    handle_command(
+        root.path(),
+        &command(
+            "ctox.workjet.worker_profile.bind",
+            "bind-project-crew",
+            json!({"worker_profile_id":"profile-uuid","computer_id":"computer","crew_member_id":"project-crew"}),
+        ),
+        "owner",
+    )?;
+    assert!(super::super::project_crew::member_for_chat(&conn, "other-user", chat).is_err());
+    let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner",
+        "Owner",
+        "admin",
+        chrono::Utc::now().timestamp_millis(),
+    )?;
+    let request = json!({"thread_id":chat,"title":"Project task","instruction":"Work on the project",
+        "harness":"codex","timeout_seconds":10,"idempotency_key":"project-start-1",
+        "_context":{"actor":"owner","workspace":"project-test"}});
+    let start = |request: Value| {
+        mcp_channel::call_tool(root.path(), "business_os.start_crew_execution", request)
+    };
+    let accepted = start(request.clone())?;
+    let replay = start(request.clone())?;
+    assert_eq!(accepted["command_id"], replay["command_id"]);
+    assert_eq!(accepted["task_id"], replay["task_id"]);
+    assert_eq!(accepted["executor_id"], "computer");
+    assert_eq!(accepted["crew_member_id"], "project-crew");
+    let mut changed = request.clone();
+    changed["instruction"] = json!("Different intent");
+    assert!(start(changed).is_err());
+    let mut spoofed = request.clone();
+    spoofed["crew_member_id"] = json!("other-project-crew");
+    assert!(start(spoofed).is_err());
+    let mut foreign = request.clone();
+    foreign["_context"]["actor"] = json!("other-user");
+    assert!(start(foreign).is_err());
+    let canonical = channels::business_command_projection(
+        root.path(),
+        accepted["command_id"].as_str().unwrap(),
+    )?;
+    assert_eq!(canonical["command_type"], "business_os.chat.task");
+    assert_eq!(canonical["payload"]["thread_id"], chat);
+    assert_eq!(
+        canonical["payload"]["external_executor"]["executor_id"],
+        "computer"
+    );
+    let task_id = accepted["task_id"]
+        .as_str()
+        .context("project task missing")?;
+    assert_eq!(
+        super::super::project_crew_member_for_task(root.path(), task_id)?,
+        Some("project-crew".into())
+    );
+    let leased = channels::lease_queue_task(root.path(), task_id, "project-worker")?;
+    assert!(leased.attempt > 0);
+    let prepare = || {
+        crate::crew::prepare_attempt(
+            root.path(),
+            &[task_id.to_owned()],
+            "project-worker",
+            "project-attempt",
+            Some(chat),
+            &json!({}),
+            None,
+            "Work on the project",
+            None,
+        )
+    };
+    let selected = prepare()?.context("bound project Crew missing")?;
+    assert_eq!(selected.member_id, "project-crew");
+    assert_eq!(
+        prepare()?
+            .context("resumed project Crew missing")?
+            .member_id,
+        "project-crew"
+    );
+    core.execute("UPDATE communication_routing_state SET crew_assigned_member_id='other-project-crew' WHERE message_key=?1", [task_id])?;
+    assert!(prepare()
+        .unwrap_err()
+        .to_string()
+        .contains("conflicts with the project worker"));
+    core.execute(
+        "UPDATE communication_routing_state SET crew_assigned_member_id=NULL WHERE message_key=?1",
+        [task_id],
+    )?;
+    handle_command(
+        root.path(),
+        &command(
+            "ctox.workjet.project.worker.remove",
+            "remove-project-crew",
+            json!({"project_id":"project","worker_profile_id":"profile-uuid"}),
+        ),
+        "owner",
+    )?;
+    assert!(super::super::project_crew_member_for_task(root.path(), task_id).is_err());
+    assert!(prepare().is_err());
+    let stored: String = core.query_row(
+        "SELECT member_id FROM crew_attempts WHERE attempt_id='project-attempt'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(
+        stored, "project-crew",
+        "revocation must not retarget the existing attempt"
+    );
+    let cancel_request = json!({
+        "target_command_id":accepted["command_id"],
+        "idempotency_key":"cancel-project-crew-1",
+        "reason":"stop leased Crew turn",
+        "_context":{"actor":"owner","workspace":"project-test"}
+    });
+    let cancelled = mcp_channel::call_tool(
+        root.path(),
+        "business_os.cancel_project_task",
+        cancel_request.clone(),
+    )?;
+    assert_eq!(cancelled["task_id"], task_id);
+    assert_eq!(cancelled["target_status"], "cancelled");
+    assert_eq!(cancelled["side_effects_may_have_started"], true);
+    let replay_cancel = mcp_channel::call_tool(
+        root.path(),
+        "business_os.cancel_project_task",
+        cancel_request,
+    )?;
+    assert_eq!(cancelled["command_id"], replay_cancel["command_id"]);
+    Ok(())
+}
+
+#[test]
+fn native_project_task_needs_no_app_crew_or_executor_and_replays_one_task() -> anyhow::Result<()> {
+    use crate::mission::channels;
+    let root = fixture()?;
+    let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner",
+        "Owner",
+        "admin",
+        chrono::Utc::now().timestamp_millis(),
+    )?;
+    let request = json!({
+        "project_id":"project",
+        "title":"Native project task",
+        "instruction":"Work on the project without an app",
+        "idempotency_key":"native-project-1",
+        "_context":{"actor":"owner","workspace":"project-test"}
+    });
+    let start = |request: Value| {
+        mcp_channel::call_tool(root.path(), "business_os.start_project_task", request)
+    };
+    let accepted = start(request.clone())?;
+    let replay = start(request.clone())?;
+    assert_eq!(accepted["command_id"], replay["command_id"]);
+    assert_eq!(accepted["task_id"], replay["task_id"]);
+    let command_id = accepted["command_id"].as_str().context("command id")?;
+    let task_id = accepted["task_id"].as_str().context("native task id")?;
+    let canonical = channels::business_command_projection(root.path(), command_id)?;
+    assert_eq!(canonical["module"], "ctox");
+    assert_eq!(canonical["command_type"], "business_os.chat.task");
+    assert!(canonical.pointer("/client_context/actor/id").is_none());
+    let admitted = store::load_business_command(&open_store(root.path())?, command_id)?;
+    assert_eq!(admitted.client_context["actor"]["id"], "owner");
+    assert_eq!(canonical["payload"]["project_id"], "project");
+    assert!(canonical["payload"].get("module_id").is_none());
+    assert!(canonical["payload"].get("thread_id").is_none());
+    assert!(canonical["payload"].get("external_executor").is_none());
+    assert_eq!(
+        super::super::project_crew_member_for_task(root.path(), task_id)?,
+        None
+    );
+
+    let cancel_request = json!({
+        "target_command_id":command_id,
+        "idempotency_key":"cancel-native-project-1",
+        "reason":"stop requested from Workjet",
+        "_context":{"actor":"owner","workspace":"project-test"}
+    });
+    let cancel = |request: Value| {
+        mcp_channel::call_tool(root.path(), "business_os.cancel_project_task", request)
+    };
+    let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner",
+        "Owner",
+        "user",
+        chrono::Utc::now().timestamp_millis(),
+    )?;
+    assert!(cancel(cancel_request.clone()).is_err());
+    assert_eq!(
+        channels::business_command_projection(root.path(), command_id)?["status"],
+        "accepted"
+    );
+    let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "other-user",
+        "Other user",
+        "admin",
+        chrono::Utc::now().timestamp_millis(),
+    )?;
+    let mut foreign_cancel = cancel_request.clone();
+    foreign_cancel["idempotency_key"] = json!("cancel-native-project-foreign");
+    foreign_cancel["_context"]["actor"] = json!("other-user");
+    assert!(cancel(foreign_cancel).is_err());
+    assert_eq!(
+        channels::business_command_projection(root.path(), command_id)?["status"],
+        "accepted"
+    );
+    let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner",
+        "Owner",
+        "admin",
+        chrono::Utc::now().timestamp_millis(),
+    )?;
+    let cancelled = cancel(cancel_request.clone())?;
+    assert_eq!(cancelled["target_command_id"], command_id);
+    assert_eq!(cancelled["task_id"], task_id);
+    assert_eq!(cancelled["status"], "completed");
+    assert_eq!(cancelled["target_status"], "cancelled");
+    assert_eq!(cancelled["side_effects_may_have_started"], false);
+    let replay_cancel = cancel(cancel_request.clone())?;
+    assert_eq!(cancelled["command_id"], replay_cancel["command_id"]);
+    assert_eq!(cancelled["task_id"], replay_cancel["task_id"]);
+    let mut second_cancel = cancel_request.clone();
+    second_cancel["idempotency_key"] = json!("cancel-native-project-2");
+    assert!(cancel(second_cancel).is_err());
+    let mut changed_cancel = cancel_request.clone();
+    changed_cancel["reason"] = json!("a different reason");
+    assert!(cancel(changed_cancel).is_err());
+    let mut unrelated_cancel = cancel_request.clone();
+    unrelated_cancel["target_command_id"] = json!("bind");
+    assert!(cancel(unrelated_cancel).is_err());
+    assert_eq!(
+        channels::business_command_projection(root.path(), command_id)?["status"],
+        "cancelled"
+    );
+
+    let mut changed = request.clone();
+    changed["instruction"] = json!("A different task");
+    assert!(start(changed).is_err());
+    let mut spoofed = request.clone();
+    spoofed["crew_member_id"] = json!("someone-else");
+    assert!(start(spoofed).is_err());
+    let mut foreign = request.clone();
+    foreign["_context"]["actor"] = json!("other-user");
+    assert!(start(foreign).is_err());
+    let conn = open_store(root.path())?;
+    let mut project =
+        outbound_load_record(&conn, "workjet_projects", "project")?.context("project record")?;
+    project["status"] = json!("archived");
+    store::upsert_business_record(&conn, "workjet_projects", "project", 2, project)?;
+    let mut archived = request;
+    archived["idempotency_key"] = json!("native-project-2");
+    assert!(start(archived).is_err());
+    Ok(())
+}

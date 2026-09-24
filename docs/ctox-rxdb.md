@@ -1,5 +1,41 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Workjet computer schema upgrade (v0 to v1)
+
+Two deployed `workjet_computers` schemas used version 0. Adding binding, epoch,
+liveness and tombstone fields without a version change caused DB6 on an existing
+native store. Optional registration skipped the collection, so the Workjet
+computer-list query failed with QUERY_NOT_SUPPORTED.
+
+Version 1 uses the existing packaged native copy-and-verify migration before
+stale-table cleanup. Browser and JSON declarations preserve existing fields;
+missing binding, epoch and liveness values become empty, zero and offline, as in
+the native computer writer. No device binding or authorization is created.
+Existing bindings and tombstones survive unchanged. The original schema is
+recorded in `tests/fixtures/workjet-computers-v0-67e44b11d.json`.
+
+The native regression reproduces DB6, registers v1, migrates, cleans up, reopens,
+and reads the retained computer through RxDB. A separate persisted-data test
+covers missing destination, replay and preservation of newer destination rows.
+These are release gates, not a claim that a deployed tenant has passed them.
+
+The Crew module also declares its channel-account dependency by reusing the
+canonical Conversations schema. This allows Crew to register the collection
+before Mail or Conversations has opened. Its generated module schema (and the
+Reports re-export) must include the same definition; no new collection version,
+permission grant, or independent channel store is introduced. The module
+conformance and DB-isolation inventory guards remain release gates. Inventory
+metadata tracks the current manifests, with newly inventoried modules explicitly
+marked as source-reviewed rather than newly certified for runtime isolation.
+
+Generate module JSON, the native contract and hashes together, rebuild the
+browser bundle, and advance the canonical shell/loader revision. Regeneration
+also reconciles pre-existing stale crew-memory and ticket-key fields in the
+packaged ctox/reports/threads JSON with their source; those fields already exist
+in the native contract. Release the native migration and matching main-built
+shell together. Actual Welsch assignment and remote coding still require UI
+acceptance after deployment.
+
 This is the reference document for CTOX Sync Engine: the WebRTC-only replication layer
 between the browser-side Business OS shell and the CTOX daemon. It is written
 for engineers and coding agents, and every technical claim in it has been
@@ -25,6 +61,26 @@ settles the helper and requests continuation of the original task, under the
 existing browser controller and command policy. Recovery does not authenticate
 a session, pass review/validation, reopen terminal commands, or weaken the
 owned, expiring lease requirement for ordinary worker commands.
+
+### Outbound MCP research record identity
+
+`web_stack.person_research` binds its proposal to the raw persisted
+`outbound_lead_generation_leads` record, not the MCP descriptor's derived title.
+Runtime leads use top-level `name` and/or `data.firma_name`; legacy `company`,
+`company_name` and `title` are also recognized. Every present identity field
+must be a nonempty string matching `payload.company` after whitespace trimming.
+Conflicting aliases are rejected rather than selecting whichever matches.
+The existing exact record/operation ID, country, module, collection, workspace,
+and stored research-payload constraints remain mandatory. This performs no
+record rewrite, permission expansion, or alternate data access.
+
+The runtime-shaped proposal regressions are
+`person_research_binding_accepts_runtime_lead_name_fields` and
+`person_research_binding_runtime_leads_preserve_identity_and_scope`.
+They cover the production field shape and request/record mismatch rejection;
+a passing proposal does not establish research execution, provider coverage,
+writeback, or browser acceptance. Native execution and a new live pipeline
+check remain required before claiming this repair deployed and verified.
 
 Two implementations, one contract:
 
@@ -219,6 +275,21 @@ must not prevent another peer's credential/lifecycle update. The native
 regression holds each of the seven policy hooks across unrelated-peer,
 same-peer token and same-peer generation changes; the full browser/native
 gates remain necessary to establish end-to-end behavior and performance.
+
+Mail's `communication_accounts`, `communication_threads`, and
+`communication_messages` are native-authored projections. Their WebRTC document
+read filter resolves each document and its account association from the native
+communication store, then admits only the authenticated account owner,
+explicitly shared user IDs, or an Admin/Chef. An account without either an owner
+or an explicit share is denied to ordinary users. Browser documents cannot set
+or change account ownership by direct replication. The Mail UI mirrors this
+visibility rule for navigation, but the native document filter is the access
+boundary. Before enabling a restrictive release on an existing tenant, its
+account owner must migrate personal and shared mailboxes through an authorized
+configuration path; a UI-only owner flag is insufficient. Revoking access to
+documents already cached in a browser requires separate local-cache handling
+and live reopen verification; a server read denial alone cannot erase a copy
+already delivered to a prior session.
 
 Demand-query reservations are keyed by connection identity (including its
 native generation). Field-policy rejection releases that same key before
@@ -544,7 +615,46 @@ A stricter authority-readiness barrier is separate from the render hint. It
 requires query-fetch capability plus a successfully installed demand loader for
 the current connection generation. `requireRevision` reads use this barrier and
 are never satisfied by ordinary stale-while-revalidate state, a closed
-multi-tab broker, a timeout, or another connection generation. The opaque token
+multi-tab broker, a timeout, or another connection generation.
+
+Control-plane status collections (`business_commands`, `ctox_queue_tasks`)
+share the ordinary stale-while-revalidate path: their short freshness budget
+(1 s, 250 ms for actively tracked commands) triggers the bounded, deduplicated
+window refresh in the background instead of blocking the caller on a native
+round-trip. After any ordinary reload every cached window is older than that
+budget, so awaiting it parked app first reads behind the native query plane
+(issue #211 warm-load finding, 2026-09-23). Cached lifecycle rows render
+immediately and the refresh corrects them via the storage change event;
+`requireRevision` reads on these collections still await their authoritative
+answer. Stale empty windows remain blocking revalidations (the false-empty
+projection-race guard), and never-completed or evicted windows still fetch
+before answering.
+
+Fail-closed permission boundary: each control-plane window carries the SYNC-12
+read-permission digest (hash of the role/epoch capability claims) of the
+authorized fetch that produced it. A role or grant change bumps the digest;
+the demand loader then refuses to serve that window locally — complete fast
+path, stale-while-revalidate, cross-tab materialized window and cancel
+fallbacks alike — until a newly authorized fetch re-stamps it. Windows
+persisted before this stamp existed mismatch a known identity exactly once.
+An unresolvable current digest blocks local control-plane window serving:
+a token-endpoint failure cannot prove that an earlier grant still holds.
+The replication layer may keep a pull checkpoint during that transient unknown
+identity to avoid a full collection re-pull; a checkpoint is not permission to
+serve a cached control-plane query window. Its membership gate remains closed
+until the current digest is known and matches, or a newly authorized fetch
+re-stamps the window.
+If replication cancellation detaches the demand loader, control-plane `find`,
+`findOne`, `count`, and live subscriptions return no cached lifecycle rows.
+The loader transition immediately clears existing subscription snapshots,
+even without a storage change, and discards responses from its prior bridge.
+Control-plane `count()` walks authorized 200-row demand windows, retaining
+the regular skip/limit semantics without reading the raw local store. Every
+page must belong to one known read-permission digest; identity loss or change
+during the count returns zero rather than a partial count from the old grant.
+The direct IndexedDB fallback remains available to ordinary collections only.
+Known matching identities retain warm rendering; non-control-plane collections
+are unchanged. The opaque token
 is carried through the existing in-flight identity and sidecar satisfied-token
 fields; it is not a server revision or new transport.
 

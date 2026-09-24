@@ -1,0 +1,78 @@
+{
+  "version": 0,
+  "primaryKey": "id",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "maxLength": 160
+    },
+    "display_name": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "hosting_mode": {
+      "type": "string",
+      "enum": [
+        "workstation",
+        "self_hosted"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "assigned",
+        "unassigned"
+      ]
+    },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "string",
+        "maxLength": 80
+      }
+    },
+    "self_hosted_colocation": {
+      "type": "boolean"
+    },
+    "owner_user_id": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "created_at_ms": {
+      "type": "number"
+    },
+    "updated_at_ms": {
+      "type": "number"
+    },
+    "unassigned_at_ms": {
+      "type": "number"
+    },
+    "is_deleted": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "id",
+    "display_name",
+    "hosting_mode",
+    "status",
+    "capabilities",
+    "self_hosted_colocation",
+    "owner_user_id",
+    "created_at_ms",
+    "updated_at_ms"
+  ],
+  "indexes": [
+    "owner_user_id",
+    "status",
+    "updated_at_ms",
+    [
+      "owner_user_id",
+      "status",
+      "updated_at_ms"
+    ]
+  ],
+  "additionalProperties": false
+}

@@ -37,7 +37,7 @@ function startNativeSymbolProfile(child, {
   };
   let timer, durationTimer, killTimer, recorder, finished = false, stopping = false;
   let interruptRequested = false;
-  let recordError = '', stderr = '', stderrTruncated = false, startTicks;
+  let recordError = '', stderr = '', stderrTail = '', stderrTruncated = false, startTicks;
   let stdout = '', stdoutTruncated = false;
   let resolveCompletion;
   const completion = new Promise(resolve => { resolveCompletion = resolve; });
@@ -81,7 +81,7 @@ function startNativeSymbolProfile(child, {
       if (child.exitCode !== null || child.signalCode !== null || readStart(child.pid) !== startTicks) {
         finish('native-identity-changed'); return;
       }
-      const args = ['record', '--event', 'cpu-clock:u', '--freq', '49',
+      const args = ['record', '--verbose', '--event', 'cpu-clock:u', '--freq', '49',
         '--no-inherit', '--pid', String(child.pid), '--mmap-pages', '128',
         '--no-buildid-cache', '--max-size', '32M', '--output', dataPath];
       metadata.recordArgs = args;
@@ -98,6 +98,7 @@ function startNativeSymbolProfile(child, {
         const text = chunk.toString();
         const room = Math.max(0, 16384 - stderr.length);
         stderr += text.slice(0, room);
+        stderrTail = (stderrTail + text).slice(-16384);
         if (text.length > room) stderrTruncated = true;
       });
       recorder.once('error', error => { recordError = error.code || error.message; });
@@ -106,6 +107,7 @@ function startNativeSymbolProfile(child, {
         metadata.recordCode = code; metadata.recordSignal = signal;
         metadata.recordStdout = stdout; metadata.recordStdoutTruncated = stdoutTruncated;
         metadata.recordStderr = stderr; metadata.recordStderrTruncated = stderrTruncated;
+        metadata.recordStderrTail = stderrTruncated ? stderrTail : ''; // retain terminal debug failures too
         metadata.recordStoppedAtMs = Date.now();
         // Linux perf re-raises SIGINT after flushing a controlled recording.
         // Accept only our requested interrupt, then still validate the data and
