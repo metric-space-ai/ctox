@@ -2777,7 +2777,7 @@ async function authoritativeVisibleEmailAccounts(accounts, user, readNativeAccou
   const candidates = visibleEmailAccounts(accounts, user);
   if (!candidates.length) return [];
   if (typeof readNativeAccount !== 'function') {
-    throw new Error('Native Mail account verification is unavailable.');
+    throw new Error('Mail account verification is unavailable.');
   }
   const verified = await Promise.all(candidates.map(async (account) => {
     const document = await readNativeAccount('communication_accounts', account.account_key, { timeoutMs: 4000 });

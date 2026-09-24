@@ -6736,7 +6736,7 @@ function createModuleContext(mod, overrides = {}) {
     readNativeCollectionDocument: mod.id === 'desktop' || mod.id === 'mail'
       ? (collection, documentId, options = {}) => {
           if (mod.id === 'mail' && collection !== 'communication_accounts') {
-            throw new Error('Mail may verify only its native account records.');
+            throw new Error('Mail can verify only its account records.');
           }
           return state.sync?.readCollectionNativeDocument(collection, documentId, options)
             .then((document) => document ?? null);
