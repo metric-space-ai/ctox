@@ -22,6 +22,7 @@ import { registerCollectionSyncProfile } from './sync-profile-registry.mjs';
 import { getActiveCollectionRegistry } from './active-collections.mjs';
 import { getPresenceRegistry } from './presence.mjs';
 import { getMultiTabSyncCoordinator } from './multi-tab-sync-coordinator.mjs';
+import { isControlPlaneStatusCollection } from './query-demand-loader.mjs';
 
 export function getCtoxIndexedDbStorage() {
   return { name: 'ctox-indexeddb-native' };
@@ -266,6 +267,11 @@ class CtoxRxCollection {
   count(query = {}) {
     return {
       exec: async () => {
+        // A direct storage count bypasses the authorized demand window just
+        // like a direct document query. Control-plane counts use that window.
+        if (isControlPlaneStatusCollection(this.name)) {
+          return (await this.find(query).exec()).length;
+        }
         const normalized = normalizeQuery(query, this.schema.primaryPath);
         if (typeof this.storageCollection.countDocuments === 'function') {
           return this.storageCollection.countDocuments(normalized, {
@@ -415,6 +421,12 @@ class CtoxRxCollection {
         const flushDelta = () => {
           pendingTimer = null;
           if (!active) return;
+          if (isControlPlaneStatusCollection(this.name)) {
+            // A raw storage change does not carry the current read grant.
+            // Re-run the guarded query instead of publishing its document.
+            void flushInitial();
+            return;
+          }
           if (!initialized) {
             // An explicit invalidation event, never a partial collection snapshot.
             const changes = Object.values(pendingChanges);
@@ -431,6 +443,10 @@ class CtoxRxCollection {
           emitSnapshot();
         };
         const emit = (event) => {
+          if (isControlPlaneStatusCollection(this.name)) {
+            if (pendingTimer == null) pendingTimer = setTimeout(flushDelta, debounceMs);
+            return;
+          }
           pendingSuccess = {
             ...pendingSuccess,
             ...successPayloadFromChangeEvent(event),
@@ -510,8 +526,11 @@ class CtoxRxQuery {
         const primaryId = this.single
           ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath)
           : '';
-        const canApplyPrimaryDelta = Boolean(primaryId);
-        const canApplyQueryDelta = !this.single && canApplyUnboundedQueryDelta(this.query);
+        // Storage deltas have no query-window permission stamp. Lifecycle
+        // subscriptions must re-execute through the demand loader.
+        const controlPlaneRead = isControlPlaneStatusCollection(this.collection.name);
+        const canApplyPrimaryDelta = !controlPlaneRead && Boolean(primaryId);
+        const canApplyQueryDelta = !controlPlaneRead && !this.single && canApplyUnboundedQueryDelta(this.query);
         let pendingSuccess = {};
         const queryDocumentsById = new Map();
         const emitQueryDocuments = () => {
@@ -668,6 +687,10 @@ class CtoxRxQuery {
         : {};
       demandOptions.signal = this.signal;
       docs = await this.collection.demandLoader.resolveQuery(this.query, demandOptions);
+    } else if (isControlPlaneStatusCollection(this.collection.name)) {
+      // Replication cancellation detaches the loader. A warm local row is not
+      // evidence that the current actor may still read it after reconnect.
+      docs = [];
     } else if (typeof this.collection.storageCollection.queryDocuments === 'function') {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {
         matchesSelector,

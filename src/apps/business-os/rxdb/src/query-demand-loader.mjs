@@ -46,9 +46,8 @@ export function createQueryDemandLoader({
   // claims). A role or grant change bumps the digest; control-plane windows
   // stamped under a superseded digest must not be served locally before a
   // newly authorized fetch re-stamps their membership. An empty current
-  // digest (identity unresolvable right now) stays permissive, mirroring
-  // readPermissionDigestMatches, so a token-endpoint blip never blocks warm
-  // rendering.
+  // digest (identity unresolvable right now) cannot authorize a local
+  // control-plane window; retained replication checkpoints are separate.
   readPermissionDigest = null,
 }) {
   if (!storageCollection) throw new TypeError('demand loader requires storageCollection');
@@ -650,7 +649,7 @@ export function createQueryDemandLoader({
   };
 }
 
-function isControlPlaneStatusCollection(collectionName) {
+export function isControlPlaneStatusCollection(collectionName) {
   return collectionName === 'business_commands' || collectionName === 'ctox_queue_tasks';
 }
 

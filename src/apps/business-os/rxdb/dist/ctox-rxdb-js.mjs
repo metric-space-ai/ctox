@@ -7487,9 +7487,8 @@ function createQueryDemandLoader({
   // claims). A role or grant change bumps the digest; control-plane windows
   // stamped under a superseded digest must not be served locally before a
   // newly authorized fetch re-stamps their membership. An empty current
-  // digest (identity unresolvable right now) stays permissive, mirroring
-  // readPermissionDigestMatches, so a token-endpoint blip never blocks warm
-  // rendering.
+  // digest (identity unresolvable right now) cannot authorize a local
+  // control-plane window; retained replication checkpoints are separate.
   readPermissionDigest = null
 }) {
   if (!storageCollection) throw new TypeError("demand loader requires storageCollection");
@@ -12564,6 +12563,9 @@ var CtoxRxCollection = class {
   count(query = {}) {
     return {
       exec: async () => {
+        if (isControlPlaneStatusCollection(this.name)) {
+          return (await this.find(query).exec()).length;
+        }
         const normalized = normalizeQuery(query, this.schema.primaryPath);
         if (typeof this.storageCollection.countDocuments === "function") {
           return this.storageCollection.countDocuments(normalized, {
@@ -12697,6 +12699,10 @@ var CtoxRxCollection = class {
         const flushDelta = () => {
           pendingTimer = null;
           if (!active) return;
+          if (isControlPlaneStatusCollection(this.name)) {
+            void flushInitial();
+            return;
+          }
           if (!initialized) {
             const changes = Object.values(pendingChanges);
             pendingChanges = {};
@@ -12712,6 +12718,10 @@ var CtoxRxCollection = class {
           emitSnapshot();
         };
         const emit = (event) => {
+          if (isControlPlaneStatusCollection(this.name)) {
+            if (pendingTimer == null) pendingTimer = setTimeout(flushDelta, debounceMs);
+            return;
+          }
           pendingSuccess = {
             ...pendingSuccess,
             ...successPayloadFromChangeEvent(event)
@@ -12779,8 +12789,9 @@ var CtoxRxQuery = class _CtoxRxQuery {
         let initialized = false;
         let pendingPrimaryDoc = void 0;
         const primaryId = this.single ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath) : "";
-        const canApplyPrimaryDelta = Boolean(primaryId);
-        const canApplyQueryDelta = !this.single && canApplyUnboundedQueryDelta(this.query);
+        const controlPlaneRead = isControlPlaneStatusCollection(this.collection.name);
+        const canApplyPrimaryDelta = !controlPlaneRead && Boolean(primaryId);
+        const canApplyQueryDelta = !controlPlaneRead && !this.single && canApplyUnboundedQueryDelta(this.query);
         let pendingSuccess = {};
         const queryDocumentsById = /* @__PURE__ */ new Map();
         const emitQueryDocuments = () => {
@@ -12924,6 +12935,8 @@ var CtoxRxQuery = class _CtoxRxQuery {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : {};
       demandOptions.signal = this.signal;
       docs = await this.collection.demandLoader.resolveQuery(this.query, demandOptions);
+    } else if (isControlPlaneStatusCollection(this.collection.name)) {
+      docs = [];
     } else if (typeof this.collection.storageCollection.queryDocuments === "function") {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {
         matchesSelector,

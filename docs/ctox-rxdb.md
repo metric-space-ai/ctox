@@ -644,6 +644,9 @@ identity to avoid a full collection re-pull; a checkpoint is not permission to
 serve a cached control-plane query window. Its membership gate remains closed
 until the current digest is known and matches, or a newly authorized fetch
 re-stamps the window.
+If replication cancellation detaches the demand loader, control-plane `find`,
+`findOne`, `count`, and live subscriptions return no cached lifecycle rows.
+The direct IndexedDB fallback remains available to ordinary collections only.
 Known matching identities retain warm rendering; non-control-plane collections
 are unchanged. The opaque token
 is carried through the existing in-flight identity and sidecar satisfied-token
