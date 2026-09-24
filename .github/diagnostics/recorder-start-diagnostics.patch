@@ -1,0 +1,72 @@
+--- a/src/core/rxdb/tools/native_symbol_profile.js
++++ b/src/core/rxdb/tools/native_symbol_profile.js
+@@ -37,7 +37,7 @@
+   };
+   let timer, durationTimer, killTimer, recorder, finished = false, stopping = false;
+   let interruptRequested = false;
+-  let recordError = '', stderr = '', stderrTruncated = false, startTicks;
++  let recordError = '', stderr = '', stderrTail = '', stderrTruncated = false, startTicks;
+   let stdout = '', stdoutTruncated = false;
+   let resolveCompletion;
+   const completion = new Promise(resolve => { resolveCompletion = resolve; });
+@@ -81,7 +81,7 @@
+       if (child.exitCode !== null || child.signalCode !== null || readStart(child.pid) !== startTicks) {
+         finish('native-identity-changed'); return;
+       }
+-      const args = ['record', '--event', 'cpu-clock:u', '--freq', '49',
++      const args = ['record', '--verbose', '--event', 'cpu-clock:u', '--freq', '49',
+         '--no-inherit', '--pid', String(child.pid), '--mmap-pages', '128',
+         '--no-buildid-cache', '--max-size', '32M', '--output', dataPath];
+       metadata.recordArgs = args;
+@@ -98,6 +98,7 @@
+         const text = chunk.toString();
+         const room = Math.max(0, 16384 - stderr.length);
+         stderr += text.slice(0, room);
++        stderrTail = (stderrTail + text).slice(-16384);
+         if (text.length > room) stderrTruncated = true;
+       });
+       recorder.once('error', error => { recordError = error.code || error.message; });
+@@ -106,6 +107,7 @@
+         metadata.recordCode = code; metadata.recordSignal = signal;
+         metadata.recordStdout = stdout; metadata.recordStdoutTruncated = stdoutTruncated;
+         metadata.recordStderr = stderr; metadata.recordStderrTruncated = stderrTruncated;
++        metadata.recordStderrTail = stderrTruncated ? stderrTail : ''; // retain terminal debug failures too
+         metadata.recordStoppedAtMs = Date.now();
+         // Linux perf re-raises SIGINT after flushing a controlled recording.
+         // Accept only our requested interrupt, then still validate the data and
+--- a/src/core/rxdb/tools/native_symbol_profile.test.js
++++ b/src/core/rxdb/tools/native_symbol_profile.test.js
+@@ -245,3 +245,33 @@
+     }
+   }
+ });
++
++
++test('verbose recorder diagnostics retain a bounded terminal error without accepting failure', async t => {
++  const outputPrefix = temporary(t);
++  let reports = 0;
++  const { completion } = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0 }, {
++    platform: 'linux', readStart: () => 10,
++    spawnRecord(executable, args) {
++      assert.ok(args.includes('--verbose'));
++      const recorder = fakeRecorder(outputPrefix + '.perf.data');
++      setImmediate(() => {
++        recorder.stderr.write('x'.repeat(40000));
++        recorder.stderr.write("couldn't open /proc/4343/status\n");
++        recorder.exitCode = 255;
++        recorder.emit('close', 255, null);
++      });
++      return recorder;
++    },
++    async runReport() { reports++; throw new Error('failed recording must not be accepted'); },
++  });
++  const result = await completion;
++  assert.equal(result.available, false);
++  assert.equal(result.reason, 'perf-record-failed');
++  assert.equal(result.recordCode, 255);
++  assert.equal(result.recordStderr.length, 16384);
++  assert.equal(result.recordStderrTail.length, 16384);
++  assert.ok(result.recordStderrTail.endsWith("couldn't open /proc/4343/status\n"));
++  assert.equal(result.recordStderrTruncated, true);
++  assert.equal(reports, 0);
++});
