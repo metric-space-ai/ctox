@@ -276,6 +276,21 @@ regression holds each of the seven policy hooks across unrelated-peer,
 same-peer token and same-peer generation changes; the full browser/native
 gates remain necessary to establish end-to-end behavior and performance.
 
+Mail's `communication_accounts`, `communication_threads`, and
+`communication_messages` are native-authored projections. Their WebRTC document
+read filter resolves each document and its account association from the native
+communication store, then admits only the authenticated account owner,
+explicitly shared user IDs, or an Admin/Chef. An account without either an owner
+or an explicit share is denied to ordinary users. Browser documents cannot set
+or change account ownership by direct replication. The Mail UI mirrors this
+visibility rule for navigation, but the native document filter is the access
+boundary. Before enabling a restrictive release on an existing tenant, its
+account owner must migrate personal and shared mailboxes through an authorized
+configuration path; a UI-only owner flag is insufficient. Revoking access to
+documents already cached in a browser requires separate local-cache handling
+and live reopen verification; a server read denial alone cannot erase a copy
+already delivered to a prior session.
+
 Demand-query reservations are keyed by connection identity (including its
 native generation). Field-policy rejection releases that same key before
 sending the denial. Releasing only the signaling peer ID leaked the reserved

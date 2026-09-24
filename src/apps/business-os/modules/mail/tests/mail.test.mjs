@@ -70,14 +70,20 @@ test('ordinary users only see assigned or shared email accounts', () => {
     { account_key: 'email:bob@example.test', channel: 'email', address: 'bob@example.test', profile_json: { owner_user_id: 'bob' } },
     { account_key: 'email:team@example.test', channel: 'email', address: 'team@example.test', profile_json: { owner_user_id: 'ops', shared_user_ids: ['alice'] } },
     { account_key: 'email:legacy@example.test', channel: 'email', address: 'legacy@example.test', profile_json: {} },
+    { account_key: 'email:shared@example.test', channel: 'email', address: 'shared@example.test', profile_json: { shared_user_ids: ['alice'] } },
     { account_key: 'whatsapp:alice', channel: 'whatsapp', address: '+49123', profile_json: { owner_user_id: 'alice' } },
   ];
   assert.deepEqual(
     hooks.visibleEmailAccounts(accounts, { id: 'alice', role: 'member' }).map((account) => account.account_key),
-    ['email:alice@example.test', 'email:legacy@example.test', 'email:team@example.test'],
+    ['email:alice@example.test', 'email:shared@example.test', 'email:team@example.test'],
   );
-  assert.equal(hooks.visibleEmailAccounts(accounts, { id: 'root', role: 'admin' }).length, 4);
-  assert.equal(hooks.isGlobalMailAdmin({ role: 'founder' }), true);
+  assert.equal(hooks.visibleEmailAccounts(accounts, { id: 'root', role: 'admin' }).length, 5);
+  assert.deepEqual(
+    hooks.visibleEmailAccounts(accounts, { id: 'other', email: 'alice', login: 'alice', role: 'user' }),
+    [],
+    'mail account access follows the native user ID, not email or login aliases',
+  );
+  assert.equal(hooks.isGlobalMailAdmin({ role: 'founder' }), false);
   assert.equal(hooks.isGlobalMailAdmin({ role: 'member' }), false);
 });
 

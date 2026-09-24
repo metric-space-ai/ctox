@@ -2641,10 +2641,9 @@ function visibleEmailAccounts(accounts, user) {
     const profile = accountProfile(account);
     const owner = String(profile.owner_user_id || profile.ownerUserId || '').trim();
     const shared = arrayStrings(profile.shared_user_ids || profile.sharedUserIds || profile.member_user_ids);
-    const userIds = new Set([user?.id, user?.user_id, user?.email, user?.login].filter(Boolean).map(String));
-    if (!owner) return true;
-    if (userIds.has(owner)) return true;
-    return shared.some((id) => userIds.has(id));
+    const userId = String(user?.id || user?.user_id || '').trim();
+    if (!userId) return false;
+    return owner === userId || shared.includes(userId);
   }).sort(sortAccount);
 }
 
@@ -2667,12 +2666,12 @@ function visibleMailCampaigns(campaigns, user, accounts, messages) {
 
 function accountOwnedByCurrentUser(account, user) {
   const owner = String(accountProfile(account).owner_user_id || accountProfile(account).ownerUserId || '').trim();
-  if (!owner) return false;
-  return [user?.id, user?.user_id, user?.email, user?.login].filter(Boolean).map(String).includes(owner);
+  const userId = String(user?.id || user?.user_id || '').trim();
+  return Boolean(owner && userId && owner === userId);
 }
 
 function isGlobalMailAdmin(user) {
-  return ['admin', 'chef', 'owner', 'founder'].includes(String(user?.role || '').toLowerCase());
+  return ['admin', 'chef', 'owner'].includes(String(user?.role || '').toLowerCase());
 }
 
 function commandOutcome(command) {
