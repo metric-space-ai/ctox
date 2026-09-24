@@ -107,7 +107,7 @@ test('native account authority overrides a previously authorized browser cache',
   })), []);
   await assert.rejects(
     hooks.authoritativeVisibleEmailAccounts(cached, user, null),
-    /native mail account verification is unavailable/i,
+    /Mail account verification is unavailable/i,
   );
 });
 
