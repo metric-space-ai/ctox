@@ -75,13 +75,37 @@ for (const name of ['business_commands', 'ctox_queue_tasks']) {
   assert((await collection.find().exec()).length === 0, `${name}: detached loader leaked find()`);
   assert(await collection.findOne(rows.get(name).id).exec() === null, `${name}: detached loader leaked findOne()`);
   assert(await collection.count().exec() === 0, `${name}: detached loader leaked count()`);
-  for (const listener of listeners.get(name)) listener({});
-  await waitFor(() => snapshots.length === 2 && querySnapshots.length === 2);
+  // No storage event accompanies a WebRTC loader detach. Existing subscribers
+  // must still lose their last authorized row immediately.
+  await waitFor(() => snapshots.length >= 2 && querySnapshots.length >= 2);
   assert(snapshots[1].documents.length === 0, `${name}: collection subscription leaked a stale row`);
   assert(querySnapshots[1].length === 0, `${name}: query subscription leaked a stale row`);
+  for (const listener of listeners.get(name)) listener({});
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  assert(snapshots.every((value, index) => index === 0 || value.documents.length === 0), `${name}: later storage event restored a stale row`);
+  assert(querySnapshots.every((value, index) => index === 0 || value.length === 0), `${name}: later query event restored a stale row`);
   collectionSubscription.unsubscribe();
   querySubscription.unsubscribe();
 }
+
+// A fetch started under an earlier bridge may complete after detach. Its
+// result cannot become the initial value of either live subscription.
+const delayedCollection = database.business_commands;
+let releaseOldFetch;
+const oldFetch = new Promise((resolve) => { releaseOldFetch = resolve; });
+delayedCollection.setDemandLoader({ resolveQuery: () => oldFetch });
+const delayedSnapshots = [];
+const delayedQuerySnapshots = [];
+const delayedSubscription = delayedCollection.$.subscribe((value) => delayedSnapshots.push(value));
+const delayedQuerySubscription = delayedCollection.find().$.subscribe((value) => delayedQuerySnapshots.push(value));
+delayedCollection.setDemandLoader(null);
+releaseOldFetch([rows.get('business_commands')]);
+await waitFor(() => delayedSnapshots.length > 0 && delayedQuerySnapshots.length > 0);
+await new Promise((resolve) => setTimeout(resolve, 20));
+assert(delayedSnapshots.every((value) => value.documents.length === 0), 'late collection fetch published superseded row');
+assert(delayedQuerySnapshots.every((value) => value.length === 0), 'late query fetch published superseded row');
+delayedSubscription.unsubscribe();
+delayedQuerySubscription.unsubscribe();
 
 assert(directReads === 0, 'control-plane reads must never use raw storage fallback');
 assert((await database.ordinary_records.find().exec())[0]?.id === 'record-1', 'ordinary collection local read changed');

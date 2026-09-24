@@ -207,6 +207,7 @@ class CtoxRxCollection {
     };
     this.storageCollection = storageCollection;
     this.demandLoader = null;
+    this.demandLoaderListeners = new Set();
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
       deltaLiveQueryApplies: 0,
@@ -216,7 +217,17 @@ class CtoxRxCollection {
   }
 
   setDemandLoader(loader) {
-    this.demandLoader = loader || null;
+    const nextLoader = loader || null;
+    if (this.demandLoader === nextLoader) return;
+    this.demandLoader = nextLoader;
+    if (isControlPlaneStatusCollection(this.name)) {
+      for (const listener of this.demandLoaderListeners) listener();
+    }
+  }
+
+  subscribeDemandLoaderChange(listener) {
+    this.demandLoaderListeners.add(listener);
+    return () => this.demandLoaderListeners.delete(listener);
   }
 
   async insert(doc) {
@@ -364,6 +375,7 @@ class CtoxRxCollection {
         let initialRetryTimer = null;
         let initialRetryAttempt = 0;
         let initialized = false;
+        let snapshotGeneration = 0;
         let pendingSuccess = {};
         let pendingChanges = {};
         const documentsById = new Map();
@@ -387,10 +399,12 @@ class CtoxRxCollection {
         };
         const flushInitial = async () => {
           if (!active) return;
+          const generation = ++snapshotGeneration;
           let documents;
           try {
             documents = await this.find().exec();
           } catch (error) {
+            if (!active || generation !== snapshotGeneration) return;
             if (isIndexedDbConnectionClosingError(error)) return;
             if (active && isRetryableObservableInitError(error)) {
               const delayMs = observableInitRetryDelayMs(initialRetryAttempt);
@@ -403,7 +417,7 @@ class CtoxRxCollection {
             }
             throw error;
           }
-          if (!active) return;
+          if (!active || generation !== snapshotGeneration) return;
           initialRetryAttempt = 0;
           documentsById.clear();
           for (const doc of documents) {
@@ -458,6 +472,16 @@ class CtoxRxCollection {
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushDelta, debounceMs);
         };
+        const unsubscribeLoader = this.subscribeDemandLoaderChange(() => {
+          if (!active) return;
+          snapshotGeneration += 1;
+          documentsById.clear();
+          pendingSuccess = {};
+          pendingChanges = {};
+          initialized = false;
+          emitSnapshot();
+          void flushInitial();
+        });
         // Initial reads can briefly hit the bounded demand-transport queue when
         // a shell activates many collections at once. Treat that retryable
         // backpressure as flow control, not as an unhandled page error.
@@ -475,6 +499,7 @@ class CtoxRxCollection {
               initialRetryTimer = null;
             }
             unsubscribe();
+            unsubscribeLoader();
             registry.subscriptionEnded(this.name);
           },
         };
@@ -522,6 +547,7 @@ class CtoxRxQuery {
         registry.subscriptionStarted(this.collection.name);
         let pendingTimer = null;
         let initialized = false;
+        let queryEmissionGeneration = 0;
         let pendingPrimaryDoc = undefined;
         const primaryId = this.single
           ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath)
@@ -550,12 +576,13 @@ class CtoxRxQuery {
         const flushEmit = () => {
           pendingTimer = null;
           if (!active) return;
+          const generation = ++queryEmissionGeneration;
           if (initialized && !canApplyPrimaryDelta && !canApplyQueryDelta) {
             this.collection.recordComplexLiveQueryReexec(this.query);
           }
           this.exec()
             .then((value) => {
-              if (!active) return;
+              if (!active || generation !== queryEmissionGeneration) return;
               initialized = true;
               if (pendingPrimaryDoc !== undefined && canApplyPrimaryDelta) {
                 listener(wrapPrimaryDeltaDocument(this.collection, pendingPrimaryDoc));
@@ -618,6 +645,16 @@ class CtoxRxQuery {
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushEmit, 50);
         };
+        const unsubscribeLoader = this.collection.subscribeDemandLoaderChange(() => {
+          if (!active) return;
+          queryEmissionGeneration += 1;
+          pendingSuccess = {};
+          pendingPrimaryDoc = undefined;
+          queryDocumentsById.clear();
+          initialized = false;
+          listener(this.single ? null : []);
+          flushEmit();
+        });
         flushEmit();
         const unsubscribe = this.collection.observe(emit);
         return {
@@ -628,6 +665,7 @@ class CtoxRxQuery {
               pendingTimer = null;
             }
             unsubscribe();
+            unsubscribeLoader();
             registry.subscriptionEnded(this.collection.name);
           },
         };
@@ -681,12 +719,13 @@ class CtoxRxQuery {
     // a short window so one-shot reads also get priority on the wire.
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
-    if (this.collection.demandLoader) {
+    const demandLoader = this.collection.demandLoader;
+    if (demandLoader) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit))
         ? { window: { offset: Number(this.query.skip || 0), limit: 1 } }
         : {};
       demandOptions.signal = this.signal;
-      docs = await this.collection.demandLoader.resolveQuery(this.query, demandOptions);
+      docs = await demandLoader.resolveQuery(this.query, demandOptions);
     } else if (isControlPlaneStatusCollection(this.collection.name)) {
       // Replication cancellation detaches the loader. A warm local row is not
       // evidence that the current actor may still read it after reconnect.
@@ -706,6 +745,11 @@ class CtoxRxQuery {
       if (Number.isFinite(this.query.limit)) {
         docs = docs.slice(0, this.query.limit);
       }
+    }
+    if (isControlPlaneStatusCollection(this.collection.name) && demandLoader !== this.collection.demandLoader) {
+      // A response authorized under the previous bridge must not reach a
+      // subscriber after that bridge has been detached or replaced.
+      docs = [];
     }
     const wrapped = docs.map((doc) => new CtoxRxDocument(this.collection, doc));
     return this.single ? wrapped[0] || null : wrapped;

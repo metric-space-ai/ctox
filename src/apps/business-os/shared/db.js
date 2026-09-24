@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v396';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v397';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

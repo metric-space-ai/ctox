@@ -646,6 +646,8 @@ until the current digest is known and matches, or a newly authorized fetch
 re-stamps the window.
 If replication cancellation detaches the demand loader, control-plane `find`,
 `findOne`, `count`, and live subscriptions return no cached lifecycle rows.
+The loader transition immediately clears existing subscription snapshots,
+even without a storage change, and discards responses from its prior bridge.
 The direct IndexedDB fallback remains available to ordinary collections only.
 Known matching identities retain warm rendering; non-control-plane collections
 are unchanged. The opaque token

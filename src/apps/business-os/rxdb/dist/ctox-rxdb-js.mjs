@@ -12514,6 +12514,7 @@ var CtoxRxCollection = class {
     };
     this.storageCollection = storageCollection;
     this.demandLoader = null;
+    this.demandLoaderListeners = /* @__PURE__ */ new Set();
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
       deltaLiveQueryApplies: 0,
@@ -12522,7 +12523,16 @@ var CtoxRxCollection = class {
     };
   }
   setDemandLoader(loader) {
-    this.demandLoader = loader || null;
+    const nextLoader = loader || null;
+    if (this.demandLoader === nextLoader) return;
+    this.demandLoader = nextLoader;
+    if (isControlPlaneStatusCollection(this.name)) {
+      for (const listener of this.demandLoaderListeners) listener();
+    }
+  }
+  subscribeDemandLoaderChange(listener) {
+    this.demandLoaderListeners.add(listener);
+    return () => this.demandLoaderListeners.delete(listener);
   }
   async insert(doc) {
     const normalized = normalizeDoc(doc, this.schema.primaryPath);
@@ -12642,6 +12652,7 @@ var CtoxRxCollection = class {
         let initialRetryTimer = null;
         let initialRetryAttempt = 0;
         let initialized = false;
+        let snapshotGeneration = 0;
         let pendingSuccess = {};
         let pendingChanges = {};
         const documentsById = /* @__PURE__ */ new Map();
@@ -12665,10 +12676,12 @@ var CtoxRxCollection = class {
         };
         const flushInitial = async () => {
           if (!active) return;
+          const generation = ++snapshotGeneration;
           let documents;
           try {
             documents = await this.find().exec();
           } catch (error) {
+            if (!active || generation !== snapshotGeneration) return;
             if (isIndexedDbConnectionClosingError(error)) return;
             if (active && isRetryableObservableInitError(error)) {
               const delayMs = observableInitRetryDelayMs(initialRetryAttempt);
@@ -12681,7 +12694,7 @@ var CtoxRxCollection = class {
             }
             throw error;
           }
-          if (!active) return;
+          if (!active || generation !== snapshotGeneration) return;
           initialRetryAttempt = 0;
           documentsById.clear();
           for (const doc of documents) {
@@ -12733,6 +12746,16 @@ var CtoxRxCollection = class {
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushDelta, debounceMs);
         };
+        const unsubscribeLoader = this.subscribeDemandLoaderChange(() => {
+          if (!active) return;
+          snapshotGeneration += 1;
+          documentsById.clear();
+          pendingSuccess = {};
+          pendingChanges = {};
+          initialized = false;
+          emitSnapshot();
+          void flushInitial();
+        });
         void flushInitial();
         const unsubscribe = this.observe(emit);
         return {
@@ -12747,6 +12770,7 @@ var CtoxRxCollection = class {
               initialRetryTimer = null;
             }
             unsubscribe();
+            unsubscribeLoader();
             registry.subscriptionEnded(this.name);
           }
         };
@@ -12787,6 +12811,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
         registry.subscriptionStarted(this.collection.name);
         let pendingTimer = null;
         let initialized = false;
+        let queryEmissionGeneration = 0;
         let pendingPrimaryDoc = void 0;
         const primaryId = this.single ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath) : "";
         const controlPlaneRead = isControlPlaneStatusCollection(this.collection.name);
@@ -12811,11 +12836,12 @@ var CtoxRxQuery = class _CtoxRxQuery {
         const flushEmit = () => {
           pendingTimer = null;
           if (!active) return;
+          const generation = ++queryEmissionGeneration;
           if (initialized && !canApplyPrimaryDelta && !canApplyQueryDelta) {
             this.collection.recordComplexLiveQueryReexec(this.query);
           }
           this.exec().then((value) => {
-            if (!active) return;
+            if (!active || generation !== queryEmissionGeneration) return;
             initialized = true;
             if (pendingPrimaryDoc !== void 0 && canApplyPrimaryDelta) {
               listener(wrapPrimaryDeltaDocument(this.collection, pendingPrimaryDoc));
@@ -12878,6 +12904,16 @@ var CtoxRxQuery = class _CtoxRxQuery {
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushEmit, 50);
         };
+        const unsubscribeLoader = this.collection.subscribeDemandLoaderChange(() => {
+          if (!active) return;
+          queryEmissionGeneration += 1;
+          pendingSuccess = {};
+          pendingPrimaryDoc = void 0;
+          queryDocumentsById.clear();
+          initialized = false;
+          listener(this.single ? null : []);
+          flushEmit();
+        });
         flushEmit();
         const unsubscribe = this.collection.observe(emit);
         return {
@@ -12888,6 +12924,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
               pendingTimer = null;
             }
             unsubscribe();
+            unsubscribeLoader();
             registry.subscriptionEnded(this.collection.name);
           }
         };
@@ -12931,10 +12968,11 @@ var CtoxRxQuery = class _CtoxRxQuery {
   async exec() {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
-    if (this.collection.demandLoader) {
+    const demandLoader = this.collection.demandLoader;
+    if (demandLoader) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : {};
       demandOptions.signal = this.signal;
-      docs = await this.collection.demandLoader.resolveQuery(this.query, demandOptions);
+      docs = await demandLoader.resolveQuery(this.query, demandOptions);
     } else if (isControlPlaneStatusCollection(this.collection.name)) {
       docs = [];
     } else if (typeof this.collection.storageCollection.queryDocuments === "function") {
@@ -12952,6 +12990,9 @@ var CtoxRxQuery = class _CtoxRxQuery {
       if (Number.isFinite(this.query.limit)) {
         docs = docs.slice(0, this.query.limit);
       }
+    }
+    if (isControlPlaneStatusCollection(this.collection.name) && demandLoader !== this.collection.demandLoader) {
+      docs = [];
     }
     const wrapped = docs.map((doc) => new CtoxRxDocument(this.collection, doc));
     return this.single ? wrapped[0] || null : wrapped;
