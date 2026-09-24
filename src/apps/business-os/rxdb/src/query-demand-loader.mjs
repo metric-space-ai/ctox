@@ -79,6 +79,7 @@ export function createQueryDemandLoader({
   let nextConsumerSignalSequence = 0;
 
   return {
+    currentReadPermissionDigest: resolveReadPermissionDigest,
     async resolveQuery(query, { window, signal } = {}) {
       const normalizedWindow = normalizeWindow(window, query);
       const strictRequireRevision = Boolean(query?.requireRevision);

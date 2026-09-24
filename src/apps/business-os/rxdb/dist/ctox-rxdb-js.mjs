@@ -7512,6 +7512,7 @@ function createQueryDemandLoader({
   const consumerSignals = /* @__PURE__ */ new WeakMap();
   let nextConsumerSignalSequence = 0;
   return {
+    currentReadPermissionDigest: resolveReadPermissionDigest,
     async resolveQuery(query, { window: window2, signal } = {}) {
       const normalizedWindow = normalizeWindow(window2, query);
       const strictRequireRevision = Boolean(query?.requireRevision);
@@ -12574,7 +12575,34 @@ var CtoxRxCollection = class {
     return {
       exec: async () => {
         if (isControlPlaneStatusCollection(this.name)) {
-          return (await this.find(query).exec()).length;
+          const normalized2 = normalizeQuery(query, this.schema.primaryPath);
+          const maximum = Number.isFinite(normalized2.limit) ? normalized2.limit : Number.POSITIVE_INFINITY;
+          const offset = normalized2.skip || 0;
+          const startingLoader = this.demandLoader;
+          if (!startingLoader || maximum <= 0) return 0;
+          const readDigest = () => {
+            try {
+              return String(startingLoader.currentReadPermissionDigest?.() || "");
+            } catch {
+              return "";
+            }
+          };
+          const startingDigest = readDigest();
+          if (!startingDigest) return 0;
+          let total = 0;
+          while (total < maximum) {
+            if (this.demandLoader !== startingLoader || readDigest() !== startingDigest) return 0;
+            const pageLimit = Math.min(DEFAULT_WINDOW_LIMIT, maximum - total);
+            const page = await this.find({
+              ...normalized2,
+              skip: offset + total,
+              limit: pageLimit
+            }).exec();
+            if (this.demandLoader !== startingLoader || readDigest() !== startingDigest) return 0;
+            total += page.length;
+            if (page.length < pageLimit) break;
+          }
+          return total;
         }
         const normalized = normalizeQuery(query, this.schema.primaryPath);
         if (typeof this.storageCollection.countDocuments === "function") {

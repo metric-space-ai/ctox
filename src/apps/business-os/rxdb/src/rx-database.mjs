@@ -22,7 +22,7 @@ import { registerCollectionSyncProfile } from './sync-profile-registry.mjs';
 import { getActiveCollectionRegistry } from './active-collections.mjs';
 import { getPresenceRegistry } from './presence.mjs';
 import { getMultiTabSyncCoordinator } from './multi-tab-sync-coordinator.mjs';
-import { isControlPlaneStatusCollection } from './query-demand-loader.mjs';
+import { DEFAULT_WINDOW_LIMIT, isControlPlaneStatusCollection } from './query-demand-loader.mjs';
 
 export function getCtoxIndexedDbStorage() {
   return { name: 'ctox-indexeddb-native' };
@@ -279,9 +279,37 @@ class CtoxRxCollection {
     return {
       exec: async () => {
         // A direct storage count bypasses the authorized demand window just
-        // like a direct document query. Control-plane counts use that window.
+        // like a direct document query. Count every authorized page, since a
+        // single demand window is capped at DEFAULT_WINDOW_LIMIT rows.
         if (isControlPlaneStatusCollection(this.name)) {
-          return (await this.find(query).exec()).length;
+          const normalized = normalizeQuery(query, this.schema.primaryPath);
+          const maximum = Number.isFinite(normalized.limit) ? normalized.limit : Number.POSITIVE_INFINITY;
+          const offset = normalized.skip || 0;
+          const startingLoader = this.demandLoader;
+          if (!startingLoader || maximum <= 0) return 0;
+          const readDigest = () => {
+            try {
+              return String(startingLoader.currentReadPermissionDigest?.() || '');
+            } catch {
+              return '';
+            }
+          };
+          const startingDigest = readDigest();
+          if (!startingDigest) return 0;
+          let total = 0;
+          while (total < maximum) {
+            if (this.demandLoader !== startingLoader || readDigest() !== startingDigest) return 0;
+            const pageLimit = Math.min(DEFAULT_WINDOW_LIMIT, maximum - total);
+            const page = await this.find({
+              ...normalized,
+              skip: offset + total,
+              limit: pageLimit,
+            }).exec();
+            if (this.demandLoader !== startingLoader || readDigest() !== startingDigest) return 0;
+            total += page.length;
+            if (page.length < pageLimit) break;
+          }
+          return total;
         }
         const normalized = normalizeQuery(query, this.schema.primaryPath);
         if (typeof this.storageCollection.countDocuments === 'function') {

@@ -58,7 +58,10 @@ const waitFor = async (predicate) => {
 
 for (const name of ['business_commands', 'ctox_queue_tasks']) {
   const collection = database.collection(name);
-  collection.setDemandLoader({ resolveQuery: async () => [rows.get(name)] });
+  collection.setDemandLoader({
+    currentReadPermissionDigest: () => 'authorized-epoch',
+    resolveQuery: async () => [rows.get(name)],
+  });
   assert((await collection.find().exec()).length === 1, `${name}: authorized loader must supply the row`);
   assert(await collection.count().exec() === 1, `${name}: count must use the authorized window`);
 
@@ -106,6 +109,31 @@ assert(delayedSnapshots.every((value) => value.documents.length === 0), 'late co
 assert(delayedQuerySnapshots.every((value) => value.length === 0), 'late query fetch published superseded row');
 delayedSubscription.unsubscribe();
 delayedQuerySubscription.unsubscribe();
+
+const manyRows = Array.from({ length: 205 }, (_, index) => ({ id: `command-${index}`, state: 'complete' }));
+delayedCollection.setDemandLoader({
+  currentReadPermissionDigest: () => 'authorized-epoch',
+  resolveQuery: async (query) => manyRows.slice(query.skip || 0, (query.skip || 0) + query.limit),
+});
+assert(await delayedCollection.count().exec() === 205, 'authorized count stopped at the first 200-row window');
+assert(await delayedCollection.count({ skip: 5, limit: 7 }).exec() === 7, 'authorized count lost skip/limit semantics');
+let digest = 'authorized-epoch';
+let pageCalls = 0;
+delayedCollection.setDemandLoader({
+  currentReadPermissionDigest: () => digest,
+  resolveQuery: async (query) => {
+    pageCalls += 1;
+    if (pageCalls === 2) {
+      digest = '';
+      return [];
+    }
+    return manyRows.slice(query.skip || 0, (query.skip || 0) + query.limit);
+  },
+});
+assert(await delayedCollection.count().exec() === 0, 'mid-count identity loss leaked an earlier page count');
+assert(pageCalls === 2, 'mid-count fixture did not cross the second demand window');
+delayedCollection.setDemandLoader(null);
+assert(await delayedCollection.count().exec() === 0, 'detached loader leaked the multi-window count');
 
 assert(directReads === 0, 'control-plane reads must never use raw storage fallback');
 assert((await database.ordinary_records.find().exec())[0]?.id === 'record-1', 'ordinary collection local read changed');

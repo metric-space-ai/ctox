@@ -648,6 +648,10 @@ If replication cancellation detaches the demand loader, control-plane `find`,
 `findOne`, `count`, and live subscriptions return no cached lifecycle rows.
 The loader transition immediately clears existing subscription snapshots,
 even without a storage change, and discards responses from its prior bridge.
+Control-plane `count()` walks authorized 200-row demand windows, retaining
+the regular skip/limit semantics without reading the raw local store. Every
+page must belong to one known read-permission digest; identity loss or change
+during the count returns zero rather than a partial count from the old grant.
 The direct IndexedDB fallback remains available to ordinary collections only.
 Known matching identities retain warm rendering; non-control-plane collections
 are unchanged. The opaque token
