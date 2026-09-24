@@ -228,11 +228,22 @@ fn validate_account_users(root: &Path, config: &mut EmailAccountConfig) -> Resul
 pub(crate) fn delete_account(root: &Path, address: &str) -> Result<bool> {
     let address = normalize_address(address);
     let mut accounts = load_accounts(root)?;
-    let before = accounts.len();
-    accounts.retain(|item| item.address != address);
-    if accounts.len() == before {
+    let Some(index) = accounts.iter().position(|item| item.address == address) else {
         return Ok(false);
-    }
+    };
+    let deleted = accounts.remove(index);
+    // A registry-only deletion would leave the native projection readable by
+    // its former owner and shares. Revoke first; a later registry/secret error
+    // leaves an unavailable account rather than continuing to expose mail.
+    let mut conn = crate::communication_store::open_channel_db(&root.join("runtime/ctox.sqlite3"))?;
+    crate::mission::channels::upsert_communication_account(
+        &mut conn,
+        &format!("email:{}", address),
+        "email",
+        &address,
+        &deleted.provider,
+        account_profile_json(&deleted, "", &[]),
+    )?;
     save_accounts(root, &accounts)?;
     let _ = secrets::delete_secret_record(root, SECRET_SCOPE, &address);
     Ok(true)
@@ -517,6 +528,14 @@ mod tests {
 
         assert!(delete_account(root, "JILL@example.com")?);
         assert!(load_accounts(root)?.is_empty());
+        let deleted = crate::mission::channels::pull_communication_record_for_business_os(
+            root,
+            "communication_accounts",
+            "email:jill@example.com",
+        )?
+        .context("native account after deletion")?;
+        assert_eq!(deleted["profile_json"]["ownerUserId"], "");
+        assert_eq!(deleted["profile_json"]["shared_user_ids"], json!([]));
 
         // Exchange-Konto: eigener Server und Domänen-Benutzer kommen an.
         let exchange = upsert_account(

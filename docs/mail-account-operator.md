@@ -44,6 +44,10 @@ their email-account upsert preserves the current native access binding. An
 explicit empty owner or share list from the account configuration path still
 revokes it. Neither operation requires sending a message to verify the
 binding: the native profile regression covers both cases.
+Deleting a configured account revokes its native owner/share grants before
+removing the registry entry and secret. Historical communication records remain
+for administrator review; a later connector profile refresh cannot restore the
+deleted readers' access.
 
 Nonsecret registry entries use the existing `CTO_EMAIL_ACCOUNTS` runtime setting.
 Passwords use secret scope `email-account` and the normalized address as name.

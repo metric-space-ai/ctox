@@ -6510,6 +6510,90 @@ mod tests {
             !alice_filter(&shared_message),
             "share revocation must affect an existing filter"
         );
+        drop(conn);
+
+        let deleted_key = "email:delete@example.test";
+        crate::communication::email_accounts::upsert_account(
+            root,
+            crate::communication::email_accounts::EmailAccountConfig {
+                address: "delete@example.test".into(),
+                provider: "owa".into(),
+                owner_user_id: "alice".into(),
+                shared_user_ids: Some(vec!["bob".into()]),
+                ..Default::default()
+            },
+            None,
+        )?;
+        let before_delete = crate::mission::channels::pull_communication_record_for_business_os(
+            root,
+            "communication_accounts",
+            deleted_key,
+        )?
+        .context("account before deletion")?;
+        assert!(may_replicate_document(
+            root,
+            &alice_token,
+            "communication_accounts",
+            &before_delete,
+        ));
+        assert!(may_replicate_document(
+            root,
+            &bob_token,
+            "communication_accounts",
+            &before_delete,
+        ));
+        assert!(crate::communication::email_accounts::delete_account(
+            root,
+            "delete@example.test"
+        )?);
+        let after_delete = crate::mission::channels::pull_communication_record_for_business_os(
+            root,
+            "communication_accounts",
+            deleted_key,
+        )?
+        .context("native account history after deletion")?;
+        for ordinary in [&alice_token, &bob_token] {
+            assert!(!may_replicate_document(
+                root,
+                ordinary,
+                "communication_accounts",
+                &after_delete,
+            ));
+        }
+        assert!(may_replicate_document(
+            root,
+            &admin_token,
+            "communication_accounts",
+            &after_delete,
+        ));
+        let mut channel_conn =
+            crate::communication_store::open_channel_db(&root.join("runtime/ctox.sqlite3"))?;
+        crate::mission::channels::upsert_communication_account(
+            &mut channel_conn,
+            deleted_key,
+            "email",
+            "delete@example.test",
+            "owa",
+            json!({ "folder": "Sent" }),
+        )?;
+        let after_connector = crate::mission::channels::pull_communication_record_for_business_os(
+            root,
+            "communication_accounts",
+            deleted_key,
+        )?
+        .context("deleted account after connector refresh")?;
+        assert!(!may_replicate_document(
+            root,
+            &alice_token,
+            "communication_accounts",
+            &after_connector,
+        ));
+        assert!(!may_replicate_document(
+            root,
+            &bob_token,
+            "communication_accounts",
+            &after_connector,
+        ));
         Ok(())
     }
 
