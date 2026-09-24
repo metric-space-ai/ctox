@@ -836,7 +836,7 @@ async function loadRecordsByIds(name, ids, options = {}) {
   const uniqueIds = [...new Set((ids || []).map((id) => String(id || '').trim()).filter(Boolean))];
   if (!collection?.findOne || !uniqueIds.length) return [];
   // Primary-key lookups use the optimized single-document demand window.
-  // A Mango `$in` query over `id` scans large native collections and can hold
+  // A Mango `$in` query over `id` scans large collections and can hold
   // the shared query collector until its transport deadline.
   const docs = [];
   for (let offset = 0; offset < uniqueIds.length; offset += 20) {
