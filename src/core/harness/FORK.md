@@ -188,3 +188,11 @@ cargo test --manifest-path src/core/harness/Cargo.toml -p ctox-app-server-client
 ```
 
 Refs #97.
+
+The fixture waits for `TurnCompleted` matching both the started thread and
+turn id before reading persisted history. Concurrent `thread/read` snapshots
+can observe a partially flushed rollout, and stale-turn reconstruction can
+classify that snapshot as interrupted before the live completion event is
+consumed. Such snapshots are not a substitute for terminal events. The exact
+completion status, pre-shutdown disk markers, post-restart history and missing
+identified-resume rejection remain mandatory assertions.

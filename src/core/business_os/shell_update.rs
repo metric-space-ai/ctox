@@ -116,6 +116,14 @@ struct ReleaseManifest {
     signature: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum ShellRollbackTarget {
+    NoPreviousTarget,
+    BuiltInRecovery,
+    Slot { version: String },
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShellUpdateState {
@@ -125,6 +133,10 @@ pub struct ShellUpdateState {
     desired_version: Option<String>,
     current_slot: Option<String>,
     previous_slot: Option<String>,
+    // Missing only in legacy state. Never infer a historical recovery target
+    // from active_version/current_slot being absent.
+    #[serde(default)]
+    rollback_target: Option<ShellRollbackTarget>,
     latest_compatible_version: Option<String>,
     last_checked_at: Option<String>,
     last_activated_at: Option<String>,
@@ -143,6 +155,7 @@ impl Default for ShellUpdateState {
             desired_version: None,
             current_slot: None,
             previous_slot: None,
+            rollback_target: Some(ShellRollbackTarget::NoPreviousTarget),
             latest_compatible_version: None,
             last_checked_at: None,
             last_activated_at: None,
@@ -151,6 +164,26 @@ impl Default for ShellUpdateState {
             error_code: None,
             rollback_active: false,
         }
+    }
+}
+
+impl ShellUpdateState {
+    fn rollback_target(&self) -> ShellRollbackTarget {
+        self.rollback_target.clone().unwrap_or_else(|| {
+            self.previous_slot
+                .clone()
+                .map_or(ShellRollbackTarget::NoPreviousTarget, |version| {
+                    ShellRollbackTarget::Slot { version }
+                })
+        })
+    }
+
+    fn set_rollback_target(&mut self, target: ShellRollbackTarget) {
+        self.previous_slot = match &target {
+            ShellRollbackTarget::Slot { version } => Some(version.clone()),
+            _ => None,
+        };
+        self.rollback_target = Some(target);
     }
 }
 
@@ -185,6 +218,14 @@ fn read_state(root: &Path) -> Result<ShellUpdateState> {
     anyhow::ensure!(
         state.schema == STATE_SCHEMA,
         "unsupported shell update state"
+    );
+    let target_slot = match state.rollback_target() {
+        ShellRollbackTarget::Slot { version } => Some(version),
+        _ => None,
+    };
+    anyhow::ensure!(
+        state.previous_slot == target_slot,
+        "inconsistent shell rollback target"
     );
     Ok(state)
 }
@@ -764,7 +805,13 @@ fn public_status(state: &ShellUpdateState, administrable: bool) -> serde_json::V
         "phase": phase,
         "health": health,
         "administrable": administrable,
-        "recoveryShell": state.active_version.is_none(),
+        "recoveryShell": state.current_slot.is_none(),
+        "currentSlot": state.current_slot,
+        "previousSlot": state.previous_slot,
+        "rollbackSupported": true,
+        "rollbackTarget": state.rollback_target(),
+        "rollbackRequiresSlotVerification": matches!(
+            state.rollback_target(), ShellRollbackTarget::Slot { .. }),
         "lastCheckedAt": state.last_checked_at,
         "lastActivatedAt": state.last_activated_at,
         "errorCode": state.error_code,
@@ -929,7 +976,15 @@ pub fn activate(root: &Path) -> Result<serde_json::Value> {
 }
 
 fn apply_activation(state: &mut ShellUpdateState, version: String) {
-    state.previous_slot = state.current_slot.take();
+    // This records the actual selection at this transition, not a guess about
+    // historical state. None is precisely the native built-in fallback selector.
+    let previous = state
+        .current_slot
+        .take()
+        .map_or(ShellRollbackTarget::BuiltInRecovery, |version| {
+            ShellRollbackTarget::Slot { version }
+        });
+    state.set_rollback_target(previous);
     state.current_slot = Some(version.clone());
     state.active_version = Some(version);
     state.desired_version = None;
@@ -941,21 +996,37 @@ fn apply_activation(state: &mut ShellUpdateState, version: String) {
 
 pub fn rollback(root: &Path) -> Result<serde_json::Value> {
     let mut state = read_state(root)?;
-    let previous = state
-        .previous_slot
-        .clone()
-        .context("no previous shell slot")?;
-    let previous_path = slots_root(root).join(&previous);
-    verify_slot(&previous_path, Some(&previous))?;
+    let previous = state.rollback_target();
+    match &previous {
+        ShellRollbackTarget::NoPreviousTarget => bail!("no previous shell target"),
+        ShellRollbackTarget::BuiltInRecovery => {}
+        ShellRollbackTarget::Slot { version } => {
+            pinned_release_url(version)?;
+            let previous_path = slots_root(root).join(version);
+            verify_slot(&previous_path, Some(version))?;
+        }
+    }
     apply_rollback(&mut state, previous);
     write_state(root, &state)?;
     Ok(public_status(&state, true))
 }
 
-fn apply_rollback(state: &mut ShellUpdateState, previous: String) {
-    let current = state.current_slot.replace(previous.clone());
-    state.previous_slot = current;
-    state.active_version = Some(previous);
+fn apply_rollback(state: &mut ShellUpdateState, previous: ShellRollbackTarget) {
+    let selected = match previous {
+        ShellRollbackTarget::Slot { version } => Some(version),
+        ShellRollbackTarget::BuiltInRecovery => None,
+        ShellRollbackTarget::NoPreviousTarget => unreachable!("rollback target was checked"),
+    };
+    let current = state
+        .current_slot
+        .take()
+        .map_or(ShellRollbackTarget::BuiltInRecovery, |version| {
+            ShellRollbackTarget::Slot { version }
+        });
+    state.current_slot = selected.clone();
+    state.active_version = selected;
+    state.set_rollback_target(current);
+    state.desired_version = None;
     state.phase = "restart_required".to_owned();
     state.health = "pending_restart".to_owned();
     state.rollback_active = true;
@@ -965,6 +1036,13 @@ fn apply_rollback(state: &mut ShellUpdateState, previous: String) {
 pub fn active_shell_root(root: &Path) -> Result<Option<PathBuf>> {
     let mut state = read_state(root)?;
     let Some(ref slot) = state.current_slot else {
+        // Complete a persisted rollback to the native fallback on restart,
+        // without claiming that unverified built-in assets passed slot checks.
+        if state.phase == "restart_required" && state.rollback_active {
+            state.phase = "recovery".to_owned();
+            state.health = "unknown".to_owned();
+            write_state(root, &state)?;
+        }
         return Ok(None);
     };
     let path = slots_root(root).join(&slot);
@@ -1035,7 +1113,9 @@ mod tests {
         let mut state = read_state(temp.path())?;
         state.active_version = Some("1.1.0".to_owned());
         state.current_slot = Some("1.1.0".to_owned());
-        state.previous_slot = Some("1.0.0".to_owned());
+        state.set_rollback_target(ShellRollbackTarget::Slot {
+            version: "1.0.0".to_owned(),
+        });
         state.phase = "current".to_owned();
         write_state(temp.path(), &state)?;
         let persisted = read_state(temp.path())?;
@@ -1262,7 +1342,12 @@ mod tests {
         assert_eq!(state.phase, "restart_required");
         assert_eq!(state.health, "pending_restart");
 
-        apply_rollback(&mut state, "1.0.0".to_owned());
+        apply_rollback(
+            &mut state,
+            ShellRollbackTarget::Slot {
+                version: "1.0.0".to_owned(),
+            },
+        );
         assert_eq!(state.active_version.as_deref(), Some("1.0.0"));
         assert_eq!(state.current_slot.as_deref(), Some("1.0.0"));
         assert_eq!(state.previous_slot.as_deref(), Some("1.1.0"));
@@ -1291,6 +1376,190 @@ mod tests {
         assert_eq!(persisted.active_version.as_deref(), Some("1.0.0"));
         assert_eq!(persisted.current_slot.as_deref(), Some("1.0.0"));
         assert_eq!(persisted.desired_version.as_deref(), Some("1.1.0"));
+        Ok(())
+    }
+
+    #[test]
+    fn shell_recovery_first_activation_survives_restart_and_rolls_back_to_builtin() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut state = read_state(temp.path())?;
+        assert_eq!(
+            state.rollback_target(),
+            ShellRollbackTarget::NoPreviousTarget
+        );
+        assert!(rollback(temp.path()).is_err());
+
+        // Exercise the transition after the existing activation verifier. The
+        // public activation rejection test separately keeps that gate covered.
+        apply_activation(&mut state, "1.2.3".to_owned());
+        write_state(temp.path(), &state)?;
+        drop(state);
+        let restarted = read_state(temp.path())?;
+        assert_eq!(
+            restarted.rollback_target,
+            Some(ShellRollbackTarget::BuiltInRecovery)
+        );
+        let before = status(temp.path(), true)?;
+        assert_eq!(before["currentSlot"], "1.2.3");
+        assert_eq!(before["rollbackTarget"]["kind"], "built_in_recovery");
+        assert_eq!(before["rollbackRequiresSlotVerification"], false);
+
+        let artifact = slots_root(temp.path()).join("1.2.3/retained-evidence");
+        fs::create_dir_all(artifact.parent().unwrap())?;
+        fs::write(&artifact, b"keep this slot")?;
+        let result = rollback(temp.path())?;
+        assert!(result["currentSlot"].is_null());
+        assert!(result["activeVersion"].is_null());
+        assert_eq!(result["recoveryShell"], true);
+        assert_eq!(result["phase"], "restart");
+        assert_eq!(result["rollbackTarget"]["kind"], "slot");
+        assert_eq!(result["rollbackTarget"]["version"], "1.2.3");
+        assert!(active_shell_root(temp.path())?.is_none());
+        let after_restart = read_state(temp.path())?;
+        assert!(after_restart.current_slot.is_none());
+        assert!(after_restart.active_version.is_none());
+        assert_eq!(after_restart.phase, "recovery");
+        assert_eq!(after_restart.health, "unknown");
+        assert!(after_restart.rollback_active);
+        assert_eq!(fs::read(artifact)?, b"keep this slot");
+        Ok(())
+    }
+
+    #[test]
+    fn shell_recovery_slot_transitions_preserve_persisted_rollback_selection() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut state = ShellUpdateState {
+            current_slot: Some("1.0.0".to_owned()),
+            active_version: Some("1.0.0".to_owned()),
+            ..ShellUpdateState::default()
+        };
+        apply_activation(&mut state, "1.1.0".to_owned());
+        write_state(temp.path(), &state)?;
+        let mut restarted = read_state(temp.path())?;
+        let target = restarted.rollback_target();
+        assert_eq!(
+            target,
+            ShellRollbackTarget::Slot {
+                version: "1.0.0".to_owned()
+            }
+        );
+        assert_eq!(restarted.previous_slot.as_deref(), Some("1.0.0"));
+        apply_rollback(&mut restarted, target);
+        write_state(temp.path(), &restarted)?;
+        let restored = read_state(temp.path())?;
+        assert_eq!(restored.current_slot.as_deref(), Some("1.0.0"));
+        assert_eq!(restored.active_version.as_deref(), Some("1.0.0"));
+        assert_eq!(
+            restored.rollback_target(),
+            ShellRollbackTarget::Slot {
+                version: "1.1.0".to_owned()
+            }
+        );
+        assert_eq!(restored.previous_slot.as_deref(), Some("1.1.0"));
+        assert!(restored.rollback_active);
+        assert_eq!(restored.phase, "restart_required");
+        Ok(())
+    }
+
+    #[test]
+    fn shell_recovery_legacy_state_never_infers_a_builtin_previous_target() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        for (current, previous) in [
+            (None, None),
+            (Some("1.2.3"), None),
+            (Some("1.2.3"), Some("1.1.0")),
+        ] {
+            let state = ShellUpdateState {
+                current_slot: current.map(str::to_owned),
+                // Deliberately absent: this is NOT historical rollback evidence.
+                active_version: None,
+                previous_slot: previous.map(str::to_owned),
+                rollback_target: None,
+                ..ShellUpdateState::default()
+            };
+            write_state(temp.path(), &state)?;
+            let mut legacy = serde_json::to_value(&state)?;
+            legacy.as_object_mut().unwrap().remove("rollbackTarget");
+            let conn = super::super::store::open_store(temp.path())?;
+            conn.execute(
+                "UPDATE business_os_shell_update_state SET state_json = ?1 WHERE singleton = 1",
+                [serde_json::to_string(&legacy)?],
+            )?;
+            drop(conn);
+            let restored = read_state(temp.path())?;
+            let expected = previous.map_or(ShellRollbackTarget::NoPreviousTarget, |version| {
+                ShellRollbackTarget::Slot {
+                    version: version.to_owned(),
+                }
+            });
+            assert_eq!(restored.rollback_target(), expected);
+            assert_ne!(
+                restored.rollback_target(),
+                ShellRollbackTarget::BuiltInRecovery
+            );
+            let before = serde_json::to_value(&restored)?;
+            assert!(rollback(temp.path()).is_err());
+            assert_eq!(serde_json::to_value(read_state(temp.path())?)?, before);
+            assert_eq!(
+                status(temp.path(), true)?["recoveryShell"],
+                current.is_none()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn shell_recovery_invalid_slot_rollback_never_mutates_persisted_state() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        for version in ["1.0.0", "../escape", "1.2.3"] {
+            let mut state = ShellUpdateState {
+                current_slot: Some("2.0.0".to_owned()),
+                active_version: Some("2.0.0".to_owned()),
+                ..ShellUpdateState::default()
+            };
+            state.set_rollback_target(ShellRollbackTarget::Slot {
+                version: version.to_owned(),
+            });
+            if version == "1.2.3" {
+                let slot = slots_root(temp.path()).join(version);
+                fs::create_dir_all(&slot)?;
+                fs::write(
+                    slot.join(".ctox-shell-release.v2.json"),
+                    serde_json::to_vec(&sample_manifest("0.0.0", None, "shell-current-2026-08"))?,
+                )?;
+            }
+            write_state(temp.path(), &state)?;
+            let before = serde_json::to_value(read_state(temp.path())?)?;
+            let error = rollback(temp.path()).expect_err("invalid target must not select fallback");
+            if version == "1.2.3" {
+                assert!(format!("{error:#}").contains("invalid-signature"));
+            }
+            assert_eq!(serde_json::to_value(read_state(temp.path())?)?, before);
+            let public = status(temp.path(), true)?;
+            assert_eq!(public["rollbackTarget"]["kind"], "slot");
+            assert_eq!(public["rollbackRequiresSlotVerification"], true);
+            assert_eq!(public["recoveryShell"], false);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn shell_recovery_inconsistent_or_unknown_target_fails_closed() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let state = ShellUpdateState {
+            previous_slot: Some("1.0.0".to_owned()),
+            rollback_target: Some(ShellRollbackTarget::BuiltInRecovery),
+            ..ShellUpdateState::default()
+        };
+        write_state(temp.path(), &state)?;
+        assert!(read_state(temp.path())
+            .unwrap_err()
+            .to_string()
+            .contains("inconsistent"));
+        assert!(rollback(temp.path()).is_err());
+        let mut unknown = serde_json::to_value(&state)?;
+        unknown["rollbackTarget"] = serde_json::json!({"kind": "automatic_recovery"});
+        assert!(serde_json::from_value::<ShellUpdateState>(unknown).is_err());
         Ok(())
     }
 
