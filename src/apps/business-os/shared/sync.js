@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+} from './sync-contract.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20260913-shell-v2-authoritative-pin-retry-v384';
+const MULTI_TAB_COORDINATOR_EPOCH = '20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -688,7 +688,7 @@ export function createSyncRuntime({
         },
       };
     },
-    async leaseCollection(collection, reason = 'scoped-collection-lease') {
+    async leaseCollection(collection, reason = 'scoped-collection-lease', options = {}) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       const normalized = normalizeCollectionName(collection);
       if (!normalized) throw new Error('collection is required.');
@@ -711,7 +711,7 @@ export function createSyncRuntime({
       });
       publishResourceBudget();
       try {
-        await this.startCollection(normalized, { pin: false });
+        await this.startCollection(normalized, { pin: false, forceDirect: options.forceDirect === true });
         return lease;
       } catch (error) {
         await lease.release();
@@ -1072,13 +1072,17 @@ export function createSyncRuntime({
       const remainingMs = () => Math.max(1, budgetMs - (Date.now() - startedAt));
       const controller = typeof AbortController === 'function' ? new AbortController() : null;
       nativeReadSequence = (nativeReadSequence + 1) % Number.MAX_SAFE_INTEGER;
-      const lease = await withRejectingTimeout(
-        () => this.leaseCollection(normalized, 'authoritative-native-read'),
-        remainingMs(),
-        `Native read lease for ${normalized} exceeded ${budgetMs}ms.`,
-      );
+      // Follower stubs only forward writes; an authoritative query needs a
+      // leased native bridge, just like requestNativeDirectly().
+      const acquisition = this.leaseCollection(normalized, 'authoritative-native-read', { forceDirect: true });
+      let lease = null;
       let timer = null;
       try {
+        lease = await withRejectingTimeout(
+          () => acquisition,
+          remainingMs(),
+          `Native read lease for ${normalized} exceeded ${budgetMs}ms.`,
+        );
         let bridge = lease.bridge;
         if (!bridge?.state && bridge?.ready) {
           bridge = await withRejectingTimeout(
@@ -1116,7 +1120,10 @@ export function createSyncRuntime({
       } finally {
         if (timer) clearTimeout(timer);
         controller?.abort?.();
-        await lease.release().catch(() => {});
+        if (lease) await lease.release().catch(() => {});
+        // A deadline can win while startup is still acquiring the lease.
+        // Release that late ownership without stopping other consumers.
+        else acquisition.then((lateLease) => lateLease.release()).catch(() => {});
       }
     },
 

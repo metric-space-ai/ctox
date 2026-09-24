@@ -1,4 +1,5 @@
 mod registry;
+pub(crate) use registry::target_script_registration;
 use registry::{
     count_rows, list_targets, open_db, register_script, register_source_module, resolve_db_path,
     show_api, show_target, upsert_target,
@@ -30,6 +31,10 @@ mod classify;
 mod query_completion;
 use classify::Classification;
 pub(crate) use classify::ScrapeRunStatus;
+
+pub(crate) fn registered_target_summary(root: &Path, target_key: &str) -> Result<Option<Value>> {
+    show_target(root, target_key)
+}
 
 use anyhow::Context;
 use anyhow::Result;

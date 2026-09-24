@@ -248,7 +248,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   user_thread_messages: "3e9ac54c218496245fdeaa9e8cd6f2f649455448703bada2ac290a1de4fd7646",
   user_thread_states: "71e70b8a2e44bd2b851b24fde40a5b4cd42cd9e0b6158525055a9c04743de9eb",
   user_threads: "97a226600a64559f18c795e6a6c39b56e478d455bc5ce1485b714e1d13c2e5cb",
-  workjet_computers: "ad5b7f32d8237ac93399904960c193e40de34e2f1b521306d8d1aeea590645b1",
+  workjet_computers: "367b6f7af7849a06616267a13d2ef49e539e10b2267628dc860b1d82ba10f595",
   workjet_project_chats: "f68e34d8702d58f1ffc430bd12edb61f01528b26a2e5197df3e46e393819bc2e",
   workjet_project_workers: "f2c2dfcf7f722902e47a2d947b81f8afae740b6a642bb9b392a4260ce79d4892",
   workjet_projects: "16bf130df1fb7883a21198744dd3f5c2c0ecd621e39355b6f0d875d59cbe9a0e",
@@ -1654,7 +1654,7 @@ var QueryMetaStorage = class {
     await this.backend.putQueryWindow(record);
     return record;
   }
-  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null }) {
+  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null, permissionDigest = void 0 }) {
     const now = this.clock();
     const existing = await this.backend.getQueryWindow(
       [collection, queryFingerprint2, offset, limit].join("|")
@@ -1677,6 +1677,11 @@ var QueryMetaStorage = class {
       // fetch satisfied — distinct from the server echo above.
       satisfiedRevision: satisfiedRevision ?? null,
       satisfiedGeneration: satisfiedGeneration ?? null,
+      // SYNC-12: read-permission identity (digest of role+epoch capability
+      // claims) this window's membership was authorized under. The demand
+      // loader refuses to serve control-plane windows whose stamp mismatches
+      // the current digest. Omitted on upsert: keep the previous stamp.
+      permissionDigest: permissionDigest === void 0 ? existing?.permissionDigest ?? null : permissionDigest ?? null,
       queryShape: queryShape && typeof queryShape === "object" ? structuredCloneSafe3(queryShape) : null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -7476,7 +7481,15 @@ function createQueryDemandLoader({
   // state: without the stamp they counted as unsynced LOCAL writes, so the
   // push pipeline echoed them (and cache-eviction tombstones — i.e. DELETES)
   // back to the master, and the LWW gate let them veto later master pulls.
-  replicationOrigin = null
+  replicationOrigin = null,
+  // SYNC-12 boundary for control-plane reads: live provider for this
+  // browser's read-permission digest (hash of the role+epoch capability
+  // claims). A role or grant change bumps the digest; control-plane windows
+  // stamped under a superseded digest must not be served locally before a
+  // newly authorized fetch re-stamps their membership. An empty current
+  // digest (identity unresolvable right now) cannot authorize a local
+  // control-plane window; retained replication checkpoints are separate.
+  readPermissionDigest = null
 }) {
   if (!storageCollection) throw new TypeError("demand loader requires storageCollection");
   if (!sidecar) throw new TypeError("demand loader requires sidecar");
@@ -7485,6 +7498,9 @@ function createQueryDemandLoader({
     throw new TypeError("demand loader requires requestQueryFetch");
   }
   const resolveReplicationOrigin = () => (typeof replicationOrigin === "function" ? replicationOrigin() : replicationOrigin) || null;
+  const resolveReadPermissionDigest = () => String(
+    (typeof readPermissionDigest === "function" ? readPermissionDigest() : readPermissionDigest) || ""
+  );
   const boundedQueryWindowRevalidateMs = Math.max(
     250,
     Number(queryWindowRevalidateMs) || DEFAULT_QUERY_WINDOW_REVALIDATE_MS
@@ -7496,6 +7512,7 @@ function createQueryDemandLoader({
   const consumerSignals = /* @__PURE__ */ new WeakMap();
   let nextConsumerSignalSequence = 0;
   return {
+    currentReadPermissionDigest: resolveReadPermissionDigest,
     async resolveQuery(query, { window: window2, signal } = {}) {
       const normalizedWindow = normalizeWindow(window2, query);
       const strictRequireRevision = Boolean(query?.requireRevision);
@@ -7592,25 +7609,33 @@ function createQueryDemandLoader({
         const emptyWindowStale = cached && (!Array.isArray(cached.documentIds) || cached.documentIds.length === 0) && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= EMPTY_QUERY_WINDOW_REVALIDATE_MS;
         const mutableMembershipWindowStale = isMutableMembershipCollection(collectionName) && cached && Array.isArray(cached.documentIds) && cached.documentIds.length > 0 && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= MUTABLE_QUERY_MEMBERSHIP_REVALIDATE_MS;
         const queryWindowStale = cached && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= boundedQueryWindowRevalidateMs;
-        if (cached && cached.complete && cachedDocumentsAvailable && !emptyWindowStale && !mutableMembershipWindowStale && !queryWindowStale) {
+        const controlPlaneRead = isControlPlaneStatusCollection(collectionName);
+        const controlPlanePermissionMismatchNow = () => controlPlaneRead && cached && (cached.complete || cached.everCompleted) && !windowReadPermissionDigestMatches(cached.permissionDigest, resolveReadPermissionDigest());
+        const controlPlaneFallbackMembership = () => controlPlanePermissionMismatchNow() || controlPlaneRead && !cached ? [] : cached?.documentIds;
+        const serveWindowDocuments = async (windowRecord, membershipIds) => {
+          const documents = await readLocalDocuments(
+            storageCollection,
+            query,
+            normalizedWindow,
+            membershipIds
+          );
+          if (controlPlaneRead && !windowReadPermissionDigestMatches(
+            windowRecord?.permissionDigest,
+            resolveReadPermissionDigest()
+          )) {
+            return [];
+          }
+          return documents;
+        };
+        if (cached && cached.complete && cachedDocumentsAvailable && !emptyWindowStale && !mutableMembershipWindowStale && !queryWindowStale && !controlPlanePermissionMismatchNow()) {
           if (strictRequireRevision) {
             if (cached.satisfiedRevision === query.requireRevision && cached.satisfiedGeneration === generation && !controlPlaneWindowStale) {
               await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-              return readLocalDocuments(
-                storageCollection,
-                query,
-                normalizedWindow,
-                cached.documentIds
-              );
+              return serveWindowDocuments(cached, cached.documentIds);
             }
           } else if (!controlPlaneWindowStale) {
             await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached.documentIds
-            );
+            return serveWindowDocuments(cached, cached.documentIds);
           }
         }
         const dedupKey = strictRequireRevision ? `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}|strict|${query.requireRevision}|${generation}` : `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
@@ -7624,6 +7649,7 @@ function createQueryDemandLoader({
           throwIfQueryCancelled(invocationEntry);
           const job = (async () => {
             const startedAt = clock();
+            const fetchPermissionDigest = resolveReadPermissionDigest();
             try {
               assertFresh();
               const result = await Promise.race([
@@ -7644,6 +7670,9 @@ function createQueryDemandLoader({
                 cancellationPromise
               ]);
               assertFresh();
+              if (controlPlaneRead && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())) {
+                throw createQueryCancelledError("permission-identity-changed");
+              }
               await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
               assertFresh();
               const documentIds = (result.documents || []).map(extractId).filter(Boolean);
@@ -7657,6 +7686,10 @@ function createQueryDemandLoader({
                 authoritativeRevision: result.authoritativeRevision ?? null,
                 satisfiedRevision: query?.requireRevision ?? null,
                 satisfiedGeneration: strictRequireRevision ? generation : null,
+                // SYNC-12: stamp the read-permission identity this authorized
+                // fetch ran under; a later role/grant change (new digest) must
+                // not be served this membership.
+                permissionDigest: fetchPermissionDigest || null,
                 queryShape: {
                   selector: query?.selector ?? {},
                   sort: normalizeSort(query?.sort)
@@ -7667,6 +7700,9 @@ function createQueryDemandLoader({
                 estimatedBytes: estimateBytesPerDocument(result.documents || [])
               });
               assertFresh();
+              if (controlPlaneRead && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())) {
+                throw createQueryCancelledError("permission-identity-changed");
+              }
               bumpStatus(status, "queryFetchSuccessCount");
               if (status) status.lastQueryFetchMs = clock() - startedAt;
               v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
@@ -7676,12 +7712,7 @@ function createQueryDemandLoader({
                 bumpStatus(status, "queryFetchCancelCount");
                 v15Log("fetch:cancel", { fingerprint, error: String(error?.message ?? error) });
                 if (strictRequireRevision || invocationEntry.consumerCancelled) throw error;
-                return readLocalDocuments(
-                  storageCollection,
-                  query,
-                  normalizedWindow,
-                  cached?.documentIds
-                );
+                return serveWindowDocuments(cached, controlPlaneFallbackMembership());
               }
               bumpStatus(status, "queryFetchErrorCount");
               v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
@@ -7700,12 +7731,7 @@ function createQueryDemandLoader({
             if (strictRequireRevision || invocationEntry.consumerCancelled) {
               throw createQueryCancelledError("multi-tab-broker-closed");
             }
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached?.documentIds
-            );
+            return serveWindowDocuments(cached, controlPlaneFallbackMembership());
           }
           assertFresh();
           const leader = await multiTabBroker.claim(dedupKey);
@@ -7723,23 +7749,16 @@ function createQueryDemandLoader({
             if (strictRequireRevision || invocationEntry.consumerCancelled) {
               throw createQueryCancelledError("multi-tab-broker-closed");
             }
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached?.documentIds
-            );
+            return serveWindowDocuments(cached, controlPlaneFallbackMembership());
           }
           const materialized = await sidecar.getQueryWindow(sidecarKey);
           assertFresh();
-          if (materialized?.complete && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds) && (!strictRequireRevision || materialized.satisfiedRevision === query.requireRevision && materialized.satisfiedGeneration === generation)) {
+          if (materialized?.complete && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds) && (!controlPlaneRead || windowReadPermissionDigestMatches(
+            materialized.permissionDigest,
+            resolveReadPermissionDigest()
+          )) && (!strictRequireRevision || materialized.satisfiedRevision === query.requireRevision && materialized.satisfiedGeneration === generation)) {
             bumpStatus(status, "queryFetchDedupHitCount");
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              materialized.documentIds
-            );
+            return serveWindowDocuments(materialized, materialized.documentIds);
           }
           const takeover = await multiTabBroker.claim(dedupKey);
           assertFresh();
@@ -7748,12 +7767,7 @@ function createQueryDemandLoader({
               if (strictRequireRevision || invocationEntry.consumerCancelled) {
                 throw createQueryCancelledError("multi-tab-broker-closed");
               }
-              return readLocalDocuments(
-                storageCollection,
-                query,
-                normalizedWindow,
-                cached?.documentIds
-              );
+              return serveWindowDocuments(cached, controlPlaneFallbackMembership());
             }
             return startFetchJob();
           }
@@ -7777,21 +7791,13 @@ function createQueryDemandLoader({
           coordinatedByFingerprint.set(dedupKey, job);
           return job;
         };
-        if (cached?.everCompleted && cachedDocumentsAvailable && !emptyWindowStale && !query?.requireRevision) {
-          if (controlPlaneWindowStale) {
-            return coordinatedFetchJob();
-          }
+        if (cached?.everCompleted && cachedDocumentsAvailable && !emptyWindowStale && !controlPlanePermissionMismatchNow() && !query?.requireRevision) {
           coordinatedFetchJob().catch(() => {
           });
           bumpStatus(status, "queryFetchStaleServedCount");
           v15Log("fetch:stale-served", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
           await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
-          return readLocalDocuments(
-            storageCollection,
-            query,
-            normalizedWindow,
-            cached.documentIds || []
-          );
+          return serveWindowDocuments(cached, cached.documentIds || []);
         }
         return coordinatedFetchJob();
       })();
@@ -7990,6 +7996,10 @@ function normalizeSort(sort) {
     const direction = entry[key];
     return { [key]: direction === -1 || direction === "desc" || direction === "DESC" ? "desc" : "asc" };
   });
+}
+function windowReadPermissionDigestMatches(storedDigest, currentDigest) {
+  if (!currentDigest) return false;
+  return String(storedDigest || "") === currentDigest;
 }
 async function readLocalDocuments(storageCollection, query, window2, documentIds = null) {
   if (Array.isArray(documentIds)) {
@@ -11222,7 +11232,11 @@ var CtoxWebRtcReplicationState = class {
       status: this.demandStatus,
       multiTabBroker: this.multiTabBroker,
       queryGeneration: () => this.collectionQueryGenerationToken(this.activeRemotePeerId),
-      replicationOrigin: demandReplicationOrigin
+      replicationOrigin: demandReplicationOrigin,
+      // SYNC-12: live provider — runPeerReady recomputes this digest at every
+      // handshake, so a same-session role/grant change takes effect at the
+      // next control-plane read without rebuilding the loader.
+      readPermissionDigest: () => this.readPermissionDigest || ""
     }) : null;
     if (typeof this.collection.setDemandLoader === "function") {
       this.collection.setDemandLoader(this.demandLoader);
@@ -11934,6 +11948,10 @@ function createMultiTabSyncCoordinator({
   let electionTimer = null;
   let releaseLock = null;
   let lockRequestRunning = false;
+  let releaseWaitAbort = null;
+  let retryReleaseElection = false;
+  let lifecycleSuspended = false;
+  let resumeReleasedLeader = false;
   const emitRole = () => {
     const status = snapshot();
     for (const listener of listeners) {
@@ -12017,19 +12035,37 @@ function createMultiTabSyncCoordinator({
     if (changed) emitRole();
     if (reason) post({ type: "follower", reason });
   };
-  const tryWebLock = async () => {
-    if (closed || lockRequestRunning || !globalThis.navigator?.locks?.request) return false;
+  const tryWebLock = async (waitForRelease = false) => {
+    if (closed || lifecycleSuspended || !globalThis.navigator?.locks?.request) return false;
+    if (lockRequestRunning) {
+      if (waitForRelease) retryReleaseElection = true;
+      return false;
+    }
     lockRequestRunning = true;
+    const abort = waitForRelease ? new AbortController() : null;
+    if (abort) releaseWaitAbort = abort;
     let resolveAttempt;
     const attempted = new Promise((resolve) => {
       resolveAttempt = resolve;
     });
-    navigator.locks.request(lockName, { mode: "exclusive", ifAvailable: true }, async (lock) => {
-      if (!lock || closed) {
-        lockRequestRunning = false;
-        resolveAttempt(false);
+    const finishFailedAttempt = () => {
+      if (releaseWaitAbort === abort) releaseWaitAbort = null;
+      lockRequestRunning = false;
+      resolveAttempt(false);
+      if (retryReleaseElection && !closed) {
+        retryReleaseElection = false;
+        tryWebLock(true).catch(() => {
+        });
+      }
+    };
+    const options = waitForRelease ? { mode: "exclusive", signal: abort.signal } : { mode: "exclusive", ifAvailable: true };
+    navigator.locks.request(lockName, options, async (lock) => {
+      if (!lock || closed || lifecycleSuspended) {
+        finishFailedAttempt();
         return;
       }
+      if (releaseWaitAbort === abort) releaseWaitAbort = null;
+      retryReleaseElection = false;
       becomeLeader("web-lock");
       resolveAttempt(true);
       await new Promise((resolve) => {
@@ -12038,14 +12074,18 @@ function createMultiTabSyncCoordinator({
       releaseLock = null;
       lockRequestRunning = false;
       becomeFollower("", "web-lock-released");
-    }).catch(() => {
-      lockRequestRunning = false;
-      resolveAttempt(false);
-    });
+      if (retryReleaseElection && !closed && !lifecycleSuspended && !leaderTabId) {
+        retryReleaseElection = false;
+        tryWebLock(true).catch(() => {
+        });
+      } else {
+        retryReleaseElection = false;
+      }
+    }).catch(finishFailedAttempt);
     return attempted;
   };
   const attemptElection = async () => {
-    if (closed || role === "leader") return;
+    if (closed || lifecycleSuspended || role === "leader") return;
     if (clock() - leaderSeenAtMs < LEASE_TTL_MS) return;
     if (globalThis.navigator?.locks?.request) {
       await tryWebLock();
@@ -12073,11 +12113,15 @@ function createMultiTabSyncCoordinator({
       } else if (message.type === "leader-claim") {
         if (role === "leader") post({ type: "leader-heartbeat", reason: "claim-rejected" });
         else if (!leaderTabId || String(message.tabId) < leaderTabId) leaderTabId = String(message.tabId);
-      } else if (message.type === "leader-release" && String(message.tabId || "") === leaderTabId) {
+      } else if (message.type === "leader-release" && String(message.tabId || "") && (!leaderTabId || String(message.tabId) === leaderTabId)) {
         leaderSeenAtMs = 0;
         leaderTabId = "";
-        attemptElection().catch(() => {
-        });
+        if (!lifecycleSuspended) {
+          if (globalThis.navigator?.locks?.request) tryWebLock(true).catch(() => {
+          });
+          else attemptElection().catch(() => {
+          });
+        }
       } else if (message.type === "dirty" && role === "leader") {
         handleDirty(message).catch(() => {
         });
@@ -12112,14 +12156,27 @@ function createMultiTabSyncCoordinator({
     };
   }
   const lifecycleRelease = () => {
+    lifecycleSuspended = true;
+    retryReleaseElection = false;
+    releaseWaitAbort?.abort();
     if (role === "leader") {
+      resumeReleasedLeader = true;
+      leaderSeenAtMs = 0;
+      leaderTabId = "";
       post({ type: "leader-release" });
       releaseLock?.();
     }
     becomeFollower("", "page-lifecycle");
   };
-  const lifecycleResume = () => attemptElection().catch(() => {
-  });
+  const lifecycleResume = () => {
+    lifecycleSuspended = false;
+    const reacquireReleasedLine = resumeReleasedLeader && !leaderTabId;
+    resumeReleasedLeader = false;
+    if (reacquireReleasedLine && globalThis.navigator?.locks?.request) tryWebLock(true).catch(() => {
+    });
+    else attemptElection().catch(() => {
+    });
+  };
   function start() {
     if (started) return Promise.resolve(snapshot());
     started = true;
@@ -12221,6 +12278,10 @@ function createMultiTabSyncCoordinator({
     async close() {
       if (role === "leader") post({ type: "leader-release" });
       closed = true;
+      lifecycleSuspended = true;
+      resumeReleasedLeader = false;
+      retryReleaseElection = false;
+      releaseWaitAbort?.abort();
       releaseLock?.();
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (electionTimer) clearInterval(electionTimer);
@@ -12454,6 +12515,7 @@ var CtoxRxCollection = class {
     };
     this.storageCollection = storageCollection;
     this.demandLoader = null;
+    this.demandLoaderListeners = /* @__PURE__ */ new Set();
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
       deltaLiveQueryApplies: 0,
@@ -12462,7 +12524,16 @@ var CtoxRxCollection = class {
     };
   }
   setDemandLoader(loader) {
-    this.demandLoader = loader || null;
+    const nextLoader = loader || null;
+    if (this.demandLoader === nextLoader) return;
+    this.demandLoader = nextLoader;
+    if (isControlPlaneStatusCollection(this.name)) {
+      for (const listener of this.demandLoaderListeners) listener();
+    }
+  }
+  subscribeDemandLoaderChange(listener) {
+    this.demandLoaderListeners.add(listener);
+    return () => this.demandLoaderListeners.delete(listener);
   }
   async insert(doc) {
     const normalized = normalizeDoc(doc, this.schema.primaryPath);
@@ -12503,6 +12574,36 @@ var CtoxRxCollection = class {
   count(query = {}) {
     return {
       exec: async () => {
+        if (isControlPlaneStatusCollection(this.name)) {
+          const normalized2 = normalizeQuery(query, this.schema.primaryPath);
+          const maximum = Number.isFinite(normalized2.limit) ? normalized2.limit : Number.POSITIVE_INFINITY;
+          const offset = normalized2.skip || 0;
+          const startingLoader = this.demandLoader;
+          if (!startingLoader || maximum <= 0) return 0;
+          const readDigest = () => {
+            try {
+              return String(startingLoader.currentReadPermissionDigest?.() || "");
+            } catch {
+              return "";
+            }
+          };
+          const startingDigest = readDigest();
+          if (!startingDigest) return 0;
+          let total = 0;
+          while (total < maximum) {
+            if (this.demandLoader !== startingLoader || readDigest() !== startingDigest) return 0;
+            const pageLimit = Math.min(DEFAULT_WINDOW_LIMIT, maximum - total);
+            const page = await this.find({
+              ...normalized2,
+              skip: offset + total,
+              limit: pageLimit
+            }).exec();
+            if (this.demandLoader !== startingLoader || readDigest() !== startingDigest) return 0;
+            total += page.length;
+            if (page.length < pageLimit) break;
+          }
+          return total;
+        }
         const normalized = normalizeQuery(query, this.schema.primaryPath);
         if (typeof this.storageCollection.countDocuments === "function") {
           return this.storageCollection.countDocuments(normalized, {
@@ -12579,6 +12680,7 @@ var CtoxRxCollection = class {
         let initialRetryTimer = null;
         let initialRetryAttempt = 0;
         let initialized = false;
+        let snapshotGeneration = 0;
         let pendingSuccess = {};
         let pendingChanges = {};
         const documentsById = /* @__PURE__ */ new Map();
@@ -12602,10 +12704,12 @@ var CtoxRxCollection = class {
         };
         const flushInitial = async () => {
           if (!active) return;
+          const generation = ++snapshotGeneration;
           let documents;
           try {
             documents = await this.find().exec();
           } catch (error) {
+            if (!active || generation !== snapshotGeneration) return;
             if (isIndexedDbConnectionClosingError(error)) return;
             if (active && isRetryableObservableInitError(error)) {
               const delayMs = observableInitRetryDelayMs(initialRetryAttempt);
@@ -12618,7 +12722,7 @@ var CtoxRxCollection = class {
             }
             throw error;
           }
-          if (!active) return;
+          if (!active || generation !== snapshotGeneration) return;
           initialRetryAttempt = 0;
           documentsById.clear();
           for (const doc of documents) {
@@ -12636,6 +12740,10 @@ var CtoxRxCollection = class {
         const flushDelta = () => {
           pendingTimer = null;
           if (!active) return;
+          if (isControlPlaneStatusCollection(this.name)) {
+            void flushInitial();
+            return;
+          }
           if (!initialized) {
             const changes = Object.values(pendingChanges);
             pendingChanges = {};
@@ -12651,6 +12759,10 @@ var CtoxRxCollection = class {
           emitSnapshot();
         };
         const emit = (event) => {
+          if (isControlPlaneStatusCollection(this.name)) {
+            if (pendingTimer == null) pendingTimer = setTimeout(flushDelta, debounceMs);
+            return;
+          }
           pendingSuccess = {
             ...pendingSuccess,
             ...successPayloadFromChangeEvent(event)
@@ -12662,6 +12774,16 @@ var CtoxRxCollection = class {
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushDelta, debounceMs);
         };
+        const unsubscribeLoader = this.subscribeDemandLoaderChange(() => {
+          if (!active) return;
+          snapshotGeneration += 1;
+          documentsById.clear();
+          pendingSuccess = {};
+          pendingChanges = {};
+          initialized = false;
+          emitSnapshot();
+          void flushInitial();
+        });
         void flushInitial();
         const unsubscribe = this.observe(emit);
         return {
@@ -12676,6 +12798,7 @@ var CtoxRxCollection = class {
               initialRetryTimer = null;
             }
             unsubscribe();
+            unsubscribeLoader();
             registry.subscriptionEnded(this.name);
           }
         };
@@ -12716,10 +12839,12 @@ var CtoxRxQuery = class _CtoxRxQuery {
         registry.subscriptionStarted(this.collection.name);
         let pendingTimer = null;
         let initialized = false;
+        let queryEmissionGeneration = 0;
         let pendingPrimaryDoc = void 0;
         const primaryId = this.single ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath) : "";
-        const canApplyPrimaryDelta = Boolean(primaryId);
-        const canApplyQueryDelta = !this.single && canApplyUnboundedQueryDelta(this.query);
+        const controlPlaneRead = isControlPlaneStatusCollection(this.collection.name);
+        const canApplyPrimaryDelta = !controlPlaneRead && Boolean(primaryId);
+        const canApplyQueryDelta = !controlPlaneRead && !this.single && canApplyUnboundedQueryDelta(this.query);
         let pendingSuccess = {};
         const queryDocumentsById = /* @__PURE__ */ new Map();
         const emitQueryDocuments = () => {
@@ -12739,11 +12864,12 @@ var CtoxRxQuery = class _CtoxRxQuery {
         const flushEmit = () => {
           pendingTimer = null;
           if (!active) return;
+          const generation = ++queryEmissionGeneration;
           if (initialized && !canApplyPrimaryDelta && !canApplyQueryDelta) {
             this.collection.recordComplexLiveQueryReexec(this.query);
           }
           this.exec().then((value) => {
-            if (!active) return;
+            if (!active || generation !== queryEmissionGeneration) return;
             initialized = true;
             if (pendingPrimaryDoc !== void 0 && canApplyPrimaryDelta) {
               listener(wrapPrimaryDeltaDocument(this.collection, pendingPrimaryDoc));
@@ -12806,6 +12932,16 @@ var CtoxRxQuery = class _CtoxRxQuery {
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushEmit, 50);
         };
+        const unsubscribeLoader = this.collection.subscribeDemandLoaderChange(() => {
+          if (!active) return;
+          queryEmissionGeneration += 1;
+          pendingSuccess = {};
+          pendingPrimaryDoc = void 0;
+          queryDocumentsById.clear();
+          initialized = false;
+          listener(this.single ? null : []);
+          flushEmit();
+        });
         flushEmit();
         const unsubscribe = this.collection.observe(emit);
         return {
@@ -12816,6 +12952,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
               pendingTimer = null;
             }
             unsubscribe();
+            unsubscribeLoader();
             registry.subscriptionEnded(this.collection.name);
           }
         };
@@ -12859,10 +12996,13 @@ var CtoxRxQuery = class _CtoxRxQuery {
   async exec() {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
-    if (this.collection.demandLoader) {
+    const demandLoader = this.collection.demandLoader;
+    if (demandLoader) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : {};
       demandOptions.signal = this.signal;
-      docs = await this.collection.demandLoader.resolveQuery(this.query, demandOptions);
+      docs = await demandLoader.resolveQuery(this.query, demandOptions);
+    } else if (isControlPlaneStatusCollection(this.collection.name)) {
+      docs = [];
     } else if (typeof this.collection.storageCollection.queryDocuments === "function") {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {
         matchesSelector,
@@ -12878,6 +13018,9 @@ var CtoxRxQuery = class _CtoxRxQuery {
       if (Number.isFinite(this.query.limit)) {
         docs = docs.slice(0, this.query.limit);
       }
+    }
+    if (isControlPlaneStatusCollection(this.collection.name) && demandLoader !== this.collection.demandLoader) {
+      docs = [];
     }
     const wrapped = docs.map((doc) => new CtoxRxDocument(this.collection, doc));
     return this.single ? wrapped[0] || null : wrapped;

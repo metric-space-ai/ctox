@@ -7,7 +7,7 @@ const EDITOR_MODES = Object.freeze({
 });
 
 const DEFAULT_EASY_EMAIL_MODULE = '../../../vendor/easy-email-editor/index.mjs';
-const STYLE_REVISION = '20260807-mail-content-editor-v1';
+const STYLE_REVISION = '20260923-mail-content-editor-v2';
 
 const COPY = Object.freeze({
   de: Object.freeze({
@@ -335,6 +335,14 @@ export async function createMailContentEditor(options = {}) {
       return;
     }
     const alreadyVisible = activeHtmlPanel === name && !drawer.hidden;
+    if (name === 'logic' && !alreadyVisible && logicEditor) {
+      // Visual edits may still be waiting for an onChange bridge event when
+      // the user opens Logic. Capture the frame's current document once before
+      // Logic starts writing against the ordered source mirror.
+      await logicEditor.flush();
+      htmlDocument = cloneJson(await editor.getDocument());
+      await logicEditor.reload();
+    }
     if (!alreadyVisible) {
       for (const [panelName, panelHost] of Object.entries(panelHosts)) {
         const selected = panelName === name;

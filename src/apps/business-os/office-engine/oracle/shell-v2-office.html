@@ -62,9 +62,9 @@
   const doc = (value) => value ? {...value,toJSON:()=>({...value}),async incrementalPatch(patch){Object.assign(value,patch);persist();return doc(value);},async remove(){value.is_deleted=true;persist();}} : null;
   const collection = (name) => {
     const table=rows[name] ||= [];
-    return { $:{subscribe(observer){observers.add(observer);return {unsubscribe(){observers.delete(observer);}};}}, findOne(id){return {async exec(){return doc(table.find(row=>row.id===id));}};},find(query={}){return {async exec(){return table.filter(row=>matches(row,query.selector)).map(doc);}};},async insert(value){table.push(value);persist();return doc(value);},async upsert(value){const row=table.find(row=>row.id===value.id);row?Object.assign(row,value):table.push(value);persist();return doc(value);},async bulkUpsert(values){for(const value of values){const row=table.find(row=>row.id===value.id);row?Object.assign(row,value):table.push(value);}persist();return values.map(doc);}};
+    return { $:{subscribe(observer){observers.add(observer);return {unsubscribe(){observers.delete(observer);}};}}, findOne(id){return {async exec(){return doc(table.find(row=>row.id===id));}};},find(query={}){return {async exec(){return table.filter(row=>matches(row,query.selector)).map(doc);}};},async insert(value){table.push(value);persist();return doc(value);},async upsert(value){const row=table.find(row=>row.id===value.id);row?Object.assign(row,value):table.push(value);persist();return doc(value);},async bulkUpsert(values){const stored=[];for(const value of values){const row=table.find(row=>row.id===value.id);const stamped={...value,_meta:{...value._meta,lwt:Date.now()}};if(row) Object.assign(row,stamped);else table.push(stamped);stored.push(doc(row||stamped));}persist();return stored;}};
   };
-  const syncState={awaitInSync:async()=>{},awaitInitialReplication:async()=>{},pushToRemotePeers:async()=>{}};
+  const syncState={awaitInSync:async()=>{},awaitInitialReplication:async()=>{},pushToRemotePeers:async()=>{},waitForOpenPeerId:async()=> 'office-lab-peer',pushDocumentsToPeer:async()=>true,pushToPeer:async()=>true};
   const commands=[];
   const completedCommits=[];
   let firstCommitReleased=false;
@@ -94,11 +94,18 @@
       const record=records.find(row=>row.id===payload[`${kind}_id`]);
       const version=versions.find(row=>row.id===(payload.version_id || payload.base_version_id || record?.current_version_id));
       if(!record || !version) throw new Error(`Unexpected lab command: ${command.type}`);
+      let preparedCanonical={};
       if(command.type.endsWith('.prepare')) {
         const input=chunks.filter(row=>row.blob_id===version.blob_id).sort((a,b)=>a.idx-b.idx).map(row=>atob(row.data)).join('');
-        const prepared=await window.officeLabPrepare(kind,btoa(input));
+        let canonical=null;
+        if(kind==='spreadsheet' && !input.startsWith('PK')) {
+          canonical=await window.officeLabCanonicalize(btoa(input));
+          chunks.push({id:`${version.id}-canonical-0`,blob_id:`${version.id}-canonical`,idx:0,total:1,data:canonical.data});
+        }
+        const prepared=await window.officeLabPrepare(kind,canonical?.data || btoa(input));
         version.editor_blob_id=`${version.id}-prepared`;version.editor_protocol=`euro-office-${kind==='document'?'word':'cell'}-binary-v10`;version.editor_protocol_version=10;version.conversion_state='prepared';
         chunks.push({id:`${version.editor_blob_id}-0`,blob_id:version.editor_blob_id,idx:0,total:1,data:prepared});
+        if(canonical) preparedCanonical={blob_id:`${version.id}-canonical`,source_sha256:canonical.sha256};
       } else if(command.type.endsWith('.commit')) {
         if(window.officeLab.failCommits) throw new Error('OFFICE_LAB_EXPECTED_SAVE_FAILURE');
         const next={...version,id:`${record.id}-v${versions.length+1}`,editor_blob_id:payload.editor_blob_id,editor_protocol:payload.editor_protocol,editor_protocol_version:payload.editor_protocol_version};
@@ -121,7 +128,7 @@
         chunks.push({id:`${blobId}-0`,blob_id:blobId,idx:0,total:1,data:exported.data});
         persist();return {status:'completed',payload:{outcome:{ok:true,blob_id:blobId,source_sha256:exported.sha256}}};
       } else throw new Error(`Unimplemented lab command: ${command.type}`);
-      persist();return {status:'completed',payload:{outcome:{ok:true,record_id:record.id,version_id:version.id,editor_blob_id:version.editor_blob_id,editor_protocol:version.editor_protocol,editor_protocol_version:10,conversion_state:'prepared'}}};
+      persist();return {status:'completed',payload:{outcome:{ok:true,record_id:record.id,version_id:version.id,editor_blob_id:version.editor_blob_id,editor_protocol:version.editor_protocol,editor_protocol_version:10,conversion_state:'prepared',...preparedCanonical}}};
     }},
     closeDrawers(){document.querySelector('#lab-drawer')?.remove();},
     // Mirror the shell's drawer DOM/classes; collections and command dispatch

@@ -67,6 +67,18 @@ the managed thread configuration. The CLI receives that token through
 `--command-session`; an unbound harness turn fails before any auth-assist command
 is enqueued, so browser sessions cannot silently fall back to `ctox_harness`.
 
+`ctox_web_scrape` execute is a mutating fork tool. Managed harness turns require
+the signed Business OS command session before starting the CLI. The CLI checks
+that session against either a current Outbound person-research command or a
+single-lead research chat with a matching writeback contract, takes the actor
+and company/lead identity from the command, permits only a target and source
+listed in its source policy, and rejects conflicting model inputs.
+Stored `latest` and `semantic` reads remain nonmutating. A generic
+systematic-research turn without a bound supported Outbound research command
+cannot execute a scrape target through this tool. This invocation binding does
+not create per-script credential isolation; registered scripts still run under
+the CTOX OS user and retain their existing nested CLI capability.
+
 ## 2026-07 Persistent CTOX Runtime Context
 
 CTOX uses the existing turn-context and rollout machinery for a durable normal

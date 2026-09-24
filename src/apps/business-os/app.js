@@ -1,15 +1,15 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
-import { CtoxResizer } from './shared/resizer.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
-import { createAppActions } from './shared/app-actions.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
+import { CtoxResizer } from './shared/resizer.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
+import { createAppActions } from './shared/app-actions.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+} from './shared/app-lifecycle.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +17,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+} from './shared/permissions.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+} from './shared/branding.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+} from './shared/presentation.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +41,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
-import { createDocumentsFacade } from './shared/documents.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+} from './shared/shell-permissions-ui.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
+import { createDocumentsFacade } from './shared/documents.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,16 +51,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+} from './shared/maintenance-state.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+} from './shared/workspace-session.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+} from './shared/taskbar-pins.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -68,10 +68,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -79,8 +79,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260913-shell-v2-authoritative-pin-retry-v384';
+} from './shared/startup-deadlines.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -99,7 +99,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260913-shell-v2-authoritative-pin-retry-v384';
+const APP_BUILD = '20260924-shell-v2-read-mail-computer-multitab-resume-v398';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -6734,10 +6734,14 @@ function createModuleContext(mod, overrides = {}) {
     runtimeCapabilities: createRuntimeCapabilityFacade(mod),
     storageScope: createStorageScopeFacade(mod),
     sync: moduleSync,
-    readNativeCollectionDocument: mod.id === 'desktop'
-      ? (collection, documentId, options = {}) =>
-          state.sync?.readCollectionNativeDocument(collection, documentId, options)
-            .then((document) => document ?? null)
+    readNativeCollectionDocument: mod.id === 'desktop' || mod.id === 'mail'
+      ? (collection, documentId, options = {}) => {
+          if (mod.id === 'mail' && collection !== 'communication_accounts') {
+            throw new Error('Mail can verify only its account records.');
+          }
+          return state.sync?.readCollectionNativeDocument(collection, documentId, options)
+            .then((document) => document ?? null);
+        }
       : null,
     commandBus: createLiveCommandBusFacade(),
     actions: createAppActions({
