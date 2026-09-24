@@ -61,6 +61,67 @@ pub(crate) fn execute_scrape_with_outcome(
     root: &Path,
     args: &[String],
 ) -> Result<ScrapeExecutionOutcome> {
+    execute_scrape_with_expected_binding(root, args, None)
+}
+
+/// Bind a configured research source to the registered script/configuration,
+/// returning only a digest, never credential values or raw configuration.
+pub(crate) fn configured_research_target_binding(
+    root: &Path,
+    target_key: &str,
+    expected_provider: &str,
+) -> Result<String> {
+    let conn = open_db(root)?;
+    let target = load_registered_target(root, &conn, target_key)?
+        .context("configured research target is not registered")?;
+    anyhow::ensure!(
+        target.view.status == "active",
+        "configured research target is inactive"
+    );
+    anyhow::ensure!(
+        target
+            .view
+            .config
+            .get("expected_provider")
+            .and_then(Value::as_str)
+            == Some(expected_provider),
+        "configured research target provider mismatch"
+    );
+    registered_research_digest(&conn, &target)
+}
+
+fn registered_research_digest(
+    conn: &rusqlite::Connection,
+    target: &RegisteredTarget,
+) -> Result<String> {
+    use sha2::Digest;
+    let binding = json!({
+        "schema": "ctox.research.registered_target.v1",
+        "target_id": target.view.target_id, "target_key": target.view.target_key,
+        "status": target.view.status, "start_url": target.view.start_url,
+        "config": target.view.config, "output_schema": target.view.output_schema,
+        "script_revision_no": target.script.revision_no, "script_sha256": target.script.script_sha256,
+        "sources": latest_source_revision_map(conn, &target.view.target_id)?,
+    });
+    Ok(format!(
+        "{:x}",
+        sha2::Sha256::digest(serde_json::to_vec(&binding)?)
+    ))
+}
+
+pub(crate) fn execute_scrape_with_research_binding(
+    root: &Path,
+    args: &[String],
+    expected_binding: &str,
+) -> Result<ScrapeExecutionOutcome> {
+    execute_scrape_with_expected_binding(root, args, Some(expected_binding))
+}
+
+fn execute_scrape_with_expected_binding(
+    root: &Path,
+    args: &[String],
+    expected_binding: Option<&str>,
+) -> Result<ScrapeExecutionOutcome> {
     let execution_started = Instant::now();
     let target_key = required_flag_value(args, "--target-key")
         .context("usage: ctox scrape execute --target-key <key> [--trigger-kind <manual|scheduled|repair>] [--scheduled-for <iso>] [--timeout-seconds <n>] [--runtime-root <path>] [--allow-heal] [--input-json <text>] [--input-file <path>] [--thread-key <key>] [--owner-user-id <id>] [--queue-priority <urgent|high|normal|low>]")?;
@@ -98,6 +159,12 @@ pub(crate) fn execute_scrape_with_outcome(
         load_registered_target(root, &conn, target_key)?.context("target_key not found")?;
     let workspace_dir = resolve_workspace_dir(root, &target.view.workspace_dir);
     let _run_lock = acquire_target_run_lock(&workspace_dir, target_key)?;
+    if let Some(expected) = expected_binding {
+        anyhow::ensure!(
+            registered_research_digest(&conn, &target)? == expected,
+            "configured research target changed before dispatch"
+        );
+    }
     let run_started_at = now_iso_string();
     let run_id = format!(
         "scrape_run-{}",
@@ -134,6 +201,7 @@ pub(crate) fn execute_scrape_with_outcome(
     );
 
     let execution = execute_registered_script(
+        root,
         &target,
         &run_dir,
         &output_dir,
@@ -170,6 +238,35 @@ pub(crate) fn execute_scrape_with_outcome(
         records_found,
         expected_min_records,
     );
+    let mut continuation = None;
+    if payload.get("failure_mode").and_then(Value::as_str) == Some("awaiting_provider")
+        || payload.get("continuation").is_some()
+    {
+        match super::continuation::validate_provider_continuation(
+            &payload,
+            &run_id,
+            &target.view.target_key,
+            &target.view.config,
+            input_json.as_deref(),
+            &execution,
+        ) {
+            Ok(receipt) => {
+                continuation = Some(serde_json::to_value(receipt)?);
+                classification = Classification {
+                    status: ScrapeRunStatus::AwaitingProvider,
+                    should_queue_repair: false,
+                    reason: "current_provider_collection_pending".to_string(),
+                };
+            }
+            Err(_) => {
+                classification = Classification {
+                    status: ScrapeRunStatus::PortalDrift,
+                    should_queue_repair: false,
+                    reason: "invalid_provider_continuation".to_string(),
+                };
+            }
+        }
+    }
     // Capability 10: an expired/invalid session on a credential-protected
     // source lands on the source's own login page. That is not portal drift —
     // upgrade the classification and persist the precise reauthorization
@@ -356,6 +453,7 @@ pub(crate) fn execute_scrape_with_outcome(
                 "last_successful_run": last_successful_run,
             }),
             result: json!({
+                "continuation": continuation,
                 "records_found": records_found,
                 "query_completion": query_completion,
                 "enriched_records_found": materialized_records.map(|items| items.len() as i64),
@@ -444,6 +542,7 @@ pub(crate) fn execute_scrape_with_outcome(
         target_key: target.view.target_key,
         run_id,
         status: classification.status,
+        continuation,
         records_found,
         fields_extracted,
         latency_ms: execution_started
@@ -490,6 +589,7 @@ pub(super) fn kill_runner_process_tree(child: &mut std::process::Child) {
 }
 
 pub(super) fn execute_registered_script(
+    root: &Path,
     target: &RegisteredTarget,
     run_dir: &Path,
     output_dir: &Path,
@@ -526,6 +626,10 @@ pub(super) fn execute_registered_script(
     child
         .args(&args)
         .current_dir(&target.workspace_root)
+        // Instance context comes from this execution, never the ambient daemon
+        // environment or caller-supplied scrape input. Nested secret/search CLI
+        // calls must address the same instance even when targets live elsewhere.
+        .env("CTOX_ROOT", fs::canonicalize(root)?)
         .env("CTOX_SCRAPE_TARGET_KEY", &target.view.target_key)
         .env(
             "CTOX_SCRAPE_TARGET_DIR",

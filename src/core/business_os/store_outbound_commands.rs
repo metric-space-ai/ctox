@@ -2847,6 +2847,9 @@ fn outbound_apply_research_adapter_scrape_effect(
                     ("test_zero_records", "test_zero_records")
                 } else {
                     match test_outcome.status {
+                        scrape::ScrapeRunStatus::AwaitingProvider => {
+                            ("test_awaiting_provider", "test_awaiting_provider")
+                        }
                         scrape::ScrapeRunStatus::CompletedEmpty => {
                             ("test_evidence_invalid", "test_evidence_invalid")
                         }

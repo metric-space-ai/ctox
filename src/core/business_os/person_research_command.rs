@@ -11,6 +11,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::store::{self, BusinessCommand};
 
+#[path = "person_research_provider_wait.rs"]
+mod provider_wait;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct ActiveResearchCommandKey {
     root: PathBuf,
@@ -284,6 +287,27 @@ fn spawn_worker(root: PathBuf, command: BusinessCommand) -> anyhow::Result<bool>
     let Some(active_guard) = ActiveResearchCommandGuard::claim(&root, &guard_record_id) else {
         return Ok(false);
     };
+    let previous = match provider_wait::claim_if_due(&root, &command, now_ms().max(0) as u64) {
+        Ok(Some(previous)) => previous,
+        Ok(None) => return Ok(false),
+        Err(error) => {
+            let message = error.to_string();
+            store::write_rxdb_failed_control_command_outcome(
+                &root,
+                &command,
+                "person_research_provider_wait",
+                error,
+            )?;
+            project_outbound_lead_generation_lead_state(
+                &root,
+                &command,
+                "failed",
+                Some(&message),
+                None,
+            )?;
+            return Ok(false);
+        }
+    };
     super::person_research_gap_closure::cancel_open_gap_task_for_new_research(&root, &command)?;
     project_outbound_lead_generation_lead_state(&root, &command, "running", None, None)?;
     let worker_command = command;
@@ -296,14 +320,36 @@ fn spawn_worker(root: PathBuf, command: BusinessCommand) -> anyhow::Result<bool>
         .spawn(move || {
             let _active_guard = active_guard;
             let result = panic::catch_unwind(AssertUnwindSafe(|| {
-                execute(
+                let mut outcome = execute(
                     &root,
                     &worker_command_id,
                     &worker_command.payload,
                     &worker_command.client_context,
-                )
+                    previous.as_ref(),
+                )?;
+                if outcome["status"] == "awaiting_provider" {
+                    provider_wait::prepare_outcome(
+                        &root,
+                        &worker_command,
+                        &mut outcome,
+                        previous.as_ref(),
+                        now_ms().max(0) as u64,
+                    )?;
+                }
+                Ok::<_, anyhow::Error>(outcome)
             }));
             let (persisted, lead_status, lead_error, lead_result) = match result {
+                Ok(Ok(outcome)) if outcome["status"] == "awaiting_provider" => (
+                    store::write_rxdb_control_command_progress(
+                        &root,
+                        &worker_command,
+                        "running",
+                        outcome.clone(),
+                    ),
+                    "running",
+                    None,
+                    Some(outcome),
+                ),
                 Ok(Ok(mut outcome)) => {
                     let gap_task =
                         super::person_research_gap_closure::enqueue_gap_closure_if_needed(
@@ -2036,6 +2082,7 @@ fn execute(
     command_id: &str,
     payload: &Value,
     client_context: &Value,
+    previous: Option<&Value>,
 ) -> anyhow::Result<Value> {
     let parsed_client_context = match client_context {
         Value::String(value) => serde_json::from_str(value).unwrap_or(Value::Null),
@@ -2095,7 +2142,65 @@ fn execute(
         workspace: Some(workspace),
         persist_workspace: true,
     };
-    let mut result = ctox_web_stack::run_ctox_person_research_tool(root, &research_request)?;
+    // Resolve only explicitly configured canonical sources. The Workjet planner
+    // calls the resolver after country, field and private-source admission.
+    let mut configured_sources = std::collections::BTreeMap::new();
+    for source in &request.source_policy.sources {
+        if let Some(module) = ctox_web_stack::sources::find(source.id.trim()) {
+            anyhow::ensure!(
+                safe_runtime_source_identifier(source.target_key.trim(), 128),
+                "invalid configured research target identifier"
+            );
+            anyhow::ensure!(
+                configured_sources
+                    .insert(module.id(), source.target_key.trim())
+                    .is_none(),
+                "duplicate configured research source"
+            );
+        }
+    }
+    let resolved_targets =
+        std::cell::RefCell::new(std::collections::BTreeMap::<String, String>::new());
+    let mut resolver =
+        |source_id: &str| -> anyhow::Result<Option<ctox_web_stack::ConfiguredResearchTarget>> {
+            let Some(target_key) = configured_sources.get(source_id) else {
+                return Ok(None);
+            };
+            let binding = crate::capabilities::scrape::configured_research_target_binding(
+                root, target_key, source_id,
+            )?;
+            resolved_targets
+                .borrow_mut()
+                .insert(target_key.to_string(), binding.clone());
+            Ok(Some(ctox_web_stack::ConfiguredResearchTarget {
+                target_key: target_key.to_string(),
+                registry_binding_sha256: binding,
+            }))
+        };
+    let mut dispatch = |target_key: &str, input: &Value| -> anyhow::Result<Value> {
+        let args = [
+            "--target-key".into(),
+            target_key.into(),
+            "--trigger-kind".into(),
+            "manual".into(),
+            "--allow-heal".into(),
+            "--input-json".into(),
+            input.to_string(),
+        ];
+        let outcome = if let Some(binding) = resolved_targets.borrow().get(target_key) {
+            crate::capabilities::scrape::execute_scrape_with_research_binding(root, &args, binding)?
+        } else {
+            crate::capabilities::scrape::execute_scrape_with_outcome(root, &args)?
+        };
+        Ok(serde_json::to_value(outcome)?)
+    };
+    let mut result = ctox_web_stack::run_ctox_person_research_with_configured_dispatch(
+        root,
+        &research_request,
+        previous,
+        &mut resolver,
+        &mut dispatch,
+    )?;
     result["research_instructions_len"] = serde_json::json!(research_instructions_len);
     result["workspace_root"] = Value::String(
         research_request
@@ -2105,6 +2210,12 @@ fn execute(
             .to_string_lossy()
             .into_owned(),
     );
+    if result["status"] == "awaiting_provider" {
+        // Native CRM/runtime/capture augmentation follows this compiled-source
+        // phase once it finishes, not once per provider poll. The full partial
+        // result is checkpointed by spawn_worker before any terminal write.
+        return Ok(result);
+    }
     // Sellify is the contractual baseline of every lead research: the CRM
     // record is consulted first and its values must appear as visible
     // evidence candidates, not as invisible pre-knowledge. A lookup failure
