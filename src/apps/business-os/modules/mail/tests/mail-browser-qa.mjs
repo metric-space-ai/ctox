@@ -322,7 +322,7 @@ mailQa: try {
         if (command.command_type === 'ctox.mailserver.save_user') {
           const username = command.payload.username;
           if (!mailserver.users.some((user) => user.username === username)) mailserver.users.push({ username });
-          upsert('communication_accounts', {
+          const account = {
             account_key: `email:${username}`,
             channel: 'email',
             address: username,
@@ -335,7 +335,9 @@ mailQa: try {
             },
             created_at: new Date(now).toISOString(),
             updated_at: new Date(now).toISOString(),
-          });
+          };
+          window.__mailNativeAccounts.set(account.account_key, structuredClone(account));
+          upsert('communication_accounts', account);
           return { id: command.id, status: 'completed', result: { username } };
         }
         if (command.command_type === 'ctox.mailserver.delete_user') {
@@ -344,6 +346,7 @@ mailQa: try {
           if (userIndex >= 0) mailserver.users.splice(userIndex, 1);
           const accountIndex = rows.communication_accounts.findIndex((account) => account.account_key === `email:${username}`);
           if (accountIndex >= 0) rows.communication_accounts.splice(accountIndex, 1);
+          window.__mailNativeAccounts.delete(`email:${username}`);
           notify('communication_accounts');
           return { id: command.id, status: 'completed', result: { username } };
         }
