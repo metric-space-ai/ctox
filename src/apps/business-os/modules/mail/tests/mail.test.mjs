@@ -78,6 +78,11 @@ test('ordinary users only see assigned or shared email accounts', () => {
     ['email:alice@example.test', 'email:shared@example.test', 'email:team@example.test'],
   );
   assert.equal(hooks.visibleEmailAccounts(accounts, { id: 'root', role: 'admin' }).length, 5);
+  assert.deepEqual(
+    hooks.visibleEmailAccounts(accounts, { id: 'other', email: 'alice', login: 'alice', role: 'user' }),
+    [],
+    'mail account access follows the native user ID, not email or login aliases',
+  );
   assert.equal(hooks.isGlobalMailAdmin({ role: 'founder' }), false);
   assert.equal(hooks.isGlobalMailAdmin({ role: 'member' }), false);
 });

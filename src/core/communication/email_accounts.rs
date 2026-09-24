@@ -129,47 +129,67 @@ pub(crate) fn upsert_account(
     } else {
         accounts.push(config.clone());
     }
-    save_accounts(root, &accounts)?;
-
-    if let Some(secret) = password.map(str::trim).filter(|value| !value.is_empty()) {
-        secrets::write_secret_record(
-            root,
-            SECRET_SCOPE,
-            &config.address,
-            secret,
-            Some("Mail-App: persönliches E-Mail-Konto".to_owned()),
-            json!({ "owner_user_id": config.owner_user_id }),
-        )?;
-    }
-
-    // Konto sofort in communication_accounts sichtbar machen (Mail-App-Liste).
+    // The registry and native channel projection cannot share one transaction.
+    // Revoke native reads first, then persist the registry and finally publish
+    // the new grants. An error at any stage may leave the account temporarily
+    // unavailable, but it cannot leave a revoked reader with the old profile.
     let db_path = root.join("runtime/ctox.sqlite3");
     {
         let mut conn = crate::communication_store::open_channel_db(&db_path)?;
-        let profile_json = json!({
-            "imapHost": config.imap_host,
-            "imapPort": config.imap_port,
-            "smtpHost": config.smtp_host,
-            "smtpPort": config.smtp_port,
-            "username": config.username,
-            "ewsUrl": config.ews_url,
-            "owaUrl": config.owa_url,
-            "ewsUsername": config.username,
-            "ownerUserId": config.owner_user_id,
-            "shared_user_ids": config.shared_user_ids,
-            "displayName": config.display_name,
-            "source": "mail-app-account",
-        });
         crate::mission::channels::upsert_communication_account(
             &mut conn,
             &format!("email:{}", config.address),
             "email",
             &config.address,
             &config.provider,
-            profile_json,
+            account_profile_json(&config, "", &[]),
+        )?;
+        save_accounts(root, &accounts)?;
+        if let Some(secret) = password.map(str::trim).filter(|value| !value.is_empty()) {
+            secrets::write_secret_record(
+                root,
+                SECRET_SCOPE,
+                &config.address,
+                secret,
+                Some("Mail-App: persönliches E-Mail-Konto".to_owned()),
+                json!({ "owner_user_id": config.owner_user_id }),
+            )?;
+        }
+        crate::mission::channels::upsert_communication_account(
+            &mut conn,
+            &format!("email:{}", config.address),
+            "email",
+            &config.address,
+            &config.provider,
+            account_profile_json(
+                &config,
+                &config.owner_user_id,
+                config.shared_user_ids.as_deref().unwrap_or(&[]),
+            ),
         )?;
     }
     Ok(config)
+}
+
+fn account_profile_json(
+    config: &EmailAccountConfig,
+    owner: &str,
+    shared_users: &[String],
+) -> Value {
+    json!({
+        "imapHost": config.imap_host,
+        "imapPort": config.imap_port,
+        "smtpHost": config.smtp_host,
+        "smtpPort": config.smtp_port,
+        "username": config.username,
+        "ewsUrl": config.ews_url,
+        "owaUrl": config.owa_url,
+        "ewsUsername": config.username,
+        "ownerUserId": owner,
+        "shared_user_ids": shared_users,
+        "displayName": config.display_name,
+        "source": "mail-app-account",
+    })
 }
 
 fn validate_account_users(root: &Path, config: &mut EmailAccountConfig) -> Result<()> {
@@ -621,6 +641,48 @@ mod tests {
         )?;
         let profile: Value = serde_json::from_str(&profile_raw)?;
         assert_eq!(profile["shared_user_ids"], json!([]));
+        Ok(())
+    }
+
+    #[test]
+    fn registry_failure_revokes_native_access_before_returning_error() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        seed_user(root, "owner")?;
+        seed_user(root, "reader")?;
+        let saved = upsert_account(
+            root,
+            EmailAccountConfig {
+                address: "team@example.test".into(),
+                owner_user_id: "owner".into(),
+                shared_user_ids: Some(vec!["reader".into()]),
+                ..Default::default()
+            },
+            None,
+        )?;
+        let registry_path = crate::inference::runtime_env::runtime_config_path(root);
+        std::fs::remove_file(&registry_path)?;
+        std::fs::create_dir(&registry_path)?;
+        let result = upsert_account(
+            root,
+            EmailAccountConfig {
+                shared_user_ids: Some(Vec::new()),
+                ..saved
+            },
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "an unwritable registry must fail the upsert"
+        );
+        let account = crate::mission::channels::pull_communication_record_for_business_os(
+            root,
+            "communication_accounts",
+            "email:team@example.test",
+        )?
+        .context("native account after failed registry write")?;
+        assert_eq!(account["profile_json"]["ownerUserId"], "");
+        assert_eq!(account["profile_json"]["shared_user_ids"], json!([]));
         Ok(())
     }
 }

@@ -33,6 +33,12 @@ share. Duplicate, empty, inactive, and unknown IDs are rejected. Do not replace
 an owner with a guessed ID or write the channel SQLite profile directly.
 Preserve the current account configuration and secret when performing an
 authorized owner or share update.
+Account updates first remove native reader grants, then save the registry and
+publish the new grants. If either persistence step fails, Mail can temporarily
+hide that account; retry the supported upsert after correcting the error. This
+ordering prevents a reported failed revocation from retaining the old native
+share. Previously downloaded browser copies require a separate cache/reload
+acceptance check.
 
 Nonsecret registry entries use the existing `CTO_EMAIL_ACCOUNTS` runtime setting.
 Passwords use secret scope `email-account` and the normalized address as name.

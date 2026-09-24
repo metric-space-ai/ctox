@@ -801,18 +801,9 @@ fn handle_request(root: &Path, app_root: &Path, mut request: Request) -> anyhow:
         (Method::Get, "/api/business-os/ctox/harness-flow") => {
             respond_json_value(request, latest_harness_flow_payload(root))?;
         }
-        // ---------- Channels tab ----------
-        (Method::Get, "/api/business-os/channels/accounts") => {
-            let session = request_session(root, &request);
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                match crate::mission::channels::list_communication_accounts_for_business_os(root) {
-                    Ok(value) => respond_json_value(request, value)?,
-                    Err(error) => respond_status(request, 500, &error.to_string())?,
-                }
-            }
-        }
+        // Mail account settings are an explicit control-plane endpoint. The
+        // old channel-account record listing is deliberately absent here; its
+        // path is rejected with 410 by the data-plane gate above.
         (Method::Get, "/api/business-os/mail/accounts") => {
             let session = request_session(root, &request);
             if !session.authenticated {
@@ -5107,7 +5098,7 @@ mod tests {
     }
 
     #[test]
-    fn shell_update_routes_are_control_plane_only() {
+    fn control_plane_excludes_channel_account_records() {
         for path in [
             "/api/business-os/shell/update/status",
             "/api/business-os/shell/update/check",
@@ -5119,6 +5110,9 @@ mod tests {
         }
         assert!(!is_business_os_control_plane_path(
             "/api/business-os/shell/update/business-records"
+        ));
+        assert!(!is_business_os_control_plane_path(
+            "/api/business-os/channels/accounts"
         ));
     }
 }
