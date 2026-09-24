@@ -167,7 +167,8 @@ test('the tenant shell resolves every windowed app to shell v2', () => {
   assert.match(appSource, /visualRect\.left \+ \(visualRect\.width - width\) \/ 2/);
   assert.match(appCss, /\.desktop-icon\.is-app-open:hover \.desktop-icon-glyph[\s\S]*?transform:\s*none !important/);
   assert.match(appSource, /shellContract:\s*shell\?\.contract \|\| 'v2'/);
-  assert.match(appSource, /iconAsset:\s*String\(operatorIcon\?\.asset \|\| mod\?\.layout\?\.icon_asset/);
+  assert.match(appSource, /function desktopAppDescriptorForModule\(mod\) \{[\s\S]*?const selectedIcon = operatorIconFor\(mod\.id\) \|\| grokShellIconFor\(mod\.id\);/);
+  assert.match(appSource, /function desktopAppDescriptorForModule\(mod\) \{[\s\S]*?iconAsset:\s*String\(selectedIcon\?\.asset \|\| mod\?\.layout\?\.icon_asset \|\| ''\)\.trim\(\)/);
   assert.match(appSource, /shellContract:\s*'v2',[\s\S]*?iconAnchorRect:\s*\(\) => desktopIconAnchorRect\(entry\.id\)/);
   assert.match(appSource, /trigger\.className = 'shell-v2-window-title-fallback'/);
   assert.match(windowManagerSource, /options\.shellContract === 'v1' \? 'v1' : 'v2'/);
