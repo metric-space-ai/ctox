@@ -33,7 +33,7 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: never
       # Reviewed native integration plus required Desktop restart recovery.
-      REVIEWED_SOURCE_REVISION: 'a0e30a8f8fd5012005cab9687ce25c1da7e60f85'
+      REVIEWED_SOURCE_REVISION: 'c6164052057b361c6e138b13d8ce2afc5c39c9db'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
