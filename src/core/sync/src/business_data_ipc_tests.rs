@@ -5,6 +5,90 @@ use crate::business_data_contract::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[tokio::test]
+async fn response_release_waits_for_complete_private_frame_write() {
+    use tokio::io::AsyncReadExt;
+    struct ReleaseDispatcher {
+        dispatched: Arc<tokio::sync::Notify>,
+        released: Arc<tokio::sync::Notify>,
+        release_called: Arc<AtomicBool>,
+    }
+    impl BusinessDataDispatcher for ReleaseDispatcher {
+        fn dispatch(&self, request: Request) -> BusinessDataDispatchFuture {
+            let dispatched = self.dispatched.clone();
+            Box::pin(async move {
+                dispatched.notify_one();
+                Ok(Response {
+                    version: 1,
+                    request_id: request.request_id,
+                    result: NativeBusinessDataResult::Rejected {
+                        code: NativeBusinessDataErrorCode::Unsupported,
+                        message: "fixture response".into(),
+                        retryable: false,
+                    },
+                })
+            })
+        }
+        fn response_sent<'a>(&'a self, response: &'a Response) -> BusinessDataShutdownFuture<'a> {
+            // Record invocation as well as future completion: neither may
+            // precede the complete frame write.
+            assert_eq!(response.request_id, "open");
+            self.release_called.store(true, Ordering::SeqCst);
+            Box::pin(async move {
+                self.released.notify_one();
+                Ok(())
+            })
+        }
+    }
+    let dispatched = Arc::new(tokio::sync::Notify::new());
+    let released = Arc::new(tokio::sync::Notify::new());
+    let release_called = Arc::new(AtomicBool::new(false));
+    let service = BusinessDataIpc::new(Arc::new({
+        let dispatched = dispatched.clone();
+        let released = released.clone();
+        let release_called = release_called.clone();
+        move |_, _| {
+            Ok(Arc::new(ReleaseDispatcher {
+                dispatched: dispatched.clone(),
+                released: released.clone(),
+                release_called: release_called.clone(),
+            }))
+        }
+    }));
+    // The response cannot fit even its header without the client reading.
+    let (native, mut client) = tokio::io::duplex(1);
+    let exchange = async {
+        write_host_frame(&mut client, &open_request())
+            .await
+            .unwrap();
+        dispatched.notified().await;
+        tokio::task::yield_now().await;
+        assert!(!release_called.load(Ordering::SeqCst));
+        let mut header = [0u8; 4];
+        client.read_exact(&mut header).await.unwrap();
+        tokio::task::yield_now().await;
+        assert!(
+            !release_called.load(Ordering::SeqCst),
+            "header alone must not release events"
+        );
+        let size = u32::from_be_bytes(header) as usize;
+        assert!(size > 1 && size < 4096);
+        let mut body = vec![0; size];
+        client.read_exact(&mut body).await.unwrap();
+        assert!(matches!(serde_json::from_slice::<Frame>(&body).unwrap(),
+            Frame::Response { response } if response.request_id == "open"));
+        released.notified().await;
+        assert!(release_called.load(Ordering::SeqCst));
+        drop(client);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(service.serve(Box::new(native)), exchange)
+    })
+    .await
+    .expect("bounded response release regression");
+    assert!(result.is_err());
+}
+
 struct TestDispatcher {
     credentials: CredentialRequester,
 }
@@ -71,6 +155,715 @@ async fn service_reads_credentials_while_a_dispatch_is_waiting() {
     };
     let (result, ()) = tokio::join!(serve, client);
     assert!(result.is_err()); // EOF closes the service and its credential owner.
+}
+
+#[tokio::test]
+async fn queued_event_rechecks_exact_watch_lifetime_before_writing() {
+    let old_alive = Arc::new(WatchLifetime::new());
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let service = BusinessDataIpc::new(Arc::new({
+        let old_alive = old_alive.clone();
+        let entered = entered.clone();
+        let release = release.clone();
+        move |credentials, events| {
+            let delayed_authority: crate::business_data_remote::EventAuthorityCheck = {
+                let entered = entered.clone();
+                let release = release.clone();
+                Arc::new(move || {
+                    let entered = entered.clone();
+                    let release = release.clone();
+                    Box::pin(async move {
+                        entered.notify_one();
+                        release.notified().await;
+                        true
+                    })
+                })
+            };
+            for sequence in [1, 2] {
+                let queued = QueuedBusinessDataEvent {
+                    event: Event {
+                        version: 1,
+                        session: crate::business_data_contract::NativeBusinessDataSessionRef {
+                            handle: "same-session".into(),
+                            generation: 1,
+                        },
+                        subscription_id: "same-subscription".into(),
+                        sequence,
+                        payload:
+                            crate::business_data_contract::NativeBusinessDataEventPayload::Reset {
+                                code: NativeBusinessDataErrorCode::ResetRequired,
+                            },
+                    },
+                    alive: if sequence == 1 {
+                        old_alive.clone()
+                    } else {
+                        Arc::new(WatchLifetime::new())
+                    },
+                    failed: Arc::new(AtomicBool::new(false)),
+                    authority: if sequence == 1 {
+                        delayed_authority.clone()
+                    } else {
+                        Arc::new(|| Box::pin(async { true }))
+                    },
+                };
+                assert!(events.try_send(queued).is_ok());
+            }
+            Ok(Arc::new(TestDispatcher { credentials }))
+        }
+    }));
+    let (native, mut main) = tokio::io::duplex(64);
+    let client = async {
+        entered.notified().await;
+        old_alive.invalidate();
+        release.notify_one();
+        match read_host_frame(&mut main).await.unwrap() {
+            Frame::Event { event } => {
+                assert_eq!(event.subscription_id, "same-subscription");
+                assert_eq!(
+                    event.sequence, 2,
+                    "old watch must not inherit replacement authority"
+                );
+            }
+            _ => panic!("expected event from new watch only"),
+        }
+        drop(main);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(service.serve(Box::new(native)), client)
+    })
+    .await
+    .expect("bounded IPC lifetime regression");
+    assert!(result.is_err());
+}
+
+struct FirstByteBlockedStream {
+    inner: tokio::io::DuplexStream,
+    allow_write: Arc<AtomicBool>,
+    blocked: Arc<tokio::sync::Notify>,
+    writer_waker: Arc<futures_util::task::AtomicWaker>,
+}
+
+impl tokio::io::AsyncRead for FirstByteBlockedStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        tokio::io::AsyncRead::poll_read(Pin::new(&mut self.inner), cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for FirstByteBlockedStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        self.writer_waker.register(cx.waker());
+        if !self.allow_write.load(Ordering::SeqCst) {
+            // Deliberately accept zero bytes, unlike a full duplex buffer that
+            // has already accepted part of the frame's header.
+            self.blocked.notify_one();
+            return std::task::Poll::Pending;
+        }
+        tokio::io::AsyncWrite::poll_write(Pin::new(&mut self.inner), cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        tokio::io::AsyncWrite::poll_flush(Pin::new(&mut self.inner), cx)
+    }
+
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        tokio::io::AsyncWrite::poll_shutdown(Pin::new(&mut self.inner), cx)
+    }
+}
+
+#[tokio::test]
+async fn invalidation_cancels_same_event_before_first_byte_and_wakes_writer() {
+    let alive = Arc::new(WatchLifetime::new());
+    let blocked = Arc::new(tokio::sync::Notify::new());
+    let next_checked = Arc::new(tokio::sync::Notify::new());
+    let allow_write = Arc::new(AtomicBool::new(false));
+    let writer_waker = Arc::new(futures_util::task::AtomicWaker::new());
+    let service = BusinessDataIpc::new(Arc::new({
+        let alive = alive.clone();
+        let next_checked = next_checked.clone();
+        move |credentials, events| {
+            for sequence in [1, 2] {
+                let mut event = reset_event(sequence);
+                event.payload =
+                    crate::business_data_contract::NativeBusinessDataEventPayload::CaughtUp {
+                        cursor: format!("cursor-{sequence}"),
+                    };
+                let next_checked = next_checked.clone();
+                assert!(events
+                    .try_send(QueuedBusinessDataEvent {
+                        event,
+                        alive: if sequence == 1 {
+                            alive.clone()
+                        } else {
+                            Arc::new(WatchLifetime::new())
+                        },
+                        failed: Arc::new(AtomicBool::new(false)),
+                        authority: Arc::new(move || {
+                            let next_checked = next_checked.clone();
+                            Box::pin(async move {
+                                if sequence == 2 {
+                                    next_checked.notify_one();
+                                }
+                                true
+                            })
+                        }),
+                    })
+                    .is_ok());
+            }
+            Ok(Arc::new(TestDispatcher { credentials }))
+        }
+    }));
+    let (native, mut main) = tokio::io::duplex(64);
+    let native = FirstByteBlockedStream {
+        inner: native,
+        allow_write: allow_write.clone(),
+        blocked: blocked.clone(),
+        writer_waker: writer_waker.clone(),
+    };
+    let client = async {
+        blocked.notified().await;
+        alive.invalidate();
+        // Invalidation itself must wake the blocked writer and discard event1.
+        // Do not release the transport until the independent next watch runs.
+        next_checked.notified().await;
+        allow_write.store(true, Ordering::SeqCst);
+        writer_waker.wake();
+        match read_host_frame(&mut main).await.unwrap() {
+            Frame::Event { event } => {
+                assert_eq!(
+                    event.sequence, 2,
+                    "invalidated event must publish zero bytes"
+                );
+                assert!(matches!(event.payload,
+                    crate::business_data_contract::NativeBusinessDataEventPayload::CaughtUp { ref cursor }
+                    if cursor == "cursor-2"));
+            }
+            _ => panic!("expected intact event from independent watch"),
+        }
+        drop(main);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(service.serve(Box::new(native)), client)
+    })
+    .await
+    .expect("same-event first-byte cancellation must make progress");
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn same_connection_unwatch_progresses_while_event_writer_accepts_no_bytes() {
+    struct UnwatchDispatcher {
+        alive: Arc<WatchLifetime>,
+        handled: Arc<tokio::sync::Notify>,
+    }
+    impl BusinessDataDispatcher for UnwatchDispatcher {
+        fn dispatch(&self, request: Request) -> BusinessDataDispatchFuture {
+            let alive = self.alive.clone();
+            let handled = self.handled.clone();
+            Box::pin(async move {
+                let NativeBusinessDataOperation::Unwatch {
+                    session,
+                    subscription_id,
+                } = request.operation
+                else {
+                    panic!("expected real Unwatch operation");
+                };
+                alive.invalidate();
+                handled.notify_one();
+                Ok(Response {
+                    version: 1,
+                    request_id: request.request_id,
+                    result: NativeBusinessDataResult::Unwatched {
+                        session,
+                        subscription_id,
+                    },
+                })
+            })
+        }
+    }
+    let alive = Arc::new(WatchLifetime::new());
+    let handled = Arc::new(tokio::sync::Notify::new());
+    let blocked = Arc::new(tokio::sync::Notify::new());
+    let allow_write = Arc::new(AtomicBool::new(false));
+    let writer_waker = Arc::new(futures_util::task::AtomicWaker::new());
+    let event = reset_event(1);
+    let request = Frame::Request {
+        request: Request {
+            version: 1,
+            request_id: "unwatch".into(),
+            operation: NativeBusinessDataOperation::Unwatch {
+                session: event.session.clone(),
+                subscription_id: event.subscription_id.clone(),
+            },
+        },
+    };
+    let service = BusinessDataIpc::new(Arc::new({
+        let alive = alive.clone();
+        let handled = handled.clone();
+        move |_, events| {
+            assert!(events
+                .try_send(QueuedBusinessDataEvent {
+                    event: event.clone(),
+                    alive: alive.clone(),
+                    failed: Arc::new(AtomicBool::new(false)),
+                    authority: Arc::new(|| Box::pin(async { true })),
+                })
+                .is_ok());
+            Ok(Arc::new(UnwatchDispatcher {
+                alive: alive.clone(),
+                handled: handled.clone(),
+            }))
+        }
+    }));
+    let (native, mut client) = tokio::io::duplex(64);
+    let native = FirstByteBlockedStream {
+        inner: native,
+        allow_write: allow_write.clone(),
+        blocked: blocked.clone(),
+        writer_waker: writer_waker.clone(),
+    };
+    let exchange = async {
+        blocked.notified().await;
+        write_host_frame(&mut client, &request).await.unwrap();
+        // The command must run before the client makes the writer writable.
+        handled.notified().await;
+        assert!(!alive.is_alive());
+        allow_write.store(true, Ordering::SeqCst);
+        writer_waker.wake();
+        assert!(
+            matches!(read_host_frame(&mut client).await.unwrap(),
+            Frame::Response { response } if response.request_id == "unwatch"
+                && matches!(response.result, NativeBusinessDataResult::Unwatched { .. })),
+            "cancelled event must not precede the unwatch response"
+        );
+        drop(client);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(service.serve(Box::new(native)), exchange)
+    })
+    .await
+    .expect("Unwatch must progress independently of pending output");
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn credential_reply_progresses_while_event_write_is_blocked() {
+    struct CredentialDispatcher {
+        credentials: CredentialRequester,
+        received: Arc<tokio::sync::Notify>,
+    }
+    impl BusinessDataDispatcher for CredentialDispatcher {
+        fn dispatch(&self, request: Request) -> BusinessDataDispatchFuture {
+            let credentials = self.credentials.clone();
+            let received = self.received.clone();
+            Box::pin(async move {
+                credentials.request("target", "connection", 0, None).await?;
+                received.notify_one();
+                Ok(Response {
+                    version: 1,
+                    request_id: request.request_id,
+                    result: NativeBusinessDataResult::Rejected {
+                        code: NativeBusinessDataErrorCode::Unsupported,
+                        message: "fixture".into(),
+                        retryable: false,
+                    },
+                })
+            })
+        }
+    }
+    let received = Arc::new(tokio::sync::Notify::new());
+    let start_event = Arc::new(tokio::sync::Notify::new());
+    let blocked = Arc::new(tokio::sync::Notify::new());
+    let allow_write = Arc::new(AtomicBool::new(true));
+    let writer_waker = Arc::new(futures_util::task::AtomicWaker::new());
+    let service = BusinessDataIpc::new(Arc::new({
+        let received = received.clone();
+        let start_event = start_event.clone();
+        move |credentials, events| {
+            let start_event = start_event.clone();
+            assert!(events
+                .try_send(QueuedBusinessDataEvent {
+                    event: reset_event(1),
+                    alive: Arc::new(WatchLifetime::new()),
+                    failed: Arc::new(AtomicBool::new(false)),
+                    authority: Arc::new(move || {
+                        let start_event = start_event.clone();
+                        Box::pin(async move {
+                            start_event.notified().await;
+                            true
+                        })
+                    }),
+                })
+                .is_ok());
+            Ok(Arc::new(CredentialDispatcher {
+                credentials,
+                received: received.clone(),
+            }))
+        }
+    }));
+    let (native, mut client) = tokio::io::duplex(64);
+    let native = FirstByteBlockedStream {
+        inner: native,
+        allow_write: allow_write.clone(),
+        blocked: blocked.clone(),
+        writer_waker: writer_waker.clone(),
+    };
+    let exchange = async {
+        write_host_frame(&mut client, &open_request())
+            .await
+            .unwrap();
+        let Frame::CredentialChallenge { challenge } = read_host_frame(&mut client).await.unwrap()
+        else {
+            panic!("expected challenge");
+        };
+        allow_write.store(false, Ordering::SeqCst);
+        start_event.notify_one();
+        blocked.notified().await;
+        write_host_frame(
+            &mut client,
+            &Frame::CredentialReply {
+                reply: NativeBusinessDataCredentialReply {
+                    version: 1,
+                    request_id: challenge.request_id,
+                    connection_id: challenge.connection_id,
+                    session_epoch: 0,
+                    capability_token: Some("fixture-token".into()),
+                    device_proof: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
+        received.notified().await;
+        // Receipt proves the dispatcher accepted the reply while output was
+        // blocked; only now permit the old event and response to drain.
+        allow_write.store(true, Ordering::SeqCst);
+        writer_waker.wake();
+        assert!(matches!(
+            read_host_frame(&mut client).await.unwrap(),
+            Frame::Event { .. }
+        ));
+        assert!(
+            matches!(read_host_frame(&mut client).await.unwrap(), Frame::Response { response } if response.request_id == "open")
+        );
+        drop(client);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(service.serve(Box::new(native)), exchange)
+    })
+    .await
+    .expect("credential replies must progress independently of output");
+    assert!(result.is_err());
+}
+
+struct BackpressuredStream {
+    inner: tokio::io::DuplexStream,
+    blocked: Arc<tokio::sync::Notify>,
+}
+
+impl tokio::io::AsyncRead for BackpressuredStream {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        tokio::io::AsyncRead::poll_read(Pin::new(&mut self.inner), cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for BackpressuredStream {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        let result = tokio::io::AsyncWrite::poll_write(Pin::new(&mut self.inner), cx, buf);
+        if result.is_pending() {
+            self.blocked.notify_one();
+        }
+        result
+    }
+    fn poll_flush(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        tokio::io::AsyncWrite::poll_flush(Pin::new(&mut self.inner), cx)
+    }
+    fn poll_shutdown(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        tokio::io::AsyncWrite::poll_shutdown(Pin::new(&mut self.inner), cx)
+    }
+}
+
+#[tokio::test]
+async fn writer_backpressure_drops_stale_events_without_truncating_started_frame() {
+    // Exercise lifetime invalidation and a current-authority denial separately.
+    for revoke_lifetime in [true, false] {
+        let alive = Arc::new(WatchLifetime::new());
+        let authorized = Arc::new(AtomicBool::new(true));
+        let blocked = Arc::new(tokio::sync::Notify::new());
+        let service = BusinessDataIpc::new(Arc::new({
+            let alive = alive.clone();
+            let authorized = authorized.clone();
+            move |credentials, events| {
+                for sequence in [1, 2, 3] {
+                    let current = authorized.clone();
+                    assert!(events.try_send(QueuedBusinessDataEvent {
+                        event: Event {
+                            version: 1,
+                            session: crate::business_data_contract::NativeBusinessDataSessionRef {
+                                handle: "session".into(), generation: 1,
+                            },
+                            subscription_id: "reused-id".into(), sequence,
+                            payload: crate::business_data_contract::NativeBusinessDataEventPayload::CaughtUp {
+                                cursor: format!("cursor-{sequence}"),
+                            },
+                        },
+                        alive: if sequence != 3 { alive.clone() } else { Arc::new(WatchLifetime::new()) },
+                        failed: Arc::new(AtomicBool::new(false)),
+                    authority: Arc::new(move || {
+                            let current = current.clone();
+                            Box::pin(async move { sequence != 2 || current.load(Ordering::SeqCst) })
+                        }),
+                    }).is_ok());
+                }
+                Ok(Arc::new(TestDispatcher { credentials }))
+            }
+        }));
+        let (native, mut main) = tokio::io::duplex(1);
+        let native = BackpressuredStream {
+            inner: native,
+            blocked: blocked.clone(),
+        };
+        let client = async {
+            // Observe actual Poll::Pending from the frame writer, not a timer.
+            blocked.notified().await;
+            if revoke_lifetime {
+                alive.invalidate();
+            } else {
+                authorized.store(false, Ordering::SeqCst);
+            }
+            for expected in if revoke_lifetime {
+                vec![1, 3]
+            } else {
+                vec![1, 2, 3]
+            } {
+                match read_host_frame(&mut main).await.unwrap() {
+                    Frame::Event { event } => {
+                        use crate::business_data_contract::NativeBusinessDataEventPayload as Payload;
+                        assert_eq!(event.sequence, expected);
+                        if expected == 2 {
+                            assert!(
+                                matches!(
+                                    event.payload,
+                                    Payload::Reset {
+                                        code: NativeBusinessDataErrorCode::ResetRequired,
+                                    }
+                                ),
+                                "revoked authority must replace queued completion with Reset"
+                            );
+                        } else {
+                            assert!(
+                                matches!(event.payload, Payload::CaughtUp { ref cursor }
+                                if cursor == &format!("cursor-{expected}")),
+                                "authorized events must retain their original payload"
+                            );
+                        }
+                    }
+                    _ => panic!("expected complete event frame"),
+                }
+            }
+            drop(main);
+        };
+        let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            tokio::join!(service.serve(Box::new(native)), client)
+        })
+        .await
+        .expect("bounded writer backpressure regression");
+        assert!(result.is_err());
+    }
+}
+
+#[tokio::test]
+async fn authority_failure_resets_once_and_cannot_later_complete_snapshot() {
+    use crate::business_data_contract::NativeBusinessDataEventPayload as Payload;
+    let service = BusinessDataIpc::new(Arc::new(|credentials, events| {
+        let failed = Arc::new(AtomicBool::new(false));
+        let alive = Arc::new(WatchLifetime::new());
+        for sequence in [1, 2, 3, 4] {
+            let mut event = reset_event(sequence);
+            event.payload = if sequence == 2 {
+                Payload::SnapshotEnd {
+                    snapshot_id: "snapshot".into(),
+                    cursor: "cursor".into(),
+                }
+            } else {
+                Payload::CaughtUp {
+                    cursor: "cursor".into(),
+                }
+            };
+            if sequence == 4 {
+                event.subscription_id = "independent-watch".into();
+            }
+            assert!(events
+                .try_send(QueuedBusinessDataEvent {
+                    event,
+                    alive: alive.clone(),
+                    failed: if sequence == 4 {
+                        Arc::new(AtomicBool::new(false))
+                    } else {
+                        failed.clone()
+                    },
+                    authority: Arc::new(move || Box::pin(async move { sequence != 1 })),
+                })
+                .is_ok());
+        }
+        Ok(Arc::new(TestDispatcher { credentials }))
+    }));
+    let (native, mut main) = tokio::io::duplex(64);
+    let client = async {
+        assert!(matches!(read_host_frame(&mut main).await.unwrap(),
+            Frame::Event { event } if event.sequence == 1 && matches!(event.payload, Payload::Reset { .. })));
+        assert!(matches!(read_host_frame(&mut main).await.unwrap(),
+            Frame::Event { event } if event.sequence == 4 && event.subscription_id == "independent-watch"));
+        drop(main);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(service.serve(Box::new(native)), client)
+    })
+    .await
+    .expect("bounded snapshot failure regression");
+    assert!(result.is_err());
+}
+
+fn reset_event(sequence: u64) -> Event {
+    Event {
+        version: 1,
+        session: crate::business_data_contract::NativeBusinessDataSessionRef {
+            handle: "session".into(),
+            generation: 1,
+        },
+        subscription_id: "subscription".into(),
+        sequence,
+        payload: crate::business_data_contract::NativeBusinessDataEventPayload::Reset {
+            code: NativeBusinessDataErrorCode::ResetRequired,
+        },
+    }
+}
+
+#[tokio::test]
+async fn event_authority_can_exchange_credentials_without_blocking_ipc() {
+    let service = BusinessDataIpc::new(Arc::new(|credentials, events| {
+        let requester = credentials.clone();
+        assert!(events
+            .try_send(QueuedBusinessDataEvent {
+                event: reset_event(1),
+                alive: Arc::new(WatchLifetime::new()),
+                failed: Arc::new(AtomicBool::new(false)),
+                authority: Arc::new(move || {
+                    let requester = requester.clone();
+                    Box::pin(async move {
+                        requester
+                            .request("target", "connection", 0, None)
+                            .await
+                            .is_ok()
+                    })
+                }),
+            })
+            .is_ok());
+        Ok(Arc::new(TestDispatcher { credentials }))
+    }));
+    let (native, mut main) = tokio::io::duplex(64);
+    let client = async {
+        let challenge = match read_host_frame(&mut main).await.unwrap() {
+            Frame::CredentialChallenge { challenge } => challenge,
+            _ => panic!("authority must obtain credentials before its event"),
+        };
+        write_host_frame(
+            &mut main,
+            &Frame::CredentialReply {
+                reply: NativeBusinessDataCredentialReply {
+                    version: 1,
+                    request_id: challenge.request_id,
+                    connection_id: challenge.connection_id,
+                    session_epoch: 0,
+                    capability_token: Some("test-token".into()),
+                    device_proof: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(read_host_frame(&mut main).await.unwrap(), Frame::Event { event } if event.sequence == 1)
+        );
+        drop(main);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(service.serve(Box::new(native)), client)
+    })
+    .await
+    .expect("event validation must not deadlock credential replies");
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn closing_ipc_cancels_pending_event_authority() {
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(AtomicBool::new(false));
+    let service = BusinessDataIpc::new(Arc::new({
+        let entered = entered.clone();
+        let dropped = dropped.clone();
+        move |credentials, events| {
+            let entered = entered.clone();
+            let dropped = dropped.clone();
+            assert!(events
+                .try_send(QueuedBusinessDataEvent {
+                    event: reset_event(1),
+                    alive: Arc::new(WatchLifetime::new()),
+                    failed: Arc::new(AtomicBool::new(false)),
+                    authority: Arc::new(move || {
+                        let entered = entered.clone();
+                        let guard = DropSignal(dropped.clone());
+                        Box::pin(async move {
+                            let _guard = guard;
+                            entered.notify_one();
+                            std::future::pending::<bool>().await
+                        })
+                    }),
+                })
+                .is_ok());
+            Ok(Arc::new(TestDispatcher { credentials }))
+        }
+    }));
+    let (native, main) = tokio::io::duplex(64);
+    let client = async {
+        entered.notified().await;
+        drop(main);
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(service.serve(Box::new(native)), client)
+    })
+    .await
+    .expect("pending event authority must cancel with IPC");
+    assert!(result.is_err());
+    assert!(dropped.load(Ordering::SeqCst));
 }
 
 struct DropSignal(Arc<AtomicBool>);

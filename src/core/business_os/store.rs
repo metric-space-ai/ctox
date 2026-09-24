@@ -13423,6 +13423,35 @@ pub(crate) fn business_command_core_claim(
     business_command_core_claim_with_authorization(command_id, command, None)
 }
 
+/// Bind only an owner obtained from native authentication, never request JSON.
+/// Authentication is separate from the command's permission decision.
+pub(super) fn bind_business_command_claim_owner(
+    claim: &mut channels::BusinessCommandClaimRequest,
+    owner: &str,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(!owner.trim().is_empty(), "command owner is required");
+    let intent = claim
+        .intent
+        .as_object_mut()
+        .context("command intent must be an object")?;
+    anyhow::ensure!(
+        !intent.contains_key("native_owner"),
+        "command owner is already bound"
+    );
+    intent.insert(
+        "native_owner".into(),
+        serde_json::json!({
+            "contract": "ctox-business-command-owner-v1",
+            "user_id": owner,
+        }),
+    );
+    claim.payload_hash = format!(
+        "sha256:{:x}",
+        Sha256::digest(serde_json::to_vec(&claim.intent)?)
+    );
+    Ok(())
+}
+
 pub(super) fn business_command_core_claim_with_authorization(
     command_id: &str,
     command: &BusinessCommand,
@@ -39822,6 +39851,60 @@ pub(super) mod tests {
         assert!(!is_recoverable_background_control_command_type(
             "office.document.create"
         ));
+    }
+
+    #[test]
+    fn control_claim_owner_binding_rejects_cross_owner_replay() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let command = BusinessCommand {
+            origin: CommandOrigin::ReplicatedPeer,
+            id: Some("owner-bound-control".into()),
+            module: "fixture".into(),
+            command_type: "fixture.control".into(),
+            record_id: None,
+            payload: serde_json::json!({"same":"payload"}),
+            client_context: serde_json::json!({}),
+        };
+        let make_claim = |owner: &str| -> anyhow::Result<_> {
+            let mut claim = business_command_core_claim_with_authorization(
+                "owner-bound-control",
+                &command,
+                None,
+            )?;
+            bind_business_command_claim_owner(&mut claim, owner)?;
+            Ok(claim)
+        };
+        let first = channels::claim_business_control_command(temp.path(), make_claim("alice")?)?;
+        assert_eq!(first.disposition, "new");
+        let replay = channels::claim_business_control_command(temp.path(), make_claim("alice")?)?;
+        assert_eq!(replay.disposition, "uncertain");
+        let foreign = channels::claim_business_control_command(temp.path(), make_claim("bob")?);
+        assert!(foreign.is_err());
+        let stored = channels::business_command_projection(temp.path(), "owner-bound-control")?;
+        assert_eq!(stored["native_owner"]["user_id"], "alice");
+
+        // Legacy ownerless intent must not be adopted by its next caller.
+        let legacy_id = "legacy-ownerless-control";
+        let legacy = business_command_core_claim_with_authorization(legacy_id, &command, None)?;
+        channels::claim_business_control_command(temp.path(), legacy)?;
+        let mut claimed =
+            business_command_core_claim_with_authorization(legacy_id, &command, None)?;
+        bind_business_command_claim_owner(&mut claimed, "alice")?;
+        let attempted_adoption = channels::claim_business_control_command(temp.path(), claimed);
+        let error = attempted_adoption
+            .err()
+            .context("ownerless replay must conflict")?;
+        assert!(error.to_string().contains("idempotency_conflict"));
+        let unchanged = channels::business_command_projection(temp.path(), legacy_id)?;
+        assert!(unchanged.get("native_owner").is_none());
+
+        // Even before persistence, the helper cannot overwrite a bound owner.
+        let mut bound = make_claim("alice")?;
+        let original_hash = bound.payload_hash.clone();
+        assert!(bind_business_command_claim_owner(&mut bound, "bob").is_err());
+        assert_eq!(bound.intent["native_owner"]["user_id"], "alice");
+        assert_eq!(bound.payload_hash, original_hash);
+        Ok(())
     }
 
     #[test]

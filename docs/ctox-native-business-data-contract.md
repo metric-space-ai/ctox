@@ -3,8 +3,10 @@
 Status: implementation boundary agreed with the Workjet consumer on 2026-09-09.
 This document specifies the remaining integration; it is not a declaration that
 an application client, production Workjet resolver or resumable subscription is
-available. A native Open/Status/Close lifecycle service and a reusable trusted
-host seam now exist; scoped query/watch/command execution remains outstanding.
+available. The current branch includes native lifecycle and scoped query/watch/
+command source implementations. The BusinessData rework has not passed compiler,
+adversarial service, or production consumer validation; it is not a release gate
+pass or permission to remove the existing consumer path.
 
 ## Generated host-consumer API
 
@@ -44,11 +46,11 @@ fabricated from shape validation alone.
 ## Trusted native lifecycle service
 
 `BusinessDataService` is a connection-scoped dispatcher for the private
-`BusinessDataIpc` factory. `BusinessDataServiceDispatcher::dispatch` implements
-`Open`, `Status` and `Close`; all query, watch, command and unwatch operations
-return explicit `Unsupported` or `UnknownSession` failures without exposing
-data. One dispatcher owns one random opaque handle table and credential
-requester, so concurrent private clients cannot share a handle or lease.
+`BusinessDataIpc` factory. `BusinessDataServiceDispatcher::dispatch` routes
+lifecycle, query/watch and command operations through that connection's native
+session and authenticated source. Invalid or stale handles fail closed. Each
+factory invocation must create a separate service/handle table; sharing a
+service across private clients is not an authorized host configuration.
 
 The host implements `BusinessDataSessionHost`. For a renderer-selected target
 ID it asynchronously supplies:
@@ -81,8 +83,31 @@ service awaits dispatcher shutdown. Concurrent opens each receive a fresh
 handle and own a separate native transport and credentials.
 
 This service does not add a saved-target store, policy store or Workjet
-bootstrap. It also does not authorize scoped selectors or provide subscription
-or command execution.
+bootstrap. Source-side document visibility, field projection and query-field
+authorization reuse Business OS replication policy. Their complete runtime
+coverage remains an acceptance requirement.
+
+## Command ownership and existing records
+
+ObserveCommand must resolve the requested command in the canonical native
+command store before installing an observation. Peer-provided owner fields and
+client context are not ownership evidence. Native queue authorization receipts
+already bind a trusted actor. For replicated control commands without such a
+receipt, admission now adds `native_owner` with contract
+`ctox-business-command-owner-v1` and the authenticated session's user ID to the
+canonical intent before hashing it. This is an authentication binding, not a
+permission grant; current collection and command policies still apply.
+
+The binding participates in idempotency: an otherwise identical command with
+the same ID and a different owner must conflict. Existing permission receipts
+remain unchanged so background recovery can reproduce their hashes. Existing
+ownerless commands must not acquire an owner from the next requester. They
+remain unavailable to owner-scoped observation and conflict with a newly bound
+intent; no automatic ownership backfill is implemented.
+
+Tests for canonical store replay/conflict and receipt validation are present as
+source but have not been executed for this rework. Full authenticated intake,
+observation, recovery and migration evidence is still required.
 
 
 ## Private host credential callback
