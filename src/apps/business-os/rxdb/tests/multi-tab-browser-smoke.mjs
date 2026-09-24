@@ -35,6 +35,19 @@ try {
     first.goto(`http://127.0.0.1:${port}/`),
     second.goto(`http://127.0.0.1:${port}/`),
   ]);
+  await first.evaluate(() => {
+    if (!navigator.locks?.request) throw new Error('Web Locks are required for this handover case');
+    const request = navigator.locks.request.bind(navigator.locks);
+    Object.defineProperty(navigator.locks, 'request', {
+      configurable: true,
+      value: (name, options, callback) => request(name, options, async (lock) => {
+        const result = await callback(lock);
+        // A releasing tab can announce pagehide before the browser frees its lock.
+        if (lock) await new Promise((resolve) => setTimeout(resolve, 200));
+        return result;
+      }),
+    });
+  });
   const room = `browser-room-${Date.now()}`;
   await first.evaluate(async ({ room }) => {
     const { createMultiTabSyncCoordinator } = await import('/bundle.mjs');
@@ -61,7 +74,13 @@ try {
   await waitFor(first, () => globalThis.__dirty?.ids?.[0] === 'ticket-browser-1', 'dirty event at leader');
 
   await first.evaluate(() => globalThis.dispatchEvent(new Event('pagehide')));
-  await waitFor(second, () => globalThis.__coord?.isLeader?.() === true, 'follower leader handover');
+  await waitFor(second, () => globalThis.__coord?.isLeader?.() === true, 'follower leader handover', 3_000).catch(async (error) => {
+    const states = await Promise.all([first, second].map((page) => page.evaluate(async () => ({
+      coordinator: globalThis.__coord.snapshot(),
+      locks: await navigator.locks.query(),
+    }))));
+    throw new Error(`${error.message}; states=${JSON.stringify(states)}`, { cause: error });
+  });
   await second.evaluate(() => globalThis.__coord.notifyReplicatedChange('tickets', ['ticket-browser-2']));
   await waitFor(first, () => globalThis.__replicated?.ids?.[0] === 'ticket-browser-2', 'replicated event at follower');
 
