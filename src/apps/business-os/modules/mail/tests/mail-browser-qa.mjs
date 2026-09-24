@@ -873,6 +873,9 @@ mailQa: try {
   });
   await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
   await page.evaluate(() => {
+    // An unrelated slow query must not delay hiding a mailbox whose native
+    // account can no longer be verified.
+    window.__mailReadFailures.set('outbound_engagements', 'PENDING');
     window.__mailNativeUnavailable = true;
     window.dispatchEvent(new Event('focus'));
   });
@@ -880,6 +883,7 @@ mailQa: try {
   assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
   assert.equal(await page.locator('[data-mail-record-id="thread-sent"]').count(), 0);
   await page.evaluate(() => {
+    window.__mailReadFailures.delete('outbound_engagements');
     window.__mailNativeUnavailable = false;
     window.dispatchEvent(new Event('focus'));
   });

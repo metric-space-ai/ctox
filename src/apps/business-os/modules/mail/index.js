@@ -623,7 +623,7 @@ export async function mount(ctx) {
       } catch { /* surfaced below */ }
     }
     if (recoveredCollection) wireCollectionSubscriptions();
-    const snapshots = await Promise.all([
+    const reads = [
       readAll(collections.business_commands),
       readAll(collections.business_module_catalog),
       readAll(collections.business_users),
@@ -634,13 +634,13 @@ export async function mount(ctx) {
       readAll(collections.outbound_engagements),
       readAll(collections.outbound_messages),
       readAll(collections.outbound_approvals),
-    ]);
+    ];
+    // Check the account before waiting for unrelated collection reads. A slow
+    // campaign query must not keep a revoked mailbox visible until it times out.
+    const accountRead = await reads[3];
     if (view.disposed) return;
-    const failedRead = [3, 4, 5].map((index) => snapshots[index])
-      .find((snapshot) => snapshot instanceof Error);
-    const [commands, catalogs, users, accounts, threads, communicationMessages, campaigns, engagements, outboundMessages, approvals]
-      = snapshots.map((snapshot) => Array.isArray(snapshot) ? snapshot : null);
-    const accountCandidates = accounts || (view.accounts.length ? view.accounts : null);
+    const accountCandidates = Array.isArray(accountRead)
+      ? accountRead : (view.accounts.length ? view.accounts : null);
     let authorizedAccounts = null;
     if (accountCandidates) {
       try {
@@ -662,6 +662,12 @@ export async function mount(ctx) {
         return;
       }
     }
+    const snapshots = await Promise.all(reads);
+    if (view.disposed) return;
+    const failedRead = [3, 4, 5].map((index) => snapshots[index])
+      .find((snapshot) => snapshot instanceof Error);
+    const [commands, catalogs, users, accounts, threads, communicationMessages, campaigns, engagements, outboundMessages, approvals]
+      = snapshots.map((snapshot) => Array.isArray(snapshot) ? snapshot : null);
     // Native account reads use a fresh authority token. A later denial must
     // win over an older local snapshot that finishes out of order.
     if (sequence > view.authorityDecisionSequence) {
