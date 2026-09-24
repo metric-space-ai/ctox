@@ -22,3 +22,11 @@ The local fallback receives the same already-read source, so connection fallback
 does not try to read stdin a second time. The existing IPC envelope limit remains
 32 MiB, allowing JSON escaping of the bounded source. This transport change does
 not alter script registration or grant writes to a canonical scrape workspace.
+
+When login needs an email one-time code, the credential must identify the exact
+recipient mailbox through its `otp_recipient` secret field or an email-shaped
+login hint. Native Mail lookup is limited to that mailbox's account and to an
+account owned by or explicitly shared with the authenticated command actor.
+Only a message addressed to that mailbox and received after login started can
+provide a code. Missing mailbox ownership, missing recipient, or ambiguous fresh
+codes stop automatic OTP completion so the login can be completed manually.

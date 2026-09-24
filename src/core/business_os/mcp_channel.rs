@@ -749,7 +749,10 @@ pub(crate) fn bind_internal_command_session_to_crew_attempt(
     sign_internal_command_session_claims(root, &claims)
 }
 
-fn verify_internal_command_session_token(root: &Path, token: &str) -> anyhow::Result<Value> {
+pub(crate) fn verify_internal_command_session_token(
+    root: &Path,
+    token: &str,
+) -> anyhow::Result<Value> {
     let claims = decode_internal_command_session_token(root, token)?;
     let command = crate::mission::channels::inspect_business_command(root, &claims.command_id)?
         .context("Business OS internal command session references an unknown command")?;

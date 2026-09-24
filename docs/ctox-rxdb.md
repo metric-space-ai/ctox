@@ -637,9 +637,10 @@ the demand loader then refuses to serve that window locally — complete fast
 path, stale-while-revalidate, cross-tab materialized window and cancel
 fallbacks alike — until a newly authorized fetch re-stamps it. Windows
 persisted before this stamp existed mismatch a known identity exactly once.
-An unresolvable current digest stays permissive, mirroring
-`readPermissionDigestMatches`, so a token-endpoint blip never blocks warm
-rendering. Non-control-plane collections are unchanged. The opaque token
+An unresolvable current digest blocks local control-plane window serving:
+a token-endpoint failure cannot prove that an earlier grant still holds.
+Known matching identities retain warm rendering; non-control-plane collections
+are unchanged. The opaque token
 is carried through the existing in-flight identity and sidecar satisfied-token
 fields; it is not a server revision or new transport.
 

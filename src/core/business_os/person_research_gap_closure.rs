@@ -1999,8 +1999,9 @@ fn numbers_in(text: &str) -> Vec<(f64, std::ops::Range<usize>)> {
         .collect()
 }
 
-/// Whether a source quote states the field's figure. Not a quantity field, no
-/// figure in the value, or no number in the quote: nothing to check (true).
+/// Whether a source quote states the field's figure. Non-quantity fields and
+/// values without a figure have nothing to compare; a numeric value needs a
+/// matching figure in the quote.
 /// Numbers that only bound a range ("11-100", "11 bis 100") do not count: a
 /// size class never proves an exact value.
 /// A quote backs a value only when it states it: figures by number
@@ -2045,7 +2046,7 @@ fn quantity_quote_backs(field: &str, value: &str, quote: &str) -> bool {
     };
     let in_quote = numbers_in(quote);
     if in_quote.is_empty() {
-        return true;
+        return false;
     }
     let range =
         regex::Regex::new(r"(?i)\d[\d.,]*\s*(?:-|–|—|bis|to)\s*\d[\d.,]*").expect("range pattern");
@@ -3096,12 +3097,18 @@ mod tests {
             "50,87 Mio. EUR",
             "Umsatz 38,3 Mio. €"
         ));
-        // Nothing to judge: no figure in the quote, or not a quantity field.
-        assert!(quantity_quote_backs(
+        // A generic quote cannot verify a numeric value.
+        assert!(!quantity_quote_backs(
             "mitarbeiter",
             "30",
             "Mitarbeiterzahl laut Registerauszug"
         ));
+        assert!(!quantity_quote_backs(
+            "umsatz",
+            "50,87 Mio. EUR",
+            "Umsatz laut Registerauszug"
+        ));
+        // Non-quantity fields do not require a numeric quote.
         assert!(quantity_quote_backs(
             "firma_plz",
             "50735",
@@ -4794,6 +4801,56 @@ mod tests {
             "the documentation host must be named: {rejections:?}"
         );
         assert_eq!(result["accepted_fields"], serde_json::json!([]));
+        Ok(())
+    }
+
+    #[test]
+    fn a_numeric_writeback_needs_a_quote_containing_its_number() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-unbelegte-zahl";
+        let research_command_id = "research-unbelegte-zahl";
+        let (_, task) =
+            create_gap_fixture(temp.path(), research_command_id, record_id, "mitarbeiter")?;
+        let command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "gap_task_id": task.message_key,
+                "field_status": {
+                    "mitarbeiter": {
+                        "status": "verified",
+                        "value": "30",
+                        "sources": [{
+                            "source_id": "company",
+                            "url": "https://company.test/about",
+                            "quote": "Unser Unternehmen beschäftigt viele Fachkräfte."
+                        }],
+                        "attempts": []
+                    }
+                },
+                "result": {
+                    "fields": {"mitarbeiter": {"value": "30"}},
+                    "person_records": [],
+                    "evidence": [{
+                        "field_key": "mitarbeiter",
+                        "value": "30",
+                        "source_id": "company",
+                        "url": "https://company.test/about",
+                        "quote": "Unser Unternehmen beschäftigt viele Fachkräfte."
+                    }]
+                }
+            }),
+        );
+        let result = handle_research_writeback(temp.path(), &command)?;
+        let rejections = result["rejections"].as_array().context("rejections")?;
+        assert!(rejections.iter().any(|entry| entry
+            .as_str()
+            .is_some_and(|text| text.contains("Zitat") && text.contains("mitarbeiter"))));
+        assert_eq!(result["accepted_fields"], serde_json::json!([]));
+        assert_eq!(result["research_status"], "needs_review");
+        assert_ne!(result["field_status"]["mitarbeiter"]["status"], "verified");
         Ok(())
     }
 

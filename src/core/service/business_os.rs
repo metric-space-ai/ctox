@@ -2180,6 +2180,7 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
                     .get("owner_user_id")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
+                resolved_credential.otp_recipient.as_deref(),
                 &recipe,
                 login_started_epoch_s,
                 continuation_source,
@@ -5323,6 +5324,7 @@ struct ResolvedWebStackCredential {
     credential_value: String,
     login_hint: Option<String>,
     login_hint_from_secret: bool,
+    otp_recipient: Option<String>,
 }
 
 fn resolve_web_stack_credential(
@@ -5348,9 +5350,22 @@ fn resolve_web_stack_credential(
             .map(str::to_string)
     });
     let login_hint_from_secret = explicit_login_hint.is_none() && bundled_login_hint.is_some();
+    let otp_recipient = object
+        .and_then(|value| value.get("otp_recipient"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let login_hint = explicit_login_hint.or(bundled_login_hint);
     ResolvedWebStackCredential {
         credential_value: bundled_credential.unwrap_or_else(|| secret_value.to_string()),
-        login_hint: explicit_login_hint.or(bundled_login_hint),
+        otp_recipient: otp_recipient.or_else(|| {
+            login_hint
+                .as_deref()
+                .filter(|value| value.contains('@'))
+                .map(str::to_string)
+        }),
+        login_hint,
         login_hint_from_secret,
     }
 }
@@ -5532,42 +5547,104 @@ fn find_fresh_email_otp(
     root: &Path,
     recipe: &WebStackEmailOtpRecipe,
     not_before_epoch_s: i64,
+    mailbox_address: &str,
+    profile_owner: &str,
 ) -> Option<(String, String)> {
     let conn = rusqlite::Connection::open_with_flags(
         crate::paths::core_db(root),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .ok()?;
+    find_fresh_email_otp_in_conn(
+        &conn,
+        recipe,
+        not_before_epoch_s,
+        mailbox_address,
+        profile_owner,
+    )
+}
+
+fn find_fresh_email_otp_in_conn(
+    conn: &rusqlite::Connection,
+    recipe: &WebStackEmailOtpRecipe,
+    not_before_epoch_s: i64,
+    mailbox_address: &str,
+    profile_owner: &str,
+) -> Option<(String, String)> {
+    let mailbox_address = mailbox_address.trim().to_ascii_lowercase();
+    let profile_owner = profile_owner.trim();
+    if mailbox_address.is_empty() || !mailbox_address.contains('@') || profile_owner.is_empty() {
+        return None;
+    }
+    let account_key = format!("email:{mailbox_address}");
     let mut statement = conn
         .prepare(
-            "SELECT message_key, COALESCE(sender_address, ''), COALESCE(subject, ''),
-                    COALESCE(NULLIF(body_text, ''), preview, '')
-             FROM communication_messages
-             WHERE channel = 'email' AND direction = 'inbound'
-               AND CAST(strftime('%s', COALESCE(external_created_at, observed_at)) AS INTEGER) >= ?1
-             ORDER BY CAST(strftime('%s', COALESCE(external_created_at, observed_at)) AS INTEGER) DESC
+            "SELECT m.message_key, COALESCE(m.sender_address, ''), COALESCE(m.subject, ''),
+                    COALESCE(NULLIF(m.body_text, ''), m.preview, ''),
+                    m.recipient_addresses_json, a.profile_json
+             FROM communication_messages m
+             JOIN communication_accounts a ON a.account_key = m.account_key
+             WHERE m.channel = 'email' AND m.direction = 'inbound'
+               AND m.account_key = ?2 AND a.channel = 'email' AND lower(a.address) = ?3
+               AND CAST(strftime('%s', COALESCE(m.external_created_at, m.observed_at)) AS INTEGER) >= ?1
+             ORDER BY CAST(strftime('%s', COALESCE(m.external_created_at, m.observed_at)) AS INTEGER) DESC
              LIMIT 40",
         )
         .ok()?;
     let rows = statement
-        .query_map(rusqlite::params![not_before_epoch_s], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })
+        .query_map(
+            rusqlite::params![not_before_epoch_s, account_key, mailbox_address],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
         .ok()?;
-    for (message_key, sender, subject, body) in rows.flatten() {
-        if !email_otp_sender_matches(recipe, &sender) {
+    let mut candidate = None;
+    for (message_key, sender, subject, body, recipient_json, profile_json) in rows.flatten() {
+        let profile: serde_json::Value = serde_json::from_str(&profile_json).ok()?;
+        let owner_matches = profile
+            .get("owner_user_id")
+            .or_else(|| profile.get("ownerUserId"))
+            .and_then(serde_json::Value::as_str)
+            == Some(profile_owner);
+        let shared_matches = profile
+            .get("shared_user_ids")
+            .or_else(|| profile.get("sharedUserIds"))
+            .or_else(|| profile.get("member_user_ids"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|users| {
+                users
+                    .iter()
+                    .any(|user| user.as_str() == Some(profile_owner))
+            });
+        if !owner_matches && !shared_matches {
+            continue;
+        }
+        let recipients: Vec<String> = serde_json::from_str(&recipient_json).ok()?;
+        if !recipients
+            .iter()
+            .any(|recipient| recipient.trim().eq_ignore_ascii_case(&mailbox_address))
+            || !email_otp_sender_matches(recipe, &sender)
+        {
             continue;
         }
         if let Some(code) = extract_email_otp_code(&subject, &body) {
-            return Some((code, message_key));
+            if candidate.is_some() {
+                // Two simultaneous codes for one mailbox cannot be bound to
+                // this browser challenge from mail headers alone.
+                return None;
+            }
+            candidate = Some((code, message_key));
         }
     }
-    None
+    candidate
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5577,10 +5654,22 @@ fn complete_web_stack_login_with_email_otp(
     browser_dir: Option<PathBuf>,
     timeout_ms: u64,
     profile_owner: Option<String>,
+    otp_recipient: Option<&str>,
     recipe: &WebStackEmailOtpRecipe,
     login_started_epoch_s: i64,
     continuation_source: Option<&str>,
 ) -> serde_json::Value {
+    let Some((profile_owner_id, mailbox_address)) = profile_owner
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .zip(otp_recipient.filter(|value| value.contains('@')))
+    else {
+        return serde_json::json!({
+            "ok": false,
+            "status": "otp_mailbox_unbound",
+            "detail": "automatic email OTP requires a bound owner and recipient mailbox",
+        });
+    };
     // Many providers only send the code once the user picks "e-mail" or
     // presses "send code" on the challenge page, so trigger it first and note
     // what the page offered — a silent 150 s wait for a mail nobody sent looks
@@ -5593,8 +5682,9 @@ fn complete_web_stack_login_with_email_otp(
         profile_owner.clone(),
         EMAIL_OTP_TRIGGER_SOURCE.to_string(),
     );
-    // Tolerate some clock skew between the mail server and this host.
-    let not_before = login_started_epoch_s.saturating_sub(90);
+    // Only consider codes created after this login began. Clock skew may
+    // require manual completion; an older challenge must not win the lookup.
+    let not_before = login_started_epoch_s;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(150);
     let mut polls = 0usize;
     let mut found = None;
@@ -5603,7 +5693,9 @@ fn complete_web_stack_login_with_email_otp(
         if let Ok(settings) = crate::inference::runtime_env::effective_operator_env_map(root) {
             let _ = crate::communication::email_native::service_sync(root, &settings);
         }
-        if let Some(hit) = find_fresh_email_otp(root, recipe, not_before) {
+        if let Some(hit) =
+            find_fresh_email_otp(root, recipe, not_before, mailbox_address, profile_owner_id)
+        {
             found = Some(hit);
             break;
         }
@@ -5760,6 +5852,91 @@ mod email_otp_tests {
         ));
         assert!(!email_otp_sender_matches(&recipe, "noreply@brightdata.com"));
         assert!(web_stack_email_otp_recipe("northdata.de").is_none());
+    }
+
+    #[test]
+    fn otp_lookup_stays_in_the_bound_mailbox_and_owner() {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory mail fixture");
+        conn.execute_batch(
+            "CREATE TABLE communication_accounts (
+                account_key TEXT PRIMARY KEY, channel TEXT, address TEXT, profile_json TEXT
+             );
+             CREATE TABLE communication_messages (
+                message_key TEXT PRIMARY KEY, channel TEXT, account_key TEXT, direction TEXT,
+                sender_address TEXT, subject TEXT, body_text TEXT, preview TEXT,
+                recipient_addresses_json TEXT, external_created_at TEXT, observed_at TEXT
+             );",
+        )
+        .expect("fixture tables");
+        for (key, address, owner) in [
+            ("email:alice@example.com", "alice@example.com", "alice"),
+            ("email:bob@example.com", "bob@example.com", "bob"),
+        ] {
+            conn.execute(
+                "INSERT INTO communication_accounts VALUES (?1, 'email', ?2, ?3)",
+                rusqlite::params![
+                    key,
+                    address,
+                    serde_json::json!({"owner_user_id": owner, "shared_user_ids": []}).to_string()
+                ],
+            )
+            .expect("account");
+        }
+        let insert_code = |key: &str, account: &str, recipient: &str, code: &str| {
+            conn.execute(
+                "INSERT INTO communication_messages VALUES (
+                    ?1, 'email', ?2, 'inbound', 'no-reply@mail.dnb.com',
+                    'Verification code', ?3, '', ?4, '2026-09-24T03:00:00Z',
+                    '2026-09-24T03:00:00Z'
+                 )",
+                rusqlite::params![
+                    key,
+                    account,
+                    format!("Your verification code is {code}."),
+                    serde_json::json!([recipient]).to_string(),
+                ],
+            )
+            .expect("message");
+        };
+        insert_code(
+            "alice-code",
+            "email:alice@example.com",
+            "alice@example.com",
+            "111111",
+        );
+        insert_code(
+            "bob-code",
+            "email:bob@example.com",
+            "bob@example.com",
+            "222222",
+        );
+        insert_code(
+            "wrong-recipient",
+            "email:alice@example.com",
+            "bob@example.com",
+            "333333",
+        );
+        let recipe = web_stack_email_otp_recipe("dnbhoovers.com").expect("recipe");
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice"),
+            Some(("111111".to_string(), "alice-code".to_string()))
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "bob@example.com", "alice"),
+            None,
+            "Alice cannot select Bob's code from another account"
+        );
+        insert_code(
+            "alice-second",
+            "email:alice@example.com",
+            "alice@example.com",
+            "444444",
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice"),
+            None,
+            "two concurrent codes in one mailbox have no challenge identity"
+        );
     }
 }
 
@@ -8027,6 +8204,7 @@ mod tests {
         );
         assert_eq!(bundled.credential_value, "secret-value");
         assert_eq!(bundled.login_hint.as_deref(), Some("user@example.test"));
+        assert_eq!(bundled.otp_recipient.as_deref(), Some("user@example.test"));
         assert!(bundled.login_hint_from_secret);
 
         let explicit = resolve_web_stack_credential(
@@ -8037,11 +8215,25 @@ mod tests {
             explicit.login_hint.as_deref(),
             Some("operator@example.test")
         );
+        assert_eq!(
+            explicit.otp_recipient.as_deref(),
+            Some("operator@example.test")
+        );
         assert!(!explicit.login_hint_from_secret);
+
+        let separate_mailbox = resolve_web_stack_credential(
+            r#"{"username":"provider-user","password":"secret-value","otp_recipient":"crew@example.test"}"#,
+            None,
+        );
+        assert_eq!(
+            separate_mailbox.otp_recipient.as_deref(),
+            Some("crew@example.test")
+        );
 
         let legacy = resolve_web_stack_credential("legacy-password", None);
         assert_eq!(legacy.credential_value, "legacy-password");
         assert_eq!(legacy.login_hint, None);
+        assert_eq!(legacy.otp_recipient, None);
         assert!(!legacy.login_hint_from_secret);
     }
 

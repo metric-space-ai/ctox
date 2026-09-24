@@ -420,10 +420,10 @@ export function createQueryDemandLoader({
         if (
           materialized?.complete
           && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds)
-          && windowReadPermissionDigestMatches(
+          && (!controlPlaneRead || windowReadPermissionDigestMatches(
             materialized.permissionDigest,
-            controlPlaneRead ? resolveReadPermissionDigest() : '',
-          )
+            resolveReadPermissionDigest(),
+          ))
           && (
             !strictRequireRevision
             || (
@@ -734,13 +734,11 @@ function normalizeSort(sort) {
 }
 
 // Mirrors readPermissionDigestMatches in replication-webrtc.mjs (SYNC-12):
-// an empty CURRENT digest means the identity is unresolvable right now (no
-// token / token-endpoint blip) and stays permissive, so a transient token
-// outage never blocks warm rendering or forces a resync. A non-empty current
-// digest must equal the window's stamp. Windows persisted before the stamp
-// existed mismatch a known identity exactly once — the safe direction.
+// control-plane windows may be served only under a known matching identity.
+// An unresolved current digest can hide a role/grant change and must block
+// local membership until a newly authorized fetch re-stamps the window.
 function windowReadPermissionDigestMatches(storedDigest, currentDigest) {
-  if (!currentDigest) return true;
+  if (!currentDigest) return false;
   return String(storedDigest || '') === currentDigest;
 }
 

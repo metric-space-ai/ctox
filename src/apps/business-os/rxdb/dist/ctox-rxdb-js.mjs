@@ -7753,10 +7753,10 @@ function createQueryDemandLoader({
           }
           const materialized = await sidecar.getQueryWindow(sidecarKey);
           assertFresh();
-          if (materialized?.complete && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds) && windowReadPermissionDigestMatches(
+          if (materialized?.complete && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds) && (!controlPlaneRead || windowReadPermissionDigestMatches(
             materialized.permissionDigest,
-            controlPlaneRead ? resolveReadPermissionDigest() : ""
-          ) && (!strictRequireRevision || materialized.satisfiedRevision === query.requireRevision && materialized.satisfiedGeneration === generation)) {
+            resolveReadPermissionDigest()
+          )) && (!strictRequireRevision || materialized.satisfiedRevision === query.requireRevision && materialized.satisfiedGeneration === generation)) {
             bumpStatus(status, "queryFetchDedupHitCount");
             return serveWindowDocuments(materialized, materialized.documentIds);
           }
@@ -7998,7 +7998,7 @@ function normalizeSort(sort) {
   });
 }
 function windowReadPermissionDigestMatches(storedDigest, currentDigest) {
-  if (!currentDigest) return true;
+  if (!currentDigest) return false;
   return String(storedDigest || "") === currentDigest;
 }
 async function readLocalDocuments(storageCollection, query, window2, documentIds = null) {

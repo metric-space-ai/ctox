@@ -262,6 +262,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
     collectionName: 'business_commands',
     schemaVersion: 1,
     clock: () => now,
+    readPermissionDigest: () => 'digest-known',
     requestQueryFetch: async () => {
       fetches += 1;
       if (fetches === 1) {
@@ -305,6 +306,7 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
     schemaVersion: 1,
     clock: () => now,
     queryGeneration: () => 'swr-control-plane-generation',
+    readPermissionDigest: () => 'digest-known',
     requestQueryFetch: async () => {
       fetches += 1;
       if (fetches === 1) {
@@ -337,8 +339,8 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
 // A control-plane window stamped under a superseded digest must NOT serve
 // local rows before a newly authorized fetch re-stamps it — neither via SWR
 // nor via the complete fast path — while an unchanged digest keeps the
-// instant warm render, and an unresolvable current digest stays permissive
-// (token-endpoint blip convention, mirroring readPermissionDigestMatches).
+// instant warm render. An unresolvable current digest must not serve cached
+// lifecycle rows because a role/grant revoke may have occurred during outage.
 {
   let now = 30_000;
   const sidecar = createSidecarWithMemoryBackend({ databaseName: 'swr-7', clock: () => now });
@@ -360,6 +362,10 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
         return { documents: [{ id: 'cmd-1', status: 'running', scope: 'role-a' }] };
       }
       await refreshGate; // the authorized fetch under the new identity is gated
+      if (!currentDigest) throw new Error('capability unavailable');
+      if (currentDigest === 'digest-role-c') {
+        return { documents: [] }; // the role was revoked during the outage
+      }
       return { documents: [{ id: 'cmd-2', status: 'running', scope: 'role-b' }] };
     },
   });
@@ -395,12 +401,26 @@ const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
   assert(Date.now() - warmStarted < 200, 'warm read under unchanged digest stays sub-200ms');
   assert(fetches === fetchesBeforeWarm + 1, 'unchanged digest revalidates in the background');
 
-  // Unresolvable current digest (token-endpoint blip): permissive, no storm.
+  // A revoke during a token-endpoint outage is indistinguishable from a blip.
+  // Neither complete nor stale local control-plane membership may be served.
+  await settle(); // let the previous warm background refresh finish
   currentDigest = '';
   now += 60_000;
-  const blip = await loader.resolveQuery({ selector: {} });
-  assert(blip.length === 1 && blip[0].id === 'cmd-2',
-    'unresolvable current digest stays permissive (token-blip convention)');
+  const fetchesBeforeBlip = fetches;
+  let blipError = null;
+  try {
+    await loader.resolveQuery({ selector: {} });
+  } catch (error) {
+    blipError = error;
+  }
+  assert(blipError?.message === 'capability unavailable',
+    'unknown current identity must not return cached role-b rows');
+  assert(fetches === fetchesBeforeBlip + 1,
+    'unknown identity requests a new authoritative read');
+  currentDigest = 'digest-role-c';
+  const revoked = await loader.resolveQuery({ selector: {} });
+  assert(revoked.length === 0,
+    'restored revoked identity sees no rows from the former grant');
 }
 
 // --- 8. pre-stamp-era control-plane window mismatches a known identity once -

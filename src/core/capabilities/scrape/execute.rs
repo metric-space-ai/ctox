@@ -57,6 +57,188 @@ pub(super) fn execute_scrape(root: &Path, args: &[String]) -> Result<()> {
     print_json(&serde_json::to_value(outcome)?)
 }
 
+fn bind_scrape_input_to_command(
+    input: &mut Value,
+    session: &Value,
+    command_context: &Value,
+    target_key: &str,
+) -> Result<String> {
+    anyhow::ensure!(
+        session.get("crew_only").and_then(Value::as_bool) != Some(true),
+        "Crew-only command session cannot execute scrape targets"
+    );
+    let command_id = session
+        .get("command_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("scrape command session has no command id")?;
+    let actor = session
+        .get("actor")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("scrape command session has no actor")?;
+    let command = &command_context["command"];
+    anyhow::ensure!(
+        command.get("command_id").and_then(Value::as_str) == Some(command_id)
+            && command.get("command_type").and_then(Value::as_str)
+                == Some("web_stack.person_research")
+            && command.get("module").and_then(Value::as_str) == Some("outbound-lead-generation"),
+        "scrape execute requires its own Outbound person-research command"
+    );
+    let source_id = command["payload"]["source_policy"]["sources"]
+        .as_array()
+        .and_then(|sources| {
+            sources
+                .iter()
+                .find(|source| source.get("target_key").and_then(Value::as_str) == Some(target_key))
+        })
+        .and_then(|source| source.get("id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("scrape target is not in the bound research command source policy")?;
+    let object = input
+        .as_object_mut()
+        .context("scrape execute input must be a JSON object")?;
+    for (field, expected) in [
+        ("source_id", source_id),
+        ("task_id", command_id),
+        ("owner_user_id", actor),
+        (
+            "company",
+            command["payload"]["company"]
+                .as_str()
+                .context("person-research command has no company")?,
+        ),
+        (
+            "country",
+            command["payload"]["country"]
+                .as_str()
+                .context("person-research command has no country")?,
+        ),
+    ] {
+        if let Some(provided) = object.get(field) {
+            anyhow::ensure!(
+                provided
+                    .as_str()
+                    .is_some_and(|value| value.trim() == expected),
+                "scrape execute input {field} differs from its bound command"
+            );
+        }
+        object.insert(field.to_string(), Value::String(expected.to_string()));
+    }
+    if let Some(record_id) = command.get("record_id").and_then(Value::as_str) {
+        if let Some(provided) = object.get("record_id") {
+            anyhow::ensure!(
+                provided
+                    .as_str()
+                    .is_some_and(|value| value.trim() == record_id),
+                "scrape execute input record_id differs from its bound command"
+            );
+        }
+        object.insert(
+            "record_id".to_string(),
+            Value::String(record_id.to_string()),
+        );
+    } else {
+        anyhow::ensure!(
+            !object.contains_key("record_id"),
+            "scrape execute input record_id has no bound command record"
+        );
+    }
+    Ok(actor.to_string())
+}
+
+#[cfg(test)]
+mod command_binding_tests {
+    use super::*;
+
+    fn session() -> Value {
+        json!({
+            "command_id": "research-1",
+            "actor": "user-1",
+            "crew_only": false
+        })
+    }
+
+    fn command() -> Value {
+        json!({"command": {
+            "command_id": "research-1",
+            "command_type": "web_stack.person_research",
+            "module": "outbound-lead-generation",
+            "record_id": "lead-1",
+            "payload": {
+                "company": "X GmbH", "country": "DE",
+                "source_policy": {"sources": [{"id": "northdata-de", "target_key": "northdata-de"}]}
+            }
+        }})
+    }
+
+    #[test]
+    fn scrape_input_uses_bound_command_and_actor() {
+        let mut input = json!({"source_id": "northdata-de"});
+        let owner =
+            bind_scrape_input_to_command(&mut input, &session(), &command(), "northdata-de")
+                .expect("person research binding");
+        assert_eq!(owner, "user-1");
+        assert_eq!(input["task_id"], "research-1");
+        assert_eq!(input["record_id"], "lead-1");
+        assert_eq!(input["owner_user_id"], "user-1");
+        assert_eq!(input["company"], "X GmbH");
+        assert_eq!(input["country"], "DE");
+        assert_eq!(input["source_id"], "northdata-de");
+    }
+
+    #[test]
+    fn scrape_input_rejects_foreign_task_owner_and_lead() {
+        for input in [
+            json!({"task_id": "research-2"}),
+            json!({"owner_user_id": "user-2"}),
+            json!({"company": "Y GmbH"}),
+            json!({"country": "AT"}),
+            json!({"record_id": "lead-2"}),
+            json!({"source_id": "other-source"}),
+        ] {
+            let mut input = input;
+            assert!(bind_scrape_input_to_command(
+                &mut input,
+                &session(),
+                &command(),
+                "northdata-de"
+            )
+            .is_err());
+        }
+        let mut input = json!({});
+        let mut foreign = command();
+        foreign["command"]["command_type"] = json!("ctox.delegate_task");
+        assert!(
+            bind_scrape_input_to_command(&mut input, &session(), &foreign, "northdata-de").is_err()
+        );
+        let mut crew_only = session();
+        crew_only["crew_only"] = json!(true);
+        assert!(
+            bind_scrape_input_to_command(&mut input, &crew_only, &command(), "northdata-de")
+                .is_err()
+        );
+        assert!(
+            bind_scrape_input_to_command(&mut input, &session(), &command(), "other-target")
+                .is_err()
+        );
+        let mut without_record = command();
+        without_record["command"]
+            .as_object_mut()
+            .unwrap()
+            .remove("record_id");
+        let mut input = json!({"record_id": "lead-2"});
+        assert!(bind_scrape_input_to_command(
+            &mut input,
+            &session(),
+            &without_record,
+            "northdata-de"
+        )
+        .is_err());
+    }
+}
+
 pub(crate) fn execute_scrape_with_outcome(
     root: &Path,
     args: &[String],
@@ -65,7 +247,7 @@ pub(crate) fn execute_scrape_with_outcome(
     let target_key = required_flag_value(args, "--target-key")
         .context("usage: ctox scrape execute --target-key <key> [--trigger-kind <manual|scheduled|repair>] [--scheduled-for <iso>] [--timeout-seconds <n>] [--runtime-root <path>] [--allow-heal] [--input-json <text>] [--input-file <path>] [--thread-key <key>] [--owner-user-id <id>] [--queue-priority <urgent|high|normal|low>]")?;
     let trigger_kind = find_flag_value(args, "--trigger-kind").unwrap_or("manual");
-    let owner_user_id = find_flag_value(args, "--owner-user-id")
+    let claimed_owner_user_id = find_flag_value(args, "--owner-user-id")
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let timeout_seconds = find_flag_value(args, "--timeout-seconds")
@@ -79,7 +261,7 @@ pub(crate) fn execute_scrape_with_outcome(
     // CTOX_SCRAPE_INPUT_JSON. Lets one registered target serve per-call
     // queries (e.g. person-research handing the company name to a Northdata
     // extractor) without registering a new target per query.
-    let input_json: Option<String> = if let Some(text) = find_flag_value(args, "--input-json") {
+    let mut input_json: Option<String> = if let Some(text) = find_flag_value(args, "--input-json") {
         Some(text.to_string())
     } else if let Some(path) = find_flag_value(args, "--input-file") {
         Some(
@@ -93,6 +275,33 @@ pub(crate) fn execute_scrape_with_outcome(
         serde_json::from_str::<Value>(text)
             .context("--input-json / --input-file must be valid JSON")?;
     }
+    let session_owner_user_id = if let Some(token) = find_flag_value(args, "--command-session") {
+        let session =
+            crate::business_os::mcp_channel::verify_internal_command_session_token(root, token)?;
+        let command_id = session
+            .get("command_id")
+            .and_then(Value::as_str)
+            .context("scrape command session has no command id")?;
+        let command = crate::mission::channels::inspect_business_command(root, command_id)?
+            .context("scrape command session has no current command")?;
+        let mut input = input_json
+            .as_deref()
+            .map(serde_json::from_str::<Value>)
+            .transpose()?
+            .unwrap_or_else(|| json!({}));
+        let owner = bind_scrape_input_to_command(&mut input, &session, &command, target_key)?;
+        if let Some(claimed) = claimed_owner_user_id {
+            anyhow::ensure!(
+                claimed == owner,
+                "scrape owner differs from bound command actor"
+            );
+        }
+        input_json = Some(input.to_string());
+        Some(owner)
+    } else {
+        None
+    };
+    let owner_user_id = session_owner_user_id.as_deref().or(claimed_owner_user_id);
     let conn = open_db(root)?;
     let target =
         load_registered_target(root, &conn, target_key)?.context("target_key not found")?;
