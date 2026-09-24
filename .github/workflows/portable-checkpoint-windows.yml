@@ -1,0 +1,56 @@
+name: Portable checkpoint Windows
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/portable-checkpoint-windows.yml'
+      - 'src/core/sync/**'
+      - 'src/core/harness/protocol/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: portable-checkpoint-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checkpoint:
+    name: Windows checkpoint capture and reconstruction
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
+      RUST_TEST_THREADS: 2
+      CARGO_TERM_COLOR: never
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: '1.93.0'
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        with:
+          key: portable-checkpoint-windows
+          workspaces: src/core/sync -> ${{ runner.temp }}/ctox-checkpoint-target
+      - name: Exercise real Git capture and reconstruction
+        shell: pwsh
+        run: |
+          $env:CARGO_TARGET_DIR = Join-Path $env:RUNNER_TEMP 'ctox-checkpoint-target'
+          $proof = Join-Path $env:RUNNER_TEMP 'ctox-checkpoint-proof'
+          New-Item -ItemType Directory -Force -Path $proof | Out-Null
+          git rev-parse HEAD | Set-Content (Join-Path $proof 'source-revision.txt')
+          git --version | Set-Content (Join-Path $proof 'git-version.txt')
+          cargo test --locked --manifest-path src/core/sync/Cargo.toml --test capture --test reconstruct --jobs 2 -- --test-threads=2 2>&1 | Tee-Object -FilePath (Join-Path $proof 'tests.log')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked --manifest-path src/core/sync/Cargo.toml --lib reconstruct_strips_windows_verbatim_prefixes_for_git --jobs 2 -- --test-threads=2 2>&1 | Tee-Object -FilePath (Join-Path $proof 'tests.log') -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Retain checkpoint test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: windows-checkpoint-proof
+          path: ${{ runner.temp }}/ctox-checkpoint-proof/
+          if-no-files-found: warn

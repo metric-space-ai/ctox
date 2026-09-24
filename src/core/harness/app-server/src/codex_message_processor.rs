@@ -3014,16 +3014,39 @@ impl CodexMessageProcessor {
 
         let mut thread = if let Some(summary) = db_summary {
             summary_to_thread(summary)
-        } else if let Some(rollout_path) = rollout_path.as_ref() {
+        } else if let Some(path) = rollout_path.as_ref() {
             let fallback_provider = self.config.model_provider_id.as_str();
-            match read_summary_from_rollout(rollout_path, fallback_provider).await {
+            match read_summary_from_rollout(path, fallback_provider).await {
                 Ok(summary) => summary_to_thread(summary),
+                Err(err) if loaded_thread.is_some() && rollout_file_is_zero_bytes(path) => {
+                    // A loaded thread can create its rollout before the first
+                    // session-meta line is flushed. Prefer the in-memory snapshot
+                    // instead of treating a zero-byte file as persisted history.
+                    let Some(thread) = loaded_thread.as_ref() else {
+                        self.send_internal_error(
+                            request_id,
+                            format!(
+                                "failed to load rollout `{}` for thread {thread_uuid}: {err}",
+                                path.display()
+                            ),
+                        )
+                        .await;
+                        return;
+                    };
+                    let config_snapshot = thread.config_snapshot().await;
+                    let loaded_rollout_path = thread.rollout_path();
+                    build_thread_from_snapshot(
+                        thread_uuid,
+                        &config_snapshot,
+                        loaded_rollout_path.or_else(|| Some(path.clone())),
+                    )
+                }
                 Err(err) => {
                     self.send_internal_error(
                         request_id,
                         format!(
                             "failed to load rollout `{}` for thread {thread_uuid}: {err}",
-                            rollout_path.display()
+                            path.display()
                         ),
                     )
                     .await;
@@ -3061,7 +3084,11 @@ impl CodexMessageProcessor {
                 Ok(items) => {
                     thread.turns = build_turns_from_rollout_items(&items);
                 }
-                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                Err(err)
+                    if err.kind() == std::io::ErrorKind::NotFound
+                        || (loaded_thread.is_some()
+                            && rollout_file_is_zero_bytes(rollout_path)) =>
+                {
                     self.send_invalid_request_error(
                         request_id,
                         format!(
@@ -7496,6 +7523,16 @@ pub(crate) async fn read_rollout_items_from_rollout(
     Ok(items)
 }
 
+/// Newly created rollout files can exist at zero bytes before the first
+/// session-meta line is flushed. Those files are not persisted history.
+/// Non-empty unreadable content, including corrupt JSON whose parser error
+/// mentions "empty", stays fail-closed.
+fn rollout_file_is_zero_bytes(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|meta| meta.len() == 0)
+        .unwrap_or(false)
+}
+
 fn extract_conversation_summary(
     path: PathBuf,
     head: &[serde_json::Value],
@@ -7727,6 +7764,32 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn zero_byte_rollout_is_in_progress_empty_but_nonempty_corrupt_history_is_not() {
+        let dir = TempDir::new().expect("tempdir");
+        let empty = dir.path().join("empty.jsonl");
+        std::fs::write(&empty, b"").expect("write empty rollout");
+        assert!(rollout_file_is_zero_bytes(&empty));
+
+        let corrupt = dir.path().join("rollout at empty session file.jsonl");
+        std::fs::write(
+            &corrupt,
+            b"{not session metadata}\nempty session file\nrollout at this file is empty\n",
+        )
+        .expect("write corrupt rollout");
+        assert!(
+            corrupt.metadata().expect("corrupt metadata").len() > 0,
+            "negative case must be a non-empty file"
+        );
+        assert!(
+            !rollout_file_is_zero_bytes(&corrupt),
+            "non-empty corrupt history must stay fail-closed even if path/contents mention empty"
+        );
+        assert!(!rollout_file_is_zero_bytes(
+            &dir.path().join("missing-rollout.jsonl")
+        ));
+    }
 
     #[test]
     fn validate_dynamic_tools_rejects_unsupported_input_schema() {
