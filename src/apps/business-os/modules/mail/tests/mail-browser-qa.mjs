@@ -426,10 +426,12 @@ mailQa: try {
   // A provider can reuse a thread ID in another mailbox. The newer message
   // must never replace Alice's row or leak into her opened conversation.
   await page.evaluate(() => {
-    window.__mailRows.communication_accounts.push({
+    const bobAccount = {
       account_key: 'email:bob@example.test', channel: 'email', address: 'bob@example.test',
       provider: 'ctox-mailserver', profile_json: { owner_user_id: 'bob' },
-    });
+    };
+    window.__mailRows.communication_accounts.push(bobAccount);
+    window.__mailNativeAccounts.set(bobAccount.account_key, structuredClone(bobAccount));
     window.__mailRows.communication_messages.push({
       message_key: 'bob-shared-thread', thread_key: 'thread-1', channel: 'email',
       account_key: 'email:bob@example.test', direction: 'outbound', folder_hint: 'sent',
@@ -455,6 +457,7 @@ mailQa: try {
   await page.locator('[data-mail-left-pane] [data-pg-tray-toggle]').click();
   await page.evaluate(() => {
     window.__mailRows.communication_accounts = window.__mailRows.communication_accounts.filter((account) => account.account_key !== 'email:bob@example.test');
+    window.__mailNativeAccounts.delete('email:bob@example.test');
     window.__mailRows.communication_messages = window.__mailRows.communication_messages.filter((message) => message.message_key !== 'bob-shared-thread');
     window.__mailNotify('communication_accounts');
     window.__mailNotify('communication_messages');
