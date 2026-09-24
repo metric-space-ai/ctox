@@ -253,10 +253,22 @@ command/task status. The source test checks admission, replay, changed intent,
 foreign ownership and archived-project denial; it does not prove a full worker
 turn or an installed Dev/Ops user path. Those are required before release.
 
+For a project already linked to a Business OS module, Workjet uses
+`business_os.execute_action` with `ctox.delegate_task`. It persists and sends
+an `idempotency_key` before transport. CTOX binds a supplied key to the
+authenticated actor and module, retains one command/task identity, and rejects
+a retry whose title, objective or other canonical intent changed. The key is
+optional for older callers, whose one-shot calls retain their prior behavior;
+Workjet's native retry path must always supply it. The MCP tool and action
+schemas advertise the field. This is a distinct app-linked route, not an app
+invented for a general project.
+
 `business_os.cancel_project_task` accepts only a command ID returned by
-`start_project_task` or `start_crew_execution`, a stable cancellation retry key
-and an optional bounded reason. It checks the corresponding canonical project
-or private Crew command shape, including the external executor for Crew turns.
+`start_project_task`, `start_crew_execution`, or a keyed `ctox.delegate_task`, a
+stable cancellation retry key and an optional bounded reason. It checks the
+corresponding canonical project, private Crew or app-linked command shape,
+including the external executor for Crew turns and the actor/module/key-derived
+identity for app-linked turns.
 The MCP actor must still own the canonical command and pass `ctox.task.manage`
 on its actual linked native task; a caller cannot provide a task, actor, module
 or policy scope. The tool submits the existing `ctox.command.cancel` control

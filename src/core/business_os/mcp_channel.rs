@@ -1587,6 +1587,7 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
                 optional_string("record_id"),
                 optional_string("title"),
                 optional_string("objective"),
+                optional_string("idempotency_key"),
                 optional_action_payload("payload"),
             ]),
         ),
@@ -4933,6 +4934,62 @@ pub fn propose_action(
     })
 }
 
+fn delegate_action_command_id(
+    module_id: &str,
+    action_id: &str,
+    arguments: &Value,
+    actor: &Value,
+) -> anyhow::Result<Option<String>> {
+    if action_id != "ctox.delegate_task" {
+        return Ok(None);
+    }
+    // Older callers without a key retain their existing one-shot behavior.
+    // A supplied key must never silently fall back to a random command ID.
+    let Some(value) = arguments.get("idempotency_key") else {
+        return Ok(None);
+    };
+    let key = value
+        .as_str()
+        .context("delegation idempotency key must be a string")?;
+    let bytes = key.as_bytes();
+    anyhow::ensure!(
+        !bytes.is_empty()
+            && bytes.len() <= 256
+            && bytes[0].is_ascii_alphanumeric()
+            && bytes
+                .iter()
+                .all(|byte| byte.is_ascii_alphanumeric()
+                    || matches!(*byte, b'.' | b'_' | b':' | b'-')),
+        "invalid delegation idempotency key"
+    );
+    let actor_id = actor
+        .pointer("/id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .context("delegation actor identity is required")?;
+    let identity = serde_json::to_vec(&(actor_id, module_id, action_id, key))?;
+    Ok(Some(format!(
+        "ctox_delegate_{}",
+        URL_SAFE_NO_PAD.encode(digest::digest(&digest::SHA256, &identity).as_ref())
+    )))
+}
+
+fn ensure_delegate_action_intent(
+    canonical: &Value,
+    module_id: &str,
+    proposal: &BusinessOsActionProposal,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        canonical["module"].as_str() == Some(module_id)
+            && canonical["command_type"].as_str() == Some(proposal.command_type.as_str())
+            && canonical["record_id"].as_str().filter(|id| !id.is_empty())
+                == proposal.record_id.as_deref()
+            && canonical["payload"] == proposal.payload,
+        "delegation key conflicts with existing intent"
+    );
+    Ok(())
+}
+
 pub fn execute_action(
     root: &Path,
     context: &McpChannelRequestContext,
@@ -4983,10 +5040,12 @@ pub fn execute_action(
     } else {
         None
     };
+    let actor = resolved_mcp_actor_context(root, context)?;
+    let delegate_command_id = delegate_action_command_id(module_id, action_id, arguments, &actor)?;
     let mut client_context = serde_json::json!({
         "channel": &context.channel,
         "surface": &context.surface,
-        "actor": resolved_mcp_actor_context(root, context)?,
+        "actor": actor,
         "mcp_actor": &context.actor,
         "workspace": &context.workspace,
         "request_id": &context.request_id,
@@ -5000,6 +5059,9 @@ pub fn execute_action(
     }
     if let Some(key) = person_research_key {
         client_context["idempotency_key"] = serde_json::json!(key);
+    }
+    if delegate_command_id.is_some() {
+        client_context["idempotency_key"] = arguments["idempotency_key"].clone();
     }
     if is_native_mcp_control_action(module_id, action_id) {
         let command_id = if action_id == "web_stack.person_research" {
@@ -5048,11 +5110,51 @@ pub fn execute_action(
             client_context,
         });
     }
+    if let Some(command_id) = delegate_command_id.as_deref() {
+        if let Some(existing) =
+            crate::mission::channels::inspect_business_command(root, command_id)?
+        {
+            let canonical =
+                crate::mission::channels::business_command_projection(root, command_id)?;
+            ensure_delegate_action_intent(&canonical, module_id, &proposal)?;
+            let status_record = store::pull_business_command_status_record(root, command_id)?;
+            let task_id = existing
+                .get("execution_task_id")
+                .and_then(Value::as_str)
+                .or_else(|| status_record.as_ref()?.get("task_id")?.as_str())
+                .map(str::to_string);
+            let status = status_record
+                .as_ref()
+                .and_then(|record| record.get("status"))
+                .and_then(Value::as_str)
+                .or_else(|| canonical.get("status").and_then(Value::as_str))
+                .unwrap_or("accepted")
+                .to_string();
+            let task_status = status_record
+                .as_ref()
+                .and_then(|record| record.get("task_status"))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            return Ok(BusinessOsActionExecution {
+                ok: true,
+                action: proposal.action,
+                module_id: module_id.to_string(),
+                record_id: proposal.record_id,
+                command_type: proposal.command_type,
+                command_id: command_id.to_string(),
+                status,
+                task_id,
+                task_status,
+                confirmation_required: proposal.confirmation_required,
+                client_context,
+            });
+        }
+    }
     let accepted = store::record_command(
         root,
         store::BusinessCommand {
             origin: store::CommandOrigin::TrustedLocal,
-            id: None,
+            id: delegate_command_id.clone(),
             module: module_id.to_string(),
             command_type: proposal.command_type.clone(),
             record_id: proposal.record_id.clone(),
@@ -5060,6 +5162,11 @@ pub fn execute_action(
             client_context: client_context.clone(),
         },
     )?;
+    if accepted.ok && delegate_command_id.is_some() {
+        let canonical =
+            crate::mission::channels::business_command_projection(root, &accepted.command_id)?;
+        ensure_delegate_action_intent(&canonical, module_id, &proposal)?;
+    }
     Ok(BusinessOsActionExecution {
         ok: accepted.ok,
         action: proposal.action,
@@ -7510,7 +7617,7 @@ fn required_object(name: &'static str) -> (&'static str, Value, bool) {
 }
 
 fn generic_delegate_action(module_id: &str) -> BusinessOsActionDescriptor {
-    action_descriptor(
+    let mut descriptor = action_descriptor(
         "ctox.delegate_task",
         module_id,
         "Delegate CTOX task",
@@ -7518,7 +7625,11 @@ fn generic_delegate_action(module_id: &str) -> BusinessOsActionDescriptor {
         "write",
         false,
         false,
-    )
+    );
+    descriptor.input_schema["properties"]["idempotency_key"] = serde_json::json!({
+        "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+    });
+    descriptor
 }
 
 fn action_descriptor(
@@ -12822,6 +12933,158 @@ mod tests {
                 .get("proposal_only")
                 .and_then(Value::as_bool),
             Some(true)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn delegate_action_retry_uses_one_native_command_and_rejects_changed_intent(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "tickets", "Tickets", &["tickets"])?;
+        write_module(root, "notes", "Notes", &["notes"])?;
+        seed_default_mcp_admin(root)?;
+        seed_business_user(root, "chatgpt:other", "admin")?;
+
+        let execute_tool = tool_descriptors()
+            .into_iter()
+            .find(|tool| tool.name == "business_os.execute_action")
+            .context("execute action tool descriptor")?;
+        assert_eq!(
+            execute_tool
+                .input_schema
+                .pointer("/properties/idempotency_key/type")
+                .and_then(Value::as_str),
+            Some("string")
+        );
+        let actions = list_module_actions(
+            root,
+            &test_context("business_os.list_module_actions"),
+            "tickets",
+        )?;
+        let delegate = actions
+            .items
+            .iter()
+            .find(|action| action.action_id == "ctox.delegate_task")
+            .context("native delegation action")?;
+        assert!(delegate
+            .input_schema
+            .pointer("/properties/idempotency_key/pattern")
+            .and_then(Value::as_str)
+            .is_some());
+
+        let request = serde_json::json!({
+            "module_id":"tickets", "action_id":"ctox.delegate_task",
+            "title":"Resolve the ticket", "objective":"Inspect the ticket and report",
+            "idempotency_key":"workjet-native-turn-1",
+            "_context":{"actor":"chatgpt:test-user","workspace":"test-workspace"}
+        });
+        let submit = |request: Value| call_tool(root, "business_os.execute_action", request);
+        let mut malformed = request.clone();
+        malformed["idempotency_key"] = serde_json::json!("not a valid key");
+        assert!(submit(malformed).is_err());
+        let first = submit(request.clone())?;
+        let replay = submit(request.clone())?;
+        let command_id = first["command_id"].as_str().context("first command id")?;
+        let task_id = first["task_id"].as_str().context("first task id")?;
+        assert_eq!(replay["command_id"], command_id);
+        assert_eq!(replay["task_id"], task_id);
+        let before = crate::mission::channels::business_command_projection(root, command_id)?;
+
+        let mut changed = request.clone();
+        changed["objective"] = serde_json::json!("Run an unrelated task");
+        assert!(submit(changed).is_err());
+        let after = crate::mission::channels::business_command_projection(root, command_id)?;
+        assert_eq!(
+            after, before,
+            "changed retry must not mutate the native command"
+        );
+        let conn = rusqlite::Connection::open(crate::paths::core_db(root))?;
+        let links: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_command_task_links WHERE command_id=?1",
+            [command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(links, 1, "one native task link for repeated intent");
+
+        let mut other_actor = request.clone();
+        other_actor["_context"]["actor"] = serde_json::json!("chatgpt:other");
+        let foreign = submit(other_actor)?;
+        assert_ne!(foreign["command_id"], command_id);
+        let mut other_module = request;
+        other_module["module_id"] = serde_json::json!("notes");
+        let scoped = submit(other_module)?;
+        assert_ne!(scoped["command_id"], command_id);
+        assert_ne!(scoped["command_id"], foreign["command_id"]);
+        Ok(())
+    }
+
+    #[test]
+    fn keyed_delegate_action_cancel_replays_and_warns_after_lease() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "tickets", "Tickets", &["tickets"])?;
+        seed_default_mcp_admin(root)?;
+        seed_business_user(root, "chatgpt:other", "admin")?;
+        let start = |key: &str| {
+            call_tool(
+                root,
+                "business_os.execute_action",
+                serde_json::json!({
+                    "module_id":"tickets", "action_id":"ctox.delegate_task",
+                    "title":"Resolve the ticket", "objective":"Inspect the ticket and report",
+                    "idempotency_key":key,
+                    "_context":{"actor":"chatgpt:test-user","workspace":"test-workspace"}
+                }),
+            )
+        };
+        let cancel = |request: Value| call_tool(root, "business_os.cancel_project_task", request);
+        let queued = start("app-cancel-queued")?;
+        let queued_id = queued["command_id"].as_str().context("queued command id")?;
+        let queued_task = queued["task_id"].as_str().context("queued task id")?;
+        let cancel_queued = serde_json::json!({
+            "target_command_id":queued_id,"idempotency_key":"stop-app-queued",
+            "reason":"stop before lease",
+            "_context":{"actor":"chatgpt:test-user","workspace":"test-workspace"}
+        });
+        let mut foreign = cancel_queued.clone();
+        foreign["_context"]["actor"] = serde_json::json!("chatgpt:other");
+        assert!(cancel(foreign).is_err());
+        assert_eq!(
+            crate::mission::channels::business_command_projection(root, queued_id)?["status"],
+            "accepted"
+        );
+        let stopped = cancel(cancel_queued.clone())?;
+        assert_eq!(stopped["task_id"], queued_task);
+        assert_eq!(stopped["target_status"], "cancelled");
+        assert_eq!(stopped["side_effects_may_have_started"], false);
+        assert_eq!(
+            cancel(cancel_queued.clone())?["command_id"],
+            stopped["command_id"]
+        );
+        let mut changed = cancel_queued;
+        changed["reason"] = serde_json::json!("different cancellation intent");
+        assert!(cancel(changed).is_err());
+
+        let leased = start("app-cancel-leased")?;
+        let leased_id = leased["command_id"].as_str().context("leased command id")?;
+        let leased_task = leased["task_id"].as_str().context("leased task id")?;
+        let lease =
+            crate::mission::channels::lease_queue_task(root, leased_task, "project-worker")?;
+        assert!(lease.attempt > 0);
+        let cancel_leased = serde_json::json!({
+            "target_command_id":leased_id,"idempotency_key":"stop-app-leased",
+            "reason":"stop after lease",
+            "_context":{"actor":"chatgpt:test-user","workspace":"test-workspace"}
+        });
+        let leased_stopped = cancel(cancel_leased.clone())?;
+        assert_eq!(leased_stopped["task_id"], leased_task);
+        assert_eq!(leased_stopped["target_status"], "cancelled");
+        assert_eq!(leased_stopped["side_effects_may_have_started"], true);
+        assert_eq!(
+            cancel(cancel_leased)?["command_id"],
+            leased_stopped["command_id"]
         );
         Ok(())
     }
