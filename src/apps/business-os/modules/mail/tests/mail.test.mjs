@@ -87,6 +87,30 @@ test('ordinary users only see assigned or shared email accounts', () => {
   assert.equal(hooks.isGlobalMailAdmin({ role: 'member' }), false);
 });
 
+test('native account authority overrides a previously authorized browser cache', async () => {
+  const user = { id: 'alice', role: 'member' };
+  const cached = [{
+    account_key: 'email:team@example.test', channel: 'email', address: 'team@example.test',
+    profile_json: { owner_user_id: 'bob', shared_user_ids: ['alice'] },
+  }];
+  const allowed = async (_collection, accountKey) => ({
+    toJSON: () => ({ ...cached[0], account_key: accountKey }),
+  });
+  assert.equal((await hooks.authoritativeVisibleEmailAccounts(cached, user, allowed)).length, 1);
+  const revoked = async () => ({
+    toJSON: () => ({ ...cached[0], profile_json: { owner_user_id: 'bob', shared_user_ids: [] } }),
+  });
+  assert.deepEqual(await hooks.authoritativeVisibleEmailAccounts(cached, user, revoked), []);
+  assert.deepEqual(await hooks.authoritativeVisibleEmailAccounts(cached, user, async () => null), []);
+  assert.deepEqual(await hooks.authoritativeVisibleEmailAccounts(cached, user, async () => ({
+    ...cached[0], account_key: 'email:wrong@example.test',
+  })), []);
+  await assert.rejects(
+    hooks.authoritativeVisibleEmailAccounts(cached, user, null),
+    /native mail account verification is unavailable/i,
+  );
+});
+
 test('mailserver configuration values are normalized without exposing secrets', () => {
   assert.deepEqual(hooks.commandOutcome({ result: { outcome: { users: [{ username: 'alice@example.test' }] } } }), {
     users: [{ username: 'alice@example.test' }],

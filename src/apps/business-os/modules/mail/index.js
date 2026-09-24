@@ -256,6 +256,8 @@ export async function mount(ctx) {
     refreshPending: false,
     refreshSequence: 0,
     lastSuccessfulMailSequence: 0,
+    authorityDecisionSequence: 0,
+    lastAuthorityOkAt: 0,
     lastAppliedAuxiliarySequence: 0,
     busy: false,
     mailserver: {
@@ -281,6 +283,7 @@ export async function mount(ctx) {
   };
   const cleanups = [];
   const subscribedCollections = new Set();
+  const accountAuthorityCache = new Map();
 
   const savedLeft = Number(ctx.storageScope?.get?.('ctox.mail.layout.leftWidth') || 300);
   const savedRight = Number(ctx.storageScope?.get?.('ctox.mail.layout.rightWidth') || 480);
@@ -290,6 +293,19 @@ export async function mount(ctx) {
   wireEvents();
   wireCollectionSubscriptions();
   wireReadiness();
+  const revalidateAccounts = () => {
+    accountAuthorityCache.clear();
+    scheduleRefresh();
+  };
+  const authorityRefreshTimer = window.setInterval(revalidateAccounts, 15_000);
+  cleanups.push(() => window.clearInterval(authorityRefreshTimer));
+  window.addEventListener('focus', revalidateAccounts);
+  cleanups.push(() => window.removeEventListener('focus', revalidateAccounts));
+  const revalidateWhenVisible = () => {
+    if (document.visibilityState === 'visible') revalidateAccounts();
+  };
+  document.addEventListener('visibilitychange', revalidateWhenVisible);
+  cleanups.push(() => document.removeEventListener('visibilitychange', revalidateWhenVisible));
   render();
   // Keep the app responsive when a local RxDB query stalls during reconnect.
   // The first snapshot can finish after mount; later subscription updates use
@@ -555,6 +571,20 @@ export async function mount(ctx) {
     }
   }
 
+  function readNativeAccount(collection, accountKey, options) {
+    const cached = accountAuthorityCache.get(accountKey);
+    if (cached && Date.now() - cached.at < 2_000) return cached.promise;
+    const entry = {
+      at: Date.now(),
+      promise: Promise.resolve().then(() => ctx.readNativeCollectionDocument(collection, accountKey, options)),
+    };
+    accountAuthorityCache.set(accountKey, entry);
+    entry.promise.catch(() => {
+      if (accountAuthorityCache.get(accountKey) === entry) accountAuthorityCache.delete(accountKey);
+    });
+    return entry.promise;
+  }
+
   async function readSnapshot() {
     const sequence = ++view.refreshSequence;
     let recoveredCollection = false;
@@ -583,28 +613,63 @@ export async function mount(ctx) {
       .find((snapshot) => snapshot instanceof Error);
     const [commands, catalogs, users, accounts, threads, communicationMessages, campaigns, engagements, outboundMessages, approvals]
       = snapshots.map((snapshot) => Array.isArray(snapshot) ? snapshot : null);
-    // A newer notification may start another read while this one is pending.
-    // A completed successful snapshot must still render, or continuous events
-    // could discard every result and leave Mail syncing forever.
-    if (sequence > view.lastSuccessfulMailSequence) {
-      if (accounts && threads && communicationMessages) {
-        // Keep the required collections consistent through a reconnect.
-        view.accounts = visibleEmailAccounts(accounts, ctx.session?.user || {});
-        const visibleAccountKeys = new Set(view.accounts.map((account) => account.account_key));
-        view.threads = threads.filter((thread) => thread.channel === 'email' && !isDeleted(thread) && visibleAccountKeys.has(thread.account_key));
-        view.communicationMessages = communicationMessages.filter((message) => message.channel === 'email' && !isDeleted(message) && visibleAccountKeys.has(message.account_key));
-        view.lastSuccessfulMailSequence = sequence;
-        view.mailReadComplete = true;
-        if (view.accountKey && !view.accounts.some((account) => account.account_key === view.accountKey)) {
-          view.accountKey = '';
+    const accountCandidates = accounts || (view.accounts.length ? view.accounts : null);
+    let authorizedAccounts = null;
+    if (accountCandidates) {
+      try {
+        authorizedAccounts = await authoritativeVisibleEmailAccounts(
+          accountCandidates,
+          ctx.session?.user || {},
+          typeof ctx.readNativeCollectionDocument === 'function' ? readNativeAccount : null,
+        );
+      } catch (error) {
+        if (sequence > view.authorityDecisionSequence) {
+          view.authorityDecisionSequence = sequence;
+          view.mailReadError = String(error?.message || error);
+          // An already validated snapshot can survive a short reconnect. A
+          // new mount never renders persisted mail before native authority is
+          // checked, and an extended outage cannot retain it indefinitely.
+          if (!view.lastAuthorityOkAt || Date.now() - view.lastAuthorityOkAt > 30_000) {
+            view.accounts = [];
+            view.threads = [];
+            view.communicationMessages = [];
+            view.accountKey = '';
+            view.selectedKind = '';
+            view.selectedId = '';
+            view.mailReadComplete = false;
+          }
+          view.loading = false;
         }
-        // Keep a timed-out empty mailbox actionable until replication reports
-        // readiness or the selected folder actually contains records.
-        if (view.readiness?.ready !== false || currentRecords().length) view.mailReadError = '';
+        return;
+      }
+    }
+    // Native account reads use a fresh authority token. A later denial must
+    // win over an older local snapshot that finishes out of order.
+    if (sequence > view.authorityDecisionSequence) {
+      if (authorizedAccounts) {
+        view.authorityDecisionSequence = sequence;
+        view.lastAuthorityOkAt = Date.now();
+        view.accounts = authorizedAccounts;
+        const visibleAccountKeys = new Set(view.accounts.map((account) => account.account_key));
+        if (accounts && threads && communicationMessages) {
+          view.threads = threads.filter((thread) => thread.channel === 'email' && !isDeleted(thread) && visibleAccountKeys.has(thread.account_key));
+          view.communicationMessages = communicationMessages.filter((message) => message.channel === 'email' && !isDeleted(message) && visibleAccountKeys.has(message.account_key));
+          view.lastSuccessfulMailSequence = sequence;
+          view.mailReadComplete = true;
+          // Keep a timed-out empty mailbox actionable until replication reports
+          // readiness or the selected folder actually contains records.
+          if (view.readiness?.ready !== false || currentRecords().length) view.mailReadError = '';
+        } else {
+          view.threads = view.threads.filter((thread) => visibleAccountKeys.has(thread.account_key));
+          view.communicationMessages = view.communicationMessages.filter((message) => visibleAccountKeys.has(message.account_key));
+          if (failedRead) view.mailReadError = String(failedRead.message || failedRead);
+        }
+        if (view.accountKey && !visibleAccountKeys.has(view.accountKey)) {
+          view.accountKey = '';
+          view.selectedKind = '';
+          view.selectedId = '';
+        }
       } else if (failedRead) {
-        // The first timeout remains visible even while newer reads are pending;
-        // a later successful snapshot clears it. An older failure cannot
-        // overwrite an already applied newer success.
         view.mailReadError = String(failedRead.message || failedRead);
       }
     }
@@ -2647,6 +2712,21 @@ function visibleEmailAccounts(accounts, user) {
   }).sort(sortAccount);
 }
 
+async function authoritativeVisibleEmailAccounts(accounts, user, readNativeAccount) {
+  const candidates = visibleEmailAccounts(accounts, user);
+  if (!candidates.length) return [];
+  if (typeof readNativeAccount !== 'function') {
+    throw new Error('Native Mail account verification is unavailable.');
+  }
+  const verified = await Promise.all(candidates.map(async (account) => {
+    const document = await readNativeAccount('communication_accounts', account.account_key, { timeoutMs: 4000 });
+    const nativeAccount = document?.toJSON?.() || document;
+    if (nativeAccount?.account_key !== account.account_key) return null;
+    return visibleEmailAccounts([nativeAccount], user)[0] || null;
+  }));
+  return verified.filter(Boolean).sort(sortAccount);
+}
+
 function visibleMailCampaigns(campaigns, user, accounts, messages) {
   const active = (campaigns || []).filter((campaign) => !isDeleted(campaign));
   if (isGlobalMailAdmin(user)) return active.sort(sortUpdatedDesc);
@@ -3129,6 +3209,7 @@ function escapeAttribute(value) {
 
 export const __mailTestHooks = {
   visibleEmailAccounts,
+  authoritativeVisibleEmailAccounts,
   visibleMailCampaigns,
   messageBelongsToThread,
   latestMessageForThread,

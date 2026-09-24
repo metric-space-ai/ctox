@@ -6733,10 +6733,14 @@ function createModuleContext(mod, overrides = {}) {
     runtimeCapabilities: createRuntimeCapabilityFacade(mod),
     storageScope: createStorageScopeFacade(mod),
     sync: moduleSync,
-    readNativeCollectionDocument: mod.id === 'desktop'
-      ? (collection, documentId, options = {}) =>
-          state.sync?.readCollectionNativeDocument(collection, documentId, options)
-            .then((document) => document ?? null)
+    readNativeCollectionDocument: mod.id === 'desktop' || mod.id === 'mail'
+      ? (collection, documentId, options = {}) => {
+          if (mod.id === 'mail' && collection !== 'communication_accounts') {
+            throw new Error('Mail may verify only its native account records.');
+          }
+          return state.sync?.readCollectionNativeDocument(collection, documentId, options)
+            .then((document) => document ?? null);
+        }
       : null,
     commandBus: createLiveCommandBusFacade(),
     actions: createAppActions({
