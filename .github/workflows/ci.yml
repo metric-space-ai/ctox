@@ -383,6 +383,10 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --locked --bin ctox native_peer_consumes_pending_business_command
 
+      - name: Artifact recovery acquires a fresh queue lease
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox --jobs 2 artifact_recovery_feedback_survives_hold_and_requires_fresh_lease -- --test-threads=2
+
       - name: Business OS schema hash parity
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --locked --bin ctox native_all_schema_hashes_match_browser_contract_fixture

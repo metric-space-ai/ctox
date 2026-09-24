@@ -232,6 +232,13 @@ perform an uncached durable `pending` count at most every 30 seconds. This
 bounds dispatch latency when a WAL write does not change the cached filesystem
 stamp, without returning to continuous full-router scans.
 
+When a reviewed queue attempt fails its artifact witness, recovery feedback is
+persisted on the same durable queue item. Finalization retains the normal hold,
+retry budget and backoff. The router must acquire a fresh lease before executing
+that feedback; the service does not enqueue an in-memory artifact retry with
+the released attempt's message keys. Proactive outbound work without queue keys
+retains its existing bounded in-process recovery path.
+
 ## Worker Slice Flow
 
 `start_prompt_worker(...)` is the outer harness entry point for a leased slice.

@@ -155,6 +155,10 @@ impl CodexThread {
         self.codex.state_db()
     }
 
+    pub async fn rollout_materialization_pending(&self) -> bool {
+        self.codex.rollout_materialization_pending().await
+    }
+
     pub async fn config_snapshot(&self) -> ThreadConfigSnapshot {
         self.codex.thread_config_snapshot().await
     }

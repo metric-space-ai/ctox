@@ -167,6 +167,8 @@ jobs:
           java-version: "17"
           cache: gradle
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Install pinned Android SDK
         run: |
           yes | sdkmanager --licenses >/dev/null || true
@@ -176,7 +178,19 @@ jobs:
       - name: Unit tests and unsigned debug build
         working-directory: ${{ env.MOBILE_ROOT }}/android
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - name: Enable and verify KVM access
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo udevadm settle
+          test -r /dev/kvm
+          test -w /dev/kvm
+
+          "$ANDROID_HOME/emulator/emulator" -accel-check
       - name: Emulator launch smoke
+
         id: phone
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -207,7 +221,7 @@ jobs:
           script: |
             adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk
             adb shell settings put system accelerometer_rotation 0
-            adb shell settings put system user_rotation 1
+            adb shell settings put system user_rotation 0
             adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity
             sleep 2
             adb exec-out screencap -p > "$RUNNER_TEMP/android-tablet-4x3.png"

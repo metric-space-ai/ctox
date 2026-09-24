@@ -7456,71 +7456,19 @@ fn start_prompt_worker(
                                         &root, &job, &reply, err,
                                     ));
                                 }
-                                if job.ticket_self_work_id.is_none()
-                                    && job.leased_message_keys.is_empty()
-                                    && job.outbound_email.is_some()
-                                    && outcome_witness_outbound_recovery_requeue_allowed(
-                                        &root, &job,
-                                    )
-                                {
-                                    let recovery =
-                                        founder_send_error.as_ref().cloned().unwrap_or_else(|| {
-                                            outcome_witness_recovery_message(
-                                                &root, &job, &reply, err,
-                                            )
-                                        });
-                                    outcome_recovery_prompt = Some(QueuedPrompt {
-                                        queue_task_metadata: job.queue_task_metadata.clone(),
-                                        prompt: recovery.clone(),
-                                        goal: format!(
-                                            "Complete reviewed send for {}",
-                                            job.source_label
-                                        ),
-                                        preview: clip_text(&recovery, 180),
-                                        source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL
-                                            .to_string(),
-                                        suggested_skill: job.suggested_skill.clone(),
-                                        leased_message_keys: Vec::new(),
-                                        leased_ticket_event_keys: Vec::new(),
-                                        thread_key: job.thread_key.clone(),
-                                        workspace_root: job.workspace_root.clone(),
-                                        ticket_self_work_id: None,
-                                        outbound_email: job.outbound_email.clone(),
-                                        outbound_anchor: job.outbound_anchor.clone(),
+                                let recovery =
+                                    founder_send_error.as_ref().cloned().unwrap_or_else(|| {
+                                        outcome_witness_recovery_message(&root, &job, &reply, err)
                                     });
-                                }
-                                if job.ticket_self_work_id.is_none()
-                                    && !job.leased_message_keys.is_empty()
-                                    && job.outbound_email.is_none()
-                                    && outcome_witness_artifact_recovery_allowed(&root, &job)
-                                {
-                                    let recovery =
-                                        founder_send_error.as_ref().cloned().unwrap_or_else(|| {
-                                            outcome_witness_recovery_message(
-                                                &root, &job, &reply, err,
-                                            )
-                                        });
-                                    outcome_recovery_prompt = Some(QueuedPrompt {
-                                        queue_task_metadata: job.queue_task_metadata.clone(),
-                                        prompt: recovery.clone(),
-                                        goal: format!(
-                                            "Complete required artifacts for {}",
-                                            job.goal
+                                match prepare_outcome_witness_recovery(&root, &job, recovery) {
+                                    Ok(queued) => outcome_recovery_prompt = queued,
+                                    Err(error) => push_event_locked(
+                                        &mut shared,
+                                        format!(
+                                            "Failed to persist outcome recovery feedback: {}; retaining durable hold without an in-memory retry",
+                                            clip_text(&error.to_string(), 180)
                                         ),
-                                        preview: clip_text(&recovery, 180),
-                                        source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL
-                                            .to_string(),
-                                        suggested_skill: job.suggested_skill.clone(),
-                                        leased_message_keys: job.leased_message_keys.clone(),
-                                        leased_ticket_event_keys: job
-                                            .leased_ticket_event_keys
-                                            .clone(),
-                                        thread_key: job.thread_key.clone(),
-                                        workspace_root: job.workspace_root.clone(),
-                                        ticket_self_work_id: None,
-                                        outbound_email: None,
-                                        outbound_anchor: job.outbound_anchor.clone(),
-                                    });
+                                    ),
                                 }
                             }
                             if let Some(terminal_disposition) =
@@ -14098,6 +14046,50 @@ fn outcome_witness_outbound_recovery_requeue_allowed(root: &Path, job: &QueuedPr
     outcome_witness_rejection_count(root, job)
         .map(|count| count < outcome_witness_recovery_limit(root, job))
         .unwrap_or(true)
+}
+
+fn prepare_outcome_witness_recovery(
+    root: &Path,
+    job: &QueuedPrompt,
+    recovery: String,
+) -> Result<Option<QueuedPrompt>> {
+    if job.ticket_self_work_id.is_some() {
+        return Ok(None);
+    }
+    if job.leased_message_keys.is_empty()
+        && job.outbound_email.is_some()
+        && outcome_witness_outbound_recovery_requeue_allowed(root, job)
+    {
+        return Ok(Some(QueuedPrompt {
+            queue_task_metadata: job.queue_task_metadata.clone(),
+            prompt: recovery.clone(),
+            goal: format!("Complete reviewed send for {}", job.source_label),
+            preview: clip_text(&recovery, 180),
+            source_label: OUTCOME_WITNESS_RECOVERY_SOURCE_LABEL.to_string(),
+            suggested_skill: job.suggested_skill.clone(),
+            leased_message_keys: Vec::new(),
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: job.thread_key.clone(),
+            workspace_root: job.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: job.outbound_email.clone(),
+            outbound_anchor: job.outbound_anchor.clone(),
+        }));
+    }
+    if !job.leased_message_keys.is_empty()
+        && job.outbound_email.is_none()
+        && outcome_witness_artifact_recovery_allowed(root, job)
+    {
+        // Finalization releases this lease and applies retry budget/backoff.
+        // The router must obtain a fresh lease before executing the feedback.
+        apply_review_feedback_to_leased_queue(
+            root,
+            job,
+            &recovery,
+            "Required artifact was not witnessed after review",
+        )?;
+    }
+    Ok(None)
 }
 
 fn outcome_witness_artifact_recovery_allowed(root: &Path, job: &QueuedPrompt) -> bool {
@@ -36639,6 +36631,151 @@ Business OS command:
             panic!("expected bounded feedback retry for proactive outbound");
         };
         assert!(feedback_prompt.contains("Business OS login path"));
+    }
+
+    #[test]
+    fn artifact_recovery_feedback_survives_hold_and_requires_fresh_lease() -> anyhow::Result<()> {
+        let temporary = tempfile::tempdir()?;
+        let root = temporary.path();
+        let accepted = crate::business_os::store::record_command(
+            root,
+            crate::business_os::store::BusinessCommand {
+                origin: crate::business_os::store::CommandOrigin::TrustedLocal,
+                id: Some("cmd_artifact_recovery_lease".to_string()),
+                module: "ctox".to_string(),
+                command_type: "business_os.chat.task".to_string(),
+                record_id: Some("ctox".to_string()),
+                payload: json!({
+                    "title": "Create artifact",
+                    "instruction": format!("Create {} and verify it.", root.join("result.txt").display()),
+                }),
+                client_context: json!({"action": "context-chat", "module": "ctox"}),
+            },
+        )?;
+        let task_id = accepted.task_id.expect("linked queue task");
+        let task = channels::lease_queue_task(root, &task_id, CHANNEL_ROUTER_LEASE_OWNER)?;
+        for phase in ["leased", "running"] {
+            channels::transition_business_command_for_task(
+                root,
+                &task_id,
+                phase,
+                None,
+                None,
+                None,
+                "initial attempt",
+            )?;
+        }
+        channels::persist_business_command_worker_result(root, &task_id, "Done")?;
+        channels::record_business_command_review(
+            root,
+            &task_id,
+            "passed",
+            "passed",
+            &json!({"test": true}),
+        )?;
+        let job = QueuedPrompt {
+            queue_task_metadata: task.metadata.clone(),
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".to_string(),
+            suggested_skill: task.suggested_skill.clone(),
+            leased_message_keys: vec![task_id.clone()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: task.workspace_root.clone(),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let feedback = "The required result.txt is missing; create and verify it.";
+        assert!(outcome_witness_artifact_recovery_allowed(root, &job));
+        assert!(
+            prepare_outcome_witness_recovery(root, &job, feedback.to_string())?.is_none(),
+            "durable artifact recovery must not create an in-memory retry with released lease keys"
+        );
+        let db_path = crate::paths::core_db(root);
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+        engine.begin_worker_attempt_finalization(lcm::WorkerAttemptFinalizationInput {
+            attempt_id: "artifact-hold-attempt",
+            work_key: &task_id,
+            conversation_id: 7410,
+            source_label: "queue",
+            agent_outcome: lcm::AgentOutcome::Success,
+            reply_text: "Done",
+            error_text: None,
+        })?;
+        assert_eq!(
+            channels::hold_leased_messages_for_attempt(
+                root,
+                "artifact-hold-attempt",
+                &job.leased_message_keys,
+                &review::HoldReason::MissingArtifact,
+                "Missing artifact",
+            )?,
+            1
+        );
+        drop(engine);
+
+        let held = channels::load_queue_task(root, &task_id)?.expect("durable task after hold");
+        assert_eq!(held.route_status, "pending");
+        assert!(held.prompt.starts_with(&task.prompt));
+        assert!(held.prompt.contains(feedback));
+        let conn = channels::open_channel_db(&db_path)?;
+        let (owner, expiry, backoff, failures): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            i64,
+        ) = conn.query_row(
+            "SELECT lease_owner, lease_expires_at, retry_not_before, failure_attempt_count
+             FROM communication_routing_state WHERE message_key=?1",
+            [&task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        assert!(owner.is_none() && expiry.is_none());
+        assert!(backoff.is_some());
+        assert_eq!(failures, 1);
+        assert!(
+            channels::lease_queue_task(root, &task_id, CHANNEL_ROUTER_LEASE_OWNER)
+                .expect_err("backoff must prevent immediate admission")
+                .to_string()
+                .contains("deferred until")
+        );
+        assert!(channels::transition_business_command_for_task(
+            root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "stale in-memory retry",
+        )
+        .expect_err("released keys cannot authorize execution")
+        .to_string()
+        .contains("owned, expiring queue lease"));
+
+        // Advance only the persisted test deadline; do not bypass production admission.
+        conn.execute(
+            "UPDATE communication_routing_state SET retry_not_before='2000-01-01T00:00:00+00:00'
+             WHERE message_key=?1",
+            [&task_id],
+        )?;
+        drop(conn);
+        let retried = channels::lease_queue_task(root, &task_id, CHANNEL_ROUTER_LEASE_OWNER)?;
+        assert!(retried.prompt.contains(feedback));
+        for phase in ["leased", "running"] {
+            assert!(channels::transition_business_command_for_task(
+                root,
+                &task_id,
+                phase,
+                None,
+                None,
+                None,
+                "fresh durable retry",
+            )?);
+        }
+        Ok(())
     }
 
     #[test]

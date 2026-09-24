@@ -385,10 +385,10 @@ test('command bus revalidates exact command ids without restarting the shared ro
   assert.match(source, /25, 50, 100, 200, 400, 800, 1600, 3000, 5000/);
   assert.match(source, /masterChange\$\?\.subscribe/);
   assert.match(source, /requireRevision/);
-  assert.match(source, /bind\(\{ authoritative: true \}\)[\s\S]*scheduleTerminalRevalidation\(index \+ 1\)/);
+  assert.match(source, /bind\(\{ authoritative: true, trigger: 'timer' \}\)[\s\S]*scheduleTerminalRevalidation\(index \+ 1\)/);
   assert.doesNotMatch(
     source,
-    /refreshProjectionBridges\(syncPlan\?\.afterCommand\)[\s\S]{0,160}bind\(\{ authoritative: true \}\)[\s\S]{0,160}scheduleTerminalRevalidation\(index \+ 1\)/,
+    /refreshProjectionBridges\(syncPlan\?\.afterCommand\)[\s\S]{0,160}bind\(\{ authoritative: true, trigger: 'timer' \}\)[\s\S]{0,160}scheduleTerminalRevalidation\(index \+ 1\)/,
   );
   assert.match(source, /scheduleTerminalRevalidation\(index \+ 1\)/);
   assert.match(source, /evaluateCommandDataPlaneProgress/);
@@ -1491,3 +1491,132 @@ test('command timing probe records seven correlated marks only when requested', 
   assert.ok(metrics.some((metric) => metric.name === 'roundtrip_total'));
   assert.ok(!JSON.stringify(sample).includes('capability_token'));
 });
+
+for (const mode of ['detailed_hint', 'generic_hint', 'timer', 'reactive', 'local_fallback', 'coalesced', 'bounded', 'quiet']) {
+  test(`command return-path probe distinguishes ${mode} without extra reads`, async () => {
+    const commandId = `cmd-return-path-${mode}`;
+    let stored;
+    let tracking = false;
+    let initialReadResolve;
+    const initialRead = new Promise((resolve) => { initialReadResolve = resolve; });
+    let releaseInitial;
+    const heldRead = new Promise((resolve) => { releaseInitial = resolve; });
+    let held = false;
+    const masterListeners = new Set();
+    const reactiveListeners = new Set();
+    const reads = [];
+    const collection = {
+      async insert(document) { stored = { ...document }; },
+      findOne(idOrQuery) {
+        const revision = idOrQuery?.requireRevision || '';
+        return {
+          $: { subscribe(listener) {
+            reactiveListeners.add(listener);
+            return { unsubscribe: () => reactiveListeners.delete(listener) };
+          } },
+          async exec() {
+            if (tracking) {
+              reads.push(revision);
+              initialReadResolve();
+              if (mode === 'coalesced' && !held) {
+                held = true;
+                const snapshot = { ...stored };
+                await heldRead;
+                return snapshot;
+              }
+            }
+            return stored ? { ...stored } : null;
+          },
+        };
+      },
+    };
+    const state = {
+      collection: { name: 'business_commands' },
+      demandStatus: { peerConnected: true },
+      async pushDocumentsToRemotePeers() { return true; },
+      masterChange$: { subscribe(listener) {
+        masterListeners.add(listener);
+        return { unsubscribe: () => masterListeners.delete(listener) };
+      } },
+    };
+    const bus = createCommandBus({
+      db: { raw: { business_commands: collection } },
+      sync: { async startCollection() { return { state }; } },
+    });
+    await bus.submit({
+      id: commandId,
+      command_type: 'ctox.provider_subscription.status',
+      sync_queue_tasks: false,
+      client_context: { command_timing_probe: mode !== 'quiet' },
+    });
+    const complete = () => {
+      stored = {
+        ...stored, status: 'completed', execution_phase: 'terminal',
+        terminal_status: 'completed', replication_phase: 'native_observed',
+        result: { private_payload: 'must-not-be-in-return-path' },
+      };
+    };
+    if (mode === 'local_fallback') {
+      complete();
+      collection.storageCollection = { async findDocumentsById() { return { [commandId]: stored }; } };
+    }
+    tracking = true;
+    const waiting = bus.waitForTerminal(commandId, { timeoutMs: 1000, sync_queue_tasks: false });
+    if (mode !== 'local_fallback') {
+      await initialRead;
+      // Let the non-held initial bind finish before exercising its successor.
+      if (mode !== 'coalesced') await new Promise((resolve) => setImmediate(resolve));
+      if (mode === 'bounded') {
+        for (let index = 0; index < 40; index += 1) {
+          masterListeners.forEach((listener) => listener({ documents: [{ id: 'other', status: 'completed' }] }));
+        }
+      }
+      complete();
+      if (mode === 'generic_hint' || mode === 'coalesced') {
+        masterListeners.forEach((listener) => listener(1));
+        if (mode === 'coalesced') releaseInitial();
+      } else if (mode === 'reactive') {
+        reactiveListeners.forEach((listener) => listener(stored));
+      } else if (mode !== 'timer') {
+        masterListeners.forEach((listener) => listener({ documents: [{ ...stored }] }));
+      }
+    }
+    assert.equal((await waiting).status, 'completed');
+    if (mode === 'quiet') {
+      assert.equal(peekCommandRoundtripTiming(commandId), null);
+      return;
+    }
+    const peek = peekCommandRoundtripTiming(commandId);
+    const sample = consumeCommandRoundtripTiming(commandId);
+    const trace = sample.return_path;
+    const bindResult = ['generic_hint', 'timer', 'coalesced'].includes(mode);
+    assert.equal(trace.terminal_source, bindResult ? 'bind_result'
+      : mode === 'bounded' ? 'detailed_hint' : mode);
+    assert.equal(reads.length, mode === 'local_fallback' ? 0 : bindResult ? 2 : 1);
+    assert.ok(trace.events.length <= 24);
+    assert.ok(trace.events.every((event) => Number.isFinite(event.elapsed_ms) && event.elapsed_ms >= 0));
+    assert.ok(!JSON.stringify(trace).includes('must-not-be-in-return-path'));
+    assert.ok(!JSON.stringify(trace).includes(commandId));
+    if (bindResult) {
+      assert.equal(trace.terminal_bind_trigger, mode === 'coalesced' ? 'generic_hint' : mode);
+      const winner = trace.events.find((event) => event.kind === 'bind_started' && event.bind_id === trace.terminal_bind_id);
+      assert.ok(winner);
+      assert.equal(winner.coalesced, mode === 'coalesced');
+      if (mode === 'coalesced') {
+        const coalesced = trace.events.find((event) => event.kind === 'bind_coalesced');
+        assert.equal(coalesced.source, 'generic_hint');
+        assert.notEqual(coalesced.bind_id, trace.terminal_bind_id);
+      }
+    }
+    if (mode === 'bounded') {
+      assert.equal(trace.events.length, 24);
+      assert.ok(trace.dropped_events > 0);
+      assert.ok(trace.events.some((event) => event.kind === 'hint_received' && !event.matched && !event.terminal));
+    }
+    // Exports are independent snapshots, including the nested diagnostic events.
+    peek.return_path.events[0].source = 'mutated-export';
+    assert.notEqual(trace.events[0].source, 'mutated-export');
+    assert.equal(masterListeners.size, 0);
+    assert.equal(reactiveListeners.size, 0);
+  });
+}
