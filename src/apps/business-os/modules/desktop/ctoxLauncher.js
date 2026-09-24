@@ -35,8 +35,8 @@ export function createCtoxLauncher({ modules, apps, currentModuleId, openApp }) 
   function open(targetId, { recordId } = {}) {
     if (!targetId) return false;
     if (appDirectory.has(targetId)) {
-      openApp?.(targetId);
-      return true;
+      if (typeof openApp !== 'function') return false;
+      return Promise.resolve(openApp(targetId)).then((windowId) => Boolean(windowId));
     }
     if (!moduleDirectory.has(targetId)) return false;
     const hash = recordId
