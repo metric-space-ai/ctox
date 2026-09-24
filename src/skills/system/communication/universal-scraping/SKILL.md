@@ -199,6 +199,16 @@ job, not the owner's.
   through `CTOX_BIN`), so it never reaches an artifact.
 - Sign in through the CTOX browser session for that target, verify the session
   (an element only a signed-in page shows), then derive the extractor as usual.
+  The command for that is
+  `ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref ctox-secret://credentials/<NAME> --target-url <login-url> --task-id <your task id> --timeout-ms 240000`:
+  CTOX fills the stored credential itself and completes an e-mail one-time code
+  from the connected mailbox (D&B/Okta). A run that returns
+  `authorization_required` with a `reauthorization` block is exactly this case:
+  take `source_id`, `credential_ref` and `login_url` from that block, sign in,
+  then rerun `ctox scrape execute`. Only if the automatic sign-in fails hand it
+  to the owner with `auth-assist-request`.
+- To give up on a queue task, `ctox channel ack --status failed` needs
+  `--reason "<exact cause>"`; without a reason the ack is refused.
 - An API-key target (name ends in `_TOKEN` or `_API_KEY`) holds one raw value,
   not a user/password pair. The script reads it and sends it as the API's
   credential (for example `Authorization: Bearer <value>`).

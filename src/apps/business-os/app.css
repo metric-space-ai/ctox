@@ -8470,7 +8470,87 @@ button.shell-window-header-meta:focus-visible,
   right: 0;
   z-index: 3;
   pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
 }
+
+.shell-window-layout-control {
+  position: relative;
+}
+
+.shell-window[data-shell-contract="v2"] .shell-window-control--layout {
+  width: var(--shell-v2-close-size);
+  height: var(--shell-v2-close-size);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: #030507;
+  color: #fff;
+  font-size: 0;
+}
+
+.shell-window[data-shell-contract="v2"] .shell-window-control--layout:hover,
+.shell-window[data-shell-contract="v2"] .shell-window-control--layout:focus-visible {
+  color: var(--shell-v2-local-accent, var(--shell-v2-frame-end));
+  outline: 2px solid var(--shell-v2-local-accent, var(--shell-v2-frame-end));
+  outline-offset: 2px;
+}
+
+.shell-window-layout-glyph {
+  display: block;
+  position: relative;
+  width: 16px;
+  height: 14px;
+  margin: auto;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+.shell-window-layout-glyph::after {
+  content: '';
+  position: absolute;
+  background: currentColor;
+  opacity: .9;
+}
+
+.shell-window-layout-glyph--free::after { inset: 3px; background: transparent; border: 1px solid currentColor; }
+.shell-window-layout-glyph--maximize::after { inset: 3px; }
+.shell-window-layout-glyph--minimize::after { left: 3px; right: 3px; bottom: 3px; height: 2px; }
+.shell-window-layout-glyph--left::after { left: 2px; top: 2px; bottom: 2px; width: 4px; }
+.shell-window-layout-glyph--right::after { right: 2px; top: 2px; bottom: 2px; width: 4px; }
+.shell-window-layout-glyph--top::after { left: 2px; right: 2px; top: 2px; height: 4px; }
+.shell-window-layout-glyph--bottom::after { left: 2px; right: 2px; bottom: 2px; height: 4px; }
+
+.shell-window-layout-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: repeat(4, 34px);
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--shell-v2-local-accent, var(--shell-v2-frame-end)) 55%, #252b34);
+  border-radius: 10px;
+  background: #090c11;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .42);
+}
+
+.shell-window-layout-menu[hidden] { display: none; }
+.shell-window-layout-menu button {
+  width: 34px;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #dce5eb;
+}
+.shell-window-layout-menu button:hover,
+.shell-window-layout-menu button:focus-visible {
+  background: color-mix(in srgb, var(--shell-v2-local-accent, var(--shell-v2-frame-end)) 20%, #151a22);
+  color: var(--shell-v2-local-accent, var(--shell-v2-frame-end));
+  outline: none;
+}
+.shell-window-layout-menu .shell-window-layout-glyph { transform: scale(.82); }
 
 .shell-window[data-shell-contract="v2"] .shell-window-control--close,
 :root[data-shell-style] .shell-window[data-shell-contract="v2"] .shell-window-control--close {

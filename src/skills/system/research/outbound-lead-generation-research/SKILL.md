@@ -151,6 +151,7 @@ ctox web unlock <list-probes|list-vectors|baseline|history|add-vector|set-vector
 ### Login sources and the human in the loop
 
 ```bash
+ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <login-url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>]
 ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--task-id <id>]
 ctox business-os web-stack auth-assist-status --session-id <id>
 ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]
@@ -161,11 +162,12 @@ ctox business-os web-stack authenticated-automation --source-id <id> --target-ur
 
 Unblocking with continuation, in this order:
 
+0. **Automatic sign-in first.** When a scrape or capture returns `authorization_required` / `session_expired_*` and its `reauthorization` names a `credential_ref`, run `auth-assist-login --source-id <source_id> --credential-ref <credential_ref> --target-url <login_url> --task-id <your command id> --timeout-ms 240000` yourself. CTOX fills the stored credential in its own browser (you never see or type the value) and completes an e-mail one-time code on its own (D&B/Okta "Send me an email": the code mail arrives in the connected mailbox). Then rerun the same `ctox scrape execute` / `source-capture`. An expired session is routine, not a reason to stop: do this in the same turn before reporting the source as unreachable. Only when `auth-assist-login` itself fails (MFA push, captcha, locked account) go on with step 1.
 1. `auth-assist-request --source-id <id> --task-id <your command id>` — opens the owner's streamed browser on that source and returns the browser `session_id`; the human signs in or solves the challenge in the stream.
 2. `auth-assist-status --session-id <id>` — poll until the session reports authenticated; do not proceed on a pending session.
 3. Continue **in the same session**: `ctox web browser-automation --session-id <id> --script-file <path>` for your own navigation and extraction, `source-capture --source-id <id> --session-id <id> --company <name>` for the built-in extractors of dnbhoovers.com, leadfeeder.com, rocketreach.com and xing.com, `context-capture --session-id <id>` / `context-extract --session-id <id>` for a page the human positioned for you.
 
-Never type credentials yourself; never guess what a login source would have said. If the human does not complete the login within the turn, the field ends `action_required` with the `session_id` and your command id as reference.
+Never type credentials yourself (`auth-assist-login` is CTOX filling the stored credential, not you); never guess what a login source would have said. If the human does not complete the login within the turn, the field ends `action_required` with the `session_id` and your command id as reference.
 
 ### Scraping pipeline (scripts and records live in SQLite)
 
