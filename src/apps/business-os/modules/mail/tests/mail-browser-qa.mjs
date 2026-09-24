@@ -873,6 +873,51 @@ mailQa: try {
   });
   await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
   await page.evaluate(() => {
+    const account = {
+      account_key: 'email:second@example.test', channel: 'email', address: 'second@example.test',
+      profile_json: { owner_user_id: 'alice' },
+    };
+    window.__mailRows.communication_accounts.push(account);
+    window.__mailNativeAccounts.set(account.account_key, structuredClone(account));
+    window.__mailRows.outbound_messages.push({
+      id: 'message-revoked-b', channel: 'email', direction: 'outbound',
+      sender_account_id: account.account_key, recipient_email: 'private@example.test',
+      subject: 'Second account private mail', body_text: 'PRIVATE SECOND ACCOUNT BODY',
+      approval_status: 'approved', send_status: 'sent', created_at_ms: Date.now(), updated_at_ms: Date.now(),
+    });
+    window.__mailNotify('communication_accounts');
+    window.__mailNotify('outbound_messages');
+  });
+  await page.waitForFunction(() => document.querySelector('[data-mail-account]')?.textContent.includes('second@example.test'));
+  await page.locator('[data-mail-scope-id="all"]').click();
+  await page.locator('[data-mail-record-id="message-revoked-b"]').click();
+  await page.getByText('PRIVATE SECOND ACCOUNT BODY', { exact: true }).waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    const key = 'email:second@example.test';
+    const native = window.__mailNativeAccounts.get(key);
+    window.__mailNativeAccounts.set(key, { ...native, profile_json: { owner_user_id: 'bob' } });
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.getByText('PRIVATE SECOND ACCOUNT BODY', { exact: true }).waitFor({ state: 'hidden', timeout: 8_000 });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
+    const key = 'email:alice@example.test';
+    const native = window.__mailNativeAccounts.get(key);
+    window.__mailNativeAccounts.set(key, { ...native, profile_json: { owner_user_id: 'bob' } });
+    window.__mailReadFailures.set('business_module_catalog', 'PENDING');
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.getByText('Keine E-Mails', { exact: true }).waitFor({ state: 'visible', timeout: 8_000 });
+  assert.equal(await page.locator('[data-mail-record-id="thread-1"]').count(), 0);
+  await page.evaluate(() => {
+    const key = 'email:alice@example.test';
+    const native = window.__mailNativeAccounts.get(key);
+    window.__mailNativeAccounts.set(key, { ...native, profile_json: { owner_user_id: 'alice' } });
+    window.__mailReadFailures.delete('business_module_catalog');
+    window.dispatchEvent(new Event('focus'));
+  });
+  await page.locator('[data-mail-record-id="thread-1"]').waitFor({ state: 'visible' });
+  await page.evaluate(() => {
     // An unrelated slow query must not delay hiding a mailbox whose native
     // account can no longer be verified.
     window.__mailReadFailures.set('outbound_engagements', 'PENDING');

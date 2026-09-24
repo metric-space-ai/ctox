@@ -584,14 +584,7 @@ export async function mount(ctx) {
     return entry.promise;
   }
 
-  function hideUnverifiedMail() {
-    view.accounts = [];
-    view.threads = [];
-    view.communicationMessages = [];
-    view.campaigns = [];
-    view.engagements = [];
-    view.outboundMessages = [];
-    view.approvals = [];
+  function closeAccountDerivedSurfaces() {
     view.accountKey = '';
     view.scopeType = 'queue';
     view.scopeId = 'inbound';
@@ -609,7 +602,33 @@ export async function mount(ctx) {
         console.warn('[mail] content editor cleanup failed', error);
       });
     }
+  }
+
+  function hideUnverifiedMail() {
+    view.accounts = [];
+    view.threads = [];
+    view.communicationMessages = [];
+    view.campaigns = [];
+    view.engagements = [];
+    view.outboundMessages = [];
+    view.approvals = [];
+    closeAccountDerivedSurfaces();
     view.mailReadComplete = false;
+  }
+
+  function applyVerifiedAccounts(accounts) {
+    const allowed = new Set(accounts.map((account) => account.account_key));
+    const accessContracted = view.accounts.some((account) => !allowed.has(account.account_key));
+    view.accounts = accounts;
+    if (!accessContracted) return false;
+    view.threads = view.threads.filter((thread) => allowed.has(thread.account_key));
+    view.communicationMessages = view.communicationMessages.filter((message) => allowed.has(message.account_key));
+    view.outboundMessages = view.outboundMessages.filter((message) => allowed.has(message.communication_account_key || message.sender_account_id));
+    view.campaigns = [];
+    view.engagements = [];
+    view.approvals = [];
+    closeAccountDerivedSurfaces();
+    return true;
   }
 
   async function readSnapshot() {
@@ -662,6 +681,17 @@ export async function mount(ctx) {
         return;
       }
     }
+    if (authorizedAccounts && sequence > view.authorityDecisionSequence) {
+      view.authorityDecisionSequence = sequence;
+      if (!authorizedAccounts.length) {
+        hideUnverifiedMail();
+        view.mailReadComplete = true;
+        view.mailReadError = '';
+        view.loading = false;
+        return;
+      }
+      if (applyVerifiedAccounts(authorizedAccounts)) render();
+    }
     const snapshots = await Promise.all(reads);
     if (view.disposed) return;
     const failedRead = [3, 4, 5].map((index) => snapshots[index])
@@ -670,15 +700,10 @@ export async function mount(ctx) {
       = snapshots.map((snapshot) => Array.isArray(snapshot) ? snapshot : null);
     // Native account reads use a fresh authority token. A later denial must
     // win over an older local snapshot that finishes out of order.
-    if (sequence > view.authorityDecisionSequence) {
+    if (sequence >= view.authorityDecisionSequence) {
       if (authorizedAccounts) {
         view.authorityDecisionSequence = sequence;
         view.accounts = authorizedAccounts;
-        if (!view.accounts.length) {
-          hideUnverifiedMail();
-          view.mailReadComplete = true;
-          view.mailReadError = '';
-        }
         const visibleAccountKeys = new Set(view.accounts.map((account) => account.account_key));
         if (accounts && threads && communicationMessages) {
           view.threads = threads.filter((thread) => thread.channel === 'email' && !isDeleted(thread) && visibleAccountKeys.has(thread.account_key));
@@ -710,6 +735,7 @@ export async function mount(ctx) {
       if (engagements) view.engagements = engagements.filter((engagement) => !isDeleted(engagement));
       if (outboundMessages) view.outboundMessages = outboundMessages.filter((message) => (
         !isDeleted(message) && (!message.channel || message.channel === 'email')
+        && view.accounts.some((account) => account.account_key === (message.communication_account_key || message.sender_account_id))
       )).sort(sortUpdatedDesc);
       if (approvals) view.approvals = approvals.filter((approval) => !isDeleted(approval));
       view.lastAppliedAuxiliarySequence = sequence;
@@ -1017,7 +1043,7 @@ export async function mount(ctx) {
   }
 
   function renderOutboundDetail(messageId) {
-    const message = view.outboundMessages.find((item) => item.id === messageId);
+    const message = filteredAccountOutboundMessages().find((item) => item.id === messageId);
     if (!message) return renderMissingDetail();
     const campaign = view.campaigns.find((item) => item.id === message.campaign_id);
     const actions = [
@@ -1128,7 +1154,7 @@ export async function mount(ctx) {
       });
       return;
     }
-    const message = view.outboundMessages.find((item) => item.id === id);
+    const message = filteredAccountOutboundMessages().find((item) => item.id === id);
     if (!message) return;
     await runBusy(async () => {
       if (action === 'request-approval') {
