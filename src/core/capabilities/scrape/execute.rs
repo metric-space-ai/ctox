@@ -80,11 +80,37 @@ fn bind_scrape_input_to_command(
     let command = &command_context["command"];
     anyhow::ensure!(
         command.get("command_id").and_then(Value::as_str) == Some(command_id)
-            && command.get("command_type").and_then(Value::as_str)
-                == Some("web_stack.person_research")
             && command.get("module").and_then(Value::as_str) == Some("outbound-lead-generation"),
-        "scrape execute requires its own Outbound person-research command"
+        "scrape execute requires its own Outbound research command"
     );
+    let record_id = command.get("record_id").and_then(Value::as_str);
+    match command.get("command_type").and_then(Value::as_str) {
+        Some("web_stack.person_research") => {
+            anyhow::ensure!(
+                record_id.is_some_and(|value| !value.is_empty() && !value.starts_with("campaign:")),
+                "scrape person-research command is not scoped to one lead"
+            );
+        }
+        Some("business_os.chat.task") => {
+            let lead_id = command["payload"]["lead_id"]
+                .as_str()
+                .filter(|value| !value.is_empty() && !value.starts_with("campaign:"))
+                .context("scrape chat session is not scoped to one lead")?;
+            anyhow::ensure!(
+                record_id == Some(lead_id),
+                "scrape chat command record differs from its lead"
+            );
+            let contract = &command["payload"]["writeback_contract"];
+            anyhow::ensure!(
+                crate::business_os::mcp_channel::supports_command_writeback(contract)
+                    && contract["record_ids"]
+                        .as_array()
+                        .is_some_and(|ids| ids.len() == 1 && ids[0].as_str() == Some(lead_id)),
+                "scrape chat command lacks a matching lead writeback contract"
+            );
+        }
+        _ => anyhow::bail!("scrape execute requires a bound Outbound research command"),
+    }
     let source_id = command["payload"]["source_policy"]["sources"]
         .as_array()
         .and_then(|sources| {
@@ -126,7 +152,7 @@ fn bind_scrape_input_to_command(
         }
         object.insert(field.to_string(), Value::String(expected.to_string()));
     }
-    if let Some(record_id) = command.get("record_id").and_then(Value::as_str) {
+    if let Some(record_id) = record_id {
         if let Some(provided) = object.get("record_id") {
             anyhow::ensure!(
                 provided
@@ -169,6 +195,25 @@ mod command_binding_tests {
             "payload": {
                 "company": "X GmbH", "country": "DE",
                 "source_policy": {"sources": [{"id": "northdata-de", "target_key": "northdata-de"}]}
+            }
+        }})
+    }
+
+    fn chat_command() -> Value {
+        json!({"command": {
+            "command_id": "research-1",
+            "command_type": "business_os.chat.task",
+            "module": "outbound-lead-generation",
+            "record_id": "lead-1",
+            "payload": {
+                "lead_id": "lead-1", "company": "X GmbH", "country": "DE",
+                "source_policy": {"sources": [{"id": "northdata-de", "target_key": "northdata-de"}]},
+                "writeback_contract": {
+                    "mechanism": "business_command",
+                    "command_type": "outbound.lead.research_writeback",
+                    "collection": "outbound_lead_generation_leads",
+                    "record_ids": ["lead-1"]
+                }
             }
         }})
     }
@@ -233,6 +278,51 @@ mod command_binding_tests {
             &mut input,
             &session(),
             &without_record,
+            "northdata-de"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn scrape_input_accepts_only_a_single_lead_writeback_chat() {
+        let mut input = json!({"source_id": "northdata-de"});
+        assert_eq!(
+            bind_scrape_input_to_command(&mut input, &session(), &chat_command(), "northdata-de")
+                .expect("signed lead chat"),
+            "user-1"
+        );
+        assert_eq!(input["record_id"], "lead-1");
+        assert_eq!(input["company"], "X GmbH");
+
+        let mut wrong_lead = chat_command();
+        wrong_lead["command"]["payload"]["lead_id"] = json!("lead-2");
+        assert!(bind_scrape_input_to_command(
+            &mut json!({}),
+            &session(),
+            &wrong_lead,
+            "northdata-de"
+        )
+        .is_err());
+
+        let mut campaign = chat_command();
+        campaign["command"]["record_id"] = json!("campaign:1");
+        campaign["command"]["payload"]["lead_id"] = json!("campaign:1");
+        campaign["command"]["payload"]["writeback_contract"]["record_ids"] = json!(["campaign:1"]);
+        assert!(bind_scrape_input_to_command(
+            &mut json!({}),
+            &session(),
+            &campaign,
+            "northdata-de"
+        )
+        .is_err());
+
+        let mut foreign_contract = chat_command();
+        foreign_contract["command"]["payload"]["writeback_contract"]["record_ids"] =
+            json!(["lead-2"]);
+        assert!(bind_scrape_input_to_command(
+            &mut json!({}),
+            &session(),
+            &foreign_contract,
             "northdata-de"
         )
         .is_err());

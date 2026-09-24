@@ -200,9 +200,11 @@ export function createQueryDemandLoader({
       // fetched under a specific read-permission identity. After a role or
       // grant change (new capability epoch, hence a new digest) a cached
       // window's membership may still reference rows the identity is no
-      // longer authorized to see, or miss rows of the new scope — the
-      // retained-checkpoint invalidation in replication-webrtc forces a full
-      // re-pull, but it does not rewrite these persisted windows. Neither the
+      // longer authorized to see, or miss rows of the new scope. A known
+      // changed digest invalidates the retained pull checkpoint in
+      // replication-webrtc, but that does not rewrite persisted windows. An
+      // unknown current digest may retain that checkpoint for reconnect; it
+      // still cannot authorize a local control-plane window. Neither the
       // complete fast path nor stale-while-revalidate may serve that
       // membership before a newly authorized fetch re-stamps the window.
       // Windows persisted before this stamp existed mismatch a known identity
@@ -733,7 +735,7 @@ function normalizeSort(sort) {
   });
 }
 
-// Mirrors readPermissionDigestMatches in replication-webrtc.mjs (SYNC-12):
+// Unlike the retained-checkpoint matcher in replication-webrtc.mjs (SYNC-12),
 // control-plane windows may be served only under a known matching identity.
 // An unresolved current digest can hide a role/grant change and must block
 // local membership until a newly authorized fetch re-stamps the window.

@@ -639,6 +639,11 @@ fallbacks alike — until a newly authorized fetch re-stamps it. Windows
 persisted before this stamp existed mismatch a known identity exactly once.
 An unresolvable current digest blocks local control-plane window serving:
 a token-endpoint failure cannot prove that an earlier grant still holds.
+The replication layer may keep a pull checkpoint during that transient unknown
+identity to avoid a full collection re-pull; a checkpoint is not permission to
+serve a cached control-plane query window. Its membership gate remains closed
+until the current digest is known and matches, or a newly authorized fetch
+re-stamps the window.
 Known matching identities retain warm rendering; non-control-plane collections
 are unchanged. The opaque token
 is carried through the existing in-flight identity and sidecar satisfied-token
