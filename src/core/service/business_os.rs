@@ -5107,7 +5107,9 @@ fn resolve_web_stack_auth_owner_user_id_with_env(
                 return Ok(Some(owner.to_string()));
             }
         }
-        return Ok(claimed_owner.map(str::to_string));
+        if let Some(claimed) = claimed_owner {
+            return Ok(Some(claimed.to_string()));
+        }
     }
     if let Some(claimed) = claimed_owner {
         eprintln!(
@@ -5115,7 +5117,28 @@ fn resolve_web_stack_auth_owner_user_id_with_env(
             requesting_task_id, claimed
         );
     }
+    // Company logins (D&B, Leadfeeder) are one shared account. A native
+    // research run or a queue task carries no requesting human, so every
+    // capture and the stored-credential login died with "auth assist owner
+    // unresolved" and D&B stayed dark for a day (thesen, 23./24.09.2026).
+    // The operator can name the owner such runs sign in as, in the runtime
+    // store; without that setting nothing changes.
+    if let Some(default_owner) = web_stack_default_auth_owner(root) {
+        eprintln!(
+            "[business-os] web-stack auth owner defaulted task={} owner={}",
+            requesting_task_id, default_owner
+        );
+        return Ok(Some(default_owner));
+    }
     Ok(None)
+}
+
+const WEB_STACK_DEFAULT_AUTH_OWNER_KEY: &str = "CTOX_WEB_STACK_DEFAULT_AUTH_OWNER";
+
+fn web_stack_default_auth_owner(root: &Path) -> Option<String> {
+    crate::inference::runtime_env::get_runtime_env_value(root, WEB_STACK_DEFAULT_AUTH_OWNER_KEY)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
 }
 
 fn web_stack_auth_owner_from_command_session(
@@ -7722,6 +7745,51 @@ mod tests {
                 "{error:#}"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn web_stack_auth_owner_falls_back_to_the_configured_default_owner() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                "queue:system::x",
+                None,
+                false
+            )?,
+            None
+        );
+        crate::inference::runtime_env::set_runtime_env_value(
+            root.path(),
+            WEB_STACK_DEFAULT_AUTH_OWNER_KEY,
+            "crew@thesen-ag.com",
+        )?;
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                "queue:system::x",
+                None,
+                false
+            )?
+            .as_deref(),
+            Some("crew@thesen-ag.com")
+        );
+        let claim = vec!["--owner-user-id".to_string(), "someone-else".to_string()];
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &claim,
+                "queue:system::x",
+                None,
+                false
+            )?
+            .as_deref(),
+            Some("crew@thesen-ag.com")
+        );
         Ok(())
     }
 

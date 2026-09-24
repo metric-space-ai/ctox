@@ -1227,6 +1227,7 @@ fn outbound_handle_research_source_registry_read(
                 .map(str::to_string)
                 .collect::<std::collections::BTreeSet<_>>()
         });
+    let laeufe = outbound_registry_last_runs(root).unwrap_or_default();
     let mut eintraege = Vec::new();
     for ziel in ziele {
         let key = ziel
@@ -1250,6 +1251,8 @@ fn outbound_handle_research_source_registry_read(
             "target_kind": ziel.get("target_kind").and_then(Value::as_str).unwrap_or_default(),
             "start_url": ziel.get("start_url").and_then(Value::as_str).unwrap_or_default(),
             "latest_script_revision_no": ziel.get("latest_script_revision_no").cloned().unwrap_or(Value::Null),
+            "last_run": laeufe.get(ziel.get("target_id").and_then(Value::as_str).unwrap_or_default()).map(|(last, _)| last.clone()).unwrap_or(Value::Null),
+            "last_successful_run": laeufe.get(ziel.get("target_id").and_then(Value::as_str).unwrap_or_default()).and_then(|(_, ok)| ok.clone()).unwrap_or(Value::Null),
         }));
     }
     let script = match command
@@ -1268,6 +1271,52 @@ fn outbound_handle_research_source_registry_read(
         "targets": eintraege,
         "script": script,
     }))
+}
+
+/// Last run and last successful run per scrape target. The app list showed
+/// the result of its own source test (mostly 18.09.) while research runs had
+/// been succeeding on newer scripts for days (thesen, 24.09.2026); the real
+/// run state was never shown next to the test state.
+fn outbound_registry_last_runs(
+    root: &Path,
+) -> anyhow::Result<BTreeMap<String, (Value, Option<Value>)>> {
+    let conn = Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    let run = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(String, Value)> {
+        Ok((
+            row.get::<_, String>(0)?,
+            serde_json::json!({
+                "run_id": row.get::<_, String>(1)?,
+                "status": row.get::<_, String>(2)?,
+                "started_at": row.get::<_, Option<String>>(3)?,
+                "finished_at": row.get::<_, Option<String>>(4)?,
+            }),
+        ))
+    };
+    let mut out: BTreeMap<String, (Value, Option<Value>)> = BTreeMap::new();
+    let mut last = conn.prepare(
+        "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at FROM scrape_run r
+         WHERE r.started_at = (SELECT MAX(started_at) FROM scrape_run WHERE target_id = r.target_id)",
+    )?;
+    for entry in last.query_map([], run)? {
+        let (target_id, value) = entry?;
+        out.insert(target_id, (value, None));
+    }
+    let mut ok = conn.prepare(
+        "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at FROM scrape_run r
+         WHERE r.status IN ('succeeded', 'completed_empty')
+           AND r.started_at = (SELECT MAX(started_at) FROM scrape_run
+                               WHERE target_id = r.target_id AND status IN ('succeeded', 'completed_empty'))",
+    )?;
+    for entry in ok.query_map([], run)? {
+        let (target_id, value) = entry?;
+        if let Some(slot) = out.get_mut(&target_id) {
+            slot.1 = Some(value);
+        }
+    }
+    Ok(out)
 }
 
 /// Latest registered script of one scrape target, for the Outbound app's
@@ -6540,6 +6589,15 @@ mod tests {
             },
         )?;
         assert!(plain.get("script").is_some_and(Value::is_null));
+        // The list carries the real run state next to the registration; a
+        // target that never ran reports null, not a guessed status.
+        assert!(outbound_registry_last_runs(root).is_ok());
+        assert!(plain.pointer("/targets/0").is_some_and(|target| target
+            .get("last_run")
+            .is_some_and(Value::is_null)
+            && target
+                .get("last_successful_run")
+                .is_some_and(Value::is_null)));
         Ok(())
     }
 
