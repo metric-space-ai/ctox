@@ -995,6 +995,7 @@ pub struct WebRTCRsConnectionHandler {
     document_read_authz: Arc<Mutex<Option<DocumentReadAuthzHook>>>,
     document_write_authz: Arc<Mutex<Option<DocumentWriteAuthzHook>>>,
     peer_capability_tokens: Arc<Mutex<HashMap<WebRTCRsPeer, String>>>,
+    peer_session_ids: Arc<Mutex<HashMap<WebRTCRsPeer, String>>>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
 
@@ -1167,6 +1168,7 @@ impl WebRTCRsConnectionHandler {
             document_read_authz: Arc::new(Mutex::new(None)),
             document_write_authz: Arc::new(Mutex::new(None)),
             peer_capability_tokens: Arc::new(Mutex::new(HashMap::new())),
+            peer_session_ids: Arc::new(Mutex::new(HashMap::new())),
             tasks: Mutex::new(Vec::new()),
         }
     }
@@ -2100,6 +2102,24 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         }
         let peer = &peer.peer_id;
         self.peer_capability_tokens.lock().get(peer).cloned()
+    }
+
+    fn set_peer_session_id(&self, peer: &Self::Peer, session_id: String) {
+        let _connection_lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return;
+        }
+        self.peer_session_ids
+            .lock()
+            .insert(peer.peer_id.clone(), session_id);
+    }
+
+    fn peer_session_id(&self, peer: &Self::Peer) -> Option<String> {
+        let _connection_lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return None;
+        }
+        self.peer_session_ids.lock().get(&peer.peer_id).cloned()
     }
 
     /// #12c: fail-open when no authz hook is installed (the default — behavior
@@ -3879,6 +3899,7 @@ fn remove_peer_inner(
             handler.presence_dirty.store(true, Ordering::SeqCst);
         }
         handler.peer_capability_tokens.lock().remove(peer);
+        handler.peer_session_ids.lock().remove(peer);
         if let Some(bp) = handler.backpressure.lock().remove(peer) {
             bp.clear_high();
         }
@@ -6118,6 +6139,34 @@ mod tests {
             "replacement-token"
         );
         assert_eq!(handler.frame_transport_status().backpressure_stall_count, 0);
+    }
+
+    #[tokio::test]
+    async fn credential_reveal_session_identity_is_generation_scoped_and_removed_on_close() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let old = install_test_connection(&handler, "credential-route", 1).await;
+        handler.set_peer_session_id(&old, "old-session".into());
+        assert_eq!(
+            handler.peer_session_id(&old).as_deref(),
+            Some("old-session")
+        );
+        handler.close_peer(&old).await;
+        assert_eq!(handler.peer_session_id(&old), None);
+        assert!(!handler.peer_session_ids.lock().contains_key(old.peer_id()));
+        let current = install_test_connection(&handler, "credential-route", 2).await;
+        handler.set_peer_session_id(&current, "current-session".into());
+        handler.set_peer_session_id(&old, "stale-write".into());
+        assert_eq!(handler.peer_session_id(&old), None);
+        assert_eq!(
+            handler.peer_session_id(&current).as_deref(),
+            Some("current-session")
+        );
+        handler.close_peer(&old).await;
+        assert_eq!(
+            handler.peer_session_id(&current).as_deref(),
+            Some("current-session")
+        );
+        handler.close_peer(&current).await;
     }
 
     #[tokio::test]
