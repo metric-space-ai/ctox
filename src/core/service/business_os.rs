@@ -2674,7 +2674,9 @@ if (sourceId === "dnbhoovers.com") {{
     const phone = context.match(/(?:\+|00)\d[\d\s()\/-]{{7,}}\d/)?.[0];
     const city = context.match(/\bFolgen\s+([^,]{{2,80}}),/)?.[1];
     const revenue = context.match(/Umsatz\s+EUR:\s*([0-9.,]+\s*[BMK]?)/i)?.[1];
-    const employees = context.match(/Beschäftigte\s*\(Gesamt\):\s*([0-9.,]+\s*[KMB]?)/i)?.[1];
+    // "[KMB]?" also took the M of a following word ("15 M…"): only a
+    // standalone unit letter counts.
+    const employees = context.match(/Beschäftigte\s*\(Gesamt\):\s*([0-9.,]+(?:\s*[KMB]\b)?)/i)?.[1];
     const duns = context.match(/D-U-N-S:\s*([0-9-]+)/i)?.[1];
     const industry = phone
       ? context.match(new RegExp(`${{phone.replace(/[.*+?^${{}}()|[\]\\]/g, "\\$&")}}\\s+(.+?)\\s+(?:Private|Public|Nonprofit)`, "i"))?.[1]
@@ -2700,12 +2702,14 @@ if (sourceId === "dnbhoovers.com") {{
       }}
       if (hostAllowed(page.url()) && /\/company\//i.test(page.url())) {{
         const detail = await page.evaluate(() => String(document.body?.innerText || "").replace(/[ \t]+/g, " "));
-        const codeRe = /(WZ\s*2008|WZ|NACE(?:\s*Rev\.?\s*2)?|ÖNACE(?:\s*2008)?|NOGA(?:\s*2008)?)[^0-9\n]{{0,80}}(\d{{2}}(?:\.\d{{1,2}}){{1,2}}|\d{{4,5}})/i;
+        // The classification year is not a code: "WZ 2008" read as wz_code=2008
+        // for HAMM AG (25.09.2026). Label and value may sit on separate lines.
+        const codeRe = /\b(WZ\s*2008|WZ|NACE(?:\s*Rev\.?\s*2)?|ÖNACE(?:\s*2008)?|NOGA(?:\s*2008)?)\b[^0-9]{{0,80}}(?!(?:1993|2003|2008)\b)(\d{{2}}(?:\.\d{{1,2}}){{1,2}}|\d{{4,5}})\b/i;
         const code = detail.match(codeRe);
         if (code) {{
-          push("wz_code", code[2], "high", `D&B Hoovers Firmenseite: ${{code[1]}} ${{code[2]}}`, page.url());
+          push("wz_code", code[2], "medium", `D&B Hoovers Firmenseite: ${{code[1]}} ${{code[2]}}`, page.url());
         }}
-        const marker = detail.search(/(Branchencode|Industry Codes|NACE|WZ\s*2008|NOGA|ÖNACE|SIC)/i);
+        const marker = detail.search(/\b(Branchencodes?|Industry Codes|NACE|WZ\s*2008|NOGA|ÖNACE|SIC|NAICS)\b/i);
         if (marker >= 0) {{
           push("branche_codes_rohtext", detail.slice(Math.max(0, marker - 40), marker + 600).replace(/\n+/g, " | "), "medium", "D&B Hoovers Firmenseite: Abschnitt Branchencodes (Rohtext)", page.url());
         }}
@@ -8601,6 +8605,12 @@ mod tests {
             build_web_stack_authenticated_source_capture("dnbhoovers.com", "Example AG", "DE")?;
         assert!(dnb.contains("app.dnbhoovers.com"));
         assert!(dnb.contains("D&B Hoovers exact company result"));
+        // The classification year "WZ 2008" must never be read as the code, and
+        // the rendered script carries plain regex braces (format escapes gone).
+        assert!(dnb.contains("(?!(?:1993|2003|2008)\\b)"));
+        assert!(dnb.contains("[^0-9]{0,80}"));
+        assert!(dnb.contains("SIC|NAICS)\\b/i"));
+        assert!(dnb.contains("(?:\\s*[KMB]\\b)?"));
 
         let leadfeeder =
             build_web_stack_authenticated_source_capture("leadfeeder.com", "Example AG", "DE")?;
