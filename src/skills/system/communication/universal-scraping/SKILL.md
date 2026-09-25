@@ -207,6 +207,14 @@ job, not the owner's.
   take `source_id`, `credential_ref` and `login_url` from that block, sign in,
   then rerun `ctox scrape execute`. Only if the automatic sign-in fails hand it
   to the owner with `auth-assist-request`.
+- When the sign-in stops at the e-mail code, the result names it in
+  `email_otp.status` (`source-capture`: `email_otp_status`/`email_otp_detail`).
+  `no_code_mail` means the provider's mail did not reach a synced mailbox in
+  time: run the sign-in once more before anything else, because the provider
+  often sends the code only on the second challenge. `otp_mailbox_unbound`
+  means the stored login names no code mailbox; that, and a code mailbox owned
+  by another person, are the only cases for `auth-assist-request`, and the
+  request must quote the status.
 - To give up on a queue task, `ctox channel ack --status failed` needs
   `--reason "<exact cause>"`; without a reason the ack is refused.
 - An API-key target (name ends in `_TOKEN` or `_API_KEY`) holds one raw value,

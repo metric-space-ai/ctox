@@ -2181,6 +2181,11 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
                 resolved_credential.otp_recipient.as_deref(),
+                web_stack_otp_mailbox_granted(
+                    root,
+                    &source_id,
+                    resolved_credential.otp_recipient.as_deref(),
+                ),
                 &recipe,
                 login_started_epoch_s,
                 continuation_source,
@@ -2362,7 +2367,17 @@ fn run_business_os_web_stack_source_capture_with_trust(
         "country": country,
         "records": records,
         "record_count": records.len(),
-        "source_status": result.get("status").and_then(serde_json::Value::as_str).unwrap_or("failed"),
+        // Without a capture result the login itself stopped; name its state
+        // (e.g. mfa_required) and the e-mail code outcome instead of a bare
+        // "failed", so the research can see what blocks it (THESEN 25.09.2026).
+        "source_status": result
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| combined.get("status").and_then(serde_json::Value::as_str))
+            .unwrap_or("failed"),
+        "login_status": combined.get("status").cloned().unwrap_or(serde_json::Value::Null),
+        "email_otp_status": combined.pointer("/email_otp/status").cloned().unwrap_or(serde_json::Value::Null),
+        "email_otp_detail": combined.pointer("/email_otp/detail").cloned().unwrap_or(serde_json::Value::Null),
         "source_url": result.get("source_url").and_then(serde_json::Value::as_str),
         "credential_ref": credential_ref,
         "secret_value_in_payload": false,
@@ -5141,6 +5156,47 @@ fn web_stack_default_auth_owner(root: &Path) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
+/// Owner-granted exceptions to the owned-mailbox rule of the e-mail OTP
+/// lookup, one `source_id=mailbox` pair per entry (comma or newline
+/// separated). A pair lets the login of exactly that provider read its own
+/// one-time codes from exactly that mailbox, even though the mailbox is not
+/// owned by or shared with the login owner. Sender, recipient and the
+/// single-code rule still apply. THESEN 25.09.2026: D&B sends its codes to a
+/// staff mailbox that predates mailbox ownership; the owner approved reading
+/// only D&B codes from it.
+const WEB_STACK_OTP_MAILBOX_GRANTS_KEY: &str = "CTOX_WEB_STACK_OTP_MAILBOX_GRANTS";
+
+fn web_stack_otp_source_key(source_id: &str) -> String {
+    let source = source_id.trim().to_ascii_lowercase();
+    source
+        .strip_prefix("app.")
+        .map(str::to_string)
+        .unwrap_or(source)
+}
+
+fn web_stack_otp_mailbox_granted_by(grants: &str, source_id: &str, mailbox: &str) -> bool {
+    let source = web_stack_otp_source_key(source_id);
+    let mailbox = mailbox.trim().to_ascii_lowercase();
+    if source.is_empty() || !mailbox.contains('@') {
+        return false;
+    }
+    grants
+        .split([',', '\n'])
+        .filter_map(|entry| entry.split_once('='))
+        .any(|(granted_source, granted_mailbox)| {
+            web_stack_otp_source_key(granted_source) == source
+                && granted_mailbox.trim().to_ascii_lowercase() == mailbox
+        })
+}
+
+fn web_stack_otp_mailbox_granted(root: &Path, source_id: &str, mailbox: Option<&str>) -> bool {
+    let Some(mailbox) = mailbox else {
+        return false;
+    };
+    crate::inference::runtime_env::get_runtime_env_value(root, WEB_STACK_OTP_MAILBOX_GRANTS_KEY)
+        .is_some_and(|grants| web_stack_otp_mailbox_granted_by(&grants, source_id, mailbox))
+}
+
 fn web_stack_auth_owner_from_command_session(
     root: &Path,
     token: &str,
@@ -5572,6 +5628,7 @@ fn find_fresh_email_otp(
     not_before_epoch_s: i64,
     mailbox_address: &str,
     profile_owner: &str,
+    mailbox_granted: bool,
 ) -> Option<(String, String)> {
     let conn = rusqlite::Connection::open_with_flags(
         crate::paths::core_db(root),
@@ -5584,6 +5641,7 @@ fn find_fresh_email_otp(
         not_before_epoch_s,
         mailbox_address,
         profile_owner,
+        mailbox_granted,
     )
 }
 
@@ -5593,6 +5651,7 @@ fn find_fresh_email_otp_in_conn(
     not_before_epoch_s: i64,
     mailbox_address: &str,
     profile_owner: &str,
+    mailbox_granted: bool,
 ) -> Option<(String, String)> {
     let mailbox_address = mailbox_address.trim().to_ascii_lowercase();
     let profile_owner = profile_owner.trim();
@@ -5647,7 +5706,26 @@ fn find_fresh_email_otp_in_conn(
                     .iter()
                     .any(|user| user.as_str() == Some(profile_owner))
             });
-        if !owner_matches && !shared_matches {
+        // A tenant mailbox nobody owns (set up before mailbox ownership existed,
+        // e.g. the crew or a staff inbox CTOX syncs for the company) is the one
+        // the stored login itself names as its code recipient. It yields only
+        // this provider's codes (sender check below), so the research can
+        // finish the login on its own. Mailboxes owned by someone else stay
+        // closed unless owned, shared or explicitly granted.
+        let owner_field = profile
+            .get("owner_user_id")
+            .or_else(|| profile.get("ownerUserId"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let has_shared_users = profile
+            .get("shared_user_ids")
+            .or_else(|| profile.get("sharedUserIds"))
+            .or_else(|| profile.get("member_user_ids"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|users| !users.is_empty());
+        let unowned_tenant_mailbox = owner_field.is_empty() && !has_shared_users;
+        if !owner_matches && !shared_matches && !mailbox_granted && !unowned_tenant_mailbox {
             continue;
         }
         let recipients: Vec<String> = serde_json::from_str(&recipient_json).ok()?;
@@ -5678,6 +5756,7 @@ fn complete_web_stack_login_with_email_otp(
     timeout_ms: u64,
     profile_owner: Option<String>,
     otp_recipient: Option<&str>,
+    mailbox_granted: bool,
     recipe: &WebStackEmailOtpRecipe,
     login_started_epoch_s: i64,
     continuation_source: Option<&str>,
@@ -5716,9 +5795,14 @@ fn complete_web_stack_login_with_email_otp(
         if let Ok(settings) = crate::inference::runtime_env::effective_operator_env_map(root) {
             let _ = crate::communication::email_native::service_sync(root, &settings);
         }
-        if let Some(hit) =
-            find_fresh_email_otp(root, recipe, not_before, mailbox_address, profile_owner_id)
-        {
+        if let Some(hit) = find_fresh_email_otp(
+            root,
+            recipe,
+            not_before,
+            mailbox_address,
+            profile_owner_id,
+            mailbox_granted,
+        ) {
             found = Some(hit);
             break;
         }
@@ -5941,11 +6025,11 @@ mod email_otp_tests {
         );
         let recipe = web_stack_email_otp_recipe("dnbhoovers.com").expect("recipe");
         assert_eq!(
-            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice"),
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice", false),
             Some(("111111".to_string(), "alice-code".to_string()))
         );
         assert_eq!(
-            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "bob@example.com", "alice"),
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "bob@example.com", "alice", false),
             None,
             "Alice cannot select Bob's code from another account"
         );
@@ -5956,10 +6040,80 @@ mod email_otp_tests {
             "444444",
         );
         assert_eq!(
-            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice"),
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice", false),
             None,
             "two concurrent codes in one mailbox have no challenge identity"
         );
+        conn.execute(
+            "INSERT INTO communication_accounts VALUES ('email:lena@example.com', 'email', 'lena@example.com', '{}')",
+            [],
+        )
+        .expect("unowned account");
+        insert_code(
+            "lena-code",
+            "email:lena@example.com",
+            "lena@example.com",
+            "555555",
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "lena@example.com", "alice", false),
+            Some(("555555".to_string(), "lena-code".to_string())),
+            "an unowned tenant mailbox named by the login yields the provider code"
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "lena@example.com", "alice", true),
+            Some(("555555".to_string(), "lena-code".to_string())),
+            "the owner-granted mailbox yields the provider code"
+        );
+        conn.execute(
+            "INSERT INTO communication_messages VALUES (
+                'lena-phish', 'email', 'email:lena@example.com', 'inbound', 'alerts@evil.example',
+                'Verification code', 'Your verification code is 999999.', '', '[\"lena@example.com\"]',
+                '2026-09-24T03:05:00Z', '2026-09-24T03:05:00Z'
+             )",
+            [],
+        )
+        .expect("foreign sender");
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "lena@example.com", "alice", false),
+            Some(("555555".to_string(), "lena-code".to_string())),
+            "a code from a foreign sender in the tenant mailbox is never taken"
+        );
+    }
+
+    #[test]
+    fn otp_mailbox_grant_names_exactly_one_provider_and_mailbox() {
+        let grants = "dnbhoovers.com=Lena@Example.com, leadfeeder.com=crew@example.com";
+        assert!(web_stack_otp_mailbox_granted_by(
+            grants,
+            "dnbhoovers.com",
+            "lena@example.com"
+        ));
+        assert!(web_stack_otp_mailbox_granted_by(
+            grants,
+            "app.dnbhoovers.com",
+            "LENA@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            grants,
+            "xing.com",
+            "lena@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            grants,
+            "dnbhoovers.com",
+            "crew@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            "",
+            "dnbhoovers.com",
+            "lena@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            grants,
+            "dnbhoovers.com",
+            "not-a-mailbox"
+        ));
     }
 }
 
