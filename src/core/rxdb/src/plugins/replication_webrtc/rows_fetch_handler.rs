@@ -164,6 +164,7 @@ pub struct RowsFetchRegistry {
     rate_burst: u32,
     rate_refill_per_second: u32,
     auth_check: Mutex<Option<Arc<RowsAuthCheckFn>>>,
+    source_timeout: Mutex<Duration>,
 }
 
 impl RowsFetchRegistry {
@@ -177,7 +178,19 @@ impl RowsFetchRegistry {
             rate_burst: stream_based_burst.max(RATE_BUCKET_MIN_BURST),
             rate_refill_per_second: RATE_BUCKET_REFILL_PER_SECOND,
             auth_check: Mutex::new(None),
+            source_timeout: Mutex::new(Duration::from_millis(CTOX_QUERY_MAX_RUNTIME_MS as u64)),
         }
+    }
+
+    /// Upper bound for one blocking source call. When it elapses the request
+    /// answers `REMOTE_TIMEOUT` and releases its in-flight slot; the worker
+    /// thread finishes in the background and its result is dropped.
+    pub fn set_source_timeout(&self, timeout: Duration) {
+        *self.source_timeout.lock() = timeout;
+    }
+
+    fn source_timeout(&self) -> Duration {
+        *self.source_timeout.lock()
     }
 
     pub fn register_rows_source(&self, collection: &str, source: Arc<RowsWindowFn>) {
@@ -406,7 +419,16 @@ pub async fn run_rows_fetch<H: WebRTCConnectionHandler>(
     let request = normalize_rows_request(request);
     send_fetch_accepted(handler.as_ref(), &peer, &message.id, &request.request_id).await;
 
-    let outcome = stream_rows(handler.as_ref(), &peer, &request, source, &cancel_flag).await;
+    let source_timeout = registry.source_timeout();
+    let outcome = stream_rows(
+        handler.as_ref(),
+        &peer,
+        &request,
+        source,
+        &cancel_flag,
+        source_timeout,
+    )
+    .await;
     registry.release(&connection_identity, &request.request_id);
     outcome
 }
@@ -417,12 +439,40 @@ async fn stream_rows<H: WebRTCConnectionHandler>(
     request: &NormalizedRowsRequest,
     source: Arc<RowsWindowFn>,
     cancel_flag: &Arc<std::sync::atomic::AtomicBool>,
+    source_timeout: Duration,
 ) -> RxResult<()> {
     let runtime_deadline = Instant::now() + Duration::from_millis(CTOX_QUERY_MAX_RUNTIME_MS as u64);
     let table_id = request.table_id.clone();
     let offset = request.offset_for_source;
     let limit = request.limit;
-    let joined = tokio::task::spawn_blocking(move || source(&table_id, offset, limit)).await;
+    let mut source_call = tokio::task::spawn_blocking(move || source(&table_id, offset, limit));
+    // The blocking read cannot be interrupted, but the request must not hold
+    // its in-flight slot past the budget or after a cancel.
+    let source_deadline = tokio::time::sleep(source_timeout);
+    tokio::pin!(source_deadline);
+    let joined = loop {
+        tokio::select! {
+            joined = &mut source_call => break joined,
+            _ = &mut source_deadline => {
+                send_rows_error(
+                    handler,
+                    peer,
+                    "",
+                    &request.request_id,
+                    ROWS_FETCH_ERROR_REMOTE_TIMEOUT,
+                    "rows source exceeded its time budget",
+                    true,
+                )
+                .await;
+                return Ok(());
+            }
+            _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                if cancel_flag.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+            }
+        }
+    };
     let window = match joined {
         Ok(result) => result,
         Err(err) => Err(new_rx_error(
@@ -1060,6 +1110,56 @@ mod tests {
         ));
         assert!(error_retryable_emitted(&frames, false));
         assert!(chunk_frames(&frames).is_empty());
+    }
+
+    #[tokio::test]
+    async fn rows_fetch_source_timeout_answers_remote_timeout_and_releases_slot() {
+        let registry = authorized_rows_registry(1);
+        registry.set_source_timeout(Duration::from_millis(100));
+        registry.register_rows_source(
+            "knowledge_tables",
+            Arc::new(|_table_id, _offset, _limit| {
+                std::thread::sleep(Duration::from_millis(600));
+                Ok(RowsWindow {
+                    rows: vec![json!({ "id": "late" })],
+                    row_count: 1,
+                    content_hash: String::new(),
+                    schema_hash: String::new(),
+                })
+            }),
+        );
+        let handler = Arc::new(MockHandler::new());
+        let started = Instant::now();
+        run_rows_fetch(
+            Arc::clone(&registry),
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("slow", "knowledge_tables", "kdt-slow", 0, 10),
+        )
+        .await
+        .unwrap();
+        assert!(started.elapsed() < Duration::from_millis(500));
+        {
+            let frames = handler.sent.lock();
+            assert!(error_code_emitted(&frames, ROWS_FETCH_ERROR_REMOTE_TIMEOUT));
+            assert!(error_retryable_emitted(&frames, true));
+            assert!(chunk_frames(&frames).is_empty());
+        }
+        // The single in-flight slot is free again for the next request.
+        registry.set_source_timeout(Duration::from_secs(5));
+        run_rows_fetch(
+            Arc::clone(&registry),
+            Arc::clone(&handler),
+            MockPeer("p1"),
+            "p1".into(),
+            make_request("next", "knowledge_tables", "kdt-slow", 0, 10),
+        )
+        .await
+        .unwrap();
+        let frames = handler.sent.lock();
+        assert!(!error_code_emitted(&frames, ROWS_FETCH_ERROR_STREAM_LIMIT));
+        assert!(!chunk_frames(&frames).is_empty());
     }
 
     #[tokio::test]

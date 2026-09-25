@@ -4940,34 +4940,57 @@ pub(super) async fn sync_knowledge_tables_with_database(
             }
         }
     }
-    let existing = collection
-        .find(Some(MangoQuery {
-            limit: Some(10_000),
-            ..Default::default()
-        }))
-        .map_err(|err| anyhow::anyhow!("query stale knowledge_tables projections: {err}"))?
-        .exec(false)
-        .await
-        .map_err(|err| anyhow::anyhow!("exec stale knowledge_tables projection query: {err}"))?;
-    for mut stale in existing.as_array().cloned().unwrap_or_default() {
-        let Some(id) = stale.get("id").and_then(Value::as_str).map(str::to_string) else {
-            continue;
-        };
-        if current_ids.contains(&id) {
-            continue;
+    // Collect every stale id before writing: tombstoning while paging would
+    // shift the skip window. Legacy row chunks can outnumber a single page.
+    let mut stale_documents = Vec::new();
+    let mut skip = 0u64;
+    loop {
+        let page = collection
+            .find(Some(MangoQuery {
+                sort: Some(vec![HashMap::from([("id".to_string(), "asc".to_string())])]),
+                limit: Some(KNOWLEDGE_TABLES_RECONCILE_PAGE),
+                skip: Some(skip),
+                ..Default::default()
+            }))
+            .map_err(|err| anyhow::anyhow!("query stale knowledge_tables projections: {err}"))?
+            .exec(false)
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!("exec stale knowledge_tables projection query: {err}")
+            })?;
+        let page = page.as_array().cloned().unwrap_or_default();
+        let page_len = page.len() as u64;
+        for stale in page {
+            let is_stale = stale
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !current_ids.contains(id));
+            if is_stale {
+                stale_documents.push(stale);
+            }
         }
+        if page_len < KNOWLEDGE_TABLES_RECONCILE_PAGE {
+            break;
+        }
+        skip += page_len;
+    }
+    for mut stale in stale_documents {
         if let Some(object) = stale.as_object_mut() {
             object.remove("_rev");
             object.remove("_meta");
         }
         let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
-        upsert_business_record_projection_tombstone(&collection, stale)
+        // Tombstones keep their body in storage and replicate it to every
+        // browser, so a legacy chunk must lose its rows before it is deleted.
+        upsert_projection_tombstone_with(&collection, stale, strip_knowledge_table_embedded_rows)
             .await
             .map_err(|err| anyhow::anyhow!("tombstone stale knowledge_tables projection: {err}"))?;
         count += 1;
     }
     Ok(count)
 }
+
+const KNOWLEDGE_TABLES_RECONCILE_PAGE: u64 = 1_000;
 
 async fn sync_knowledge_tables_with_database_if_changed(
     root: &Path,
@@ -6307,6 +6330,16 @@ pub(super) async fn upsert_business_record_projection_tombstone(
     collection: &Arc<RxCollection>,
     document: Value,
 ) -> anyhow::Result<()> {
+    upsert_projection_tombstone_with(collection, document, |_| {}).await
+}
+
+/// Tombstone `document`, letting `finalize` reshape the merged body (for
+/// example drop payload fields) right before it is marked deleted.
+pub(super) async fn upsert_projection_tombstone_with(
+    collection: &Arc<RxCollection>,
+    document: Value,
+    finalize: impl FnOnce(&mut Value),
+) -> anyhow::Result<()> {
     let schema = collection
         .schema_required()
         .map_err(|err| anyhow::anyhow!("{err}"))?;
@@ -6328,6 +6361,7 @@ pub(super) async fn upsert_business_record_projection_tombstone(
 
     let Some(previous) = existing else {
         let mut write_data = document;
+        finalize(&mut write_data);
         prepare_projection_tombstone_document(&schema.json_schema, &mut write_data);
         let write_data = fill_object_data_before_insert(schema, write_data)
             .map_err(|err| anyhow::anyhow!("fill projection tombstone envelope: {err}"))?;
@@ -6352,6 +6386,7 @@ pub(super) async fn upsert_business_record_projection_tombstone(
     } else {
         next = document;
     }
+    finalize(&mut next);
     prepare_projection_tombstone_document(&schema.json_schema, &mut next);
 
     let result = collection
@@ -15881,14 +15916,20 @@ pub(in crate::business_os) mod tests {
             Connection::open(store::rxdb_store_path(root.path())).expect("reopen rxdb sqlite");
         for index in 1..=3 {
             let id = format!("table:kdt-legacy:chunk:{index:04}");
-            let deleted: i64 = conn
+            let (deleted, data): (i64, String) = conn
                 .query_row(
-                    "SELECT deleted FROM ctox_business_os__knowledge_tables__v0 WHERE id = ?1",
+                    "SELECT deleted, data FROM ctox_business_os__knowledge_tables__v0 WHERE id = ?1",
                     [id.as_str()],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .expect("legacy chunk row");
             assert_eq!(deleted, 1, "{id}");
+            // Tombstones keep their body in storage and replicate it, so the
+            // deleted chunk must not carry its rows any more.
+            let chunk: Value = serde_json::from_str(&data).expect("legacy chunk json");
+            assert!(chunk.get("rows").is_none(), "{chunk}");
+            assert!(chunk.get("chunk_index").is_none(), "{chunk}");
+            assert!(chunk.pointer("/payload/rows").is_none(), "{chunk}");
         }
         let (deleted, data): (i64, String) = conn
             .query_row(

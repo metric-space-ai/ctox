@@ -20650,8 +20650,7 @@ fn knowledge_receipt_table_id(raw: &str) -> String {
 }
 
 fn knowledge_table_lookup_miss(err: &anyhow::Error) -> bool {
-    let message = format!("{err:#}");
-    message.contains("unknown knowledge table") || message.contains("archived knowledge table")
+    crate::knowledge::is_knowledge_table_not_found(err)
 }
 
 fn knowledge_receipt_row(

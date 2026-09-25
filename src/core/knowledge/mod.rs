@@ -43,14 +43,15 @@ mod parquet_io;
 mod search;
 mod skill;
 
+pub use data::is_knowledge_table_not_found;
 pub use data::knowledge_active_tables;
 pub use data::knowledge_table_all_rows;
 pub use data::knowledge_table_row_window;
 pub use data::knowledge_tables_projection_source_stamp;
-/// Build the `knowledge_tables` RxDB documents (with parquet rows embedded in
-/// the doc payload) that the Business OS native peer syncs to browser surfaces
-/// over RxDB/WebRTC. See [`data::knowledge_tables_rxdb_documents`] for the
-/// projection contract (path re-resolution, row embedding, row cap).
+/// Build the `knowledge_tables` RxDB catalog documents (one per table, no
+/// rows) that the Business OS native peer syncs to browser surfaces over
+/// RxDB/WebRTC. Rows are served on demand by `rxdb.rows.fetch` from Parquet.
+/// See [`data::knowledge_tables_rxdb_documents`] for the catalog contract.
 pub use data::knowledge_tables_rxdb_documents;
 #[cfg(test)]
 pub(crate) use data::seed_knowledge_table_for_test;

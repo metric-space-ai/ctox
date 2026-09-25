@@ -200,17 +200,17 @@ fn has_matching_managed_snapshot(root: &Path, row: &Map<String, Value>) -> bool 
     {
         return false;
     }
-    let Ok(bytes) = fs::read(path) else {
+    let Some((byte_len, digest)) = memoized_file_sha256(&path) else {
         return false;
     };
     if row
         .get("content_size_bytes")
         .and_then(Value::as_u64)
-        .is_some_and(|expected| expected != bytes.len() as u64)
+        .is_some_and(|expected| expected != byte_len)
     {
         return false;
     }
-    format!("{:x}", Sha256::digest(bytes)).eq_ignore_ascii_case(expected_hash)
+    digest.eq_ignore_ascii_case(expected_hash)
 }
 
 fn has_matching_server_web_receipt(
@@ -294,13 +294,13 @@ fn data_artifact_matches(root: &Path, doc: &Value, receipt: &Value, expected: &s
     if !path.starts_with(cache_root) {
         return false;
     }
-    let Ok(bytes) = fs::read(path) else {
+    let Some((byte_len, digest)) = memoized_file_sha256(&path) else {
         return false;
     };
-    if receipt.get("byte_count").and_then(Value::as_u64) != Some(bytes.len() as u64) {
+    if receipt.get("byte_count").and_then(Value::as_u64) != Some(byte_len) {
         return false;
     }
-    format!("{:x}", Sha256::digest(bytes)).eq_ignore_ascii_case(expected)
+    digest.eq_ignore_ascii_case(expected)
 }
 
 pub(super) fn is_evidence_table(table_key: &str) -> bool {
@@ -1202,21 +1202,82 @@ fn knowledge_file_change_stamp(path: &Path) -> KnowledgeFileChangeStamp {
 }
 
 fn knowledge_file_content_hash(path: &Path) -> String {
-    let Ok(mut file) = File::open(path) else {
-        return String::new();
-    };
+    memoized_file_sha256(path)
+        .map(|(_, digest)| format!("sha256:{digest}"))
+        .unwrap_or_default()
+}
+
+/// File identity that invalidates a memoized digest: size, mtime and (on Unix)
+/// the inode, so an atomic rename of a new Parquet file is never served stale.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct FileDigestStamp {
+    len: u64,
+    modified_nanos: u128,
+    inode: u64,
+}
+
+const FILE_DIGEST_MEMO_MAX_ENTRIES: usize = 4_096;
+
+fn file_digest_memo(
+) -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, (FileDigestStamp, String)>> {
+    static MEMO: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, (FileDigestStamp, String)>>,
+    > = std::sync::OnceLock::new();
+    MEMO.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn file_digest_stamp(metadata: &fs::Metadata) -> FileDigestStamp {
+    #[cfg(unix)]
+    let inode = std::os::unix::fs::MetadataExt::ino(metadata);
+    #[cfg(not(unix))]
+    let inode = 0;
+    FileDigestStamp {
+        len: metadata.len(),
+        modified_nanos: metadata
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0),
+        inode,
+    }
+}
+
+/// `(byte length, lowercase hex SHA-256)` of a file, memoized per path and file
+/// identity. Row windows and evidence checks run per `rxdb.rows.fetch` request;
+/// re-hashing whole Parquet and snapshot files on every request would let a
+/// peer turn a small RPC into full-file reads.
+fn memoized_file_sha256(path: &Path) -> Option<(u64, String)> {
+    let metadata = fs::metadata(path).ok()?;
+    let stamp = file_digest_stamp(&metadata);
+    if let Ok(memo) = file_digest_memo().lock() {
+        if let Some((cached_stamp, digest)) = memo.get(path) {
+            if *cached_stamp == stamp {
+                return Some((stamp.len, digest.clone()));
+            }
+        }
+    }
+    let mut file = File::open(path).ok()?;
     let mut hasher = Sha256::new();
-    let mut buffer = [0u8; 128 * 1024];
+    let mut buffer = vec![0u8; 128 * 1024];
+    let mut len = 0u64;
     loop {
-        let Ok(read) = file.read(&mut buffer) else {
-            return String::new();
-        };
+        let read = file.read(&mut buffer).ok()?;
         if read == 0 {
             break;
         }
+        len += read as u64;
         hasher.update(&buffer[..read]);
     }
-    format!("sha256:{:x}", hasher.finalize())
+    let digest = format!("{:x}", hasher.finalize());
+    let observed = FileDigestStamp { len, ..stamp };
+    if let Ok(mut memo) = file_digest_memo().lock() {
+        if memo.len() >= FILE_DIGEST_MEMO_MAX_ENTRIES {
+            memo.clear();
+        }
+        memo.insert(path.to_path_buf(), (observed, digest.clone()));
+    }
+    Some((len, digest))
 }
 
 /// Maximum rows returned by one on-demand Parquet window.
@@ -1537,10 +1598,36 @@ fn lookup_active_knowledge_table(
             |_| Ok(()),
         )
         .optional()?;
-    if archived.is_some() {
-        bail!("archived knowledge table: {table_id}");
+    Err(KnowledgeTableNotFound {
+        table_id: table_id.to_string(),
+        archived: archived.is_some(),
     }
-    bail!("unknown knowledge table: {table_id}");
+    .into())
+}
+
+/// The requested knowledge table is unknown or archived. Callers classify it
+/// with [`is_knowledge_table_not_found`], never by matching the message text.
+#[derive(Debug)]
+pub struct KnowledgeTableNotFound {
+    pub table_id: String,
+    pub archived: bool,
+}
+
+impl std::fmt::Display for KnowledgeTableNotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.archived {
+            write!(f, "archived knowledge table: {}", self.table_id)
+        } else {
+            write!(f, "unknown knowledge table: {}", self.table_id)
+        }
+    }
+}
+
+impl std::error::Error for KnowledgeTableNotFound {}
+
+pub fn is_knowledge_table_not_found(err: &anyhow::Error) -> bool {
+    err.chain()
+        .any(|cause| cause.downcast_ref::<KnowledgeTableNotFound>().is_some())
 }
 
 /// Parse an RFC3339 timestamp into epoch milliseconds. Returns `None` when the
@@ -2617,6 +2704,43 @@ mod tests {
             archived_message.contains("archived knowledge table: kdt-archived-window"),
             "{archived_message}"
         );
+        assert!(is_knowledge_table_not_found(&unknown));
+        assert!(is_knowledge_table_not_found(&archived));
+        assert!(is_knowledge_table_not_found(
+            &unknown.context("wrapped by a caller")
+        ));
+        assert!(!is_knowledge_table_not_found(&anyhow::anyhow!(
+            "unknown knowledge table: text alone does not classify"
+        )));
+        Ok(())
+    }
+
+    #[test]
+    fn memoized_file_sha256_reuses_digest_until_the_file_changes() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("snapshot.bin");
+        fs::write(&path, b"first body")?;
+        let first = memoized_file_sha256(&path).expect("digest of first body");
+        assert_eq!(first.0, 10);
+        assert_eq!(first.1, format!("{:x}", Sha256::digest(b"first body")));
+        assert_eq!(memoized_file_sha256(&path), Some(first.clone()));
+
+        // A rewrite with a different length (and a new rename-based file) must
+        // never be answered from the memo.
+        let replacement = temp.path().join("snapshot.next");
+        fs::write(&replacement, b"second, longer body")?;
+        fs::rename(&replacement, &path)?;
+        let second = memoized_file_sha256(&path).expect("digest of second body");
+        assert_eq!(second.0, 19);
+        assert_eq!(
+            second.1,
+            format!("{:x}", Sha256::digest(b"second, longer body"))
+        );
+        assert_eq!(
+            knowledge_file_content_hash(&path),
+            format!("sha256:{}", second.1)
+        );
+        assert!(memoized_file_sha256(&temp.path().join("missing")).is_none());
         Ok(())
     }
 

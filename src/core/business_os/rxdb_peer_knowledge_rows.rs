@@ -45,18 +45,16 @@ fn knowledge_rows_window(
             schema_hash: window.schema_hash,
         }),
         Err(err) => {
-            let message = format!("{err:#}");
             // `rows_fetch_error_code_for_rx_error` maps this code (and
             // NOT_FOUND / ENOENT) to non-retryable ROWS_TABLE_NOT_FOUND.
             // Any other code becomes retryable ROWS_SOURCE_ERROR, so this
             // branch must not reuse NOT_FOUND, ENOENT, or the auth codes.
-            let code = if message.contains("unknown knowledge table")
-                || message.contains("archived knowledge table")
-            {
+            let code = if crate::knowledge::is_knowledge_table_not_found(&err) {
                 ROWS_FETCH_ERROR_TABLE_NOT_FOUND
             } else {
                 "KNOWLEDGE_ROWS_SOURCE"
             };
+            let message = format!("{err:#}");
             Err(new_rx_error(code, Some(json!({ "message": message }))))
         }
     }
