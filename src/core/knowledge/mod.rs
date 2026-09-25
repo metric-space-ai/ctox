@@ -43,6 +43,8 @@ mod parquet_io;
 mod search;
 mod skill;
 
+pub use data::knowledge_active_tables;
+pub use data::knowledge_table_all_rows;
 pub use data::knowledge_table_row_window;
 pub use data::knowledge_tables_projection_source_stamp;
 /// Build the `knowledge_tables` RxDB documents (with parquet rows embedded in

@@ -1997,6 +1997,60 @@ const USAGE_DELETE: &str = "ctox knowledge data delete --domain X --key Y --conf
 const USAGE_TAG: &str = "ctox knowledge data tag --domain X --key Y --tag k=v";
 const USAGE_UNTAG: &str = "ctox knowledge data untag --domain X --key Y --tag k";
 
+/// Every row of one active table, paged through [`knowledge_table_row_window`].
+///
+/// `row_count` is the full parquet length. `rows` is the concatenation of the
+/// windows, in offset order. Hashes come from the first page.
+pub fn knowledge_table_all_rows(root: &Path, table_id: &str) -> Result<KnowledgeTableRowWindow> {
+    let first = knowledge_table_row_window(root, table_id, 0, KNOWLEDGE_TABLE_ROW_WINDOW_MAX)?;
+    let mut rows = first.rows;
+    let mut offset = rows.len();
+    while i64::try_from(offset).unwrap_or(i64::MAX) < first.row_count {
+        let page =
+            knowledge_table_row_window(root, table_id, offset, KNOWLEDGE_TABLE_ROW_WINDOW_MAX)?;
+        if page.rows.is_empty() {
+            break;
+        }
+        offset += page.rows.len();
+        rows.extend(page.rows);
+    }
+    let limit = rows.len();
+    Ok(KnowledgeTableRowWindow {
+        table_id: first.table_id,
+        domain: first.domain,
+        table_key: first.table_key,
+        offset: 0,
+        limit,
+        row_count: first.row_count,
+        rows,
+        content_hash: first.content_hash,
+        schema_hash: first.schema_hash,
+    })
+}
+
+/// Active catalog rows, optionally limited to one domain. Archived tables are
+/// omitted. Order is `table_id`.
+pub fn knowledge_active_tables(
+    root: &Path,
+    domain: Option<&str>,
+) -> Result<Vec<(String, String, String)>> {
+    let conn = open_runtime_db(root)?;
+    let mut statement = conn.prepare(
+        "SELECT table_id, domain, table_key
+         FROM knowledge_data_tables
+         WHERE archived_at IS NULL AND (?1 IS NULL OR domain = ?1)
+         ORDER BY table_id",
+    )?;
+    let rows = statement.query_map(params![domain], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// Catalog row plus the live parquet file readers actually open.
 ///
 /// The catalog stores a stale `parquet_path` on purpose: window reads resolve
@@ -3115,6 +3169,96 @@ mod tests {
         let changed = knowledge_tables_projection_source_stamp(root)?;
         assert_ne!(first, changed);
         assert_eq!(changed, knowledge_tables_projection_source_stamp(root)?);
+        Ok(())
+    }
+
+    #[test]
+    fn knowledge_table_all_rows_pages_past_one_window() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let row_total = KNOWLEDGE_TABLE_ROW_WINDOW_MAX + 1;
+        let rows = (0..row_total)
+            .map(|index| json!({ "n": index as i64 }))
+            .collect::<Vec<_>>();
+        seed_knowledge_table_for_test(root, "kdt-paged", "paging_domain", "notes", &rows, None)?;
+
+        let all = knowledge_table_all_rows(root, "kdt-paged")?;
+        assert_eq!(all.offset, 0);
+        assert_eq!(all.row_count, row_total as i64);
+        assert_eq!(all.rows.len(), row_total);
+        assert_eq!(all.limit, row_total);
+        assert_eq!(all.rows[0]["n"], json!(0));
+        assert_eq!(all.rows[row_total - 1]["n"], json!(row_total as i64 - 1));
+        let first = knowledge_table_row_window(root, "kdt-paged", 0, 10)?;
+        assert_eq!(all.content_hash, first.content_hash);
+        assert_eq!(all.schema_hash, first.schema_hash);
+        Ok(())
+    }
+
+    #[test]
+    fn knowledge_table_active_tables_filter_domain_and_skip_archived() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        seed_knowledge_table_for_test(
+            root,
+            "kdt-b",
+            "domain_b",
+            "notes",
+            &[json!({ "id": "b" })],
+            None,
+        )?;
+        seed_knowledge_table_for_test(
+            root,
+            "kdt-a2",
+            "domain_a",
+            "other",
+            &[json!({ "id": "a2" })],
+            None,
+        )?;
+        seed_knowledge_table_for_test(
+            root,
+            "kdt-a1",
+            "domain_a",
+            "notes",
+            &[json!({ "id": "a1" })],
+            None,
+        )?;
+        seed_knowledge_table_for_test(
+            root,
+            "kdt-archived",
+            "domain_a",
+            "old",
+            &[json!({ "id": "gone" })],
+            Some("2020-01-01T00:00:00Z"),
+        )?;
+
+        assert_eq!(
+            knowledge_active_tables(root, Some("domain_a"))?,
+            vec![
+                (
+                    "kdt-a1".to_string(),
+                    "domain_a".to_string(),
+                    "notes".to_string()
+                ),
+                (
+                    "kdt-a2".to_string(),
+                    "domain_a".to_string(),
+                    "other".to_string()
+                ),
+            ]
+        );
+        assert_eq!(
+            knowledge_active_tables(root, None)?
+                .into_iter()
+                .map(|(table_id, _, _)| table_id)
+                .collect::<Vec<_>>(),
+            vec![
+                "kdt-a1".to_string(),
+                "kdt-a2".to_string(),
+                "kdt-b".to_string()
+            ]
+        );
+        assert!(knowledge_active_tables(root, Some("missing"))?.is_empty());
         Ok(())
     }
 }
