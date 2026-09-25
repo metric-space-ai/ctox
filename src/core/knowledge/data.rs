@@ -2210,6 +2210,307 @@ mod tests {
         Ok(())
     }
 
+    fn insert_knowledge_catalog_row(
+        conn: &Connection,
+        table_id: &str,
+        domain: &str,
+        table_key: &str,
+        parquet_path: &str,
+        row_count: i64,
+        archived_at: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let now = now_rfc3339();
+        conn.execute(
+            "INSERT INTO knowledge_data_tables (
+                 table_id, domain, table_key, source_system, title, description,
+                 parquet_path, schema_hash, row_count, bytes, tags_json, archived_at,
+                 created_at, updated_at
+             ) VALUES (?1, ?2, ?3, 'agent', 'Window Table', 'window test',
+                       ?4, 'catalog-schema', ?5, 0, '{}', ?6, ?7, ?7)",
+            params![
+                table_id,
+                domain,
+                table_key,
+                parquet_path,
+                row_count,
+                archived_at,
+                now
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn window_row_ids(rows: &[Value]) -> Vec<String> {
+        rows.iter()
+            .map(|row| row["row_id"].as_str().expect("measured row_id").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn knowledge_table_row_window_reads_past_the_projection_cap() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let domain = "drone_bearing_design_verified";
+        let table_key = "measured_load_points";
+        let table_id = "kdt-measured-load-points";
+        let row_total = 5_103usize;
+        let live_path = compute_parquet_path(root, domain, table_key);
+        let conn = open_runtime_db(root)?;
+        insert_knowledge_catalog_row(
+            &conn,
+            table_id,
+            domain,
+            table_key,
+            "/stale/not-the-live-file.parquet",
+            1,
+            None,
+        )?;
+        let rows = (0..row_total)
+            .map(|index| {
+                json!({
+                    "source_id": "source-verified",
+                    "source_row": index as i64,
+                    "rpm": 1_000.0 + index as f64,
+                })
+            })
+            .collect::<Vec<_>>();
+        let df = super::super::parquet_io::rows_to_df(&rows)?;
+        super::super::parquet_io::commit_parquet(&live_path, df)?;
+
+        let window = knowledge_table_row_window(root, table_id, 5_100, 10)?;
+        assert_eq!(window.table_id, table_id);
+        assert_eq!(window.domain, domain);
+        assert_eq!(window.table_key, table_key);
+        assert_eq!(window.offset, 5_100);
+        assert_eq!(window.limit, 10);
+        assert_eq!(window.row_count, row_total as i64);
+        assert_eq!(window.rows.len(), 3);
+        assert_eq!(
+            window_row_ids(&window.rows),
+            vec![
+                "MLP-5101".to_string(),
+                "MLP-5102".to_string(),
+                "MLP-5103".to_string()
+            ]
+        );
+        let source_rows = window
+            .rows
+            .iter()
+            .filter_map(|row| row["source_row"].as_i64())
+            .collect::<Vec<_>>();
+        assert_eq!(source_rows, vec![5_100, 5_101, 5_102]);
+        assert_eq!(window.content_hash, knowledge_file_content_hash(&live_path));
+        assert_eq!(window.schema_hash.len(), 64);
+        assert_ne!(window.schema_hash, "catalog-schema");
+
+        let past_end = knowledge_table_row_window(root, table_id, 6_000, 10)?;
+        assert!(past_end.rows.is_empty());
+        assert_eq!(past_end.row_count, row_total as i64);
+        assert_eq!(past_end.offset, 6_000);
+        Ok(())
+    }
+
+    #[test]
+    fn knowledge_table_row_window_row_ids_match_full_projection() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let domain = "verified_research";
+        let table_key = "measured_load_points";
+        let table_id = "kdt-window-ids";
+        let row_total = 400usize;
+        let live_path = compute_parquet_path(root, domain, table_key);
+        let conn = open_runtime_db(root)?;
+        insert_knowledge_catalog_row(
+            &conn,
+            table_id,
+            domain,
+            table_key,
+            &live_path.display().to_string(),
+            row_total as i64,
+            None,
+        )?;
+        let rows = (0..row_total)
+            .map(|index| {
+                json!({
+                    "source_id": "source-verified",
+                    "source_row": index as i64,
+                    "rpm": 8_000.0 + index as f64,
+                })
+            })
+            .collect::<Vec<_>>();
+        let df = super::super::parquet_io::rows_to_df(&rows)?;
+        super::super::parquet_io::commit_parquet(&live_path, df)?;
+
+        let docs = knowledge_tables_rxdb_documents(root)?;
+        let projected_ids = docs
+            .iter()
+            .flat_map(|doc| {
+                doc["rows"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|row| row["row_id"].as_str().map(str::to_string))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(projected_ids.len(), row_total);
+
+        let first = knowledge_table_row_window(root, table_id, 0, 200)?;
+        let second = knowledge_table_row_window(root, table_id, 200, 200)?;
+        assert_eq!(first.rows.len(), 200);
+        assert_eq!(second.rows.len(), 200);
+        assert_eq!(window_row_ids(&first.rows), projected_ids[..200]);
+        assert_eq!(window_row_ids(&second.rows), projected_ids[200..]);
+        assert_eq!(first.row_count, row_total as i64);
+        assert_eq!(second.row_count, row_total as i64);
+        assert_eq!(
+            first.content_hash,
+            docs[0]["content_hash"]
+                .as_str()
+                .expect("projection content hash")
+        );
+        assert_eq!(
+            first.schema_hash,
+            docs[0]["schema_hash"]
+                .as_str()
+                .expect("projection schema hash")
+        );
+        assert_eq!(first.content_hash, second.content_hash);
+        assert_eq!(first.schema_hash, second.schema_hash);
+        Ok(())
+    }
+
+    #[test]
+    fn knowledge_table_row_window_applies_evidence_receipts() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let domain = "verified_research";
+        let table_key = "evidence_points";
+        let table_id = "kdt-evidence-points";
+        let live_path = compute_parquet_path(root, domain, table_key);
+        let conn = open_runtime_db(root)?;
+        insert_knowledge_catalog_row(
+            &conn,
+            table_id,
+            domain,
+            table_key,
+            "/stale/evidence.parquet",
+            99,
+            None,
+        )?;
+        let rows = vec![json!({
+            "claim_id": "claim-1",
+            "source_id": "src-1",
+            "trace_id": "trace-1",
+            "canonical_url": "https://publisher.example/source",
+            "source_type": "web",
+            "verification_status": "verified",
+            "transport_verified": true,
+            "content_extracted": true,
+            "actual_full_text_or_data": true,
+            "evidence_relevance_score": 32,
+            "metadata_only": false,
+            "http_status": 200,
+            "snapshot_id": "snapshot:run-1:source-1",
+            "snapshot_hash": format!("sha256:{}", "b".repeat(64)),
+            "source_tier": "authoritative",
+            "evidence_eligible": true
+        })];
+        let df = super::super::parquet_io::rows_to_df(&rows)?;
+        super::super::parquet_io::commit_parquet(&live_path, df)?;
+
+        let window = knowledge_table_row_window(root, table_id, 0, 10)?;
+        let docs = knowledge_tables_rxdb_documents(root)?;
+        assert_eq!(docs.len(), 1);
+        assert_eq!(window.rows.len(), 1);
+        assert_eq!(window.row_count, 1);
+        assert_eq!(window.rows[0]["evidence_eligible"], json!(false));
+        assert_eq!(
+            window.rows[0]["evidence_rejection_reason"],
+            json!("missing_server_evidence_receipt")
+        );
+        assert_eq!(
+            window.rows[0]["evidence_eligible"],
+            docs[0]["rows"][0]["evidence_eligible"]
+        );
+        assert_eq!(
+            window.rows[0]["evidence_rejection_reason"],
+            docs[0]["rows"][0]["evidence_rejection_reason"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn knowledge_table_row_window_clamps_limit_and_rejects_unknown_table() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let domain = "verified_research";
+        let table_key = "sensor_readings";
+        let table_id = "kdt-sensor-readings";
+        let row_total = KNOWLEDGE_TABLE_ROW_WINDOW_MAX + 5;
+        let live_path = compute_parquet_path(root, domain, table_key);
+        let conn = open_runtime_db(root)?;
+        insert_knowledge_catalog_row(
+            &conn,
+            table_id,
+            domain,
+            table_key,
+            &live_path.display().to_string(),
+            row_total as i64,
+            None,
+        )?;
+        insert_knowledge_catalog_row(
+            &conn,
+            "kdt-archived-window",
+            domain,
+            "archived_readings",
+            "/nope.parquet",
+            4,
+            Some("2026-01-01T00:00:00Z"),
+        )?;
+        insert_knowledge_catalog_row(
+            &conn,
+            "kdt-missing-parquet",
+            domain,
+            "missing_parquet",
+            "/stale.parquet",
+            42,
+            None,
+        )?;
+        let rows = (0..row_total)
+            .map(|index| json!({"reading": index as i64}))
+            .collect::<Vec<_>>();
+        let df = super::super::parquet_io::rows_to_df(&rows)?;
+        super::super::parquet_io::commit_parquet(&live_path, df)?;
+
+        let window = knowledge_table_row_window(root, table_id, 0, 5_000)?;
+        assert_eq!(KNOWLEDGE_TABLE_ROW_WINDOW_MAX, 1_000);
+        assert_eq!(window.limit, 1_000);
+        assert_eq!(window.rows.len(), 1_000);
+        assert_eq!(window.row_count, row_total as i64);
+        assert_eq!(window.rows[0]["reading"].as_i64(), Some(0));
+        assert_eq!(window.rows[999]["reading"].as_i64(), Some(999));
+
+        let missing = knowledge_table_row_window(root, "kdt-missing-parquet", 0, 10)?;
+        assert!(missing.rows.is_empty());
+        assert_eq!(missing.row_count, 42);
+        assert!(missing.content_hash.is_empty());
+        assert_eq!(missing.schema_hash, "catalog-schema");
+
+        let unknown = knowledge_table_row_window(root, "kdt-does-not-exist", 0, 10).unwrap_err();
+        let unknown_message = format!("{unknown:#}");
+        assert!(
+            unknown_message.contains("unknown knowledge table: kdt-does-not-exist"),
+            "{unknown_message}"
+        );
+        let archived = knowledge_table_row_window(root, "kdt-archived-window", 0, 10).unwrap_err();
+        let archived_message = format!("{archived:#}");
+        assert!(
+            archived_message.contains("archived knowledge table: kdt-archived-window"),
+            "{archived_message}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn knowledge_tables_projection_limits_serialized_chunk_size() -> anyhow::Result<()> {
         let rows = (0..120)
