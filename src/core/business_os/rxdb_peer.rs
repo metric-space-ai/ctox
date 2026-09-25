@@ -4839,21 +4839,64 @@ pub(super) async fn ticket_state_source_stamp(
         .context("join native ticket state source stamp")
 }
 
+/// Drop legacy row and chunk keys from a catalog document before replace.
+///
+/// `bulk_upsert` merges and would keep a previous top-level `rows` array.
+/// Knowledge sync therefore uses `incremental_upsert`, which replaces the
+/// document body. Stripping here makes the replacement explicit even if a
+/// caller still attached those keys. Nested `payload` is an object, so
+/// `payload.data` (a legacy row alias) is removed; a top-level `data` key
+/// is not, because that name is not a row field on this collection.
+fn strip_knowledge_table_embedded_rows(document: &mut Value) {
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "rows",
+        "records",
+        "chunk_index",
+        "chunk_count",
+        "chunk_row_offset",
+        "chunk_row_count",
+        "projected_row_count",
+    ] {
+        object.remove(key);
+    }
+    if let Some(payload) = object.get_mut("payload").and_then(Value::as_object_mut) {
+        for key in [
+            "rows",
+            "records",
+            "data",
+            "chunk_index",
+            "chunk_count",
+            "chunk_row_offset",
+            "chunk_row_count",
+            "projected_row_count",
+        ] {
+            payload.remove(key);
+        }
+    }
+}
+
 /// Project the record-shape knowledge catalog (`knowledge_data_tables`) into
-/// the `knowledge_tables` RxDB collection, embedding the parquet rows directly
-/// in each doc's payload.
+/// the `knowledge_tables` RxDB collection as one small catalog document per
+/// active table.
 ///
-/// This is the SINGLE native writer of the `knowledge_tables` collection.
-/// `knowledge_tables` is therefore excluded from the generic business-record
-/// projection in [`business_record_projection_collections`] so the two paths do
-/// not fight over the same docs.
+/// Rows are not embedded. Browsers read them from Parquet through
+/// `rxdb.rows.fetch`. This is the SINGLE native writer of the
+/// `knowledge_tables` collection. `knowledge_tables` is therefore excluded
+/// from the generic business-record projection in
+/// [`business_record_projection_collections`] so the two paths do not fight
+/// over the same docs.
 ///
-/// Business OS Web Research / Knowledge modules read rows exclusively from the
-/// synced doc payload over RxDB/WebRTC — there is no HTTP data path — so the
-/// rows must ride inside the doc, which is exactly what
-/// [`crate::knowledge::knowledge_tables_rxdb_documents`] produces (with the
-/// parquet path re-resolved to the live state dir, not the possibly-stale path
-/// persisted in the catalog).
+/// Upserts use [`incremental_upsert_projection_if_changed`], which replaces
+/// the stored document body. The paged `bulk_upsert` helper merges keys and
+/// would keep a legacy top-level `rows` array (and chunk metadata) on the
+/// historical `table:<id>` document. After the new set is written, every
+/// stored id outside that set is tombstoned, including legacy chunk ids
+/// `table:<id>:chunk:NNNN`. The reconcile query still uses `find` with a
+/// limit of 10_000: catalog documents are small, and the first run is the
+/// only one that still loads the previous heavy documents.
 pub(super) async fn sync_knowledge_tables_with_database(
     root: &Path,
     database: &Arc<RxDatabase>,
@@ -4885,13 +4928,18 @@ pub(super) async fn sync_knowledge_tables_with_database(
             object.insert("_deleted".to_string(), Value::Bool(false));
             object.insert("is_deleted".to_string(), Value::Bool(false));
         }
+        strip_knowledge_table_embedded_rows(document);
     }
-    count += super::rxdb_peer_projections::upsert_background_projection_pages(
-        &collection,
-        "knowledge_tables",
-        documents,
-    )
-    .await?;
+    {
+        let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+        for document in documents {
+            if incremental_upsert_projection_if_changed(&collection, document, "knowledge_tables")
+                .await?
+            {
+                count += 1;
+            }
+        }
+    }
     let existing = collection
         .find(Some(MangoQuery {
             limit: Some(10_000),
@@ -15751,6 +15799,120 @@ pub(in crate::business_os) mod tests {
             table.get("title").and_then(Value::as_str),
             Some("Idle Gate Table Updated")
         );
+    }
+
+    #[test]
+    fn knowledge_tables_sync_tombstones_legacy_chunks_and_strips_base_rows() {
+        let root = tempfile::tempdir().expect("temp root");
+        assert_eq!(
+            sync_knowledge_tables(root.path()).expect("initial empty knowledge sync"),
+            0
+        );
+        crate::knowledge::seed_knowledge_table_for_test(
+            root.path(),
+            "kdt-legacy",
+            "legacy_domain",
+            "notes",
+            &[json!({"n": 0}), json!({"n": 1})],
+            None,
+        )
+        .expect("seed legacy catalog parquet");
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let insert = |id: &str, revision: &str, body: Value| {
+            conn.execute(
+                "INSERT INTO ctox_business_os__knowledge_tables__v0 \
+                 (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
+                params![
+                    id,
+                    revision,
+                    1.0_f64,
+                    serde_json::to_string(&body).expect("legacy knowledge json")
+                ],
+            )
+            .expect("seed legacy knowledge document");
+        };
+        insert(
+            "table:kdt-legacy",
+            "1-legacybase",
+            json!({
+                "id": "table:kdt-legacy",
+                "kind": "dataframe",
+                "title": "Old Heavy",
+                "updated_at_ms": 1,
+                "rows": [{"n": 0}, {"n": 1}],
+                "payload": {"rows": [{"n": 0}], "domain": "legacy_domain", "table_key": "notes"},
+                "chunk_index": 0,
+                "chunk_count": 4,
+                "_deleted": false,
+                "_meta": { "lwt": 1.0 },
+                "_rev": "1-legacybase",
+                "_attachments": {}
+            }),
+        );
+        for index in 1..=3 {
+            let id = format!("table:kdt-legacy:chunk:{index:04}");
+            let revision = format!("1-legacychunk{index}");
+            insert(
+                &id,
+                &revision,
+                json!({
+                    "id": id,
+                    "kind": "dataframe",
+                    "title": "Legacy Chunk",
+                    "updated_at_ms": 1,
+                    "rows": [{"n": index}],
+                    "payload": {"rows": [{"n": index}]},
+                    "chunk_index": index,
+                    "chunk_count": 4,
+                    "_deleted": false,
+                    "_meta": { "lwt": 1.0 },
+                    "_rev": revision,
+                    "_attachments": {}
+                }),
+            );
+        }
+        drop(conn);
+
+        let synced = sync_knowledge_tables(root.path()).expect("replace legacy knowledge rows");
+        assert_eq!(synced, 4);
+
+        let conn =
+            Connection::open(store::rxdb_store_path(root.path())).expect("reopen rxdb sqlite");
+        for index in 1..=3 {
+            let id = format!("table:kdt-legacy:chunk:{index:04}");
+            let deleted: i64 = conn
+                .query_row(
+                    "SELECT deleted FROM ctox_business_os__knowledge_tables__v0 WHERE id = ?1",
+                    [id.as_str()],
+                    |row| row.get(0),
+                )
+                .expect("legacy chunk row");
+            assert_eq!(deleted, 1, "{id}");
+        }
+        let (deleted, data): (i64, String) = conn
+            .query_row(
+                "SELECT deleted, data FROM ctox_business_os__knowledge_tables__v0 WHERE id = 'table:kdt-legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("legacy base row");
+        assert_eq!(deleted, 0);
+        let table: Value = serde_json::from_str(&data).expect("legacy base json");
+        // bulk_upsert would have kept top-level rows and chunk_index. Their
+        // absence is the proof that incremental_upsert replaced the body.
+        // payload.rows disappearing alone is not, because a shallow merge
+        // replaces the whole payload value.
+        assert!(table.get("rows").is_none(), "{table}");
+        assert!(table.get("chunk_index").is_none(), "{table}");
+        assert!(table.get("chunk_count").is_none(), "{table}");
+        assert!(table["payload"].get("rows").is_none(), "{table}");
+        assert_eq!(table["id"], json!("table:kdt-legacy"));
+        assert_eq!(table["row_count"], json!(2));
+        assert_eq!(table["projection_version"], json!(2));
+        assert_eq!(table["rows_source"], json!("rxdb.rows.fetch"));
+        assert_eq!(table["rows_complete"], json!(true));
+        assert_eq!(table["title"], json!("Window Table"));
     }
 
     #[test]
