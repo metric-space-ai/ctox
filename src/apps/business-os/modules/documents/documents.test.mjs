@@ -650,6 +650,53 @@ test('document knowledge aggregation marks inconsistent counts and offsets incom
   assert.ok(table.chunk_validation_errors.includes('inconsistent_projected_row_count'));
 });
 
+test('document knowledge catalog references keep catalog fields and do not embed rows', () => {
+  const [table] = hooks.mergeKnowledgeTableReferences([{
+    id: 'table:kdt-loads',
+    payload: {
+      id: 'table:kdt-loads',
+      logical_table_id: 'table:kdt-loads',
+      table_id: 'kdt-loads',
+      domain: 'drone_bearing_design',
+      projection_version: 2,
+      rows_source: 'rxdb.rows.fetch',
+      row_count: 5103,
+      rows_complete: true,
+      columns: [{ name: 'measurement_id', type: 'string' }],
+    },
+  }]);
+
+  assert.equal(table.id, 'table:kdt-loads');
+  assert.equal(table.table_id, 'kdt-loads');
+  assert.equal(table.domain, 'drone_bearing_design');
+  assert.equal(table.row_count, 5103);
+  assert.equal(table.rows_source, 'rxdb.rows.fetch');
+  assert.equal(table.projection_version, 2);
+  assert.equal(table.rows_complete, true);
+  assert.equal(table.chunk_status, 'complete');
+  assert.deepEqual(table.chunk_validation_errors, []);
+  assert.equal(table.rows, undefined);
+  assert.equal(table.payload.rows, undefined);
+  assert.equal(table.chunk_lineage, undefined);
+  assert.equal(table.payload.chunk_lineage, undefined);
+  assert.deepEqual(table.columns.map((column) => column.name), ['measurement_id']);
+
+  const context = hooks.resolveKnowledgeContext({
+    knowledgeItems: [],
+    knowledgeRunbooks: [],
+    knowledgeTables: [table],
+  }, table.id, '');
+  assert.equal(context.id, table.id);
+  assert.equal(context.selection_type, 'table');
+  assert.deepEqual(context.table_lineage, [{
+    id: table.id,
+    table_id: 'kdt-loads',
+    domain: 'drone_bearing_design',
+    row_count: 5103,
+    columns: table.columns,
+  }]);
+});
+
 test('table-only Knowledge is selectable as data context, never as a procedural skill', () => {
   const state = {
     knowledgeItems: [],
