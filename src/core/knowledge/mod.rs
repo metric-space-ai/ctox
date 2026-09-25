@@ -43,12 +43,15 @@ mod parquet_io;
 mod search;
 mod skill;
 
+pub use data::knowledge_table_row_window;
 pub use data::knowledge_tables_projection_source_stamp;
 /// Build the `knowledge_tables` RxDB documents (with parquet rows embedded in
 /// the doc payload) that the Business OS native peer syncs to browser surfaces
 /// over RxDB/WebRTC. See [`data::knowledge_tables_rxdb_documents`] for the
 /// projection contract (path re-resolution, row embedding, row cap).
 pub use data::knowledge_tables_rxdb_documents;
+#[cfg(test)]
+pub use data::seed_knowledge_table_for_test;
 pub use data::KnowledgeTablesProjectionSourceStamp;
 
 use anyhow::Context;

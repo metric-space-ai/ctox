@@ -2920,6 +2920,7 @@ async fn run_native_peer(
                 // already auto-registers every multiplexed collection inside
                 // `RxWebRTCReplicationPool::new_multi`.
                 register_demand_file_sources(pool, &database, &root);
+                super::rxdb_peer_knowledge_rows::register_knowledge_row_source(pool, &root);
                 let browser_live_root = root.clone();
                 let browser_live_database = Arc::clone(&database);
                 pool.register_auxiliary_request_handler(

@@ -1997,6 +1997,44 @@ const USAGE_DELETE: &str = "ctox knowledge data delete --domain X --key Y --conf
 const USAGE_TAG: &str = "ctox knowledge data tag --domain X --key Y --tag k=v";
 const USAGE_UNTAG: &str = "ctox knowledge data untag --domain X --key Y --tag k";
 
+/// Catalog row plus the live parquet file readers actually open.
+///
+/// The catalog stores a stale `parquet_path` on purpose: window reads resolve
+/// `<root>/runtime/knowledge/data/<domain>/<table_key>.parquet`.
+#[cfg(test)]
+pub(crate) fn seed_knowledge_table_for_test(
+    root: &Path,
+    table_id: &str,
+    domain: &str,
+    table_key: &str,
+    rows: &[Value],
+    archived_at: Option<&str>,
+) -> Result<PathBuf> {
+    let conn = open_runtime_db(root)?;
+    let now = now_rfc3339();
+    conn.execute(
+        "INSERT INTO knowledge_data_tables (
+             table_id, domain, table_key, source_system, title, description,
+             parquet_path, schema_hash, row_count, bytes, tags_json, archived_at,
+             created_at, updated_at
+         ) VALUES (?1, ?2, ?3, 'agent', 'Window Table', 'window test',
+                   ?4, 'catalog-schema', ?5, 0, '{}', ?6, ?7, ?7)",
+        params![
+            table_id,
+            domain,
+            table_key,
+            "/stale/not-the-live-file.parquet",
+            rows.len() as i64,
+            archived_at,
+            now
+        ],
+    )?;
+    let live_path = compute_parquet_path(root, domain, table_key);
+    let df = super::parquet_io::rows_to_df(rows)?;
+    super::parquet_io::commit_parquet(&live_path, df)?;
+    Ok(live_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
