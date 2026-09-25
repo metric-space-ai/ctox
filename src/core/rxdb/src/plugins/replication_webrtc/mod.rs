@@ -38,6 +38,7 @@ pub mod local_session;
 pub(super) mod protocol_contract_generated;
 pub mod query_fetch_client;
 pub mod query_fetch_handler;
+pub mod rows_fetch_handler;
 pub mod signaling_client;
 pub mod signaling_protocol;
 pub mod v1_5_status;
