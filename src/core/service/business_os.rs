@@ -2646,6 +2646,30 @@ if (sourceId === "dnbhoovers.com") {{
     push("mitarbeiter", employees, "high", "D&B Hoovers employee total", hit.url);
     push("firma_register", duns, "high", "D&B D-U-N-S", hit.url);
     push("konzernstruktur", structure, "medium", "D&B Hoovers organization role", hit.url);
+    // Branchencodes (WZ/NACE/NOGA) stehen nur auf der Firmenseite, nicht in der
+    // Trefferliste. Im selben angemeldeten Lauf die Firmenseite oeffnen; ohne
+    // eindeutigen Code den gefundenen Abschnitt als Rohtext mitgeben, damit die
+    // Recherche ihn selbst lesen kann (THESEN 25.09.2026: CHT ohne WZ-Code).
+    try {{
+      await page.goto(hit.url, {{ waitUntil: "domcontentloaded", timeout: 20000 }});
+      for (let attempt = 0; attempt < 20; attempt += 1) {{
+        await page.waitForTimeout(750);
+        const size = await page.evaluate(() => String(document.body?.innerText || "").length).catch(() => 0);
+        if (size > 4000) break;
+      }}
+      if (hostAllowed(page.url()) && /\/company\//i.test(page.url())) {{
+        const detail = await page.evaluate(() => String(document.body?.innerText || "").replace(/[ \t]+/g, " "));
+        const codeRe = /(WZ\s*2008|WZ|NACE(?:\s*Rev\.?\s*2)?|ÖNACE(?:\s*2008)?|NOGA(?:\s*2008)?)[^0-9\n]{{0,80}}(\d{{2}}(?:\.\d{{1,2}}){{1,2}}|\d{{4,5}})/i;
+        const code = detail.match(codeRe);
+        if (code) {{
+          push("wz_code", code[2], "high", `D&B Hoovers Firmenseite: ${{code[1]}} ${{code[2]}}`, page.url());
+        }}
+        const marker = detail.search(/(Branchencode|Industry Codes|NACE|WZ\s*2008|NOGA|ÖNACE|SIC)/i);
+        if (marker >= 0) {{
+          push("branche_codes_rohtext", detail.slice(Math.max(0, marker - 40), marker + 600).replace(/\n+/g, " | "), "medium", "D&B Hoovers Firmenseite: Abschnitt Branchencodes (Rohtext)", page.url());
+        }}
+      }}
+    }} catch {{}}
   }}
 }} else if (sourceId === "leadfeeder.com") {{
   const companyName = normalized(company);
