@@ -53,7 +53,7 @@ pub use data::knowledge_tables_projection_source_stamp;
 /// projection contract (path re-resolution, row embedding, row cap).
 pub use data::knowledge_tables_rxdb_documents;
 #[cfg(test)]
-pub use data::seed_knowledge_table_for_test;
+pub(crate) use data::seed_knowledge_table_for_test;
 pub use data::KnowledgeTablesProjectionSourceStamp;
 
 use anyhow::Context;
