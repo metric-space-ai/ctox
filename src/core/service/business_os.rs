@@ -2299,6 +2299,12 @@ fn run_business_os_web_stack_source_capture_with_trust(
         .trim();
     anyhow::ensure!(!company.is_empty(), "source-capture company is empty");
     let country = flag_value(args, "--country").unwrap_or("DE").trim();
+    // One login and capture per provider at a time. Parallel research runs
+    // each logged into D&B with the same account: several e-mail codes arrived
+    // at once (no challenge identity, login_failed) and the shared browser
+    // profile was locked (THESEN 25.09.2026, every D&B run failed from 12:19).
+    let _capture_lock =
+        acquire_source_capture_lock(root, &source_id, std::time::Duration::from_secs(300));
     let source = build_web_stack_authenticated_source_capture(&source_id, company, country)?;
     let credential_ref = optional_web_stack_credential_ref(flag_value(args, "--credential-ref"))?
         .or_else(|| {
@@ -2384,6 +2390,41 @@ fn run_business_os_web_stack_source_capture_with_trust(
         "browser_stream": "rxdb",
         "authenticated_capture": combined,
     }))
+}
+
+/// Exclusive per-provider lock for authenticated captures across CTOX
+/// processes. Returns `None` when the wait expires; the capture then proceeds
+/// and reports what it finds rather than hanging a research turn.
+fn acquire_source_capture_lock(
+    root: &Path,
+    source_id: &str,
+    wait: std::time::Duration,
+) -> Option<std::fs::File> {
+    let dir = crate::paths::runtime_dir(root)
+        .join("browser")
+        .join("locks");
+    std::fs::create_dir_all(&dir).ok()?;
+    let name: String = source_id
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect();
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join(format!("source-capture-{name}.lock")))
+        .ok()?;
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 fn enqueue_web_stack_source_capture_auth_assist(
@@ -9938,4 +9979,40 @@ fn allowed_domains_from_url(target_url: &str) -> Vec<String> {
         .and_then(|url| url.host_str().map(str::to_string))
         .map(|host| vec![host])
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod source_capture_lock_tests {
+    #[test]
+    fn a_second_capture_for_the_same_provider_waits_for_the_first() {
+        let root = tempfile::tempdir().expect("root");
+        let first = super::acquire_source_capture_lock(
+            root.path(),
+            "dnbhoovers.com",
+            std::time::Duration::from_secs(1),
+        )
+        .expect("first lock");
+        let blocked = super::acquire_source_capture_lock(
+            root.path(),
+            "dnbhoovers.com",
+            std::time::Duration::from_millis(600),
+        );
+        assert!(
+            blocked.is_none(),
+            "the provider stays locked while the first capture runs"
+        );
+        let other = super::acquire_source_capture_lock(
+            root.path(),
+            "leadfeeder.com",
+            std::time::Duration::from_millis(600),
+        );
+        assert!(other.is_some(), "another provider is not blocked");
+        drop(first);
+        assert!(super::acquire_source_capture_lock(
+            root.path(),
+            "dnbhoovers.com",
+            std::time::Duration::from_secs(1),
+        )
+        .is_some());
+    }
 }

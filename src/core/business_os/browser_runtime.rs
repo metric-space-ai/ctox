@@ -632,13 +632,27 @@ impl BrowserRuntimeManager {
              private_profile={private_profile} viewport={}x{}",
             viewport_w, viewport_h
         );
-        let handle =
+        // A second CTOX process (e.g. a parallel research capture for the same
+        // owner) may hold the persistent profile. Chromium then refuses with a
+        // ProcessSingleton error; wait for the profile instead of failing the
+        // capture (THESEN 25.09.2026: parallel D&B runs lost their capture).
+        let mut attempt = 0u32;
+        let handle = loop {
+            let root = root.clone();
+            let spawn = spawn.clone();
             match tokio::task::spawn_blocking(move || spawn_persistent_browser(&root, &spawn))
                 .await
                 .context("browser runtime spawn worker panicked")
                 .and_then(|result| result)
             {
-                Ok(handle) => handle,
+                Ok(handle) => break handle,
+                Err(err) if attempt < 9 && browser_profile_in_use(&err) => {
+                    attempt += 1;
+                    eprintln!(
+                        "[business-os] browser profile busy session_id={session_id}, retry {attempt}/9 in 10s"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                }
                 Err(err) => {
                     self.record_crash(session_id);
                     eprintln!(
@@ -647,7 +661,8 @@ impl BrowserRuntimeManager {
                     );
                     return Err(err);
                 }
-            };
+            }
+        };
         let runner_pid = handle.process_id();
         let session = Arc::new(LiveBrowserSession {
             handle: Mutex::new(handle),
@@ -989,5 +1004,27 @@ mod tests {
             runner
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+/// Chromium refuses a persistent profile another process still holds.
+fn browser_profile_in_use(err: &anyhow::Error) -> bool {
+    let text = format!("{err:#}");
+    text.contains("ProcessSingleton")
+        || text.contains("SingletonLock")
+        || text.contains("profile appears to be in use")
+}
+
+#[cfg(test)]
+mod browser_profile_busy_tests {
+    #[test]
+    fn a_held_profile_is_recognised_as_busy_not_as_a_crash() {
+        let busy = anyhow::anyhow!(
+            "browserType.launchPersistentContext: Failed to create a ProcessSingleton for your profile directory"
+        );
+        assert!(super::browser_profile_in_use(&busy));
+        let other =
+            anyhow::anyhow!("browserType.launchPersistentContext: Executable doesn't exist");
+        assert!(!super::browser_profile_in_use(&other));
     }
 }
