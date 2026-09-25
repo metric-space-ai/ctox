@@ -241,6 +241,38 @@ pub(super) fn read_rows_capped(path: &Path, cap: usize) -> Result<(Vec<Value>, i
     Ok((rows, count))
 }
 
+/// Read a row window from `path` without loading the rest of the file.
+///
+/// The second value is the full row count from the Parquet footer, not the
+/// window length and not the catalog. An offset at or past the end returns an
+/// empty window rather than an error. This stays on the eager `ParquetReader`
+/// path: `LazyFrame::collect()` panics in this build because the streaming
+/// executor is not enabled.
+pub(super) fn read_rows_window(
+    path: &Path,
+    offset: usize,
+    limit: usize,
+) -> Result<(Vec<Value>, i64)> {
+    let file = File::open(path)
+        .with_context(|| format!("open parquet for row window {}", path.display()))?;
+    let mut reader = ParquetReader::new(file);
+    let count_usize = reader
+        .num_rows()
+        .map_err(cerr)
+        .with_context(|| format!("read parquet row count {}", path.display()))?;
+    let count = i64::try_from(count_usize)
+        .with_context(|| format!("parquet row count exceeds i64 for {}", path.display()))?;
+    if limit == 0 || offset >= count_usize {
+        return Ok((Vec::new(), count));
+    }
+    let df = reader
+        .with_slice(Some((offset, limit)))
+        .finish()
+        .map_err(cerr)
+        .with_context(|| format!("read parquet row window {}", path.display()))?;
+    Ok((df_to_rows(&df)?, count))
+}
+
 /// Convert a DataFrame to NDJSON-shaped `Vec<serde_json::Value>` of objects.
 pub(super) fn df_to_rows(df: &DataFrame) -> Result<Vec<Value>> {
     if df.height() == 0 {

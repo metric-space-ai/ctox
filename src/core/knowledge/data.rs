@@ -13,6 +13,7 @@ use chrono::Utc;
 use rusqlite::params;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
+use serde::Serialize;
 use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
@@ -1220,6 +1221,9 @@ fn knowledge_file_content_hash(path: &Path) -> String {
 /// Hard upper bound on rows projected for one logical knowledge table.
 const KNOWLEDGE_TABLE_RXDB_ROW_CAP: usize = 5_000;
 
+/// Maximum rows returned by one on-demand Parquet window.
+const KNOWLEDGE_TABLE_ROW_WINDOW_MAX: usize = 1_000;
+
 /// Maximum rows carried by one replicated `knowledge_tables` document.
 ///
 /// A single wide evidence row can contain substantial provenance metadata.
@@ -1354,7 +1358,7 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
         };
 
         let rows = normalize_evidence_rows_with_server_receipts(root, &table_key, rows)?;
-        let (rows, quality_notes) = enrich_knowledge_table_rows(&table_key, rows);
+        let (rows, quality_notes) = enrich_knowledge_table_rows_from(&table_key, rows, 0);
         let columns = knowledge_table_columns(&table_key, &rows);
         let schema_value = json!({ "columns": columns.clone() });
         let quality_notes_value =
@@ -1445,6 +1449,99 @@ pub fn knowledge_tables_rxdb_documents(root: &Path) -> Result<Vec<Value>> {
     Ok(documents)
 }
 
+/// One on-demand page of knowledge-table rows, read from Parquet.
+///
+/// `row_count` is the full table length. `rows` is only the requested window
+/// after evidence normalization and table-specific enrichment. `limit` is the
+/// applied page size, clamped to [`KNOWLEDGE_TABLE_ROW_WINDOW_MAX`].
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct KnowledgeTableRowWindow {
+    pub table_id: String,
+    pub domain: String,
+    pub table_key: String,
+    pub offset: usize,
+    pub limit: usize,
+    pub row_count: i64,
+    pub rows: Vec<Value>,
+    pub content_hash: String,
+    pub schema_hash: String,
+}
+
+pub fn knowledge_table_row_window(
+    root: &Path,
+    table_id: &str,
+    offset: usize,
+    limit: usize,
+) -> Result<KnowledgeTableRowWindow> {
+    let limit = limit.min(KNOWLEDGE_TABLE_ROW_WINDOW_MAX);
+    let conn = open_runtime_db(root)?;
+    let (domain, table_key, catalog_schema_hash, catalog_row_count) =
+        lookup_active_knowledge_table(&conn, table_id)?;
+    let resolved_path = compute_parquet_path(root, &domain, &table_key);
+    let content_hash = knowledge_file_content_hash(&resolved_path);
+    let (rows, row_count, schema_hash) = if resolved_path.is_file() {
+        let schema_hash = super::parquet_io::scan_table(&resolved_path)
+            .and_then(|mut lf| lf.collect_schema())
+            .map(|schema| super::parquet_io::schema_hash(&schema))
+            .unwrap_or_else(|_| catalog_schema_hash.clone());
+        let (rows, row_count) = super::parquet_io::read_rows_window(&resolved_path, offset, limit)?;
+        (rows, row_count, schema_hash)
+    } else {
+        (Vec::new(), catalog_row_count, catalog_schema_hash)
+    };
+    let rows = normalize_evidence_rows_with_server_receipts(root, &table_key, rows)?;
+    let (rows, _quality_notes) = enrich_knowledge_table_rows_from(&table_key, rows, offset);
+    Ok(KnowledgeTableRowWindow {
+        table_id: table_id.to_string(),
+        domain,
+        table_key,
+        offset,
+        limit,
+        row_count,
+        rows,
+        content_hash,
+        schema_hash,
+    })
+}
+
+fn lookup_active_knowledge_table(
+    conn: &Connection,
+    table_id: &str,
+) -> Result<(String, String, String, i64)> {
+    let active = conn
+        .query_row(
+            "SELECT domain, table_key, schema_hash, row_count
+             FROM knowledge_data_tables
+             WHERE table_id = ?1 AND archived_at IS NULL",
+            params![table_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    if let Some(active) = active {
+        return Ok(active);
+    }
+    let archived = conn
+        .query_row(
+            "SELECT 1
+             FROM knowledge_data_tables
+             WHERE table_id = ?1 AND archived_at IS NOT NULL",
+            params![table_id],
+            |_| Ok(()),
+        )
+        .optional()?;
+    if archived.is_some() {
+        bail!("archived knowledge table: {table_id}");
+    }
+    bail!("unknown knowledge table: {table_id}");
+}
+
 /// Parse an RFC3339 timestamp into epoch milliseconds. Returns `None` when the
 /// string is empty or unparseable so the caller can fall back to "now".
 fn rfc3339_to_millis(value: &str) -> Option<i64> {
@@ -1456,14 +1553,23 @@ fn rfc3339_to_millis(value: &str) -> Option<i64> {
         .map(|dt| dt.timestamp_millis())
 }
 
+#[cfg(test)]
 fn enrich_knowledge_table_rows(table_key: &str, rows: Vec<Value>) -> (Vec<Value>, Vec<String>) {
+    enrich_knowledge_table_rows_from(table_key, rows, 0)
+}
+
+fn enrich_knowledge_table_rows_from(
+    table_key: &str,
+    rows: Vec<Value>,
+    base_index: usize,
+) -> (Vec<Value>, Vec<String>) {
     if table_key != "measured_load_points" {
         return (rows, Vec::new());
     }
     let rows = rows
         .into_iter()
         .enumerate()
-        .map(|(index, row)| enrich_measured_load_point_row(index, row))
+        .map(|(index, row)| enrich_measured_load_point_row(base_index + index, row))
         .collect();
     (
         rows,
