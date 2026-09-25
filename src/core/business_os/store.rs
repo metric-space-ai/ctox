@@ -26410,18 +26410,14 @@ pub(super) mod tests {
     fn document_source_receipt_finds_row_past_projection_cap() -> anyhow::Result<()> {
         let root = tempdir()?;
         let row_total = 5_100usize;
+        // Every row carries `marker`: Parquet schema inference drops a column
+        // that appears in only one of 5,100 rows.
         let rows = (0..row_total)
             .map(|index| {
-                if index == 5_049 {
-                    serde_json::json!({
-                        "source_id": "source-5050",
-                        "marker": "row-5050",
-                    })
-                } else {
-                    serde_json::json!({
-                        "source_id": format!("source-{index}"),
-                    })
-                }
+                serde_json::json!({
+                    "source_id": format!("source-{}", index + 1),
+                    "marker": format!("row-{}", index + 1),
+                })
             })
             .collect::<Vec<_>>();
         crate::knowledge::seed_knowledge_table_for_test(
