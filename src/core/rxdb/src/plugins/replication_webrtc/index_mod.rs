@@ -70,8 +70,8 @@ use protocol_contract_generated::{
     CTOX_PROTOCOL_ERROR_CAPABILITY_MISSING, CTOX_PROTOCOL_ERROR_COLLECTION_MISMATCH,
     CTOX_PROTOCOL_ERROR_MISMATCH, CTOX_PROTOCOL_ERROR_MISSING,
     CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH, CTOX_PROTOCOL_ERROR_SCHEMA_VERSION_MISMATCH,
-    CTOX_QUERY_FETCH_CAPABILITY, CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_RXDB_PROTOCOL,
-    CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
+    CTOX_QUERY_FETCH_CAPABILITY, CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_ROWS_FETCH_CAPABILITY,
+    CTOX_RXDB_PROTOCOL, CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
 };
 
 const FORK_RESYNC_INTERVAL: Duration = Duration::from_secs(5);
@@ -270,6 +270,7 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     pub error_subject: RxSubject<RxError>,
     pub query_fetch_registry: Arc<super::query_fetch_handler::QueryFetchRegistry>,
     pub file_fetch_registry: Arc<super::file_fetch_handler::FileFetchRegistry>,
+    pub rows_fetch_registry: Arc<super::rows_fetch_handler::RowsFetchRegistry>,
     /// Typed, explicitly registered request methods that share the authenticated
     /// WebRTC DataChannel without becoming RxDB documents. This is reserved for
     /// latency-sensitive ephemeral control planes such as the live Browser.
@@ -350,8 +351,12 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         let file_registry = Arc::new(super::file_fetch_handler::FileFetchRegistry::new(
             protocol_contract_generated::CTOX_QUERY_MAX_IN_FLIGHT_STREAMS as u64,
         ));
+        let rows_registry = Arc::new(super::rows_fetch_handler::RowsFetchRegistry::new(
+            protocol_contract_generated::CTOX_QUERY_MAX_IN_FLIGHT_STREAMS as u64,
+        ));
         registry.set_auth_check(Arc::new(|_peer_identity, _collection| true));
         file_registry.set_auth_check(Arc::new(|_peer_identity, _collection| true));
+        rows_registry.set_auth_check(Arc::new(|_peer_identity, _collection| true));
         let mut master_replication_handlers: HashMap<String, Arc<dyn RxReplicationHandler>> =
             HashMap::new();
         let mut collection_map: HashMap<String, Arc<RxCollection>> = HashMap::new();
@@ -377,6 +382,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             error_subject: RxSubject::new(),
             query_fetch_registry: registry,
             file_fetch_registry: file_registry,
+            rows_fetch_registry: rows_registry,
             auxiliary_request_handlers: Mutex::new(HashMap::new()),
             authenticated_peers: Arc::new(Mutex::new(HashSet::new())),
             outbound_ready_peers: Mutex::new(HashSet::new()),
@@ -754,6 +760,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         let peer_identity = self.connection_handler.connection_identity(peer);
         self.query_fetch_registry.cancel_peer(&peer_identity);
         self.file_fetch_registry.cancel_peer(&peer_identity);
+        self.rows_fetch_registry.cancel_peer(&peer_identity);
         for task in &sub_tasks {
             task.abort();
         }
@@ -1351,6 +1358,35 @@ where
                     }
                     continue;
                 }
+                if item.message.method == super::rows_fetch_handler::rows_fetch_method() {
+                    let registry = Arc::clone(&pool_clone.rows_fetch_registry);
+                    let handler_clone = Arc::clone(&handler);
+                    let peer = item.peer.clone();
+                    let peer_identity = handler.peer_identity(&peer);
+                    let message = item.message.clone();
+                    pool_clone.spawn_tracked(async move {
+                        let _ = super::rows_fetch_handler::run_rows_fetch(
+                            registry,
+                            handler_clone,
+                            peer,
+                            peer_identity,
+                            message,
+                        )
+                        .await;
+                    });
+                    continue;
+                }
+                if item.message.method == super::rows_fetch_handler::rows_cancel_method() {
+                    if let Ok(request_id) =
+                        super::rows_fetch_handler::parse_rows_cancel_request(&item.message)
+                    {
+                        let peer_identity = handler.connection_identity(&item.peer);
+                        pool_clone
+                            .rows_fetch_registry
+                            .cancel(&peer_identity, &request_id);
+                    }
+                    continue;
+                }
                 let is_browser_live = item.message.method == BROWSER_LIVE_METHOD;
                 if is_browser_live {
                     BROWSER_LIVE_WIRE_RECEIVED.fetch_add(1, Ordering::Relaxed);
@@ -1492,6 +1528,8 @@ where
                         "token" => Value::String(storage_token),
                         "ctoxProtocol" => {
                             let flag = pool_task.query_fetch_registry.is_feature_enabled();
+                            let rows_fetch_registered =
+                                pool_task.rows_fetch_registry.has_any_source();
                             // Resolve the protocol payload for the collection
                             // the remote asked about (if it tagged one);
                             // otherwise the representative. This keeps the
@@ -1506,6 +1544,7 @@ where
                                 target.as_ref(),
                                 peer_session_id.as_deref(),
                                 flag,
+                                rows_fetch_registered,
                                 room_payload.collection_schemas,
                                 room_payload.collection_checkpoints,
                                 Some(&storage_token),
@@ -1749,12 +1788,14 @@ where
                         format!("{}|{}|{}", database.token, request_flag, n)
                     };
                     let local_flag = pool_clone.query_fetch_registry.is_feature_enabled();
+                    let rows_fetch_registered = pool_clone.rows_fetch_registry.has_any_source();
                     let local_room_payload = pool_clone.protocol_room_payload().await;
                     let local_collection_schemas = local_room_payload.collection_schemas.clone();
                     let mut local_protocol = ctox_protocol_response_with_flag(
                         representative.as_ref(),
                         peer_session_id.as_deref(),
                         local_flag,
+                        rows_fetch_registered,
                         local_room_payload.collection_schemas,
                         local_room_payload.collection_checkpoints,
                         Some(&storage_token),
@@ -2219,6 +2260,7 @@ async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     collection: Option<&Arc<RxCollection>>,
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
+    rows_fetch_registered: bool,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
@@ -2246,6 +2288,7 @@ async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
         collection_payload,
         peer_session_id,
         query_demand_loading_enabled,
+        rows_fetch_registered,
         collection_schemas,
         collection_checkpoints,
         storage_generation,
@@ -2265,6 +2308,7 @@ fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&st
         collection,
         peer_session_id,
         true,
+        false,
         None,
         None,
         None,
@@ -2276,6 +2320,7 @@ fn ctox_protocol_response_payload_with_flag(
     collection: Value,
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
+    rows_fetch_registered: bool,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
@@ -2289,7 +2334,7 @@ fn ctox_protocol_response_payload_with_flag(
     // is currently enabled. Browsers that see `queryDemandLoadingEnabled: false`
     // MUST fall back to the V1 replication path even when they themselves
     // carry the capability. This is the runtime feature-flag handshake.
-    let advertised_capabilities: Vec<&str> = CTOX_RXDB_NATIVE_CAPABILITIES
+    let mut advertised_capabilities: Vec<&str> = CTOX_RXDB_NATIVE_CAPABILITIES
         .iter()
         .copied()
         .filter(|cap| {
@@ -2298,6 +2343,12 @@ fn ctox_protocol_response_payload_with_flag(
             *cap != CTOX_QUERY_FETCH_CAPABILITY || query_demand_loading_enabled
         })
         .collect();
+    // Rows fetch is optional and independent of query demand-loading. Advertise
+    // it only when a row-window source is already registered. The check is the
+    // same moment as the query feature flag: handshake build, not pool create.
+    if rows_fetch_registered {
+        advertised_capabilities.push(CTOX_ROWS_FETCH_CAPABILITY);
+    }
     let mut payload = serde_json::json!({
         "protocol": CTOX_RXDB_PROTOCOL,
         "capabilities": advertised_capabilities,
@@ -3506,6 +3557,7 @@ mod tests {
             collection_payload,
             Some("rxdb-rs-run-a"),
             true,
+            false,
             None,
             Some(checkpoints_map.clone()),
             Some(storage_generation),
@@ -3778,6 +3830,7 @@ mod tests {
                 Value::Null,
                 Some("session"),
                 true,
+                false,
                 None,
                 None,
                 None,
@@ -3806,6 +3859,7 @@ mod tests {
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
             true,
+            false,
             None,
             None,
             Some("storage-generation-1"),
@@ -3819,6 +3873,7 @@ mod tests {
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
             true,
+            false,
             Some(local_schemas_two()),
             Some(serde_json::json!({
                 "documents": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "documents" },
@@ -4312,6 +4367,7 @@ mod tests {
             None,
             Some("worker-session"),
             false,
+            false,
             payload.collection_schemas,
             payload.collection_checkpoints,
             Some("worker-storage"),
@@ -4372,6 +4428,7 @@ mod tests {
             let protocol = ctox_protocol_response_with_flag(
                 None,
                 Some("control-session"),
+                false,
                 false,
                 Some(serde_json::json!({})),
                 Some(serde_json::json!({})),
