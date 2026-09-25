@@ -6825,10 +6825,35 @@ const preAuthenticatedVerifyFound = verifySelectorVisible && !stillOnLoginPage;
 // signed in, and reports `credential-field-not-found` on a working session.
 // Landing somewhere other than the login URL with no credential field and no
 // error is the same evidence, and it does not rot when a class name changes.
+// D&B Hoovers serves its signed-in dashboard at the same app root it is opened
+// with ("Willkommen, Lena! ... Suchen & eine Liste erstellen" at
+// https://app.dnbhoovers.com/). Requiring a landing *elsewhere* read that live
+// session as "not signed in", found no login field and reported
+// credential-field-not-found / login_failed on every capture from 12:19 on
+// 25.09.2026, while the session from the 12:02 e-mail code was still valid.
+// Staying on the target URL counts as signed in when the page shows no login
+// or credential field and no sign-in entry point.
+const signInEntryVisible = async () => page.evaluate(() => Array.from(
+  document.querySelectorAll("a, button, [role='button'], input[type='submit']"),
+).some((element) => {
+  if (!element.offsetParent) return false;
+  const label = String(element.innerText || element.value || element.getAttribute("aria-label") || "").trim();
+  return /^(log ?in|sign ?in|anmelden|einloggen|login)$/i.test(label);
+})).catch(() => true);
 const preAuthenticatedByLanding = await (async () => {
   if (preAuthenticatedVerifyFound) return false;
   const landedElsewhere = beforeSignals.url && !samePage(beforeSignals.url, targetUrl);
-  if (!landedElsewhere) return false;
+  if (!landedElsewhere) {
+    if (!beforeSignals.url || looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;
+    const signalsHere = beforeSignals.auth_signals || emptyAuthSignals();
+    if (signalsHere.mfa_required === true || signalsHere.login_error_detected === true) return false;
+    const formHere = beforeSignals.form_state || {};
+    if (Number(formHere.visible_password_fields || 0) > 0 || Number(formHere.visible_email_fields || 0) > 0) return false;
+    const loginHere = await browserCandidateFields("login").catch(() => []);
+    const credentialHere = await browserCandidateFields("credential").catch(() => []);
+    if (loginHere.length || credentialHere.length) return false;
+    return !(await signInEntryVisible());
+  }
   if (looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;
   const signals = beforeSignals.auth_signals || emptyAuthSignals();
   if (signals.mfa_required === true || signals.login_error_detected === true) return false;
@@ -8439,6 +8464,10 @@ mod tests {
         // A login page that only gained a query token (D&B: /login?F…=_) is not a
         // landing elsewhere; otherwise a username-first step reads as signed in.
         assert!(source.contains("!samePage(beforeSignals.url, targetUrl)"));
+        // D&B keeps its signed-in dashboard on the app root: staying on the
+        // target URL without any login field or sign-in entry is a session.
+        assert!(source.contains("const signInEntryVisible = async () =>"));
+        assert!(source.contains("if (!landedElsewhere) {"));
         assert!(!source.contains("beforeSignals.url !== targetUrl"));
         // A verify selector that also matches on the login page (D&B: a search
         // link) must not count while the login form is still shown.
