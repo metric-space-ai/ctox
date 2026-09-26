@@ -296,6 +296,22 @@ jobs:
             | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
           cargo test --locked --bin ctox -- mission::channels::tests::business_command mission::channels::tests::business_control --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
+      - name: Knowledge Parquet snapshot regressions
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --bin ctox --jobs 2 -- knowledge::data::tests:: --list \
+            | tee "$RUNNER_TEMP/ctox-host-proof/knowledge-tests-list.log"
+          for test_name in \
+            knowledge_table_snapshot_survives_replacement_between_pages \
+            knowledge_table_row_window_clamps_limit_and_rejects_unknown_table \
+            memoized_file_sha256_reuses_digest_until_the_file_changes; do
+            grep -Fx "knowledge::data::tests::$test_name: test" \
+              "$RUNNER_TEMP/ctox-host-proof/knowledge-tests-list.log"
+          done
+          cargo test --locked --bin ctox --jobs 2 -- knowledge::data::tests:: --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/knowledge-tests.log"
       - name: Preserve native schema migration history and deletion markers
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash
