@@ -11689,6 +11689,43 @@ mod rxdb_string_field_lookup_tests {
     use super::*;
 
     #[test]
+    fn grouped_contains_search_counts_live_rows_per_value() {
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE group_table (id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                 deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0);
+             INSERT INTO group_table (id, data, deleted) VALUES
+                 ('a', '{\"name\":\"Maschinenbau - Welle 1\"}', 0),
+                 ('b', '{\"name\":\"Maschinenbau - Welle 1\"}', 0),
+                 ('c', '{\"name\":\"Maschinenbau - Welle 1\",\"is_deleted\":true}', 0),
+                 ('d', '{\"name\":\"Maschinenbau - Welle 1\"}', 1),
+                 ('e', '{\"name\":\"Chemie - Welle 1\"}', 0),
+                 ('f', '{\"name\":\"Beauty\"}', 0);",
+        )
+        .expect("seed");
+        let path = Path::new("/nonexistent/group-test.sqlite3");
+        ensure_rxdb_string_field_lookup_index(path, &conn, "group_table", "name");
+        let mut statement = conn
+            .prepare(&rxdb_string_field_group_sql("group_table", "name"))
+            .expect("prepare");
+        let mut groups = statement
+            .query_map(params!["%welle%"], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .expect("query")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("rows");
+        groups.sort();
+        assert_eq!(
+            groups,
+            vec![
+                ("Chemie - Welle 1".to_string(), 1),
+                ("Maschinenbau - Welle 1".to_string(), 2)
+            ]
+        );
+    }
+
+    #[test]
     fn string_field_lookup_uses_an_expression_index_and_matches_text_and_numbers() {
         let conn = Connection::open_in_memory().expect("open");
         conn.execute_batch(
@@ -11801,6 +11838,78 @@ pub(super) fn find_rxdb_collection_records_by_string_field(
 /// CRM company matching, where names drift over time (legal-form suffixes,
 /// renames): the browser must not scan 17k replicated documents itself, so
 /// the LIKE scan runs natively over the SQLite store instead.
+/// Counts live records per value of one JSON string field whose value
+/// contains `needle` (case-insensitive LIKE), largest groups first.
+///
+/// A Sellify campaign search needs only names and member counts. Loading every
+/// matching membership row (up to 50,000 full documents) and grouping in Rust
+/// took 8 s for "Welle" and silently undercounted once the cap was reached
+/// (THESEN 26.09.2026). Grouping in SQL over the `("deleted", name, "id")`
+/// expression index reads the name from the index and touches a row only for
+/// its `is_deleted` flag.
+pub(super) fn group_rxdb_collection_string_field_contains(
+    root: &Path,
+    collection: &str,
+    field: &str,
+    needle: &str,
+    max_groups: usize,
+) -> anyhow::Result<(Vec<(String, u64)>, u64)> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    if !field
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        anyhow::bail!("invalid RxDB JSON field `{field}`");
+    }
+    let needle = needle.trim();
+    if max_groups == 0 || needle.len() < 2 {
+        return Ok((Vec::new(), 0));
+    }
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok((Vec::new(), 0));
+    }
+    let conn = Connection::open(&path)?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+        return Ok((Vec::new(), 0));
+    };
+    ensure_rxdb_string_field_lookup_index(&path, &conn, &table, field);
+    let escaped = needle
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let pattern = format!("%{escaped}%");
+    let mut stmt = conn.prepare(&rxdb_string_field_group_sql(&table, field))?;
+    let groups = stmt
+        .query_map(params![pattern], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let scanned = groups.iter().map(|(_, count)| (*count).max(0) as u64).sum();
+    let mut groups = groups
+        .into_iter()
+        .map(|(name, count)| (name.trim().to_string(), count.max(0) as u64))
+        .filter(|(name, _)| !name.is_empty())
+        .collect::<Vec<_>>();
+    groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    groups.truncate(max_groups);
+    Ok((groups, scanned))
+}
+
+fn rxdb_string_field_group_sql(table: &str, field: &str) -> String {
+    format!(
+        "SELECT json_extract(data, '$.{field}') AS grouped_value, COUNT(*)
+         FROM {table}
+         WHERE deleted = 0
+           AND json_extract(data, '$.{field}') LIKE ?1 ESCAPE '\\'
+           AND COALESCE(json_extract(data, '$.is_deleted'), 0) NOT IN (1, 'true')
+         GROUP BY grouped_value"
+    )
+}
+
 pub(super) fn find_rxdb_collection_records_by_string_field_contains(
     root: &Path,
     collection: &str,

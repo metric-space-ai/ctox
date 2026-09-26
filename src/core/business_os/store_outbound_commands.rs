@@ -4,7 +4,8 @@
 use super::backup_restore::file_sha256;
 use super::store::{
     find_rxdb_collection_record_by_string_field, find_rxdb_collection_records_by_string_field,
-    find_rxdb_collection_records_by_string_field_contains, insert_business_event,
+    find_rxdb_collection_records_by_string_field_contains,
+    group_rxdb_collection_string_field_contains, insert_business_event,
     is_safe_rxdb_collection_name, load_rxdb_collection_record, now_ms, open_store,
     outbound_first_string, outbound_id_from_command, outbound_load_record,
     outbound_load_records_by_string_field, outbound_load_required, outbound_merge_fields,
@@ -1387,6 +1388,74 @@ fn outbound_registry_latest_script(root: &Path, target_key: &str) -> anyhow::Res
     }))
 }
 
+/// Campaign search: names and member counts grouped in SQL (see
+/// `group_rxdb_collection_string_field_contains`). Exact `selectors` count as a
+/// containment probe too, so a full campaign name finds its own group.
+fn outbound_sellify_campaign_name_groups(
+    root: &Path,
+    collection: &str,
+    allowed_fields: &[&str],
+    payload: &Value,
+) -> anyhow::Result<Value> {
+    const MAX_GROUPS: usize = 200;
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut scanned = 0_u64;
+    for key in ["fuzzy_selectors", "selectors"] {
+        for selector in payload
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let field = selector
+                .get("field")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let needle = selector
+                .get("value")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            anyhow::ensure!(
+                allowed_fields.contains(&field),
+                "unsupported campaign lookup field `{field}`"
+            );
+            if needle.is_empty() {
+                continue;
+            }
+            let (groups, matched) = group_rxdb_collection_string_field_contains(
+                root,
+                collection,
+                field,
+                needle,
+                usize::MAX,
+            )?;
+            scanned = scanned.saturating_add(matched);
+            for (name, count) in groups {
+                let entry = counts.entry(name).or_default();
+                *entry = (*entry).max(count);
+            }
+        }
+    }
+    let mut groups = counts.into_iter().collect::<Vec<_>>();
+    groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let truncated = groups.len() > MAX_GROUPS;
+    let groups = groups
+        .into_iter()
+        .take(MAX_GROUPS)
+        .map(|(name, count)| serde_json::json!({ "name": name, "count": count }))
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "ok": true,
+        "entity": "campaign",
+        "groups": groups,
+        "scanned": scanned,
+        "truncated": truncated,
+        "records": [],
+    }))
+}
+
 pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::Result<Value> {
     let entity = outbound_required_string(payload, &["entity"])?;
     let (collection, allowed_fields): (&str, &[&str]) = match entity.as_str() {
@@ -1451,6 +1520,9 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
         .and_then(Value::as_u64)
         .unwrap_or(25)
         .clamp(1, limit_cap) as usize;
+    if group_by_name {
+        return outbound_sellify_campaign_name_groups(root, collection, allowed_fields, payload);
+    }
     let mut records = Vec::new();
     let mut seen = BTreeSet::new();
     if let Some(ids) = payload.get("ids").and_then(Value::as_array) {
@@ -1542,40 +1614,6 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
                 }
             }
         }
-    }
-    // Beauty, 11.09.2026: a campaign search returned 2000 full rows (1.1 MB);
-    // the peer dropped the result ("exceeds peer wire budget", 256 KB) and the
-    // browser reported "no Sellify campaign found". A search needs names and
-    // counts, an import only a few columns.
-    if group_by_name {
-        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-        for record in &records {
-            let name = record
-                .get("name")
-                .or_else(|| record.get("title"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .unwrap_or("");
-            if !name.is_empty() && record.get("is_deleted").and_then(Value::as_bool) != Some(true) {
-                *counts.entry(name.to_string()).or_default() += 1;
-            }
-        }
-        let mut groups = counts.into_iter().collect::<Vec<_>>();
-        groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        let truncated = records.len() >= limit;
-        let groups = groups
-            .into_iter()
-            .take(200)
-            .map(|(name, count)| serde_json::json!({ "name": name, "count": count }))
-            .collect::<Vec<_>>();
-        return Ok(serde_json::json!({
-            "ok": true,
-            "entity": entity,
-            "groups": groups,
-            "scanned": records.len(),
-            "truncated": truncated,
-            "records": [],
-        }));
     }
     let fields = payload
         .get("fields")
