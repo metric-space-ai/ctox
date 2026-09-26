@@ -11620,6 +11620,132 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
     Ok(Some((id, record)))
 }
 
+/// Exact-match lookup over one JSON field of an RxDB collection table.
+///
+/// The JSON path is a literal and `deleted` leads the predicate so SQLite can
+/// use the `("deleted", json_extract(data, '$.field'), "id")` expression index
+/// that RxDB schema indexes and [`ensure_rxdb_string_field_lookup_index`]
+/// create. The former `CAST(json_extract(data, ?1) AS TEXT) = ?2` could use no
+/// index: each Sellify lookup parsed every row, e.g. 92,875 campaign rows
+/// (118 MB) per campaign import on THESEN (26.09.2026). The caller must have
+/// validated `field` as `[A-Za-z0-9_]+`.
+fn rxdb_string_field_lookup_sql(table: &str, field: &str) -> String {
+    format!(
+        "SELECT id, data
+         FROM {table}
+         WHERE deleted IN (0, 1)
+           AND json_extract(data, '$.{field}') IN (?1, ?2)
+         ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
+         LIMIT ?3"
+    )
+}
+
+/// Creates the expression index a string-field lookup needs when the RxDB
+/// schema does not declare one (e.g. `sellify_campaigns.name`). Best effort:
+/// without the index the lookup stays correct, only slower.
+fn ensure_rxdb_string_field_lookup_index(path: &Path, conn: &Connection, table: &str, field: &str) {
+    static CHECKED: std::sync::OnceLock<std::sync::Mutex<BTreeSet<String>>> =
+        std::sync::OnceLock::new();
+    let key = format!("{}|{table}|{field}", path.display());
+    let checked = CHECKED.get_or_init(|| std::sync::Mutex::new(BTreeSet::new()));
+    if checked
+        .lock()
+        .map(|set| set.contains(&key))
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let expression = format!("json_extract(data, '$.{field}')");
+    let result = (|| -> rusqlite::Result<()> {
+        let mut statement = conn.prepare(
+            "SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'index' AND tbl_name = ?1",
+        )?;
+        let covered = statement
+            .query_map(params![table], |row| row.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .any(|sql| sql.contains(&format!("(\"deleted\", {expression}")));
+        if !covered {
+            conn.execute_batch(&format!(
+                "CREATE INDEX IF NOT EXISTS \"{table}_lookup_{field}_idx\"
+                 ON \"{table}\"(\"deleted\", {expression}, \"id\");"
+            ))?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            if let Ok(mut set) = checked.lock() {
+                set.insert(key);
+            }
+        }
+        Err(error) => {
+            eprintln!("[business-os] lookup index on {table}.{field} not available yet: {error}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod rxdb_string_field_lookup_tests {
+    use super::*;
+
+    #[test]
+    fn string_field_lookup_uses_an_expression_index_and_matches_text_and_numbers() {
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE lookup_table (id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                 deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0);
+             INSERT INTO lookup_table (id, data) VALUES
+                 ('a', '{\"name\":\"Maschinenbau\",\"updated_at_ms\":2}'),
+                 ('b', '{\"name\":\"Chemie\",\"updated_at_ms\":1}'),
+                 ('c', '{\"contact_id\":123,\"updated_at_ms\":3}'),
+                 ('d', '{\"contact_id\":\"123\",\"updated_at_ms\":4}');",
+        )
+        .expect("seed");
+        let path = Path::new("/nonexistent/lookup-test.sqlite3");
+        ensure_rxdb_string_field_lookup_index(path, &conn, "lookup_table", "name");
+        ensure_rxdb_string_field_lookup_index(path, &conn, "lookup_table", "contact_id");
+
+        let lookup = |field: &str, expected: &str| -> Vec<String> {
+            let numeric = expected.parse::<i64>().ok();
+            let mut statement = conn
+                .prepare(&rxdb_string_field_lookup_sql("lookup_table", field))
+                .expect("prepare");
+            statement
+                .query_map(params![expected, numeric, 10_i64], |row| {
+                    row.get::<_, String>(0)
+                })
+                .expect("query")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("rows")
+        };
+        assert_eq!(lookup("name", "Maschinenbau"), vec!["a".to_string()]);
+        assert_eq!(
+            lookup("contact_id", "123"),
+            vec!["d".to_string(), "c".to_string()]
+        );
+        assert!(lookup("name", "Bau").is_empty());
+
+        let plan = conn
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {}",
+                rxdb_string_field_lookup_sql("lookup_table", "name")
+            ))
+            .expect("prepare plan")
+            .query_map(
+                params!["Maschinenbau", Option::<i64>::None, 10_i64],
+                |row| row.get::<_, String>(3),
+            )
+            .expect("plan")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("plan rows")
+            .join("\n");
+        assert!(
+            plan.contains("lookup_table_lookup_name_idx"),
+            "lookup must use the expression index, plan: {plan}"
+        );
+    }
+}
+
 pub(super) fn find_rxdb_collection_records_by_string_field(
     root: &Path,
     collection: &str,
@@ -11644,19 +11770,17 @@ pub(super) fn find_rxdb_collection_records_by_string_field(
         return Ok(Vec::new());
     }
     let conn = Connection::open(&path)?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
     let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
         return Ok(Vec::new());
     };
-    let json_path = format!("$.{field}");
-    let mut stmt = conn.prepare(&format!(
-        "SELECT id, data
-         FROM {table}
-         WHERE CAST(json_extract(data, ?1) AS TEXT) = ?2
-         ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
-         LIMIT ?3"
-    ))?;
+    ensure_rxdb_string_field_lookup_index(&path, &conn, &table, field);
+    // A numeric JSON value must still match its decimal text (the former
+    // `CAST(... AS TEXT) = ?` semantics), so the integer form is probed too.
+    let numeric = expected.parse::<i64>().ok();
+    let mut stmt = conn.prepare(&rxdb_string_field_lookup_sql(&table, field))?;
     let rows = stmt
-        .query_map(params![json_path, expected, limit as i64], |row| {
+        .query_map(params![expected, numeric, limit as i64], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;

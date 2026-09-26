@@ -1319,7 +1319,11 @@ class CtoxWebRtcReplicationState {
         timeoutMs,
       );
     }
-    return this.peer.request(negotiated.peerId, String(method || ''), [params], timeoutMs, this.collection);
+    // The frame's `collection` field is the collection NAME. Passing the
+    // RxCollection object made the native peer drop every such frame, so each
+    // `ctox.outbound.sellify_lookup.v1` ran into its caller's timeout while the
+    // same request with the name answered in under a second (THESEN 26.09.2026).
+    return this.peer.request(negotiated.peerId, String(method || ''), [params], timeoutMs, this.collection?.name || null);
   }
 
   async start(connectionHandlerCreator) {

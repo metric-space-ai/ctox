@@ -10851,7 +10851,7 @@ var CtoxWebRtcReplicationState = class {
         timeoutMs
       );
     }
-    return this.peer.request(negotiated.peerId, String(method || ""), [params], timeoutMs, this.collection);
+    return this.peer.request(negotiated.peerId, String(method || ""), [params], timeoutMs, this.collection?.name || null);
   }
   async start(connectionHandlerCreator) {
     this.schemaHashValue = await this.collection.schema.hash();
