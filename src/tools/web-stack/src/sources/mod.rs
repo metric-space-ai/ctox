@@ -326,9 +326,9 @@ pub struct FieldEvidence {
 /// Context handed to source modules for a single research turn.
 ///
 /// `root` is the CTOX state root (the directory containing
-/// `runtime/ctox.sqlite3`), so a module can read API tokens via
-/// [`runtime_config::get`](crate::runtime_config::get) or — for encrypted
-/// credentials — via the `ctox secret get` CLI of the same binary.
+/// `runtime/ctox.sqlite3`) for non-secret configuration. Encrypted credentials
+/// are borrowed explicitly through `fetch_direct_with_resolver`; modules must
+/// not launch a credential CLI or treat runtime configuration as a secret store.
 pub struct SourceCtx<'a> {
     pub root: &'a Path,
     pub country: Option<Country>,
@@ -599,6 +599,18 @@ pub trait SourceModule: Sync {
         _company: &str,
     ) -> Option<Result<Vec<SourceHit>, SourceError>> {
         None
+    }
+
+    /// Native hosts lend a scoped credential resolver for this request only.
+    /// Legacy sources retain their existing behavior; credential-aware sources
+    /// override this and fail closed when the resolver is unavailable.
+    fn fetch_direct_with_resolver(
+        &self,
+        ctx: &SourceCtx<'_>,
+        company: &str,
+        _resolver: Option<&dyn crate::credentials::CredentialResolver>,
+    ) -> Option<Result<Vec<SourceHit>, SourceError>> {
+        self.fetch_direct(ctx, company)
     }
 
     /// Pull typed fields out of a single read page (HTML, PDF, or JSON body
