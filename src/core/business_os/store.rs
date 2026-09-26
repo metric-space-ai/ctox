@@ -25649,7 +25649,7 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             subject_type TEXT NOT NULL CHECK(subject_type IN ('user', 'role')),
             subject_id TEXT NOT NULL,
             permission TEXT NOT NULL,
-            scope_type TEXT NOT NULL CHECK(scope_type IN ('workspace', 'module', 'collection', 'record', 'task', 'approval', 'mcp')),
+            scope_type TEXT NOT NULL CHECK(scope_type IN ('workspace', 'module', 'collection', 'record', 'task', 'approval', 'mcp', 'session_handoff')),
             scope_id TEXT NOT NULL DEFAULT '',
             active INTEGER NOT NULL DEFAULT 1,
             reason TEXT NOT NULL DEFAULT '',
@@ -25661,6 +25661,42 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
             ON business_permission_grants(subject_type, subject_id, active);
         CREATE INDEX IF NOT EXISTS idx_business_permission_grants_scope
             ON business_permission_grants(permission, scope_type, scope_id, active);
+
+        CREATE TABLE IF NOT EXISTS business_session_handoff_bindings (
+            binding_id TEXT PRIMARY KEY,
+            binding_digest TEXT NOT NULL,
+            revision INTEGER NOT NULL,
+            state TEXT NOT NULL CHECK(state IN ('active', 'revoked')),
+            side TEXT NOT NULL CHECK(side IN ('source', 'target')),
+            job_id TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            scope_id TEXT NOT NULL,
+            checkpoint_digest TEXT NOT NULL,
+            checkpoint_sequence INTEGER NOT NULL,
+            ownership_generation INTEGER NOT NULL,
+            source_instance_id TEXT NOT NULL,
+            source_identity TEXT NOT NULL,
+            source_actor_user_id TEXT NOT NULL,
+            target_instance_id TEXT NOT NULL,
+            target_identity TEXT NOT NULL,
+            target_principal_user_id TEXT NOT NULL,
+            repository_id TEXT NOT NULL,
+            target_working_copy_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            gateway_account_id TEXT NOT NULL,
+            model_route_id TEXT NOT NULL,
+            model_id TEXT NOT NULL,
+            required_capabilities_json TEXT NOT NULL DEFAULT '[]',
+            harness TEXT NOT NULL,
+            harness_version TEXT NOT NULL,
+            created_by TEXT NOT NULL,
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_business_session_handoff_bindings_digest
+            ON business_session_handoff_bindings(binding_digest, state);
+        CREATE INDEX IF NOT EXISTS idx_business_session_handoff_bindings_session
+            ON business_session_handoff_bindings(job_id, session_id, state);
 
         CREATE TABLE IF NOT EXISTS business_module_releases (
             version_id TEXT PRIMARY KEY,
@@ -25740,6 +25776,7 @@ fn migrate(conn: &Connection) -> anyhow::Result<()> {
     migrate_business_users_roles(conn)?;
     migrate_business_users_profile_json(conn)?;
     migrate_business_users_capability_epoch(conn)?;
+    migrate_business_permission_grants_scope_types(conn)?;
     install_capability_epoch_triggers(conn)?;
     super::support::migrate(conn)?;
     Ok(())
@@ -25806,6 +25843,141 @@ fn migrate_business_users_capability_epoch(conn: &Connection) -> anyhow::Result<
         [],
     )?;
     Ok(())
+}
+
+/// Existing grant tables reject the `session_handoff` scope type through their
+/// original CHECK constraint. Rebuild the table once, preserving every grant,
+/// without firing the capability-epoch triggers for a pure schema change.
+fn migrate_business_permission_grants_scope_types(conn: &Connection) -> anyhow::Result<()> {
+    let table_sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'business_permission_grants'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or_default();
+    if table_sql.is_empty() || table_sql.contains("'session_handoff'") {
+        return Ok(());
+    }
+    // A savepoint also preserves an enclosing caller-owned transaction.
+    conn.execute_batch("SAVEPOINT business_grants_scope_migration")?;
+    let result = (|| -> anyhow::Result<()> {
+        conn.execute_batch(
+        "
+        DROP TRIGGER IF EXISTS business_grants_capability_epoch_on_insert;
+        DROP TRIGGER IF EXISTS business_grants_capability_epoch_on_update;
+        DROP TRIGGER IF EXISTS business_grants_capability_epoch_on_delete;
+        ALTER TABLE business_permission_grants RENAME TO business_permission_grants_old;
+        CREATE TABLE business_permission_grants (
+            grant_id TEXT PRIMARY KEY,
+            subject_type TEXT NOT NULL CHECK(subject_type IN ('user', 'role')),
+            subject_id TEXT NOT NULL,
+            permission TEXT NOT NULL,
+            scope_type TEXT NOT NULL CHECK(scope_type IN ('workspace', 'module', 'collection', 'record', 'task', 'approval', 'mcp', 'session_handoff')),
+            scope_id TEXT NOT NULL DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            reason TEXT NOT NULL DEFAULT '',
+            created_by TEXT NOT NULL DEFAULT '',
+            created_at_ms INTEGER NOT NULL,
+            updated_at_ms INTEGER NOT NULL
+        );
+        INSERT INTO business_permission_grants
+            (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+             active, reason, created_by, created_at_ms, updated_at_ms)
+        SELECT grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+               active, reason, created_by, created_at_ms, updated_at_ms
+        FROM business_permission_grants_old;
+        DROP TABLE business_permission_grants_old;
+        CREATE INDEX IF NOT EXISTS idx_business_permission_grants_subject
+            ON business_permission_grants(subject_type, subject_id, active);
+        CREATE INDEX IF NOT EXISTS idx_business_permission_grants_scope
+            ON business_permission_grants(permission, scope_type, scope_id, active);
+        ",
+    )?;
+        install_capability_epoch_triggers(conn)?;
+        conn.execute_batch("RELEASE business_grants_scope_migration")?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        conn.execute_batch(
+            "ROLLBACK TO business_grants_scope_migration; RELEASE business_grants_scope_migration",
+        )
+        .context(format!(
+            "grant scope migration failed ({error:#}); rollback failed"
+        ))?;
+        return Err(error);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod grant_scope_migration_tests {
+    use super::*;
+
+    #[test]
+    fn grant_scope_migration_rolls_back_and_retries_inside_transaction() -> anyhow::Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE business_permission_grants (
+                grant_id TEXT PRIMARY KEY, subject_type TEXT NOT NULL,
+                subject_id TEXT NOT NULL, permission TEXT NOT NULL,
+                scope_type TEXT NOT NULL CHECK(scope_type IN ('workspace')),
+                scope_id TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1,
+                reason TEXT NOT NULL DEFAULT '', created_by TEXT NOT NULL DEFAULT '',
+                created_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL
+             );
+             INSERT INTO business_permission_grants VALUES
+                ('g', 'user', 'alice', 'read', 'workspace', '', 1, 'retained', 'admin', 1, 2);
+             CREATE TRIGGER business_grants_capability_epoch_on_insert
+                AFTER INSERT ON business_permission_grants BEGIN SELECT 1; END;
+             BEGIN;",
+        )?;
+        // Trigger installation fails after the table copy: business_users is absent.
+        assert!(migrate_business_permission_grants_scope_types(&conn).is_err());
+        assert!(!conn.is_autocommit());
+        let schema: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'business_permission_grants'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(!schema.contains("'session_handoff'"));
+        let triggers: i64 = conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND name = 'business_grants_capability_epoch_on_insert'",
+            [], |row| row.get(0),
+        )?;
+        assert_eq!(triggers, 1);
+        conn.execute_batch(
+            "CREATE TABLE business_users (user_id TEXT PRIMARY KEY, role TEXT, active INTEGER, capability_epoch INTEGER);
+             INSERT INTO business_users VALUES ('alice', 'member', 1, 7);",
+        )?;
+        migrate_business_permission_grants_scope_types(&conn)?;
+        migrate_business_permission_grants_scope_types(&conn)?;
+        assert!(!conn.is_autocommit());
+        let retained: (String, i64, i64) = conn.query_row(
+            "SELECT reason, created_at_ms, updated_at_ms FROM business_permission_grants WHERE grant_id = 'g'",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(retained, ("retained".into(), 1, 2));
+        let epoch = || {
+            conn.query_row(
+                "SELECT capability_epoch FROM business_users WHERE user_id = 'alice'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+        };
+        assert_eq!(epoch()?, 7);
+        conn.execute("UPDATE business_permission_grants SET scope_type = 'session_handoff' WHERE grant_id = 'g'", [])?;
+        assert_eq!(epoch()?, 8);
+        conn.execute_batch("ROLLBACK")?;
+        let schema: String = conn.query_row(
+            "SELECT sql FROM sqlite_master WHERE name = 'business_permission_grants'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(!schema.contains("'session_handoff'"));
+        Ok(())
+    }
 }
 
 fn install_capability_epoch_triggers(conn: &Connection) -> anyhow::Result<()> {

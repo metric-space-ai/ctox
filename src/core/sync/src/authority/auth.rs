@@ -3,6 +3,8 @@
 pub mod business_data_identity;
 #[cfg(all(feature = "webrtc", unix))]
 pub(crate) mod route;
+#[path = "auth/session_handoff.rs"]
+pub mod session_handoff;
 #[cfg(test)]
 #[path = "auth_tests.rs"]
 mod tests;

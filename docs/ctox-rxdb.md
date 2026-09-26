@@ -44,6 +44,55 @@ disagree, the code wins — and this document should be fixed.
 
 [Domain application receipts and command recovery](domain-effect-recovery.md) define the native boundary for a committed domain mutation whose RxDB/result delivery failed. Core remains the lifecycle owner; domain receipts are atomic application evidence, not another outbox.
 
+### Session handoff policy candidate — not production acceptance
+
+The [production integration boundary](ctox-sync-handoff-integration.md)
+traces the existing Workjet context handoff and native library seams, identifies
+their missing callers, and defines the required native lifecycle and evidence.
+
+The source work for [native handoff authorization (#183)](https://github.com/metric-space-ai/ctox/issues/183)
+introduces separate disclose, receive and execute permissions. Roles alone do
+not grant them. The explicit-grant evaluator requires a named actor and an exact,
+nonempty `session_handoff` scope. This is a grant lookup precondition, not proof
+that the actor was authenticated or that a binding is current.
+
+`src/core/sync/src/authority/handoff.rs` verifies each gate result against the
+independently enrolled issuer, signature, audience, fresh nonce, validity window,
+phase, binding digest, job/session/scope, checkpoint and ownership generation.
+Revalidation clears prior evidence before fallible work and awaits. Its permit
+accessor exposes audit evidence only; every protected chunk requires a new
+decision. The gate interface does not itself move or fence checkpoint bytes.
+
+The quorum state retains the source disclosure permit with a protected
+checkpoint and requires the target resume permit to name the same binding
+digest. This preserves digest continuity through state serialization. It does
+not prove that an issuer consulted current policy, resolve configured workspace
+or provider-account entitlements, or independently establish the initial binding.
+
+Existing grant-table migration rewrites the scope CHECK constraint and restores
+capability-epoch triggers in one savepoint. Copying grants does not fire those
+triggers; migration failure rolls back the rewrite, including dropped triggers.
+An enclosing caller transaction remains owned by the caller.
+
+Legacy quorum snapshots lacking disclosure evidence deserialize but deny
+takeover. The current owner can explicitly reauthorize the identical checkpoint
+with a fresh disclosure permit and identical sequence, digest, replicas and copy
+receipts. This one-time upgrade neither advances ownership nor changes checkpoint
+contents. Afterward equal-sequence replacement remains forbidden. Previously
+denied request IDs stay denied; a new takeover needs a new request and permit.
+This path requires the original owner; unavailable-owner recovery is unresolved.
+No automatic backfill or inferred permission is authorized.
+
+Cutover remains blocked on the native policy adapter, authenticated transport
+wiring, authoritative binding/account/workspace resolution, post-await revocation
+fencing, and actual checkpoint transfer/resume integration. Added grant,
+migration, permit, cancellation and restored-state regressions are source-only
+and have not been compiled or executed. State serialization tests are not Raft
+disk-snapshot restart tests. Acceptance still requires the real native policy
+store and authenticated transport, pre-byte and mid-transfer revocation tests,
+restoration of populated stores, independent-host durability, and real provider
+continuation. No production-readiness or rollout claim follows from these edits.
+
 ### Auth-assist command recovery
 
 `web_stack.auth_assist.request` represents an outstanding human login request.
