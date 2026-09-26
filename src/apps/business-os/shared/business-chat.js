@@ -8097,9 +8097,9 @@ ${CREW_CREATURE_BASE_CSS}
       grid-template-columns: max-content var(--ctox-date-pill-width) 36px;
       gap: 6px;
       padding: 5px;
-      border-color: color-mix(in srgb, var(--line) 48%, transparent);
+      border-color: var(--line);
       border-radius: 16px;
-      background: var(--surface);
+      background: var(--surface-2);
     }
     .ctox-chat-dock.has-visible-chats {
       grid-template-columns: max-content var(--ctox-date-pill-width) minmax(48px, auto) 36px;
@@ -8320,6 +8320,47 @@ ${CREW_CREATURE_BASE_CSS}
     }
     .ctox-chat-overflow-chip span,
     .ctox-chat-overflow-chip small { display: none !important; }
+    /* Dock contrast: use opaque shell surfaces, not the app behind the dock.
+       Keep creature/status colors intact; brighten only control chrome. */
+    .ctox-chat-dock .ctox-chat-date-pill {
+      border-color: var(--muted);
+      background: var(--surface);
+    }
+    .ctox-chat-dock .ctox-chat-chip:not(.is-active),
+    .ctox-chat-dock :is(.ctox-chat-fab, .ctox-date-nav-btn, .ctox-date-picker-trigger, .ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip) {
+      color: var(--text-strong);
+      background: var(--surface);
+    }
+    .ctox-chat-dock .ctox-chat-chip:not(.is-active),
+    .ctox-chat-dock :is(.ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip) {
+      border-color: var(--muted);
+    }
+    .ctox-chat-dock .ctox-date-picker-trigger svg {
+      color: currentColor;
+    }
+    .ctox-chat-dock :is(.ctox-chat-fab, .ctox-date-nav-btn, .ctox-date-picker-trigger, .ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip):not(:disabled):not([aria-disabled="true"]):hover {
+      color: var(--text-strong);
+      background: var(--surface-3);
+    }
+    .ctox-chat-dock :is(.ctox-chat-fab, .ctox-date-nav-btn, .ctox-date-picker-trigger, .ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip):not(:disabled):not([aria-disabled="true"]):active,
+    .ctox-chat-dock .ctox-chat-chip.is-active {
+      color: var(--text-strong);
+      background: var(--accent-soft);
+      border-color: var(--accent);
+    }
+    .ctox-chat-dock :is(button, [role="button"], [tabindex]):focus-visible {
+      /* A solid accent outline stays visible beside the translucent kit ring. */
+      outline: 2px solid var(--accent);
+      outline-offset: -2px;
+      box-shadow: var(--focus-ring);
+    }
+    .ctox-chat-dock :is(button, [role="button"]):is(:disabled, [aria-disabled="true"]) {
+      color: var(--muted);
+      background: var(--surface-2);
+      border-color: var(--line);
+      opacity: 1;
+    }
+    /* End dock contrast. */
     /* The dock has two deliberately opposite geometries. Keep these final
        state rules after all compact/theme overrides so a later generic dock
        rule cannot stretch the collapsed controls or cap the expanded strip. */
