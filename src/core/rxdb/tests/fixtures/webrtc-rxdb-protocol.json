@@ -41,7 +41,8 @@
     "presence": "ctox-presence-v1",
     "commandLifecycle": "ctox-command-lifecycle-v2",
     "checkpointGeneration": "ctox-checkpoint-generation-v2",
-    "appRuntime": "ctox-app-runtime-v1"
+    "appRuntime": "ctox-app-runtime-v1",
+    "rowsFetch": "ctox-rxdb-rows-fetch-v1"
   },
   "presenceRpc": {
     "update": "rxdb.presence.update",
@@ -67,6 +68,14 @@
     "error": "rxdb.file.error",
     "cancel": "rxdb.file.cancel",
     "maxBytesPerChunk": 262144
+  },
+  "rowsRpc": {
+    "fetch": "rxdb.rows.fetch",
+    "chunk": "rxdb.rows.chunk",
+    "error": "rxdb.rows.error",
+    "cancel": "rxdb.rows.cancel",
+    "maxBytesPerChunk": 262144,
+    "maxRowsPerWindow": 1000
   },
   "errorCodes": {
     "protocolMissing": "ctox_rxdb_protocol_missing",

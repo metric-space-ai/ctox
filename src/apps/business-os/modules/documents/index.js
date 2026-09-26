@@ -2394,6 +2394,9 @@ function mergeKnowledgeTableReferences(tables = []) {
   }
 
   return [...groups.entries()].map(([logicalId, parts]) => {
+    if (parts.every((part) => isCatalogKnowledgeReference(part))) {
+      return mergeKnowledgeCatalogReference(logicalId, parts);
+    }
     const sorted = [...parts].sort((left, right) => (
       (left.chunkIndex ?? Number.MAX_SAFE_INTEGER) - (right.chunkIndex ?? Number.MAX_SAFE_INTEGER)
       || left.id.localeCompare(right.id)
@@ -2513,6 +2516,146 @@ function mergeKnowledgeTableReferences(tables = []) {
   });
 }
 
+function isCatalogKnowledgeReference(part) {
+  if (hasEmbeddedKnowledgeRows(part?.table) || hasEmbeddedKnowledgeRows(part?.payload)) return false;
+  return isKnowledgeCatalogDocument(part?.table) || isKnowledgeCatalogDocument(part?.payload);
+}
+
+function isKnowledgeCatalogDocument(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  const nested = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const version = record.projection_version ?? nested?.projection_version;
+  const rowsSource = record.rows_source ?? nested?.rows_source;
+  const marked = version === 2 || version === '2' || rowsSource === 'rxdb.rows.fetch';
+  if (!marked) return false;
+  return !hasEmbeddedKnowledgeRows(record);
+}
+
+function hasEmbeddedKnowledgeRows(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  const nested = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const frame = record.dataframe && typeof record.dataframe === 'object' && !Array.isArray(record.dataframe)
+    ? record.dataframe
+    : null;
+  const nestedFrame = nested?.dataframe && typeof nested.dataframe === 'object' && !Array.isArray(nested.dataframe)
+    ? nested.dataframe
+    : null;
+  return [
+    record.rows,
+    record.records,
+    record.data,
+    frame?.rows,
+    frame?.records,
+    frame?.data,
+    nested?.rows,
+    nested?.records,
+    nested?.data,
+    nestedFrame?.rows,
+    nestedFrame?.records,
+    nestedFrame?.data,
+  ].some((value) => Array.isArray(value) && value.length > 0);
+}
+
+function catalogRowCount(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  const nested = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const value = record.row_count ?? nested?.row_count;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return null;
+  return number;
+}
+
+function mergeKnowledgeCatalogReference(logicalId, parts) {
+  const sorted = [...parts].sort((left, right) => left.id.localeCompare(right.id));
+  const first = sorted[0];
+  const rowCount = sorted
+    .map((part) => catalogRowCount(part.table) ?? catalogRowCount(part.payload))
+    .find((value) => value != null);
+  const columns = firstArray(
+    first.payload?.columns,
+    first.table?.columns,
+    first.payload?.schema?.columns,
+    first.table?.schema?.columns,
+  );
+  const tableId = String(first.payload?.table_id || first.table?.table_id || '').trim();
+  const domain = String(
+    first.payload?.domain
+    || first.table?.domain
+    || first.payload?.knowledge_domain
+    || first.table?.knowledge_domain
+    || '',
+  ).trim();
+  const projectionVersion = first.payload?.projection_version ?? first.table?.projection_version ?? 2;
+  const rowsSource = first.payload?.rows_source || first.table?.rows_source || 'rxdb.rows.fetch';
+  const mergedPayload = {
+    id: logicalId,
+    table_id: tableId,
+    logical_table_id: logicalId,
+    domain,
+    columns,
+    rows_source: rowsSource,
+    projection_version: projectionVersion,
+    rows_complete: true,
+    chunk_status: 'complete',
+    chunk_validation_errors: [],
+  };
+  if (rowCount != null) mergedPayload.row_count = rowCount;
+  return normalizeKnowledgeRecord({
+    id: logicalId,
+    table_id: tableId,
+    logical_table_id: logicalId,
+    domain,
+    kind: first.table?.kind || first.payload?.kind || 'dataframe',
+    title: String(first.table?.title || first.payload?.title || '').trim(),
+    summary: String(
+      first.table?.summary
+      || first.payload?.summary
+      || first.table?.description
+      || first.payload?.description
+      || '',
+    ).trim(),
+    columns,
+    rows_source: rowsSource,
+    projection_version: projectionVersion,
+    rows_complete: true,
+    chunk_status: 'complete',
+    chunk_validation_errors: [],
+    ...(rowCount != null ? { row_count: rowCount } : {}),
+    payload: mergedPayload,
+  });
+}
+
+function knowledgeTableLineage(table) {
+  if (isKnowledgeCatalogDocument(table)) {
+    return {
+      id: table.id,
+      table_id: String(table.table_id || table.payload?.table_id || '').trim(),
+      domain: String(table.domain || table.payload?.domain || table.knowledge_domain || table.payload?.knowledge_domain || '').trim(),
+      row_count: catalogRowCount(table),
+      columns: firstArray(
+        table.columns,
+        table.payload?.columns,
+        table.schema?.columns,
+        table.payload?.schema?.columns,
+      ),
+    };
+  }
+  return {
+    id: table.id,
+    chunk_status: table.chunk_status || table.payload?.chunk_status || 'complete',
+    rows_complete: table.rows_complete ?? table.payload?.rows_complete ?? true,
+    chunk_ids: table.chunk_ids || table.payload?.chunk_ids || [table.id],
+    chunk_lineage: table.chunk_lineage || table.payload?.chunk_lineage || table.lineage || table.payload?.lineage || [],
+    projected_row_count: table.projected_row_count ?? table.payload?.projected_row_count ?? null,
+  };
+}
+
 function consistentDeclaredValue(parts, field, errors, errorCode) {
   const values = [...new Set(parts
     .map((part) => part[field].present ? part[field].value : null)
@@ -2593,14 +2736,7 @@ function resolveKnowledgeContext(state, requestedId = '', query = '') {
     updated_at_ms: selected.updated_at_ms,
     linked_runbook_ids: relatedRunbooks.map((runbook) => runbook.id),
     table_ids: relatedTables.map((table) => table.id),
-    table_lineage: relatedTables.map((table) => ({
-      id: table.id,
-      chunk_status: table.chunk_status || table.payload?.chunk_status || 'complete',
-      rows_complete: table.rows_complete ?? table.payload?.rows_complete ?? true,
-      chunk_ids: table.chunk_ids || table.payload?.chunk_ids || [table.id],
-      chunk_lineage: table.chunk_lineage || table.payload?.chunk_lineage || table.lineage || table.payload?.lineage || [],
-      projected_row_count: table.projected_row_count ?? table.payload?.projected_row_count ?? null,
-    })),
+    table_lineage: relatedTables.map((table) => knowledgeTableLineage(table)),
     source_references: sourceReferences.slice(0, 200),
   };
 }
