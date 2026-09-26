@@ -19,6 +19,17 @@ EVIDENCE.mkdir(parents=True, exist_ok=True)
 DEADLINE = time.monotonic() + 7200
 TARGET = 'x86_64-unknown-linux-gnu'
 FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
+           'knowledge::data::tests::',
+           'business_os::rxdb_peer_knowledge_rows::tests::',
+           'startup_clamp_waits_for_a_concurrent_writer_instead_of_failing',
+           'knowledge_tables_sync_tombstones_legacy_chunks_and_strips_base_rows',
+           'queue_task_update_keeps_its_place_unless_priority_changes',
+           'cockpit_bring_up_materializes_no_legacy_grants',
+           'native_peer_consumes_pending_knowledge_command',
+           'native_peer_consumes_pending_module_governance_commands',
+           'native_peer_marks_invalid_ticket_commands_failed',
+           'native_peer_sync_config_change_detects_room_rotation',
+           'sync_business_record_projections_materializes_procedural_knowledge',
            'business_chat', 'repair_queue_projections',
            'mcp_app_authority', 'app_source_', 'gateway_managed_',
            'replicated_queue_command_persists_and_revalidates_native_authorization',
@@ -173,8 +184,8 @@ def main():
         'src/apps/business-os/rxdb/tests/customer-identifier-inventory-smoke.mjs'])
     run('content-guard', ['node', 'src/apps/business-os/scripts/audit-business-os-content.mjs'])
     if not focused:
-        # These four main sync suites remain unchanged by Desktop recovery and
-        # define 26 tests. The five PR185 native-read tests are not on this tree.
+        # Preserve the four existing sync suites and their exact discovery count.
+        # Additional native source groups are discovered below, without zero-match passes.
         sync_tests = [
             'sync-collection-registry.test.mjs',
             'sync-contract.test.mjs',
@@ -265,6 +276,24 @@ def main():
                                    '--format-version', '1']))
     target_dir = Path(metadata['target_directory'])
     RECORD['cargo_target_directory'] = str(target_dir)
+    # This nested harness crate's unit tests are not executed by the root bin tests.
+    # Reuse the full lane's release target directory and retain an exact discovery gate.
+    harness_case = 'sse::responses::tests::restores_function_call_arguments_streamed_only_as_deltas'
+    harness_command = ['cargo', 'test', '--locked', '--release', '--manifest-path',
+                       'src/core/harness/Cargo.toml', '-p', 'ctox-api', '--lib',
+                       '--target', TARGET, '--target-dir', str(target_dir), '--jobs', '2',
+                       harness_case, '--', '--exact']
+    harness_listing = run('harness-arguments-list', harness_command + ['--list'])
+    harness_names = re.findall(r'^(.+): test$', harness_listing, re.MULTILINE)
+    if harness_names != [harness_case]:
+        raise RuntimeError(f'Required harness argument regression absent or ambiguous: {harness_names}')
+    RECORD['required_harness_tests'] = harness_names
+    save()
+    harness_output = run('harness-arguments-test', harness_command + ['--test-threads=2'])
+    harness_summaries = re.findall(
+        r'test result: ok\. (\d+) passed; 0 failed; 0 ignored;', harness_output)
+    if harness_summaries != ['1']:
+        raise RuntimeError('Harness argument regression did not execute and pass exactly once')
     # Business OS directory requirements, on the same reviewed product source.
     run('cargo-check', ['cargo', 'check', '--locked', '--jobs', '2'])
     run('rxdb-native-tests', ['cargo', 'test', '--locked', '--manifest-path',

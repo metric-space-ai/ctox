@@ -32,8 +32,8 @@ jobs:
       RAYON_NUM_THREADS: '2'
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: never
-      # Reviewed native integration plus required Desktop restart recovery.
-      REVIEWED_SOURCE_REVISION: 'c6164052057b361c6e138b13d8ce2afc5c39c9db'
+      # Current main source reviewed for full verification; acceptance requires all gates.
+      REVIEWED_SOURCE_REVISION: '09203a514ef49543bd2466786511426911eded94'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
