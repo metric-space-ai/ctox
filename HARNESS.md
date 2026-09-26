@@ -405,6 +405,19 @@ closed. A truthful blocker report does not complete requested execution; a
 verified query with zero matches can complete it. Review admission preserves
 incomplete plan steps and their actual progress.
 
+When an otherwise accepted Business OS chat queue result still has incomplete
+durable plan steps, finalization records a terminal failure with the same
+attempt/work key and plan revision/counts. It does not complete those steps,
+replay research/writebacks, or enqueue an automatic recovery prompt. Partial
+writeback receipts are retained evidence, not completion proof. Reconciliation
+of the saved result and plan must precede an explicit retry. Storage failures
+remain recoverable from the stored attempt.
+
+The failure transition checks current plan and lease ownership under an
+Immediate transaction. A prior nonterminal hold's effect marker is preserved;
+it cannot swallow this terminal transition. Cancellation and other terminal
+owners are retained. A changed lease or plan is not overwritten.
+
 The supported dispositions are:
 
 - `Approved`
