@@ -487,6 +487,10 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
   text-overflow: ellipsis;
 }
 
+.ctox-backend-version-line {
+  max-width: 240px;
+}
+
 .shell-release-line {
   position: relative;
 }
