@@ -11620,6 +11620,169 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
     Ok(Some((id, record)))
 }
 
+/// Exact-match lookup over one JSON field of an RxDB collection table.
+///
+/// The JSON path is a literal and `deleted` leads the predicate so SQLite can
+/// use the `("deleted", json_extract(data, '$.field'), "id")` expression index
+/// that RxDB schema indexes and [`ensure_rxdb_string_field_lookup_index`]
+/// create. The former `CAST(json_extract(data, ?1) AS TEXT) = ?2` could use no
+/// index: each Sellify lookup parsed every row, e.g. 92,875 campaign rows
+/// (118 MB) per campaign import on THESEN (26.09.2026). The caller must have
+/// validated `field` as `[A-Za-z0-9_]+`.
+fn rxdb_string_field_lookup_sql(table: &str, field: &str) -> String {
+    format!(
+        "SELECT id, data
+         FROM {table}
+         WHERE deleted IN (0, 1)
+           AND json_extract(data, '$.{field}') IN (?1, ?2)
+         ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
+         LIMIT ?3"
+    )
+}
+
+/// Creates the expression index a string-field lookup needs when the RxDB
+/// schema does not declare one (e.g. `sellify_campaigns.name`). Best effort:
+/// without the index the lookup stays correct, only slower.
+fn ensure_rxdb_string_field_lookup_index(path: &Path, conn: &Connection, table: &str, field: &str) {
+    static CHECKED: std::sync::OnceLock<std::sync::Mutex<BTreeSet<String>>> =
+        std::sync::OnceLock::new();
+    let key = format!("{}|{table}|{field}", path.display());
+    let checked = CHECKED.get_or_init(|| std::sync::Mutex::new(BTreeSet::new()));
+    if checked
+        .lock()
+        .map(|set| set.contains(&key))
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let expression = format!("json_extract(data, '$.{field}')");
+    let result = (|| -> rusqlite::Result<()> {
+        let mut statement = conn.prepare(
+            "SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'index' AND tbl_name = ?1",
+        )?;
+        let covered = statement
+            .query_map(params![table], |row| row.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .any(|sql| sql.contains(&format!("(\"deleted\", {expression}")));
+        if !covered {
+            conn.execute_batch(&format!(
+                "CREATE INDEX IF NOT EXISTS \"{table}_lookup_{field}_idx\"
+                 ON \"{table}\"(\"deleted\", {expression}, \"id\");"
+            ))?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            if let Ok(mut set) = checked.lock() {
+                set.insert(key);
+            }
+        }
+        Err(error) => {
+            eprintln!("[business-os] lookup index on {table}.{field} not available yet: {error}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod rxdb_string_field_lookup_tests {
+    use super::*;
+
+    #[test]
+    fn grouped_contains_search_counts_live_rows_per_value() {
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE group_table (id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                 deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0);
+             INSERT INTO group_table (id, data, deleted) VALUES
+                 ('a', '{\"name\":\"Maschinenbau - Welle 1\"}', 0),
+                 ('b', '{\"name\":\"Maschinenbau - Welle 1\"}', 0),
+                 ('c', '{\"name\":\"Maschinenbau - Welle 1\",\"is_deleted\":true}', 0),
+                 ('d', '{\"name\":\"Maschinenbau - Welle 1\"}', 1),
+                 ('e', '{\"name\":\"Chemie - Welle 1\"}', 0),
+                 ('f', '{\"name\":\"Beauty\"}', 0);",
+        )
+        .expect("seed");
+        let path = Path::new("/nonexistent/group-test.sqlite3");
+        ensure_rxdb_string_field_lookup_index(path, &conn, "group_table", "name");
+        let mut statement = conn
+            .prepare(&rxdb_string_field_group_sql("group_table", "name"))
+            .expect("prepare");
+        let mut groups = statement
+            .query_map(params!["%welle%"], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .expect("query")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("rows");
+        groups.sort();
+        assert_eq!(
+            groups,
+            vec![
+                ("Chemie - Welle 1".to_string(), 1),
+                ("Maschinenbau - Welle 1".to_string(), 2)
+            ]
+        );
+    }
+
+    #[test]
+    fn string_field_lookup_uses_an_expression_index_and_matches_text_and_numbers() {
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE lookup_table (id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                 deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0);
+             INSERT INTO lookup_table (id, data) VALUES
+                 ('a', '{\"name\":\"Maschinenbau\",\"updated_at_ms\":2}'),
+                 ('b', '{\"name\":\"Chemie\",\"updated_at_ms\":1}'),
+                 ('c', '{\"contact_id\":123,\"updated_at_ms\":3}'),
+                 ('d', '{\"contact_id\":\"123\",\"updated_at_ms\":4}');",
+        )
+        .expect("seed");
+        let path = Path::new("/nonexistent/lookup-test.sqlite3");
+        ensure_rxdb_string_field_lookup_index(path, &conn, "lookup_table", "name");
+        ensure_rxdb_string_field_lookup_index(path, &conn, "lookup_table", "contact_id");
+
+        let lookup = |field: &str, expected: &str| -> Vec<String> {
+            let numeric = expected.parse::<i64>().ok();
+            let mut statement = conn
+                .prepare(&rxdb_string_field_lookup_sql("lookup_table", field))
+                .expect("prepare");
+            statement
+                .query_map(params![expected, numeric, 10_i64], |row| {
+                    row.get::<_, String>(0)
+                })
+                .expect("query")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("rows")
+        };
+        assert_eq!(lookup("name", "Maschinenbau"), vec!["a".to_string()]);
+        assert_eq!(
+            lookup("contact_id", "123"),
+            vec!["d".to_string(), "c".to_string()]
+        );
+        assert!(lookup("name", "Bau").is_empty());
+
+        let plan = conn
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {}",
+                rxdb_string_field_lookup_sql("lookup_table", "name")
+            ))
+            .expect("prepare plan")
+            .query_map(
+                params!["Maschinenbau", Option::<i64>::None, 10_i64],
+                |row| row.get::<_, String>(3),
+            )
+            .expect("plan")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("plan rows")
+            .join("\n");
+        assert!(
+            plan.contains("lookup_table_lookup_name_idx"),
+            "lookup must use the expression index, plan: {plan}"
+        );
+    }
+}
+
 pub(super) fn find_rxdb_collection_records_by_string_field(
     root: &Path,
     collection: &str,
@@ -11644,19 +11807,17 @@ pub(super) fn find_rxdb_collection_records_by_string_field(
         return Ok(Vec::new());
     }
     let conn = Connection::open(&path)?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
     let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
         return Ok(Vec::new());
     };
-    let json_path = format!("$.{field}");
-    let mut stmt = conn.prepare(&format!(
-        "SELECT id, data
-         FROM {table}
-         WHERE CAST(json_extract(data, ?1) AS TEXT) = ?2
-         ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
-         LIMIT ?3"
-    ))?;
+    ensure_rxdb_string_field_lookup_index(&path, &conn, &table, field);
+    // A numeric JSON value must still match its decimal text (the former
+    // `CAST(... AS TEXT) = ?` semantics), so the integer form is probed too.
+    let numeric = expected.parse::<i64>().ok();
+    let mut stmt = conn.prepare(&rxdb_string_field_lookup_sql(&table, field))?;
     let rows = stmt
-        .query_map(params![json_path, expected, limit as i64], |row| {
+        .query_map(params![expected, numeric, limit as i64], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -11677,6 +11838,78 @@ pub(super) fn find_rxdb_collection_records_by_string_field(
 /// CRM company matching, where names drift over time (legal-form suffixes,
 /// renames): the browser must not scan 17k replicated documents itself, so
 /// the LIKE scan runs natively over the SQLite store instead.
+/// Counts live records per value of one JSON string field whose value
+/// contains `needle` (case-insensitive LIKE), largest groups first.
+///
+/// A Sellify campaign search needs only names and member counts. Loading every
+/// matching membership row (up to 50,000 full documents) and grouping in Rust
+/// took 8 s for "Welle" and silently undercounted once the cap was reached
+/// (THESEN 26.09.2026). Grouping in SQL over the `("deleted", name, "id")`
+/// expression index reads the name from the index and touches a row only for
+/// its `is_deleted` flag.
+pub(super) fn group_rxdb_collection_string_field_contains(
+    root: &Path,
+    collection: &str,
+    field: &str,
+    needle: &str,
+    max_groups: usize,
+) -> anyhow::Result<(Vec<(String, u64)>, u64)> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    if !field
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        anyhow::bail!("invalid RxDB JSON field `{field}`");
+    }
+    let needle = needle.trim();
+    if max_groups == 0 || needle.len() < 2 {
+        return Ok((Vec::new(), 0));
+    }
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok((Vec::new(), 0));
+    }
+    let conn = Connection::open(&path)?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+        return Ok((Vec::new(), 0));
+    };
+    ensure_rxdb_string_field_lookup_index(&path, &conn, &table, field);
+    let escaped = needle
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let pattern = format!("%{escaped}%");
+    let mut stmt = conn.prepare(&rxdb_string_field_group_sql(&table, field))?;
+    let groups = stmt
+        .query_map(params![pattern], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let scanned = groups.iter().map(|(_, count)| (*count).max(0) as u64).sum();
+    let mut groups = groups
+        .into_iter()
+        .map(|(name, count)| (name.trim().to_string(), count.max(0) as u64))
+        .filter(|(name, _)| !name.is_empty())
+        .collect::<Vec<_>>();
+    groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    groups.truncate(max_groups);
+    Ok((groups, scanned))
+}
+
+fn rxdb_string_field_group_sql(table: &str, field: &str) -> String {
+    format!(
+        "SELECT json_extract(data, '$.{field}') AS grouped_value, COUNT(*)
+         FROM {table}
+         WHERE deleted = 0
+           AND json_extract(data, '$.{field}') LIKE ?1 ESCAPE '\\'
+           AND COALESCE(json_extract(data, '$.is_deleted'), 0) NOT IN (1, 'true')
+         GROUP BY grouped_value"
+    )
+}
+
 pub(super) fn find_rxdb_collection_records_by_string_field_contains(
     root: &Path,
     collection: &str,
@@ -20109,51 +20342,22 @@ fn systematic_research_evidence_snapshot(
     let run_id = first_string_field(&command.payload, &["research_run_id", "run_id"])
         .or_else(|| first_string_field(&command.client_context, &["research_run_id", "run_id"]))
         .context("systematic research completion requires an immutable research_run_id")?;
-    let path = rxdb_store_path(root);
-    anyhow::ensure!(
-        path.is_file(),
-        "systematic research completion requires the RxDB store"
-    );
-    let conn = Connection::open(&path)?;
-    let table = rxdb_collection_table_name(&path, &conn, "knowledge_tables")
-        .context("systematic research completion requires Knowledge tables")?;
-    let mut statement = conn.prepare(&format!("SELECT data FROM {table}"))?;
-    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-    let mut domain_tables = Vec::new();
-    for raw in rows {
-        let document: Value = serde_json::from_str(&raw?)?;
-        let source = document
-            .get("payload")
-            .filter(|value| value.is_object())
-            .unwrap_or(&document);
-        if first_string_field(source, &["domain", "knowledge_domain"]).as_deref()
-            == Some(domain.as_str())
-        {
-            domain_tables.push(document);
-        }
-    }
+    // Parquet is the row source. One manifest entry per catalog table, not per
+    // RxDB projection chunk. `knowledge_active_tables` already orders by table_id.
+    let domain_tables = crate::knowledge::knowledge_active_tables(root, Some(&domain))?;
     anyhow::ensure!(
         !domain_tables.is_empty(),
         "systematic research completion requires authoritative Knowledge tables for {domain}"
     );
-    domain_tables.sort_by_key(|document| {
-        first_string_field(document, &["id", "table_id"]).unwrap_or_default()
-    });
 
     let mut identified_count = 0_i64;
     let mut source_receipt_links = Vec::new();
     let mut snapshot_hashes = Vec::new();
     let mut run_manifest = Vec::new();
-    for document in &domain_tables {
-        let source = document
-            .get("payload")
-            .filter(|value| value.is_object())
-            .unwrap_or(document);
-        let table_key = first_string_field(source, &["table_key"]).unwrap_or_default();
-        let table_id = first_string_field(source, &["id", "table_id"])
-            .or_else(|| first_string_field(document, &["id", "table_id"]))
-            .unwrap_or_default();
-        let run_rows = document_knowledge_table_rows(document)
+    for (catalog_id, _table_domain, table_key) in &domain_tables {
+        let table_id = format!("table:{catalog_id}");
+        let run_rows = crate::knowledge::knowledge_table_all_rows(root, catalog_id)?
+            .rows
             .into_iter()
             .filter(|row| {
                 first_string_field(row, &["research_run_id", "run_id"]).as_deref()
@@ -20621,20 +20825,6 @@ fn document_source_receipt_snapshot_hash(link: &Value) -> Option<String> {
     )
 }
 
-fn document_knowledge_table_rows(document: &Value) -> Vec<Value> {
-    [
-        document.get("rows"),
-        document.pointer("/payload/rows"),
-        document.get("records"),
-        document.pointer("/payload/records"),
-    ]
-    .into_iter()
-    .flatten()
-    .find_map(Value::as_array)
-    .cloned()
-    .unwrap_or_default()
-}
-
 fn document_source_receipt_row_matches(row: &Value, reference: &str) -> bool {
     ["source_id", "receipt_id", "evidence_id", "id"]
         .iter()
@@ -20658,37 +20848,58 @@ fn document_source_receipt_from_knowledge_tables(
             "table_ref",
         ],
     );
-    if let Some(table_id) = table_reference {
-        if let Some(document) = load_rxdb_collection_record(root, "knowledge_tables", &table_id)? {
-            if let Some(row) = document_knowledge_table_rows(&document)
-                .into_iter()
-                .find(|row| document_source_receipt_row_matches(row, &reference))
-            {
-                return Ok(Some(row));
-            }
+    let mut already_read = None;
+    if let Some(raw_table_id) = table_reference.as_deref() {
+        let table_id = knowledge_receipt_table_id(raw_table_id);
+        already_read = Some(table_id.clone());
+        match knowledge_receipt_row(root, &table_id, &reference)? {
+            Some(row) => return Ok(Some(row)),
+            None => {}
         }
     }
 
-    let path = rxdb_store_path(root);
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let conn = Connection::open(&path)?;
-    let Some(table) = rxdb_collection_table_name(&path, &conn, "knowledge_tables") else {
-        return Ok(None);
-    };
-    let mut statement = conn.prepare(&format!("SELECT data FROM {table}"))?;
-    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-    for raw in rows {
-        let document: Value = serde_json::from_str(&raw?)?;
-        if let Some(row) = document_knowledge_table_rows(&document)
-            .into_iter()
-            .find(|row| document_source_receipt_row_matches(row, &reference))
-        {
+    for (table_id, _domain, _table_key) in crate::knowledge::knowledge_active_tables(root, None)? {
+        if already_read.as_deref() == Some(table_id.as_str()) {
+            continue;
+        }
+        if let Some(row) = knowledge_receipt_row(root, &table_id, &reference)? {
             return Ok(Some(row));
         }
     }
     Ok(None)
+}
+
+/// Strip one `table:` prefix and a trailing `:chunk:` + digits suffix.
+fn knowledge_receipt_table_id(raw: &str) -> String {
+    let stripped = raw.strip_prefix("table:").unwrap_or(raw);
+    match stripped.rsplit_once(":chunk:") {
+        Some((table_id, suffix))
+            if !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            table_id.to_string()
+        }
+        _ => stripped.to_string(),
+    }
+}
+
+fn knowledge_table_lookup_miss(err: &anyhow::Error) -> bool {
+    crate::knowledge::is_knowledge_table_not_found(err)
+}
+
+fn knowledge_receipt_row(
+    root: &Path,
+    table_id: &str,
+    reference: &str,
+) -> anyhow::Result<Option<Value>> {
+    let window = match crate::knowledge::knowledge_table_all_rows(root, table_id) {
+        Ok(window) => window,
+        Err(err) if knowledge_table_lookup_miss(&err) => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    Ok(window
+        .rows
+        .into_iter()
+        .find(|row| document_source_receipt_row_matches(row, reference)))
 }
 
 fn document_source_receipt_candidate(root: &Path, link: &Value) -> anyhow::Result<Option<Value>> {
@@ -26339,60 +26550,42 @@ pub(super) mod tests {
     fn research_report_lineage_binds_eligible_receipts_and_knowledge_version() -> anyhow::Result<()>
     {
         let root = tempdir()?;
-        let snapshot_path = root.path().join("runtime/research/snapshots/source-7.html");
+        let snapshot_path = root.path().join("research/snapshots/source-7.html");
         fs::create_dir_all(snapshot_path.parent().context("snapshot parent")?)?;
         fs::write(&snapshot_path, b"authoritative publisher content")?;
         let receipt_hash = format!("sha256:{}", hex_sha256(b"authoritative publisher content"));
-        let rxdb_path = rxdb_store_path(root.path());
-        fs::create_dir_all(rxdb_path.parent().context("RxDB parent")?)?;
-        let rxdb_conn = Connection::open(&rxdb_path)?;
-        let table = format!(
-            "ctox_business_os__knowledge_tables__v{}",
-            rxdb_schema_version("knowledge_tables")
-        );
-        rxdb_conn.execute(
-            &format!(
-                "CREATE TABLE {} (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    revision TEXT,
-                    deleted INTEGER NOT NULL DEFAULT 0,
-                    lastWriteTime REAL NOT NULL DEFAULT 0,
-                    data TEXT NOT NULL
-                )",
-                sqlite_quote_identifier(&table)
-            ),
-            [],
-        )?;
-        drop(rxdb_conn);
-        upsert_rxdb_collection_record(
+        let snapshot_path_value = snapshot_path
+            .canonicalize()
+            .context("canonicalize source snapshot")?
+            .display()
+            .to_string();
+        crate::knowledge::seed_knowledge_table_for_test(
             root.path(),
-            "knowledge_tables",
             "table-evidence",
-            1700000000000,
-            serde_json::json!({
-                "table_key": "source_catalog",
-                "rows": [{
-                    "id": "source-7",
-                    "source_id": "source-7",
-                    "evidence_id": "evidence-7",
-                    "snapshot_id": "snapshot-7",
-                    "trace_id": "trace-7",
-                    "snapshot_path": "runtime/research/snapshots/source-7.html",
-                    "snapshot_hash": receipt_hash.clone(),
-                    "retrieved_at": "2026-07-17T00:00:00Z",
-                    "url_role": "publisher_full_text",
-                    "content_scope": "full_text",
-                    "verification_status": "verified",
-                    "transport_verified": true,
-                    "content_extracted": true,
-                    "actual_full_text_or_data": true,
-                    "evidence_relevance_score": 9,
-                    "http_status": 200,
-                    "canonical_url": "https://publisher.example/source-7",
-                    "source_tier": "primary",
-                    "evidence_eligible": true
-                }]
-            }),
+            "bearing_design",
+            "source_catalog",
+            &[serde_json::json!({
+                "id": "source-7",
+                "source_id": "source-7",
+                "evidence_id": "evidence-7",
+                "snapshot_id": "snapshot-7",
+                "trace_id": "trace-7",
+                "snapshot_path": snapshot_path_value,
+                "snapshot_hash": receipt_hash.clone(),
+                "retrieved_at": "2026-07-17T00:00:00Z",
+                "url_role": "publisher_full_text",
+                "content_scope": "full_text",
+                "verification_status": "verified",
+                "transport_verified": true,
+                "content_extracted": true,
+                "actual_full_text_or_data": true,
+                "evidence_relevance_score": 9,
+                "http_status": 200,
+                "canonical_url": "https://publisher.example/source-7",
+                "source_tier": "primary",
+                "evidence_eligible": true
+            })],
+            None,
         )?;
         let linked_records = vec![
             serde_json::json!({ "kind": "research_task", "id": "task-42" }),
@@ -26441,6 +26634,48 @@ pub(super) mod tests {
         assert_ne!(
             lineage.source_receipt_snapshot_hashes[0],
             hex_sha256(b"the generated DOCX bytes")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn document_source_receipt_finds_row_past_projection_cap() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let row_total = 5_100usize;
+        // Every row carries `marker`: Parquet schema inference drops a column
+        // that appears in only one of 5,100 rows.
+        let rows = (0..row_total)
+            .map(|index| {
+                serde_json::json!({
+                    "source_id": format!("source-{}", index + 1),
+                    "marker": format!("row-{}", index + 1),
+                })
+            })
+            .collect::<Vec<_>>();
+        crate::knowledge::seed_knowledge_table_for_test(
+            root.path(),
+            "kdt-wide",
+            "wide_domain",
+            "notes",
+            &rows,
+            None,
+        )?;
+
+        let found = document_source_receipt_from_knowledge_tables(
+            root.path(),
+            &serde_json::json!({
+                "id": "source-5050",
+                "table_id": "table:kdt-wide:chunk:0009",
+            }),
+        )?
+        .context("row 5050 must be readable past the 5000-row projection cap")?;
+        assert_eq!(
+            found.get("source_id").and_then(Value::as_str),
+            Some("source-5050")
+        );
+        assert_eq!(
+            found.get("marker").and_then(Value::as_str),
+            Some("row-5050")
         );
         Ok(())
     }
@@ -39166,75 +39401,15 @@ pub(super) mod tests {
                 "updated_at_ms": 1
             }),
         )?;
-        let snapshot_path = root.join("runtime/research/snapshots/source-1.html");
+        let snapshot_path = root.join("research/snapshots/source-1.html");
         fs::create_dir_all(snapshot_path.parent().context("snapshot parent")?)?;
         fs::write(&snapshot_path, b"verified source bytes")?;
         let snapshot_hash = format!("sha256:{}", hex_sha256(b"verified source bytes"));
-        // Seed with a valid RxDB revision envelope ("<height>-<token>") so the
-        // knowledge_tables projection sync can read and tombstone this stale
-        // document instead of failing on an unparseable revision.
-        rxdb_conn.execute(
-            "INSERT INTO ctox_business_os__knowledge_tables__v0
-             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
-            params![
-                "knowledge_source_catalog",
-                "1-test",
-                1.0_f64,
-                serde_json::to_string(&serde_json::json!({
-                    "id": "knowledge_source_catalog",
-                    "domain": "drone_bearing_design",
-                    "table_key": "source_catalog",
-                    "rows": [{
-                        "source_id": "source-1",
-                        "research_run_id": "research_run_1",
-                        "research_command_id": "cmd_research_completed",
-                        "evidence_id": "evidence-1",
-                        "snapshot_id": "snapshot-1",
-                        "snapshot_path": "runtime/research/snapshots/source-1.html",
-                        "snapshot_hash": snapshot_hash,
-                        "canonical_url": "https://publisher.example/source-1",
-                        "url_role": "original_content",
-                        "content_scope": "full_text",
-                        "retrieved_at": "2026-07-17T00:00:00Z",
-                        "source_type": "publisher",
-                        "source_tier": "primary",
-                        "verification_status": "verified",
-                        "transport_verified": true,
-                        "content_extracted": true,
-                        "actual_full_text_or_data": true,
-                        "evidence_relevance_score": 9,
-                        "http_status": 200,
-                        "evidence_eligible": true
-                    }, {
-                        "source_id": "stale-source",
-                        "research_run_id": "research_run_stale",
-                        "research_command_id": "cmd_research_stale",
-                        "evidence_id": "stale-evidence",
-                        "snapshot_id": "snapshot-1",
-                        "snapshot_path": "runtime/research/snapshots/source-1.html",
-                        "snapshot_hash": snapshot_hash,
-                        "canonical_url": "https://publisher.example/stale",
-                        "url_role": "original_content",
-                        "content_scope": "full_text",
-                        "retrieved_at": "2026-07-17T00:00:00Z",
-                        "source_type": "publisher",
-                        "source_tier": "primary",
-                        "verification_status": "verified",
-                        "transport_verified": true,
-                        "content_extracted": true,
-                        "actual_full_text_or_data": true,
-                        "evidence_relevance_score": 9,
-                        "http_status": 200,
-                        "evidence_eligible": true
-                    }],
-                    "updated_at_ms": 2,
-                    "_rev": "1-test",
-                    "_meta": { "lwt": 1.0 },
-                    "_attachments": {},
-                    "_deleted": false
-                }))?
-            ],
-        )?;
+        let snapshot_path_value = snapshot_path
+            .canonicalize()
+            .context("canonicalize source snapshot")?
+            .display()
+            .to_string();
         drop(rxdb_conn);
 
         // The native writeback gate requires the completed research workspace
@@ -39323,7 +39498,7 @@ pub(super) mod tests {
         fs::write(
             dashboard_dir.join("source_catalog.csv"),
             format!(
-                "research_run_id,research_command_id,source_id,canonical_url,snapshot_hash\n{lineage},source-1,https://publisher.example/source-1,{snapshot_hash}\n"
+                "research_run_id,research_command_id,source_id,canonical_url,snapshot_hash,evidence_id,snapshot_id,snapshot_path,retrieved_at,url_role,content_scope,verification_status,transport_verified,content_extracted,actual_full_text_or_data,evidence_relevance_score,http_status,source_type,source_tier,trace_id\n{lineage},source-1,https://publisher.example/source-1,{snapshot_hash},evidence-1,snapshot-1,{snapshot_path_value},2026-07-17T00:00:00Z,original_content,full_text,verified,true,true,true,9,200,publisher,primary,trace-1\n"
             ),
         )?;
 

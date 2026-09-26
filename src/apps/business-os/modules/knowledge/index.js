@@ -30,6 +30,9 @@ const labels = {
     tableUnavailable: 'Für diesen Eintrag ist keine Tabelle verfügbar.',
     dataIncomplete: 'Daten unvollständig',
     dataIncompleteHint: 'Die Tabelle wird erst angezeigt, wenn alle Daten-Chunks konsistent und vollständig repliziert wurden.',
+    rowsLoading: 'Zeilen werden geladen',
+    rowsLoadFailed: 'Zeilen konnten nicht geladen werden',
+    rowsRetry: 'Erneut versuchen',
     queued: 'Command angelegt',
     queueFailed: 'Command konnte nicht angelegt werden',
     edit: 'Bearbeiten',
@@ -58,6 +61,9 @@ const labels = {
     tableUnavailable: 'This item has no table.',
     dataIncomplete: 'Incomplete data',
     dataIncompleteHint: 'The table is shown only after all data chunks are replicated consistently and completely.',
+    rowsLoading: 'Loading rows',
+    rowsLoadFailed: 'Rows could not be loaded',
+    rowsRetry: 'Try again',
     queued: 'Command queued',
     queueFailed: 'Could not queue command',
     edit: 'Edit',
@@ -110,6 +116,8 @@ const state = {
 };
 
 const els = {};
+let knowledgeTableRenderToken = 0;
+let knowledgeTableAbort = null;
 
 export async function mount(ctx) {
   await ensureStyles();
@@ -138,6 +146,9 @@ export async function mount(ctx) {
   window.addEventListener('message', handleShellMessage);
   return () => {
     disposed = true;
+    knowledgeTableRenderToken += 1;
+    knowledgeTableAbort?.abort();
+    knowledgeTableAbort = null;
     window.removeEventListener('message', handleShellMessage);
     window.removeEventListener('click', handleContextOutsideClick, { capture: true });
     window.removeEventListener('keydown', handleContextEscape);
@@ -922,6 +933,9 @@ function mergeKnowledgeTableChunks(tables = []) {
   }
 
   return [...groups.entries()].map(([logicalId, parts]) => {
+    if (parts.every(({ rawTable, source }) => isKnowledgeCatalogDocument(rawTable) || isKnowledgeCatalogDocument(source))) {
+      return mergeKnowledgeCatalogParts(logicalId, parts);
+    }
     parts.sort((left, right) => (
       Number(left.source.chunk_index ?? left.rawTable.chunk_index ?? 0)
       - Number(right.source.chunk_index ?? right.rawTable.chunk_index ?? 0)
@@ -963,6 +977,84 @@ function mergeKnowledgeTableChunks(tables = []) {
       payload,
     };
   });
+}
+
+function isKnowledgeCatalogDocument(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  const payload = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const version = record.projection_version ?? payload?.projection_version;
+  const rowsSource = record.rows_source ?? payload?.rows_source;
+  const marked = version === 2 || version === '2' || rowsSource === 'rxdb.rows.fetch';
+  if (!marked) return false;
+  return !hasEmbeddedKnowledgeRows(record);
+}
+
+function hasEmbeddedKnowledgeRows(record) {
+  if (!record || typeof record !== 'object') return false;
+  const payload = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const candidates = [
+    record.rows,
+    record.records,
+    record.data,
+    record.dataframe?.rows,
+    record.dataframe?.records,
+    record.dataframe?.data,
+    payload?.rows,
+    payload?.records,
+    payload?.data,
+    payload?.dataframe?.rows,
+    payload?.dataframe?.records,
+    payload?.dataframe?.data,
+  ];
+  return candidates.some((value) => Array.isArray(value) && value.length > 0);
+}
+
+function catalogRowCount(record) {
+  const value = firstPresentValue(record, ['row_count']);
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return null;
+  return number;
+}
+
+function mergeKnowledgeCatalogParts(logicalId, parts) {
+  const first = parts[0];
+  const rowCount = parts
+    .map(({ rawTable, source }) => catalogRowCount(source) ?? catalogRowCount(rawTable))
+    .find((value) => value != null);
+  const payload = omitEmbeddedKnowledgeRows({
+    ...(first.source || {}),
+    id: logicalId,
+    logical_table_id: logicalId,
+    rows_complete: true,
+  });
+  if (rowCount != null) payload.row_count = rowCount;
+  return {
+    ...omitEmbeddedKnowledgeRows(first.rawTable || {}),
+    ...payload,
+    payload,
+  };
+}
+
+function omitEmbeddedKnowledgeRows(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return {};
+  const next = { ...record };
+  delete next.rows;
+  delete next.records;
+  delete next.data;
+  if (next.dataframe && typeof next.dataframe === 'object' && !Array.isArray(next.dataframe)) {
+    next.dataframe = { ...next.dataframe };
+    delete next.dataframe.rows;
+    delete next.dataframe.records;
+    delete next.dataframe.data;
+  }
+  if (next.payload && next.payload !== record && typeof next.payload === 'object' && !Array.isArray(next.payload)) {
+    next.payload = omitEmbeddedKnowledgeRows(next.payload);
+  }
+  return next;
 }
 
 function knowledgeItemFromTable(table) {
@@ -1909,6 +2001,11 @@ function renderTableSwitcher() {
 }
 
 async function renderTable() {
+  const token = ++knowledgeTableRenderToken;
+  knowledgeTableAbort?.abort();
+  const abort = new AbortController();
+  knowledgeTableAbort = abort;
+  const current = () => token === knowledgeTableRenderToken;
   const copy = state.messages || labels[state.lang];
   const tableId = activeTableId();
   const item = state.items.find((entry) => entry.id === tableId);
@@ -1920,6 +2017,7 @@ async function renderTable() {
     els.tableTitle.textContent = 'DataFrame';
     els.tableMeta.textContent = copy.tableUnavailable;
     els.tableHost.innerHTML = `<div class="ctox-empty"><strong>${copy.tableUnavailable}</strong></div>`;
+    setRowPageButtons({ previous: true, next: true });
     return;
   }
   try {
@@ -1928,29 +2026,118 @@ async function renderTable() {
       els.tableTitle.textContent = schemaTitleForTable(tableSource);
       els.tableMeta.textContent = `${copy.dataIncomplete} · ${completeness.reason}`;
       els.tableHost.innerHTML = `<div class="ctox-empty knowledge-error" role="alert"><strong>${escapeHtml(copy.dataIncomplete)}</strong><span>${escapeHtml(copy.dataIncompleteHint)}</span><span>${escapeHtml(completeness.reason)}</span></div>`;
+      setRowPageButtons({ previous: true, next: true });
       return;
     }
-    const localRows = completeness.rows;
-    const schema = localDataFrameSchema(tableSource);
-    const rows = localRows.length
-      ? {
-          returned: localRows.slice(state.tableOffset, state.tableOffset + state.tableLimit).length,
-          rows: localRows.slice(state.tableOffset, state.tableOffset + state.tableLimit),
+    const catalog = isKnowledgeCatalogDocument(tableSource);
+    let pageRows = null;
+    let pageRowCount = null;
+    if (catalog) {
+      const loader = await knowledgeRowsLoaderFor(state.ctx);
+      if (!current()) return;
+      if (loader) {
+        els.tableTitle.textContent = schemaTitleForTable(tableSource);
+        els.tableMeta.textContent = copy.rowsLoading;
+        els.tableHost.innerHTML = `<div class="ctox-empty" role="status"><strong>${escapeHtml(copy.rowsLoading)}</strong></div>`;
+        setRowPageButtons({ previous: true, next: true });
+        try {
+          const page = await loader.fetchRows(knowledgeRowsTableId(tableSource), {
+            offset: state.tableOffset,
+            limit: state.tableLimit,
+            signal: abort.signal,
+          });
+          if (!current()) return;
+          pageRows = Array.isArray(page?.rows) ? page.rows : [];
+          pageRowCount = Number.isFinite(Number(page?.rowCount)) ? Number(page.rowCount) : null;
+        } catch (error) {
+          if (!current() || isRowsFetchCancelled(error)) return;
+          renderRowsLoadError(copy, error);
+          return;
         }
-      : { returned: 0, rows: [] };
+      }
+    }
+    if (!current()) return;
+    const localRows = pageRows || completeness.rows;
+    const schema = localDataFrameSchema(tableSource);
+    const rows = pageRows
+      ? { returned: pageRows.length, rows: pageRows }
+      : localRows.length
+        ? {
+            returned: localRows.slice(state.tableOffset, state.tableOffset + state.tableLimit).length,
+            rows: localRows.slice(state.tableOffset, state.tableOffset + state.tableLimit),
+          }
+        : { returned: 0, rows: [] };
     els.tableTitle.textContent = schema.title || tableSource.title || 'DataFrame';
-    const totalRows = Number.isFinite(Number(schema.row_count)) ? Number(schema.row_count) : localRows.length;
-    const firstVisible = totalRows ? state.tableOffset + 1 : 0;
-    const lastVisible = Math.min(totalRows, state.tableOffset + rows.returned);
+    const totalRows = pageRowCount != null
+      ? pageRowCount
+      : Number.isFinite(Number(schema.row_count)) ? Number(schema.row_count) : localRows.length;
+    const firstVisible = rows.returned ? state.tableOffset + 1 : 0;
+    const lastVisible = rows.returned ? Math.min(totalRows, state.tableOffset + rows.returned) : 0;
     els.tableMeta.textContent = `${schema.columns?.length || 0} Spalten · Zeilen ${firstVisible.toLocaleString('de-DE')}-${lastVisible.toLocaleString('de-DE')} von ${totalRows.toLocaleString('de-DE')}`;
-    const previous = state.ctx.host.querySelector('[data-action="prev-rows"]');
-    const next = state.ctx.host.querySelector('[data-action="next-rows"]');
-    if (previous) previous.disabled = state.tableOffset <= 0;
-    if (next) next.disabled = lastVisible >= totalRows;
+    setRowPageButtons({
+      previous: state.tableOffset <= 0,
+      next: lastVisible >= totalRows || rows.returned === 0,
+    });
     renderDataFrameTable(schema.columns || [], rows.rows || []);
   } catch (error) {
+    if (!current() || isRowsFetchCancelled(error)) return;
     els.tableHost.innerHTML = `<div class="ctox-empty knowledge-error"><strong>DataFrame konnte nicht geladen werden</strong><span>${escapeHtml(error.message || String(error))}</span></div>`;
   }
+}
+
+function setRowPageButtons({ previous = true, next = true } = {}) {
+  const host = state.ctx?.host;
+  const previousButton = host?.querySelector?.('[data-action="prev-rows"]');
+  const nextButton = host?.querySelector?.('[data-action="next-rows"]');
+  if (previousButton) previousButton.disabled = previous;
+  if (nextButton) nextButton.disabled = next;
+}
+
+function isRowsFetchCancelled(error) {
+  return error?.name === 'AbortError' || error?.code === 'ROWS_CANCELLED';
+}
+
+function renderRowsLoadError(copy, error) {
+  els.tableMeta.textContent = copy.rowsLoadFailed;
+  const host = document.createElement('div');
+  host.className = 'ctox-empty knowledge-error';
+  host.setAttribute('role', 'alert');
+  const title = document.createElement('strong');
+  title.textContent = copy.rowsLoadFailed;
+  const detail = document.createElement('span');
+  detail.textContent = error?.message || String(error || '');
+  host.append(title, detail);
+  if (error?.retryable === true) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ctox-button';
+    button.textContent = copy.rowsRetry;
+    button.addEventListener('click', () => { renderTable(); });
+    host.append(button);
+  }
+  els.tableHost.replaceChildren(host);
+  setRowPageButtons({ previous: true, next: true });
+}
+
+async function knowledgeRowsLoaderFor(ctx) {
+  try {
+    if (typeof ctx?.sync?.startCollection !== 'function') return null;
+    const bridge = await ctx.sync.startCollection('knowledge_tables');
+    return bridge?.state?.knowledgeRowsLoader || null;
+  } catch {
+    return null;
+  }
+}
+
+function knowledgeRowsTableId(table) {
+  const explicit = table?.table_id || table?.payload?.table_id;
+  if (explicit) return stripKnowledgeTablePrefix(explicit);
+  return stripKnowledgeTablePrefix(table?.logical_table_id || table?.id || '');
+}
+
+function stripKnowledgeTablePrefix(value) {
+  const text = String(value || '').trim();
+  return text.startsWith('table:') ? text.slice('table:'.length) : text;
 }
 
 function schemaTitleForTable(table) {
@@ -2722,6 +2909,19 @@ function rawDataFrameRows(item) {
 }
 
 function dataFrameCompleteness(item) {
+  if (isKnowledgeCatalogDocument(item)) {
+    const rowCount = catalogRowCount(item);
+    if (rowCount !== null) {
+      return {
+        complete: true,
+        rows: [],
+        expectedRows: rowCount,
+        actualRows: rowCount,
+        chunkCount: 0,
+        reason: '',
+      };
+    }
+  }
   const chunks = dataframeChunks(item);
   const rootRowsComplete = explicitRowsComplete(item);
   if (!chunks && rootRowsComplete !== undefined && rootRowsComplete !== true) {

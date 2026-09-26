@@ -2674,12 +2674,18 @@ async fn run_native_peer(
             );
         }
     }
-    let clamped_documents = clamp_oversized_projected_documents(&root, &database_path)
-        .context("clamp oversized projected Business OS documents")?;
-    if clamped_documents > 0 {
-        eprintln!(
+    // A legacy repair must not decide whether the peer comes up. It failed with
+    // SQLITE_BUSY_SNAPSHOT (517) under concurrent writes after every restart on
+    // thesen (25.09.2026: 12 failed bring-ups, five in a row after one release,
+    // replication down for ~2.5 min each time). Skip it for this start instead.
+    match clamp_oversized_projected_documents(&root, &database_path) {
+        Ok(clamped_documents) if clamped_documents > 0 => eprintln!(
             "[business-os] trimmed {clamped_documents} oversized projected documents that were stalling replication"
-        );
+        ),
+        Ok(_) => {}
+        Err(error) => eprintln!(
+            "[business-os] clamp oversized projected Business OS documents skipped for this start: {error:#}"
+        ),
     }
     let database = open_database(database_path.clone()).await?;
     let database_write_lock = Arc::new(AsyncMutex::new(()));
@@ -2920,6 +2926,7 @@ async fn run_native_peer(
                 // already auto-registers every multiplexed collection inside
                 // `RxWebRTCReplicationPool::new_multi`.
                 register_demand_file_sources(pool, &database, &root);
+                super::rxdb_peer_knowledge_rows::register_knowledge_row_source(pool, &root);
                 let browser_live_root = root.clone();
                 let browser_live_database = Arc::clone(&database);
                 pool.register_auxiliary_request_handler(
@@ -4838,21 +4845,64 @@ pub(super) async fn ticket_state_source_stamp(
         .context("join native ticket state source stamp")
 }
 
+/// Drop legacy row and chunk keys from a catalog document before replace.
+///
+/// `bulk_upsert` merges and would keep a previous top-level `rows` array.
+/// Knowledge sync therefore uses `incremental_upsert`, which replaces the
+/// document body. Stripping here makes the replacement explicit even if a
+/// caller still attached those keys. Nested `payload` is an object, so
+/// `payload.data` (a legacy row alias) is removed; a top-level `data` key
+/// is not, because that name is not a row field on this collection.
+fn strip_knowledge_table_embedded_rows(document: &mut Value) {
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "rows",
+        "records",
+        "chunk_index",
+        "chunk_count",
+        "chunk_row_offset",
+        "chunk_row_count",
+        "projected_row_count",
+    ] {
+        object.remove(key);
+    }
+    if let Some(payload) = object.get_mut("payload").and_then(Value::as_object_mut) {
+        for key in [
+            "rows",
+            "records",
+            "data",
+            "chunk_index",
+            "chunk_count",
+            "chunk_row_offset",
+            "chunk_row_count",
+            "projected_row_count",
+        ] {
+            payload.remove(key);
+        }
+    }
+}
+
 /// Project the record-shape knowledge catalog (`knowledge_data_tables`) into
-/// the `knowledge_tables` RxDB collection, embedding the parquet rows directly
-/// in each doc's payload.
+/// the `knowledge_tables` RxDB collection as one small catalog document per
+/// active table.
 ///
-/// This is the SINGLE native writer of the `knowledge_tables` collection.
-/// `knowledge_tables` is therefore excluded from the generic business-record
-/// projection in [`business_record_projection_collections`] so the two paths do
-/// not fight over the same docs.
+/// Rows are not embedded. Browsers read them from Parquet through
+/// `rxdb.rows.fetch`. This is the SINGLE native writer of the
+/// `knowledge_tables` collection. `knowledge_tables` is therefore excluded
+/// from the generic business-record projection in
+/// [`business_record_projection_collections`] so the two paths do not fight
+/// over the same docs.
 ///
-/// Business OS Web Research / Knowledge modules read rows exclusively from the
-/// synced doc payload over RxDB/WebRTC — there is no HTTP data path — so the
-/// rows must ride inside the doc, which is exactly what
-/// [`crate::knowledge::knowledge_tables_rxdb_documents`] produces (with the
-/// parquet path re-resolved to the live state dir, not the possibly-stale path
-/// persisted in the catalog).
+/// Upserts use [`incremental_upsert_projection_if_changed`], which replaces
+/// the stored document body. The paged `bulk_upsert` helper merges keys and
+/// would keep a legacy top-level `rows` array (and chunk metadata) on the
+/// historical `table:<id>` document. After the new set is written, every
+/// stored id outside that set is tombstoned, including legacy chunk ids
+/// `table:<id>:chunk:NNNN`. The reconcile query still uses `find` with a
+/// limit of 10_000: catalog documents are small, and the first run is the
+/// only one that still loads the previous heavy documents.
 pub(super) async fn sync_knowledge_tables_with_database(
     root: &Path,
     database: &Arc<RxDatabase>,
@@ -4884,41 +4934,69 @@ pub(super) async fn sync_knowledge_tables_with_database(
             object.insert("_deleted".to_string(), Value::Bool(false));
             object.insert("is_deleted".to_string(), Value::Bool(false));
         }
+        strip_knowledge_table_embedded_rows(document);
     }
-    count += super::rxdb_peer_projections::upsert_background_projection_pages(
-        &collection,
-        "knowledge_tables",
-        documents,
-    )
-    .await?;
-    let existing = collection
-        .find(Some(MangoQuery {
-            limit: Some(10_000),
-            ..Default::default()
-        }))
-        .map_err(|err| anyhow::anyhow!("query stale knowledge_tables projections: {err}"))?
-        .exec(false)
-        .await
-        .map_err(|err| anyhow::anyhow!("exec stale knowledge_tables projection query: {err}"))?;
-    for mut stale in existing.as_array().cloned().unwrap_or_default() {
-        let Some(id) = stale.get("id").and_then(Value::as_str).map(str::to_string) else {
-            continue;
-        };
-        if current_ids.contains(&id) {
-            continue;
+    {
+        let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+        for document in documents {
+            if incremental_upsert_projection_if_changed(&collection, document, "knowledge_tables")
+                .await?
+            {
+                count += 1;
+            }
         }
+    }
+    // Collect every stale id before writing: tombstoning while paging would
+    // shift the skip window. Legacy row chunks can outnumber a single page.
+    let mut stale_documents = Vec::new();
+    let mut skip = 0u64;
+    loop {
+        let page = collection
+            .find(Some(MangoQuery {
+                sort: Some(vec![HashMap::from([("id".to_string(), "asc".to_string())])]),
+                limit: Some(KNOWLEDGE_TABLES_RECONCILE_PAGE),
+                skip: Some(skip),
+                ..Default::default()
+            }))
+            .map_err(|err| anyhow::anyhow!("query stale knowledge_tables projections: {err}"))?
+            .exec(false)
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!("exec stale knowledge_tables projection query: {err}")
+            })?;
+        let page = page.as_array().cloned().unwrap_or_default();
+        let page_len = page.len() as u64;
+        for stale in page {
+            let is_stale = stale
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !current_ids.contains(id));
+            if is_stale {
+                stale_documents.push(stale);
+            }
+        }
+        if page_len < KNOWLEDGE_TABLES_RECONCILE_PAGE {
+            break;
+        }
+        skip += page_len;
+    }
+    for mut stale in stale_documents {
         if let Some(object) = stale.as_object_mut() {
             object.remove("_rev");
             object.remove("_meta");
         }
         let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
-        upsert_business_record_projection_tombstone(&collection, stale)
+        // Tombstones keep their body in storage and replicate it to every
+        // browser, so a legacy chunk must lose its rows before it is deleted.
+        upsert_projection_tombstone_with(&collection, stale, strip_knowledge_table_embedded_rows)
             .await
             .map_err(|err| anyhow::anyhow!("tombstone stale knowledge_tables projection: {err}"))?;
         count += 1;
     }
     Ok(count)
 }
+
+const KNOWLEDGE_TABLES_RECONCILE_PAGE: u64 = 1_000;
 
 async fn sync_knowledge_tables_with_database_if_changed(
     root: &Path,
@@ -6258,6 +6336,16 @@ pub(super) async fn upsert_business_record_projection_tombstone(
     collection: &Arc<RxCollection>,
     document: Value,
 ) -> anyhow::Result<()> {
+    upsert_projection_tombstone_with(collection, document, |_| {}).await
+}
+
+/// Tombstone `document`, letting `finalize` reshape the merged body (for
+/// example drop payload fields) right before it is marked deleted.
+pub(super) async fn upsert_projection_tombstone_with(
+    collection: &Arc<RxCollection>,
+    document: Value,
+    finalize: impl FnOnce(&mut Value),
+) -> anyhow::Result<()> {
     let schema = collection
         .schema_required()
         .map_err(|err| anyhow::anyhow!("{err}"))?;
@@ -6279,6 +6367,7 @@ pub(super) async fn upsert_business_record_projection_tombstone(
 
     let Some(previous) = existing else {
         let mut write_data = document;
+        finalize(&mut write_data);
         prepare_projection_tombstone_document(&schema.json_schema, &mut write_data);
         let write_data = fill_object_data_before_insert(schema, write_data)
             .map_err(|err| anyhow::anyhow!("fill projection tombstone envelope: {err}"))?;
@@ -6303,6 +6392,7 @@ pub(super) async fn upsert_business_record_projection_tombstone(
     } else {
         next = document;
     }
+    finalize(&mut next);
     prepare_projection_tombstone_document(&schema.json_schema, &mut next);
 
     let result = collection
@@ -8187,7 +8277,12 @@ fn clamp_oversized_projected_documents(root: &Path, database_path: &Path) -> any
             .into_iter()
             .map(|source| source.storage_collection)
             .collect();
-    let mut conn = Connection::open(database_path)?;
+    let conn = Connection::open(database_path)?;
+    // Wait for a concurrent writer instead of failing at once, and scan outside
+    // a write transaction: the old deferred transaction read every table and
+    // then tried to upgrade to a writer, which WAL refuses (517) as soon as any
+    // other connection committed in between.
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
     let tables = {
         let mut statement = conn.prepare(
             "SELECT name FROM sqlite_master
@@ -8196,7 +8291,7 @@ fn clamp_oversized_projected_documents(root: &Path, database_path: &Path) -> any
         let mapped = statement.query_map([], |row| row.get::<_, String>(0))?;
         mapped.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    let transaction = conn.transaction()?;
+    let transaction = &conn;
     let mut clamped = 0usize;
     for table in tables {
         let collection = table
@@ -8247,14 +8342,23 @@ fn clamp_oversized_projected_documents(root: &Path, database_path: &Path) -> any
             if let Some(object) = document.as_object_mut() {
                 object.insert("_rev".to_string(), Value::String(revision.clone()));
             }
-            transaction.execute(
-                &format!("UPDATE {quoted} SET revision = ?1, data = ?2 WHERE id = ?3"),
-                params![revision, serde_json::to_string(&document)?, id],
+            // One short autocommit write per row, guarded by the revision it was
+            // read at: a document changed in the meantime is left for the next
+            // start instead of being overwritten with a stale trim.
+            let updated = transaction.execute(
+                &format!(
+                    "UPDATE {quoted} SET revision = ?1, data = ?2 WHERE id = ?3 AND revision = ?4"
+                ),
+                params![
+                    revision,
+                    serde_json::to_string(&document)?,
+                    id,
+                    stored_revision
+                ],
             )?;
-            clamped += 1;
+            clamped += updated;
         }
     }
-    transaction.commit()?;
     Ok(clamped)
 }
 
@@ -12101,6 +12205,57 @@ pub(in crate::business_os) mod tests {
     }
 
     #[test]
+    fn startup_clamp_waits_for_a_concurrent_writer_instead_of_failing() -> anyhow::Result<()> {
+        // thesen 25.09.2026: the clamp ran inside a deferred transaction and
+        // failed with 517 whenever another connection wrote during the scan,
+        // which aborted peer bring-up. It must wait and still trim.
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("busy.sqlite3");
+        let conn = Connection::open(&path)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE ctox_business_os__ctox_crew_members__v0
+             (id TEXT PRIMARY KEY, revision TEXT, data TEXT NOT NULL,
+              lastWriteTime REAL NOT NULL, deleted INTEGER);
+             CREATE TABLE other_writes (n INTEGER)",
+        )?;
+        let raw = serde_json::to_string(&json!({
+            "id": "crew-big",
+            "name": "Lumi",
+            "memory": "m".repeat(store::MAX_PROJECTED_DOCUMENT_BYTES + 100_000),
+            "_rev": "3-before",
+            "_meta": {"lwt": 1.0},
+            "_deleted": false
+        }))?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__ctox_crew_members__v0
+             VALUES ('crew-big', '3-before', ?1, 1.0, 0)",
+            params![raw],
+        )?;
+        drop(conn);
+        let writer = Connection::open(&path)?;
+        writer.execute_batch("BEGIN IMMEDIATE; INSERT INTO other_writes VALUES (1);")?;
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            writer
+                .execute_batch("COMMIT;")
+                .expect("commit concurrent writer");
+        });
+        let clamped = clamp_oversized_projected_documents(temp.path(), &path)?;
+        release.join().expect("writer thread");
+        assert_eq!(clamped, 1);
+        let conn = Connection::open(&path)?;
+        let (data, revision): (String, String) = conn.query_row(
+            "SELECT data, revision FROM ctox_business_os__ctox_crew_members__v0",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert!(data.len() < store::MAX_PROJECTED_DOCUMENT_BYTES);
+        assert_ne!(revision, "3-before");
+        Ok(())
+    }
+
+    #[test]
     fn startup_repair_preserves_oversized_historical_source_without_aborting() -> anyhow::Result<()>
     {
         let temp = tempfile::tempdir()?;
@@ -15750,6 +15905,126 @@ pub(in crate::business_os) mod tests {
             table.get("title").and_then(Value::as_str),
             Some("Idle Gate Table Updated")
         );
+    }
+
+    #[test]
+    fn knowledge_tables_sync_tombstones_legacy_chunks_and_strips_base_rows() {
+        let root = tempfile::tempdir().expect("temp root");
+        assert_eq!(
+            sync_knowledge_tables(root.path()).expect("initial empty knowledge sync"),
+            0
+        );
+        crate::knowledge::seed_knowledge_table_for_test(
+            root.path(),
+            "kdt-legacy",
+            "legacy_domain",
+            "notes",
+            &[json!({"n": 0}), json!({"n": 1})],
+            None,
+        )
+        .expect("seed legacy catalog parquet");
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let insert = |id: &str, revision: &str, body: Value| {
+            conn.execute(
+                "INSERT INTO ctox_business_os__knowledge_tables__v0 \
+                 (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
+                params![
+                    id,
+                    revision,
+                    1.0_f64,
+                    serde_json::to_string(&body).expect("legacy knowledge json")
+                ],
+            )
+            .expect("seed legacy knowledge document");
+        };
+        insert(
+            "table:kdt-legacy",
+            "1-legacybase",
+            json!({
+                "id": "table:kdt-legacy",
+                "kind": "dataframe",
+                "title": "Old Heavy",
+                "updated_at_ms": 1,
+                "rows": [{"n": 0}, {"n": 1}],
+                "payload": {"rows": [{"n": 0}], "domain": "legacy_domain", "table_key": "notes"},
+                "chunk_index": 0,
+                "chunk_count": 4,
+                "_deleted": false,
+                "_meta": { "lwt": 1.0 },
+                "_rev": "1-legacybase",
+                "_attachments": {}
+            }),
+        );
+        for index in 1..=3 {
+            let id = format!("table:kdt-legacy:chunk:{index:04}");
+            let revision = format!("1-legacychunk{index}");
+            insert(
+                &id,
+                &revision,
+                json!({
+                    "id": id,
+                    "kind": "dataframe",
+                    "title": "Legacy Chunk",
+                    "updated_at_ms": 1,
+                    "rows": [{"n": index}],
+                    "payload": {"rows": [{"n": index}]},
+                    "chunk_index": index,
+                    "chunk_count": 4,
+                    "_deleted": false,
+                    "_meta": { "lwt": 1.0 },
+                    "_rev": revision,
+                    "_attachments": {}
+                }),
+            );
+        }
+        drop(conn);
+
+        let synced = sync_knowledge_tables(root.path()).expect("replace legacy knowledge rows");
+        assert_eq!(synced, 4);
+
+        let conn =
+            Connection::open(store::rxdb_store_path(root.path())).expect("reopen rxdb sqlite");
+        for index in 1..=3 {
+            let id = format!("table:kdt-legacy:chunk:{index:04}");
+            let (deleted, data): (i64, String) = conn
+                .query_row(
+                    "SELECT deleted, data FROM ctox_business_os__knowledge_tables__v0 WHERE id = ?1",
+                    [id.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("legacy chunk row");
+            assert_eq!(deleted, 1, "{id}");
+            // Tombstones keep their body in storage and replicate it, so the
+            // deleted chunk must not carry its rows any more.
+            let chunk: Value = serde_json::from_str(&data).expect("legacy chunk json");
+            assert!(chunk.get("rows").is_none(), "{chunk}");
+            assert!(chunk.get("chunk_index").is_none(), "{chunk}");
+            assert!(chunk.pointer("/payload/rows").is_none(), "{chunk}");
+        }
+        let (deleted, data): (i64, String) = conn
+            .query_row(
+                "SELECT deleted, data FROM ctox_business_os__knowledge_tables__v0 WHERE id = 'table:kdt-legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("legacy base row");
+        assert_eq!(deleted, 0);
+        let table: Value = serde_json::from_str(&data).expect("legacy base json");
+        // bulk_upsert would have kept top-level rows and chunk_index. Their
+        // absence is the proof that incremental_upsert replaced the body.
+        // payload.rows disappearing alone is not, because a shallow merge
+        // replaces the whole payload value.
+        assert!(table.get("rows").is_none(), "{table}");
+        assert!(table.get("chunk_index").is_none(), "{table}");
+        assert!(table.get("chunk_count").is_none(), "{table}");
+        assert!(table["payload"].get("rows").is_none(), "{table}");
+        assert_eq!(table["id"], json!("table:kdt-legacy"));
+        assert_eq!(table["row_count"], json!(2));
+        assert_eq!(table["projection_version"], json!(2));
+        assert_eq!(table["rows_source"], json!("rxdb.rows.fetch"));
+        assert_eq!(table["rows_complete"], json!(true));
+        assert_eq!(table["title"], json!("Window Table"));
     }
 
     #[test]

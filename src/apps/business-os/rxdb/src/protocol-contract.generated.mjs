@@ -45,6 +45,15 @@ export const CTOX_FILE_RPC = Object.freeze({
   cancel: "rxdb.file.cancel",
   maxBytesPerChunk: 262144
 });
+export const CTOX_ROWS_FETCH_CAPABILITY = "ctox-rxdb-rows-fetch-v1";
+export const CTOX_ROWS_RPC = Object.freeze({
+  fetch: "rxdb.rows.fetch",
+  chunk: "rxdb.rows.chunk",
+  error: "rxdb.rows.error",
+  cancel: "rxdb.rows.cancel",
+  maxBytesPerChunk: 262144,
+  maxRowsPerWindow: 1000
+});
 export const CTOX_PRESENCE_CAPABILITY = "ctox-presence-v1";
 export const CTOX_PRESENCE_RPC = Object.freeze({
   update: "rxdb.presence.update",

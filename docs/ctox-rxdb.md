@@ -1090,6 +1090,35 @@ Adding a code is safe on this path: `routeFileError`
 an allowlist, so an unknown code retries according to the server's flag rather
 than being misclassified as fatal.
 
+**Knowledge row windows (`rxdb.rows.*`).** Knowledge tables live in Parquet
+(`runtime/knowledge/data/<domain>/<table_key>.parquet`). The
+`knowledge_tables` collection carries one small catalog document per table
+(`projection_version: 2`, `rows_source: "rxdb.rows.fetch"`, full `row_count`,
+`columns`, hashes) and no rows. Rows are fetched on demand with
+`rxdb.rows.fetch` / `rxdb.rows.chunk` / `rxdb.rows.error` /
+`rxdb.rows.cancel` (fixture block `rowsRpc`, capability
+`ctox-rxdb-rows-fetch-v1`). Request `params[0]`:
+`{ requestId, collectionName: "knowledge_tables", tableId, offset, limit }`,
+with `limit` clamped to `maxRowsPerWindow` (1000) and a leading `table:`
+stripped. Chunks carry `{ requestId, seq, final, tableId, offset, rowCount,
+contentHash, schemaHash, rows }` in order, each under `maxBytesPerChunk`; an
+empty window is one final chunk. Extra error codes: `ROWS_TABLE_NOT_FOUND`
+(not retryable) and `ROWS_SOURCE_ERROR` (retryable).
+
+- Native: `rows_fetch_handler.rs` (registry, auth, rate limit, chunking,
+  cancel) plus `business_os/rxdb_peer_knowledge_rows.rs`, which registers the
+  Parquet source (`knowledge::knowledge_table_row_window`: eager
+  `ParquetReader::with_slice`, evidence receipts, `row_id` enrichment from the
+  absolute offset). The capability is advertised only when a rows source is
+  registered.
+- Browser: `rows-demand-loader.mjs`, reachable from modules as
+  `bridge.state.knowledgeRowsLoader` after
+  `ctx.sync.startCollection('knowledge_tables')` (`fetchRows`,
+  `fetchAllRows`). Results stay in memory; they are never written to a
+  collection or IndexedDB.
+- Never read Parquet through `LazyFrame::collect()` in this build: Polars 0.53
+  selects the streaming executor, which is not compiled in, and panics.
+
 ### 6.5 Presence (ctox-presence-v1)
 
 Ephemeral "who is viewing/editing what" hints between browser peers, relayed

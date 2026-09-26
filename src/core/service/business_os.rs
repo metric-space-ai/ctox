@@ -2181,6 +2181,11 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
                 resolved_credential.otp_recipient.as_deref(),
+                web_stack_otp_mailbox_granted(
+                    root,
+                    &source_id,
+                    resolved_credential.otp_recipient.as_deref(),
+                ),
                 &recipe,
                 login_started_epoch_s,
                 continuation_source,
@@ -2294,6 +2299,12 @@ fn run_business_os_web_stack_source_capture_with_trust(
         .trim();
     anyhow::ensure!(!company.is_empty(), "source-capture company is empty");
     let country = flag_value(args, "--country").unwrap_or("DE").trim();
+    // One login and capture per provider at a time. Parallel research runs
+    // each logged into D&B with the same account: several e-mail codes arrived
+    // at once (no challenge identity, login_failed) and the shared browser
+    // profile was locked (THESEN 25.09.2026, every D&B run failed from 12:19).
+    let _capture_lock =
+        acquire_source_capture_lock(root, &source_id, std::time::Duration::from_secs(300));
     let source = build_web_stack_authenticated_source_capture(&source_id, company, country)?;
     let credential_ref = optional_web_stack_credential_ref(flag_value(args, "--credential-ref"))?
         .or_else(|| {
@@ -2362,13 +2373,58 @@ fn run_business_os_web_stack_source_capture_with_trust(
         "country": country,
         "records": records,
         "record_count": records.len(),
-        "source_status": result.get("status").and_then(serde_json::Value::as_str).unwrap_or("failed"),
+        // Without a capture result the login itself stopped; name its state
+        // (e.g. mfa_required) and the e-mail code outcome instead of a bare
+        // "failed", so the research can see what blocks it (THESEN 25.09.2026).
+        "source_status": result
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| combined.get("status").and_then(serde_json::Value::as_str))
+            .unwrap_or("failed"),
+        "login_status": combined.get("status").cloned().unwrap_or(serde_json::Value::Null),
+        "email_otp_status": combined.pointer("/email_otp/status").cloned().unwrap_or(serde_json::Value::Null),
+        "email_otp_detail": combined.pointer("/email_otp/detail").cloned().unwrap_or(serde_json::Value::Null),
         "source_url": result.get("source_url").and_then(serde_json::Value::as_str),
         "credential_ref": credential_ref,
         "secret_value_in_payload": false,
         "browser_stream": "rxdb",
         "authenticated_capture": combined,
     }))
+}
+
+/// Exclusive per-provider lock for authenticated captures across CTOX
+/// processes. Returns `None` when the wait expires; the capture then proceeds
+/// and reports what it finds rather than hanging a research turn.
+fn acquire_source_capture_lock(
+    root: &Path,
+    source_id: &str,
+    wait: std::time::Duration,
+) -> Option<std::fs::File> {
+    let dir = crate::paths::runtime_dir(root)
+        .join("browser")
+        .join("locks");
+    std::fs::create_dir_all(&dir).ok()?;
+    let name: String = source_id
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect();
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join(format!("source-capture-{name}.lock")))
+        .ok()?;
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 fn enqueue_web_stack_source_capture_auth_assist(
@@ -2618,7 +2674,9 @@ if (sourceId === "dnbhoovers.com") {{
     const phone = context.match(/(?:\+|00)\d[\d\s()\/-]{{7,}}\d/)?.[0];
     const city = context.match(/\bFolgen\s+([^,]{{2,80}}),/)?.[1];
     const revenue = context.match(/Umsatz\s+EUR:\s*([0-9.,]+\s*[BMK]?)/i)?.[1];
-    const employees = context.match(/Beschäftigte\s*\(Gesamt\):\s*([0-9.,]+\s*[KMB]?)/i)?.[1];
+    // "[KMB]?" also took the M of a following word ("15 M…"): only a
+    // standalone unit letter counts.
+    const employees = context.match(/Beschäftigte\s*\(Gesamt\):\s*([0-9.,]+(?:\s*[KMB]\b)?)/i)?.[1];
     const duns = context.match(/D-U-N-S:\s*([0-9-]+)/i)?.[1];
     const industry = phone
       ? context.match(new RegExp(`${{phone.replace(/[.*+?^${{}}()|[\]\\]/g, "\\$&")}}\\s+(.+?)\\s+(?:Private|Public|Nonprofit)`, "i"))?.[1]
@@ -2631,6 +2689,32 @@ if (sourceId === "dnbhoovers.com") {{
     push("mitarbeiter", employees, "high", "D&B Hoovers employee total", hit.url);
     push("firma_register", duns, "high", "D&B D-U-N-S", hit.url);
     push("konzernstruktur", structure, "medium", "D&B Hoovers organization role", hit.url);
+    // Branchencodes (WZ/NACE/NOGA) stehen nur auf der Firmenseite, nicht in der
+    // Trefferliste. Im selben angemeldeten Lauf die Firmenseite oeffnen; ohne
+    // eindeutigen Code den gefundenen Abschnitt als Rohtext mitgeben, damit die
+    // Recherche ihn selbst lesen kann (THESEN 25.09.2026: CHT ohne WZ-Code).
+    try {{
+      await page.goto(hit.url, {{ waitUntil: "domcontentloaded", timeout: 20000 }});
+      for (let attempt = 0; attempt < 20; attempt += 1) {{
+        await page.waitForTimeout(750);
+        const size = await page.evaluate(() => String(document.body?.innerText || "").length).catch(() => 0);
+        if (size > 4000) break;
+      }}
+      if (hostAllowed(page.url()) && /\/company\//i.test(page.url())) {{
+        const detail = await page.evaluate(() => String(document.body?.innerText || "").replace(/[ \t]+/g, " "));
+        // The classification year is not a code: "WZ 2008" read as wz_code=2008
+        // for HAMM AG (25.09.2026). Label and value may sit on separate lines.
+        const codeRe = /\b(WZ\s*2008|WZ|NACE(?:\s*Rev\.?\s*2)?|ÖNACE(?:\s*2008)?|NOGA(?:\s*2008)?)\b[^0-9]{{0,80}}(?!(?:1993|2003|2008)\b)(\d{{2}}(?:\.\d{{1,2}}){{1,2}}|\d{{4,5}})\b/i;
+        const code = detail.match(codeRe);
+        if (code) {{
+          push("wz_code", code[2], "medium", `D&B Hoovers Firmenseite: ${{code[1]}} ${{code[2]}}`, page.url());
+        }}
+        const marker = detail.search(/\b(Branchencodes?|Industry Codes|NACE|WZ\s*2008|NOGA|ÖNACE|SIC|NAICS)\b/i);
+        if (marker >= 0) {{
+          push("branche_codes_rohtext", detail.slice(Math.max(0, marker - 40), marker + 600).replace(/\n+/g, " | "), "medium", "D&B Hoovers Firmenseite: Abschnitt Branchencodes (Rohtext)", page.url());
+        }}
+      }}
+    }} catch {{}}
   }}
 }} else if (sourceId === "leadfeeder.com") {{
   const companyName = normalized(company);
@@ -5107,7 +5191,9 @@ fn resolve_web_stack_auth_owner_user_id_with_env(
                 return Ok(Some(owner.to_string()));
             }
         }
-        return Ok(claimed_owner.map(str::to_string));
+        if let Some(claimed) = claimed_owner {
+            return Ok(Some(claimed.to_string()));
+        }
     }
     if let Some(claimed) = claimed_owner {
         eprintln!(
@@ -5115,7 +5201,69 @@ fn resolve_web_stack_auth_owner_user_id_with_env(
             requesting_task_id, claimed
         );
     }
+    // Company logins (D&B, Leadfeeder) are one shared account. A native
+    // research run or a queue task carries no requesting human, so every
+    // capture and the stored-credential login died with "auth assist owner
+    // unresolved" and D&B stayed dark for a day (thesen, 23./24.09.2026).
+    // The operator can name the owner such runs sign in as, in the runtime
+    // store; without that setting nothing changes.
+    if let Some(default_owner) = web_stack_default_auth_owner(root) {
+        eprintln!(
+            "[business-os] web-stack auth owner defaulted task={} owner={}",
+            requesting_task_id, default_owner
+        );
+        return Ok(Some(default_owner));
+    }
     Ok(None)
+}
+
+const WEB_STACK_DEFAULT_AUTH_OWNER_KEY: &str = "CTOX_WEB_STACK_DEFAULT_AUTH_OWNER";
+
+fn web_stack_default_auth_owner(root: &Path) -> Option<String> {
+    crate::inference::runtime_env::get_runtime_env_value(root, WEB_STACK_DEFAULT_AUTH_OWNER_KEY)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Owner-granted exceptions to the owned-mailbox rule of the e-mail OTP
+/// lookup, one `source_id=mailbox` pair per entry (comma or newline
+/// separated). A pair lets the login of exactly that provider read its own
+/// one-time codes from exactly that mailbox, even though the mailbox is not
+/// owned by or shared with the login owner. Sender, recipient and the
+/// single-code rule still apply. THESEN 25.09.2026: D&B sends its codes to a
+/// staff mailbox that predates mailbox ownership; the owner approved reading
+/// only D&B codes from it.
+const WEB_STACK_OTP_MAILBOX_GRANTS_KEY: &str = "CTOX_WEB_STACK_OTP_MAILBOX_GRANTS";
+
+fn web_stack_otp_source_key(source_id: &str) -> String {
+    let source = source_id.trim().to_ascii_lowercase();
+    source
+        .strip_prefix("app.")
+        .map(str::to_string)
+        .unwrap_or(source)
+}
+
+fn web_stack_otp_mailbox_granted_by(grants: &str, source_id: &str, mailbox: &str) -> bool {
+    let source = web_stack_otp_source_key(source_id);
+    let mailbox = mailbox.trim().to_ascii_lowercase();
+    if source.is_empty() || !mailbox.contains('@') {
+        return false;
+    }
+    grants
+        .split([',', '\n'])
+        .filter_map(|entry| entry.split_once('='))
+        .any(|(granted_source, granted_mailbox)| {
+            web_stack_otp_source_key(granted_source) == source
+                && granted_mailbox.trim().to_ascii_lowercase() == mailbox
+        })
+}
+
+fn web_stack_otp_mailbox_granted(root: &Path, source_id: &str, mailbox: Option<&str>) -> bool {
+    let Some(mailbox) = mailbox else {
+        return false;
+    };
+    crate::inference::runtime_env::get_runtime_env_value(root, WEB_STACK_OTP_MAILBOX_GRANTS_KEY)
+        .is_some_and(|grants| web_stack_otp_mailbox_granted_by(&grants, source_id, mailbox))
 }
 
 fn web_stack_auth_owner_from_command_session(
@@ -5549,6 +5697,7 @@ fn find_fresh_email_otp(
     not_before_epoch_s: i64,
     mailbox_address: &str,
     profile_owner: &str,
+    mailbox_granted: bool,
 ) -> Option<(String, String)> {
     let conn = rusqlite::Connection::open_with_flags(
         crate::paths::core_db(root),
@@ -5561,6 +5710,7 @@ fn find_fresh_email_otp(
         not_before_epoch_s,
         mailbox_address,
         profile_owner,
+        mailbox_granted,
     )
 }
 
@@ -5570,6 +5720,7 @@ fn find_fresh_email_otp_in_conn(
     not_before_epoch_s: i64,
     mailbox_address: &str,
     profile_owner: &str,
+    mailbox_granted: bool,
 ) -> Option<(String, String)> {
     let mailbox_address = mailbox_address.trim().to_ascii_lowercase();
     let profile_owner = profile_owner.trim();
@@ -5624,7 +5775,26 @@ fn find_fresh_email_otp_in_conn(
                     .iter()
                     .any(|user| user.as_str() == Some(profile_owner))
             });
-        if !owner_matches && !shared_matches {
+        // A tenant mailbox nobody owns (set up before mailbox ownership existed,
+        // e.g. the crew or a staff inbox CTOX syncs for the company) is the one
+        // the stored login itself names as its code recipient. It yields only
+        // this provider's codes (sender check below), so the research can
+        // finish the login on its own. Mailboxes owned by someone else stay
+        // closed unless owned, shared or explicitly granted.
+        let owner_field = profile
+            .get("owner_user_id")
+            .or_else(|| profile.get("ownerUserId"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let has_shared_users = profile
+            .get("shared_user_ids")
+            .or_else(|| profile.get("sharedUserIds"))
+            .or_else(|| profile.get("member_user_ids"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|users| !users.is_empty());
+        let unowned_tenant_mailbox = owner_field.is_empty() && !has_shared_users;
+        if !owner_matches && !shared_matches && !mailbox_granted && !unowned_tenant_mailbox {
             continue;
         }
         let recipients: Vec<String> = serde_json::from_str(&recipient_json).ok()?;
@@ -5655,6 +5825,7 @@ fn complete_web_stack_login_with_email_otp(
     timeout_ms: u64,
     profile_owner: Option<String>,
     otp_recipient: Option<&str>,
+    mailbox_granted: bool,
     recipe: &WebStackEmailOtpRecipe,
     login_started_epoch_s: i64,
     continuation_source: Option<&str>,
@@ -5693,9 +5864,14 @@ fn complete_web_stack_login_with_email_otp(
         if let Ok(settings) = crate::inference::runtime_env::effective_operator_env_map(root) {
             let _ = crate::communication::email_native::service_sync(root, &settings);
         }
-        if let Some(hit) =
-            find_fresh_email_otp(root, recipe, not_before, mailbox_address, profile_owner_id)
-        {
+        if let Some(hit) = find_fresh_email_otp(
+            root,
+            recipe,
+            not_before,
+            mailbox_address,
+            profile_owner_id,
+            mailbox_granted,
+        ) {
             found = Some(hit);
             break;
         }
@@ -5918,11 +6094,11 @@ mod email_otp_tests {
         );
         let recipe = web_stack_email_otp_recipe("dnbhoovers.com").expect("recipe");
         assert_eq!(
-            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice"),
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice", false),
             Some(("111111".to_string(), "alice-code".to_string()))
         );
         assert_eq!(
-            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "bob@example.com", "alice"),
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "bob@example.com", "alice", false),
             None,
             "Alice cannot select Bob's code from another account"
         );
@@ -5933,10 +6109,80 @@ mod email_otp_tests {
             "444444",
         );
         assert_eq!(
-            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice"),
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice", false),
             None,
             "two concurrent codes in one mailbox have no challenge identity"
         );
+        conn.execute(
+            "INSERT INTO communication_accounts VALUES ('email:lena@example.com', 'email', 'lena@example.com', '{}')",
+            [],
+        )
+        .expect("unowned account");
+        insert_code(
+            "lena-code",
+            "email:lena@example.com",
+            "lena@example.com",
+            "555555",
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "lena@example.com", "alice", false),
+            Some(("555555".to_string(), "lena-code".to_string())),
+            "an unowned tenant mailbox named by the login yields the provider code"
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "lena@example.com", "alice", true),
+            Some(("555555".to_string(), "lena-code".to_string())),
+            "the owner-granted mailbox yields the provider code"
+        );
+        conn.execute(
+            "INSERT INTO communication_messages VALUES (
+                'lena-phish', 'email', 'email:lena@example.com', 'inbound', 'alerts@evil.example',
+                'Verification code', 'Your verification code is 999999.', '', '[\"lena@example.com\"]',
+                '2026-09-24T03:05:00Z', '2026-09-24T03:05:00Z'
+             )",
+            [],
+        )
+        .expect("foreign sender");
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "lena@example.com", "alice", false),
+            Some(("555555".to_string(), "lena-code".to_string())),
+            "a code from a foreign sender in the tenant mailbox is never taken"
+        );
+    }
+
+    #[test]
+    fn otp_mailbox_grant_names_exactly_one_provider_and_mailbox() {
+        let grants = "dnbhoovers.com=Lena@Example.com, leadfeeder.com=crew@example.com";
+        assert!(web_stack_otp_mailbox_granted_by(
+            grants,
+            "dnbhoovers.com",
+            "lena@example.com"
+        ));
+        assert!(web_stack_otp_mailbox_granted_by(
+            grants,
+            "app.dnbhoovers.com",
+            "LENA@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            grants,
+            "xing.com",
+            "lena@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            grants,
+            "dnbhoovers.com",
+            "crew@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            "",
+            "dnbhoovers.com",
+            "lena@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            grants,
+            "dnbhoovers.com",
+            "not-a-mailbox"
+        ));
     }
 }
 
@@ -6583,10 +6829,35 @@ const preAuthenticatedVerifyFound = verifySelectorVisible && !stillOnLoginPage;
 // signed in, and reports `credential-field-not-found` on a working session.
 // Landing somewhere other than the login URL with no credential field and no
 // error is the same evidence, and it does not rot when a class name changes.
+// D&B Hoovers serves its signed-in dashboard at the same app root it is opened
+// with ("Willkommen, Lena! ... Suchen & eine Liste erstellen" at
+// https://app.dnbhoovers.com/). Requiring a landing *elsewhere* read that live
+// session as "not signed in", found no login field and reported
+// credential-field-not-found / login_failed on every capture from 12:19 on
+// 25.09.2026, while the session from the 12:02 e-mail code was still valid.
+// Staying on the target URL counts as signed in when the page shows no login
+// or credential field and no sign-in entry point.
+const signInEntryVisible = async () => page.evaluate(() => Array.from(
+  document.querySelectorAll("a, button, [role='button'], input[type='submit']"),
+).some((element) => {
+  if (!element.offsetParent) return false;
+  const label = String(element.innerText || element.value || element.getAttribute("aria-label") || "").trim();
+  return /^(log ?in|sign ?in|anmelden|einloggen|login)$/i.test(label);
+})).catch(() => true);
 const preAuthenticatedByLanding = await (async () => {
   if (preAuthenticatedVerifyFound) return false;
   const landedElsewhere = beforeSignals.url && !samePage(beforeSignals.url, targetUrl);
-  if (!landedElsewhere) return false;
+  if (!landedElsewhere) {
+    if (!beforeSignals.url || looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;
+    const signalsHere = beforeSignals.auth_signals || emptyAuthSignals();
+    if (signalsHere.mfa_required === true || signalsHere.login_error_detected === true) return false;
+    const formHere = beforeSignals.form_state || {};
+    if (Number(formHere.visible_password_fields || 0) > 0 || Number(formHere.visible_email_fields || 0) > 0) return false;
+    const loginHere = await browserCandidateFields("login").catch(() => []);
+    const credentialHere = await browserCandidateFields("credential").catch(() => []);
+    if (loginHere.length || credentialHere.length) return false;
+    return !(await signInEntryVisible());
+  }
   if (looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;
   const signals = beforeSignals.auth_signals || emptyAuthSignals();
   if (signals.mfa_required === true || signals.login_error_detected === true) return false;
@@ -7726,6 +7997,51 @@ mod tests {
     }
 
     #[test]
+    fn web_stack_auth_owner_falls_back_to_the_configured_default_owner() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                "queue:system::x",
+                None,
+                false
+            )?,
+            None
+        );
+        crate::inference::runtime_env::set_runtime_env_value(
+            root.path(),
+            WEB_STACK_DEFAULT_AUTH_OWNER_KEY,
+            "crew@thesen-ag.com",
+        )?;
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                "queue:system::x",
+                None,
+                false
+            )?
+            .as_deref(),
+            Some("crew@thesen-ag.com")
+        );
+        let claim = vec!["--owner-user-id".to_string(), "someone-else".to_string()];
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &claim,
+                "queue:system::x",
+                None,
+                false
+            )?
+            .as_deref(),
+            Some("crew@thesen-ag.com")
+        );
+        Ok(())
+    }
+
+    #[test]
     fn web_stack_auth_owner_resolution_uses_command_authorization_chat_and_session(
     ) -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
@@ -8152,6 +8468,10 @@ mod tests {
         // A login page that only gained a query token (D&B: /login?F…=_) is not a
         // landing elsewhere; otherwise a username-first step reads as signed in.
         assert!(source.contains("!samePage(beforeSignals.url, targetUrl)"));
+        // D&B keeps its signed-in dashboard on the app root: staying on the
+        // target URL without any login field or sign-in entry is a session.
+        assert!(source.contains("const signInEntryVisible = async () =>"));
+        assert!(source.contains("if (!landedElsewhere) {"));
         assert!(!source.contains("beforeSignals.url !== targetUrl"));
         // A verify selector that also matches on the login page (D&B: a search
         // link) must not count while the login form is still shown.
@@ -8285,6 +8605,12 @@ mod tests {
             build_web_stack_authenticated_source_capture("dnbhoovers.com", "Example AG", "DE")?;
         assert!(dnb.contains("app.dnbhoovers.com"));
         assert!(dnb.contains("D&B Hoovers exact company result"));
+        // The classification year "WZ 2008" must never be read as the code, and
+        // the rendered script carries plain regex braces (format escapes gone).
+        assert!(dnb.contains("(?!(?:1993|2003|2008)\\b)"));
+        assert!(dnb.contains("[^0-9]{0,80}"));
+        assert!(dnb.contains("SIC|NAICS)\\b/i"));
+        assert!(dnb.contains("(?:\\s*[KMB]\\b)?"));
 
         let leadfeeder =
             build_web_stack_authenticated_source_capture("leadfeeder.com", "Example AG", "DE")?;
@@ -9692,4 +10018,40 @@ fn allowed_domains_from_url(target_url: &str) -> Vec<String> {
         .and_then(|url| url.host_str().map(str::to_string))
         .map(|host| vec![host])
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod source_capture_lock_tests {
+    #[test]
+    fn a_second_capture_for_the_same_provider_waits_for_the_first() {
+        let root = tempfile::tempdir().expect("root");
+        let first = super::acquire_source_capture_lock(
+            root.path(),
+            "dnbhoovers.com",
+            std::time::Duration::from_secs(1),
+        )
+        .expect("first lock");
+        let blocked = super::acquire_source_capture_lock(
+            root.path(),
+            "dnbhoovers.com",
+            std::time::Duration::from_millis(600),
+        );
+        assert!(
+            blocked.is_none(),
+            "the provider stays locked while the first capture runs"
+        );
+        let other = super::acquire_source_capture_lock(
+            root.path(),
+            "leadfeeder.com",
+            std::time::Duration::from_millis(600),
+        );
+        assert!(other.is_some(), "another provider is not blocked");
+        drop(first);
+        assert!(super::acquire_source_capture_lock(
+            root.path(),
+            "dnbhoovers.com",
+            std::time::Duration::from_secs(1),
+        )
+        .is_some());
+    }
 }
