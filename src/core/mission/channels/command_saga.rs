@@ -1640,6 +1640,27 @@ pub(crate) fn record_business_command_review(
     validation_status: &str,
     evidence: &Value,
 ) -> Result<bool> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let recorded = record_business_command_review_in_transaction(
+        &tx,
+        task_id,
+        review_status,
+        validation_status,
+        evidence,
+    )?;
+    tx.commit()?;
+    Ok(recorded)
+}
+
+pub(super) fn record_business_command_review_in_transaction(
+    tx: &Transaction<'_>,
+    task_id: &str,
+    review_status: &str,
+    validation_status: &str,
+    evidence: &Value,
+) -> Result<bool> {
     anyhow::ensure!(
         matches!(review_status, "passed" | "failed" | "held"),
         "invalid command review status"
@@ -1648,9 +1669,6 @@ pub(crate) fn record_business_command_review(
         matches!(validation_status, "passed" | "failed" | "pending"),
         "invalid command validation status"
     );
-    let db_path = resolve_db_path(root, None);
-    let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let row = tx
         .query_row(
             "SELECT aggregate_row.command_id, aggregate_row.execution_phase,
@@ -1670,7 +1688,6 @@ pub(crate) fn record_business_command_review(
         )
         .optional()?;
     let Some((command_id, from_phase, version, attempt)) = row else {
-        tx.commit()?;
         return Ok(false);
     };
     anyhow::ensure!(from_phase != "terminal", "cannot review a terminal command");
@@ -1741,7 +1758,6 @@ pub(crate) fn record_business_command_review(
         }),
         now_ms,
     )?;
-    tx.commit()?;
     Ok(true)
 }
 

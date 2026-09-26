@@ -1096,6 +1096,28 @@ fn incomplete_plan_terminal_disposition(
     }
 }
 
+fn apply_incomplete_queue_plan_failure(
+    root: &Path,
+    job: &QueuedPrompt,
+    attempt_id: &str,
+    lease_worker_id: Option<&str>,
+    incomplete: &lcm::IncompleteTaskExecutionPlan,
+) -> Result<CompletionReviewDisposition> {
+    let disposition = incomplete_plan_terminal_disposition(attempt_id, incomplete);
+    let CompletionReviewDisposition::TerminalQueueFailure { summary } = &disposition else {
+        unreachable!()
+    };
+    channels::fail_incomplete_plan_for_attempt(
+        root,
+        attempt_id,
+        &job.leased_message_keys,
+        lease_worker_id,
+        incomplete,
+        summary,
+    )?;
+    Ok(disposition)
+}
+
 fn queue_supports_plan_failure(root: &Path, job: &QueuedPrompt) -> Result<bool> {
     if job.source_label != "queue" || job.leased_message_keys.len() != 1 {
         return Ok(false);
@@ -1117,9 +1139,7 @@ fn accepted_queue_plan_failure(
 ) -> Result<Option<lcm::IncompleteTaskExecutionPlan>> {
     if !matches!(
         disposition,
-        CompletionReviewDisposition::Approved { .. }
-            | CompletionReviewDisposition::None
-            | CompletionReviewDisposition::NoSend { .. }
+        CompletionReviewDisposition::Approved { .. } | CompletionReviewDisposition::None
     ) || !queue_supports_plan_failure(root, job)?
     {
         return Ok(None);
@@ -7055,38 +7075,45 @@ fn start_prompt_worker(
             } else {
                 None
             };
-            let review_disposition = incomplete_plan_failure
-                .as_ref()
-                .map(|incomplete| incomplete_plan_terminal_disposition(&attempt_id, incomplete))
-                .unwrap_or(review_disposition);
-            let mut review_disposition = match typed_result {
-                Ok(Some(task_id)) => {
-                    if let Err(error) = record_typed_business_command_review(
-                        &root,
-                        &task_id,
-                        &review_disposition,
-                        app_validation_before_review,
-                        &command_turn_id,
-                        conversation_thread_key.as_deref(),
-                    ) {
-                        push_event(
-                            &state,
-                            format!(
-                                "Typed Business OS review persistence failed for {}: {error:#}",
-                                job.source_label
-                            ),
-                        );
-                        CompletionReviewDisposition::Hold {
-                            reason: review::HoldReason::MissingReviewEvidence,
-                            summary: format!(
-                                "Command review evidence could not be persisted: {error}"
-                            ),
+            let mut review_disposition = if let Some(incomplete) = incomplete_plan_failure.as_ref()
+            {
+                apply_incomplete_queue_plan_failure(
+                    &root,
+                    &job,
+                    &attempt_id,
+                    worker_activity.lease_worker_id.as_deref(),
+                    incomplete,
+                )?
+            } else {
+                match typed_result {
+                    Ok(Some(task_id)) => {
+                        if let Err(error) = record_typed_business_command_review(
+                            &root,
+                            &task_id,
+                            &review_disposition,
+                            app_validation_before_review,
+                            &command_turn_id,
+                            conversation_thread_key.as_deref(),
+                        ) {
+                            push_event(
+                                &state,
+                                format!(
+                                    "Typed Business OS review persistence failed for {}: {error:#}",
+                                    job.source_label
+                                ),
+                            );
+                            CompletionReviewDisposition::Hold {
+                                reason: review::HoldReason::MissingReviewEvidence,
+                                summary: format!(
+                                    "Command review evidence could not be persisted: {error}"
+                                ),
+                            }
+                        } else {
+                            review_disposition
                         }
-                    } else {
-                        review_disposition
                     }
+                    _ => review_disposition,
                 }
-                _ => review_disposition,
             };
             let review_reason = match &review_disposition {
                 CompletionReviewDisposition::Hold { summary, .. }
@@ -7662,7 +7689,9 @@ fn start_prompt_worker(
                             && founder_send_error.is_none()
                             && !app_validation_rework
                             && !app_validation_terminal_failure;
-                        if lcm::run_task_execution_progress(&db_path, &attempt_work_key)?.is_some()
+                        if incomplete_plan_failure.is_none()
+                            && lcm::run_task_execution_progress(&db_path, &attempt_work_key)?
+                                .is_some()
                         {
                             let plan_review = lcm::run_set_task_execution_review_status(
                                 &db_path,
@@ -7682,31 +7711,21 @@ fn start_prompt_worker(
                                 let Some(incomplete) = incomplete else {
                                     return Err(error);
                                 };
-                                if !queue_supports_plan_failure(&root, &job)? {
+                                if terminal_no_send || !queue_supports_plan_failure(&root, &job)? {
                                     return Err(error);
                                 }
-                                review_disposition =
-                                    incomplete_plan_terminal_disposition(&attempt_id, &incomplete);
+                                review_disposition = apply_incomplete_queue_plan_failure(
+                                    &root,
+                                    &job,
+                                    &attempt_id,
+                                    worker_activity.lease_worker_id.as_deref(),
+                                    &incomplete,
+                                )?;
                                 incomplete_plan_failure = Some(incomplete);
                                 accepted_success = false;
                                 should_handle_messages = false;
                                 app_validation_terminal_success = false;
                                 outcome_recovery_prompt = None;
-                                for task_id in &job.leased_message_keys {
-                                    record_typed_business_command_review(
-                                        &root,
-                                        task_id,
-                                        &review_disposition,
-                                        app_validation_before_review,
-                                        &command_turn_id,
-                                        conversation_thread_key.as_deref(),
-                                    )?;
-                                }
-                                lcm::run_set_task_execution_review_status(
-                                    &db_path,
-                                    &attempt_work_key,
-                                    "failed",
-                                )?;
                             }
                             if let Some(task_id) = job.leased_message_keys.first() {
                                 crate::business_os::store::refresh_business_command_queue_task_projection(
@@ -35031,6 +35050,7 @@ Business OS command:
         let attempt_id = format!("attempt-{name}");
         let work_key = worker_attempt_work_key(&job);
         let engine = LcmEngine::open(&crate::paths::core_db(&root), LcmConfig::default())?;
+        engine.continuity_init_documents(7410)?;
         engine.begin_worker_attempt_finalization(lcm::WorkerAttemptFinalizationInput {
             attempt_id: &attempt_id,
             work_key: &work_key,
@@ -35117,16 +35137,13 @@ Business OS command:
             &job.leased_message_keys[0],
             &recovered.reply_text,
         )?;
-        let disposition = incomplete_plan_terminal_disposition(&attempt_id, &incomplete);
-        record_typed_business_command_review(
+        let disposition = apply_incomplete_queue_plan_failure(
             &root,
-            &job.leased_message_keys[0],
-            &disposition,
-            None,
-            "fixture-turn",
-            None,
+            &job,
+            &attempt_id,
+            Some("fixture-worker"),
+            &incomplete,
         )?;
-        lcm::run_set_task_execution_review_status(&db_path, &work_key, "failed")?;
         let CompletionReviewDisposition::TerminalQueueFailure { summary } = disposition else {
             unreachable!()
         };
@@ -35134,17 +35151,6 @@ Business OS command:
             summary.contains(&attempt_id)
                 && summary.contains("1/2")
                 && summary.contains("revision=")
-        );
-        assert_eq!(
-            channels::fail_incomplete_plan_for_attempt(
-                &root,
-                &attempt_id,
-                &job.leased_message_keys,
-                Some("fixture-worker"),
-                &incomplete,
-                &summary
-            )?,
-            1
         );
         assert_eq!(
             route_status_for(&root, &job.leased_message_keys[0]),
@@ -35208,12 +35214,12 @@ Business OS command:
 
     #[test]
     fn incomplete_plan_failure_preserves_cancellation_and_new_lease_owner() -> anyhow::Result<()> {
-        for cancel in [true, false] {
-            let name = if cancel {
-                "plan-stop-cancel"
-            } else {
-                "plan-stop-new-owner"
-            };
+        for name in [
+            "plan-stop-cancel",
+            "plan-stop-new-owner",
+            "plan-stop-new-revision",
+        ] {
+            let cancel = name == "plan-stop-cancel";
             let (root, job, attempt_id) = incomplete_plan_queue_fixture(name)?;
             let incomplete =
                 accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)?
@@ -35228,25 +35234,55 @@ Business OS command:
                     None,
                     "operator cancellation",
                 )?;
-            } else {
+            } else if name == "plan-stop-new-owner" {
                 channels::record_queue_lease_worker(
                     &root,
                     &job.leased_message_keys,
                     CHANNEL_ROUTER_LEASE_OWNER,
                     "new-worker",
                 )?;
+            } else {
+                LcmEngine::open(&crate::paths::core_db(&root), LcmConfig::default())?
+                    .record_task_execution_plan(lcm::TaskExecutionPlanUpdate {
+                        work_key: &worker_attempt_work_key(&job),
+                        task_id: &job.leased_message_keys[0],
+                        command_id: name,
+                        attempt_id: &attempt_id,
+                        explanation: Some("new authoritative plan"),
+                        steps: &[lcm::TaskExecutionPlanStepInput {
+                            label: "Reconciled new plan".into(),
+                            status: "in_progress".into(),
+                        }],
+                    })?;
             }
             let before = route_status_for(&root, &job.leased_message_keys[0]);
-            let result = channels::fail_incomplete_plan_for_attempt(
+            let db_path = crate::paths::core_db(&root);
+            let conn = rusqlite::Connection::open(&db_path)?;
+            let snapshot =
+                || -> anyhow::Result<(Option<serde_json::Value>, String)> {
+                    Ok((lcm::run_task_execution_progress(&db_path, &worker_attempt_work_key(&job))?,
+                    conn.query_row(
+                        "SELECT json_object('phase',a.execution_phase,'terminal',a.terminal_status,
+                            'version',a.projection_version,'review',r.review_status,
+                            'validation',r.validation_status,'evidence',r.review_evidence_json)
+                         FROM business_command_aggregates a JOIN business_command_results r
+                         ON r.command_id=a.command_id AND r.attempt=MAX(a.attempt,1)
+                         WHERE a.command_id=?1", [name], |row| row.get(0))?))
+                };
+            let evidence_before = snapshot()?;
+            // Same production boundary as preflight and late typed rejection.
+            let result = apply_incomplete_queue_plan_failure(
                 &root,
+                &job,
                 &attempt_id,
-                &job.leased_message_keys,
                 Some("fixture-worker"),
                 &incomplete,
-                "old finalizer",
             );
             if cancel {
-                assert_eq!(result?, 0);
+                assert!(matches!(
+                    result?,
+                    CompletionReviewDisposition::TerminalQueueFailure { .. }
+                ));
                 assert_eq!(before, "cancelled");
                 assert!(channels::lease_queue_task(
                     &root,
@@ -35255,8 +35291,13 @@ Business OS command:
                 )
                 .is_err());
             } else {
-                assert!(result.unwrap_err().to_string().contains("changed owner"));
+                assert!(result.is_err());
             }
+            assert_eq!(
+                snapshot()?,
+                evidence_before,
+                "stale finalizer changed authoritative evidence"
+            );
             assert_eq!(route_status_for(&root, &job.leased_message_keys[0]), before);
             assert!(
                 lcm::run_worker_attempt(&crate::paths::core_db(&root), &attempt_id)?
@@ -35276,6 +35317,14 @@ Business OS command:
             summary: "review still needed".into(),
         };
         assert!(accepted_queue_plan_failure(&root, &job, &hold)?.is_none());
+        assert!(accepted_queue_plan_failure(
+            &root,
+            &job,
+            &CompletionReviewDisposition::NoSend {
+                summary: "operator no-send".into()
+            }
+        )?
+        .is_none());
         let conn = rusqlite::Connection::open(crate::paths::core_db(&root))?;
         let saved_steps: String = conn.query_row(
             "SELECT steps_json FROM task_execution_plan_revisions",

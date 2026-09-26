@@ -2593,6 +2593,38 @@ pub(crate) fn fail_incomplete_plan_for_attempt(
         |row| row.get(0),
     )?;
     anyhow::ensure!(owns_lease, "plan failure queue lease changed owner");
+    // All failure evidence is fenced together, before any new owner or plan
+    // revision can interleave. Reuse the canonical review/outbox writer.
+    anyhow::ensure!(
+        command_saga::record_business_command_review_in_transaction(
+            &tx,
+            task_id,
+            "failed",
+            "failed",
+            &serde_json::json!({
+                "disposition": "terminal-queue-failure",
+                "failure_class": "incomplete_execution_plan",
+                "attempt_id": attempt_id,
+                "work_key": incomplete.work_key,
+                "plan_revision": incomplete.revision,
+                "completed_steps": incomplete.completed,
+                "total_steps": incomplete.total,
+                "summary": reason,
+            }),
+        )?,
+        "plan failure lost its command/task link"
+    );
+    tx.execute(
+        "UPDATE task_execution_plan_revisions
+         SET review_status='failed',phase='review',percent=?3,updated_at_ms=?4
+         WHERE work_key=?1 AND revision=?2",
+        params![
+            incomplete.work_key,
+            incomplete.revision,
+            (90.0 * incomplete.completed as f64 / incomplete.total as f64).round() as i64,
+            epoch_millis()
+        ],
+    )?;
     let updated =
         ack_messages_in_transaction(&tx, message_keys, "failed", Some(reason), None, None)?;
     tx.execute(
