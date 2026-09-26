@@ -73,29 +73,32 @@ fn read_command_writeback_receipts(
 ) -> Result<Vec<CommandWritebackRecord>> {
     let transaction = conn.unchecked_transaction()?;
     let mut statement = transaction.prepare(
-        "SELECT command_id, status, COALESCE(originating_research=?3, 0)
-         FROM (
-             SELECT command_id, status,
-                    CASE WHEN json_valid(payload_json)
-                         THEN CASE WHEN json_type(payload_json, '$.research_command_id')='text'
-                                   THEN NULLIF(json_extract(payload_json, '$.research_command_id'), '')
-                              END
-                    END AS originating_research
-             FROM business_commands WHERE command_type=?1 AND record_id=?2
-         )
-         WHERE originating_research IS NULL OR originating_research=?3
+        "SELECT command_id, status,
+                CASE WHEN json_valid(payload_json)
+                     THEN CASE WHEN json_type(payload_json, '$.research_command_id')='text'
+                               THEN json_extract(payload_json, '$.research_command_id')
+                          END
+                END
+         FROM business_commands WHERE command_type=?1 AND record_id=?2
          ORDER BY command_id",
     )?;
     let mut records = Vec::with_capacity(targets.len());
     for target in targets {
         let rows = statement.query_map(
-            rusqlite::params![target.command_type, target.record_id, target.parent_id],
+            rusqlite::params![target.command_type, target.record_id],
             |row| {
                 let command_id = row.get::<_, String>(0)?;
                 let status = row.get::<_, String>(1)?;
-                let correlated = row.get::<_, bool>(2)?;
-                let state = if !correlated {
+                let originating_research = row.get::<_, Option<String>>(2)?;
+                let origin = originating_research
+                    .as_deref()
+                    .filter(|id| !id.trim().is_empty());
+                let state = if origin.is_none() {
                     CommandWritebackReceiptState::Uncorrelated(status)
+                } else if origin != Some(target.parent_id.as_str()) {
+                    // Blank detection is whitespace-aware; valid IDs are compared
+                    // exactly, never trimmed into the current parent's authority.
+                    return Ok(None);
                 } else {
                     match status.as_str() {
                         "completed" => CommandWritebackReceiptState::Completed,
@@ -106,10 +109,12 @@ fn read_command_writeback_receipts(
                         _ => CommandWritebackReceiptState::Unknown(status),
                     }
                 };
-                Ok(CommandWritebackReceipt { command_id, state })
+                Ok(Some(CommandWritebackReceipt { command_id, state }))
             },
         )?;
-        let receipts = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        let receipts = rows
+            .filter_map(|receipt| receipt.transpose())
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         records.push(CommandWritebackRecord { target, receipts });
     }
     Ok(records)
@@ -165,6 +170,46 @@ fn command_writeback_probe(root: &Path, job: &QueuedPrompt) -> Result<CommandWri
     ))
 }
 
+/// Bound only presentation; the probe retains complete typed evidence.
+fn bounded_command_writeback_receipt_diagnostic(receipts: &[CommandWritebackReceipt]) -> String {
+    const MAX_ENTRIES: usize = 8;
+    const MAX_BODY_BYTES: usize = 944;
+    const MAX_ID_BYTES: usize = 96;
+    let mut body = String::new();
+    let mut shown = 0;
+    for receipt in receipts.iter().take(MAX_ENTRIES) {
+        let mut end = receipt.command_id.len().min(MAX_ID_BYTES);
+        while !receipt.command_id.is_char_boundary(end) {
+            end -= 1;
+        }
+        let suffix = if end < receipt.command_id.len() {
+            "..."
+        } else {
+            ""
+        };
+        let state = match &receipt.state {
+            CommandWritebackReceiptState::Completed => "Completed",
+            CommandWritebackReceiptState::InFlight => "InFlight",
+            CommandWritebackReceiptState::Failed => "Failed",
+            CommandWritebackReceiptState::Unknown(_) => "Unknown",
+            CommandWritebackReceiptState::Uncorrelated(_) => "Uncorrelated",
+        };
+        let entry = format!("{}{}:{state}", &receipt.command_id[..end], suffix);
+        let separator = if shown == 0 { "" } else { ", " };
+        if body.len() + separator.len() + entry.len() > MAX_BODY_BYTES {
+            break;
+        }
+        body.push_str(separator);
+        body.push_str(&entry);
+        shown += 1;
+    }
+    format!(
+        "total={} omitted={} [{body}]",
+        receipts.len(),
+        receipts.len() - shown
+    )
+}
+
 fn command_writeback_failure(root: &Path, job: &QueuedPrompt) -> Result<Option<String>> {
     let records = match command_writeback_probe(root, job)? {
         CommandWritebackProbe::NotRequired => return Ok(None),
@@ -184,14 +229,9 @@ fn command_writeback_failure(root: &Path, job: &QueuedPrompt) -> Result<Option<S
             command_type,
             record_id,
         } = record.target;
-        let observed = record
-            .receipts
-            .iter()
-            .map(|receipt| format!("{}:{:?}", receipt.command_id, receipt.state))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let observed = bounded_command_writeback_receipt_diagnostic(&record.receipts);
         return Ok(Some(format!(
-            "Business command writeback failed: no successful {command_type} receipt for record {record_id} and originating research {parent_id}. CLI/shell/terminal/SQLite/direct_sql are forbidden writeback mechanisms and cannot complete this task. Research output must be retained for recovery. Observed receipts: [{observed}]."
+            "Business command writeback failed: no successful {command_type} receipt for record {record_id} and originating research {parent_id}. CLI/shell/terminal/SQLite/direct_sql are forbidden writeback mechanisms and cannot complete this task. Research output must be retained for recovery. Observed receipts: {observed}."
         )));
     }
     Ok(None)
@@ -200,6 +240,26 @@ fn command_writeback_failure(root: &Path, job: &QueuedPrompt) -> Result<Option<S
 #[cfg(test)]
 mod command_writeback_tests {
     use super::*;
+
+    #[test]
+    fn writeback_receipt_diagnostic_is_bounded_without_dropping_typed_evidence() {
+        let receipts = (0..50)
+            .map(|index| CommandWritebackReceipt {
+                command_id: format!("{index}-{}", "🙂".repeat(200)),
+                state: CommandWritebackReceiptState::Unknown("future-state".repeat(500)),
+            })
+            .collect::<Vec<_>>();
+        let summary = bounded_command_writeback_receipt_diagnostic(&receipts);
+        assert!(summary.len() <= 1024, "diagnostic must have a byte bound");
+        assert!(summary.starts_with("total=50 omitted=42 ["));
+        assert_eq!(summary.matches(":Unknown").count(), 8);
+        assert_eq!(receipts.len(), 50);
+        assert!(receipts[49].command_id.len() > 700);
+        assert_eq!(
+            bounded_command_writeback_receipt_diagnostic(&[]),
+            "total=0 omitted=0 []",
+        );
+    }
 
     #[test]
     fn writeback_receipt_probe_keeps_all_records_and_uncertain_receipts() -> Result<()> {
@@ -237,8 +297,20 @@ mod command_writeback_tests {
             (
                 "ambiguous-5",
                 "ambiguous",
+                "completed",
+                r#"{"research_command_id":" \t\n\u2003 "}"#,
+            ),
+            (
+                "ambiguous-6",
+                "ambiguous",
                 "future-status",
                 payload.as_str(),
+            ),
+            (
+                "padded-parent",
+                "wrong-parent",
+                "completed",
+                r#"{"research_command_id":" research-a "}"#,
             ),
             (
                 "unrelated",
@@ -307,11 +379,11 @@ mod command_writeback_tests {
             records[4].receipts[0].state,
             CommandWritebackReceiptState::Failed
         );
-        assert_eq!(records[5].receipts.len(), 5);
-        assert!(records[5].receipts[..4].iter().all(|receipt| receipt.state
+        assert_eq!(records[5].receipts.len(), 6);
+        assert!(records[5].receipts[..5].iter().all(|receipt| receipt.state
             == CommandWritebackReceiptState::Uncorrelated("completed".to_string())));
         assert_eq!(
-            records[5].receipts[4].state,
+            records[5].receipts[5].state,
             CommandWritebackReceiptState::Unknown("future-status".to_string()),
         );
         assert!(records[6].receipts.is_empty());
