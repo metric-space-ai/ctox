@@ -395,6 +395,8 @@ function renderEngagementsView(campaign) {
   const slice = engagements.slice(0, ACTIVE_OUTREACH_PAGE_SIZE);
   const truncated = engagements.length > ACTIVE_OUTREACH_PAGE_SIZE;
   const selectedId = stateRef.activeOutreach.selectedEngagementId;
+  const requested = engagements.find((e) => e.id === selectedId);
+  if (requested && !slice.some((e) => e.id === selectedId)) slice.unshift(requested);
   const selected = slice.find((e) => e.id === selectedId) || slice[0];
   return `
     <div class="outbound-outreach-split">
@@ -751,7 +753,7 @@ function renderDoneView(campaign) {
       </thead>
       <tbody>
         ${engagements.map((e) => `
-          <tr data-context-record-id="${escapeFn(e.id)}" data-context-record-type="outbound_engagement" data-context-label="${escapeFn(e.payload?.contact_name || e.id)}">
+          <tr class="${e.id === stateRef.activeOutreach.selectedEngagementId ? 'is-selected' : ''}" aria-current="${e.id === stateRef.activeOutreach.selectedEngagementId}" data-context-record-id="${escapeFn(e.id)}" data-context-record-type="outbound_engagement" data-context-label="${escapeFn(e.payload?.contact_name || e.id)}">
             <td>${escapeFn(e.payload?.contact_name || e.id)}</td>
             <td>${escapeFn(prettyStatus(e.status || ''))}</td>
             <td>${escapeFn(e.closed_reason || e.payload?.closed_reason || '—')}</td>

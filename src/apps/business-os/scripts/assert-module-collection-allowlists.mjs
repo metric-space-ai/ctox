@@ -46,6 +46,11 @@ function walk(dir, out = []) {
 // `db?.raw?.x`, `ctoxCollection(ctx, 'x')`, `loadLocalCollection(ctx, 'x')`.
 const ACCESS_PATTERNS = [
   /\.collection\(\s*['"]([a-z0-9_]+)['"]\s*\)/g,
+  // Scoped modules can pass a literal to their own query helpers. Those
+  // helpers eventually call ctx.db.collection(name), so a missing allowlist
+  // entry otherwise looks like a successful empty read at runtime.
+  /\bloadCollection\(\s*['"]([a-z0-9_]+)['"]/g,
+  /\bloadPersonalPages\(\s*['"]([a-z0-9_]+)['"]/g,
   /\.raw\??\.([a-z][a-z0-9_]+)/g,
   /ctoxCollection\([^,]+,\s*['"]([a-z0-9_]+)['"]/g,
   /loadLocalCollection\([^,]+,\s*['"]([a-z0-9_]+)['"]/g,

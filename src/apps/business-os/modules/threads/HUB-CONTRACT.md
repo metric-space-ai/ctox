@@ -45,13 +45,13 @@ user, now. It MUST include exactly:
   queue lives under `approvals`/`team`.
 - **My mentions** — a message with `me` in `target_user_ids`, or a notification
   of type `mention`.
-- **My unread human threads** — unread `user_notifications` for `me`.
-- **Work assigned to me** — `assigned_user_id === me` while `status` is one of
-  `open` / `blocked` / `escalated`.
+- **My unread human threads** — native `Ungelesen` attention for `me` while
+  the thread remains actionable.
+- **Work assigned to me** — native `Zugewiesen` attention while the thread
+  remains actionable.
 
-**Machine work** (`kind === 'ctox_task'`) MUST enter the inbox **only on
-escalation**: `status === 'blocked'`, `status === 'escalated'`, or a linked
-CTOX command/task in a failed state. A "work finished" notification is a
+**Machine work** (`kind === 'ctox_task'`) MUST enter the inbox **only when a
+blocker or failure is assigned to this user**. A "work finished" notification is a
 **result to review**, not a call to act, and MUST NOT surface in the inbox by
 itself.
 
@@ -85,9 +85,10 @@ full collections when the state exists. Native MUST refresh
 | `Freigabe nötig` | a pending approval where `reviewer_user_id === me` |
 | `Erwähnung` | I am in a message `target_user_ids` / an unread `mention` |
 | `Übergabe an dich` | an open handoff whose target is me (`assigned_user_id`) |
-| `Blockiert` | thread `status === 'blocked'` |
-| `Fehlgeschlagen` | a linked CTOX command/task failed |
-| `Frist heute` / `Frist überschritten` | `due_at_ms` is today / in the past |
+| `Zugewiesen` | an actionable human thread is assigned to me |
+| `Ungelesen` | an actionable human thread has unread notifications for me |
+| `Blockiert` | a blocked/escalated thread is assigned to me |
+| `Fehlgeschlagen` | a failed CTOX status is assigned to me |
 
 **Score weights** (highest applicable reason wins — **max**, not sum):
 
@@ -97,6 +98,7 @@ full collections when the state exists. Native MUST refresh
 | Blockiert / Fehlgeschlagen | 70 |
 | Übergabe an dich | 65 |
 | Erwähnung | 60 |
+| Zugewiesen | 50 |
 | Ungelesen | 40 |
 
 `needs_action` is **derived**, not stored independently: it is true iff
@@ -116,13 +118,12 @@ The thread timeline merges `user_thread_messages` and
   chat bubble.
 - **Every reference is a link.** A timeline entry that points at an object,
   command, or task MUST render a real navigation control, never bare text:
-  - object → `#<module>?record_id=<id>` (see §5),
+  - object → a source-module-specific record route (see §5),
   - command → `#ctox?command_id=<command_id>`,
   - task → `#ctox?task_id=<task_id>`.
-- **Every failure line carries a follow-up action.** A protocol line whose body
-  reads as failed/blocked MUST offer a one-click rework, dispatched as a real
-  AI request `threads.ai.request` (`{ thread_id, goal, risk_class }`) in the
-  same thread — not a dead status string.
+- **A new analysis is distinct from retry.** A failed protocol line MAY offer
+  `threads.ai.request` as a separate CTOX analysis. The source command's owner
+  retains retry, review and completion.
 
 Human messages (with `author_user_id`, or `actor_type === 'ai'` for CTOX) render
 as conversation bubbles with sender and relative time.
@@ -132,16 +133,48 @@ as conversation bubbles with sender and relative time.
 Object deep links are hash routes into the source app:
 
 ```
-#<module>?record_id=<id>
+#<module>?<module-specific-record-parameter>=<id>&return_thread_id=<thread-id>
 ```
 
-- `record_id` is URL-encoded. Threads **emits** `record_id`.
-- The shell record-focus contract (planned Phase 4) accepts the alias `record`
-  in addition to `record_id`; consumers reading a deep link SHOULD accept both.
-- An explicit `source_deep_link` on the entry, when present, MUST win over the
-  derived form. A `module` of `threads` (or empty) yields no object link.
-- Command/task links use the CTOX app: `#ctox?command_id=<id>` and
-  `#ctox?task_id=<id>`.
+- Threads emits `record` for Tickets, Outbound and Documents; Mail uses
+  `thread_key` or `message_id`; CTOX uses `task_id` or `command_id`.
+- The source module MUST confirm the record in its own data. If missing, it
+  MUST show an unavailable state instead of silently focusing the first row.
+- Source modules report confirmed navigation through the bubbling
+  `ctox-business-os-record-focus` event with `module`, `recordId`,
+  `returnThreadId` and `status`. The shell accepts a report only from the
+  matching module window and the current return action's thread and record.
+  `record_focused` measures time since the Threads navigation; `unavailable`
+  remains distinct from a synchronized empty collection. Each source module
+  reports an unavailable record after its required collections are ready.
+- An internal `source_deep_link` on the entry takes precedence. Its module must
+  be registered in the current shell. External paths and URLs are not accepted
+  as module navigation. A `module` of `threads` (or empty) yields no object link.
+- `return_thread_id` opens `#threads?thread_id=<id>` from the shell window.
+
+**Source ownership matrix.** Threads owns the conversation, personal
+attention and explicit `threads.ctox_approval.*` decision. A source record's
+business state changes only through its owning app and native command policy.
+
+| Source | Focus argument | Business action owner | Receipt shown in Threads |
+| --- | --- | --- | --- |
+| CTOX task/command | `task_id` / `command_id` | CTOX queue and command policy owns review, retry and completion | Referenced task/command ID and projected status |
+| Tickets ticket/case | `record` | Tickets owns clarification, ticket status and ticket assignment; a Threads handoff changes only the conversation assignment | Threads handoff receipt; ticket command receipt stays with Tickets |
+| Mail conversation/message | `thread_key` / `message_id` | Mail owns reply, send and mail read state | Threads decision receipt, with Mail's source status linked |
+| Documents file | `record` | Documents owns file, version and edit state | Threads decision receipt, with the document link retained |
+| Outbound campaign/company/pipeline/engagement/research run | `record` | Outbound owns delivery, research and engagement lifecycle; native approval checks the request version and target policy | Approval receipt with produced command/task ID and later source status |
+
+The source app confirms a visible record after its scoped CTOX-DB read. A
+missing or inaccessible record yields `unavailable`; an explicit policy denial
+may yield `forbidden` without disclosing foreign record metadata. Neither
+outcome changes the source object or completes the thread.
+
+**Handoff concurrency.** `threads.handoff.create` carries the selected
+thread's `expected_updated_at_ms`. Native validates the actor, thread version,
+and active target user before creating the handoff message or notification.
+The assignment changes the conversation owner; it does not assign the linked
+source record. A concurrent write after preflight can still prevent the later
+assignment, so the client must inspect a failed command receipt and refresh.
 
 **Record-approval banner contract.** A pending approval MUST be able to surface
 **at the object** (the shell banner over the source record), not only inside
@@ -214,25 +247,25 @@ Threads is **NOT**:
   Threads holds the conversation and audit trail about it and links to it.
 
 Threads also MUST NOT bypass the WebRTC/RxDB data plane or become an HTTP data
-bridge, and MUST NOT treat browser-asserted actor identity as authority for
-approve/reject once native role enforcement (planned Phase 1/5) lands.
+bridge. Native role and version checks authorize approval decisions.
 
 ## 9. Deviations (contract vs. current code)
 
-Recorded so the contract stays honest against `threads.rs` and the module as of
-2026-07-20:
+Recorded against `threads.rs` and the module as of 2026-09-23:
 
-1. **Attention labels/weights.** The browser fallback in
-   `attentionReasons`/`attentionScore` currently uses different strings
-   (`Freigabe`, `Zugewiesen`, `Blockiert`, `Frist`, `Erwähnung`) and different
-   weights **summed** (`Freigabe 100`, `Blockiert 90`, `Frist 80`,
-   `Erwähnung 70`, `Zugewiesen 50`), while `whyMeLine` emits yet another set
-   (`Freigabe nötig`, `Fehlgeschlagen`, `AI arbeitet`, `Unzugeteilt`,
-   `Frist heute`/`Frist überschritten`). §3 is the **target**: server-written
-   `attention_reasons`/`attention_score` with max-wins weighting. Phase 1
-   reconciles the client fallback to this vocabulary. The browser already
-   prefers the stored `user_thread_states` values when present, so writing them
-   natively is what makes §3 authoritative.
+1. **Broad-view query window.** The personal inbox uses paged attention and
+   approval records, unread notifications are paged per user, and the selected
+   timeline pages its own messages, links, approvals and notifications. The
+   list no longer reads a global message/link window; unselected previews use
+   the native next-step/source summary. An active search waits for thread
+   collection readiness, then scans accessible threads in serial pages and
+   matches title/source locally. Partial pages retain lower-bound counts;
+   leaving the search or hiding the app stops the scan between pages. Team,
+   system and all-thread views without an active search still start from a
+   bounded recent thread window; their counts are marked as lower bounds when
+   that window is full. The `team` view is exposed to Chef/Admin only, matching
+   the native broad document-read roles; ordinary users remain scoped by the
+   native per-thread replication filter.
 2. **Notification type vocabulary.** The refactor plan names five short types
    (`approval`, `mention`, `note`, `handoff`, `escalation`). The code emits the
    concrete strings in §6 instead: approvals as `approval_request` /
@@ -241,10 +274,9 @@ Recorded so the contract stays honest against `threads.rs` and the module as of
    (there is **no** literal `handoff` or `escalation` notification type today);
    CTOX status uses `ctox_*`. Treat §6 as canonical; the short list is a
    category grouping, not the wire values.
-3. **Deep-link alias `record`.** Threads emits only `record_id=`. The `record`
-   alias is part of the planned shell record-focus contract (Phase 4) and is not
-   yet emitted or parsed by this module.
-4. **Native role enforcement for approve/reject** is not yet in force
-   (Auth audit: capability token default-off, browser-asserted actor). §5/§8
-   state the target; the module's decision buttons are display until Phase 1/5
-   makes native the authority.
+3. **Record focus coverage.** Tickets and Outbound consume `record`; CTOX,
+   Documents and Mail consume their specific parameters. Other legacy source
+   modules can still open, but their record focus is unconfirmed and the UI
+   labels those links as app navigation.
+4. **Integrated acceptance.** The new routing and attention behavior requires
+   a released shell and real Workjet/browser verification before rollout.

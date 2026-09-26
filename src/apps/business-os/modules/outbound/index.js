@@ -734,6 +734,10 @@ const state = {
   selectedCampaignId: '',
   selectedCompanyId: '',
   selectedPipelineId: '',
+  focusedRunId: '',
+  requestedRecordId: '',
+  returnThreadId: '',
+  unavailableFocusReportedId: '',
   activeView: 'companies',
   filter: 'all',
   search: '',
@@ -774,6 +778,10 @@ const state = {
 
 export async function mount(ctx) {
   state.ctx = ctx;
+  state.requestedRecordId = String(ctx.args?.record || ctx.args?.record_id || '').trim();
+  state.returnThreadId = String(ctx.args?.return_thread_id || '').trim();
+  state.unavailableFocusReportedId = '';
+  state.focusedRunId = '';
   await applyOutboundLanguage(ctx.locale || 'de', { render: false });
   if (!state.activeMsgByContact) state.activeMsgByContact = new Map();
   if (!state.activeNoteByContact) state.activeNoteByContact = new Map();
@@ -793,6 +801,20 @@ export async function mount(ctx) {
   ctx.right?.replaceChildren?.();
   configureActiveOutreach({ state, t, escapeHtml, rerender: () => render() });
   wireEvents(ctx.host);
+  const onAppLaunch = (event) => {
+    const args = event?.detail?.args || {};
+    const recordId = String(args.record || args.record_id || '').trim();
+    if (!recordId) return;
+    state.requestedRecordId = recordId;
+    state.returnThreadId = String(args.return_thread_id || '').trim();
+    state.unavailableFocusReportedId = '';
+    focusRequestedOutboundRecord();
+    render();
+    scrollFocusedOutboundRun();
+    if (state.requestedRecordId) scheduleDataRefresh(0);
+  };
+  ctx.host.addEventListener('ctox-business-os-app-launch', onAppLaunch);
+  state.cleanup.push(() => ctx.host.removeEventListener('ctox-business-os-app-launch', onAppLaunch));
   wireRealtime();
   wireCollectionReadiness();
   let disposed = false;
@@ -845,9 +867,15 @@ export async function mount(ctx) {
       if (disposed || state.ctx !== ctx) return;
       await loadAll({ hydrateKnowledge: false });
       if (disposed || state.ctx !== ctx) return;
-      await loadActiveOutreachData().catch((error) => console.warn('[outbound] active outreach load failed', error));
+      const activeLoaded = await loadActiveOutreachData().then(() => true).catch((error) => {
+        console.warn('[outbound] active outreach load failed', error);
+        return false;
+      });
       if (disposed || state.ctx !== ctx) return;
+      focusRequestedOutboundRecord();
       render();
+      scrollFocusedOutboundRun();
+      if (activeLoaded) reportUnavailableOutboundFocus();
       scheduleCampaignKnowledgeSetup(selectedCampaign());
     })
     .catch((error) => {
@@ -1279,6 +1307,98 @@ async function loadAll(options = {}) {
   if (state.selectedPipelineId && !currentPipeline().some((item) => item.id === state.selectedPipelineId)) {
     state.selectedPipelineId = '';
   }
+  focusRequestedOutboundRecord();
+}
+
+function focusRequestedOutboundRecord() {
+  const recordId = state.requestedRecordId;
+  if (!recordId) return;
+  const status = state.ctx?.host?.querySelector('[data-outbound-record-status]');
+  const showStatus = (message, isError = false) => {
+    if (!status) return;
+    status.hidden = false;
+    status.textContent = message;
+    status.dataset.state = isError ? 'error' : 'info';
+  };
+  const campaign = state.campaigns.find((item) => item.id === recordId);
+  const company = state.companies.find((item) => item.id === recordId || item.duplicate_company_ids?.includes(recordId));
+  const pipelineItem = state.pipeline.find((item) => item.id === recordId);
+  const engagement = state.engagements?.find((item) => item.id === recordId);
+  const researchRun = state.runs.find((item) => item.id === recordId);
+  if (campaign) {
+    state.selectedCampaignId = campaign.id;
+    state.selectedCompanyId = '';
+    state.selectedPipelineId = '';
+    showStatus('Verknüpfte Kampagne geöffnet.');
+  } else if (company) {
+    state.selectedCampaignId = company.campaign_id;
+    state.selectedCompanyId = company.id;
+    state.activeView = 'companies';
+    showStatus('Verknüpftes Unternehmen geöffnet.');
+  } else if (pipelineItem) {
+    state.selectedCampaignId = pipelineItem.campaign_id;
+    state.selectedPipelineId = pipelineItem.id;
+    state.activeView = 'pipeline';
+    showStatus('Verknüpfter Pipeline-Eintrag geöffnet.');
+  } else if (engagement) {
+    state.selectedCampaignId = engagement.campaign_id;
+    state.outreachView = true;
+    state.activeOutreach.view = ['closed', 'meeting_booked'].includes(engagement.status) ? 'done' : 'engagements';
+    state.activeOutreach.selectedEngagementId = engagement.id;
+    showStatus('Verknüpftes Engagement geöffnet.');
+  } else if (researchRun) {
+    const relatedCompany = state.companies.find((item) => item.id === researchRun.company_id);
+    const relatedPipeline = state.pipeline.find((item) => item.id === researchRun.pipeline_id);
+    if (!relatedCompany && !relatedPipeline) {
+      showStatus(`Recherchelauf ${recordId} hat hier keinen sichtbaren Quelldatensatz.`, true);
+      return;
+    }
+    state.selectedCampaignId = researchRun.campaign_id || relatedCompany?.campaign_id || relatedPipeline?.campaign_id;
+    state.outreachView = false;
+    state.focusedRunId = researchRun.id;
+    if (relatedCompany) {
+      state.selectedCompanyId = relatedCompany.id;
+      state.activeView = 'companies';
+    } else {
+      state.selectedPipelineId = relatedPipeline.id;
+      state.activeView = 'pipeline';
+    }
+    showStatus('Verknüpfter Recherchelauf geöffnet.');
+  } else {
+    showStatus(`Verknüpfter Outbound-Datensatz ${recordId} ist hier nicht verfügbar.`, true);
+    return;
+  }
+  state.requestedRecordId = '';
+  queueMicrotask(() => reportOutboundFocus('record_focused', recordId));
+}
+
+function reportOutboundFocus(status, recordId) {
+  if (!state.returnThreadId) return;
+  state.ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
+    bubbles: true,
+    detail: { module: 'outbound', status, recordId, returnThreadId: state.returnThreadId },
+  }));
+}
+
+function reportUnavailableOutboundFocus() {
+  const recordId = state.requestedRecordId;
+  if (!recordId || !state.returnThreadId || state.unavailableFocusReportedId === recordId) return;
+  const ready = ['outbound_campaigns', 'outbound_companies', 'outbound_pipeline_items',
+    'outbound_research_runs', 'outbound_engagements']
+    .every((name) => outboundCollectionReadiness(name)?.ready === true);
+  if (!ready) return;
+  state.unavailableFocusReportedId = recordId;
+  reportOutboundFocus('unavailable', recordId);
+}
+
+function scrollFocusedOutboundRun() {
+  if (!state.focusedRunId) return;
+  const runId = state.focusedRunId;
+  requestAnimationFrame(() => {
+    const row = [...state.ctx.host.querySelectorAll('[data-context-record-type="outbound_research_run"]')]
+      .find((item) => item.dataset.contextRecordId === runId);
+    row?.scrollIntoView?.({ block: 'nearest' });
+  });
 }
 
 async function repairDanglingImportedSources() {
@@ -1817,8 +1937,12 @@ function scheduleDataRefresh(delay = 80) {
   state.refreshTimer = window.setTimeout(async () => {
     state.refreshTimer = null;
     await loadAll({ hydrateKnowledge: false });
-    await loadActiveOutreachData().catch((error) => console.warn('[outbound] active outreach refresh failed', error));
+    const activeLoaded = await loadActiveOutreachData().then(() => true).catch((error) => {
+      console.warn('[outbound] active outreach refresh failed', error);
+      return false;
+    });
     render();
+    if (activeLoaded) reportUnavailableOutboundFocus();
   }, delay);
 }
 
@@ -6340,7 +6464,7 @@ function renderCompanyDetail() {
       </div>
       <div class="outbound-detail-block">
         <div class="ctox-field-label">Research Runs</div>
-        ${runs.map((run) => `<div class="outbound-muted">${escapeHtml(run.run_type)} · ${escapeHtml(run.status)} · ${new Date(run.updated_at_ms).toLocaleString()}</div>`).join('') || '<div class="outbound-muted">Noch keine Research Runs.</div>'}
+        ${runs.map((run) => `<div class="outbound-muted${run.id === state.focusedRunId ? ' is-selected' : ''}" data-context-record-type="outbound_research_run" data-context-record-id="${escapeHtml(run.id)}" data-context-label="${escapeHtml(run.run_type || run.id)}" aria-current="${run.id === state.focusedRunId}">${escapeHtml(run.run_type)} · ${escapeHtml(run.status)} · ${new Date(run.updated_at_ms).toLocaleString()}</div>`).join('') || '<div class="outbound-muted">Noch keine Research Runs.</div>'}
       </div>
       <div class="outbound-detail-block">
         <div class="ctox-field-label">Details</div>
@@ -6387,6 +6511,10 @@ function renderPipelineDetail() {
           ['Kontakte', String((item.contacts || []).length)],
           ['Letzter Run', runs[0] ? `${runs[0].run_type || 'Run'} · ${runs[0].status || 'offen'}` : 'kein Run'],
         ])}
+      </div>
+      <div class="outbound-detail-block">
+        <div class="ctox-field-label">Research Runs</div>
+        ${runs.map((run) => `<div class="outbound-muted${run.id === state.focusedRunId ? ' is-selected' : ''}" data-context-record-type="outbound_research_run" data-context-record-id="${escapeHtml(run.id)}" data-context-label="${escapeHtml(run.run_type || run.id)}" aria-current="${run.id === state.focusedRunId}">${escapeHtml(run.run_type)} · ${escapeHtml(run.status)} · ${new Date(run.updated_at_ms).toLocaleString()}</div>`).join('') || '<div class="outbound-muted">Noch keine Research Runs.</div>'}
       </div>
     </div>
   `;

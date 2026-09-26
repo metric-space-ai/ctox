@@ -7,6 +7,62 @@ import {
   splitUserIds,
 } from '../commands.js';
 import { collections } from '../schema.js';
+import { collectUniquePages } from '../paging.js';
+import { normalizeInternalDeepLink, sourceDeepLinkFor, sourceFocusSupported } from '../links.js';
+
+assert.equal(
+  sourceDeepLinkFor({ source_module: 'tickets', source_record_type: 'ticket_case', source_record_id: 'case 1' }, 'thread-1'),
+  '#tickets?record=case+1&record_type=ticket_case&return_thread_id=thread-1',
+);
+assert.equal(
+  sourceDeepLinkFor({ source_module: 'ctox', source_record_type: 'task', source_record_id: 'task-1' }, 'thread-1'),
+  '#ctox?task_id=task-1&record_type=task&return_thread_id=thread-1',
+);
+assert.equal(
+  sourceDeepLinkFor({ source_module: 'mail', source_record_type: 'conversation', source_record_id: 'mail-1' }, 'thread-1'),
+  '#mail?thread_key=mail-1&record_type=conversation&return_thread_id=thread-1',
+);
+assert.equal(
+  sourceDeepLinkFor({ source_module: 'mail', source_record_type: 'message', source_deep_link: '#mail?record_id=mail-2' }, 'thread-1'),
+  '#mail?message_id=mail-2&record_type=message&return_thread_id=thread-1',
+);
+assert.equal(
+  sourceDeepLinkFor({ source_module: 'documents', source_record_type: 'document', source_record_id: 'doc-1' }, 'thread-1'),
+  '#documents?record=doc-1&record_type=document&return_thread_id=thread-1',
+);
+assert.equal(
+  sourceDeepLinkFor({ source_module: 'outbound', source_record_type: 'research_run', source_record_id: 'run-1' }, 'thread-1'),
+  '#outbound?record=run-1&record_type=research_run&return_thread_id=thread-1',
+);
+assert.equal(sourceFocusSupported({ source_module: 'outbound', source_record_type: 'research_run', source_record_id: 'run-1' }), true);
+assert.equal(sourceFocusSupported({ source_module: 'outbound', source_record_type: 'unknown', source_record_id: 'run-1' }), false);
+assert.equal(sourceFocusSupported({ source_module: 'outbound', source_record_type: 'research_run', source_record_id: 'run-1', source_deep_link: '#tickets?record=run-1' }), false);
+assert.equal(normalizeInternalDeepLink('javascript:alert(1)', 'thread-1'), '');
+assert.equal(normalizeInternalDeepLink('https://example.org/', 'thread-1'), '');
+assert.equal(normalizeInternalDeepLink('#tickets?record=1', 'thread-1', new Set(['mail'])), '');
+
+const manyRecords = Array.from({ length: 235 }, (_, index) => ({ id: `thread-${index}` }));
+const requestedOffsets = [];
+const pageSizes = [];
+const complete = await collectUniquePages(({ skip, limit }) => {
+  requestedOffsets.push(skip);
+  return Promise.resolve(manyRecords.slice(skip, skip + limit));
+}, { onPage: (page) => pageSizes.push(page.length) });
+assert.equal(complete.records.length, 235);
+assert.equal(complete.complete, true);
+assert.deepEqual(requestedOffsets, [0, 100, 200]);
+assert.deepEqual(pageSizes, [100, 100, 35]);
+let deliveredPages = 0;
+const cancelled = await collectUniquePages(({ skip, limit }) => Promise.resolve(manyRecords.slice(skip, skip + limit)), {
+  onPage: () => { deliveredPages += 1; },
+  shouldContinue: () => deliveredPages < 1,
+});
+assert.equal(cancelled.records.length, 100);
+assert.equal(cancelled.complete, false);
+await assert.rejects(
+  collectUniquePages(({ skip }) => Promise.resolve(skip ? manyRecords.slice(0, 100) : manyRecords.slice(0, 100))),
+  /doppelten Datensatz/,
+);
 
 assert.ok(THREAD_COLLECTIONS.includes('user_threads'));
 assert.ok(collections.user_threads);
@@ -112,19 +168,21 @@ assert.doesNotMatch(css, /\.threads-briefing/);
 // Kit tokens are owned by the kit (shared/base.css), never re-defined here.
 assert.doesNotMatch(css, /--kit-fill:\s|--kit-hover:\s|--kit-fill-strong:\s|--focus-ring:\s/);
 
-// Sync readiness gates the data-driven list empty: while user_threads has
-// not finished its initial replication (ready === false), an empty unfiltered
-// source renders the canonical ctox-syncing shell — never "no threads".
-// Selection/filter empties stay ungated ctox-empty.
+// Personal counts and empty state must wait for the thread, state and approval
+// collections. A partial replication cannot claim the inbox is complete.
+// Search and filter empties also stay provisional until their window is ready.
 assert.match(js, /collectionReadiness/);
 assert.match(js, /subscribeCollectionReadiness/);
 assert.match(js, /subscribe\.call\(state\.ctx\.sync, 'user_threads'/);
 assert.match(js, /state\.cleanup\.push\(wireReadiness\(\)\)/);
 assert.match(js, /ctox-syncing" role="status" aria-live="polite"/);
 assert.match(js, /syncingThreads/);
-// The syncing shell only appears when the unfiltered source is empty AND the
-// collection is not ready; a filtered-out list keeps the plain empty state.
-assert.match(js, /!state\.data\.threads\.length && readiness\?\.ready === false/);
+assert.match(js, /const complete = state\.filter === 'inbox'/);
+assert.match(js, /state\.recentThreadsComplete && readiness\?\.ready === true/);
+assert.match(js, /partialSearchResults/);
+assert.match(js, /loadPersonalPages\('user_thread_states'/);
+assert.match(js, /loadPersonalPages\('ctox_task_approval_requests'/);
+assert.match(js, /filter === 'inbox' \? personalCollectionsReady\(\)/);
 for (const locale of ['de', 'en']) {
   const messages = JSON.parse(await readFile(fileURLToPath(new URL(`../locales/${locale}.json`, import.meta.url)), 'utf8'));
   assert.ok(messages.syncingThreads, `locales/${locale}.json carries syncingThreads`);

@@ -1,15 +1,15 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260926-shell-v2-native-request-collection-name-v400';
-import { CtoxResizer } from './shared/resizer.js?v=20260926-shell-v2-native-request-collection-name-v400';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260926-shell-v2-native-request-collection-name-v400';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260926-shell-v2-native-request-collection-name-v400';
-import { createAppActions } from './shared/app-actions.js?v=20260926-shell-v2-native-request-collection-name-v400';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260926-shell-v2-threads-native-request-v401';
+import { CtoxResizer } from './shared/resizer.js?v=20260926-shell-v2-threads-native-request-v401';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260926-shell-v2-threads-native-request-v401';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260926-shell-v2-threads-native-request-v401';
+import { createAppActions } from './shared/app-actions.js?v=20260926-shell-v2-threads-native-request-v401';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260926-shell-v2-native-request-collection-name-v400';
+} from './shared/app-lifecycle.js?v=20260926-shell-v2-threads-native-request-v401';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +17,20 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260926-shell-v2-native-request-collection-name-v400';
+} from './shared/permissions.js?v=20260926-shell-v2-threads-native-request-v401';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260926-shell-v2-native-request-collection-name-v400';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260926-shell-v2-native-request-collection-name-v400';
+} from './shared/branding.js?v=20260926-shell-v2-threads-native-request-v401';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260926-shell-v2-threads-native-request-v401';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260926-shell-v2-native-request-collection-name-v400';
+} from './shared/presentation.js?v=20260926-shell-v2-threads-native-request-v401';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +41,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260926-shell-v2-native-request-collection-name-v400';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260926-shell-v2-native-request-collection-name-v400';
-import { createDocumentsFacade } from './shared/documents.js?v=20260926-shell-v2-native-request-collection-name-v400';
+} from './shared/shell-permissions-ui.js?v=20260926-shell-v2-threads-native-request-v401';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260926-shell-v2-threads-native-request-v401';
+import { createDocumentsFacade } from './shared/documents.js?v=20260926-shell-v2-threads-native-request-v401';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,16 +51,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260926-shell-v2-native-request-collection-name-v400';
+} from './shared/maintenance-state.js?v=20260926-shell-v2-threads-native-request-v401';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260926-shell-v2-native-request-collection-name-v400';
+} from './shared/workspace-session.js?v=20260926-shell-v2-threads-native-request-v401';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260926-shell-v2-native-request-collection-name-v400';
+} from './shared/taskbar-pins.js?v=20260926-shell-v2-threads-native-request-v401';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -68,10 +68,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260926-shell-v2-native-request-collection-name-v400';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260926-shell-v2-threads-native-request-v401';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260926-shell-v2-native-request-collection-name-v400';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260926-shell-v2-native-request-collection-name-v400';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260926-shell-v2-threads-native-request-v401';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260926-shell-v2-threads-native-request-v401';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -79,8 +79,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20260926-shell-v2-native-request-collection-name-v400';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260926-shell-v2-native-request-collection-name-v400';
+} from './shared/startup-deadlines.js?v=20260926-shell-v2-threads-native-request-v401';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260926-shell-v2-threads-native-request-v401';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -99,7 +99,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260926-shell-v2-native-request-collection-name-v400';
+const APP_BUILD = '20260926-shell-v2-threads-native-request-v401';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -4778,6 +4778,7 @@ async function openDesktopApp(appId, options = {}) {
   const existing = findDesktopWindow(appId);
   if (existing) {
     restoreAndFocusWindow(existing);
+    setThreadReturnAction(existing, options.args);
     const launchDelivered = dispatchDesktopAppLaunch(existing, appId, options.args);
     if (options.args && !launchDelivered) {
       throw new Error(`Desktop app launch arguments could not be delivered: ${appId}`);
@@ -4800,6 +4801,7 @@ async function openDesktopApp(appId, options = {}) {
     iconSrcSet: entry.iconSrcSet,
     iconAnchorRect: () => desktopIconAnchorRect(entry.id),
   });
+  setThreadReturnAction(win, options.args);
   applyWorkjetCategory(win.element, entry.category || 'imported');
   let teardown = null;
   try {
@@ -4869,6 +4871,7 @@ async function openDesktopApp(appId, options = {}) {
       }
     });
   }
+  setThreadReturnAction(win, options.args);
   return win.id;
 }
 
@@ -4878,6 +4881,7 @@ async function openWindowedModule(mod, options = {}) {
   const existing = descriptor.multiInstance ? null : findDesktopWindow(mod.id);
   if (existing) {
     restoreAndFocusWindow(existing);
+    setThreadReturnAction(existing, options.args);
     const launchDelivered = dispatchDesktopAppLaunch(existing, mod.id, options.args);
     if (options.args?.openFile) {
       state.eventBus?.emitAsync?.('desktop-app:open-file', {
@@ -4909,6 +4913,7 @@ async function openWindowedModule(mod, options = {}) {
     iconAnchorRect: () => desktopIconAnchorRect(mod.id),
     ...windowHeaderOptionsForModule(mod),
   });
+  setThreadReturnAction(win, options.args);
   applyWorkjetCategory(win.element, descriptor.category);
   // Apply the declared presentation before the asynchronous module mount.
   // Shell controls are interactive as soon as the window exists; applying the
@@ -4968,6 +4973,7 @@ async function openWindowedModule(mod, options = {}) {
     }
     wireShellV2ModuleTitle(mod, win, content);
     state.windowManager?.refreshV2Chrome?.(win.id);
+    setThreadReturnAction(win, options.args);
     const windowResizers = [];
     cleanupWindowResizers = setupModuleResizers(mod, {
       scope: root,
@@ -5131,6 +5137,55 @@ function dispatchDesktopAppLaunch(win, appId, args = {}) {
   }));
   return true;
 }
+
+function setThreadReturnAction(win, args = {}) {
+  const actions = win?.element?.querySelector?.('[data-window-actions]');
+  if (!actions) return;
+  const existing = actions.querySelector('[data-thread-return]');
+  const threadId = String(args?.return_thread_id || '').trim();
+  const targetRecordId = String(args?.record || args?.record_id || args?.case_id
+    || args?.task_id || args?.command_id || args?.message_id || args?.thread_key || '').trim();
+  if (!threadId || threadId.length > 256) {
+    existing?.remove();
+    return;
+  }
+  if (existing?.dataset.threadReturn === threadId
+    && existing?.dataset.targetRecordId === targetRecordId) return;
+  existing?.remove();
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'shell-window-header-action';
+  button.dataset.threadReturn = threadId;
+  button.dataset.targetRecordId = targetRecordId;
+  button.dataset.windowHeaderAction = '';
+  button.textContent = '↩ Threads';
+  button.setAttribute('aria-label', 'Zurück zur Abstimmung in Threads');
+  button.addEventListener('click', () => {
+    window.location.hash = `#threads?thread_id=${encodeURIComponent(threadId)}`;
+  });
+  actions.prepend(button);
+}
+
+document.addEventListener('ctox-business-os-record-focus', (event) => {
+  const detail = event.detail || {};
+  if (!['record_focused', 'unavailable', 'forbidden'].includes(detail.status)) return;
+  const windowElement = event.target?.closest?.('.shell-window');
+  const returnButton = windowElement?.querySelector?.('[data-thread-return]');
+  if (!returnButton || windowElement?.dataset.ownerId !== `desktop-app:${detail.module}`
+    || returnButton.dataset.threadReturn !== detail.returnThreadId
+    || returnButton.dataset.targetRecordId !== detail.recordId) return;
+  returnButton.dataset.sourceFocusStatus = detail.status;
+  returnButton.title = detail.status === 'record_focused'
+    ? 'Datensatz in der Quell-App fokussiert · Zurück zu Threads'
+    : detail.status === 'forbidden'
+      ? 'Kein Zugriff auf den verknüpften Datensatz · Zurück zu Threads'
+      : 'Verknüpfter Datensatz nicht verfügbar · Zurück zu Threads';
+  if (detail.status !== 'record_focused'
+    || !performance.getEntriesByName('ctox.threads.source_navigation_started', 'mark').length) return;
+  performance.mark('ctox.threads.source_record_focused');
+  performance.measure('ctox.threads.source_record_focus',
+    'ctox.threads.source_navigation_started', 'ctox.threads.source_record_focused');
+});
 
 function openBusinessChat(detail = {}) {
   const moduleId = detail.module || detail.source_module || '';
@@ -7145,6 +7200,7 @@ const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
     'user_notifications',
     'user_thread_links',
     'user_thread_messages',
+    'user_thread_states',
     'user_threads',
   ]),
   tickets: Object.freeze([
@@ -15919,8 +15975,20 @@ async function maybeShowRecordApprovalBanner() {
     `;
     const decide = async (decision) => {
       const note = decision === 'reject' ? (window.prompt('Begründung oder Änderungswunsch:') || '') : '';
+      if (decision === 'reject' && !note.trim()) return;
+      const actionButtons = [...banner.querySelectorAll('[data-record-approval-approve], [data-record-approval-reject]')];
+      actionButtons.forEach((button) => { button.disabled = true; });
+      let status = banner.querySelector('[data-record-approval-status]');
+      if (!status) {
+        status = document.createElement('span');
+        status.dataset.recordApprovalStatus = '';
+        status.setAttribute('role', 'status');
+        banner.querySelector('.ctox-record-approval-copy')?.append(status);
+      }
+      status.textContent = 'Entscheidung wird übermittelt…';
       try {
-        await state.commandBus?.dispatch?.({
+        if (!state.commandBus?.dispatch) throw new Error('Freigabe ist derzeit nicht verfügbar.');
+        const outcome = await state.commandBus.dispatch({
           command_type: decision === 'approve' ? 'threads.ctox_approval.approve' : 'threads.ctox_approval.reject',
           module: 'threads',
           record_id: pending.id,
@@ -15929,11 +15997,16 @@ async function maybeShowRecordApprovalBanner() {
             expected_updated_at_ms: Number(pending.updated_at_ms || 0),
             decision_note: note,
           },
-        });
+        }, { until: 'terminal' });
+        if (['failed', 'rejected', 'blocked'].includes(outcome?.status)) {
+          throw new Error(outcome?.error || 'Die Entscheidung wurde nicht übernommen.');
+        }
+        banner.remove();
       } catch (error) {
         console.warn('[record-approval] decision dispatch failed', error);
+        status.textContent = error?.message || 'Die Entscheidung konnte nicht übernommen werden.';
+        actionButtons.forEach((button) => { button.disabled = false; });
       }
-      banner.remove();
     };
     banner.querySelector('[data-record-approval-approve]')?.addEventListener('click', () => { decide('approve'); });
     banner.querySelector('[data-record-approval-reject]')?.addEventListener('click', () => { decide('reject'); });
