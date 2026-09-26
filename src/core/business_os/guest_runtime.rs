@@ -2,10 +2,13 @@
 // License: AGPL-3.0-only
 
 //! Guest-side desktop effects. This adapter owns no identity, VM provisioner,
-//! lease, transport, scheduler or persistent state. A native authority must
-//! execute input at its effect boundary and publish observations through its
-//! revocation-aware delivery path. There is intentionally no permissive default
-//! implementation and no registered browser/VM operation until that connector exists.
+//! lease, scheduler or persistent state. A native authority must authorize
+//! each effect and publish observations through its revocation-aware delivery path.
+//! An owned local QEMU virtio-serial channel may carry those effects, never
+//! browser business data. Observe/input enter through the Business OS command
+//! connector when installed; that connector fails closed until a native owner
+//! is injected. Neither path enables a model-facing tool or production VM
+//! provisioner, and there is no permissive default implementation.
 
 use anyhow::{ensure, Result};
 use serde::Deserialize;
@@ -169,8 +172,11 @@ pub(super) trait GuestAuthorization {
         Fut: Future<Output = Result<()>> + Send;
 }
 
-fn identifier(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+pub(super) fn identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.len() <= 256
+        && !value.chars().any(char::is_control)
 }
 
 impl GuestInput {

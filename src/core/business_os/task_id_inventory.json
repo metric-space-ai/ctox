@@ -4,14 +4,14 @@
   "sites": [
     {
       "file": "src/core/business_os/command_plane.rs",
-      "function": "accept_rxdb_business_command_with_origin",
+      "function": "accept_rxdb_business_command_with_guest_runtime",
       "occurrence": 1,
       "semantics": "compatibility_mixed",
       "target_field": "return explicit execution_task_id/target fields"
     },
     {
       "file": "src/core/business_os/command_plane.rs",
-      "function": "accept_rxdb_business_command_with_origin",
+      "function": "accept_rxdb_business_command_with_guest_runtime",
       "occurrence": 2,
       "semantics": "compatibility_mixed",
       "target_field": "return explicit execution_task_id/target fields"
