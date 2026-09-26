@@ -351,6 +351,15 @@ fn skips_cli_startup_db(args: &[String]) -> bool {
 }
 
 fn skips_cli_turn_ledger(args: &[String]) -> bool {
+    // Static diagnostics must remain available when daemon state is outside
+    // the caller's sandbox or the ledger cannot be opened. Match only the
+    // top-level command, never a --help token inside a stateful command.
+    if matches!(
+        args.first().map(String::as_str),
+        Some("help" | "--help" | "-h" | "--version" | "-V")
+    ) {
+        return true;
+    }
     // Office file tools run within the caller's filesystem sandbox and do not
     // read or mutate daemon state. They must not wait on its SQLite ledger.
     if args.first().map(String::as_str) == Some("office") {
@@ -724,7 +733,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             }
             service::run_foreground(root)
         }
-        Some("version") => {
+        Some("version" | "--version" | "-V") => {
             let version = version_info(root)?;
             println!("{}", serde_json::to_string_pretty(&version)?);
             Ok(())
@@ -5147,6 +5156,31 @@ fn handle_mailserver_command(root: &Path, args: &[String]) -> anyhow::Result<()>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn top_level_diagnostics_skip_startup_database_without_exempting_secret_commands() {
+        for command in ["help", "--help", "-h", "version", "--version", "-V"] {
+            let args = vec![command.to_string()];
+            assert!(super::skips_cli_startup_db(&args), "{command}");
+            assert!(super::skips_cli_turn_ledger(&args), "{command}");
+        }
+        // Metadata reads still need their supported authority boundary; a
+        // diagnostic fix must not disable ledger/policy handling for secrets.
+        for command in [
+            vec!["secret", "list"],
+            vec!["secret", "list", "--scope", "credentials"],
+            vec!["secret", "get", "--help"],
+            vec!["secret", "put", "--value", "--help"],
+            vec!["config", "--help"],
+        ] {
+            let args = command
+                .iter()
+                .map(|arg| arg.to_string())
+                .collect::<Vec<_>>();
+            assert!(!super::skips_cli_startup_db(&args), "{command:?}");
+            assert!(!super::skips_cli_turn_ledger(&args), "{command:?}");
+        }
+    }
+
     use super::lcm;
     use super::{
         append_appsec_credential_proof_arg, appsec_command_argv_strings,
