@@ -29,12 +29,99 @@ fn validate_command_writeback_contract(command: &Value, contract: &Value) -> Res
     Ok(())
 }
 
-fn command_writeback_failure(root: &Path, job: &QueuedPrompt) -> Result<Option<String>> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CommandWritebackReceiptState {
+    Completed,
+    InFlight,
+    Failed,
+    Unknown(String),
+    Uncorrelated(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandWritebackReceipt {
+    command_id: String,
+    state: CommandWritebackReceiptState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandWritebackTarget {
+    parent_id: String,
+    command_type: String,
+    record_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CommandWritebackRecord {
+    target: CommandWritebackTarget,
+    receipts: Vec<CommandWritebackReceipt>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum CommandWritebackProbe {
+    NotRequired,
+    InvalidContract(String),
+    Records(Vec<CommandWritebackRecord>),
+}
+
+/// Capture every contracted record from one native read snapshot. Absence,
+/// unfinished commands, terminal failures and ambiguous correlation remain
+/// distinct; none of these states grants permission to repeat a write.
+fn read_command_writeback_receipts(
+    conn: &rusqlite::Connection,
+    targets: Vec<CommandWritebackTarget>,
+) -> Result<Vec<CommandWritebackRecord>> {
+    let transaction = conn.unchecked_transaction()?;
+    let mut statement = transaction.prepare(
+        "SELECT command_id, status, COALESCE(originating_research=?3, 0)
+         FROM (
+             SELECT command_id, status,
+                    CASE WHEN json_valid(payload_json)
+                         THEN CASE WHEN json_type(payload_json, '$.research_command_id')='text'
+                                   THEN NULLIF(json_extract(payload_json, '$.research_command_id'), '')
+                              END
+                    END AS originating_research
+             FROM business_commands WHERE command_type=?1 AND record_id=?2
+         )
+         WHERE originating_research IS NULL OR originating_research=?3
+         ORDER BY command_id",
+    )?;
+    let mut records = Vec::with_capacity(targets.len());
+    for target in targets {
+        let rows = statement.query_map(
+            rusqlite::params![target.command_type, target.record_id, target.parent_id],
+            |row| {
+                let command_id = row.get::<_, String>(0)?;
+                let status = row.get::<_, String>(1)?;
+                let correlated = row.get::<_, bool>(2)?;
+                let state = if !correlated {
+                    CommandWritebackReceiptState::Uncorrelated(status)
+                } else {
+                    match status.as_str() {
+                        "completed" => CommandWritebackReceiptState::Completed,
+                        "pending" | "running" | "accepted" | "queued" => {
+                            CommandWritebackReceiptState::InFlight
+                        }
+                        "failed" | "cancelled" | "rejected" => CommandWritebackReceiptState::Failed,
+                        _ => CommandWritebackReceiptState::Unknown(status),
+                    }
+                };
+                Ok(CommandWritebackReceipt { command_id, state })
+            },
+        )?;
+        let receipts = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        records.push(CommandWritebackRecord { target, receipts });
+    }
+    Ok(records)
+}
+
+fn command_writeback_probe(root: &Path, job: &QueuedPrompt) -> Result<CommandWritebackProbe> {
     if metadata_string(&job.queue_task_metadata, "business_os_command_type").as_deref()
         != Some("business_os.chat.task")
     {
-        return Ok(None);
+        return Ok(CommandWritebackProbe::NotRequired);
     }
+    let mut targets = Vec::new();
     for key in &job.leased_message_keys {
         let Some(context) = channels::inspect_business_command_for_task(root, key)? else {
             continue;
@@ -43,7 +130,7 @@ fn command_writeback_failure(root: &Path, job: &QueuedPrompt) -> Result<Option<S
             continue;
         };
         if let Err(error) = validate_command_writeback_contract(&context["command"], contract) {
-            return Ok(Some(error.to_string()));
+            return Ok(CommandWritebackProbe::InvalidContract(error.to_string()));
         }
         if !crate::business_os::mcp_channel::supports_command_writeback(contract) {
             continue;
@@ -58,25 +145,54 @@ fn command_writeback_failure(root: &Path, job: &QueuedPrompt) -> Result<Option<S
         let records = contract["record_ids"]
             .as_array()
             .context("writeback record IDs missing")?;
-        let conn = crate::business_os::store::open_store(root)?;
         for record in records {
-            let record_id = record
-                .as_str()
-                .context("writeback record id must be a string")?;
-            let completed: bool = conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM business_commands
-                 WHERE command_type=?1 AND record_id=?2 AND status='completed'
-                   AND json_valid(payload_json)
-                   AND json_extract(payload_json, '$.research_command_id')=?3)",
-                rusqlite::params![command_type, record_id, parent_id],
-                |row| row.get(0),
-            )?;
-            if !completed {
-                return Ok(Some(format!(
-                    "Business command writeback failed: no successful {command_type} receipt for record {record_id} and originating research {parent_id}. CLI/shell/terminal/SQLite/direct_sql are forbidden writeback mechanisms and cannot complete this task. Research output must be retained for recovery."
-                )));
-            }
+            targets.push(CommandWritebackTarget {
+                parent_id: parent_id.to_string(),
+                command_type: command_type.to_string(),
+                record_id: record
+                    .as_str()
+                    .context("writeback record id must be a string")?
+                    .to_string(),
+            });
         }
+    }
+    if targets.is_empty() {
+        return Ok(CommandWritebackProbe::NotRequired);
+    }
+    let conn = crate::business_os::store::open_store(root)?;
+    Ok(CommandWritebackProbe::Records(
+        read_command_writeback_receipts(&conn, targets)?,
+    ))
+}
+
+fn command_writeback_failure(root: &Path, job: &QueuedPrompt) -> Result<Option<String>> {
+    let records = match command_writeback_probe(root, job)? {
+        CommandWritebackProbe::NotRequired => return Ok(None),
+        CommandWritebackProbe::InvalidContract(error) => return Ok(Some(error)),
+        CommandWritebackProbe::Records(records) => records,
+    };
+    for record in records {
+        if record
+            .receipts
+            .iter()
+            .any(|receipt| receipt.state == CommandWritebackReceiptState::Completed)
+        {
+            continue;
+        }
+        let CommandWritebackTarget {
+            parent_id,
+            command_type,
+            record_id,
+        } = record.target;
+        let observed = record
+            .receipts
+            .iter()
+            .map(|receipt| format!("{}:{:?}", receipt.command_id, receipt.state))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Ok(Some(format!(
+            "Business command writeback failed: no successful {command_type} receipt for record {record_id} and originating research {parent_id}. CLI/shell/terminal/SQLite/direct_sql are forbidden writeback mechanisms and cannot complete this task. Research output must be retained for recovery. Observed receipts: [{observed}]."
+        )));
     }
     Ok(None)
 }
@@ -84,6 +200,123 @@ fn command_writeback_failure(root: &Path, job: &QueuedPrompt) -> Result<Option<S
 #[cfg(test)]
 mod command_writeback_tests {
     use super::*;
+
+    #[test]
+    fn writeback_receipt_probe_keeps_all_records_and_uncertain_receipts() -> Result<()> {
+        let conn = rusqlite::Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE business_commands (
+                command_id TEXT PRIMARY KEY, command_type TEXT NOT NULL,
+                record_id TEXT NOT NULL, status TEXT NOT NULL, payload_json TEXT NOT NULL
+            );",
+        )?;
+        let parent = "research-a";
+        let command_type = "outbound.lead.research_writeback";
+        let payload = serde_json::json!({"research_command_id": parent}).to_string();
+        for (id, record, status, body) in [
+            ("done-1", "done", "completed", payload.as_str()),
+            ("mixed-1", "mixed", "completed", payload.as_str()),
+            ("mixed-2", "mixed", "pending", payload.as_str()),
+            ("mixed-3", "mixed", "failed", payload.as_str()),
+            ("waiting-1", "waiting", "running", payload.as_str()),
+            ("failed-1", "failed", "cancelled", payload.as_str()),
+            ("ambiguous-1", "ambiguous", "completed", "{invalid"),
+            ("ambiguous-2", "ambiguous", "completed", "{}"),
+            (
+                "ambiguous-3",
+                "ambiguous",
+                "completed",
+                r#"{"research_command_id":123}"#,
+            ),
+            (
+                "ambiguous-4",
+                "ambiguous",
+                "completed",
+                r#"{"research_command_id":""}"#,
+            ),
+            (
+                "ambiguous-5",
+                "ambiguous",
+                "future-status",
+                payload.as_str(),
+            ),
+            (
+                "unrelated",
+                "wrong-parent",
+                "completed",
+                r#"{"research_command_id":"research-b"}"#,
+            ),
+        ] {
+            conn.execute(
+                "INSERT INTO business_commands VALUES (?1,?2,?3,?4,?5)",
+                rusqlite::params![id, command_type, record, status, body],
+            )?;
+        }
+        conn.execute(
+            "INSERT INTO business_commands VALUES ('different-type','other.command','missing','completed',?1)",
+            [&payload],
+        )?;
+        let ids = [
+            "missing",
+            "done",
+            "mixed",
+            "waiting",
+            "failed",
+            "ambiguous",
+            "wrong-parent",
+        ];
+        let records = read_command_writeback_receipts(
+            &conn,
+            ids.iter()
+                .map(|id| CommandWritebackTarget {
+                    parent_id: parent.to_string(),
+                    command_type: command_type.to_string(),
+                    record_id: id.to_string(),
+                })
+                .collect(),
+        )?;
+        assert_eq!(records.len(), ids.len());
+        for (record, id) in records.iter().zip(ids) {
+            assert_eq!(record.target.parent_id, parent);
+            assert_eq!(record.target.command_type, command_type);
+            assert_eq!(record.target.record_id, id);
+        }
+        assert!(records[0].receipts.is_empty());
+        assert_eq!(records[1].receipts[0].command_id, "done-1");
+        assert_eq!(
+            records[1].receipts[0].state,
+            CommandWritebackReceiptState::Completed
+        );
+        assert_eq!(
+            records[2]
+                .receipts
+                .iter()
+                .map(|receipt| receipt.state.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                CommandWritebackReceiptState::Completed,
+                CommandWritebackReceiptState::InFlight,
+                CommandWritebackReceiptState::Failed,
+            ],
+        );
+        assert_eq!(
+            records[3].receipts[0].state,
+            CommandWritebackReceiptState::InFlight
+        );
+        assert_eq!(
+            records[4].receipts[0].state,
+            CommandWritebackReceiptState::Failed
+        );
+        assert_eq!(records[5].receipts.len(), 5);
+        assert!(records[5].receipts[..4].iter().all(|receipt| receipt.state
+            == CommandWritebackReceiptState::Uncorrelated("completed".to_string())));
+        assert_eq!(
+            records[5].receipts[4].state,
+            CommandWritebackReceiptState::Unknown("future-status".to_string()),
+        );
+        assert!(records[6].receipts.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn incident_legacy_lead_contract_validation_preserves_other_data_chat_scopes() {
