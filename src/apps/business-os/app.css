@@ -9495,21 +9495,25 @@ button.shell-window-header-meta:focus-visible,
     width: max-content !important;
     max-width: calc(100vw - 16px) !important;
     gap: 6px !important;
-    grid-template-columns: 76px var(--ctox-date-pill-width) 44px !important;
+    /* Keep every portrait inside Crew's own track. On the narrowest screens
+       scroll the bounded dock instead of painting over the date controls. */
+    overflow-x: auto;
+    overflow-y: hidden;
+    grid-template-columns: max-content var(--ctox-date-pill-width) 44px !important;
   }
 
   .ctox-chat-dock.is-collapsed {
     width: auto !important;
-    grid-template-columns: 76px var(--ctox-date-pill-width) !important;
+    grid-template-columns: max-content var(--ctox-date-pill-width) !important;
   }
 
   .ctox-chat-dock.has-visible-chats {
-    grid-template-columns: 76px var(--ctox-date-pill-width) minmax(0, 1fr) 44px !important;
+    grid-template-columns: max-content var(--ctox-date-pill-width) minmax(0, 1fr) 44px !important;
   }
 
   .ctox-chat-dock.has-nav,
   .ctox-chat-dock.has-many-chats {
-    grid-template-columns: 76px var(--ctox-date-pill-width) 32px minmax(0, 1fr) 32px 44px !important;
+    grid-template-columns: max-content var(--ctox-date-pill-width) 32px minmax(0, 1fr) 32px 44px !important;
     width: min(860px, calc(100vw - 16px)) !important;
   }
 
@@ -9520,14 +9524,14 @@ button.shell-window-header-meta:focus-visible,
   }
 
   .ctox-chat-fab {
-    width: 76px !important;
+    width: max-content !important;
     min-width: 0 !important;
     height: 44px !important;
   }
 
   .ctox-chat-date-pill {
     height: 44px !important;
-    min-width: 0 !important;
+    min-width: var(--ctox-date-pill-width) !important;
   }
 
   .ctox-date-nav-btn {
