@@ -2674,12 +2674,18 @@ async fn run_native_peer(
             );
         }
     }
-    let clamped_documents = clamp_oversized_projected_documents(&root, &database_path)
-        .context("clamp oversized projected Business OS documents")?;
-    if clamped_documents > 0 {
-        eprintln!(
+    // A legacy repair must not decide whether the peer comes up. It failed with
+    // SQLITE_BUSY_SNAPSHOT (517) under concurrent writes after every restart on
+    // thesen (25.09.2026: 12 failed bring-ups, five in a row after one release,
+    // replication down for ~2.5 min each time). Skip it for this start instead.
+    match clamp_oversized_projected_documents(&root, &database_path) {
+        Ok(clamped_documents) if clamped_documents > 0 => eprintln!(
             "[business-os] trimmed {clamped_documents} oversized projected documents that were stalling replication"
-        );
+        ),
+        Ok(_) => {}
+        Err(error) => eprintln!(
+            "[business-os] clamp oversized projected Business OS documents skipped for this start: {error:#}"
+        ),
     }
     let database = open_database(database_path.clone()).await?;
     let database_write_lock = Arc::new(AsyncMutex::new(()));
@@ -8271,7 +8277,12 @@ fn clamp_oversized_projected_documents(root: &Path, database_path: &Path) -> any
             .into_iter()
             .map(|source| source.storage_collection)
             .collect();
-    let mut conn = Connection::open(database_path)?;
+    let conn = Connection::open(database_path)?;
+    // Wait for a concurrent writer instead of failing at once, and scan outside
+    // a write transaction: the old deferred transaction read every table and
+    // then tried to upgrade to a writer, which WAL refuses (517) as soon as any
+    // other connection committed in between.
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
     let tables = {
         let mut statement = conn.prepare(
             "SELECT name FROM sqlite_master
@@ -8280,7 +8291,7 @@ fn clamp_oversized_projected_documents(root: &Path, database_path: &Path) -> any
         let mapped = statement.query_map([], |row| row.get::<_, String>(0))?;
         mapped.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    let transaction = conn.transaction()?;
+    let transaction = &conn;
     let mut clamped = 0usize;
     for table in tables {
         let collection = table
@@ -8331,14 +8342,23 @@ fn clamp_oversized_projected_documents(root: &Path, database_path: &Path) -> any
             if let Some(object) = document.as_object_mut() {
                 object.insert("_rev".to_string(), Value::String(revision.clone()));
             }
-            transaction.execute(
-                &format!("UPDATE {quoted} SET revision = ?1, data = ?2 WHERE id = ?3"),
-                params![revision, serde_json::to_string(&document)?, id],
+            // One short autocommit write per row, guarded by the revision it was
+            // read at: a document changed in the meantime is left for the next
+            // start instead of being overwritten with a stale trim.
+            let updated = transaction.execute(
+                &format!(
+                    "UPDATE {quoted} SET revision = ?1, data = ?2 WHERE id = ?3 AND revision = ?4"
+                ),
+                params![
+                    revision,
+                    serde_json::to_string(&document)?,
+                    id,
+                    stored_revision
+                ],
             )?;
-            clamped += 1;
+            clamped += updated;
         }
     }
-    transaction.commit()?;
     Ok(clamped)
 }
 
@@ -12181,6 +12201,57 @@ pub(in crate::business_os) mod tests {
             )?;
             assert_eq!(after, before, "{table}: restart changed stored file bytes");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn startup_clamp_waits_for_a_concurrent_writer_instead_of_failing() -> anyhow::Result<()> {
+        // thesen 25.09.2026: the clamp ran inside a deferred transaction and
+        // failed with 517 whenever another connection wrote during the scan,
+        // which aborted peer bring-up. It must wait and still trim.
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("busy.sqlite3");
+        let conn = Connection::open(&path)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE ctox_business_os__ctox_crew_members__v0
+             (id TEXT PRIMARY KEY, revision TEXT, data TEXT NOT NULL,
+              lastWriteTime REAL NOT NULL, deleted INTEGER);
+             CREATE TABLE other_writes (n INTEGER)",
+        )?;
+        let raw = serde_json::to_string(&json!({
+            "id": "crew-big",
+            "name": "Lumi",
+            "memory": "m".repeat(store::MAX_PROJECTED_DOCUMENT_BYTES + 100_000),
+            "_rev": "3-before",
+            "_meta": {"lwt": 1.0},
+            "_deleted": false
+        }))?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__ctox_crew_members__v0
+             VALUES ('crew-big', '3-before', ?1, 1.0, 0)",
+            params![raw],
+        )?;
+        drop(conn);
+        let writer = Connection::open(&path)?;
+        writer.execute_batch("BEGIN IMMEDIATE; INSERT INTO other_writes VALUES (1);")?;
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            writer
+                .execute_batch("COMMIT;")
+                .expect("commit concurrent writer");
+        });
+        let clamped = clamp_oversized_projected_documents(temp.path(), &path)?;
+        release.join().expect("writer thread");
+        assert_eq!(clamped, 1);
+        let conn = Connection::open(&path)?;
+        let (data, revision): (String, String) = conn.query_row(
+            "SELECT data, revision FROM ctox_business_os__ctox_crew_members__v0",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert!(data.len() < store::MAX_PROJECTED_DOCUMENT_BYTES);
+        assert_ne!(revision, "3-before");
         Ok(())
     }
 

@@ -2674,7 +2674,9 @@ if (sourceId === "dnbhoovers.com") {{
     const phone = context.match(/(?:\+|00)\d[\d\s()\/-]{{7,}}\d/)?.[0];
     const city = context.match(/\bFolgen\s+([^,]{{2,80}}),/)?.[1];
     const revenue = context.match(/Umsatz\s+EUR:\s*([0-9.,]+\s*[BMK]?)/i)?.[1];
-    const employees = context.match(/Beschäftigte\s*\(Gesamt\):\s*([0-9.,]+\s*[KMB]?)/i)?.[1];
+    // "[KMB]?" also took the M of a following word ("15 M…"): only a
+    // standalone unit letter counts.
+    const employees = context.match(/Beschäftigte\s*\(Gesamt\):\s*([0-9.,]+(?:\s*[KMB]\b)?)/i)?.[1];
     const duns = context.match(/D-U-N-S:\s*([0-9-]+)/i)?.[1];
     const industry = phone
       ? context.match(new RegExp(`${{phone.replace(/[.*+?^${{}}()|[\]\\]/g, "\\$&")}}\\s+(.+?)\\s+(?:Private|Public|Nonprofit)`, "i"))?.[1]
@@ -2700,12 +2702,14 @@ if (sourceId === "dnbhoovers.com") {{
       }}
       if (hostAllowed(page.url()) && /\/company\//i.test(page.url())) {{
         const detail = await page.evaluate(() => String(document.body?.innerText || "").replace(/[ \t]+/g, " "));
-        const codeRe = /(WZ\s*2008|WZ|NACE(?:\s*Rev\.?\s*2)?|ÖNACE(?:\s*2008)?|NOGA(?:\s*2008)?)[^0-9\n]{{0,80}}(\d{{2}}(?:\.\d{{1,2}}){{1,2}}|\d{{4,5}})/i;
+        // The classification year is not a code: "WZ 2008" read as wz_code=2008
+        // for HAMM AG (25.09.2026). Label and value may sit on separate lines.
+        const codeRe = /\b(WZ\s*2008|WZ|NACE(?:\s*Rev\.?\s*2)?|ÖNACE(?:\s*2008)?|NOGA(?:\s*2008)?)\b[^0-9]{{0,80}}(?!(?:1993|2003|2008)\b)(\d{{2}}(?:\.\d{{1,2}}){{1,2}}|\d{{4,5}})\b/i;
         const code = detail.match(codeRe);
         if (code) {{
-          push("wz_code", code[2], "high", `D&B Hoovers Firmenseite: ${{code[1]}} ${{code[2]}}`, page.url());
+          push("wz_code", code[2], "medium", `D&B Hoovers Firmenseite: ${{code[1]}} ${{code[2]}}`, page.url());
         }}
-        const marker = detail.search(/(Branchencode|Industry Codes|NACE|WZ\s*2008|NOGA|ÖNACE|SIC)/i);
+        const marker = detail.search(/\b(Branchencodes?|Industry Codes|NACE|WZ\s*2008|NOGA|ÖNACE|SIC|NAICS)\b/i);
         if (marker >= 0) {{
           push("branche_codes_rohtext", detail.slice(Math.max(0, marker - 40), marker + 600).replace(/\n+/g, " | "), "medium", "D&B Hoovers Firmenseite: Abschnitt Branchencodes (Rohtext)", page.url());
         }}
@@ -6825,10 +6829,35 @@ const preAuthenticatedVerifyFound = verifySelectorVisible && !stillOnLoginPage;
 // signed in, and reports `credential-field-not-found` on a working session.
 // Landing somewhere other than the login URL with no credential field and no
 // error is the same evidence, and it does not rot when a class name changes.
+// D&B Hoovers serves its signed-in dashboard at the same app root it is opened
+// with ("Willkommen, Lena! ... Suchen & eine Liste erstellen" at
+// https://app.dnbhoovers.com/). Requiring a landing *elsewhere* read that live
+// session as "not signed in", found no login field and reported
+// credential-field-not-found / login_failed on every capture from 12:19 on
+// 25.09.2026, while the session from the 12:02 e-mail code was still valid.
+// Staying on the target URL counts as signed in when the page shows no login
+// or credential field and no sign-in entry point.
+const signInEntryVisible = async () => page.evaluate(() => Array.from(
+  document.querySelectorAll("a, button, [role='button'], input[type='submit']"),
+).some((element) => {
+  if (!element.offsetParent) return false;
+  const label = String(element.innerText || element.value || element.getAttribute("aria-label") || "").trim();
+  return /^(log ?in|sign ?in|anmelden|einloggen|login)$/i.test(label);
+})).catch(() => true);
 const preAuthenticatedByLanding = await (async () => {
   if (preAuthenticatedVerifyFound) return false;
   const landedElsewhere = beforeSignals.url && !samePage(beforeSignals.url, targetUrl);
-  if (!landedElsewhere) return false;
+  if (!landedElsewhere) {
+    if (!beforeSignals.url || looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;
+    const signalsHere = beforeSignals.auth_signals || emptyAuthSignals();
+    if (signalsHere.mfa_required === true || signalsHere.login_error_detected === true) return false;
+    const formHere = beforeSignals.form_state || {};
+    if (Number(formHere.visible_password_fields || 0) > 0 || Number(formHere.visible_email_fields || 0) > 0) return false;
+    const loginHere = await browserCandidateFields("login").catch(() => []);
+    const credentialHere = await browserCandidateFields("credential").catch(() => []);
+    if (loginHere.length || credentialHere.length) return false;
+    return !(await signInEntryVisible());
+  }
   if (looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;
   const signals = beforeSignals.auth_signals || emptyAuthSignals();
   if (signals.mfa_required === true || signals.login_error_detected === true) return false;
@@ -8439,6 +8468,10 @@ mod tests {
         // A login page that only gained a query token (D&B: /login?F…=_) is not a
         // landing elsewhere; otherwise a username-first step reads as signed in.
         assert!(source.contains("!samePage(beforeSignals.url, targetUrl)"));
+        // D&B keeps its signed-in dashboard on the app root: staying on the
+        // target URL without any login field or sign-in entry is a session.
+        assert!(source.contains("const signInEntryVisible = async () =>"));
+        assert!(source.contains("if (!landedElsewhere) {"));
         assert!(!source.contains("beforeSignals.url !== targetUrl"));
         // A verify selector that also matches on the login page (D&B: a search
         // link) must not count while the login form is still shown.
@@ -8572,6 +8605,12 @@ mod tests {
             build_web_stack_authenticated_source_capture("dnbhoovers.com", "Example AG", "DE")?;
         assert!(dnb.contains("app.dnbhoovers.com"));
         assert!(dnb.contains("D&B Hoovers exact company result"));
+        // The classification year "WZ 2008" must never be read as the code, and
+        // the rendered script carries plain regex braces (format escapes gone).
+        assert!(dnb.contains("(?!(?:1993|2003|2008)\\b)"));
+        assert!(dnb.contains("[^0-9]{0,80}"));
+        assert!(dnb.contains("SIC|NAICS)\\b/i"));
+        assert!(dnb.contains("(?:\\s*[KMB]\\b)?"));
 
         let leadfeeder =
             build_web_stack_authenticated_source_capture("leadfeeder.com", "Example AG", "DE")?;
