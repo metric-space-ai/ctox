@@ -635,7 +635,7 @@ impl BrowserRuntimeManager {
         // A second CTOX process (e.g. a parallel research capture for the same
         // owner) may hold the persistent profile. Chromium then refuses with a
         // ProcessSingleton error; wait for the profile instead of failing the
-        // capture (THESEN 25.09.2026: parallel D&B runs lost their capture).
+        // capture (production 25.09.2026: parallel D&B runs lost their capture).
         let mut attempt = 0u32;
         let handle = loop {
             let root = root.clone();
