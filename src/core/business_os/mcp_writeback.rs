@@ -34,9 +34,18 @@ fn bound_payload(parent_id: &str, contract: &Value, arguments: &Value) -> anyhow
         .get("payload")
         .cloned()
         .context("writeback payload is required")?;
+    // A payload sent as a JSON-encoded string is the same object, quoted once
+    // too often (THESEN 26.09.2026: six rejected writebacks in one hour).
+    if let Some(decoded) = payload
+        .as_str()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .filter(Value::is_object)
+    {
+        payload = decoded;
+    }
     let object = payload
         .as_object_mut()
-        .context("writeback payload must be an object")?;
+        .context("writeback payload must be a JSON object, not a string or list")?;
     for (key, expected) in [
         ("record_id", record_id.as_str()),
         ("module", RESEARCH_MODULE),
@@ -229,6 +238,28 @@ mod tests {
             .to_string();
         assert!(error.contains("without arguments"), "{error}");
         assert!(error.contains("in parts"), "{error}");
+    }
+
+    #[test]
+    fn a_payload_sent_as_json_text_is_decoded() -> anyhow::Result<()> {
+        let contract = serde_json::json!({
+            "mechanism": "business_command", "command_type": RESEARCH_WRITEBACK_COMMAND,
+            "collection": RESEARCH_COLLECTION, "record_ids": ["lead-a"]
+        });
+        let arguments = serde_json::json!({"record_id": "lead-a",
+            "payload": "{\"field_status\": {}, \"result\": {\"fields\": {}}}"});
+        let bound = bound_payload("research-a", &contract, &arguments)?;
+        assert_eq!(bound["record_id"], "lead-a");
+        assert!(bound["field_status"].is_object());
+        let error = bound_payload(
+            "research-a",
+            &contract,
+            &serde_json::json!({"record_id": "lead-a", "payload": "not json"}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("JSON object"), "{error}");
+        Ok(())
     }
 
     #[test]
