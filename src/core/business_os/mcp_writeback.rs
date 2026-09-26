@@ -35,7 +35,7 @@ fn bound_payload(parent_id: &str, contract: &Value, arguments: &Value) -> anyhow
         .cloned()
         .context("writeback payload is required")?;
     // A payload sent as a JSON-encoded string is the same object, quoted once
-    // too often (THESEN 26.09.2026: six rejected writebacks in one hour).
+    // too often (production 26.09.2026: six rejected writebacks in one hour).
     if let Some(decoded) = payload
         .as_str()
         .and_then(|text| serde_json::from_str::<Value>(text).ok())
