@@ -734,23 +734,19 @@ pub(super) fn refresh_queue_task_projection(
     else {
         return Ok(());
     };
-    let Some(task) = channels::load_queue_task(root, &task_id)? else {
+    let Some(snapshot) =
+        channels::load_business_os_queue_mirror_snapshot(root, command_id, &task_id)?
+    else {
         return Ok(());
     };
+    let task = snapshot.task;
     let inbound_channel = command_inbound_channel(command);
-    let structured_status =
-        channels::inspect_business_command_for_task(root, &task_id)?.and_then(|context| {
-            context
-                .pointer("/command/terminal_status")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        });
     let mut payload = business_command_queue_task_payload(
         command_id,
         command,
         &task,
         &inbound_channel,
-        structured_status.as_deref(),
+        snapshot.terminal_status.as_deref(),
         updated_at_ms,
     );
     if let Some(progress) = crate::lcm::run_task_execution_progress_for_task(
@@ -760,6 +756,26 @@ pub(super) fn refresh_queue_task_projection(
         if let Some(object) = payload.as_object_mut() {
             object.insert("execution_progress".to_string(), progress);
         }
+    }
+    stamp_canonical_queue_mirror_versions(
+        &mut payload,
+        snapshot.command_projection.as_ref(),
+        snapshot.queue_clock_version,
+    );
+    if let Some(existing) = conn
+        .query_row(
+            "SELECT payload_json
+             FROM business_records
+             WHERE collection = 'ctox_queue_tasks'
+               AND record_id = ?1
+               AND deleted = 0",
+            params![task.message_key.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    {
+        retain_noncanonical_queue_projection_fields(&mut payload, &existing);
     }
     upsert_business_record(
         conn,
@@ -776,6 +792,24 @@ pub(super) fn refresh_queue_task_projection(
         updated_at_ms,
         payload,
     )
+}
+
+pub(super) fn stamp_canonical_queue_mirror_versions(
+    payload: &mut Value,
+    command_projection: Option<&Value>,
+    queue_clock_version: i64,
+) {
+    if let Some(object) = payload.as_object_mut() {
+        if let Some(version) =
+            command_projection.and_then(|projection| projection.get("projection_version"))
+        {
+            object.insert("projection_version".to_string(), version.clone());
+        }
+        object.insert(
+            "queue_projection_version".to_string(),
+            Value::from(queue_clock_version),
+        );
+    }
 }
 
 pub(super) fn business_command_queue_task_payload(
@@ -813,6 +847,7 @@ pub(super) fn business_command_queue_task_payload(
 }
 
 pub(super) fn write_queue_task_projection(
+    root: &Path,
     conn: &Connection,
     command_id: Option<&str>,
     task: &channels::QueueTaskView,
@@ -820,17 +855,57 @@ pub(super) fn write_queue_task_projection(
 ) -> anyhow::Result<()> {
     let structured_status =
         queue_projection_structured_status(conn, command_id, &task.message_key)?;
+    let mut payload = queue_task_payload(
+        command_id,
+        task,
+        structured_status.as_deref(),
+        updated_at_ms,
+    );
+    if let Some(command_id) = command_id {
+        if let Some(snapshot) =
+            channels::load_business_os_queue_mirror_snapshot(root, command_id, &task.message_key)?
+        {
+            payload = queue_task_payload(
+                Some(command_id),
+                &snapshot.task,
+                snapshot.terminal_status.as_deref(),
+                updated_at_ms,
+            );
+            stamp_canonical_queue_mirror_versions(
+                &mut payload,
+                snapshot.command_projection.as_ref(),
+                snapshot.queue_clock_version,
+            );
+        }
+    }
+    if let Some(existing) = conn
+        .query_row(
+            "SELECT payload_json
+             FROM business_records
+             WHERE collection = 'ctox_queue_tasks'
+               AND record_id = ?1
+               AND deleted = 0",
+            params![task.message_key.as_str()],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+    {
+        retain_noncanonical_queue_projection_fields(&mut payload, &existing);
+    }
     upsert_business_record(
         conn,
         "ctox_queue_tasks",
         &task.message_key,
         updated_at_ms,
-        queue_task_payload(
-            command_id,
-            task,
-            structured_status.as_deref(),
-            updated_at_ms,
-        ),
+        payload.clone(),
+    )?;
+    upsert_rxdb_collection_record(
+        root,
+        "ctox_queue_tasks",
+        &task.message_key,
+        updated_at_ms,
+        payload,
     )
 }
 
@@ -859,6 +934,75 @@ pub(super) fn queue_task_payload(
     });
     enrich_queue_projection_payload(&mut payload, task, &route_status);
     payload
+}
+
+fn is_canonical_queue_projection_field(key: &str) -> bool {
+    matches!(
+        key,
+        "id" | "command_id"
+            | "title"
+            | "status"
+            | "route_status"
+            | "task_status"
+            | "module"
+            | "source_module"
+            | "inbound_channel"
+            | "command_type"
+            | "priority"
+            | "thread_key"
+            | "prompt"
+            | "workspace_root"
+            | "updated_at_ms"
+            | "message_key"
+            | "lease_expires_at"
+            | "lease_worker_id"
+            | "first_pending_at"
+            | "failure_class"
+            | "retry_not_before"
+            | "hold_reason"
+            | "wait_entity_type"
+            | "wait_entity_id"
+            | "crew_member_id"
+            | "crew_assigned_member_id"
+            | "ticket_key"
+            | "failure_attempt_count"
+            | "priority_time_credit_hours"
+            | "attempt"
+            | "status_note"
+            | "error"
+            | "lease_owner"
+            | "leased_at"
+            | "acked_at"
+            | "projection_version"
+            | "queue_projection_version"
+            | "_rev"
+            | "_deleted"
+            | "execution_progress"
+            | "browser_context_artifact"
+            | "contract_version"
+            | "replication_phase"
+            | "execution_mode"
+            | "execution_phase"
+            | "terminal_status"
+            | "queue_status_note"
+    )
+}
+
+/// Keep client extras such as `client_marker`. Never restore authoritative
+/// optional fields that the current snapshot omitted (`status_note`, `error`).
+pub(super) fn retain_noncanonical_queue_projection_fields(canonical: &mut Value, existing: &Value) {
+    let Some(canonical_object) = canonical.as_object_mut() else {
+        return;
+    };
+    let Some(existing_object) = existing.as_object() else {
+        return;
+    };
+    for (key, value) in existing_object {
+        if is_canonical_queue_projection_field(key) {
+            continue;
+        }
+        canonical_object.entry(key.clone()).or_insert(value.clone());
+    }
 }
 
 pub(super) fn queue_projection_structured_status(
@@ -1119,6 +1263,51 @@ pub(super) fn queue_projection_terminal_status(route_status: &str) -> &str {
     }
 }
 
+fn canonical_version_not_downgraded_sql(json_column: &str, field: &str) -> String {
+    format!(
+        "(json_extract({json_column}, '$.{field}') IS NULL \
+          OR (json_extract(excluded.{json_column}, '$.{field}') IS NOT NULL \
+              AND CAST(json_extract(excluded.{json_column}, '$.{field}') AS INTEGER) \
+                  >= CAST(json_extract({json_column}, '$.{field}') AS INTEGER)))"
+    )
+}
+
+fn rxdb_table_canonical_collection(table: &str) -> Option<&'static str> {
+    let table = table.rsplit('.').next().unwrap_or(table);
+    if table.starts_with("ctox_business_os__business_commands__") {
+        Some("business_commands")
+    } else if table.starts_with("ctox_business_os__ctox_queue_tasks__") {
+        Some("ctox_queue_tasks")
+    } else {
+        None
+    }
+}
+
+pub(super) fn canonical_collection_upsert_guard_sql(
+    collection: &str,
+    json_column: &str,
+) -> Option<String> {
+    match collection {
+        "business_commands" | "ctox_queue_tasks" => Some(format!(
+            "{} AND {}",
+            canonical_version_not_downgraded_sql(json_column, "projection_version"),
+            canonical_version_not_downgraded_sql(json_column, "queue_projection_version"),
+        )),
+        _ => None,
+    }
+}
+
+pub(super) fn canonical_rxdb_table_upsert_guard_sql(
+    table: &str,
+    json_column: &str,
+) -> Option<String> {
+    canonical_collection_upsert_guard_sql(rxdb_table_canonical_collection(table)?, json_column)
+}
+
+pub(super) fn rxdb_table_is_canonical_projection(table: &str) -> bool {
+    rxdb_table_canonical_collection(table).is_some()
+}
+
 pub(super) fn upsert_business_record(
     conn: &Connection,
     collection: &str,
@@ -1137,15 +1326,30 @@ pub(super) fn upsert_business_record(
     // before this record replicates to peers. The verified token is retained only
     // in the native business_commands.client_context_json column, never here.
     redact_document_client_context_secrets(&mut payload);
-    conn.execute(
-        "INSERT INTO business_records
+    let sql = match canonical_collection_upsert_guard_sql(collection, "payload_json") {
+        Some(guard) => format!(
+            "INSERT INTO business_records
             (collection, record_id, rev, deleted, updated_at_ms, payload_json)
          VALUES (?1, ?2, ?3, 0, ?4, ?5)
          ON CONFLICT(collection, record_id) DO UPDATE SET
             rev = excluded.rev,
             deleted = excluded.deleted,
             updated_at_ms = excluded.updated_at_ms,
-            payload_json = excluded.payload_json",
+            payload_json = excluded.payload_json
+         WHERE {guard}"
+        ),
+        None => "INSERT INTO business_records
+            (collection, record_id, rev, deleted, updated_at_ms, payload_json)
+         VALUES (?1, ?2, ?3, 0, ?4, ?5)
+         ON CONFLICT(collection, record_id) DO UPDATE SET
+            rev = excluded.rev,
+            deleted = excluded.deleted,
+            updated_at_ms = excluded.updated_at_ms,
+            payload_json = excluded.payload_json"
+            .to_string(),
+    };
+    conn.execute(
+        &sql,
         params![
             collection,
             record_id,

@@ -10,7 +10,7 @@ use super::{
     refresh_queue_projection_tasks, resolve_db_path, sanitize_path_component, set_routing_status,
     sha256_hex, BusinessCommandClaimRequest, BusinessCommandControlClaim,
     BusinessCommandOutboxEvent, BusinessCommandQueueClaim, QueueRouteStatus,
-    QueueTaskCreateRequest, TerminalPolicyGrant,
+    QueueTaskCreateRequest, QueueTaskView, TerminalPolicyGrant,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -1803,12 +1803,108 @@ pub(crate) fn pending_business_command_outbox(
         .map_err(Into::into)
 }
 
+pub(crate) struct BusinessOsQueueMirrorSnapshot {
+    pub task: QueueTaskView,
+    pub command_projection: Option<Value>,
+    pub terminal_status: Option<String>,
+    pub queue_clock_version: i64,
+}
+
+pub(crate) fn load_business_os_queue_mirror_snapshot(
+    root: &Path,
+    command_id: &str,
+    task_id: &str,
+) -> Result<Option<BusinessOsQueueMirrorSnapshot>> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let snapshot = load_business_os_queue_mirror_snapshot_from_conn(&tx, command_id, task_id)?;
+    tx.commit()?;
+    Ok(snapshot)
+}
+
+pub(crate) fn load_business_os_queue_mirror_snapshot_from_conn(
+    conn: &Connection,
+    command_id: &str,
+    task_id: &str,
+) -> Result<Option<BusinessOsQueueMirrorSnapshot>> {
+    let Some(task) = load_queue_task_from_conn(conn, task_id)? else {
+        return Ok(None);
+    };
+    let command_projection = load_business_command_projection_if_present(conn, command_id)?;
+    let inspect = inspect_business_command_for_task_from_conn(conn, task_id)?;
+    let terminal_status = inspect.as_ref().and_then(|context| {
+        context
+            .pointer("/command/terminal_status")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
+    Ok(Some(BusinessOsQueueMirrorSnapshot {
+        task,
+        command_projection,
+        terminal_status,
+        queue_clock_version: communication_projection_clock_version(conn)?,
+    }))
+}
+
+pub(crate) fn load_business_command_projection_if_present(
+    conn: &Connection,
+    command_id: &str,
+) -> Result<Option<Value>> {
+    let exists = conn
+        .query_row(
+            "SELECT 1 FROM business_command_aggregates WHERE command_id = ?1",
+            params![command_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !exists {
+        return Ok(None);
+    }
+    Ok(Some(business_command_projection_from_conn(
+        conn, command_id,
+    )?))
+}
+
+pub(crate) fn communication_projection_clock_version(conn: &Connection) -> Result<i64> {
+    Ok(conn
+        .query_row(
+            "SELECT version FROM communication_projection_clock WHERE id = 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?
+        .unwrap_or(0))
+}
+
 pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Result<Value> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
     let mut command = business_command_projection_from_conn(&conn, command_id)?;
     enrich_command_execution_progress(&db_path, &mut command)?;
     Ok(command)
+}
+
+/// Canonical command mirror for Business OS / RxDB outbox delivery.
+/// Command fields and `queue_projection_version` are read from one Core
+/// transaction so a later command-only transition cannot omit the queue clock
+/// that destination CAS now requires.
+pub(crate) fn canonical_command_mirror_projection(root: &Path, command_id: &str) -> Result<Value> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction()?;
+    let mut projection = business_command_projection_from_conn(&tx, command_id)?;
+    let queue_clock_version = communication_projection_clock_version(&tx)?;
+    if let Some(object) = projection.as_object_mut() {
+        object.insert(
+            "queue_projection_version".to_string(),
+            Value::from(queue_clock_version),
+        );
+    }
+    tx.commit()?;
+    enrich_command_execution_progress(&db_path, &mut projection)?;
+    Ok(projection)
 }
 
 /// Canonical stored command snapshot. The path-based wrapper additionally

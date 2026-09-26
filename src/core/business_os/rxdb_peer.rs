@@ -2729,6 +2729,11 @@ async fn run_native_peer(
     // persisted source row has been migrated and verified may the legacy sweep
     // remove old version tables. Migration failures are fatal: continuing would
     // publish a live heartbeat for a peer whose runtime collections are empty.
+    if let Err(err) = super::populated_store_recovery::mark_cutover_in_progress(&root)
+        .context("mark native RxDB cutover in progress before migration")
+    {
+        return Err(release_database_after_failed_bring_up(&database, err).await);
+    }
     if let Err(err) = migrate_additive_native_rxdb_collection_versions(&root)
         .context("migrate native Business OS RxDB collection schema versions")
     {
@@ -2758,6 +2763,13 @@ async fn run_native_peer(
             )
             .await);
         }
+    }
+    // Write-once. Later restarts must not hash the store or reset the restore
+    // baseline; accepted writes after this receipt fail-close rollback.
+    if let Err(err) = super::populated_store_recovery::record_native_rxdb_cutover_receipt(&root)
+        .context("record native RxDB cutover receipt after verified migration")
+    {
+        return Err(release_database_after_failed_bring_up(&database, err).await);
     }
     match compact_desktop_file_index_store(&root).await {
         Ok(stats) if stats.changed() => {
@@ -8960,7 +8972,9 @@ struct NativeMigrationRow {
 /// A non-empty source table requires every declarative step from its version to
 /// the registered target version. Empty legacy tables deliberately require no
 /// chain so currently deployed zero-row leftovers can be swept safely.
-fn migrate_additive_native_rxdb_collection_versions(root: &Path) -> anyhow::Result<Value> {
+pub(super) fn migrate_additive_native_rxdb_collection_versions(
+    root: &Path,
+) -> anyhow::Result<Value> {
     let database_path = store::rxdb_store_path(root);
     if !database_path.is_file() {
         return Ok(json!({
@@ -9493,7 +9507,9 @@ pub fn repair_optional_rxdb_collection_schema_drift(
     repair_rxdb_collection_schema_version_drift(root, collection, dry_run, force)
 }
 
-fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<Value> {
+pub(super) fn repair_stale_rxdb_collection_schema_versions(
+    root: &Path,
+) -> anyhow::Result<Value> {
     let database_path = store::rxdb_store_path(root);
     if !database_path.is_file() {
         return Ok(json!({
@@ -9788,7 +9804,7 @@ struct StaleRxdbCollectionTrigger {
     stale_versions: Vec<i64>,
 }
 
-fn expected_rxdb_collection_version(collection: &str) -> i64 {
+pub(super) fn expected_rxdb_collection_version(collection: &str) -> i64 {
     business_os_schema_contract()
         .get(collection)
         .and_then(|schema| schema.get("version"))

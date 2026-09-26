@@ -86,13 +86,15 @@ use super::store_projections::tests::{create_repair_rxdb_tables, insert_rxdb_tes
 pub(super) use super::store_projections::upsert_business_record;
 use super::store_projections::{
     business_chat_id, business_chat_owner_user_id, business_chat_payload, business_chat_title,
-    business_command_queue_task_payload, enrich_queue_projection_payload,
+    business_command_queue_task_payload, canonical_collection_upsert_guard_sql,
+    canonical_rxdb_table_upsert_guard_sql, enrich_queue_projection_payload,
     existing_business_chat_owner, initial_pending_business_chat_payload, is_business_chat_command,
     is_placeholder_business_chat_owner, materialize_pending_business_chat, normalize_queue_status,
     persist_terminal_business_chat_command_projection, queue_projection_command_id,
     queue_projection_execution_phase, queue_projection_structured_status,
     queue_projection_terminal_status, queue_task_payload, refresh_queue_task_projection,
-    write_queue_task_projection,
+    retain_noncanonical_queue_projection_fields, rxdb_table_is_canonical_projection,
+    stamp_canonical_queue_mirror_versions, write_queue_task_projection,
 };
 use super::store_release_review::{
     data_access_review_from_release_snapshot, module_release_data_access_review_summary,
@@ -1225,15 +1227,30 @@ fn upsert_attached_business_record(
         object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
     }
     redact_document_client_context_secrets(&mut payload);
-    conn.execute(
-        "INSERT INTO business_os_projection.business_records
+    let sql = match canonical_collection_upsert_guard_sql(collection, "payload_json") {
+        Some(guard) => format!(
+            "INSERT INTO business_os_projection.business_records
             (collection, record_id, rev, deleted, updated_at_ms, payload_json)
          VALUES (?1, ?2, ?3, 0, ?4, ?5)
          ON CONFLICT(collection, record_id) DO UPDATE SET
             rev = excluded.rev,
             deleted = excluded.deleted,
             updated_at_ms = excluded.updated_at_ms,
-            payload_json = excluded.payload_json",
+            payload_json = excluded.payload_json
+         WHERE {guard}"
+        ),
+        None => "INSERT INTO business_os_projection.business_records
+            (collection, record_id, rev, deleted, updated_at_ms, payload_json)
+         VALUES (?1, ?2, ?3, 0, ?4, ?5)
+         ON CONFLICT(collection, record_id) DO UPDATE SET
+            rev = excluded.rev,
+            deleted = excluded.deleted,
+            updated_at_ms = excluded.updated_at_ms,
+            payload_json = excluded.payload_json"
+            .to_string(),
+    };
+    conn.execute(
+        &sql,
         params![
             collection,
             record_id,
@@ -1330,8 +1347,10 @@ fn upsert_attached_rxdb_record(
                 .get("_rev")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            merge_json_object_values(&mut existing, &payload);
-            payload = existing;
+            if !rxdb_table_is_canonical_projection(&table) {
+                merge_json_object_values(&mut existing, &payload);
+                payload = existing;
+            }
         }
     }
     let rev = next_direct_rxdb_revision(previous_revision.as_deref());
@@ -1376,9 +1395,12 @@ fn upsert_attached_rxdb_record(
     conn.execute(
         &format!(
             "INSERT INTO {qualified_table} ({columns}) VALUES ({placeholders})
-             ON CONFLICT(id) DO UPDATE SET {updates}",
+             ON CONFLICT(id) DO UPDATE SET {updates}{guard}",
             columns = columns.join(", "),
-            updates = updates.join(", ")
+            updates = updates.join(", "),
+            guard = canonical_rxdb_table_upsert_guard_sql(&table, "data")
+                .map(|guard| format!(" WHERE {guard}"))
+                .unwrap_or_default(),
         ),
         params_from_iter(values),
     )?;
@@ -1419,6 +1441,25 @@ fn command_projection_status_fields_match(payload: &Value, task: &channels::Queu
                 && (task.route_status != "failed"
                     || payload.get("error").and_then(Value::as_str) == Some(note))
         })
+}
+
+fn stamp_attached_canonical_mirror_versions(
+    conn: &Connection,
+    command_id: Option<&str>,
+    payload: &mut Value,
+) -> anyhow::Result<()> {
+    let command_projection = match command_id {
+        Some(command_id) => {
+            channels::load_business_command_projection_if_present(conn, command_id)?
+        }
+        None => None,
+    };
+    stamp_canonical_queue_mirror_versions(
+        payload,
+        command_projection.as_ref(),
+        channels::communication_projection_clock_version(conn)?,
+    );
+    Ok(())
 }
 
 fn refresh_attached_queue_projections(
@@ -1464,34 +1505,62 @@ fn refresh_attached_queue_projections(
         let Some(raw) = row else {
             continue;
         };
-        let mut payload = serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| {
+        let existing = serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| {
             serde_json::json!({
                 "id": task.message_key,
                 "status": "queued",
                 "route_status": "pending"
             })
         });
-        let command_id = payload
+        let command_id = existing
             .get("command_id")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string);
-        if !queue_projection_status_fields_match(&payload, task) {
-            payload = apply_queue_projection_status_fields(
-                payload,
-                task,
-                &task.route_status,
-                updated_at_ms,
-            );
-            upsert_attached_business_record(
+        let snapshot = match command_id.as_deref() {
+            Some(command_id) => channels::load_business_os_queue_mirror_snapshot_from_conn(
                 conn,
-                "ctox_queue_tasks",
+                command_id,
                 &task.message_key,
-                updated_at_ms,
-                payload.clone(),
-            )?;
-        }
+            )?,
+            None => None,
+        };
+        let (mirror_task, terminal_status, command_projection, queue_clock_version) =
+            if let Some(snapshot) = snapshot {
+                (
+                    snapshot.task,
+                    snapshot.terminal_status,
+                    snapshot.command_projection,
+                    snapshot.queue_clock_version,
+                )
+            } else {
+                (
+                    task.clone(),
+                    None,
+                    None,
+                    channels::communication_projection_clock_version(conn)?,
+                )
+            };
+        let mut payload = queue_task_payload(
+            command_id.as_deref(),
+            &mirror_task,
+            terminal_status.as_deref(),
+            updated_at_ms,
+        );
+        retain_noncanonical_queue_projection_fields(&mut payload, &existing);
+        stamp_canonical_queue_mirror_versions(
+            &mut payload,
+            command_projection.as_ref(),
+            queue_clock_version,
+        );
+        upsert_attached_business_record(
+            conn,
+            "ctox_queue_tasks",
+            &task.message_key,
+            updated_at_ms,
+            payload.clone(),
+        )?;
         upsert_attached_rxdb_record(
             conn,
             "ctox_queue_tasks",
@@ -1502,16 +1571,10 @@ fn refresh_attached_queue_projections(
         let Some(command_id) = command_id else {
             continue;
         };
-        let Some(command_status) = command_status_for_queue_route_status(&task.route_status) else {
+        let Some(command_status) = command_status_for_queue_route_status(&mirror_task.route_status)
+        else {
             continue;
         };
-        conn.execute(
-            "UPDATE business_os_projection.business_commands
-             SET status = ?2, observed_at_ms = ?3
-             WHERE command_id = ?1
-               AND (status != ?2 OR observed_at_ms != ?3)",
-            params![command_id.as_str(), command_status, updated_at_ms],
-        )?;
         let command_row = conn
             .query_row(
                 "SELECT payload_json
@@ -1526,8 +1589,12 @@ fn refresh_attached_queue_projections(
         let Some(command_raw) = command_row else {
             continue;
         };
-        let mut command_payload = serde_json::from_str::<Value>(&command_raw)?;
-        if task.route_status == "leased" {
+        let mut command_payload = if let Some(projection) = command_projection.clone() {
+            projection
+        } else {
+            serde_json::from_str::<Value>(&command_raw)?
+        };
+        if mirror_task.route_status == "leased" {
             mark_outbound_lead_running_attached(
                 conn,
                 &command_payload,
@@ -1536,44 +1603,30 @@ fn refresh_attached_queue_projections(
                 updated_at_ms,
             )?;
         }
-        let command_projection_changed =
-            !command_projection_status_fields_match(&command_payload, task);
-        if command_projection_changed {
-            if let Some(object) = command_payload.as_object_mut() {
-                object.insert(
-                    "status".to_string(),
-                    Value::String(command_status.to_string()),
-                );
-                object.insert(
-                    "route_status".to_string(),
-                    Value::String(task.route_status.clone()),
-                );
-                object.insert(
-                    "task_status".to_string(),
-                    Value::String(normalize_queue_status(&task.route_status).to_string()),
-                );
-                object.insert(
-                    "task_id".to_string(),
-                    Value::String(task.message_key.clone()),
-                );
-                if let Some(note) = task.status_note.as_deref() {
-                    object.insert(
-                        "queue_status_note".to_string(),
-                        Value::String(note.to_string()),
-                    );
-                    if task.route_status == "failed" {
-                        object.insert("error".to_string(), Value::String(note.to_string()));
-                    }
-                }
-            }
-            upsert_attached_business_record(
-                conn,
-                "business_commands",
-                &command_id,
-                updated_at_ms,
-                command_payload.clone(),
-            )?;
-        }
+        overlay_queue_task_on_command_projection(
+            &mut command_payload,
+            &mirror_task,
+            command_status,
+        );
+        stamp_canonical_queue_mirror_versions(
+            &mut command_payload,
+            command_projection.as_ref(),
+            queue_clock_version,
+        );
+        upsert_attached_business_record(
+            conn,
+            "business_commands",
+            &command_id,
+            updated_at_ms,
+            command_payload.clone(),
+        )?;
+        write_compatibility_command_status_if_canonical_applied(
+            conn,
+            "business_os_projection.business_commands",
+            &command_id,
+            command_status,
+            updated_at_ms,
+        )?;
         upsert_attached_rxdb_record(
             conn,
             "business_commands",
@@ -1582,6 +1635,7 @@ fn refresh_attached_queue_projections(
             command_payload,
         )?;
     }
+
     Ok(())
 }
 
@@ -6612,7 +6666,7 @@ fn record_command_inner(
             ..CommandAccepted::default()
         });
     }
-    let conn = open_store(root)?;
+    let mut conn = open_store(root)?;
     let observed_at_ms = now_ms() as i64;
     if let Some(completed) = maybe_complete_documents_chat_markdown_edit_immediately(
         root,
@@ -6633,14 +6687,28 @@ fn record_command_inner(
         // Preserve that terminal decision instead of overwriting it with the
         // compatibility path's usual accepted/queued projection.
         let projection = channels::business_command_projection(root, &command_id)?;
-        conn.execute(
-            "INSERT INTO business_commands(command_id,module,command_type,record_id,status,payload_json,client_context_json,observed_at_ms)
-             VALUES(?1,?2,?3,?4,'cancelled',?5,?6,?7)
-             ON CONFLICT(command_id) DO UPDATE SET status='cancelled'",
-            params![command_id,command.module,command.command_type,command.record_id,
-                serde_json::to_string(&command.payload)?,serde_json::to_string(&command.client_context)?,observed_at_ms],
+        let payload_json = serde_json::to_string(&command.payload)?;
+        let context_json = serde_json::to_string(&command.client_context)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        upsert_business_record(
+            &tx,
+            "business_commands",
+            &command_id,
+            observed_at_ms,
+            projection.clone(),
         )?;
-        persist_business_command_lifecycle_projection(root, &projection)?;
+        write_compatibility_command_admission_if_canonical_applied(
+            &tx,
+            &command_id,
+            &command.module,
+            &command.command_type,
+            command.record_id.as_deref(),
+            "cancelled",
+            &payload_json,
+            &context_json,
+            observed_at_ms,
+        )?;
+        tx.commit()?;
         return Ok(CommandAccepted {
             ok: true,
             command_id,
@@ -6667,35 +6735,17 @@ fn record_command_inner(
     };
     let payload_json = serde_json::to_string(&command.payload)?;
     let context_json = serde_json::to_string(&command.client_context)?;
-    conn.execute(
-        "INSERT INTO business_commands
-            (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
-         VALUES (?1, ?2, ?3, ?4, 'accepted', ?5, ?6, ?7)
-         ON CONFLICT(command_id) DO UPDATE SET
-            module = excluded.module,
-            command_type = excluded.command_type,
-            record_id = excluded.record_id,
-            status = 'accepted',
-            payload_json = excluded.payload_json,
-            client_context_json = excluded.client_context_json,
-            observed_at_ms = excluded.observed_at_ms",
-        params![
-            command_id,
-            command.module.clone(),
-            command.command_type.clone(),
-            command.record_id.clone(),
-            payload_json,
-            context_json,
-            observed_at_ms
-        ],
-    )?;
+    let compatibility_status = queue_task
+        .as_ref()
+        .and_then(|task| command_status_for_queue_route_status(&task.route_status))
+        .unwrap_or("accepted");
     let mut command_projection = serde_json::json!({
         "id": command_id,
         "command_id": command_id,
         "module": command.module.clone(),
         "command_type": command.command_type.clone(),
         "record_id": command.record_id.clone().unwrap_or_default(),
-        "status": "accepted",
+        "status": compatibility_status,
         "execution_mode": "queue",
         "execution_task_id": queue_task.as_ref().map(|task| task.message_key.clone()).unwrap_or_default(),
         "target_task_id": "",
@@ -6712,29 +6762,48 @@ fn record_command_inner(
     if let Some(chat_id) = chat_id.as_deref() {
         command_projection["chat_id"] = Value::String(chat_id.to_string());
     }
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     upsert_business_record(
-        &conn,
+        &tx,
         "business_commands",
         &command_id,
         observed_at_ms,
         command_projection,
     )?;
-    if let Some(task) = &queue_task {
-        upsert_business_record(
-            &conn,
-            "ctox_queue_tasks",
-            &task.message_key,
-            observed_at_ms,
-            business_command_queue_task_payload(
-                &command_id,
-                &command,
-                task,
-                inbound_channel.as_str(),
-                Some("accepted"),
+    let canonical_applied = write_compatibility_command_admission_if_canonical_applied(
+        &tx,
+        &command_id,
+        &command.module,
+        &command.command_type,
+        command.record_id.as_deref(),
+        compatibility_status,
+        &payload_json,
+        &context_json,
+        observed_at_ms,
+    )?;
+    if canonical_applied {
+        if let Some(task) = &queue_task {
+            upsert_business_record(
+                &tx,
+                "ctox_queue_tasks",
+                &task.message_key,
                 observed_at_ms,
-            ),
-        )?;
+                business_command_queue_task_payload(
+                    &command_id,
+                    &command,
+                    task,
+                    inbound_channel.as_str(),
+                    command_status_for_queue_route_status(&task.route_status).or(Some("accepted")),
+                    observed_at_ms,
+                ),
+            )?;
+        }
     }
+    tx.commit()?;
+    project_admitted_command_identity(
+        root,
+        queue_task.as_ref().map(|task| task.message_key.as_str()),
+    );
     if let Some(completed) = maybe_materialize_and_complete_runtime_app_starter(
         root,
         &command_id,
@@ -6760,6 +6829,25 @@ fn record_command_inner(
         chat_id,
         ..CommandAccepted::default()
     })
+}
+
+/// Core admission is already committed. RxDB/business-os mirrors are eventual
+/// visibility, not a second atomic commit across WALs. Outbox delivery reloads
+/// the current Core projection; queue refresh reloads the current task.
+/// Failures here must not fail admission — outbox remains the retry path.
+fn project_admitted_command_identity(root: &Path, task_id: Option<&str>) {
+    if let Err(error) = deliver_business_command_outbox(root, 10) {
+        eprintln!(
+            "[business-os] admitted command RxDB visibility remains queued for retry: {error:#}"
+        );
+    }
+    if let Some(task_id) = task_id.map(str::trim).filter(|value| !value.is_empty()) {
+        if let Err(error) = refresh_business_command_queue_task_projection(root, task_id) {
+            eprintln!(
+                "[business-os] admitted queue-task RxDB visibility remains queued for retry: {error:#}"
+            );
+        }
+    }
 }
 
 /// A lead whose research has been accepted says "Wartet", and it says so
@@ -12706,7 +12794,7 @@ fn upsert_rxdb_collection_record_with_writer(
                 .and_then(Value::as_str)
                 .filter(|revision| direct_rxdb_revision_height(revision).is_some())
                 .map(str::to_string);
-            if merge_existing {
+            if merge_existing && !rxdb_table_is_canonical_projection(table) {
                 merge_json_object_values(&mut existing, &payload);
                 payload = existing;
             }
@@ -12814,9 +12902,12 @@ fn upsert_rxdb_collection_record_with_writer(
     conn.execute(
         &format!(
             "INSERT INTO {table} ({columns}) VALUES ({placeholders})
-             ON CONFLICT(id) DO UPDATE SET {updates}",
+             ON CONFLICT(id) DO UPDATE SET {updates}{guard}",
             columns = columns.join(", "),
-            updates = updates.join(", ")
+            updates = updates.join(", "),
+            guard = canonical_rxdb_table_upsert_guard_sql(table, "data")
+                .map(|guard| format!(" WHERE {guard}"))
+                .unwrap_or_default(),
         ),
         params_from_iter(values),
     )?;
@@ -13309,9 +13400,7 @@ fn refresh_pushed_queue_projections(
         .collect::<HashSet<_>>()
         .into_iter()
         .collect::<Vec<_>>();
-    let tasks = channels::load_queue_tasks(root, &unique_task_ids)?;
-    for task in tasks {
-        let task_id = task.message_key.as_str();
+    for task_id in unique_task_ids {
         let row = conn
             .query_row(
                 "SELECT payload_json
@@ -13319,57 +13408,63 @@ fn refresh_pushed_queue_projections(
                  WHERE collection = 'ctox_queue_tasks'
                    AND record_id = ?1
                    AND deleted = 0",
-                params![task_id],
+                params![task_id.as_str()],
                 |row| row.get::<_, String>(0),
             )
             .optional()?;
         let Some(raw) = row else {
             continue;
         };
-        let mut payload = serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| {
+        let existing = serde_json::from_str::<Value>(&raw).unwrap_or_else(|_| {
             serde_json::json!({
                 "id": task_id,
                 "status": "queued",
                 "route_status": "pending"
             })
         });
-        let command_id = payload
+        let Some(command_id) = existing
             .get("command_id")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .map(str::to_string);
-        if !queue_projection_status_fields_match(&payload, &task) {
-            payload = apply_queue_projection_status_fields(
-                payload,
-                &task,
-                &task.route_status,
-                updated_at_ms,
-            );
-            upsert_business_record(
-                conn,
-                "ctox_queue_tasks",
-                task_id,
-                updated_at_ms,
-                payload.clone(),
-            )?;
-        }
-        upsert_attached_rxdb_record(conn, "ctox_queue_tasks", task_id, updated_at_ms, payload)?;
-        let Some(command_id) = command_id else {
+            .map(str::to_string)
+        else {
             continue;
         };
+        let Some(snapshot) =
+            channels::load_business_os_queue_mirror_snapshot(root, &command_id, &task_id)?
+        else {
+            continue;
+        };
+        let terminal_status = snapshot.terminal_status.clone();
+        let task = snapshot.task;
+        let mut payload = queue_task_payload(
+            Some(command_id.as_str()),
+            &task,
+            terminal_status.as_deref(),
+            updated_at_ms,
+        );
+        retain_noncanonical_queue_projection_fields(&mut payload, &existing);
+        stamp_canonical_queue_mirror_versions(
+            &mut payload,
+            snapshot.command_projection.as_ref(),
+            snapshot.queue_clock_version,
+        );
+        upsert_business_record(
+            conn,
+            "ctox_queue_tasks",
+            &task_id,
+            updated_at_ms,
+            payload.clone(),
+        )?;
+        upsert_attached_rxdb_record(conn, "ctox_queue_tasks", &task_id, updated_at_ms, payload)?;
         let Some(command_status) = command_status_for_queue_route_status(&task.route_status) else {
             continue;
         };
-        conn.execute(
-            "UPDATE business_commands
-             SET status = ?2, observed_at_ms = ?3
-             WHERE command_id = ?1
-               AND (status != ?2 OR observed_at_ms != ?3)",
-            params![command_id.as_str(), command_status, updated_at_ms],
-        )?;
-        let command_row = conn
-            .query_row(
+        let mut command_payload = if let Some(projection) = snapshot.command_projection.clone() {
+            projection
+        } else {
+            conn.query_row(
                 "SELECT payload_json
                  FROM business_records
                  WHERE collection = 'business_commands'
@@ -13378,49 +13473,35 @@ fn refresh_pushed_queue_projections(
                 params![command_id.as_str()],
                 |row| row.get::<_, String>(0),
             )
-            .optional()?;
-        let Some(command_raw) = command_row else {
-            continue;
+            .optional()?
+            .and_then(|command_raw| serde_json::from_str::<Value>(&command_raw).ok())
+            .unwrap_or_else(|| {
+                serde_json::json!({
+                    "id": command_id,
+                    "command_id": command_id
+                })
+            })
         };
-        let mut command_payload = serde_json::from_str::<Value>(&command_raw)?;
-        let command_projection_changed =
-            !command_projection_status_fields_match(&command_payload, &task);
-        if command_projection_changed {
-            if let Some(object) = command_payload.as_object_mut() {
-                object.insert(
-                    "status".to_string(),
-                    Value::String(command_status.to_string()),
-                );
-                object.insert(
-                    "route_status".to_string(),
-                    Value::String(task.route_status.clone()),
-                );
-                object.insert(
-                    "task_status".to_string(),
-                    Value::String(normalize_queue_status(&task.route_status).to_string()),
-                );
-                object.insert(
-                    "task_id".to_string(),
-                    Value::String(task.message_key.clone()),
-                );
-                if let Some(note) = task.status_note.as_deref() {
-                    object.insert(
-                        "queue_status_note".to_string(),
-                        Value::String(note.to_string()),
-                    );
-                    if task.route_status == "failed" {
-                        object.insert("error".to_string(), Value::String(note.to_string()));
-                    }
-                }
-            }
-            upsert_business_record(
-                conn,
-                "business_commands",
-                &command_id,
-                updated_at_ms,
-                command_payload.clone(),
-            )?;
-        }
+        overlay_queue_task_on_command_projection(&mut command_payload, &task, command_status);
+        stamp_canonical_queue_mirror_versions(
+            &mut command_payload,
+            snapshot.command_projection.as_ref(),
+            snapshot.queue_clock_version,
+        );
+        upsert_business_record(
+            conn,
+            "business_commands",
+            &command_id,
+            updated_at_ms,
+            command_payload.clone(),
+        )?;
+        write_compatibility_command_status_if_canonical_applied(
+            conn,
+            "business_commands",
+            &command_id,
+            command_status,
+            updated_at_ms,
+        )?;
         upsert_attached_rxdb_record(
             conn,
             "business_commands",
@@ -13640,24 +13721,19 @@ pub fn refresh_business_command_queue_task_projection(
     root: &Path,
     task_id: &str,
 ) -> anyhow::Result<Option<Value>> {
-    let conn = open_store(root)?;
+    let mut conn = open_store(root)?;
     let Some(command_id) = queue_projection_command_id(&conn, task_id)? else {
         return Ok(None);
     };
     let command = load_business_command(&conn, &command_id)?;
-    let Some(task) = channels::load_queue_task(root, task_id)? else {
+    let Some(snapshot) =
+        channels::load_business_os_queue_mirror_snapshot(root, &command_id, task_id)?
+    else {
         return Ok(None);
     };
+    let task = snapshot.task;
     let updated_at_ms = now_ms() as i64;
     let terminal_command_status = command_status_for_queue_route_status(&task.route_status);
-    if let Some(command_status) = terminal_command_status {
-        conn.execute(
-            "UPDATE business_commands
-             SET status = ?2, observed_at_ms = ?3
-             WHERE command_id = ?1",
-            params![command_id.as_str(), command_status, updated_at_ms],
-        )?;
-    }
     let command_status = match terminal_command_status {
         Some(command_status) => command_status.to_string(),
         None => conn
@@ -13669,8 +13745,7 @@ pub fn refresh_business_command_queue_task_projection(
             .optional()?
             .unwrap_or_else(|| "accepted".to_string()),
     };
-    let canonical_projection = channels::business_command_projection(root, &command_id).ok();
-    let mut command_projection = if let Some(projection) = canonical_projection {
+    let mut command_projection = if let Some(projection) = snapshot.command_projection.clone() {
         projection
     } else {
         conn.query_row(
@@ -13743,13 +13818,30 @@ pub fn refresh_business_command_queue_task_projection(
         }
         object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
     }
+    stamp_canonical_queue_mirror_versions(
+        &mut command_projection,
+        snapshot.command_projection.as_ref(),
+        snapshot.queue_clock_version,
+    );
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
     upsert_business_record(
-        &conn,
+        &tx,
         "business_commands",
         &command_id,
         updated_at_ms,
         command_projection.clone(),
     )?;
+    if let Some(command_status) = terminal_command_status {
+        write_compatibility_command_status_if_canonical_applied(
+            &tx,
+            "business_commands",
+            &command_id,
+            command_status,
+            updated_at_ms,
+        )?;
+    } else {
+        notify_after_canonical_command_mirror_upsert();
+    }
     let mut rxdb_writers = RxdbProjectionWriterCache::new(root);
     upsert_rxdb_collection_record_cached(
         root,
@@ -13761,13 +13853,14 @@ pub fn refresh_business_command_queue_task_projection(
     )?;
     refresh_queue_task_projection(
         root,
-        &conn,
+        &tx,
         Some(&mut rxdb_writers),
         &command_id,
         &command,
         Some(&task),
         updated_at_ms,
     )?;
+    tx.commit()?;
     Ok(Some(command_projection))
 }
 
@@ -18733,6 +18826,230 @@ fn seed_canonical_business_command_row(
     Ok(())
 }
 
+fn overlay_queue_task_on_command_projection(
+    payload: &mut Value,
+    task: &channels::QueueTaskView,
+    command_status: &str,
+) {
+    let Some(object) = payload.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        "status".to_string(),
+        Value::String(command_status.to_string()),
+    );
+    object.insert(
+        "route_status".to_string(),
+        Value::String(task.route_status.clone()),
+    );
+    object.insert(
+        "task_status".to_string(),
+        Value::String(normalize_queue_status(&task.route_status).to_string()),
+    );
+    object.insert(
+        "task_id".to_string(),
+        Value::String(task.message_key.clone()),
+    );
+    if let Some(note) = task
+        .status_note
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        object.insert(
+            "queue_status_note".to_string(),
+            Value::String(note.to_string()),
+        );
+        if task.route_status == "failed" {
+            object.insert("error".to_string(), Value::String(note.to_string()));
+        }
+    } else {
+        object.remove("queue_status_note");
+        if task.route_status != "failed" {
+            object.remove("error");
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static AFTER_CANONICAL_COMMAND_MIRROR_UPSERT: RefCell<Option<Box<dyn FnMut()>>> =
+        RefCell::new(None);
+}
+
+fn notify_after_canonical_command_mirror_upsert() {
+    #[cfg(test)]
+    AFTER_CANONICAL_COMMAND_MIRROR_UPSERT.with(|slot| {
+        if let Some(callback) = slot.borrow_mut().as_mut() {
+            callback();
+        }
+    });
+}
+
+fn write_compatibility_command_status_if_canonical_applied(
+    conn: &Connection,
+    qualified_table: &str,
+    command_id: &str,
+    status: &str,
+    observed_at_ms: i64,
+) -> anyhow::Result<bool> {
+    let applied = conn.changes() > 0;
+    notify_after_canonical_command_mirror_upsert();
+    if !applied {
+        return Ok(false);
+    }
+    anyhow::ensure!(
+        matches!(
+            qualified_table,
+            "business_commands" | "business_os_projection.business_commands"
+        ),
+        "unsupported compatibility command table `{qualified_table}`"
+    );
+    conn.execute(
+        &format!(
+            "UPDATE {qualified_table}
+             SET status = ?2, observed_at_ms = ?3
+             WHERE command_id = ?1
+               AND (status != ?2 OR observed_at_ms != ?3)"
+        ),
+        params![command_id, status, observed_at_ms],
+    )?;
+    Ok(true)
+}
+
+fn write_compatibility_command_admission_if_canonical_applied(
+    conn: &Connection,
+    command_id: &str,
+    module: &str,
+    command_type: &str,
+    record_id: Option<&str>,
+    status: &str,
+    payload_json: &str,
+    client_context_json: &str,
+    observed_at_ms: i64,
+) -> anyhow::Result<bool> {
+    let applied = conn.changes() > 0;
+    notify_after_canonical_command_mirror_upsert();
+    if !applied {
+        return Ok(false);
+    }
+    // Version-gated cancelled canonical writes may replace running/leased/blocked.
+    // Stale accepted admission must not regress advanced or terminal rows.
+    conn.execute(
+        "INSERT INTO business_commands
+            (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(command_id) DO UPDATE SET
+            module = excluded.module,
+            command_type = excluded.command_type,
+            record_id = excluded.record_id,
+            status = CASE
+                WHEN excluded.status = 'cancelled'
+                     AND business_commands.status IN (
+                         'accepted', 'pending', 'queued', 'running', 'leased', 'blocked'
+                     )
+                THEN excluded.status
+                WHEN business_commands.status IN (
+                    'cancelled', 'completed', 'failed', 'handled',
+                    'blocked', 'running', 'leased'
+                ) THEN business_commands.status
+                ELSE excluded.status
+            END,
+            payload_json = excluded.payload_json,
+            client_context_json = excluded.client_context_json,
+            observed_at_ms = excluded.observed_at_ms",
+        params![
+            command_id,
+            module,
+            command_type,
+            record_id,
+            status,
+            payload_json,
+            client_context_json,
+            observed_at_ms
+        ],
+    )?;
+    Ok(true)
+}
+
+fn write_business_os_command_outbox_mirror(
+    conn: &Connection,
+    projection: Value,
+) -> anyhow::Result<bool> {
+    let command_id = projection
+        .get("command_id")
+        .or_else(|| projection.get("id"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .context("command outbox projection missing command_id")?
+        .to_string();
+    let module = projection
+        .get("module")
+        .and_then(Value::as_str)
+        .unwrap_or("ctox")
+        .to_string();
+    let command_type = projection
+        .get("command_type")
+        .and_then(Value::as_str)
+        .unwrap_or("business_os.command")
+        .to_string();
+    let record_id = projection
+        .get("record_id")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let status = projection
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("accepted")
+        .to_string();
+    let observed_at_ms = projection
+        .get("updated_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| now_ms() as i64);
+    let payload_json = serde_json::to_string(projection.get("payload").unwrap_or(&Value::Null))?;
+    let client_context_json =
+        serde_json::to_string(projection.get("client_context").unwrap_or(&Value::Null))?;
+    upsert_business_record(
+        conn,
+        "business_commands",
+        &command_id,
+        observed_at_ms,
+        projection,
+    )?;
+    let applied = conn.changes() > 0;
+    notify_after_canonical_command_mirror_upsert();
+    if !applied {
+        return Ok(false);
+    }
+    conn.execute(
+        "INSERT INTO business_commands
+            (command_id, module, command_type, record_id, status, payload_json,
+             client_context_json, observed_at_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(command_id) DO UPDATE SET
+            module = excluded.module,
+            command_type = excluded.command_type,
+            record_id = excluded.record_id,
+            status = excluded.status,
+            payload_json = excluded.payload_json,
+            client_context_json = excluded.client_context_json,
+            observed_at_ms = excluded.observed_at_ms",
+        params![
+            command_id,
+            module,
+            command_type,
+            record_id,
+            status,
+            payload_json,
+            client_context_json,
+            observed_at_ms,
+        ],
+    )?;
+    Ok(true)
+}
+
 /// Deliver canonical command lifecycle changes from the core SQLite outbox.
 /// Canonical queue/control progress never depends on either compatibility
 /// store being available; failed deliveries remain retryable (and eventually
@@ -18743,65 +19060,12 @@ pub(crate) fn deliver_business_command_outbox(root: &Path, limit: usize) -> anyh
     let mut delivered = 0_u64;
     let mut failed = 0_u64;
     for event in events {
-        let projection = channels::business_command_projection(root, &event.command_id);
+        let projection = channels::canonical_command_mirror_projection(root, &event.command_id);
         let delivery = projection.and_then(|projection| match event.destination.as_str() {
             "business-os" => {
-                let command_id = event.command_id.as_str();
-                let module = projection
-                    .get("module")
-                    .and_then(Value::as_str)
-                    .unwrap_or("ctox");
-                let command_type = projection
-                    .get("command_type")
-                    .and_then(Value::as_str)
-                    .unwrap_or("business_os.command");
-                let record_id = projection
-                    .get("record_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                let status = projection
-                    .get("status")
-                    .and_then(Value::as_str)
-                    .unwrap_or("accepted");
-                let observed_at_ms = projection
-                    .get("updated_at_ms")
-                    .and_then(Value::as_i64)
-                    .unwrap_or_else(|| now_ms() as i64);
                 let mut conn = open_store(root)?;
                 let tx = conn.transaction()?;
-                tx.execute(
-                    "INSERT INTO business_commands
-                        (command_id, module, command_type, record_id, status, payload_json,
-                         client_context_json, observed_at_ms)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-                     ON CONFLICT(command_id) DO UPDATE SET
-                        module = excluded.module,
-                        command_type = excluded.command_type,
-                        record_id = excluded.record_id,
-                        status = excluded.status,
-                        payload_json = excluded.payload_json,
-                        client_context_json = excluded.client_context_json,
-                        observed_at_ms = excluded.observed_at_ms",
-                    params![
-                        command_id,
-                        module,
-                        command_type,
-                        record_id,
-                        status,
-                        serde_json::to_string(projection.get("payload").unwrap_or(&Value::Null))?,
-                        serde_json::to_string(
-                            projection.get("client_context").unwrap_or(&Value::Null)
-                        )?,
-                        observed_at_ms,
-                    ],
-                )?;
-                upsert_business_record(
-                    &tx,
-                    "business_commands",
-                    command_id,
-                    observed_at_ms,
-                    projection,
-                )?;
+                write_business_os_command_outbox_mirror(&tx, projection)?;
                 tx.commit()?;
                 Ok(())
             }
@@ -19454,7 +19718,7 @@ pub fn update_ctox_task(
     let command_id = queue_projection_command_id(&conn, &task_id)?;
     let structured_status =
         queue_projection_structured_status(&conn, command_id.as_deref(), &task_id)?;
-    write_queue_task_projection(&conn, command_id.as_deref(), &updated, now)?;
+    write_queue_task_projection(root, &conn, command_id.as_deref(), &updated, now)?;
     Ok(serde_json::json!({
         "ok": true,
         "task": queue_task_payload(
@@ -22632,33 +22896,23 @@ pub(super) fn queue_status_is_terminal_failure(status: Option<&str>) -> bool {
 }
 
 pub(super) fn apply_queue_projection_status_fields(
-    mut payload: Value,
+    payload: Value,
     task: &channels::QueueTaskView,
     route_status: &str,
     updated_at_ms: i64,
 ) -> Value {
-    if let Some(object) = payload.as_object_mut() {
-        object.insert("id".to_string(), Value::String(task.message_key.clone()));
-        object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
-        object
-            .entry("title".to_string())
-            .or_insert_with(|| Value::String(task.title.clone()));
-        object
-            .entry("thread_key".to_string())
-            .or_insert_with(|| Value::String(task.thread_key.clone()));
-        object
-            .entry("prompt".to_string())
-            .or_insert_with(|| Value::String(task.prompt.clone()));
-        object
-            .entry("priority".to_string())
-            .or_insert_with(|| Value::String(task.priority.clone()));
-        object.insert(
-            "task_status".to_string(),
-            Value::String(normalize_queue_status(route_status).to_string()),
-        );
+    let command_id = payload
+        .get("command_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let mut next = queue_task_payload(command_id.as_deref(), task, None, updated_at_ms);
+    if route_status != task.route_status {
+        enrich_queue_projection_payload(&mut next, task, route_status);
     }
-    enrich_queue_projection_payload(&mut payload, task, route_status);
-    payload
+    retain_noncanonical_queue_projection_fields(&mut next, &payload);
+    next
 }
 
 pub(super) fn upsert_command_projection_from_queue_status(
@@ -22673,14 +22927,6 @@ pub(super) fn upsert_command_projection_from_queue_status(
 ) -> anyhow::Result<()> {
     if command_id.trim().is_empty() {
         return Ok(());
-    }
-    if let Some(command_status) = command_status_for_queue_route_status(route_status) {
-        conn.execute(
-            "UPDATE business_commands
-             SET status = ?2, observed_at_ms = ?3
-             WHERE command_id = ?1",
-            params![command_id, command_status, updated_at_ms],
-        )?;
     }
     let mut payload = conn
         .query_row(
@@ -22750,6 +22996,15 @@ pub(super) fn upsert_command_projection_from_queue_status(
         updated_at_ms,
         payload.clone(),
     )?;
+    if let Some(command_status) = command_status_for_queue_route_status(route_status) {
+        write_compatibility_command_status_if_canonical_applied(
+            conn,
+            "business_commands",
+            command_id,
+            command_status,
+            updated_at_ms,
+        )?;
+    }
     upsert_rxdb_collection_record_cached(
         root,
         rxdb_writers.as_deref_mut(),
@@ -38874,6 +39129,1187 @@ pub(super) mod tests {
         assert_eq!(
             rxdb_command.get("task_id").and_then(Value::as_str),
             Some(task_id.as_str())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn admitted_command_projects_rxdb_identity_without_regressing_advanced_status(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        create_repair_rxdb_tables(root)?;
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd-post-cutover-001",
+                "command_id": "cmd-post-cutover-001",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe",
+                    "instruction": "teste admitted rxdb identity",
+                    "prompt": "teste admitted rxdb identity"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        assert_eq!(
+            accepted.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+        let command_id = "cmd-post-cutover-001";
+
+        let load_canonical = |collection: &str,
+                              record_id: &str|
+         -> anyhow::Result<(Value, Value)> {
+            let rxdb = load_rxdb_collection_record(root, collection, record_id)?
+                .with_context(|| format!("expected rxdb {collection} {record_id}"))?;
+            let conn = open_store(root)?;
+            let records = load_business_record_payload(&conn, collection, record_id)?
+                .with_context(|| format!("expected business_records {collection} {record_id}"))?;
+            Ok((rxdb, records))
+        };
+        let inject_canonical =
+            |collection: &str, record_id: &str, payload: Value| -> anyhow::Result<()> {
+                upsert_rxdb_collection_record(
+                    root,
+                    collection,
+                    record_id,
+                    now_ms() as i64,
+                    payload.clone(),
+                )?;
+                let conn = open_store(root)?;
+                upsert_business_record(&conn, collection, record_id, now_ms() as i64, payload)?;
+                Ok(())
+            };
+
+        let (rxdb_command, records_command) = load_canonical("business_commands", command_id)?;
+        assert_eq!(
+            rxdb_command.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        assert_eq!(
+            records_command.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        assert_eq!(
+            rxdb_command.get("task_id").and_then(Value::as_str),
+            Some(task_id.as_str())
+        );
+        assert_eq!(
+            records_command.get("task_id").and_then(Value::as_str),
+            Some(task_id.as_str())
+        );
+        let admitted_version = rxdb_command
+            .get("projection_version")
+            .and_then(Value::as_i64)
+            .context("expected admitted canonical projection_version")?;
+        assert_eq!(
+            records_command
+                .get("projection_version")
+                .and_then(Value::as_i64),
+            Some(admitted_version)
+        );
+        assert!(rxdb_command
+            .get("queue_projection_version")
+            .and_then(Value::as_i64)
+            .is_some());
+        assert_eq!(
+            records_command
+                .get("queue_projection_version")
+                .and_then(Value::as_i64),
+            rxdb_command
+                .get("queue_projection_version")
+                .and_then(Value::as_i64)
+        );
+
+        let (rxdb_task, records_task) = load_canonical("ctox_queue_tasks", &task_id)?;
+        assert_eq!(
+            rxdb_task.get("command_id").and_then(Value::as_str),
+            Some(command_id)
+        );
+        assert_eq!(
+            records_task.get("command_id").and_then(Value::as_str),
+            Some(command_id)
+        );
+        assert_eq!(
+            rxdb_task.get("projection_version").and_then(Value::as_i64),
+            Some(admitted_version)
+        );
+        assert_eq!(
+            records_task
+                .get("projection_version")
+                .and_then(Value::as_i64),
+            Some(admitted_version)
+        );
+        let admitted_queue_clock = rxdb_task
+            .get("queue_projection_version")
+            .and_then(Value::as_i64)
+            .context("expected admitted queue_projection_version")?;
+        assert_eq!(
+            records_task
+                .get("queue_projection_version")
+                .and_then(Value::as_i64),
+            Some(admitted_queue_clock)
+        );
+        assert_eq!(
+            rxdb_command
+                .get("queue_projection_version")
+                .and_then(Value::as_i64),
+            Some(admitted_queue_clock)
+        );
+
+        channels::lease_queue_task(root, &task_id, "ctox-service")?;
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task_id.clone(),
+                route_status: Some("blocked".to_string()),
+                status_note: Some("delayed-old-writer regression".to_string()),
+                ..Default::default()
+            },
+        )?;
+
+        let (blocked_command, blocked_command_records) =
+            load_canonical("business_commands", command_id)?;
+        assert_eq!(
+            blocked_command.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            blocked_command_records
+                .get("status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        let blocked_version = blocked_command
+            .get("projection_version")
+            .and_then(Value::as_i64)
+            .context("expected blocked canonical projection_version")?;
+        let (blocked_task, blocked_task_records) = load_canonical("ctox_queue_tasks", &task_id)?;
+        assert_eq!(
+            blocked_task.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            blocked_task_records.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            blocked_task.get("route_status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            blocked_task_records
+                .get("route_status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        let blocked_queue_clock = blocked_task
+            .get("queue_projection_version")
+            .and_then(Value::as_i64)
+            .context("expected blocked queue_projection_version")?;
+        assert!(blocked_queue_clock > admitted_queue_clock);
+        assert_eq!(
+            blocked_task_records
+                .get("queue_projection_version")
+                .and_then(Value::as_i64),
+            Some(blocked_queue_clock)
+        );
+        assert_eq!(
+            blocked_command
+                .get("queue_projection_version")
+                .and_then(Value::as_i64),
+            Some(blocked_queue_clock)
+        );
+        assert_eq!(
+            blocked_command_records
+                .get("queue_projection_version")
+                .and_then(Value::as_i64),
+            Some(blocked_queue_clock)
+        );
+
+        let mut stale_command = rxdb_command.clone();
+        if let Some(object) = stale_command.as_object_mut() {
+            object.insert("status".to_string(), Value::String("accepted".to_string()));
+            object.insert(
+                "projection_version".to_string(),
+                Value::from(admitted_version),
+            );
+            object.insert(
+                "queue_projection_version".to_string(),
+                Value::from(admitted_queue_clock),
+            );
+        }
+        inject_canonical("business_commands", command_id, stale_command)?;
+        inject_canonical(
+            "business_commands",
+            command_id,
+            serde_json::json!({
+                "id": command_id,
+                "command_id": command_id,
+                "status": "accepted"
+            }),
+        )?;
+        inject_canonical(
+            "business_commands",
+            command_id,
+            serde_json::json!({ "status": "accepted" }),
+        )?;
+
+        let mut mixed_queue = rxdb_task.clone();
+        if let Some(object) = mixed_queue.as_object_mut() {
+            object.insert("status".to_string(), Value::String("queued".to_string()));
+            object.insert(
+                "route_status".to_string(),
+                Value::String("pending".to_string()),
+            );
+            object.insert(
+                "projection_version".to_string(),
+                Value::from(blocked_version.max(admitted_version) + 1),
+            );
+            object.insert(
+                "queue_projection_version".to_string(),
+                Value::from(admitted_queue_clock),
+            );
+        }
+        inject_canonical("ctox_queue_tasks", &task_id, mixed_queue)?;
+        inject_canonical(
+            "ctox_queue_tasks",
+            &task_id,
+            serde_json::json!({
+                "id": task_id,
+                "command_id": command_id,
+                "status": "queued",
+                "route_status": "pending"
+            }),
+        )?;
+
+        let (after_stale_command, after_stale_command_records) =
+            load_canonical("business_commands", command_id)?;
+        assert_eq!(
+            after_stale_command.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            after_stale_command_records
+                .get("status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            after_stale_command
+                .get("projection_version")
+                .and_then(Value::as_i64),
+            Some(blocked_version)
+        );
+        assert_eq!(
+            after_stale_command
+                .get("queue_projection_version")
+                .and_then(Value::as_i64),
+            Some(blocked_queue_clock)
+        );
+        let (after_stale_task, after_stale_task_records) =
+            load_canonical("ctox_queue_tasks", &task_id)?;
+        assert_eq!(
+            after_stale_task.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            after_stale_task_records
+                .get("status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            after_stale_task.get("route_status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            after_stale_task_records
+                .get("route_status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            after_stale_task
+                .get("queue_projection_version")
+                .and_then(Value::as_i64),
+            Some(blocked_queue_clock)
+        );
+        assert_eq!(
+            after_stale_task_records
+                .get("queue_projection_version")
+                .and_then(Value::as_i64),
+            Some(blocked_queue_clock)
+        );
+
+        accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd-post-cutover-001",
+                "command_id": "cmd-post-cutover-001",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe",
+                    "instruction": "teste admitted rxdb identity",
+                    "prompt": "teste admitted rxdb identity"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        let (after_duplicate_command, after_duplicate_command_records) =
+            load_canonical("business_commands", command_id)?;
+        assert_eq!(
+            after_duplicate_command
+                .get("status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            after_duplicate_command_records
+                .get("status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+        let compatibility_after_duplicate: String = {
+            let conn = open_store(root)?;
+            conn.query_row(
+                "SELECT status FROM business_commands WHERE command_id = ?1",
+                [command_id],
+                |row| row.get(0),
+            )?
+        };
+        assert_eq!(
+            compatibility_after_duplicate, "blocked",
+            "duplicate record_command must not force compatibility back to accepted"
+        );
+        let (after_duplicate_task, after_duplicate_task_records) =
+            load_canonical("ctox_queue_tasks", &task_id)?;
+        assert_eq!(
+            after_duplicate_task.get("status").and_then(Value::as_str),
+            Some("blocked")
+        );
+        assert_eq!(
+            after_duplicate_task_records
+                .get("status")
+                .and_then(Value::as_str),
+            Some("blocked")
+        );
+
+        update_ctox_task(
+            root,
+            &chef_session(),
+            CtoxTaskUpdateMutation {
+                task_id: task_id.clone(),
+                title: Some("edited".to_string()),
+                prompt: None,
+                priority: None,
+            },
+        )?;
+        let (edited_task, edited_task_records) = load_canonical("ctox_queue_tasks", &task_id)?;
+        assert_eq!(
+            edited_task.get("title").and_then(Value::as_str),
+            Some("edited")
+        );
+        assert_eq!(
+            edited_task_records.get("title").and_then(Value::as_str),
+            Some("edited")
+        );
+
+        let mut stale_title = rxdb_task.clone();
+        if let Some(object) = stale_title.as_object_mut() {
+            object.insert(
+                "title".to_string(),
+                Value::String("Kontext-Aufgabe".to_string()),
+            );
+            object.insert(
+                "projection_version".to_string(),
+                Value::from(admitted_version),
+            );
+            object.insert(
+                "queue_projection_version".to_string(),
+                Value::from(admitted_queue_clock),
+            );
+        }
+        inject_canonical("ctox_queue_tasks", &task_id, stale_title)?;
+        let (after_stale_title, after_stale_title_records) =
+            load_canonical("ctox_queue_tasks", &task_id)?;
+        assert_eq!(
+            after_stale_title.get("title").and_then(Value::as_str),
+            Some("edited")
+        );
+        assert_eq!(
+            after_stale_title_records
+                .get("title")
+                .and_then(Value::as_str),
+            Some("edited")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn command_only_outbox_delivers_newer_result_after_queue_stamped_admission(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        create_repair_rxdb_tables(root)?;
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd-outbox-result-001",
+                "command_id": "cmd-outbox-result-001",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe",
+                    "instruction": "teste command-only outbox",
+                    "prompt": "teste command-only outbox"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        assert_eq!(
+            accepted.get("status").and_then(Value::as_str),
+            Some("accepted")
+        );
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+        let command_id = "cmd-outbox-result-001";
+        let admitted = load_rxdb_collection_record(root, "business_commands", command_id)?
+            .context("expected admitted rxdb command")?;
+        let admitted_version = admitted
+            .get("projection_version")
+            .and_then(Value::as_i64)
+            .context("expected admitted projection_version")?;
+        assert!(admitted
+            .get("queue_projection_version")
+            .and_then(Value::as_i64)
+            .is_some());
+        let conn = open_store(root)?;
+        let admitted_records =
+            load_business_record_payload(&conn, "business_commands", command_id)?
+                .context("expected admitted business_records command")?;
+        drop(conn);
+        assert_eq!(
+            admitted_records
+                .get("projection_version")
+                .and_then(Value::as_i64),
+            Some(admitted_version)
+        );
+        assert_eq!(
+            admitted_records
+                .get("queue_projection_version")
+                .and_then(Value::as_i64),
+            admitted
+                .get("queue_projection_version")
+                .and_then(Value::as_i64)
+        );
+
+        channels::lease_queue_task(root, &task_id, "ctox-service")?;
+        channels::transition_business_command_for_task(
+            root,
+            &task_id,
+            "leased",
+            None,
+            None,
+            None,
+            "command-only outbox lease",
+        )?;
+        channels::transition_business_command_for_task(
+            root,
+            &task_id,
+            "running",
+            None,
+            None,
+            None,
+            "command-only outbox running",
+        )?;
+        anyhow::ensure!(
+            channels::persist_business_command_worker_result(
+                root,
+                &task_id,
+                "visible worker result"
+            )?,
+            "expected command-only result persistence"
+        );
+
+        let delivery = deliver_business_command_outbox(root, 32)?;
+        assert!(
+            delivery
+                .get("delivered")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0,
+            "expected applied outbox ack, got {delivery}"
+        );
+        assert_eq!(
+            delivery.get("failed").and_then(Value::as_u64).unwrap_or(0),
+            0,
+            "outbox ack must not be a silent CAS reject, got {delivery}"
+        );
+
+        let rxdb_command = load_rxdb_collection_record(root, "business_commands", command_id)?
+            .context("expected rxdb command after command-only outbox")?;
+        let conn = open_store(root)?;
+        let records_command = load_business_record_payload(&conn, "business_commands", command_id)?
+            .context("expected business_records command after command-only outbox")?;
+        drop(conn);
+        for (label, payload) in [
+            ("rxdb", &rxdb_command),
+            ("business_records", &records_command),
+        ] {
+            let version = payload
+                .get("projection_version")
+                .and_then(Value::as_i64)
+                .with_context(|| format!("expected {label} projection_version"))?;
+            assert!(
+                version > admitted_version,
+                "{label} projection_version {version} should advance past admitted {admitted_version}"
+            );
+            assert!(
+                payload
+                    .get("queue_projection_version")
+                    .and_then(Value::as_i64)
+                    .is_some(),
+                "{label} must keep queue_projection_version after command-only outbox"
+            );
+            assert_eq!(
+                payload
+                    .pointer("/result/user_reply")
+                    .and_then(Value::as_str),
+                Some("visible worker result"),
+                "{label} missing newer result"
+            );
+        }
+
+        let core = Connection::open(crate::paths::core_db(root))?;
+        let result_status: String = core.query_row(
+            "SELECT status FROM business_command_outbox
+             WHERE command_id = ?1
+               AND event_type = 'command.result_persisted'
+               AND destination = 'rxdb'",
+            [command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(result_status, "delivered");
+        let bos_status: String = core.query_row(
+            "SELECT status FROM business_command_outbox
+             WHERE command_id = ?1
+               AND event_type = 'command.result_persisted'
+               AND destination = 'business-os'",
+            [command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(bos_status, "delivered");
+        Ok(())
+    }
+
+    #[test]
+    fn push_collection_records_rebuilds_authoritative_queue_fields_from_snapshot(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        create_repair_rxdb_tables(root)?;
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd-pushed-stale-fields",
+                "command_id": "cmd-pushed-stale-fields",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe",
+                    "instruction": "original prompt",
+                    "prompt": "original prompt"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task_id.clone(),
+                title: Some("edited-title".to_string()),
+                prompt: Some("edited-prompt".to_string()),
+                thread_key: Some("thread-edited".to_string()),
+                priority: Some("high".to_string()),
+                ..Default::default()
+            },
+        )?;
+        let conn = open_store(root)?;
+        let current = load_business_record_payload(&conn, "ctox_queue_tasks", &task_id)?
+            .context("expected edited queue projection")?;
+        drop(conn);
+        assert_eq!(
+            current.get("title").and_then(Value::as_str),
+            Some("edited-title")
+        );
+        let projection_version = current
+            .get("projection_version")
+            .and_then(Value::as_i64)
+            .context("expected queue projection_version")?;
+        let queue_clock = current
+            .get("queue_projection_version")
+            .and_then(Value::as_i64)
+            .context("expected queue_projection_version")?;
+
+        let response = push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "ctox_queue_tasks",
+                "documents": [{
+                    "id": task_id,
+                    "command_id": "cmd-pushed-stale-fields",
+                    "title": "Kontext-Aufgabe",
+                    "prompt": "original prompt",
+                    "priority": "normal",
+                    "thread_key": "thread-stale",
+                    "status": "queued",
+                    "route_status": "pending",
+                    "task_status": "queued",
+                    "client_marker": "keep-me",
+                    "projection_version": projection_version,
+                    "queue_projection_version": queue_clock
+                }]
+            }),
+        )?;
+        assert_eq!(response.get("count").and_then(Value::as_u64), Some(1));
+
+        let conn = open_store(root)?;
+        let records = load_business_record_payload(&conn, "ctox_queue_tasks", &task_id)?
+            .context("expected rebuilt queue projection")?;
+        drop(conn);
+        let rxdb = load_rxdb_collection_record(root, "ctox_queue_tasks", &task_id)?
+            .context("expected rebuilt rxdb queue projection")?;
+        for (label, payload) in [("business_records", &records), ("rxdb", &rxdb)] {
+            assert_eq!(
+                payload.get("title").and_then(Value::as_str),
+                Some("edited-title"),
+                "{label} title"
+            );
+            assert_eq!(
+                payload.get("prompt").and_then(Value::as_str),
+                Some("edited-prompt"),
+                "{label} prompt"
+            );
+            assert_eq!(
+                payload.get("priority").and_then(Value::as_str),
+                Some("high"),
+                "{label} priority"
+            );
+            assert_eq!(
+                payload.get("thread_key").and_then(Value::as_str),
+                Some("thread-edited"),
+                "{label} thread_key"
+            );
+            assert_eq!(
+                payload.get("client_marker").and_then(Value::as_str),
+                Some("keep-me"),
+                "{label} noncanonical field"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn push_collection_records_does_not_restore_cleared_authoritative_fields() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        create_repair_rxdb_tables(root)?;
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd-pushed-cleared-fields",
+                "command_id": "cmd-pushed-cleared-fields",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe",
+                    "instruction": "original prompt",
+                    "prompt": "original prompt"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task_id.clone(),
+                status_note: Some("stale-note".to_string()),
+                ..Default::default()
+            },
+        )?;
+        channels::update_queue_task(
+            root,
+            channels::QueueTaskUpdateRequest {
+                message_key: task_id.clone(),
+                clear_note: true,
+                ..Default::default()
+            },
+        )?;
+        let conn = open_store(root)?;
+        let current = load_business_record_payload(&conn, "ctox_queue_tasks", &task_id)?
+            .context("expected cleared queue projection")?;
+        drop(conn);
+        assert!(
+            current.get("status_note").and_then(Value::as_str).is_none(),
+            "attached refresh must drop cleared status_note, got {current}"
+        );
+        assert!(
+            current.get("error").and_then(Value::as_str).is_none(),
+            "attached refresh must drop cleared error, got {current}"
+        );
+        let projection_version = current
+            .get("projection_version")
+            .and_then(Value::as_i64)
+            .context("expected queue projection_version")?;
+        let queue_clock = current
+            .get("queue_projection_version")
+            .and_then(Value::as_i64)
+            .context("expected queue_projection_version")?;
+
+        let response = push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "ctox_queue_tasks",
+                "documents": [{
+                    "id": task_id,
+                    "command_id": "cmd-pushed-cleared-fields",
+                    "title": "Kontext-Aufgabe",
+                    "prompt": "original prompt",
+                    "priority": "normal",
+                    "status": "queued",
+                    "route_status": "pending",
+                    "task_status": "queued",
+                    "status_note": "stale-note",
+                    "error": "stale-note",
+                    "client_marker": "keep-me",
+                    "projection_version": projection_version,
+                    "queue_projection_version": queue_clock
+                }]
+            }),
+        )?;
+        assert_eq!(response.get("count").and_then(Value::as_u64), Some(1));
+
+        let conn = open_store(root)?;
+        let records = load_business_record_payload(&conn, "ctox_queue_tasks", &task_id)?
+            .context("expected rebuilt queue projection")?;
+        drop(conn);
+        let rxdb = load_rxdb_collection_record(root, "ctox_queue_tasks", &task_id)?
+            .context("expected rebuilt rxdb queue projection")?;
+        for (label, payload) in [("business_records", &records), ("rxdb", &rxdb)] {
+            assert!(
+                payload.get("status_note").and_then(Value::as_str).is_none(),
+                "{label} restored cleared status_note: {payload}"
+            );
+            assert!(
+                payload.get("error").and_then(Value::as_str).is_none(),
+                "{label} restored cleared error: {payload}"
+            );
+            assert_eq!(
+                payload.get("client_marker").and_then(Value::as_str),
+                Some("keep-me"),
+                "{label} noncanonical field"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn delayed_accepted_outbox_does_not_regress_terminal_compatibility_status() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        create_repair_rxdb_tables(root)?;
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd-delayed-accepted-compat",
+                "command_id": "cmd-delayed-accepted-compat",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe",
+                    "instruction": "teste delayed accepted compatibility",
+                    "prompt": "teste delayed accepted compatibility"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+        let command_id = "cmd-delayed-accepted-compat";
+        let admitted = load_rxdb_collection_record(root, "business_commands", command_id)?
+            .context("expected admitted command")?;
+        let admitted_version = admitted
+            .get("projection_version")
+            .and_then(Value::as_i64)
+            .context("expected admitted projection_version")?;
+        let admitted_clock = admitted
+            .get("queue_projection_version")
+            .and_then(Value::as_i64)
+            .context("expected admitted queue_projection_version")?;
+
+        anyhow::ensure!(
+            channels::transition_business_command_for_task(
+                root,
+                &task_id,
+                "cancelled",
+                None,
+                Some("cancelled"),
+                Some("delayed-old-snapshot regression"),
+                "delayed-old-snapshot regression",
+            )?,
+            "expected command-only cancel transition"
+        );
+        let _ = deliver_business_command_outbox(root, 32)?;
+
+        let conn = open_store(root)?;
+        let terminal_status: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = ?1",
+            [command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(terminal_status, "cancelled");
+        let terminal_records =
+            load_business_record_payload(&conn, "business_commands", command_id)?
+                .context("expected terminal canonical command")?;
+        assert_eq!(
+            terminal_records.get("status").and_then(Value::as_str),
+            Some("cancelled")
+        );
+        drop(conn);
+
+        let mut stale = admitted.clone();
+        if let Some(object) = stale.as_object_mut() {
+            object.insert("status".to_string(), Value::String("accepted".to_string()));
+            object.insert(
+                "projection_version".to_string(),
+                Value::from(admitted_version),
+            );
+            object.insert(
+                "queue_projection_version".to_string(),
+                Value::from(admitted_clock),
+            );
+        }
+        let conn = open_store(root)?;
+        let applied = write_business_os_command_outbox_mirror(&conn, stale)?;
+        assert!(
+            !applied,
+            "delayed accepted snapshot must not pass the destination fence"
+        );
+        let compatibility: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = ?1",
+            [command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(compatibility, "cancelled");
+        let canonical = load_business_record_payload(&conn, "business_commands", command_id)?
+            .context("expected canonical command after delayed snapshot")?;
+        drop(conn);
+        assert_eq!(
+            canonical.get("status").and_then(Value::as_str),
+            Some("cancelled")
+        );
+
+        let repair = repair_queue_projections(root, QueueProjectionRepairOptions { apply: false })?;
+        let actions = repair
+            .get("actions")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            actions.iter().all(|action| {
+                action.get("task_id").and_then(Value::as_str) != Some(task_id.as_str())
+                    && action.get("command_id").and_then(Value::as_str) != Some(command_id)
+            }),
+            "delayed accepted snapshot must not create pending repair, got {actions:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn refresh_queue_projection_keeps_canonical_and_compatibility_in_one_transaction(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        create_repair_rxdb_tables(root)?;
+        let accepted = accept_rxdb_business_command(
+            root,
+            serde_json::json!({
+                "id": "cmd-refresh-tx-boundary",
+                "command_id": "cmd-refresh-tx-boundary",
+                "module": "research",
+                "command_type": "business_os.chat.task",
+                "record_id": "research",
+                "status": "pending_sync",
+                "payload": {
+                    "title": "Kontext-Aufgabe",
+                    "instruction": "teste refresh transaction boundary",
+                    "prompt": "teste refresh transaction boundary"
+                },
+                "client_context": {
+                    "source": "business-os-chat",
+                    "module": "research"
+                }
+            }),
+        )?;
+        let task_id = accepted
+            .get("task_id")
+            .and_then(Value::as_str)
+            .context("expected queue task id")?
+            .to_string();
+        let command_id = "cmd-refresh-tx-boundary";
+        let interleave = std::sync::Arc::new(std::sync::Mutex::new(None::<String>));
+        let store_path = business_os_store_path(root);
+        AFTER_CANONICAL_COMMAND_MIRROR_UPSERT.with(|slot| {
+            let interleave = interleave.clone();
+            let store_path = store_path.clone();
+            let command_id = command_id.to_string();
+            *slot.borrow_mut() = Some(Box::new(move || {
+                let conn = rusqlite::Connection::open(&store_path).expect("interleave store");
+                conn.busy_timeout(Duration::from_millis(0))
+                    .expect("zero busy timeout");
+                let outcome = conn.execute(
+                    "UPDATE business_commands
+                     SET status = 'cancelled', observed_at_ms = observed_at_ms + 1
+                     WHERE command_id = ?1",
+                    params![command_id.as_str()],
+                );
+                *interleave.lock().expect("interleave lock") = Some(match outcome {
+                    Ok(changes) => format!("applied:{changes}"),
+                    Err(error) => format!("error:{error}"),
+                });
+            }));
+        });
+        let _ = refresh_business_command_queue_task_projection(root, &task_id)?;
+        AFTER_CANONICAL_COMMAND_MIRROR_UPSERT.with(|slot| {
+            *slot.borrow_mut() = None;
+        });
+        let observed = interleave
+            .lock()
+            .expect("interleave lock")
+            .clone()
+            .context("expected interleave writer to run inside the refresh transaction")?;
+        assert!(
+            observed.contains("database is locked")
+                || observed.contains("database is busy")
+                || observed.contains("SQLITE_BUSY"),
+            "concurrent compatibility writer must observe the open Immediate transaction, got {observed}"
+        );
+        let conn = open_store(root)?;
+        let compatibility: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = ?1",
+            [command_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            compatibility, "accepted",
+            "interleaved cancelled write must not land between canonical upsert and commit"
+        );
+        Ok(())
+    }
+
+    fn adapter_reconciliation_command(id: &str) -> BusinessCommand {
+        BusinessCommand {
+            id: Some(id.to_string()),
+            module: "outbound".into(),
+            command_type: "outbound.research.adapters.reconcile".into(),
+            record_id: Some("research-policy".into()),
+            payload: serde_json::json!({
+                "configuration_digest": "fixture-v1",
+                "prompt": "Reconcile fixture adapters"
+            }),
+            client_context: serde_json::json!({ "source": "business-os" }),
+            origin: CommandOrigin::TrustedLocal,
+        }
+    }
+
+    fn chat_admission_command(id: &str) -> BusinessCommand {
+        BusinessCommand {
+            id: Some(id.to_string()),
+            module: "research".into(),
+            command_type: "business_os.chat.task".into(),
+            record_id: Some("research".into()),
+            payload: serde_json::json!({
+                "title": "Kontext-Aufgabe",
+                "instruction": "teste admission compatibility fence",
+                "prompt": "teste admission compatibility fence"
+            }),
+            client_context: serde_json::json!({
+                "source": "business-os-chat",
+                "module": "research"
+            }),
+            origin: CommandOrigin::TrustedLocal,
+        }
+    }
+
+    #[test]
+    fn cancelled_record_command_overwrites_running_and_blocked_compatibility() -> anyhow::Result<()>
+    {
+        for existing in ["running", "blocked"] {
+            let temp = tempdir()?;
+            let root = temp.path();
+            let first = record_command(
+                root,
+                adapter_reconciliation_command(&format!("adapter-open-{existing}")),
+            )?;
+            assert_ne!(first.status, "cancelled");
+            let duplicate_id = format!("adapter-dup-{existing}");
+            let conn = open_store(root)?;
+            conn.execute(
+                "INSERT INTO business_commands
+                    (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
+                 VALUES (?1, 'outbound', 'outbound.research.adapters.reconcile', 'research-policy', ?2, '{}', '{}', 1)",
+                params![duplicate_id.as_str(), existing],
+            )?;
+            drop(conn);
+            let duplicate = record_command(root, adapter_reconciliation_command(&duplicate_id))?;
+            assert_eq!(duplicate.status, "cancelled");
+            let conn = open_store(root)?;
+            let compatibility: String = conn.query_row(
+                "SELECT status FROM business_commands WHERE command_id = ?1",
+                [duplicate_id.as_str()],
+                |row| row.get(0),
+            )?;
+            assert_eq!(
+                compatibility, "cancelled",
+                "version-gated cancelled admission must overwrite existing {existing} compatibility"
+            );
+            let canonical =
+                load_business_record_payload(&conn, "business_commands", &duplicate_id)?
+                    .with_context(|| format!("expected canonical command for {duplicate_id}"))?;
+            assert_eq!(
+                canonical.get("status").and_then(Value::as_str),
+                Some("cancelled"),
+                "canonical must converge to cancelled after superseded admission"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn stale_accepted_record_command_does_not_overwrite_running_or_cancelled_compatibility(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let running = record_command(root, chat_admission_command("cmd-stale-running"))?;
+        let running_task = running.task_id.as_deref().context("running task id")?;
+        channels::lease_queue_task(root, running_task, "ctox-service")?;
+        let conn = open_store(root)?;
+        let running_changes = conn.execute(
+            "UPDATE business_commands SET status = 'running' WHERE command_id = 'cmd-stale-running'",
+            [],
+        )?;
+        anyhow::ensure!(running_changes == 1, "expected running compatibility seed");
+        drop(conn);
+        record_command(root, chat_admission_command("cmd-stale-running"))?;
+        let conn = open_store(root)?;
+        let running_compatibility: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = 'cmd-stale-running'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            running_compatibility, "running",
+            "stale accepted admission must not overwrite running compatibility"
+        );
+        drop(conn);
+
+        let cancelled = record_command(root, chat_admission_command("cmd-stale-cancelled"))?;
+        let cancelled_task = cancelled.task_id.as_deref().context("cancelled task id")?;
+        anyhow::ensure!(
+            channels::transition_business_command_for_task(
+                root,
+                cancelled_task,
+                "cancelled",
+                None,
+                Some("cancelled"),
+                Some("stale accepted admission regression"),
+                "stale accepted admission regression",
+            )?,
+            "expected cancel transition"
+        );
+        let conn = open_store(root)?;
+        let terminal: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = 'cmd-stale-cancelled'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(terminal, "cancelled");
+        drop(conn);
+        record_command(root, chat_admission_command("cmd-stale-cancelled"))?;
+        let conn = open_store(root)?;
+        let cancelled_compatibility: String = conn.query_row(
+            "SELECT status FROM business_commands WHERE command_id = 'cmd-stale-cancelled'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            cancelled_compatibility, "cancelled",
+            "stale admission must not overwrite newer cancelled compatibility"
+        );
+        let canonical =
+            load_business_record_payload(&conn, "business_commands", "cmd-stale-cancelled")?
+                .context("expected cancelled canonical command")?;
+        assert_eq!(
+            canonical.get("status").and_then(Value::as_str),
+            Some("cancelled")
         );
         Ok(())
     }
