@@ -2,21 +2,27 @@
 // License: AGPL-3.0-only
 
 //! Guest-side desktop effects. This adapter owns no identity, VM provisioner,
-//! lease, transport, scheduler or persistent state. A native authority must
-//! execute input at its effect boundary and publish observations through its
-//! revocation-aware delivery path. There is intentionally no permissive default
-//! implementation and no registered browser/VM operation until that connector exists.
+//! lease, scheduler or persistent state. A native authority must authorize
+//! each effect and publish observations through its revocation-aware delivery path.
+//! An owned local QEMU virtio-serial channel may carry those effects, never
+//! browser business data. Observe/input enter through the Business OS command
+//! connector when installed; that connector fails closed until a native owner
+//! is injected. Neither path enables a model-facing tool or production VM
+//! provisioner, and there is no permissive default implementation.
 
 use anyhow::{ensure, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::future::Future;
 
+mod channel;
 #[cfg(target_os = "linux")]
 mod image;
 #[cfg(target_os = "linux")]
 mod qemu;
 mod qmp;
 mod x11;
+#[cfg(target_os = "linux")]
+pub(super) use channel::run_guest_desktop_effects;
 pub(super) use x11::{X11GuestConfig, X11GuestDriver};
 
 #[derive(Clone, PartialEq, Eq)]
@@ -54,7 +60,7 @@ pub(super) enum GuestAction {
     Input { frame_id: String, input: GuestInput },
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(super) enum GuestInput {
     Click {
@@ -76,7 +82,7 @@ pub(super) enum GuestInput {
     },
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum MouseButton {
     Left,
@@ -84,7 +90,7 @@ pub(super) enum MouseButton {
     Right,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum ScrollDirection {
     Up,
@@ -93,7 +99,7 @@ pub(super) enum ScrollDirection {
     Right,
 }
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum GuestKey {
     Enter,
@@ -114,10 +120,36 @@ pub(super) enum GuestKey {
     Paste,
 }
 
+pub(super) const GUEST_FRAME_LIMIT: usize = 16 * 1024 * 1024;
+
 pub(super) struct GuestFrame {
     pub png: Vec<u8>,
     pub width: u32,
     pub height: u32,
+}
+
+impl GuestFrame {
+    pub(super) fn from_png(png: Vec<u8>) -> Result<Self> {
+        ensure!(
+            png.len() >= 33
+                && png.len() <= GUEST_FRAME_LIMIT
+                && &png[..8] == b"\x89PNG\r\n\x1a\n"
+                && &png[12..16] == b"IHDR"
+                && png[8..12] == 13u32.to_be_bytes(),
+            "guest capture is not a bounded PNG frame"
+        );
+        let width = u32::from_be_bytes(png[16..20].try_into()?);
+        let height = u32::from_be_bytes(png[20..24].try_into()?);
+        ensure!(
+            width > 0
+                && height > 0
+                && width <= 4096
+                && height <= 4096
+                && u64::from(width) * u64::from(height) <= 8_388_608,
+            "guest display dimensions exceed the limit"
+        );
+        Ok(Self { png, width, height })
+    }
 }
 
 /// Opaque receipt from the existing authority/stream publisher, not raw frame
@@ -169,8 +201,11 @@ pub(super) trait GuestAuthorization {
         Fut: Future<Output = Result<()>> + Send;
 }
 
-fn identifier(value: &str) -> bool {
-    !value.is_empty() && value.len() <= 256 && !value.chars().any(char::is_control)
+pub(super) fn identifier(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.len() <= 256
+        && !value.chars().any(char::is_control)
 }
 
 impl GuestInput {
