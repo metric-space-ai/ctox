@@ -117,7 +117,12 @@ fn hoist_top_level_field_entries(mut payload: Value) -> Value {
         _ => Map::new(),
     };
     let mut hoisted_result = false;
-    for key in ["fields", "person_records", "evidence"] {
+    for key in [
+        "fields",
+        "person_records",
+        "evidence",
+        "person_field_status",
+    ] {
         if let Some(value) = object.remove(key) {
             result.entry(key.to_string()).or_insert(value);
             hoisted_result = true;
@@ -127,7 +132,15 @@ fn hoist_top_level_field_entries(mut payload: Value) -> Value {
     // expected one of `fields`, ...", 07.09.2026) belong into `result.fields`.
     let stray_result_keys: Vec<String> = result
         .keys()
-        .filter(|key| !["fields", "person_records", "evidence"].contains(&key.as_str()))
+        .filter(|key| {
+            ![
+                "fields",
+                "person_records",
+                "evidence",
+                "person_field_status",
+            ]
+            .contains(&key.as_str())
+        })
         .cloned()
         .collect();
     if !stray_result_keys.is_empty() {
@@ -519,6 +532,11 @@ struct ResearchWritebackResult {
     person_records: Vec<Value>,
     #[serde(default, deserialize_with = "lenient_values")]
     evidence: Vec<Value>,
+    /// Status per person: `{person_key: {person_field: status}}`. The lead-level
+    /// `field_status` holds one entry per field, so the second person's
+    /// `person_email` overwrote the first (Codex review 27.09.2026).
+    #[serde(default, deserialize_with = "lenient_object")]
+    person_field_status: Value,
 }
 
 /// Live workers send `evidence`/`person_records` as `""` or as one object;
@@ -681,6 +699,7 @@ Phase-A-Kommando: {research_command_id}
 - Listen sind reine JSON-Listen: `"sources": [ {{...}}, {{...}} ]`. NIEMALS ein Traegerobjekt wie `{{"item": [...]}}`, weder bei `sources` und `attempts` noch bei `result.person_records` und `result.evidence`.
 - E-Mail-Pruefung (`person_email_validation`) uebernimmt der Daemon selbst: nach jedem Rueckschreiben prueft er jede gelieferte Kontaktadresse ueber experte.de und haengt das Ergebnis dem Kontakt an. Liefere die Adresse als `person_email` mit Beleg und dem `person_key` der Person. Setze `person_email_validation` NICHT auf `no_match`, nur weil du die Pruefung nicht selbst ausfuehren kannst.
 - Personenbezogene Ergebnisse und Belege tragen einen stabilen `person_key`.
+- Status je Person: Bei mehreren Personen gehoert der Status eines person_-Feldes in `result.person_field_status` als `{{"<person_key>": {{"person_email": {{"status": ..., "reason": ..., "sources": [...]}}}}}}`. Das Lead-weite `field_status` fasst pro Feld nur EINEN Eintrag; der Status einer zweiten Person ueberschrieb dort den der ersten. Ein fehlerhafter Eintrag einer Person verwirft nur diesen Eintrag.
 - Schreibe in `result.fields` nur strukturierte Feldobjekte, keine freien Texte.
 - `action_required` ist ausschließlich für Login/Freigabe zulässig und verweist auf einen Auth-Assist (source_id plus Task-/Command-ID) oder eine Quelle mit `requires_credential=true`.
 - Abschluss erfolgt AUSSCHLIESSLICH mit `ctox business-os commands dispatch` und dem typisierten Befehl `outbound.lead.research_writeback`.
@@ -986,6 +1005,198 @@ fn merge_field_status(existing: Option<&Value>, incoming: Value) -> Value {
     Value::Object(merged)
 }
 
+/// Stores person-bound field statuses durably in `lead.person_field_status`
+/// (`{person_key: {field: status}}`), merged per person like the lead-level
+/// map. Sources: `result.person_field_status` and lead-level `person_*`
+/// entries that name their `person_key`. Every entry is checked on its own; a
+/// malformed entry of one person is reported and dropped without touching the
+/// valid entries of the others. Returns the rejection lines.
+fn apply_person_field_status(
+    lead: &mut Value,
+    incoming: &Value,
+    lead_level: &BTreeMap<String, FieldStatus>,
+    terminal_check: Option<(&Path, &Value)>,
+) -> Vec<String> {
+    let mut rejections = Vec::new();
+    let mut per_person: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    fn take(
+        per_person: &mut BTreeMap<String, Map<String, Value>>,
+        terminal_check: Option<(&Path, &Value)>,
+        person_key: &str,
+        field: &str,
+        status: FieldStatus,
+        rejections: &mut Vec<String>,
+    ) {
+        let label = format!("person_field_status[{person_key}].{field}");
+        if !field.starts_with("person_") {
+            rejections.push(format!(
+                "{label}: nur person_*-Felder sind personengebunden"
+            ));
+            return;
+        }
+        let checked = match terminal_check {
+            Some((workspace, contract)) => {
+                validate_terminal_field(field, &status, workspace, contract)
+            }
+            None => validate_person_status_basics(field, &status),
+        };
+        if let Err(error) = checked {
+            rejections.push(format!("{label}: {error}"));
+            return;
+        }
+        match serde_json::to_value(&status) {
+            Ok(mut value) => {
+                value["person_key"] = Value::String(person_key.to_string());
+                per_person
+                    .entry(person_key.to_string())
+                    .or_default()
+                    .insert(field.to_string(), value);
+            }
+            Err(error) => rejections.push(format!("{label}: {error}")),
+        }
+    }
+    if let Some(people) = incoming.as_object() {
+        for (person_key, fields) in people {
+            let person_key = person_key.trim();
+            let Some(fields) = fields.as_object().filter(|_| !person_key.is_empty()) else {
+                rejections.push(format!(
+                    "person_field_status[{person_key}]: erwartet ein Objekt je person_key"
+                ));
+                continue;
+            };
+            for (field, raw) in fields {
+                match parse_field_status_entry(raw.clone()) {
+                    Some(status) => take(
+                        &mut per_person,
+                        terminal_check,
+                        person_key,
+                        field,
+                        status,
+                        &mut rejections,
+                    ),
+                    None => rejections.push(format!(
+                        "person_field_status[{person_key}].{field}: ohne lesbaren status"
+                    )),
+                }
+            }
+        }
+    }
+    for (field, status) in lead_level {
+        let bound = status
+            .extra
+            .get("person_key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty() && field.starts_with("person_"));
+        if let Some(person_key) = bound {
+            let already = per_person
+                .get(person_key)
+                .is_some_and(|fields| fields.contains_key(field));
+            if !already {
+                take(
+                    &mut per_person,
+                    terminal_check,
+                    person_key,
+                    field,
+                    status.clone(),
+                    &mut rejections,
+                );
+            }
+        }
+    }
+    if per_person.is_empty() {
+        return rejections;
+    }
+    if !lead
+        .get("person_field_status")
+        .is_some_and(Value::is_object)
+    {
+        lead["person_field_status"] = Value::Object(Map::new());
+    }
+    for (person_key, fields) in per_person {
+        let merged = merge_field_status(
+            lead["person_field_status"].get(&person_key),
+            Value::Object(fields),
+        );
+        lead["person_field_status"][person_key] = merged;
+    }
+    rejections
+}
+
+/// Minimal check for a chat assignment (the gap task checks through
+/// `validate_terminal_field`): a terminal status, sources for `verified`, a
+/// reason for `no_match`.
+fn validate_person_status_basics(field: &str, status: &FieldStatus) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        TERMINAL_FIELD_STATUSES.contains(&status.status.as_str()),
+        "field `{field}` has non-terminal or unsupported status `{}`",
+        status.status
+    );
+    match status.status.as_str() {
+        "verified" => {
+            anyhow::ensure!(
+                !status.sources.is_empty(),
+                "verified field `{field}` needs a source"
+            );
+            for source in &status.sources {
+                validate_source(field, source)?;
+            }
+        }
+        "no_match" => anyhow::ensure!(
+            !status.reason.trim().is_empty(),
+            "no_match field `{field}` needs a reason"
+        ),
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Every key under which a contact can be addressed as a person.
+fn contact_person_keys(contact: &Value) -> Vec<String> {
+    let mut keys = Vec::new();
+    for member in ["person_key", "sellify_person_id", "person_id"] {
+        let raw = match contact.get(member) {
+            Some(Value::String(text)) => text.trim().to_string(),
+            Some(Value::Number(number)) => number.to_string(),
+            _ => continue,
+        };
+        if raw.is_empty() {
+            continue;
+        }
+        if raw.chars().all(|c| c.is_ascii_digit()) {
+            keys.push(format!("sellify-person-{raw}"));
+        }
+        keys.push(raw);
+    }
+    keys
+}
+
+/// Projects `lead.person_field_status` onto `contacts[].field_status`, the
+/// place the app reads a person's own status from. Runs after every
+/// writeback, so a contact rebuilt by a later writeback gets its status back.
+fn project_person_field_status(lead: &mut Value) {
+    let Some(stored) = lead
+        .get("person_field_status")
+        .and_then(Value::as_object)
+        .cloned()
+    else {
+        return;
+    };
+    let Some(contacts) = lead.get_mut("contacts").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for contact in contacts.iter_mut() {
+        let Some(statuses) = contact_person_keys(contact)
+            .iter()
+            .find_map(|key| stored.get(key).cloned())
+        else {
+            continue;
+        };
+        let merged = merge_field_status(contact.get("field_status"), statuses);
+        contact["field_status"] = merged;
+    }
+}
+
 /// A research field is answered when the lead carries a verified value for it
 /// or a documented `no_match`. `unsupported` and `action_required` mean the
 /// question is still open, whether the worker never delivered the field or the
@@ -1180,7 +1391,7 @@ pub(super) fn handle_research_writeback(
     // minutes), so undelivered fields are reported separately as `open_fields`.
     let research_payload = research_command_payload(root, &request.research_command_id)?;
     let crm = CrmBaseline::from_research_payload(&research_payload);
-    let rejections = sanitize_research_writeback(&mut request, &requested_fields, &crm)?
+    let mut rejections = sanitize_research_writeback(&mut request, &requested_fields, &crm)?
         .into_iter()
         .filter(|entry| !entry.ends_with(": nicht geliefert"))
         .collect::<Vec<String>>();
@@ -1223,6 +1434,21 @@ pub(super) fn handle_research_writeback(
         serde_json::to_value(&request.field_status)?,
     );
     lead["field_status"] = merged_field_status;
+    let terminal_check = gap_task
+        .as_ref()
+        .map(|(task, contract)| {
+            task_workspace(root, task, contract).map(|workspace| (workspace, contract.clone()))
+        })
+        .transpose()?;
+    rejections.extend(apply_person_field_status(
+        &mut lead,
+        &request.result.person_field_status,
+        &request.field_status,
+        terminal_check
+            .as_ref()
+            .map(|(workspace, contract)| (workspace.as_path(), contract)),
+    ));
+    project_person_field_status(&mut lead);
     // A field is answered only when the lead now carries a verified value or a
     // documented `no_match`. Everything else stays open — including a field the
     // evidence gate downgraded from `verified` because it carried a single
@@ -3712,6 +3938,139 @@ mod tests {
         assert_eq!(status.sources[1].source_id, "impressum.example");
         assert_eq!(status.sources[2].source_id, "42");
         assert_eq!(status.reason, "7");
+    }
+
+    fn status(value: Value) -> FieldStatus {
+        parse_field_status_entry(value).expect("status")
+    }
+
+    // Codex review 27.09.2026: contact B inherited A's no_match, B's own status
+    // had nowhere to live. Each person keeps its own status now.
+    #[test]
+    fn person_field_status_keeps_each_person_separate_and_projects_onto_contacts() {
+        let mut lead = serde_json::json!({
+            "contacts": [
+                {"id": "a", "person_key": "A", "name": "Person A"},
+                {"id": "b", "person_key": "B", "name": "Person B"},
+                {"id": "c", "sellify_person_id": 8235, "name": "Person C"}
+            ]
+        });
+        let incoming = serde_json::json!({
+            "A": {"person_email": {"status": "no_match", "reason": "Keine Adresse fuer A"}},
+            "B": {"person_email": {"status": "verified", "value": "b@beispiel.test",
+                  "sources": [{"source_id": "impressum", "url": "https://beispiel.test/team", "quote": "b@beispiel.test"}]}},
+            "sellify-person-8235": {"person_geschlecht": {"status": "no_match", "reason": "keine Angabe"}}
+        });
+        let rejections = apply_person_field_status(&mut lead, &incoming, &BTreeMap::new(), None);
+        assert!(rejections.is_empty(), "{rejections:?}");
+        project_person_field_status(&mut lead);
+        assert_eq!(
+            lead["contacts"][0]["field_status"]["person_email"]["status"],
+            "no_match"
+        );
+        assert_eq!(
+            lead["contacts"][1]["field_status"]["person_email"]["status"],
+            "verified"
+        );
+        assert_eq!(
+            lead["contacts"][1]["field_status"]["person_email"]["person_key"],
+            "B"
+        );
+        assert_eq!(
+            lead["contacts"][2]["field_status"]["person_geschlecht"]["status"],
+            "no_match"
+        );
+        assert_eq!(
+            lead["person_field_status"]["A"]["person_email"]["reason"],
+            "Keine Adresse fuer A"
+        );
+
+        // A later writeback rebuilds the contacts; the stored statuses return.
+        lead["contacts"] = serde_json::json!([
+            {"id": "a2", "person_key": "A"}, {"id": "b2", "person_key": "B"}
+        ]);
+        project_person_field_status(&mut lead);
+        assert_eq!(
+            lead["contacts"][0]["field_status"]["person_email"]["status"],
+            "no_match"
+        );
+        assert_eq!(
+            lead["contacts"][1]["field_status"]["person_email"]["status"],
+            "verified"
+        );
+    }
+
+    #[test]
+    fn a_malformed_person_status_is_dropped_without_losing_the_others() {
+        let mut lead = serde_json::json!({"contacts": [{"person_key": "A"}, {"person_key": "B"}]});
+        let incoming = serde_json::json!({
+            "A": {"person_email": {"status": "no_match", "reason": "keine Quelle"}},
+            "B": {"person_email": {"status": "verified", "value": "b@beispiel.test", "sources": []},
+                  "firma_name": {"status": "verified", "value": "X"}}
+        });
+        let rejections = apply_person_field_status(&mut lead, &incoming, &BTreeMap::new(), None);
+        assert_eq!(rejections.len(), 2, "{rejections:?}");
+        assert!(rejections
+            .iter()
+            .any(|line| line.contains("person_field_status[B].person_email")));
+        assert!(rejections
+            .iter()
+            .any(|line| line.contains("person_field_status[B].firma_name")));
+        assert_eq!(
+            lead["person_field_status"]["A"]["person_email"]["status"],
+            "no_match"
+        );
+        assert!(lead["person_field_status"].get("B").is_none());
+    }
+
+    #[test]
+    fn a_lead_level_person_status_goes_only_to_its_bound_person() {
+        let mut lead = serde_json::json!({"contacts": [{"person_key": "A"}, {"person_key": "B"}]});
+        let mut lead_level = BTreeMap::new();
+        lead_level.insert(
+            "person_email".to_string(),
+            status(serde_json::json!({"status": "no_match", "reason": "No match for A", "person_key": "A"})),
+        );
+        lead_level.insert(
+            "person_telefon".to_string(),
+            status(serde_json::json!({"status": "no_match", "reason": "ungebunden"})),
+        );
+        let rejections = apply_person_field_status(&mut lead, &Value::Null, &lead_level, None);
+        assert!(rejections.is_empty(), "{rejections:?}");
+        project_person_field_status(&mut lead);
+        assert_eq!(
+            lead["contacts"][0]["field_status"]["person_email"]["status"],
+            "no_match"
+        );
+        assert!(lead["contacts"][1].get("field_status").is_none());
+        // An unbound legacy status is not assigned to anybody.
+        assert!(lead["person_field_status"]["A"]
+            .get("person_telefon")
+            .is_none());
+    }
+
+    #[test]
+    fn person_field_status_is_accepted_in_result_and_hoisted_from_the_top_level() {
+        let result: ResearchWritebackResult = serde_json::from_value(serde_json::json!({
+            "fields": {}, "person_records": [], "evidence": [],
+            "person_field_status": {"A": {"person_email": {"status": "no_match", "reason": "x"}}}
+        }))
+        .expect("result with person_field_status");
+        assert_eq!(
+            result.person_field_status["A"]["person_email"]["status"],
+            "no_match"
+        );
+        let hoisted = hoist_top_level_field_entries(serde_json::json!({
+            "record_id": "r", "field_status": {},
+            "person_field_status": {"A": {"person_email": {"status": "no_match", "reason": "x"}}}
+        }));
+        assert_eq!(
+            hoisted["result"]["person_field_status"]["A"]["person_email"]["reason"],
+            "x"
+        );
+        assert!(hoisted["result"]
+            .get("fields")
+            .map_or(true, |fields| fields.get("A").is_none()));
     }
 
     #[test]
