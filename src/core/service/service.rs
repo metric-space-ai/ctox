@@ -9207,8 +9207,18 @@ fn run_completion_review(
     conversation_id: i64,
     _mission_state: Option<&lcm::MissionStateRecord>,
 ) -> CompletionReviewDisposition {
-    match command_writeback_failure(root, job) {
-        Ok(Some(summary)) => {
+    let writeback_probe = match command_writeback_probe(root, job) {
+        Ok(probe) => probe,
+        Err(error) => {
+            return CompletionReviewDisposition::TerminalQueueFailure {
+                summary: format!(
+                    "Business command writeback evidence could not be verified: {error}"
+                ),
+            };
+        }
+    };
+    match command_writeback_failure_from_probe(&writeback_probe) {
+        Some(summary) => {
             // A research turn that ended right before its writeback ("JSON ist
             // valide. Jetzt der Writeback.", CHT and Cilag on thesen,
             // 23.09.2026, after 1-2 h of finished research) is not a failed
@@ -9229,14 +9239,7 @@ fn run_completion_review(
             }
             return CompletionReviewDisposition::TerminalQueueFailure { summary };
         }
-        Ok(None) => {}
-        Err(error) => {
-            return CompletionReviewDisposition::TerminalQueueFailure {
-                summary: format!(
-                    "Business command writeback evidence could not be verified: {error}"
-                ),
-            }
-        }
+        None => {}
     }
     let owner_visible = derive_owner_visible_for_review(&job.source_label);
     let db_path = crate::paths::core_db(&root);
@@ -9285,8 +9288,13 @@ fn run_completion_review(
         })
         .unwrap_or_default();
     let required_deliverables = founder_required_deliverables;
-    let deterministic_evidence =
-        collect_review_evidence_summaries(root, job, conversation_id, &artifact_attachments);
+    let deterministic_evidence = collect_review_evidence_summaries(
+        root,
+        job,
+        conversation_id,
+        &artifact_attachments,
+        &writeback_probe,
+    );
     let founder_commitments = if email_reply_action.is_some() || proactive_founder_action.is_some()
     {
         detect_founder_mail_commitments(reply_text)
@@ -11810,8 +11818,9 @@ fn collect_review_evidence_summaries(
     job: &QueuedPrompt,
     conversation_id: i64,
     artifact_attachments: &[String],
+    writeback_probe: &CommandWritebackProbe,
 ) -> Vec<String> {
-    let mut evidence = Vec::new();
+    let mut evidence = command_writeback_review_evidence(writeback_probe);
     if is_systematic_research_job(job) {
         match systematic_research_validation_receipt_path(job) {
             Some(path) => match std::fs::read_to_string(&path)
@@ -24846,7 +24855,13 @@ mod tests {
             r#"{"status":"pass","checked_at":"2026-07-18T00:00:00Z","manifests":[{"manifest_sha256":"abc"}]}"#,
         )
         .unwrap();
-        let evidence = collect_review_evidence_summaries(&root, &job, 1, &[]);
+        let evidence = collect_review_evidence_summaries(
+            &root,
+            &job,
+            1,
+            &[],
+            &CommandWritebackProbe::NotRequired,
+        );
         assert!(evidence.iter().any(
             |line| line.contains("Systematic research validator receipt")
                 && line.contains("status=pass")
