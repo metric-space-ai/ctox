@@ -6658,6 +6658,7 @@ var QUERY_RATE_LIMIT_RETRY_MS = 100;
 var QUERY_RATE_LIMIT_RETRIES = 16;
 var QUERY_PEER_RETRY_MS = 250;
 var QUERY_PEER_RETRIES = 24;
+var QUERY_ACK_TIMEOUT_RETRIES = 1;
 var AUTHORIZED_PEER_WAIT_TIMEOUT_MS = 6e4;
 var QUERY_PEER_WAIT_POLL_MS = 100;
 var QUERY_FETCH_REQUEST_TIMEOUT_MS = 45e3;
@@ -7002,12 +7003,13 @@ function createDemandLoadingTransport({
       } catch (error) {
         const peerUnavailable = isRetryableQueryPeerUnavailable(error);
         const rateLimited = isRetryableQueryRateLimited(error);
-        const retryLimit = peerUnavailable ? QUERY_PEER_RETRIES : rateLimited ? QUERY_RATE_LIMIT_RETRIES : QUERY_STREAM_LIMIT_RETRIES;
+        const ackTimeout = isQueryAckTimeout(error);
+        const retryLimit = ackTimeout ? QUERY_ACK_TIMEOUT_RETRIES : peerUnavailable ? QUERY_PEER_RETRIES : rateLimited ? QUERY_RATE_LIMIT_RETRIES : QUERY_STREAM_LIMIT_RETRIES;
         if (!isRetryableQueryFetch(error) || attempt >= retryLimit) {
           throw error;
         }
         attempt += 1;
-        const retryDelayMs = peerUnavailable ? QUERY_PEER_RETRY_MS : rateLimited ? QUERY_RATE_LIMIT_RETRY_MS : QUERY_STREAM_LIMIT_RETRY_MS;
+        const retryDelayMs = peerUnavailable || ackTimeout ? QUERY_PEER_RETRY_MS : rateLimited ? QUERY_RATE_LIMIT_RETRY_MS : QUERY_STREAM_LIMIT_RETRY_MS;
         await delay4(retryDelayMs * attempt);
       }
     }
@@ -7048,7 +7050,7 @@ function createDemandLoadingTransport({
     return Boolean(error?.retryable) && (code === "STREAM_LIMIT_EXCEEDED" || message.includes("STREAM_LIMIT_EXCEEDED"));
   }
   function isRetryableQueryFetch(error) {
-    return isRetryableQueryStreamLimit(error) || isRetryableQueryRateLimited(error) || isRetryableQueryPeerUnavailable(error);
+    return isRetryableQueryStreamLimit(error) || isRetryableQueryRateLimited(error) || isQueryAckTimeout(error) || isRetryableQueryPeerUnavailable(error);
   }
   function isRetryableQueryRateLimited(error) {
     const code = String(error?.code || "");
@@ -7057,7 +7059,10 @@ function createDemandLoadingTransport({
   }
   function isRetryableQueryPeerUnavailable(error) {
     const message = String(error?.message || "");
-    return message === "PEER_UNAVAILABLE" || /WebRTC peer .* is not open/.test(message) || message.includes("Timed out waiting for WebRTC response rxdb.query.fetch");
+    return message === "PEER_UNAVAILABLE" || /WebRTC peer .* is not open/.test(message);
+  }
+  function isQueryAckTimeout(error) {
+    return String(error?.message || "").includes("Timed out waiting for WebRTC response rxdb.query.fetch");
   }
   function delay4(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -13518,6 +13523,12 @@ var CtoxRxQuery = class _CtoxRxQuery {
       demandOptions.signal = this.signal;
       docs = await demandLoader.resolveQuery(this.query, demandOptions);
     } else if (isControlPlaneStatusCollection(this.collection.name)) {
+      if (this.query.requireRevision) {
+        throw Object.assign(new Error("QUERY_GENERATION_REQUIRED: strict demand read has no loader"), {
+          code: "QUERY_GENERATION_REQUIRED",
+          retryable: false
+        });
+      }
       docs = [];
     } else if (typeof this.collection.storageCollection.queryDocuments === "function") {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {
@@ -13536,6 +13547,13 @@ var CtoxRxQuery = class _CtoxRxQuery {
       }
     }
     if (isControlPlaneStatusCollection(this.collection.name) && demandLoader !== this.collection.demandLoader) {
+      if (this.query.requireRevision) {
+        throw Object.assign(new Error("QUERY_CANCELLED: generation-replaced"), {
+          code: "QUERY_CANCELLED",
+          retryable: false,
+          generationChanged: true
+        });
+      }
       docs = [];
     }
     const wrapped = docs.map((doc) => new CtoxRxDocument(this.collection, doc));
