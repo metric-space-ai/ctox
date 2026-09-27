@@ -22,18 +22,21 @@ workspace destination. Authenticated sources need typed secret-store resolution.
 Do not expose this local CLI as a remote command without the existing native policy
 gate and source/destination authorization.
 
-The private `runtime/transfers/staging/ID/payload` and engine `.aria2` control file
-hold resumable input. Content length is checked before allocation and enforced on
+The private `runtime/transfers/staging/ID/source-N/payload` and engine `.aria2`
+control file hold resumable input independently for each source. Content length is checked before allocation and enforced on
 writes. SHA-256 and length are checked before publishing `objects/SHA256`; files
 and directories are flushed before a receipt commits. An interrupted publication
 is recovered by re-verifying the object. Existing objects are never overwritten.
 Receipts identify content and engine revision; they grant no execution authority.
 
-The pinned engine chooses one reachable source and uses one connection per job.
-All candidate URLs are bound to the same caller-supplied expected content identity;
-no receipt is emitted for a mismatching source. Parallel multi-source assembly and
-mid-stream source failover are not implemented by this adapter yet. A partial
-resume is never considered verified until the final complete digest matches.
+The adapter tries each source once per attempt using one engine connection.
+All candidate URLs bind to the same caller-supplied content identity. Unreachable,
+truncated, wrong-length or wrong-hash sources fall through to the next mirror;
+partial bytes are never mixed between sources. Completed rejected payloads are
+quarantined so explicit resume can retry repaired sources. Quarantine is bounded
+at sixteen rejected payloads per source, then requires operator cleanup. Only a
+complete verified source can produce a receipt. Parallel multi-source assembly
+remains open. An accepted cancellation cannot be reversed by a late pause/resume.
 
 ## Engine source and limits
 
@@ -62,8 +65,8 @@ Workjet owns move/continue UX. A directory transfer is not a resumed harness run
 ## Verification and remaining work
 
 `tests/download.rs` exercises real loopback HTTP, durable receipt/reopen/idempotency,
-wrong hashes/lengths, exclusive worker ownership, pause/resume and publication-crash
-recovery. Run with two test workers via the shared admission gate on the Mac:
+wrong hashes/lengths, exclusive worker ownership, pause/resume, terminal cancellation,
+mirror isolation/failover, rejected-prefix recovery and publication-crash recovery. Run with two test workers via the shared admission gate on the Mac:
 
 ```
 cargo test --manifest-path src/core/transfers/Cargo.toml -j 2 -- --test-threads=2
@@ -73,5 +76,5 @@ The first implementation is unverified until that suite and native integration
 checks have executed. Directory durability is implemented for Unix only; Windows
 activation explicitly fails instead of issuing an unproven durable receipt.
 No platform is claimed accepted yet. Native command/progress projection through
-CTOX Sync, peer capability-scoped requests, peer interruption/resume, source
-failover, Git worktree integration and DevOps two-host acceptance remain open.
+CTOX Sync, peer capability-scoped requests, peer interruption/resume, parallel
+multi-source assembly, Git worktree integration and DevOps two-host acceptance remain open.

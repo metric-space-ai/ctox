@@ -172,10 +172,10 @@ impl Store {
                 } else {
                     "paused"
                 };
-                c.execute("UPDATE ctox_transfer_jobs SET desired=?2, state=CASE WHEN state='running' THEN state ELSE ?3 END, updated_at=unixepoch() WHERE id=?1 AND state NOT IN ('completed','cancelled')", params![id, action, state])?;
+                c.execute("UPDATE ctox_transfer_jobs SET desired=?2, state=CASE WHEN state='running' THEN state ELSE ?3 END, updated_at=unixepoch() WHERE id=?1 AND desired!='cancel' AND state NOT IN ('completed','cancelled')", params![id, action, state])?;
             }
             "resume" => {
-                c.execute("UPDATE ctox_transfer_jobs SET desired='run', state=CASE WHEN state='running' THEN state ELSE 'queued' END,error_code=NULL,updated_at=unixepoch() WHERE id=?1 AND state IN ('paused','failed','running')", [id])?;
+                c.execute("UPDATE ctox_transfer_jobs SET desired='run', state=CASE WHEN state='running' THEN state ELSE 'queued' END,error_code=NULL,updated_at=unixepoch() WHERE id=?1 AND desired!='cancel' AND state IN ('paused','failed','running')", [id])?;
             }
             _ => bail!("expected pause, resume or cancel"),
         }
@@ -199,6 +199,7 @@ impl Store {
         Ok(Worker {
             store: self.clone(),
             _lease: lease,
+            run_gate: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -214,11 +215,19 @@ impl Store {
 pub struct Worker {
     store: Store,
     _lease: File,
+    run_gate: tokio::sync::Mutex<()>,
+}
+
+enum SourceOutcome {
+    Ready(PathBuf),
+    Interrupted,
+    Failed,
 }
 
 impl Worker {
     /// One bounded attempt. Failed jobs require explicit resume; no unbounded retries.
     pub async fn run_next(&self, stop: &AtomicBool) -> Result<bool> {
+        let _run = self.run_gate.lock().await;
         if stop.load(Ordering::Acquire) {
             return Ok(false);
         }
@@ -247,17 +256,64 @@ impl Worker {
     async fn download(&self, request: &DownloadRequest, stop: &AtomicBool) -> Result<()> {
         let staging = self.store.artifacts.join("staging").join(&request.id);
         private_directory(&staging)?;
-        let partial = staging.join("payload");
-        regular_or_absent(&partial)?;
-        regular_or_absent(&staging.join("payload.aria2"))?;
         let object = self.store.artifacts.join("objects").join(&request.sha256);
         // Recover publication-before-receipt crashes without redownloading, but never trust existence.
         if object.try_exists()? {
             verify_file(&object, request)?;
-            if partial.try_exists()? {
-                fs::remove_file(&partial)?;
-            }
             return self.publish_receipt(request, &object, stop);
+        }
+        for (source_index, source) in request.sources.iter().enumerate() {
+            let source_dir = staging.join(format!("source-{source_index}"));
+            private_directory(&source_dir)?;
+            match self
+                .download_source(request, source, &source_dir, stop)
+                .await?
+            {
+                SourceOutcome::Ready(partial) => {
+                    File::open(&partial)?.sync_all()?;
+                    // Mirrors never share writable partial bytes.
+                    match fs::hard_link(&partial, &object) {
+                        Ok(()) => sync_directory(object.parent().unwrap())?,
+                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                            verify_file(&object, request)?
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
+                    fs::remove_file(&partial)?;
+                    sync_directory(&source_dir)?;
+                    return self.publish_receipt(request, &object, stop);
+                }
+                SourceOutcome::Interrupted => return self.settle_interruption(&request.id),
+                SourceOutcome::Failed => continue,
+            }
+        }
+        bail!("all sources failed identity or transport validation")
+    }
+
+    fn settle_interruption(&self, id: &str) -> Result<()> {
+        self.store.connection()?.execute("UPDATE ctox_transfer_jobs SET state=CASE desired WHEN 'cancel' THEN 'cancelled' WHEN 'pause' THEN 'paused' ELSE 'queued' END,updated_at=unixepoch() WHERE id=?1 AND state='running'", [id])?;
+        Ok(())
+    }
+
+    async fn download_source(
+        &self,
+        request: &DownloadRequest,
+        source: &str,
+        staging: &Path,
+        stop: &AtomicBool,
+    ) -> Result<SourceOutcome> {
+        if stop.load(Ordering::Acquire) || self.store.desired(&request.id)? != "run" {
+            return Ok(SourceOutcome::Interrupted);
+        }
+        let partial = staging.join("payload");
+        regular_or_absent(&partial)?;
+        regular_or_absent(&staging.join("payload.aria2"))?;
+        // A complete rejected download must never become the next resume prefix.
+        if partial.try_exists()? && fs::metadata(&partial)?.len() >= request.size {
+            if verify_file(&partial, request).is_ok() {
+                return Ok(SourceOutcome::Ready(partial));
+            }
+            quarantine_partial(staging)?;
         }
         let mut opts = OptionSet::with_defaults();
         for (key, value) in [
@@ -281,11 +337,10 @@ impl Worker {
             opts.set(key, value);
         }
         opts.set("ctox-expected-length", request.size.to_string());
-        opts.set("checksum", format!("sha-256={}", request.sha256));
         let progress = HttpProgress::new();
         let (cancel, receive) = watch::channel(false);
         let download = http::download(HttpJob {
-            uris: request.sources.clone(),
+            uris: vec![source.to_owned()],
             dest: partial.clone(),
             opts,
             progress: progress.clone(),
@@ -312,26 +367,16 @@ impl Worker {
         // Single-connection mode has no detached range writers; auto-save task is disabled.
         if interrupted || stop.load(Ordering::Acquire) || self.store.desired(&request.id)? != "run"
         {
-            self.store.connection()?.execute("UPDATE ctox_transfer_jobs SET state=CASE desired WHEN 'cancel' THEN 'cancelled' WHEN 'pause' THEN 'paused' ELSE 'queued' END,updated_at=unixepoch() WHERE id=?1", [&request.id])?;
-            return Ok(());
+            return Ok(SourceOutcome::Interrupted);
         }
-        result.map_err(|_| anyhow::anyhow!("engine failed"))?;
-        verify_file(&partial, request)?;
-        File::open(&partial)?.sync_all()?;
-        // No clobber: immutable hash objects are never replaced. Concurrent cancellation and
-        // activation are ordered by the SQLite write transaction in publish_receipt.
-        match fs::hard_link(&partial, &object) {
-            Ok(()) => sync_directory(object.parent().unwrap())?,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                verify_file(&object, request)?
-            }
-            Err(e) => return Err(e.into()),
+        if result.is_err() {
+            return Ok(SourceOutcome::Failed);
         }
-        // Remove the writable alias before committing a receipt. The verified object remains
-        // recoverable even if cancellation wins or the daemon dies before its SQLite commit.
-        fs::remove_file(&partial)?;
-        sync_directory(&staging)?;
-        self.publish_receipt(request, &object, stop)
+        if verify_file(&partial, request).is_err() {
+            quarantine_partial(staging)?;
+            return Ok(SourceOutcome::Failed);
+        }
+        Ok(SourceOutcome::Ready(partial))
     }
 
     fn publish_receipt(
@@ -365,6 +410,31 @@ impl Worker {
         tx.commit()?;
         Ok(())
     }
+}
+
+fn quarantine_partial(staging: &Path) -> Result<()> {
+    let partial = staging.join("payload");
+    // A bounded set of rejected inputs is retained, never silently overwritten.
+    // Exhaustion needs operator cleanup rather than unbounded disk growth.
+    for index in 0..16 {
+        let rejected = staging.join(format!("rejected-{index}"));
+        match fs::hard_link(&partial, &rejected) {
+            Ok(()) => {
+                fs::remove_file(&partial)?;
+                let control = staging.join("payload.aria2");
+                match fs::remove_file(control) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
+                }
+                sync_directory(staging)?;
+                return Ok(());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e.into()),
+        }
+    }
+    bail!("rejected transfer storage requires operator cleanup")
 }
 
 fn private_directory(path: &Path) -> Result<()> {

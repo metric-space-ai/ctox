@@ -18,6 +18,9 @@ struct Source {
 }
 impl Source {
     fn new(body: Vec<u8>, delay: Duration) -> Self {
+        Self::with_cut(body, delay, None)
+    }
+    fn with_cut(body: Vec<u8>, delay: Duration, cut_after: Option<usize>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/artifact", listener.local_addr().unwrap());
         listener.set_nonblocking(true).unwrap();
@@ -51,6 +54,13 @@ impl Source {
                     let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n", body.len());
                     continue;
                 }
+                if body.is_empty() {
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    continue;
+                }
                 let range = text.lines().find_map(|l| {
                     l.to_lowercase()
                         .strip_prefix("range: bytes=")
@@ -71,7 +81,8 @@ impl Source {
                     continue;
                 }
                 let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n", end-start+1, body.len());
-                for bytes in body[start..=end].chunks(4096) {
+                let delivered_end = cut_after.map(|n| (start + n - 1).min(end)).unwrap_or(end);
+                for bytes in body[start..=delivered_end].chunks(4096) {
                     if stopped.load(Ordering::Acquire) || stream.write_all(bytes).is_err() {
                         break;
                     }
@@ -106,6 +117,125 @@ fn open(temp: &tempfile::TempDir) -> Store {
         temp.path().join("transfers"),
     )
     .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn empty_content_has_a_verified_durable_receipt() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = Source::new(Vec::new(), Duration::ZERO);
+    let store = open(&temp);
+    store
+        .enqueue(request("empty", source.url.clone(), b""))
+        .unwrap();
+    store
+        .worker()
+        .unwrap()
+        .run_next(&AtomicBool::new(false))
+        .await
+        .unwrap();
+    let result = store.get("empty").unwrap();
+    assert_eq!(result.state, "completed", "{result:?}");
+    assert_eq!(result.receipt.unwrap().size, 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unreachable_wrong_and_truncated_mirrors_fall_through_without_mixing_bytes() {
+    let temp = tempfile::tempdir().unwrap();
+    let body = vec![0x63; 180_000];
+    let wrong = Source::new(vec![0x64; body.len()], Duration::ZERO);
+    let truncated = Source::with_cut(vec![0x65; body.len()], Duration::ZERO, Some(1024));
+    let good = Source::new(body.clone(), Duration::ZERO);
+    let store = open(&temp);
+    let mut req = request("mirrors", good.url.clone(), &body);
+    req.sources = vec![
+        "http://127.0.0.1:1/unavailable".into(),
+        wrong.url.clone(),
+        truncated.url.clone(),
+        good.url.clone(),
+    ];
+    store.enqueue(req).unwrap();
+    store
+        .worker()
+        .unwrap()
+        .run_next(&AtomicBool::new(false))
+        .await
+        .unwrap();
+    let result = store.get("mirrors").unwrap();
+    assert_eq!(result.state, "completed", "{result:?}");
+    let object = temp
+        .path()
+        .join("transfers")
+        .join(result.receipt.unwrap().artifact);
+    assert_eq!(std::fs::read(object).unwrap(), body);
+    let rejected = temp
+        .path()
+        .join("transfers/staging/mirrors/source-1/rejected-0");
+    assert_eq!(std::fs::read(rejected).unwrap(), vec![0x64; body.len()]);
+    assert!(temp
+        .path()
+        .join("transfers/staging/mirrors/source-2/payload")
+        .exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rejected_complete_partial_does_not_poison_explicit_resume() {
+    let temp = tempfile::tempdir().unwrap();
+    let body = vec![0x63; 80_000];
+    let good = Source::new(body.clone(), Duration::ZERO);
+    let store = open(&temp);
+    store
+        .enqueue(request("retry", good.url.clone(), &body))
+        .unwrap();
+    let staging = temp.path().join("transfers/staging/retry/source-0");
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::write(staging.join("payload"), vec![0x64; body.len()]).unwrap();
+    let connection = rusqlite::Connection::open(temp.path().join("ctox.sqlite3")).unwrap();
+    connection
+        .execute(
+            "UPDATE ctox_transfer_jobs SET state='failed' WHERE id='retry'",
+            [],
+        )
+        .unwrap();
+    store.control("retry", "resume").unwrap();
+    store
+        .worker()
+        .unwrap()
+        .run_next(&AtomicBool::new(false))
+        .await
+        .unwrap();
+    assert_eq!(store.get("retry").unwrap().state, "completed");
+    assert!(staging.join("rejected-0").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn accepted_running_cancel_cannot_be_revived_by_pause_or_resume() {
+    let temp = tempfile::tempdir().unwrap();
+    let body = vec![0x63; 1_000_000];
+    let source = Source::new(body.clone(), Duration::from_millis(4));
+    let store = open(&temp);
+    store
+        .enqueue(request("cancel-running", source.url.clone(), &body))
+        .unwrap();
+    let worker = store.worker().unwrap();
+    let stop = AtomicBool::new(false);
+    let control = async {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert_eq!(
+            store.control("cancel-running", "cancel").unwrap().state,
+            "running"
+        );
+        store.control("cancel-running", "pause").unwrap();
+        store.control("cancel-running", "resume").unwrap();
+    };
+    let (result, ()) = tokio::join!(worker.run_next(&stop), control);
+    result.unwrap();
+    let result = store.get("cancel-running").unwrap();
+    assert_eq!(result.state, "cancelled");
+    assert!(result.receipt.is_none());
+    assert_eq!(
+        store.control("cancel-running", "resume").unwrap().state,
+        "cancelled"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -171,7 +301,7 @@ async fn wrong_identity_and_size_never_publish() {
     );
     assert!(!temp
         .path()
-        .join("transfers/staging/wrongsize/payload")
+        .join("transfers/staging/wrongsize/source-0/payload")
         .exists());
 }
 
