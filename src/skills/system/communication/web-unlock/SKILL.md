@@ -26,7 +26,7 @@ Trigger this skill when any of the following observable signals appear during no
 4. **A skill or worker explicitly reports a bot-detection block** (HTTP 403/429 with bot-related body, "Just a moment..." Cloudflare page, "Access Denied" Akamai, etc.).
 5. **Routine regression check** — invoked by maintenance or by the owner to verify the stealth stack still holds after upstream Patchright / detection-site updates.
 
-Do not invoke for: provider rate limits (separate path), legitimate access denials (the site doesn't want you), TLS-only fingerprinting (structurally not solvable in userland — see the structural-limits section below).
+Do not invoke for: provider rate limits (separate path), **a site that simply requires a sign-in** — if the target carries a `credential_ref`, sign in with that stored credential (see `universal-scraping`, section "Authenticated targets", and the research skill's unblocking section); this skill is for bot detection, not for missing logins —, legitimate access denials (the site doesn't want you), TLS-only fingerprinting (structurally not solvable in userland — see the structural-limits section below).
 
 ## What this skill knows
 

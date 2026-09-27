@@ -16,6 +16,7 @@ pub mod decision_hub;
 mod desktop_files;
 mod domain_effect;
 mod external_sql_sync;
+mod guest_commands;
 mod guest_runtime;
 pub(crate) mod harness_cockpit;
 mod hashing;
@@ -30,10 +31,13 @@ mod module_manifest_loader;
 pub mod office_cli;
 pub mod office_engine;
 pub(crate) mod office_staging_repair;
+mod outbound_update_digest;
 mod person_research_command;
 mod person_research_gap_closure;
 pub mod policy;
 mod project_chats;
+mod project_crew;
+pub(crate) use project_crew::project_crew_member_for_task;
 mod rxdb_peer;
 mod rxdb_peer_browser;
 mod rxdb_peer_business_data;
@@ -43,6 +47,7 @@ mod rxdb_peer_desktop_files;
 mod rxdb_peer_domain_recovery;
 mod rxdb_peer_intake;
 mod rxdb_peer_intake_state;
+mod rxdb_peer_knowledge_rows;
 mod rxdb_peer_projections;
 mod rxdb_peer_tombstones;
 mod rxdb_peer_workjet_devices;
@@ -90,6 +95,7 @@ pub fn audit_customer_apps(root: &std::path::Path) -> anyhow::Result<serde_json:
     }))
 }
 pub(crate) use browser_runtime::BrowserSessionAutomationRequest;
+pub use outbound_update_digest::tick as outbound_update_digest_tick;
 pub use rxdb_peer::enqueue_business_command_document;
 pub use rxdb_peer::native_peer_status;
 pub use rxdb_peer::repair_optional_rxdb_collection_schema_drift;

@@ -245,3 +245,33 @@ test('real Linux owned-child CPU sampling resolves symbols', { skip: requirePerf
     }
   }
 });
+
+
+test('verbose recorder diagnostics retain a bounded terminal error without accepting failure', async t => {
+  const outputPrefix = temporary(t);
+  let reports = 0;
+  const { completion } = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0 }, {
+    platform: 'linux', readStart: () => 10,
+    spawnRecord(executable, args) {
+      assert.ok(args.includes('--verbose'));
+      const recorder = fakeRecorder(outputPrefix + '.perf.data');
+      setImmediate(() => {
+        recorder.stderr.write('x'.repeat(40000));
+        recorder.stderr.write("couldn't open /proc/4343/status\n");
+        recorder.exitCode = 255;
+        recorder.emit('close', 255, null);
+      });
+      return recorder;
+    },
+    async runReport() { reports++; throw new Error('failed recording must not be accepted'); },
+  });
+  const result = await completion;
+  assert.equal(result.available, false);
+  assert.equal(result.reason, 'perf-record-failed');
+  assert.equal(result.recordCode, 255);
+  assert.equal(result.recordStderr.length, 16384);
+  assert.equal(result.recordStderrTail.length, 16384);
+  assert.ok(result.recordStderrTail.endsWith("couldn't open /proc/4343/status\n"));
+  assert.equal(result.recordStderrTruncated, true);
+  assert.equal(reports, 0);
+});

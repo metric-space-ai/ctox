@@ -703,7 +703,10 @@ export function initBusinessChat({
     state.preCollapseExpandedChatIds = [];
     touchChats(state, [chat]);
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
-    await persistChatState({ state, db });
+    await persistExternalChatOpen(
+      () => persistChatState({ state, db, onRemoteError: detail.onOpenPersistError }),
+      detail.onOpenPersistError,
+    );
     if (!ownsChatOpenOwnership(state, presentationTicket)) return;
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
   };
@@ -4978,7 +4981,26 @@ function isChatLocallyDeleted(state, chat) {
   return !remoteUpdatedAt || deletedAt >= remoteUpdatedAt;
 }
 
-async function persistChatState({ state, db, remote = true }) {
+async function persistExternalChatOpen(persist, onError) {
+  try {
+    await persist();
+    return true;
+  } catch (error) {
+    console.warn?.('[business-chat] chat-open persistence failed', error);
+    reportChatOpenPersistenceError(onError, error);
+    return false;
+  }
+}
+
+function reportChatOpenPersistenceError(onError, error) {
+  try {
+    onError?.(error);
+  } catch (notificationError) {
+    console.error?.('[business-chat] chat-open error notification failed', notificationError);
+  }
+}
+
+async function persistChatState({ state, db, remote = true, onRemoteError = null }) {
   const now = Date.now();
   const ownedChats = state.chats.filter((item) => isOwnedChat(item, state.ownerUserId));
   for (const chat of ownedChats) {
@@ -5001,15 +5023,16 @@ async function persistChatState({ state, db, remote = true }) {
       ? chat.scheduledAttachmentsByCommand
       : {},
   }));
-  scheduleChatRemotePersistence(collection, docs);
+  scheduleChatRemotePersistence(collection, docs, onRemoteError);
 }
 
-function scheduleChatRemotePersistence(collection, docs) {
+function scheduleChatRemotePersistence(collection, docs, onError = null) {
   const timerApi = typeof window !== 'undefined' ? window : globalThis;
   const run = () => {
     persistChatDocsRemote(collection, docs).catch((error) => {
       if (isVolatileChatPersistenceError(error)) return;
       console.warn?.('[business-chat] chat persistence failed', error);
+      reportChatOpenPersistenceError(onError, error);
     });
   };
   if (typeof timerApi.setTimeout === 'function') {
@@ -7483,11 +7506,12 @@ ${CREW_CREATURE_BASE_CSS}
         display: none !important;
       }
       .ctox-chat-strip {
-        flex: 0 1 auto !important;
-        min-width: 0 !important;
+        flex: 0 0 auto !important;
+        min-width: 48px !important;
+        width: max-content !important;
       }
       .ctox-chat-dock.has-many-chats .ctox-chat-strip {
-        flex: 1 1 auto !important;
+        flex: 1 0 auto !important;
       }
       .ctox-chat-busy-panel {
         width: calc(100vw - 36px) !important;
@@ -8071,12 +8095,21 @@ ${CREW_CREATURE_BASE_CSS}
     .ctox-chat-dock {
       /* Two 24px day arrows, a 30px calendar, gaps, padding and border. */
       --ctox-date-pill-width: 88px;
+      /* Resolve shell theme here, before chips introduce category tokens. */
+      --ctox-dock-control-accent: var(--accent);
+      --ctox-dock-control-accent-soft: var(--accent-soft);
       grid-template-columns: max-content var(--ctox-date-pill-width) 36px;
       gap: 6px;
       padding: 5px;
-      border-color: color-mix(in srgb, var(--line) 48%, transparent);
+      border-color: var(--line);
       border-radius: 16px;
-      background: var(--surface);
+      background: var(--surface-2);
+    }
+    /* In side/mobile flex layout, scroll controls at their intended size
+       instead of shrinking the date pill, its arrows or the chat switcher. */
+    .ctox-chat-dock > :is(.ctox-chat-date-pill, .ctox-chat-nav, .ctox-chat-new),
+    .ctox-chat-date-pill > .ctox-date-nav-btn {
+      flex-shrink: 0;
     }
     .ctox-chat-dock.has-visible-chats {
       grid-template-columns: max-content var(--ctox-date-pill-width) minmax(48px, auto) 36px;
@@ -8094,6 +8127,7 @@ ${CREW_CREATURE_BASE_CSS}
       gap: 6px;
       /* Reserve the full overlapping member row, including all six portraits. */
       width: max-content;
+      flex-shrink: 0;
       min-width: 108px;
       height: 42px;
       padding: 0 8px;
@@ -8297,6 +8331,47 @@ ${CREW_CREATURE_BASE_CSS}
     }
     .ctox-chat-overflow-chip span,
     .ctox-chat-overflow-chip small { display: none !important; }
+    /* Dock contrast: use opaque shell surfaces, not the app behind the dock.
+       Keep creature/status colors intact; brighten only control chrome. */
+    .ctox-chat-dock .ctox-chat-date-pill {
+      border-color: var(--muted);
+      background: var(--surface);
+    }
+    .ctox-chat-dock .ctox-chat-chip:not(.is-active),
+    .ctox-chat-dock :is(.ctox-chat-fab, .ctox-date-nav-btn, .ctox-date-picker-trigger, .ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip) {
+      color: var(--text-strong);
+      background: var(--surface);
+    }
+    .ctox-chat-dock .ctox-chat-chip:not(.is-active),
+    .ctox-chat-dock :is(.ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip) {
+      border-color: var(--muted);
+    }
+    .ctox-chat-dock .ctox-date-picker-trigger svg {
+      color: currentColor;
+    }
+    .ctox-chat-dock :is(.ctox-chat-fab, .ctox-date-nav-btn, .ctox-date-picker-trigger, .ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip):not(:disabled):not([aria-disabled="true"]):hover {
+      color: var(--text-strong);
+      background: var(--surface-3);
+    }
+    .ctox-chat-dock :is(.ctox-chat-fab, .ctox-date-nav-btn, .ctox-date-picker-trigger, .ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip):not(:disabled):not([aria-disabled="true"]):active,
+    .ctox-chat-dock .ctox-chat-chip.is-active {
+      color: var(--text-strong);
+      background: var(--ctox-dock-control-accent-soft);
+      border-color: var(--ctox-dock-control-accent);
+    }
+    .ctox-chat-dock :is(button, [role="button"], [tabindex]):focus-visible {
+      /* A solid accent outline stays visible beside the translucent kit ring. */
+      outline: 2px solid var(--ctox-dock-control-accent);
+      outline-offset: -2px;
+      box-shadow: var(--focus-ring);
+    }
+    .ctox-chat-dock :is(button, [role="button"]):is(:disabled, [aria-disabled="true"]) {
+      color: var(--muted);
+      background: var(--surface-2);
+      border-color: var(--line);
+      opacity: 1;
+    }
+    /* End dock contrast. */
     /* The dock has two deliberately opposite geometries. Keep these final
        state rules after all compact/theme overrides so a later generic dock
        rule cannot stretch the collapsed controls or cap the expanded strip. */
@@ -9179,7 +9254,9 @@ export const __businessChatTestInternals = Object.freeze({
   stopCrewProceduralMotion,
   syncCrewProceduralMotion,
   persistChatDocsRemote,
+  persistExternalChatOpen,
   persistChatState,
+  scheduleChatRemotePersistence,
   schedulerDelayMs,
   setAttrIfChanged,
   setClassNameIfChanged,

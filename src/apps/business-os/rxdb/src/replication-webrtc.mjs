@@ -37,14 +37,28 @@ import {
   CTOX_PRESENCE_CAPABILITY,
   CTOX_PRESENCE_RPC,
   CTOX_QUERY_FETCH_CAPABILITY,
+  CTOX_ROWS_FETCH_CAPABILITY,
 } from './protocol-contract.generated.mjs';
 import { createDemandLoadingTransport } from './demand-loading-transport.mjs';
 import { createQueryDemandLoader } from './query-demand-loader.mjs';
 import { createFileDemandLoader } from './file-demand-loader.mjs';
+import { createRowsDemandLoader } from './rows-demand-loader.mjs';
 import { QueryMetaStorage } from './query-meta-storage.mjs';
 import { createIndexedDbMetaBackend } from './query-meta-backend-indexeddb.mjs';
 import { createMemoryMetaBackend } from './query-meta-backend-memory.mjs';
 import { getActiveCollectionRegistry } from './active-collections.mjs';
+
+// Weak object identities let a generation token include the actual negotiated
+// handshake and peer connection object without leaking their contents.
+const GENERATION_OBJECT_IDS = new WeakMap();
+let nextGenerationObjectId = 0;
+function generationObjectId(value) {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) return String(value || '');
+  if (!GENERATION_OBJECT_IDS.has(value)) {
+    GENERATION_OBJECT_IDS.set(value, `obj-${nextGenerationObjectId += 1}`);
+  }
+  return GENERATION_OBJECT_IDS.get(value);
+}
 import { getPresenceRegistry } from './presence.mjs';
 import { threeWayMergeDocuments } from './conflict-merge.mjs';
 import {
@@ -117,6 +131,12 @@ export function remoteSupportsQueryFetch(remoteProtocol) {
   const flag = remoteProtocol.v1_5?.queryDemandLoadingEnabled;
   if (flag === false) return false;
   return true;
+}
+
+export function remoteSupportsRowsFetch(remoteProtocol) {
+  if (!remoteProtocol || typeof remoteProtocol !== 'object') return false;
+  const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
+  return capabilities.includes(CTOX_ROWS_FETCH_CAPABILITY);
 }
 
 export function getConnectionHandlerSimplePeer({ signalingServerUrl, config } = {}) {
@@ -1098,6 +1118,10 @@ class CtoxWebRtcReplicationState {
     this.canceled$ = new CtoxSubject(false);
     this.peerStates$ = new CtoxSubject(new Map());
     this.transportStatus$ = new CtoxSubject({});
+    // Authority readiness is deliberately narrower than active$: it means the
+    // negotiated peer can fetch and this collection actually installed its
+    // loader for this generation.
+    this.queryReady$ = new CtoxSubject(null);
     // Demand-only collections have no checkpoint pull to run when the native
     // peer announces a master change. Expose that hint so bounded consumers
     // can immediately issue their exact authoritative query instead of
@@ -1141,15 +1165,118 @@ class CtoxWebRtcReplicationState {
     this.readPermissionDigest = '';
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
+    this.knowledgeRowsLoader = null;
     this.demandStatus = createV1_5StatusState();
     this.schemaHashValue = null;
     this.peerReadyPromisesByPeer = new Map();
+    this.queryReadyAttempt = null;
   }
 
   get peer() {
     return this.shared?.peer || null;
   }
 
+  collectionQueryGenerationToken(peerId = this.activeRemotePeerId) {
+    const negotiated = this.shared?.negotiated || null;
+    if (!negotiated || negotiated.peerId !== peerId) return '';
+    const connection = this.shared?.peer?.connections?.get?.(peerId) || null;
+    if (!this.shared?.isPeerOpen?.(peerId)) return '';
+
+    // Authority identity is the native database/collection state, not the
+    // browser-side RTC objects. Signaling can rebuild a connection and repeat
+    // the handshake for the same native peer session while a strict read is
+    // awaiting its turn; that transport renewal must not manufacture
+    // QUERY_CANCELLED: generation-replaced. If an older peer does not provide
+    // every required stable authority input (native session, storage
+    // generation, collection checkpoint and schema), retain conservative
+    // object-identity fencing.
+    const remoteProtocol = negotiated.remoteProtocol || null;
+    const peerSessionId = String(remoteProtocol?.peerSession?.sessionId || '').trim();
+    const storageGeneration = String(remoteProtocol?.storageGeneration || '').trim();
+    const collectionProtocol = this.shared.remoteProtocolForCollection?.(
+      remoteProtocol,
+      this.collection?.name,
+    ) || remoteProtocol;
+    const checkpointEpoch = String(collectionProtocol?.checkpoint?.epoch || '').trim();
+    const schemaHash = String(
+      collectionProtocol?.collection?.schemaHash
+        || remoteProtocol?.collectionSchemas?.[this.collection?.name]?.schemaHash
+        || '',
+    ).trim();
+    const authority = peerSessionId && storageGeneration
+      && checkpointEpoch && schemaHash
+      ? {
+        peerSessionId,
+        storageGeneration,
+        checkpointEpoch,
+        schemaHash,
+      }
+      : {
+        negotiatedObjectId: generationObjectId(negotiated),
+        connectionObjectId: generationObjectId(connection),
+      };
+    return JSON.stringify({
+      databaseName: this.collection?.storageCollection?.databaseName || '',
+      collectionName: this.collection?.name || '',
+      schemaVersion: this.collection?.schema?.version ?? null,
+      shared: generationObjectId(this.shared),
+      peerId,
+      authority,
+    });
+  }
+
+  publishQueryReady(peerId) {
+    if (this.cancelled) return;
+    const generation = this.collectionQueryGenerationToken(peerId);
+    const loaderIsCurrent = this.demandLoader
+      && this.collection?.demandLoader === this.demandLoader;
+    if (!generation || !loaderIsCurrent) return;
+    this.demandStatus.queryDemandReadyGeneration = generation;
+    this.queryReady$.next(generation);
+  }
+
+  async awaitQueryReady(timeoutMs = 15_000) {
+    const budgetMs = Math.max(250, Number(timeoutMs) || 15_000);
+    const subscriptions = [];
+    let timer = null;
+    try {
+      return await new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (fn, value) => {
+          if (settled) return;
+          settled = true;
+          fn(value);
+        };
+        const inspect = () => {
+          if (settled) return;
+          if (this.cancelled) return finish(reject, new Error('WebRTC replication cancelled'));
+          const negotiated = this.shared?.negotiated || null;
+          if (!negotiated) return;
+          if (!negotiated.queryFetchCapable) {
+            return finish(reject, new Error(`Native WebRTC peer lacks ${CTOX_QUERY_FETCH_CAPABILITY}`));
+          }
+          const generation = this.collectionQueryGenerationToken(negotiated.peerId);
+          if (!generation) return;
+          if (this.demandStatus.queryDemandReadyGeneration === generation) {
+            return finish(resolve, generation);
+          }
+          // runPeerReady owns enableDemandLoading. Starting it here would race
+          // with that lifecycle path and could construct two sidecars.
+        };
+        subscriptions.push(this.queryReady$?.subscribe?.(inspect));
+        subscriptions.push(this.peerStates$?.subscribe?.(inspect));
+        inspect();
+        timer = setTimeout(() => {
+          finish(reject, new Error(`Native query readiness exceeded ${budgetMs}ms`));
+        }, budgetMs);
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+      for (const subscription of subscriptions) {
+        try { subscription?.unsubscribe?.(); } catch {}
+      }
+    }
+  }
   async requestNative(method, params = {}, options = {}) {
     if (this.cancelled) throw new Error('WebRTC replication state is cancelled');
     const negotiated = await this.shared?.ensureNegotiatedPeer?.();
@@ -1192,7 +1319,11 @@ class CtoxWebRtcReplicationState {
         timeoutMs,
       );
     }
-    return this.peer.request(negotiated.peerId, String(method || ''), [params], timeoutMs, this.collection);
+    // The frame's `collection` field is the collection NAME. Passing the
+    // RxCollection object made the native peer drop every such frame, so each
+    // `ctox.outbound.sellify_lookup.v1` ran into its caller's timeout while the
+    // same request with the name answered in under a second (THESEN 26.09.2026).
+    return this.peer.request(negotiated.peerId, String(method || ''), [params], timeoutMs, this.collection?.name || null);
   }
 
   async start(connectionHandlerCreator) {
@@ -1385,9 +1516,10 @@ class CtoxWebRtcReplicationState {
     this.peerStates$.next(peerStates);
     this.active$.next(true);
     this.transportStatus$.next(this.decorateTransportStatus(this.shared?.getTransportStatus?.() || this.transportStatus$.getValue?.() || {}));
-    if (queryFetchCapable && !this.demandLoaderActive) {
+    if (queryFetchCapable) {
       try {
         await this.enableDemandLoading();
+        this.publishQueryReady?.(peerId);
       } catch (error) {
         this.error$.next(error);
       }
@@ -2100,13 +2232,18 @@ class CtoxWebRtcReplicationState {
     }
     try { this.demandLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
     try { this.demandFileLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
+    try { this.knowledgeRowsLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
     try { this.demandSidecar?.stopEvictionScheduler?.(); } catch {}
     try { this.multiTabBroker?.close?.(); } catch {}
     try { await this.demandSidecar?.close?.(); } catch {}
     this.demandLoader = null;
     this.demandFileLoader = null;
+    this.knowledgeRowsLoader = null;
     this.multiTabBroker = null;
     this.demandLoaderActive = false;
+    this.demandStatus.queryDemandReadyGeneration = null;
+    this.queryReadyAttempt = null;
+    this.queryReady$?.next?.(null);
   }
 
   /// V1.5 production wiring: build the sidecar + query demand loader and attach
@@ -2131,6 +2268,7 @@ class CtoxWebRtcReplicationState {
       }
       this.demandLoader = null;
       this.demandFileLoader = null;
+      this.knowledgeRowsLoader = null;
       this.demandLoaderActive = true;
       return null;
     }
@@ -2213,7 +2351,12 @@ class CtoxWebRtcReplicationState {
       requestCancel: ({ requestId, reason }) => demandTransport.requestQueryCancel({ requestId, reason }),
       status: this.demandStatus,
       multiTabBroker: this.multiTabBroker,
+      queryGeneration: () => this.collectionQueryGenerationToken(this.activeRemotePeerId),
       replicationOrigin: demandReplicationOrigin,
+      // SYNC-12: live provider — runPeerReady recomputes this digest at every
+      // handshake, so a same-session role/grant change takes effect at the
+      // next control-plane read without rebuilding the loader.
+      readPermissionDigest: () => this.readPermissionDigest || '',
     }) : null;
     if (typeof this.collection.setDemandLoader === 'function') {
       this.collection.setDemandLoader(this.demandLoader);
@@ -2238,6 +2381,8 @@ class CtoxWebRtcReplicationState {
         demandTransport.requestFileCancel({ requestId, reason }),
       status: this.demandStatus,
     }) : null;
+
+    this.knowledgeRowsLoader = knowledgeRowsLoaderForState(this, demandTransport);
 
     this.demandLoaderActive = true;
     this.demandStatus.queryDemandLoadingActive = queryDemandEnabled || fileDemandEnabled;
@@ -2315,8 +2460,11 @@ class CtoxWebRtcReplicationState {
     this.pushCheckpointsByPeer.delete(peerId);
     this.peerStates$.next(peerStates);
     this.publishTransportStatus();
+    this.demandStatus.queryDemandReadyGeneration = null;
+    this.queryReady$?.next?.(null);
     try { this.demandLoader?.abortAllInFlight?.(`peer-${reason}`); } catch {}
     try { this.demandFileLoader?.abortAllInFlight?.(`peer-${reason}`); } catch {}
+    try { this.knowledgeRowsLoader?.abortAllInFlight?.(`peer-${reason}`); } catch {}
     try { this.shared?.abortPeerRequests?.(peerId, reason); } catch {}
     if (!peerStates.size) {
       this.demandStatus.peerConnected = false;
@@ -2955,6 +3103,25 @@ function shouldAttachQueryDemandLoader(collectionName = '') {
 
 function shouldAttachFileDemandLoader(collectionName = '') {
   return String(collectionName || '') !== 'desktop_file_chunks';
+}
+
+function knowledgeRowsLoaderForState(state, demandTransport) {
+  if (String(state?.collection?.name || '') !== 'knowledge_tables') return null;
+  if (typeof demandTransport?.fetchRows !== 'function') return null;
+  if (!remoteSupportsRowsFetch(rowsRemoteProtocol(state))) return null;
+  return createRowsDemandLoader({
+    transport: demandTransport,
+    collectionName: 'knowledge_tables',
+  });
+}
+
+function rowsRemoteProtocol(state) {
+  const peerId = state?.activeRemotePeerId || state?.shared?.negotiated?.peerId || '';
+  const fromPeer = peerId
+    ? state?.peerStates$?.getValue?.()?.get?.(peerId)?.remoteProtocol
+    : null;
+  if (fromPeer) return fromPeer;
+  return state?.shared?.negotiated?.remoteProtocol || null;
 }
 
 function shouldAttachFileDemandLoaderBeforeCollectionHandshake(collectionName = '') {

@@ -1137,3 +1137,592 @@ test('seeded research task demands per-source evaluation and consolidation', asy
   assert.match(contractDoc, /`claims` table/);
   assert.match(contractDoc, /claim_support/);
 });
+
+const CATALOG_DOMAIN = 'drone_bearing_design_verified';
+const CATALOG_SNAPSHOT_HASH = `sha256:${'1'.repeat(64)}`;
+const CATALOG_LINEAGE = Object.freeze({
+  source_id: 'SRC-1',
+  snapshot_id: 'snap-1',
+  snapshot_path: 'runtime/snapshots/source-1.html',
+  retrieved_at: '2026-07-17T00:00:00Z',
+  url_role: 'original_content',
+  content_scope: 'full_text',
+  snapshot_hash: CATALOG_SNAPSHOT_HASH,
+  canonical_url: 'https://example.test/source-1',
+});
+
+function catalogKnowledgeDocument({
+  id,
+  tableId,
+  domain,
+  tableKey,
+  rowCount,
+  hash,
+  title = tableKey,
+  chunkCount = 4,
+}) {
+  const payload = {
+    id,
+    logical_table_id: id,
+    table_id: tableId,
+    domain,
+    table_key: tableKey,
+    title,
+    projection_version: 2,
+    rows_source: 'rxdb.rows.fetch',
+    rows_complete: true,
+    row_count: rowCount,
+    content_hash: hash,
+    chunk_count: chunkCount,
+  };
+  return { ...payload, payload };
+}
+
+function verifiedCatalogSourceRow() {
+  return {
+    ...CATALOG_LINEAGE,
+    evidence_id: 'EVID-1',
+    title: 'Verified propeller source',
+    source_url: 'https://example.test/source-1',
+    verification_status: 'verified',
+    transport_verified: true,
+    content_extracted: true,
+    actual_full_text_or_data: true,
+    evidence_eligible: true,
+    http_status: 200,
+    evidence_relevance_score: 9,
+    source_tier: 'A',
+    source_type: 'dataset',
+  };
+}
+
+function catalogMeasurementRow(index) {
+  return {
+    ...CATALOG_LINEAGE,
+    evidence_id: `EVID-M-${index + 1}`,
+    measurement_id: `MLP-${index + 1}`,
+    force_N: 1,
+    rpm: 100,
+  };
+}
+
+function matchesKnowledgeSelector(document, selector = {}) {
+  return Object.entries(selector).every(([key, expected]) => {
+    if (Object.prototype.hasOwnProperty.call(document, key) && document[key] !== undefined) {
+      return document[key] === expected;
+    }
+    const payload = document?.payload;
+    return Boolean(payload) && payload[key] === expected;
+  });
+}
+
+function fakeKnowledgeCollection(documents, lookups, writes) {
+  return {
+    find({ selector } = {}) {
+      const docs = documents.filter((document) => matchesKnowledgeSelector(document, selector));
+      return { exec: async () => docs.map((document) => ({ toJSON: () => document })) };
+    },
+    findOne(id) {
+      lookups.push(id);
+      const document = documents.find((entry) => entry.id === id) || null;
+      return { exec: async () => (document ? { toJSON: () => document } : null) };
+    },
+    upsert(doc) {
+      writes.push(doc);
+      throw new Error('knowledge rows must stay out of the collection');
+    },
+    insert(doc) {
+      writes.push(doc);
+      throw new Error('knowledge rows must stay out of the collection');
+    },
+  };
+}
+
+function installKnowledgeRowsHarness({ documents, loader, lookups = [], writes = [] }) {
+  globalThis.window = globalThis;
+  hooks.resetKnowledgeRowsForTest();
+  hooks.setStateForTest({
+    ctx: {
+      host: null,
+      db: {
+        collection(name) {
+          return name === 'knowledge_tables'
+            ? fakeKnowledgeCollection(documents, lookups, writes)
+            : null;
+        },
+      },
+      permissions: {
+        canReadCollection: () => true,
+        canWriteCollection: () => false,
+      },
+      sync: {
+        async startCollection(name) {
+          if (name !== 'knowledge_tables') return null;
+          return { state: { knowledgeRowsLoader: loader } };
+        },
+      },
+    },
+    tasks: [],
+    knowledgeBases: [],
+    selectedTaskId: '',
+    sourceRows: [],
+    measurementRows: [],
+    sourceModels: [],
+    rowLimitWarnings: [],
+    chunkDiagnostics: [],
+  });
+}
+
+function restoreKnowledgeRowsHarness() {
+  hooks.resetKnowledgeRowsForTest();
+  hooks.setStateForTest({
+    ctx: null,
+    tasks: [],
+    knowledgeBases: [],
+    selectedTaskId: '',
+    selectedSourceId: '',
+    candidateRows: [],
+    candidateModels: [],
+    sourceRows: [],
+    curatedRows: [],
+    claimRows: [],
+    evidenceRows: [],
+    measurementRows: [],
+    derivedMeasurementRows: [],
+    graphNodeRows: [],
+    graphEdgeRows: [],
+    sourceModels: [],
+    graphProjection: null,
+    rowLimitWarnings: [],
+    chunkDiagnostics: [],
+    diagnostics: {
+      collections: {},
+      reloadStartedAt: 0,
+      reloadFinishedAt: 0,
+      reloadCount: 0,
+      postSyncRefreshes: 0,
+      failureRetries: 0,
+      failureRetryAt: 0,
+      loadedOnce: false,
+    },
+  });
+}
+
+function deferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((next, fail) => {
+    resolve = next;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+async function waitUntil(predicate, timeoutMs = 2000) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error('timed out waiting for catalog row fetch');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+test('catalog tables do not generate chunk document ids', () => {
+  assert.deepEqual(hooks.knowledgeTableChunkDocumentIds([
+    catalogKnowledgeDocument({
+      id: 'table:kdt-measurements',
+      tableId: 'kdt-measurements',
+      domain: CATALOG_DOMAIN,
+      tableKey: 'measured_load_points',
+      rowCount: 5103,
+      hash: 'hash-5103',
+      chunkCount: 9,
+    }),
+    {
+      id: 'table:sources',
+      payload: {
+        logical_table_id: 'table:sources',
+        chunk_index: 0,
+        chunk_count: 3,
+      },
+    },
+  ]), [
+    'table:sources:chunk:0001',
+    'table:sources:chunk:0002',
+  ]);
+});
+
+test('catalog knowledge tables load every row without the chunk cap', async () => {
+  const rowCount = 5103;
+  const calls = [];
+  const lookups = [];
+  const writes = [];
+  const sourceDoc = catalogKnowledgeDocument({
+    id: 'table:kdt-sources',
+    tableId: 'kdt-sources',
+    domain: CATALOG_DOMAIN,
+    tableKey: 'source_catalog',
+    rowCount: 1,
+    hash: 'hash-sources',
+    title: 'Source catalog',
+  });
+  const measurementDoc = catalogKnowledgeDocument({
+    id: 'table:kdt-measurements',
+    tableId: 'kdt-measurements',
+    domain: CATALOG_DOMAIN,
+    tableKey: 'measured_load_points',
+    rowCount,
+    hash: 'hash-5103',
+    title: 'Measured load points',
+  });
+  const sourceRow = verifiedCatalogSourceRow();
+  const task = {
+    id: 'task-catalog-rows',
+    knowledge_domain: CATALOG_DOMAIN,
+    title: 'Catalog row load',
+    prompt: 'bearing loads propeller rpm thrust',
+    source_catalog_key: 'source_catalog',
+    measurements_table_key: 'measured_load_points',
+    payload: {},
+  };
+  installKnowledgeRowsHarness({
+    documents: [sourceDoc, measurementDoc],
+    lookups,
+    writes,
+    loader: {
+      async fetchAllRows(tableId) {
+        calls.push(tableId);
+        if (tableId === 'kdt-sources') {
+          return { rows: [sourceRow], rowCount: 1, contentHash: 'hash-sources' };
+        }
+        if (tableId === 'kdt-measurements') {
+          return {
+            rows: Array.from({ length: rowCount }, (_, index) => catalogMeasurementRow(index)),
+            rowCount,
+            contentHash: 'hash-5103',
+          };
+        }
+        throw new Error(`unexpected table ${tableId}`);
+      },
+    },
+  });
+
+  try {
+    const bases = await hooks.loadKnowledgeBases({ domains: [CATALOG_DOMAIN] });
+    const measurementTable = bases[0].tables.find((table) => table.table_key === 'measured_load_points');
+    const sourceTable = bases[0].tables.find((table) => table.table_key === 'source_catalog');
+    assert.equal(measurementTable.rows.length, rowCount);
+    assert.equal(measurementTable.rows.at(-1).measurement_id, 'MLP-5103');
+    assert.equal(measurementTable.rows_origin, 'rxdb.rows.fetch');
+    assert.equal(sourceTable.rows.length, 1);
+    assert.deepEqual(lookups, []);
+    assert.deepEqual(writes, []);
+    assert.deepEqual(calls, ['kdt-sources', 'kdt-measurements']);
+
+    const models = hooks.buildSourceModels(task, sourceTable.rows, [], measurementTable.rows);
+    assert.equal(models[0].evidenceEligible, true);
+    assert.equal(hooks.aggregateMeasurements(measurementTable.rows, models).get('SRC-1').count, rowCount);
+
+    hooks.setStateForTest({
+      knowledgeBases: bases,
+      tasks: [task],
+      selectedTaskId: task.id,
+      claimRows: [],
+      evidenceRows: [],
+    });
+    hooks.setLoadedOnceForTest();
+    await hooks.loadDashboardData();
+    assert.match(hooks.renderMeasurementsTable(), /Direkte Messwerte <span>5\.103<\/span>/);
+    assert.doesNotMatch(hooks.renderKnowledgeTables(task), /Anzeige auf/);
+
+    await hooks.loadKnowledgeBases({ domains: [CATALOG_DOMAIN] });
+    assert.deepEqual(calls, ['kdt-sources', 'kdt-measurements']);
+    measurementDoc.content_hash = 'hash-5103-b';
+    measurementDoc.payload.content_hash = 'hash-5103-b';
+    const reloaded = await hooks.loadKnowledgeBases({ domains: [CATALOG_DOMAIN] });
+    const reloadedMeasurements = reloaded[0].tables.find((table) => table.table_key === 'measured_load_points');
+    assert.deepEqual(calls, ['kdt-sources', 'kdt-measurements', 'kdt-measurements']);
+    assert.equal(reloadedMeasurements.rows.length, rowCount);
+    assert.deepEqual(lookups, []);
+    assert.deepEqual(writes, []);
+  } finally {
+    restoreKnowledgeRowsHarness();
+  }
+});
+
+test('chunk knowledge tables still load embedded rows without the rows loader', async () => {
+  const lookups = [];
+  const writes = [];
+  const calls = [];
+  const documents = [
+    {
+      id: 'table:measurements',
+      payload: {
+        id: 'table:measurements',
+        logical_table_id: 'table:measurements',
+        domain: 'verified_research',
+        table_key: 'measured_load_points',
+        row_count: 3,
+        chunk_index: 0,
+        chunk_count: 2,
+        rows_complete: true,
+        rows: [{ source_row: 0 }, { source_row: 1 }],
+      },
+    },
+    {
+      id: 'table:measurements:chunk:0001',
+      payload: {
+        id: 'table:measurements:chunk:0001',
+        logical_table_id: 'table:measurements',
+        domain: 'verified_research',
+        table_key: 'measured_load_points',
+        row_count: 3,
+        chunk_index: 1,
+        chunk_count: 2,
+        rows_complete: true,
+        rows: [{ source_row: 2 }],
+      },
+    },
+  ];
+  installKnowledgeRowsHarness({
+    documents,
+    lookups,
+    writes,
+    loader: {
+      async fetchAllRows(tableId) {
+        calls.push(tableId);
+        throw new Error(`chunk table must not use fetchAllRows (${tableId})`);
+      },
+    },
+  });
+
+  try {
+    const bases = await hooks.loadKnowledgeBases({ domains: ['verified_research'] });
+    assert.deepEqual(calls, []);
+    assert.deepEqual(lookups, ['table:measurements:chunk:0001']);
+    assert.deepEqual(writes, []);
+    assert.equal(bases.length, 1);
+    assert.deepEqual(bases[0].tables[0].rows.map((row) => row.source_row), [0, 1, 2]);
+    assert.equal(bases[0].tables[0].chunk_count, 2);
+    assert.equal(bases[0].tables[0].rows_origin, undefined);
+
+    const hybrid = hooks.mergeKnowledgeTableChunks([{
+      id: 'table:hybrid',
+      projection_version: 2,
+      rows_source: 'rxdb.rows.fetch',
+      domain: 'verified_research',
+      table_key: 'measured_load_points',
+      chunk_index: 0,
+      chunk_count: 1,
+      row_count: 1,
+      rows: [{ source_row: 7 }],
+    }]);
+    assert.deepEqual(hybrid[0].rows, [{ source_row: 7 }]);
+    assert.equal(hybrid[0].rows_origin, undefined);
+  } finally {
+    restoreKnowledgeRowsHarness();
+  }
+});
+
+test('a retryable rows error stays on that table and leaves the rest of the dashboard', async () => {
+  const lookups = [];
+  const writes = [];
+  const sourceDoc = catalogKnowledgeDocument({
+    id: 'table:kdt-sources',
+    tableId: 'kdt-sources',
+    domain: CATALOG_DOMAIN,
+    tableKey: 'source_catalog',
+    rowCount: 1,
+    hash: 'hash-sources',
+    title: 'Source catalog',
+  });
+  const measurementDoc = catalogKnowledgeDocument({
+    id: 'table:kdt-measurements',
+    tableId: 'kdt-measurements',
+    domain: CATALOG_DOMAIN,
+    tableKey: 'measured_load_points',
+    rowCount: 4,
+    hash: 'hash-measurements',
+    title: 'Measured load points',
+  });
+  const task = {
+    id: 'task-catalog-error',
+    knowledge_domain: CATALOG_DOMAIN,
+    title: 'Catalog row error',
+    prompt: 'bearing loads',
+    source_catalog_key: 'source_catalog',
+    measurements_table_key: 'measured_load_points',
+    payload: {},
+  };
+  installKnowledgeRowsHarness({
+    documents: [sourceDoc, measurementDoc],
+    lookups,
+    writes,
+    loader: {
+      async fetchAllRows(tableId) {
+        if (tableId === 'kdt-measurements') {
+          const error = new Error('Parquet-Fenster fehlgeschlagen');
+          error.retryable = true;
+          error.code = 'ROWS_SOURCE_ERROR';
+          throw error;
+        }
+        return { rows: [verifiedCatalogSourceRow()], rowCount: 1, contentHash: 'hash-sources' };
+      },
+    },
+  });
+
+  try {
+    const bases = await hooks.loadKnowledgeBases({ domains: [CATALOG_DOMAIN] });
+    const sourceTable = bases[0].tables.find((table) => table.table_key === 'source_catalog');
+    const measurementTable = bases[0].tables.find((table) => table.table_key === 'measured_load_points');
+    assert.equal(sourceTable.rows.length, 1);
+    assert.equal(measurementTable.rows, undefined);
+    hooks.setStateForTest({
+      knowledgeBases: bases,
+      tasks: [task],
+      selectedTaskId: task.id,
+    });
+    hooks.setLoadedOnceForTest();
+    await hooks.loadDashboardData();
+
+    const states = hooks.knowledgeTableRowStates();
+    assert.equal(states['table:kdt-measurements'].phase, 'error');
+    assert.equal(states['table:kdt-measurements'].retryable, true);
+    assert.equal(states['table:kdt-sources'], undefined);
+    const banner = hooks.renderKnowledgeTableRowStates();
+    assert.match(banner, /data-table-id="table:kdt-measurements"/);
+    assert.match(banner, /data-row-state="error"/);
+    assert.match(banner, /Parquet-Fenster fehlgeschlagen/);
+    assert.match(banner, /Erneut versuchen/);
+    assert.doesNotMatch(banner, /table:kdt-sources/);
+    assert.match(hooks.renderSourcesTable(), /Verified propeller source/);
+    assert.match(hooks.renderMeasurementsTable(), /Direkte Messwerte <span>0<\/span>/);
+    assert.deepEqual(lookups, []);
+    assert.deepEqual(writes, []);
+  } finally {
+    restoreKnowledgeRowsHarness();
+  }
+});
+
+test('a domain change aborts in-flight catalog fetchAllRows', async () => {
+  const lookups = [];
+  const writes = [];
+  const calls = [];
+  const started = deferred();
+  const documents = [
+    catalogKnowledgeDocument({
+      id: 'table:kdt-a',
+      tableId: 'kdt-a',
+      domain: 'domain-a',
+      tableKey: 'measured_load_points',
+      rowCount: 1,
+      hash: 'hash-a',
+      title: 'Domain A',
+    }),
+    catalogKnowledgeDocument({
+      id: 'table:kdt-b',
+      tableId: 'kdt-b',
+      domain: 'domain-b',
+      tableKey: 'measured_load_points',
+      rowCount: 0,
+      hash: 'hash-b',
+      title: 'Domain B',
+    }),
+  ];
+  installKnowledgeRowsHarness({
+    documents,
+    lookups,
+    writes,
+    loader: {
+      async fetchAllRows(tableId, { signal } = {}) {
+        calls.push({ tableId, signal });
+        if (tableId !== 'kdt-a') {
+          return { rows: [], rowCount: 0, contentHash: 'hash-b' };
+        }
+        started.resolve();
+        await new Promise((resolve, reject) => {
+          const cancel = () => {
+            const error = new Error('ROWS_CANCELLED: domain-change');
+            error.name = 'AbortError';
+            error.code = 'ROWS_CANCELLED';
+            reject(error);
+          };
+          if (signal?.aborted) {
+            cancel();
+            return;
+          }
+          signal?.addEventListener('abort', cancel, { once: true });
+        });
+        return { rows: [{ source_id: 'SRC-1' }], rowCount: 1, contentHash: 'hash-a' };
+      },
+    },
+  });
+
+  try {
+    const first = hooks.loadKnowledgeBases({ domains: ['domain-a'] });
+    await started.promise;
+    assert.equal(hooks.knowledgeTableRowStates()['table:kdt-a'].phase, 'loading');
+    const second = hooks.loadKnowledgeBases({ domains: ['domain-b'] });
+    const [basesA, basesB] = await Promise.all([first, second]);
+    assert.equal(calls[0].tableId, 'kdt-a');
+    assert.equal(calls[0].signal.aborted, true);
+    assert.equal(basesA[0].tables[0].rows, undefined);
+    assert.equal(basesB[0].domain, 'domain-b');
+    assert.deepEqual(basesB[0].tables[0].rows, []);
+    assert.equal(hooks.knowledgeTableRowStates()['table:kdt-a'], undefined);
+    assert.deepEqual(lookups, []);
+    assert.deepEqual(writes, []);
+  } finally {
+    restoreKnowledgeRowsHarness();
+  }
+});
+
+test('catalog row fetches stay at three tables in flight', async () => {
+  const lookups = [];
+  const writes = [];
+  let active = 0;
+  let maxActive = 0;
+  const releases = [];
+  const documents = [1, 2, 3, 4].map((index) => catalogKnowledgeDocument({
+    id: `table:kdt-${index}`,
+    tableId: `kdt-${index}`,
+    domain: 'domain-pool',
+    tableKey: `measured_load_points_${index}`,
+    rowCount: 1,
+    hash: `hash-${index}`,
+    title: `Table ${index}`,
+  }));
+  installKnowledgeRowsHarness({
+    documents,
+    lookups,
+    writes,
+    loader: {
+      async fetchAllRows(tableId) {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => {
+          releases.push(resolve);
+        });
+        active -= 1;
+        return { rows: [{ tableId }], rowCount: 1, contentHash: `hash-${tableId.slice(-1)}` };
+      },
+    },
+  });
+
+  try {
+    const pending = hooks.loadKnowledgeBases({ domains: ['domain-pool'] });
+    await waitUntil(() => releases.length >= 3);
+    assert.equal(releases.length, 3);
+    assert.equal(maxActive, 3);
+    releases[0]();
+    await waitUntil(() => releases.length === 4);
+    assert.equal(maxActive, 3);
+    releases.slice(1).forEach((release) => release());
+    const bases = await pending;
+    assert.equal(bases[0].tables.length, 4);
+    assert.equal(bases[0].tables.every((table) => table.rows.length === 1), true);
+    assert.deepEqual(lookups, []);
+    assert.deepEqual(writes, []);
+  } finally {
+    restoreKnowledgeRowsHarness();
+  }
+});
