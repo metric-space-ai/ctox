@@ -35132,6 +35132,19 @@ Business OS command:
             result_from_worker_attempt(&recovered)?,
             "Saved partial research result"
         );
+        // Queue re-leasing does not advance the command aggregate. Mirror the
+        // canonical context-loading transitions before restoring its result.
+        for phase in ["leased", "running"] {
+            assert!(channels::transition_business_command_for_task(
+                &root,
+                &job.leased_message_keys[0],
+                phase,
+                None,
+                None,
+                None,
+                "fixture recovery of saved partial result",
+            )?);
+        }
         channels::persist_business_command_worker_result(
             &root,
             &job.leased_message_keys[0],
