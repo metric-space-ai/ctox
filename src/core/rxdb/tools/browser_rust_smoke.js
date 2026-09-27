@@ -8288,7 +8288,9 @@ function ensureCtoxSmokeBinary() {
               const contiguous = demandChunks.length > 0
                 && demandChunks.every((chunk, index) => Number(chunk.sequence) === index);
               if (contiguous) {
-                const payload = atob(demandChunks.map((chunk) => chunk.bytesBase64 ?? chunk.bytes_base64 ?? '').join(''));
+                // Demand frames encode their own byte slices. Padding in an
+                // intermediate frame is valid; decode before joining bytes.
+                const payload = demandChunks.map((chunk) => atob(chunk.bytesBase64 ?? chunk.bytes_base64 ?? '')).join('');
                 lastSeen = {
                   file,
                   chunks: demandChunks,

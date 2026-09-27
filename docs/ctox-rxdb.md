@@ -125,6 +125,17 @@ registry or default-installed flags, copies apps directly into installed state,
 or treats a merely accepted command as a completed installation. This setup
 requires real browser/native execution before claiming the UI regression passed.
 
+The launch-mode smoke recognizes requested apps in Shell-V2 desktop windows,
+without relying on the obsolete CTOX status text. Visible shell remains bounded
+to3000ms; fully healthy typed advanced status and the requested visible app must
+arrive within the existing70000ms readiness window. Early shell paint alone is
+not readiness. Failure diagnostics omit launch/session configuration.
+
+Demand-file smoke payloads decode each independently Base64-encoded frame before
+joining the decoded bytes. Padding in intermediate frames is valid; malformed
+frames still fail. Native stored-chunk integrity does not establish browser
+transport, viewer or restart acceptance; those require actual execution.
+
 ### Desktop pin hydration
 
 The shell may paint UI-only defaults before Sync starts. Cached pin state is
