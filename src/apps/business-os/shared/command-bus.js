@@ -622,6 +622,7 @@ function pushConfirmationRemainsPending(error, bridges) {
   // specific command id rather than only the leader flush attempt.
   if ((bridges || []).some((bridge) => syncBridgeFromHandle(bridge)?.mode === 'follower')) return false;
   const code = cleanContextText(error?.code);
+  if (error?.terminal === true || code === 'ctox_replication_push_rejected') return false;
   return ![
     'ctox_rxdb_schema_hash_mismatch',
     'idempotency_conflict',

@@ -243,5 +243,30 @@ for (const terminal of [false, true]) {
   assert.deepEqual(collection.documents.get(command.id), original);
 }
 
+// A permanent transport denial is not pending delivery. Preserve the exact
+// immutable local intent and tracking receipt, but reject submission without
+// instructing a caller to issue a new command or hiding the native refusal.
+for (const rejectionKind of ['authorization', 'schema']) {
+  const collection = reactiveCollection();
+  let pushes = 0;
+  const refusal = Object.assign(new Error('Terminal masterWrite rejection'), {
+    code: 'ctox_replication_push_rejected', terminal: true, rejectionKind,
+  });
+  const state = connectedState(async () => { pushes += 1; throw refusal; });
+  const bus = createCommandBus({ db: makeDb(collection), sync: makeSync(state) });
+  const id = 'cmd-terminal-' + rejectionKind;
+  await assert.rejects(
+    bus.submit({ id, module: 'ctox', command_type: 'business_os.test' }),
+    (error) => error === refusal
+      && error.command_id === id
+      && error.receipt?.tracking.command_id === id
+      && error.receipt?.retryable === false
+      && error.receipt?.pushConfirmed === false,
+    'terminal denial must reach the caller with the retained command identity',
+  );
+  assert.equal(pushes, 1, 'no new wire submission after terminal denial');
+  assert.equal(collection.documents.has(id), true, 'retain the original immutable local intent');
+}
+
 console.log('ctox-rxdb command submit atomicity smoke OK');
 process.exit(0);
