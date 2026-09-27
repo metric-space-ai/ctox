@@ -13548,13 +13548,16 @@ mod registry_last_run_detail_tests {
     fn source_test_probe_grant_follows_the_signed_session_and_policy() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let root = temp.path();
-        let (capability, _) =
+        let now = chrono::Utc::now().timestamp_millis();
+        let (admin_capability, _) =
             super::super::store::issue_business_os_capability_token_for_managed_user(
-                root,
-                "operator",
-                "Operator",
-                "admin",
-                chrono::Utc::now().timestamp_millis(),
+                root, "operator", "Operator", "admin", now,
+            )?;
+        // A signed team member (role "user") with no module assignment and no
+        // explicit grant: the session is valid, module policy denies data.write.
+        let (member_capability, _) =
+            super::super::store::issue_business_os_capability_token_for_managed_user(
+                root, "member", "Member", "user", now,
             )?;
         let command = |command_type: &str, client_context: Value| BusinessCommand {
             id: Some("cmd-source-test-grant".to_string()),
@@ -13565,16 +13568,43 @@ mod registry_last_run_detail_tests {
             client_context,
             origin: super::super::store::CommandOrigin::ReplicatedPeer,
         };
-        let granted = outbound_source_test_probe_grant(
-            root,
-            &command(
+        let source_test = |capability: &str| {
+            command(
                 "outbound.research_source.test",
                 serde_json::json!({ "capability_token": capability }),
-            ),
+            )
+        };
+        // Both premises are established through the real session and policy
+        // functions, not assumed from test-root defaults.
+        let policy = |cmd: &BusinessCommand| -> anyhow::Result<(bool, bool)> {
+            let session = super::super::store::rxdb_authenticated_session(root, cmd)?;
+            let decision = super::super::store_policy::module_policy_decision(
+                root,
+                &session,
+                super::super::policy::BusinessOsPermission::DataWrite,
+                &cmd.module,
+            )?;
+            Ok((session.authenticated, decision.allowed))
+        };
+        let admin_command = source_test(&admin_capability);
+        assert_eq!(
+            policy(&admin_command)?,
+            (true, true),
+            "admin: valid signed session, module policy allows data.write"
         );
         assert!(
-            granted.is_some(),
-            "signed admin session with policy gets a grant"
+            outbound_source_test_probe_grant(root, &admin_command).is_some(),
+            "allowed policy on a signed session yields a grant"
+        );
+        let member_command = source_test(&member_capability);
+        assert_eq!(
+            policy(&member_command)?,
+            (true, false),
+            "member: valid signed session, module policy denies data.write"
+        );
+        assert!(
+            outbound_source_test_probe_grant(root, &member_command).is_none(),
+            "a denied policy yields no grant even with a valid session"
         );
         assert!(
             outbound_source_test_probe_grant(
@@ -13600,7 +13630,7 @@ mod registry_last_run_detail_tests {
                 root,
                 &command(
                     "business_os.chat.task",
-                    serde_json::json!({ "capability_token": capability }),
+                    serde_json::json!({ "capability_token": admin_capability }),
                 ),
             )
             .is_none(),
