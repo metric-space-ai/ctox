@@ -10005,6 +10005,9 @@ var SharedRoomPeer = class {
     this.started = false;
     this.peerOpenQueue = Promise.resolve();
     this.negotiated = null;
+    this.peerAuthorities = /* @__PURE__ */ new WeakMap();
+    this.authorityRefreshPromise = null;
+    this.authorityRefreshScopeKey = null;
     this.schemaMismatchCollections = /* @__PURE__ */ new Set();
     this.collectionCatchUps = /* @__PURE__ */ new Map();
     this.collectionCatchUpGenerations = /* @__PURE__ */ new Map();
@@ -10247,7 +10250,7 @@ var SharedRoomPeer = class {
       iceServersRefreshUrl: this.iceServersRefreshUrl,
       refreshIceServers: this.refreshIceServers,
       expectedNativePeerId: this.expectedNativePeerId || "",
-      protocolPayload: async ({ collection, params } = {}) => this.buildProtocolPayload(collection, params),
+      protocolPayload: async ({ peerId, collection, params } = {}) => this.buildProtocolPayload(collection, params, peerId),
       requestHandlers: {
         masterChangesSince: async ({ params, peerId, collection }) => this.routeMasterChangesSince(collection, params, peerId),
         masterWrite: async ({ params, peerId, collection }) => this.routeMasterWrite(collection, params, peerId),
@@ -10400,8 +10403,63 @@ var SharedRoomPeer = class {
       }
     }
   }
-  async buildProtocolPayload(collection, params = []) {
-    return this.buildProtocolPayloadUncached(collection, params);
+  async buildProtocolPayload(collection, params = [], peerId = "") {
+    const connection = this.peer?.connections?.get?.(peerId);
+    const payload = await this.buildProtocolPayloadUncached(collection, params);
+    const authority = await peerAuthorityDescriptor(payload?.peerSession?.capabilityToken);
+    if (this.authorityRefreshScopeKey && authority?.scopeKey !== this.authorityRefreshScopeKey) {
+      throw peerAuthorityError("auth_required", "Peer authority changed account or device scope.");
+    }
+    if (connection && this.peer?.connections?.get?.(peerId) === connection && authority && !this.peerAuthorities.has(connection)) {
+      this.peerAuthorities.set(connection, authority);
+    }
+    return payload;
+  }
+  async ensurePeerAuthority(capabilityToken) {
+    const desired = await peerAuthorityDescriptor(capabilityToken);
+    if (!desired || desired.expiresAtMs <= Date.now()) {
+      throw peerAuthorityError("auth_required", "A current capability is required for peer renewal.");
+    }
+    if (this.authorityRefreshPromise) {
+      if (desired.scopeKey !== this.authorityRefreshScopeKey) {
+        throw peerAuthorityError("auth_required", "Concurrent peer renewal changed account or device scope.");
+      }
+      await this.authorityRefreshPromise;
+      return true;
+    }
+    const peerId = this.negotiated?.peerId;
+    const connection = this.peer?.connections?.get?.(peerId);
+    if (!connection || !this.isPeerOpen(peerId)) {
+      throw peerAuthorityError("native_unavailable", "Peer authority has no current connection.");
+    }
+    const captured = this.peerAuthorities.get(connection);
+    if (!captured) {
+      throw peerAuthorityError("native_unavailable", "Peer authority has no handshake binding.");
+    }
+    if (captured.scopeKey !== desired.scopeKey) {
+      throw peerAuthorityError("auth_required", "A changed account or device requires its own database scope.");
+    }
+    if (captured.permissionKey === desired.permissionKey && captured.expiresAtMs > Date.now()) return false;
+    this.authorityRefreshScopeKey = captured.scopeKey;
+    const refresh = (async () => {
+      this.peer.removeConnection(peerId, "capability-authority-changed");
+      const negotiated = await this.ensureNegotiatedPeer();
+      const replacement = this.peer?.connections?.get?.(negotiated?.peerId);
+      const renewed = replacement && this.peerAuthorities.get(replacement);
+      if (!replacement || replacement === connection || !this.isPeerOpen(negotiated?.peerId) || !renewed || renewed.scopeKey !== captured.scopeKey) {
+        throw peerAuthorityError("native_unavailable", "Peer renewal did not establish a fresh scoped handshake.");
+      }
+      return true;
+    })();
+    this.authorityRefreshPromise = refresh;
+    try {
+      return await refresh;
+    } finally {
+      if (this.authorityRefreshPromise === refresh) {
+        this.authorityRefreshPromise = null;
+        this.authorityRefreshScopeKey = null;
+      }
+    }
   }
   async buildProtocolPayloadUncached(collection, params = []) {
     const registration = collection && this.collections.get(collection) || this.representativeCollection();
@@ -10932,6 +10990,17 @@ var CtoxWebRtcReplicationState = class {
   }
   emitError(error) {
     this.error$.next(error);
+  }
+  async ensurePeerAuthority(capabilityToken) {
+    if (this.cancelled || !this.shared) {
+      throw peerAuthorityError("native_unavailable", "The command bridge has no live shared peer.");
+    }
+    const shared = this.shared;
+    const changed = await shared.ensurePeerAuthority(capabilityToken);
+    if (this.cancelled || this.shared !== shared) {
+      throw peerAuthorityError("native_unavailable", "The command bridge changed during peer renewal.");
+    }
+    return changed;
   }
   async buildProtocolPayload(deviceProofNonce = null) {
     const checkpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
@@ -12286,6 +12355,35 @@ async function resolveDeviceProof(ctox = {}, nonce = null) {
   } catch {
     return null;
   }
+}
+async function peerAuthorityDescriptor(token) {
+  if (typeof token !== "string" || !token.trim()) return null;
+  try {
+    const payload = JSON.parse(base64UrlDecodeToString(token.split(".")[0]));
+    if (typeof payload.uid === "string" && payload.uid && typeof payload.role === "string" && payload.role && Number.isFinite(payload.epoch) && Number.isFinite(payload.exp)) {
+      const scopeKey = JSON.stringify([
+        payload.uid,
+        payload.device_pairing_id || "",
+        payload.device_id || "",
+        payload.cnf?.jkt || ""
+      ]);
+      return {
+        scopeKey,
+        permissionKey: JSON.stringify([scopeKey, payload.role, payload.epoch]),
+        expiresAtMs: payload.exp
+      };
+    }
+  } catch {
+  }
+  const key = "opaque:" + await sha256Hex(token);
+  return { scopeKey: key, permissionKey: key, expiresAtMs: Infinity };
+}
+function peerAuthorityError(code, message) {
+  return Object.assign(new Error(message), {
+    code,
+    retryable: code === "native_unavailable",
+    transient: code === "native_unavailable"
+  });
 }
 function decodeCapabilityTokenClaims(token) {
   if (typeof token !== "string" || !token) return null;
