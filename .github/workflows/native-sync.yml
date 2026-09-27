@@ -180,6 +180,7 @@ jobs:
         run: |
           set -o pipefail
           COMMAND_PLANE_BASELINE_PATH="$RUNNER_TEMP/ctox-browser-proof/command-plane-observability.json" \
+            CTOX_RXDB_BUNDLE_EVIDENCE_DIR="$RUNNER_TEMP/ctox-browser-proof/generated-bundle" \
             node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon \
             | tee "$RUNNER_TEMP/ctox-browser-proof/suite.log"
       - name: Retain browser contract evidence
