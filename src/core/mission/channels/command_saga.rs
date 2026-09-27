@@ -2405,10 +2405,28 @@ fn record_business_command_intake_failure_inner(
     let mut next_projection_version = 1_i64;
     let mut prior_phase = "native_observed".to_string();
     if allow_terminal_failure && exhausted && !idempotency_conflict && !canonical_already_terminal {
+        // A claimed control command is not executed again after an uncertain
+        // handler failure. Later intake attempts can therefore report only a
+        // nonterminal replay. Keep that last observation and the first durable
+        // failure together, without changing replay or retry-budget semantics.
+        let first_error_message: String = tx.query_row(
+            "SELECT error_message FROM business_command_intake_failures
+             WHERE command_id = ?1 AND resolved_at_ms IS NULL
+             ORDER BY attempt ASC LIMIT 1",
+            params![claim.command_id],
+            |row| row.get(0),
+        )?;
+        let terminal_error_message = if first_error_message == error_message {
+            error_message.to_string()
+        } else {
+            format!("{error_message}; first intake failure: {first_error_message}")
+        };
         let failure_result = json!({
             "ok": false,
             "error_code": "native_unavailable",
-            "error_message": error_message,
+            "error_message": terminal_error_message,
+            "first_intake_error": first_error_message,
+            "last_intake_error": error_message,
         });
         if let Some((_, _, phase, _, projection_version)) = canonical.as_ref() {
             prior_phase = phase.clone();
@@ -2425,7 +2443,7 @@ fn record_business_command_intake_failure_inner(
                     attempt,
                     next_projection_version,
                     serde_json::to_string(&failure_result)?,
-                    error_message,
+                    terminal_error_message,
                     now_ms,
                 ],
             )?;
@@ -2448,7 +2466,7 @@ fn record_business_command_intake_failure_inner(
                     attempt,
                     serde_json::to_string(&claim.intent)?,
                     serde_json::to_string(&failure_result)?,
-                    error_message,
+                    terminal_error_message,
                     claim.created_at_ms,
                     now_ms,
                 ],
@@ -2464,7 +2482,9 @@ fn record_business_command_intake_failure_inner(
                 prior_phase,
                 serde_json::to_string(&json!({
                     "attempt": attempt,
-                    "error_message": error_message,
+                    "error_message": terminal_error_message,
+                    "first_intake_error": first_error_message,
+                    "last_intake_error": error_message,
                 }))?,
                 now_ms,
             ],
