@@ -4443,6 +4443,16 @@ mod tests {
             ("CTO_EMAIL_FOLDER".into(), "sent".into()),
         ]);
         crate::inference::runtime_env::save_runtime_env_map(root, &global)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis() as i64;
+        crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+            root,
+            "lena-owner",
+            "Lena Owner",
+            "user",
+            now,
+        )?;
         upsert_account(
             root,
             EmailAccountConfig {

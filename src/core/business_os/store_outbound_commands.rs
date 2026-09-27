@@ -2744,19 +2744,31 @@ fn outbound_apply_research_adapter_scrape_effect(
     // A test observes the active registry revision. Registering the bundled
     // template here can silently replace a tenant's specialized script.
     let registration = if command_type == "outbound.research_source.test" {
-        scrape::registered_target_summary(root, &target_key).map(|target| {
+        scrape::registered_target_summary(root, &target_key).and_then(|target| {
+            // First use still needs a native target/workspace before generation.
+            // Existing targets must remain untouched by a source test.
+            if target.is_none() {
+                return outbound_register_research_scrape_target(
+                    root,
+                    adapter_payload,
+                    record,
+                    adapter_id,
+                    source_id,
+                    &target_key,
+                );
+            }
             let script_revision_no = target
                 .as_ref()
                 .and_then(|value| value.get("latest_script_revision_no"))
                 .and_then(Value::as_i64);
-            serde_json::json!({
+            Ok(serde_json::json!({
                 "ok": true,
                 "target_key": target_key,
                 "registered_from": "existing_registry",
                 "script_registered": script_revision_no.is_some(),
                 "script_revision_no": script_revision_no,
                 "script_sha256": target.as_ref().and_then(|value| value.get("latest_script_sha256")),
-            })
+            }))
         })
     } else {
         outbound_register_research_scrape_target(
@@ -7635,6 +7647,7 @@ mod tests {
         let mut record = adapter.clone();
         record["id"] = serde_json::json!("adapter_novel");
         record["payload"] = serde_json::json!({});
+        assert!(scrape::registered_target_summary(root, "novel-example")?.is_none());
         let first = outbound_apply_research_adapter_scrape_effect(
             root,
             &command,
@@ -7664,10 +7677,16 @@ mod tests {
                 .and_then(Value::as_str),
             Some("novel-example")
         );
+        let registered_target = scrape::registered_target_summary(root, "novel-example")?
+            .context("first use registered the generation target")?;
+        assert!(registered_target["latest_script_revision_no"].is_null());
+        let mut stale_adapter = adapter.clone();
+        stale_adapter["target_manifest"]["start_url"] = serde_json::json!("https://stale.example/");
+        stale_adapter["target_manifest"]["config"] = serde_json::json!({"stale": true});
         let second = outbound_apply_research_adapter_scrape_effect(
             root,
             &command,
-            &adapter,
+            &stale_adapter,
             "adapter_novel",
             "novel.example",
             &mut record,
@@ -7676,6 +7695,12 @@ mod tests {
         assert_eq!(
             first["generation_task"]["task_id"],
             second["generation_task"]["task_id"]
+        );
+        assert_eq!(
+            scrape::registered_target_summary(root, "novel-example")?
+                .context("target retained after repeated first use")?,
+            registered_target,
+            "a repeated source test must not replace the registered manifest"
         );
         // Stand in for the bounded harness's generated artifact; register through
         // the same native scrape command that the existing daemon relay dispatches.
@@ -7703,7 +7728,7 @@ mod tests {
             &mut record,
         )
         .context("registered execution")?;
-        assert_eq!(result["registered_from"], "runtime_sqlite");
+        assert_eq!(result["registered_from"], "existing_registry");
         assert!(result.get("generation_task").is_none());
         assert_eq!(result["test"]["status"], "succeeded");
         assert_eq!(result["test"]["records_found"], 1);

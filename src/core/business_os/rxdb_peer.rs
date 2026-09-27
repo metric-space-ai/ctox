@@ -14448,8 +14448,14 @@ pub(in crate::business_os) mod tests {
         });
         let (collections, failures) = database.add_collections_tolerant(creators).await?;
         assert!(failures.is_empty(), "{failures:?}");
-        assert_eq!(collections.len(), 4);
-        for name in ["ctox_harness_events", "ctox_harness_status", "ctox_runs"] {
+        assert_eq!(collections.len(), 6);
+        for name in [
+            "ctox_harness_events",
+            "ctox_harness_status",
+            "ctox_runs",
+            "ctox_crew_members",
+            "ctox_crew_learnings",
+        ] {
             assert!(names.iter().any(|entry| entry == name), "missing {name}");
         }
         let conn = store::open_store(root.path())?;
@@ -14457,7 +14463,8 @@ pub(in crate::business_os) mod tests {
             store::ensure_legacy_collection_grants(root.path(), &names)?;
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM business_permission_grants
-                 WHERE scope_id LIKE 'ctox_harness_%' OR scope_id = 'ctox_runs'",
+                 WHERE scope_id LIKE 'ctox_harness_%'
+                    OR scope_id IN ('ctox_runs', 'ctox_crew_members', 'ctox_crew_learnings')",
                 [],
                 |row| row.get(0),
             )?;
@@ -16185,6 +16192,17 @@ pub(in crate::business_os) mod tests {
         )
         .expect("create runbook item");
 
+        let source = super::super::server::knowledge_index_payload(root.path())
+            .expect("load authoritative procedural knowledge catalog");
+        let source_markdown = |collection: &str, id: &str| {
+            source[collection]
+                .as_array()
+                .expect("source catalog collection")
+                .iter()
+                .find(|document| document["id"].as_str() == Some(id))
+                .and_then(|document| document["markdown"].as_str())
+                .expect("source catalog markdown")
+        };
         let synced = sync_business_record_projections(root.path())
             .expect("sync procedural knowledge projections");
         assert!(synced >= 3);
@@ -16208,14 +16226,14 @@ pub(in crate::business_os) mod tests {
             Some("skillbook")
         );
         let skillbook_markdown = skillbook
-            .pointer("/payload/markdown")
+            .get("markdown")
             .and_then(Value::as_str)
             .expect("projected skillbook markdown");
         assert!(skillbook_markdown.contains("## Mission"));
         assert!(skillbook_markdown.contains("Fail closed when evidence is missing."));
         assert_eq!(
-            skillbook.get("markdown").and_then(Value::as_str),
-            Some(skillbook_markdown)
+            skillbook_markdown,
+            source_markdown("items", "skillbook:projection.skillbook.v1")
         );
 
         let runbook_json: String = conn
@@ -16235,14 +16253,14 @@ pub(in crate::business_os) mod tests {
             Some("projection.skillbook.v1")
         );
         let runbook_markdown = runbook
-            .pointer("/payload/markdown")
+            .get("markdown")
             .and_then(Value::as_str)
             .expect("projected runbook markdown");
         assert!(runbook_markdown.contains("## VERIFY · Verify source receipt"));
         assert!(runbook_markdown.contains("verify its receipt and hash"));
         assert_eq!(
-            runbook.get("markdown").and_then(Value::as_str),
-            Some(runbook_markdown)
+            runbook_markdown,
+            source_markdown("runbooks", "runbook:projection.runbook.v1")
         );
     }
 
@@ -20453,9 +20471,35 @@ pub(in crate::business_os) mod tests {
                     .expect("insert invalid ticket command");
             }
 
-            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
-                .await
-                .expect("consume invalid ticket commands");
+            let mut accept_failures = HashMap::new();
+            // Intake failures become canonical terminal outcomes after the
+            // persisted retry budget; retain the exact terminal/error guards.
+            for attempt in 1..=BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                consume_pending_business_commands(root.path(), &database, &mut accept_failures)
+                    .await
+                    .expect("consume invalid ticket commands");
+                for id in ["cmd_ticket_unsupported", "cmd_ticket_missing_title"] {
+                    let current = commands
+                        .find_one(Some(MangoQuery {
+                            selector: Some(json!({ "id": { "$eq": id } })),
+                            ..Default::default()
+                        }))
+                        .expect("intake lifecycle query")
+                        .exec(false)
+                        .await
+                        .expect("intake lifecycle document");
+                    let expected = if attempt < BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                        "pending_sync"
+                    } else {
+                        "failed"
+                    };
+                    assert_eq!(
+                        current.get("status").and_then(Value::as_str),
+                        Some(expected),
+                        "command {id} at persisted intake attempt {attempt}"
+                    );
+                }
+            }
 
             let unsupported = commands
                 .find_one(Some(MangoQuery {
@@ -20651,6 +20695,7 @@ pub(in crate::business_os) mod tests {
                 .add_collections(collection_creators())
                 .await
                 .expect("register collections");
+            let capability_token = issue_test_capability(root.path(), "knowledge-user", "admin");
             let commands = database
                 .collection("business_commands")
                 .expect("business_commands collection");
@@ -20664,7 +20709,11 @@ pub(in crate::business_os) mod tests {
                     "status": "pending_sync",
                     "inbound_channel": "business_os.outbound",
                     "payload": { "title": "Knowledge help", "args": ["help"] },
-                    "client_context": { "source_module": "outbound" },
+                    "client_context": {
+                        "source_module": "outbound",
+                        "capability_token": capability_token,
+                        "actor": { "id": "knowledge-user", "role": "admin", "is_admin": true }
+                    },
                     "updated_at_ms": now_ms() as u64
                 }))
                 .await
@@ -21378,9 +21427,33 @@ pub(in crate::business_os) mod tests {
                 }))
                 .await
                 .expect("insert module save command");
-            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
-                .await
-                .expect("consume module save command");
+            let mut accept_failures = HashMap::new();
+            for attempt in 1..=BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                consume_pending_business_commands(root.path(), &database, &mut accept_failures)
+                    .await
+                    .expect("consume module save command");
+                for id in ["cmd_gov_module_save"] {
+                    let current = commands
+                        .find_one(Some(MangoQuery {
+                            selector: Some(json!({ "id": { "$eq": id } })),
+                            ..Default::default()
+                        }))
+                        .expect("intake lifecycle query")
+                        .exec(false)
+                        .await
+                        .expect("intake lifecycle document");
+                    let expected = if attempt < BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                        "pending_sync"
+                    } else {
+                        "failed"
+                    };
+                    assert_eq!(
+                        current.get("status").and_then(Value::as_str),
+                        Some(expected),
+                        "command {id} at persisted intake attempt {attempt}"
+                    );
+                }
+            }
             let failed_module_save = commands
                 .find_one(Some(MangoQuery {
                     selector: Some(json!({ "id": { "$eq": "cmd_gov_module_save" } })),
