@@ -1,7 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
-import { renderCrewCreature, crewModeForTaskState, crewActivityFromProgress } from '../../shared/crew-renderer.js?v=20260927-crew-genome-v1';
-import { startCrewMotion } from '../../shared/crew-motion.js?v=20260927-crew-genome-v1';
+import { renderCrewCreature, crewModeForTaskState, crewActivityFromProgress } from '../../shared/crew-renderer.js?v=20260927-crew-genome-v2';
+import { startCrewMotion } from '../../shared/crew-motion.js?v=20260927-crew-genome-v2';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 
 const REFRESH_DEBOUNCE_MS = 80;
