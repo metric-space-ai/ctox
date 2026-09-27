@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad: welsch-Upgrade (Binary → main, Quelle 07:58) fertig → Business-OS-Dateien von main 9da8daca2 per Datei-Deploy in current/src + Slot deaktivieren → Browser-Abnahme auf welsch. Signierter Slot beta.59 folgt, sobald die GitHub-Warteschlange abfließt.
+Kritischer Pfad: welsch läuft auf main (Binary branch-main-20260927T075827Z + Business-OS-Dateien von main 2e4e36858, Slot aus). Offen: signierter Slot beta.60 (Tag auf main), sobald die GitHub-Actions-Warteschlange abfließt → stage/activate.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -20,10 +20,13 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 - **Stempel v405 (main `9da8daca2`)** — `20260927-shell-v2-crew-live-v405`, Crew-Buster `?v=20260927-crew-genome-v2`.
 - **beta.58 abgebrochen (überholt)** — Run `36304466632` cancelled; Tag bleibt als Historie.
 
+- **welsch auf main (27.09. 08:32–08:40 UTC, verifiziert im Browser)** — Upgrade 2. Versuch fertig (`current` → `releases/branch-main-20260927T075827Z`, Unit success). Datei-Deploy 13 Dateien (v405, Backup `~/.local/state/ctox/backups/files-20260927T083227Z`) + 7 Dateien (v406, Backup `files-20260927T083801Z`), alle sha256 = main. Slot aus: `business_os_shell_update_state.state_json.currentSlot` beta.54 → null (Zeilen-Backup `backups/shell-update-state-20260927T083255Z.json`), Restart. Wartung `waiting_replication` → per `[data-maintenance-retry]` bestätigt → completed. Browser: `app.js?v=…crew-depth-v406`, crew-renderer/motion v2, Engine aktiv, Signaling wss://signaling.ctox.dev/v2, 25 connected/5 reused; App-Fenster-Schatten = Tiefenleiter; Chatfenster #1c1f25 + Kante + Kontur; Leiste #1c1f25/92 % + Blur; Crew-Karte kompakt 80 %, Wesen auf Station.
+- **Fix v406 (main `2e4e36858`)** — Regel für Fenster mit Workjet-Kategorie setzte den alten schwarzen Schatten per !important erneut; jetzt Token. (Beim Live-Test gefunden.)
+
 ## Working
 
-- **welsch-Upgrade Binary → main** — 1. Versuch `ctox-crew-genome-upgrade-20260927` scheiterte am Platzgate (20 GiB verlangt, 19,5 frei; nichts verändert, Wartung nicht aktiv). Freigemacht: `~/.cache/ctox/build-office-20260906` (7,1 GB, reines Cargo-Target vom 06.09., kein Prozess). 2. Versuch Unit `ctox-crew-genome-upgrade-20260927b`, target `branch-main-20260927T075827Z` (Quelle = main mit S1–S3+v404), Phase building. Fertig heißt: phase=completed, current_release neu, Wartung completed, Dienst aktiv; Symlink-Falle prüfen.
-- **Shell-Release beta.59** — Tag → `9da8daca2`, Run `36305874044` queued. GitHub-Actions-Stau: 50+ Läufe queued seit 26.09. 20:09, nur 2 in_progress. Fertig heißt: Run success.
+- **(erledigt) welsch-Upgrade Binary → main** — 1. Versuch `ctox-crew-genome-upgrade-20260927` scheiterte am Platzgate (20 GiB verlangt, 19,5 frei; nichts verändert, Wartung nicht aktiv). Freigemacht: `~/.cache/ctox/build-office-20260906` (7,1 GB, reines Cargo-Target vom 06.09., kein Prozess). 2. Versuch Unit `ctox-crew-genome-upgrade-20260927b`, target `branch-main-20260927T075827Z` (Quelle = main mit S1–S3+v404), Phase building. Fertig heißt: phase=completed, current_release neu, Wartung completed, Dienst aktiv; Symlink-Falle prüfen.
+- **Shell-Release beta.60** — ersetzt beta.59 (ohne v406-Fix, Run `36305874044` abgebrochen). GitHub-Actions-Stau: 50+ Läufe queued seit 26.09. 20:09, nur 2 in_progress. Fertig heißt: Run success → welsch `shell-update stage --version 0.1.46-beta.60` → activate → restart; danach verschwindet die Kopf-Kennzeichnung „Recovery“.
 
 ## To-Do
 
@@ -54,6 +57,9 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 3. Eigene Wächterliste unvollständig: `assert-business-chat-layout.mjs` (ci.yml) nicht vor dem Push gefahren → Keyframe-Assertion auf main kurz rot (1×, 27.09., mit e9e1cf800 behoben). Regel: vor Push alle Business-OS-Schritte aus ci.yml + crew-ui-acceptance.yml + business-os-shell-release.yml lokal.
 
 ## Altbefunde (nicht von dieser Kampagne)
+
+- Crew-Leiste: Nach Aufklappen ohne Chats entsteht ein minimierter leerer Crew-Chip, die Leiste meldet aber `has-no-chats has-no-nav` (3 Spalten) → 4 Kinder, „+“ bricht in eine zweite Zeile. Nach Reload weg. Klassenlogik in business-chat.js (nicht geändert).
+- Kopf zeigt „Recovery“ statt Version, solange welsch `src/` statt signiertem Slot serviert (erwartet bis beta.60 aktiv).
 
 - `assert-shell-chat-composition.mjs` rot auch auf main `ccde06f4d`: "Shell-V2 windows expose exactly one title-bar control: [layout, close]" + drei Snap-Kanten null (Layout-Menü-Arbeit auf Branch `codex/shell-v2-layout-menu`).
 
