@@ -9,6 +9,59 @@ use std::{
     },
 };
 
+struct PendingPeer {
+    entered: tokio::sync::Notify,
+    dropped: Arc<AtomicBool>,
+}
+impl PeerRangeSource for PendingPeer {
+    fn read_range<'a>(
+        &'a self,
+        _: &'a PeerSource,
+        _: u64,
+        _: u64,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<u8>>> + Send + 'a>> {
+        Box::pin(async move {
+            struct Dropped(Arc<AtomicBool>);
+            impl Drop for Dropped {
+                fn drop(&mut self) {
+                    self.0.store(true, Ordering::SeqCst);
+                }
+            }
+            let _guard = Dropped(self.dropped.clone());
+            self.entered.notify_one();
+            std::future::pending().await
+        })
+    }
+}
+
+#[tokio::test]
+async fn peer_cancel_drops_inflight_range_before_releasing_worker() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = store(&temp);
+    store.enqueue(request(b"pending")).unwrap();
+    let dropped = Arc::new(AtomicBool::new(false));
+    let peer = Arc::new(PendingPeer {
+        entered: tokio::sync::Notify::new(),
+        dropped: dropped.clone(),
+    });
+    let worker = store.worker_with_peer(peer.clone()).unwrap();
+    let stop = AtomicBool::new(false);
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        let (result, ()) = tokio::join!(worker.run_next(&stop), async {
+            peer.entered.notified().await;
+            store.control("peer-transfer", "cancel").unwrap();
+        });
+        result.unwrap();
+    })
+    .await
+    .unwrap();
+    assert!(dropped.load(Ordering::SeqCst));
+    let result = store.get("peer-transfer").unwrap();
+    assert_eq!(result.state, "cancelled");
+    assert_eq!(result.completed_bytes, 0);
+    assert!(result.receipt.is_none());
+}
+
 struct Peer {
     body: Vec<u8>,
     fail_second: AtomicBool,
