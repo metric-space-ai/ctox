@@ -651,6 +651,13 @@ instead rejects with `QUERY_GENERATION_REQUIRED`; replacement during the read
 rejects with `QUERY_CANCELLED` and `generationChanged`. These states cannot
 confirm document absence. A stable authorized query returning no rows remains
 a successful empty result. Ordinary reads keep their fail-closed empty results.
+Demand-query ACK timeouts retain at most one recovery attempt with a fresh
+request ID, then propagate the original error. They do not consume the separate
+24-retry peer-unavailable allowance. Two 45-second ACK deadlines plus 250 ms
+backoff are 90.25 seconds, compared with the former 20-minute retry chain.
+This is not an end-to-end query deadline: stream admission, peer readiness and
+local materialization are separate phases. Rate-limit and stream-limit recovery
+and the terminal-chunk collector deadline remain unchanged.
 The loader transition immediately clears existing subscription snapshots,
 even without a storage change, and discards responses from its prior bridge.
 Control-plane `count()` walks authorized 200-row demand windows, retaining
