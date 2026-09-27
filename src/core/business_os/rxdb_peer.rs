@@ -20516,7 +20516,7 @@ pub(in crate::business_os) mod tests {
             );
             assert!(
                 unsupported
-                    .get("error")
+                    .get("error_message")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .contains("unsupported Business OS ticket command"),
@@ -20538,7 +20538,7 @@ pub(in crate::business_os) mod tests {
             );
             assert!(
                 missing_title
-                    .get("error")
+                    .get("error_message")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .contains("title is required"),

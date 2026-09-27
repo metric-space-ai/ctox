@@ -6660,7 +6660,7 @@ fn business_command_intake_failure_retains_first_and_last_durable_errors() {
         assert_eq!(projection["result"]["first_intake_error"], first_error);
         assert_eq!(projection["result"]["last_intake_error"], last_error);
         assert_eq!(
-            projection["error"],
+            projection["error_message"],
             format!("{last_error}; first intake failure: {first_error}")
         );
 
@@ -6702,7 +6702,7 @@ fn business_command_intake_failure_keeps_unchanged_error_without_duplicate_text(
         assert_eq!(outcome["attempt"], attempt);
         if attempt == 2 {
             let projection = &outcome["failure_document"];
-            assert_eq!(projection["error"], "database is locked");
+            assert_eq!(projection["error_message"], "database is locked");
             assert_eq!(
                 projection["result"]["first_intake_error"],
                 "database is locked"
