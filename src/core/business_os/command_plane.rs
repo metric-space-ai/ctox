@@ -756,7 +756,8 @@ pub fn accept_rxdb_business_command_with_origin(
                     object.insert("ok".to_string(), Value::Bool(true));
                     object.insert("already_accepted".to_string(), Value::Bool(true));
                 }
-                persist_business_command_lifecycle_projection(root, &lifecycle_outcome)?;
+                lifecycle_outcome =
+                    persist_business_command_lifecycle_projection(root, &lifecycle_outcome)?;
                 let receipt = BusinessCommandReplayReceipt::stored_outcome_with_lifecycle(
                     &command_id,
                     existing_status.as_deref().unwrap_or("known"),
@@ -2174,7 +2175,7 @@ pub(super) fn complete_and_project_business_control_command(
     let canonical = channels::business_command_projection(root, command_id)?;
     let canonical_read_ms =
         completion_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
-    persist_business_command_lifecycle_projection(root, &canonical)?;
+    let canonical = persist_business_command_lifecycle_projection(root, &canonical)?;
     let local_projected_ms =
         completion_started.map(|started| started.elapsed().as_secs_f64() * 1_000.0);
     let updated_at_ms = canonical

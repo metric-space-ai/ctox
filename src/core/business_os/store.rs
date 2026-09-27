@@ -18643,13 +18643,65 @@ pub(super) fn terminal_person_research_projection_candidates(
     Ok(candidates)
 }
 
+/// Public identity comes only from the accepted native context, after peer
+/// authentication stamped owner_user_id. Never promote a replica's actor or
+/// copy its credentials into a lifecycle projection. Core intent/hash remains
+/// unchanged: this is presentation enrichment, not an authorization receipt.
+fn command_projection_with_native_identity(
+    conn: &Connection,
+    document: &Value,
+) -> anyhow::Result<Value> {
+    let command_id = document
+        .get("command_id")
+        .or_else(|| document.get("id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .context("business command projection is missing command_id")?;
+    let native_context: Option<String> = conn
+        .query_row(
+            "SELECT client_context_json FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let native_context: Value = native_context
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or(Value::Null);
+    let owner_id = native_context
+        .get("owner_user_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty());
+    let verified_owner = owner_id.filter(|owner| {
+        native_context.pointer("/actor/id").and_then(Value::as_str) == Some(*owner)
+    });
+    let mut projected = document.clone();
+    let context = projected
+        .as_object_mut()
+        .context("business command projection must be an object")?
+        .entry("client_context")
+        .or_insert_with(|| serde_json::json!({}));
+    if !context.is_object() {
+        *context = serde_json::json!({});
+    }
+    let context = context.as_object_mut().expect("context normalized");
+    for key in ["actor", "owner_user_id", "user_id", "claimed_actor"] {
+        context.remove(key);
+    }
+    if let Some(owner_id) = verified_owner {
+        context.insert("actor".into(), serde_json::json!({"id": owner_id}));
+        context.insert("owner_user_id".into(), Value::String(owner_id.to_string()));
+    }
+    redact_document_client_context_secrets(&mut projected);
+    Ok(projected)
+}
+
 /// Persist the native-enriched v2 command document as the canonical Business OS
 /// projection. The caller has already completed the canonical intake/side
 /// effect and will mirror the same document into RxDB afterwards.
 pub(crate) fn persist_business_command_lifecycle_projection(
     root: &Path,
     document: &Value,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
         .or_else(|| document.get("id"))
@@ -18658,6 +18710,7 @@ pub(crate) fn persist_business_command_lifecycle_projection(
         .filter(|value| !value.is_empty())
         .context("business command lifecycle projection is missing command_id")?;
     let conn = open_store(root)?;
+    let document = command_projection_with_native_identity(&conn, document)?;
     let exists = conn
         .query_row(
             "SELECT 1 FROM business_commands WHERE command_id = ?1",
@@ -18680,7 +18733,7 @@ pub(crate) fn persist_business_command_lifecycle_projection(
     // Aufnahme getan haette. Der Waechter bleibt fuer Dokumente ohne
     // Kennzeichnung bestehen, damit keine leeren Projektionen entstehen.
     if !exists {
-        seed_canonical_business_command_row(&conn, command_id, document)?;
+        seed_canonical_business_command_row(&conn, command_id, &document)?;
     }
     let updated_at_ms = document
         .get("updated_at_ms")
@@ -18692,7 +18745,8 @@ pub(crate) fn persist_business_command_lifecycle_projection(
         command_id,
         updated_at_ms,
         document.clone(),
-    )
+    )?;
+    Ok(document)
 }
 
 /// Legt die kanonische `business_commands`-Zeile aus einem Lebenszyklus-
@@ -18764,7 +18818,10 @@ pub(crate) fn deliver_business_command_outbox(root: &Path, limit: usize) -> anyh
     let mut delivered = 0_u64;
     let mut failed = 0_u64;
     for event in events {
-        let projection = channels::business_command_projection(root, &event.command_id);
+        let projection =
+            channels::business_command_projection(root, &event.command_id).and_then(|projection| {
+                command_projection_with_native_identity(&open_store(root)?, &projection)
+            });
         let delivery = projection.and_then(|projection| match event.destination.as_str() {
             "business-os" => {
                 let command_id = event.command_id.as_str();
@@ -18801,7 +18858,6 @@ pub(crate) fn deliver_business_command_outbox(root: &Path, limit: usize) -> anyh
                         record_id = excluded.record_id,
                         status = excluded.status,
                         payload_json = excluded.payload_json,
-                        client_context_json = excluded.client_context_json,
                         observed_at_ms = excluded.observed_at_ms",
                     params![
                         command_id,
@@ -28615,12 +28671,50 @@ pub(super) mod tests {
             "catalog_epoch_records",
             BusinessOsPermission::DataRead
         ));
-        assert!(!capability_allows_collection_permission(
-            root.path(),
-            &fresh_token,
-            "unrelated_catalog_records",
-            BusinessOsPermission::DataRead
-        ));
+        // Chef has baseline read access. Assert the installed grants' exact
+        // scope instead of mistaking baseline policy for an extra catalog grant.
+        let conn = open_store(root.path())?;
+        let mut statement = conn.prepare(
+            "SELECT subject_id, permission, scope_id
+             FROM business_permission_grants
+             WHERE grant_id LIKE 'catalog.first_party.catalog-epoch-test.%'
+               AND subject_type='role' AND scope_type='collection' AND active=1
+             ORDER BY subject_id, permission",
+        )?;
+        let grants = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(
+            grants,
+            vec![
+                (
+                    "admin".into(),
+                    "data.read".into(),
+                    "catalog_epoch_records".into()
+                ),
+                (
+                    "admin".into(),
+                    "data.write".into(),
+                    "catalog_epoch_records".into()
+                ),
+                (
+                    "chef".into(),
+                    "data.read".into(),
+                    "catalog_epoch_records".into()
+                ),
+                (
+                    "chef".into(),
+                    "data.write".into(),
+                    "catalog_epoch_records".into()
+                ),
+            ]
+        );
         Ok(())
     }
 
@@ -28959,6 +29053,7 @@ pub(super) mod tests {
     fn capability_token_redacted_in_projection_but_retained_natively() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         seed_business_user(root.path(), "chef1", "chef")?;
+        drop(super::super::store_projections::tests::create_repair_rxdb_tables(root.path())?);
         let now = now_ms() as i64;
         let (chef_token, _) = issue_business_os_capability_token(root.path(), "chef1", now)?;
 
@@ -29026,6 +29121,70 @@ pub(super) mod tests {
             "non-secret actor context must survive redaction"
         );
         drop(conn);
+
+        let canonical_before = channels::business_command_projection(root.path(), cid)?;
+        let mut forged_projection = canonical_before.clone();
+        forged_projection["client_context"] = serde_json::json!({
+            "actor": {"id": "attacker", "role": "admin"},
+            "owner_user_id": "attacker",
+            "capability_token": "must-not-be-published"
+        });
+        let repaired =
+            persist_business_command_lifecycle_projection(root.path(), &forged_projection)?;
+        assert_eq!(
+            repaired
+                .pointer("/client_context/actor/id")
+                .and_then(Value::as_str),
+            Some("chef1")
+        );
+        assert!(repaired.pointer("/client_context/actor/role").is_none());
+        assert!(repaired
+            .pointer("/client_context/capability_token")
+            .is_none());
+
+        // The outbox must not replace the accepted native credential with the
+        // reduced public context, or erase verified identity on either replica.
+        let delivery = deliver_business_command_outbox(root.path(), 100)?;
+        assert_eq!(delivery["failed"], 0);
+        assert!(delivery["delivered"].as_u64().unwrap_or(0) > 0);
+        let conn = open_store(root.path())?;
+        let after_delivery = load_business_command(&conn, cid)?;
+        assert_eq!(
+            after_delivery.client_context["capability_token"],
+            chef_token
+        );
+        let local = outbound_load_required(&conn, "business_commands", cid, "command")?;
+        drop(conn);
+        let replicated = load_rxdb_collection_record(root.path(), "business_commands", cid)?
+            .context("terminal RxDB command projection")?;
+        for doc in [local, replicated] {
+            assert_eq!(
+                doc.pointer("/client_context/actor/id")
+                    .and_then(Value::as_str),
+                Some("chef1")
+            );
+            assert!(doc.pointer("/client_context/capability_token").is_none());
+            assert!(!serde_json::to_string(&doc)?.contains(&chef_token));
+            assert_eq!(doc["terminal_status"], "completed");
+        }
+        let canonical_after = channels::business_command_projection(root.path(), cid)?;
+        assert_eq!(
+            canonical_after["payload_hash"],
+            canonical_before["payload_hash"]
+        );
+        assert_eq!(
+            canonical_after["client_context"],
+            canonical_before["client_context"]
+        );
+
+        // No native admission evidence: claimed actor/owner must not acquire
+        // authority merely because the lifecycle projection seeds a missing row.
+        forged_projection["id"] = Value::String("unadmitted-projection".into());
+        forged_projection["command_id"] = Value::String("unadmitted-projection".into());
+        let unknown =
+            persist_business_command_lifecycle_projection(root.path(), &forged_projection)?;
+        assert!(unknown.pointer("/client_context/actor").is_none());
+        assert!(unknown.pointer("/client_context/owner_user_id").is_none());
 
         // The retained token is still a valid, replayable-by-native credential —
         // proving redaction ran AFTER verification, not before it.

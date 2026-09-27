@@ -62,6 +62,22 @@ existing browser controller and command policy. Recovery does not authenticate
 a session, pass review/validation, reopen terminal commands, or weaken the
 owned, expiring lease requirement for ordinary worker commands.
 
+### Command projection identity
+
+Terminal and outbox projections retain the actor ID from the accepted native
+command context, where authenticated peer intake stamped owner_user_id and the
+matching actor. Claimed replica identity cannot substitute for that evidence.
+Only the non-secret ID is added to the reduced public lifecycle context; the
+canonical core intent, payload hash and authorization semantics are unchanged.
+The same enriched document is mirrored locally and to RxDB. Outbox delivery
+preserves an existing native client_context_json, including the credential
+needed for execution-time revalidation; public projections remain redacted.
+
+A projection that lacks matching native admission identity does not manufacture
+an actor from incoming metadata. The regression covers terminal state, outbox
+delivery to both stores, credential retention/redaction, forged projection
+identity and unchanged core intent/hash.
+
 ### Outbound MCP research record identity
 
 `web_stack.person_research` binds its proposal to the raw persisted

@@ -1074,7 +1074,7 @@ pub(super) async fn accept_pending_business_command(
     if next.get("contract_version").and_then(Value::as_u64) == Some(2) {
         let persist_root = root.clone();
         let persisted = next.clone();
-        tokio::task::spawn_blocking(move || {
+        next = tokio::task::spawn_blocking(move || {
             store::persist_business_command_lifecycle_projection(&persist_root, &persisted)
         })
         .await

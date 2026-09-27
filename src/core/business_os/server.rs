@@ -4625,7 +4625,7 @@ mod tests {
     #[test]
     fn capability_bearer_resolves_admin_api_session() {
         let root = tempfile::tempdir().expect("tempdir");
-        let now = 1_789_000_000_000;
+        let now = store::now_ms() as i64;
         let (token, _) = store::issue_business_os_capability_token_for_managed_user(
             root.path(),
             "admin@example.com",
@@ -4668,15 +4668,37 @@ mod tests {
             Some(&binding),
         )
         .expect("invite");
-        let token = created["invite"]["session"]["capability_token"]
+        let invite_secret = created["invite"]["session"]["capability_token"]
             .as_str()
-            .expect("token");
-        assert!(store::verify_capability_actor(root.path(), token).is_some());
-        let auth_header = format!("Bearer {token}");
-        assert!(session_from_capability_bearer(root.path(), Some(&auth_header)).is_none());
-        assert!(
-            verified_unbound_capability_bearer_token(root.path(), Some(&auth_header)).is_none()
-        );
+            .expect("compact invite secret");
+        let user_id = created["invite"]["session"]["user"]["id"]
+            .as_str()
+            .expect("persisted invite user");
+        let invite_claims = store::verified_webrtc_capability_claims(root.path(), invite_secret)
+            .expect("compact invite resolves only on WebRTC");
+        assert_eq!(invite_claims.user_id, user_id);
+        assert_eq!(invite_claims.device_binding.as_ref(), Some(&binding));
+        assert!(store::verify_capability_actor(root.path(), invite_secret).is_none());
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user_with_binding(
+            root.path(),
+            user_id,
+            "Workjet Mobile",
+            "user",
+            store::now_ms() as i64,
+            Some(&binding),
+        )
+        .expect("signed capability for the persisted device binding");
+        let claims = store::verified_capability_claims(root.path(), &token)
+            .expect("valid signed bound capability");
+        assert_eq!(claims.user_id, user_id);
+        assert_eq!(claims.device_binding.as_ref(), Some(&binding));
+        for credential in [invite_secret, token.as_str()] {
+            let auth_header = format!("Bearer {credential}");
+            assert!(session_from_capability_bearer(root.path(), Some(&auth_header)).is_none());
+            assert!(
+                verified_unbound_capability_bearer_token(root.path(), Some(&auth_header)).is_none()
+            );
+        }
     }
 
     #[test]
