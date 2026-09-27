@@ -3309,7 +3309,7 @@ mod tests {
         assert_eq!(rejected[0]["evidence_eligible"], json!(false));
         assert_eq!(
             rejected[0]["evidence_rejection_reason"],
-            json!("missing_server_web_receipt")
+            json!("missing_server_evidence_receipt")
         );
         Ok(())
     }
