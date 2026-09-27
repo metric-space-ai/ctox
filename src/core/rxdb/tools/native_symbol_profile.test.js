@@ -245,6 +245,91 @@ test('report failures preserve exit, signal, timing and bounded diagnostics', as
   }
 });
 
+test('report failure Unicode diagnostics and null-code summary obey byte limits', async t => {
+  const outputPrefix = temporary(t);
+  const long = '😀€'.repeat(10000);
+  const profile = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 5 }, {
+    platform: 'linux', readStart: () => 10,
+    spawnRecord: () => fakeRecorder(outputPrefix + '.perf.data'),
+    async runReport() {
+      throw Object.assign(new Error(long), {
+        code: null, signal: 'SIGTERM', killed: true,
+        stdout: long, stderr: long + 'terminal-😀',
+      });
+    },
+  });
+  const result = await profile.completion;
+  for (const key of ['error', 'reportStdout', 'reportStderr', 'reportStderrTail']) {
+    assert.ok(Buffer.byteLength(result[key]) <= 16384, key);
+    assert.ok(!result[key].includes('\uFFFD'), key + ' preserves complete code points');
+  }
+  assert.equal(result.reportCode, null);
+  assert.equal(result.reportStdoutTruncated, true);
+  assert.equal(result.reportStderrTruncated, true);
+  assert.ok(result.reportStderrTail.endsWith('terminal-😀'));
+  assert.equal(result.available, false);
+});
+
+test('filesystem failures have distinct phases and final metadata failure still settles', { timeout: 2000 }, async t => {
+  for (const phase of ['data-stat', 'before-report', 'report-file', 'final-metadata']) {
+    const native = child(), outputPrefix = temporary(t);
+    let reportCalls = 0;
+    const profile = startNativeSymbolProfile(native, { outputPrefix, delayMs: 0, durationMs: 5 }, {
+      platform: 'linux', readStart: () => 10,
+      spawnRecord() {
+        const recorder = fakeRecorder(outputPrefix + '.perf.data');
+        if (phase === 'data-stat') {
+          const kill = recorder.kill;
+          recorder.kill = signal => {
+            const result = kill(signal);
+            fs.unlinkSync(outputPrefix + '.perf.data');
+            return result;
+          };
+        }
+        return recorder;
+      },
+      writeFile(file, value) {
+        const metadata = file.endsWith('.json') ? JSON.parse(value) : null;
+        if ((phase === 'report-file' && file.endsWith('.report.txt'))
+          || (phase === 'before-report' && metadata?.reportTimeoutMs && metadata.state !== 'complete')
+          || (phase === 'final-metadata' && metadata?.state === 'complete')) {
+          throw Object.assign(new Error('fixture disk full'), { code: 'ENOSPC' });
+        }
+        fs.writeFileSync(file, value);
+      },
+      async runReport() {
+        reportCalls++;
+        return { stdout: '# Samples: 12 of event cpu-clock:u\n' };
+      },
+    });
+    const result = await profile.completion;
+    assert.equal(result.available, false);
+    assert.equal(result.state, 'complete');
+    assert.equal(result.reportCode, undefined, 'filesystem errors are not subprocess exits');
+    assert.equal(result.reportKilled, undefined);
+    assert.equal(native.listenerCount('exit'), 0);
+    if (phase === 'data-stat' || phase === 'before-report') {
+      assert.equal(reportCalls, 0);
+      assert.equal(result.reportStartedAtMs, undefined);
+      assert.equal(result.failurePhase, phase);
+      assert.equal(result.reason, phase === 'data-stat' ? 'profile-data-read-failed' : 'profile-metadata-write-failed');
+    } else {
+      assert.equal(reportCalls, 1);
+      assert.ok(result.reportFinishedAtMs >= result.reportStartedAtMs);
+      assert.equal(result.reportDurationMs, result.reportFinishedAtMs - result.reportStartedAtMs);
+      if (phase === 'report-file') {
+        assert.equal(result.reason, 'profile-report-write-failed');
+        assert.equal(result.failurePhase, phase);
+      } else {
+        assert.equal(result.reason, 'profile-metadata-write-failed');
+        assert.equal(result.completionReason, 'sampled');
+        assert.equal(result.metadataWriteError, 'ENOSPC');
+      }
+    }
+    assert.equal((await profile.stop()).reason, result.reason);
+  }
+});
+
 test('empty sample reports are explicitly unavailable', async t => {
   const outputPrefix = temporary(t);
   const profile = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 5 }, {

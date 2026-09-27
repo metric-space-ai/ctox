@@ -7,6 +7,24 @@ const { promisify } = require('node:util');
 const { parseProcStat } = require('./native_cpu_profile.js');
 const execFileAsync = promisify(execFile);
 
+function boundedDiagnostic(value, tail = false) {
+  const bytes = Buffer.from(String(value ?? ''), 'utf8');
+  const limit = 16384;
+  if (bytes.length <= limit) return bytes.toString('utf8');
+  if (tail) {
+    let start = bytes.length - limit;
+    while ((bytes[start] & 0xc0) === 0x80) start++;
+    return bytes.subarray(start).toString('utf8');
+  }
+  let end = limit;
+  while ((bytes[end] & 0xc0) === 0x80) end--;
+  return bytes.subarray(0, end).toString('utf8');
+}
+
+function diagnosticError(error) {
+  return boundedDiagnostic(error.code ?? error.message ?? String(error));
+}
+
 // Diagnostic fixture only: a flat user-space CPU sample of this owned child.
 // No system-wide target, child inheritance, stack/memory dump or native signal.
 function startNativeSymbolProfile(child, {
@@ -18,6 +36,7 @@ function startNativeSymbolProfile(child, {
   const spawnRecord = dependencies.spawnRecord || spawn;
   const signalRecord = dependencies.signalRecord || ((recorder, signal) => recorder.kill(signal));
   const runReport = dependencies.runReport || execFileAsync;
+  const writeFile = dependencies.writeFile || fs.writeFileSync;
   const perfEnvironment = { ...process.env, PERF_CONFIG: '/dev/null', PERF_CONFIG_NOSYSTEM: '1', PERF_CONFIG_NOGLOBAL: '1' };
   if (!outputPrefix || !Number.isSafeInteger(child?.pid) || child.pid <= 0)
     throw new Error('symbol profile requires an owned child and output prefix');
@@ -41,15 +60,20 @@ function startNativeSymbolProfile(child, {
   let stdout = '', stdoutTruncated = false;
   let resolveCompletion;
   const completion = new Promise(resolve => { resolveCompletion = resolve; });
-  const write = () => fs.writeFileSync(metadataPath, JSON.stringify(metadata, null, 2) + '\n');
+  const write = () => writeFile(metadataPath, JSON.stringify(metadata, null, 2) + '\n');
   const finish = (reason, details = {}) => {
     if (finished) return;
     finished = true;
     clearTimeout(timer); clearTimeout(durationTimer); clearTimeout(killTimer);
     child.removeListener('exit', childExited);
     Object.assign(metadata, details, { state: 'complete', reason, finishedAtMs: Date.now() });
-    write();
-    resolveCompletion(metadata);
+    try { write(); }
+    catch (error) {
+      metadata.completionReason = reason;
+      metadata.reason = 'profile-metadata-write-failed';
+      metadata.available = false;
+      metadata.metadataWriteError = diagnosticError(error);
+    } finally { resolveCompletion(metadata); }
   };
   const stop = (reason = 'requested-stop') => {
     if (finished || stopping) return completion;
@@ -117,27 +141,25 @@ function startNativeSymbolProfile(child, {
         if (recordError || (code !== 0 && !controlledInterrupt)) {
           finish('perf-record-failed', { error: recordError || 'exit-' + code }); return;
         }
+        let size;
+        try { size = fs.statSync(dataPath).size; }
+        catch (error) {
+          finish('profile-data-read-failed', { error: diagnosticError(error), failurePhase: 'data-stat' }); return;
+        }
+        if (size === 0 || size > 32 * 1024 * 1024) {
+          finish('profile-size-out-of-bounds', { bytes: size }); return;
+        }
+        metadata.reportTimeoutMs = 5000;
+        try { write(); }
+        catch (error) {
+          finish('profile-metadata-write-failed', { error: diagnosticError(error), failurePhase: 'before-report' }); return;
+        }
+        metadata.reportStartedAtMs = Date.now();
+        let report;
         try {
-          const size = fs.statSync(dataPath).size;
-          if (size === 0 || size > 32 * 1024 * 1024) {
-            finish('profile-size-out-of-bounds', { bytes: size }); return;
-          }
-          metadata.reportTimeoutMs = 5000;
-          metadata.reportStartedAtMs = Date.now();
-          write();
-          const report = await runReport(perfExecutable,
+          report = await runReport(perfExecutable,
             ['report', '--stdio', '--no-children', '--percent-limit', '0.5', '--input', dataPath],
             { encoding: 'utf8', timeout: metadata.reportTimeoutMs, maxBuffer: 2 * 1024 * 1024, env: perfEnvironment });
-          metadata.reportFinishedAtMs = Date.now();
-          metadata.reportDurationMs = metadata.reportFinishedAtMs - metadata.reportStartedAtMs;
-          fs.writeFileSync(reportPath, report.stdout);
-          // A readable report without samples is not a successful CPU profile.
-          const samples = /# Samples:\s+([\d.,]+[KMG]?)/i.exec(report.stdout)?.[1] || null;
-          const hasSamples = samples !== null && Number.parseFloat(samples.replaceAll(',', '')) > 0;
-          finish(hasSamples ? 'sampled' : 'no-samples', {
-            available: hasSamples, bytes: size, reportedSamples: samples,
-            reportFile: path.basename(reportPath), dataFile: path.basename(dataPath),
-          });
         } catch (error) {
           // Preserve the subprocess result instead of collapsing a timeout,
           // signal or report exit into the same unstructured command message.
@@ -146,20 +168,34 @@ function startNativeSymbolProfile(child, {
           const reportStderr = String(error.stderr || '');
           const reportFinishedAtMs = Date.now();
           finish('perf-report-failed', {
-            error: error.code ?? error.message,
+            error: diagnosticError(error), failurePhase: 'report-process',
             reportCode: error.code ?? null,
             reportSignal: error.signal ?? null,
             reportKilled: error.killed === true,
             reportFinishedAtMs,
             reportDurationMs: metadata.reportStartedAtMs === undefined ? null
               : reportFinishedAtMs - metadata.reportStartedAtMs,
-            reportStdout: reportStdout.slice(0, 16384),
-            reportStdoutTruncated: reportStdout.length > 16384,
-            reportStderr: reportStderr.slice(0, 16384),
-            reportStderrTruncated: reportStderr.length > 16384,
-            reportStderrTail: reportStderr.length > 16384 ? reportStderr.slice(-16384) : '',
+            reportStdout: boundedDiagnostic(reportStdout),
+            reportStdoutTruncated: Buffer.byteLength(reportStdout) > 16384,
+            reportStderr: boundedDiagnostic(reportStderr),
+            reportStderrTruncated: Buffer.byteLength(reportStderr) > 16384,
+            reportStderrTail: Buffer.byteLength(reportStderr) > 16384 ? boundedDiagnostic(reportStderr, true) : '',
           });
+          return;
         }
+        metadata.reportFinishedAtMs = Date.now();
+        metadata.reportDurationMs = metadata.reportFinishedAtMs - metadata.reportStartedAtMs;
+        try { writeFile(reportPath, report.stdout); }
+        catch (error) {
+          finish('profile-report-write-failed', { error: diagnosticError(error), failurePhase: 'report-file' }); return;
+        }
+        // A readable report without samples is not a successful CPU profile.
+        const samples = /# Samples:\s+([\d.,]+[KMG]?)/i.exec(report.stdout)?.[1] || null;
+        const hasSamples = samples !== null && Number.parseFloat(samples.replaceAll(',', '')) > 0;
+        finish(hasSamples ? 'sampled' : 'no-samples', {
+          available: hasSamples, bytes: size, reportedSamples: samples,
+          reportFile: path.basename(reportPath), dataFile: path.basename(dataPath),
+        });
       });
       durationTimer = setTimeout(() => { void stop('duration-limit'); }, durationMs);
     } catch (error) { finish('profile-start-failed', { error: error.code || error.message }); }
