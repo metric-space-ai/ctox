@@ -848,6 +848,10 @@
 
 .ctox-flow-canvas {
   position: relative;
+  /* Column flex + auto margins centre a flow smaller than the canvas and
+     still let a larger one scroll from its top-left edge. */
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   width: 100%;
   height: 100%;
@@ -909,7 +913,8 @@
   color: var(--text);
 }
 
-.ctox-flow-toolbar span {
+.ctox-flow-toolbar span,
+.ctox-flow-toolbar .ctox-flow-zoom-fit {
   min-width: 42px;
   color: var(--muted);
   font-size: var(--fs-meta);
@@ -918,10 +923,11 @@
   user-select: none;
 }
 
+/* The flow is sized by its fitted zoom (fitFlowToCanvas); no fixed minimum
+   that would force scrolling in a normal window. */
 .ctox-flow-canvas-inner {
-  min-width: 980px;
-  min-height: 780px;
-  margin: var(--space-2) auto var(--space-4);
+  flex: none;
+  margin: auto;
   contain: layout paint style;
 }
 
@@ -964,6 +970,20 @@
   animation: ctox-flow-creature-focus 1.6s ease-out infinite;
 }
 
+/* What the selected, working creature is doing: plan step and last turn. */
+.ctox-flow-crew-bubble rect,
+.ctox-flow-crew-bubble path {
+  fill: var(--elev-float-2, var(--surface-2));
+  stroke: var(--elev-edge, var(--line));
+  stroke-width: 1;
+}
+.ctox-flow-crew-bubble path { stroke: none; }
+.ctox-flow-crew-bubble text {
+  fill: var(--text-strong, var(--text));
+  font-size: 11.5px;
+  font-weight: 620;
+}
+
 /* Creature look and motion come from shared/crew-renderer.js and
    shared/crew-motion.js; the map only sizes the wrapper. */
 .ctox-flow-creature-shell .ctox-crew-creature {
@@ -1001,7 +1021,8 @@
   fill: none;
   stroke: var(--ctox-flow-edge);
   stroke-width: 1.05;
-  opacity: 0.42;
+  /* Possible transitions stay quiet; the observed path carries the eye. */
+  opacity: 0.26;
   marker-end: url("#ctox-flow-arrow");
 }
 

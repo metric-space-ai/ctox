@@ -177,6 +177,17 @@ const IMPULSES = {
     pose.x += 2.6 * Math.sin(18 * Math.PI * p) * decay;
     pose.r += 5 * Math.sin(18 * Math.PI * p) * decay;
   } },
+  // Walking to another station: small quick steps while the host slides the
+  // creature along its path (duration follows data-crew-travel).
+  travel: { duration: 900, apply(p, pose, dir) {
+    const steps = Math.abs(Math.sin(4 * Math.PI * p));
+    const fade = bump(p) ** 0.4;
+    pose.y -= 3.2 * steps * fade;
+    pose.r += dir * 5 * Math.sin(4 * Math.PI * p) * fade;
+    pose.sy += 0.05 * steps * fade;
+    pose.sx -= 0.03 * steps * fade;
+    pose.ex += dir * 1.6 * fade;
+  } },
   cheer: { duration: 900, apply(p, pose) {
     const e = bump(p);
     pose.y -= 5 * e;
@@ -273,6 +284,7 @@ function createEngine() {
     } else if (turns > 0 && Date.now() - (Number(node.dataset.activityUpdatedAt) || 0) <= FRESH_EVENT_MS) {
       addImpulse(actor, impulseForTurn(node, mode), now);
     }
+    checkTravel(actor, node, now);
     actors.set(node, actor);
     intersection?.observe(node);
   }
@@ -302,12 +314,22 @@ function createEngine() {
     return node.dataset.activityKind === 'thinking' ? 'thinking' : 'tool';
   }
 
-  function addImpulse(actor, name, now) {
+  function addImpulse(actor, name, now, durationOverride = 0) {
     const spec = IMPULSES[name];
     if (!spec) return;
     const dir = hashUnit(actor.key, actor.salt++) > 0.5 ? 1 : -1;
     actor.impulses = actor.impulses.filter((impulse) => impulse.name !== name).slice(-1);
-    actor.impulses.push({ name, spec, startAt: now, duration: spec.duration / Math.sqrt(actor.genes.tempo), dir });
+    const duration = durationOverride > 0 ? durationOverride : spec.duration / Math.sqrt(actor.genes.tempo);
+    actor.impulses.push({ name, spec, startAt: now, duration, dir });
+  }
+
+  // The host moves the creature to another place (e.g. the next station on
+  // the CTOX map) and says so through data-crew-travel="<ms>".
+  function checkTravel(actor, node, now) {
+    const travel = String(node.dataset.crewTravel || '');
+    if (!travel || travel === actor.travel) return;
+    actor.travel = travel;
+    addImpulse(actor, 'travel', now, clamp(Number(travel) || 900, 300, 2000));
   }
 
   // Telemetry or mode changed on an existing node (in-place updates).
@@ -330,6 +352,7 @@ function createEngine() {
     const turns = Math.max(0, Number(node.dataset.activityTurns) || 0);
     if (turns > actor.turns && (mode === 'working' || mode === 'review')) addImpulse(actor, impulseForTurn(node, mode), now);
     actor.turns = turns;
+    checkTravel(actor, node, now);
     ensureLoop();
   }
 
@@ -487,7 +510,7 @@ function createEngine() {
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ['data-activity-turns', 'data-crew-mode'],
+      attributeFilter: ['data-activity-turns', 'data-crew-mode', 'data-crew-travel'],
     });
     document.addEventListener('visibilitychange', () => {
       if (!document.hidden) ensureLoop();
