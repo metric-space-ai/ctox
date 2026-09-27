@@ -26,6 +26,7 @@ const loader = createQueryDemandLoader({
   }),
   collectionName: 'business_commands',
   schemaVersion: 1,
+  readPermissionDigest: () => 'authoritative-test-digest',
   requestQueryFetch: async () => ({
     documents: [{ id: local.id, status: 'completed' }],
     authoritativeRevision: 'server-completed',

@@ -25,6 +25,7 @@ const { __ctoxTestHooks: hooks } = await importBrowserBundle('./index.js');
 const {
   aggregateFlowMetrics,
   aggregateRunMetrics,
+  taskCardMarkup,
   crewHomeMarkup,
   confirmAnchorBody,
   memberDomainLine,
@@ -1168,13 +1169,60 @@ test('Task creatures carry the crew member identity, unassigned tasks stay neutr
   const state = { lang: 'de', crewMembers: crewFixture, model };
   assert.equal(taskCrewMember(working, state).name, 'Milo');
   assert.equal(taskCrewMember(orphan, state), null);
-  assert.deepEqual(memberIdentity(crewFixture[0]), { name: 'Milo', color: '#00aa9a', shape: 'blob' });
+  assert.deepEqual(memberIdentity(crewFixture[0]), { id: 'crew:milo', name: 'Milo', color: '#00aa9a', shape: 'blob' });
   const html = flowCrewSvg(model, working, state);
   assert.match(html, /data-task-id="queue-task-working"[^>]*aria-label="Milo · /);
   assert.match(html, /--crew-color:#00aa9a/);
   assert.match(html, /is-blob/);
   assert.match(html, /data-crew-key="crew:milo:map"/);
   assert.match(html, /data-task-id="queue-task-orphan"[^>]*aria-label="ohne Crew-Zuordnung · /);
+});
+
+test('The harness map is a compact U and creatures stand on their station saying what they do', () => {
+  const model = buildHarnessModel({ runs: [], queue: [], communications: [], tickets: [], tools: [] }, { ok: false }, 'de');
+  assert.equal(model.nodes.length, 16);
+  for (const node of model.nodes) {
+    assert.ok(node.x - 68 >= 170 && node.x + 68 <= 1180 - 16, `${node.id} stays inside the compact width`);
+    assert.ok(node.y - 38 >= 40 && node.y + 38 <= 530 - 20, `${node.id} stays inside the compact height`);
+  }
+  for (const a of model.nodes) {
+    for (const b of model.nodes) {
+      if (a.id >= b.id) continue;
+      assert.ok(Math.abs(a.x - b.x) >= 136 + 20 || Math.abs(a.y - b.y) >= 76 + 30, `${a.id} and ${b.id} leave room for a creature`);
+    }
+  }
+  const working = {
+    id: 'queue-task-working', taskId: 'task-working', commandId: 'cmd-working', title: 'Recherche', status: 'running', routeStatus: 'running', crewMemberId: 'crew:milo',
+    executionProgress: { phase: 'work', currentStep: 2, steps: [{ label: 'Auftrag verstehen', status: 'completed' }, { label: 'Quellen sammeln', status: 'in_progress' }], totalTurns: 3, lastActivityKind: 'thinking', updatedAtMs: 1 },
+  };
+  const mapModel = { activeTask: working, activeNodeId: 'running', tasks: [working], nodeMap: model.nodeMap };
+  const html = flowCrewSvg(mapModel, working, { lang: 'de', crewMembers: crewFixture, model: mapModel });
+  const slot = html.match(/<foreignObject class="ctox-flow-creature-slot[^"]*" x="([\d.-]+)" y="([\d.-]+)" width="(\d+)" height="(\d+)"/);
+  const station = model.nodeMap.get('running');
+  assert.equal(Number(slot[2]) + Number(slot[4]) - 5, station.y - 38, 'feet on the station top edge');
+  assert.ok(Math.abs(Number(slot[1]) + Number(slot[3]) / 2 - station.x) < 1, 'centred on the station');
+  assert.match(html, /Milo · denkt nach · 2\/2 Quellen sammeln/, 'the selected creature says who it is and what it does');
+  assert.match(html, /data-activity-turns="3"/, 'durable turns reach the creature engine');
+  const idle = { ...working, id: 'queue-task-idle', status: 'queued', routeStatus: 'queued', executionProgress: null };
+  const idleModel = { ...mapModel, activeTask: null, tasks: [idle] };
+  const idleHtml = flowCrewSvg(idleModel, idle, { lang: 'de', crewMembers: crewFixture, model: idleModel });
+  assert.match(idleHtml, /Milo · wartet/, 'a waiting creature names itself and where it stands');
+  assert.doesNotMatch(idleHtml, /denkt nach|Werkzeug/, 'no activity without durable telemetry of a running task');
+  const orphan = { ...idle, id: 'queue-task-orphan', crewMemberId: '' };
+  const orphanModel = { ...mapModel, activeTask: null, tasks: [orphan] };
+  assert.match(flowCrewSvg(orphanModel, orphan, { lang: 'de', crewMembers: crewFixture, model: orphanModel }), /ohne Crew · wartet/);
+});
+
+test('Task cards name the member in its colour; unassigned work says so', () => {
+  const t = { ...labels.de };
+  const state = { lang: 'de', crewMembers: crewFixture, selectedTaskId: '', pinnedTaskIds: new Set(), model: { tasks: [] } };
+  const assigned = { id: 'queue-task-a', taskId: 'task-a', title: 'Recherche', status: 'running', routeStatus: 'running', crewMemberId: 'crew:milo' };
+  const html = taskCardMarkup(assigned, state);
+  assert.match(html, /class="ctox-task-meta-member" style="--crew-color:#00aa9a">Milo</);
+  const orphan = { id: 'queue-task-b', taskId: 'task-b', title: 'Import', status: 'failed', routeStatus: 'failed' };
+  const orphanHtml = taskCardMarkup(orphan, state);
+  assert.match(orphanHtml, new RegExp(`ctox-task-meta-member is-unassigned">${t.noCrewMemberShort}<`));
+  assert.match(orphanHtml, /ctox-crew-creature[^"]*is-neutral/, 'unassigned work shows the neutral crew ghost');
 });
 
 test('Crew at home shows every active member with its state, only while nothing runs', () => {

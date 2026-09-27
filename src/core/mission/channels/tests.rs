@@ -17,6 +17,91 @@ fn unique_test_db_path(prefix: &str) -> PathBuf {
 }
 
 #[test]
+fn email_send_profile_keeps_account_access_until_explicit_revocation() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let db_path = resolve_db_path(dir.path(), None);
+    let mut conn = open_channel_db(&db_path)?;
+    let account_key = "email:team@example.test";
+    let profile = |conn: &Connection| -> Result<Value> {
+        let raw: String = conn.query_row(
+            "SELECT profile_json FROM communication_accounts WHERE account_key = ?1",
+            [account_key],
+            |row| row.get(0),
+        )?;
+        Ok(serde_json::from_str(&raw)?)
+    };
+    upsert_communication_account(
+        &mut conn,
+        account_key,
+        "email",
+        "team@example.test",
+        "owa",
+        json!({ "ownerUserId": "alice", "shared_user_ids": ["bob"], "folder": "INBOX" }),
+    )?;
+    // Native send and provider self-test pass connector-only profiles through
+    // this same upsert path. Neither may erase Business OS access metadata.
+    upsert_communication_account(
+        &mut conn,
+        account_key,
+        "email",
+        "team@example.test",
+        "owa",
+        json!({ "folder": "Sent" }),
+    )?;
+    let after_send = profile(&conn)?;
+    assert_eq!(after_send["ownerUserId"], "alice");
+    assert_eq!(after_send["shared_user_ids"], json!(["bob"]));
+    assert_eq!(after_send["folder"], "Sent");
+
+    upsert_communication_account(
+        &mut conn,
+        account_key,
+        "email",
+        "team@example.test",
+        "owa",
+        json!({ "ownerUserId": "", "shared_user_ids": [] }),
+    )?;
+    upsert_communication_account(
+        &mut conn,
+        account_key,
+        "email",
+        "team@example.test",
+        "owa",
+        json!({ "folder": "Sent" }),
+    )?;
+    let after_revoke = profile(&conn)?;
+    assert_eq!(after_revoke["ownerUserId"], "");
+    assert_eq!(after_revoke["shared_user_ids"], json!([]));
+
+    // The email-only rule must not silently change another provider's profile
+    // replacement semantics.
+    upsert_communication_account(
+        &mut conn,
+        "jami:team",
+        "jami",
+        "team",
+        "jami",
+        json!({ "ownerUserId": "alice" }),
+    )?;
+    upsert_communication_account(
+        &mut conn,
+        "jami:team",
+        "jami",
+        "team",
+        "jami",
+        json!({ "folder": "inbox" }),
+    )?;
+    let jami_raw: String = conn.query_row(
+        "SELECT profile_json FROM communication_accounts WHERE account_key = 'jami:team'",
+        [],
+        |row| row.get(0),
+    )?;
+    let jami_profile: Value = serde_json::from_str(&jami_raw)?;
+    assert!(jami_profile.get("ownerUserId").is_none());
+    Ok(())
+}
+
+#[test]
 fn cockpit_release_guard_checks_all_links_in_either_order() -> Result<()> {
     // Production currently enforces task_id UNIQUE. Model a legacy/multi-link
     // store here to test the shared guard without weakening that invariant.
@@ -7341,4 +7426,78 @@ fn projection_outbox_retries_with_backoff_then_dead_letters() {
         .expect("inspect dead letter");
     assert_eq!(terminal, ("dead_letter".to_string(), 2));
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn queue_task_update_keeps_its_place_unless_priority_changes() {
+    // THESEN 26.09.2026: a review-feedback note recomputed sort_at, and a
+    // research task queued at 07:49 waited for hours behind later work.
+    let root = std::env::temp_dir().join(format!(
+        "ctox-queue-sort-keep-test-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&root).expect("failed to create temp test root");
+    let create = |title: &str, thread: &str| {
+        create_queue_task(
+            &root,
+            QueueTaskCreateRequest {
+                title: title.to_string(),
+                prompt: format!("Work on {title}."),
+                thread_key: thread.to_string(),
+                workspace_root: None,
+                priority: "normal".to_string(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .expect("failed to create queue task")
+    };
+    let older = create("older", "queue/sort-keep/older");
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+    let newer = create("newer", "queue/sort-keep/newer");
+    std::thread::sleep(std::time::Duration::from_millis(1_100));
+
+    update_queue_task(
+        &root,
+        QueueTaskUpdateRequest {
+            message_key: older.message_key.clone(),
+            prompt: Some("Work on older.\n\nReview feedback: write back now.".to_string()),
+            status_note: Some("Review feedback applied to same queue task".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("failed to update queue task");
+    let pending = list_queue_tasks(&root, &["pending".to_string()], 10).expect("list");
+    assert_eq!(
+        pending
+            .iter()
+            .map(|task| task.message_key.as_str())
+            .collect::<Vec<_>>(),
+        vec![older.message_key.as_str(), newer.message_key.as_str()],
+        "a feedback update must not move the task behind later work"
+    );
+
+    update_queue_task(
+        &root,
+        QueueTaskUpdateRequest {
+            message_key: older.message_key.clone(),
+            priority: Some("low".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("failed to reprioritize queue task");
+    let pending = list_queue_tasks(&root, &["pending".to_string()], 10).expect("list");
+    assert_eq!(
+        pending
+            .iter()
+            .map(|task| task.message_key.as_str())
+            .collect::<Vec<_>>(),
+        vec![newer.message_key.as_str(), older.message_key.as_str()],
+        "an explicit priority change re-sorts the task"
+    );
+    let _ = fs::remove_dir_all(&root);
 }

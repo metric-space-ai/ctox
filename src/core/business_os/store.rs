@@ -1288,11 +1288,18 @@ pub(super) fn next_projected_rxdb_revision(previous: Option<&str>) -> String {
 
 fn next_direct_rxdb_revision(previous: Option<&str>) -> String {
     let height = previous
-        .and_then(|revision| revision.split_once('-').map(|(height, _)| height))
-        .and_then(|height| height.parse::<u64>().ok())
+        .and_then(direct_rxdb_revision_height)
         .unwrap_or(0)
         .saturating_add(1);
     format!("{height}-{}", Uuid::new_v4().simple())
+}
+
+fn direct_rxdb_revision_height(revision: &str) -> Option<u64> {
+    let (height, suffix) = revision.split_once('-')?;
+    if suffix.is_empty() {
+        return None;
+    }
+    height.parse::<u64>().ok()
 }
 
 fn upsert_attached_rxdb_record(
@@ -3868,13 +3875,27 @@ pub fn load_module_source_records(
         left_path.cmp(right_path)
     });
     let now = now_ms() as i64;
-    let conn = open_store(root)?;
+    let current_ids = files
+        .iter()
+        .filter_map(|file| file.get("id").and_then(Value::as_str))
+        .collect::<HashSet<_>>();
+    let previous = pull_coding_module_source_records(root, &module_id)?;
+    let mut writer = BusinessProjectionWriter::open(root)?;
+    for file in previous {
+        let id = file
+            .get("id")
+            .and_then(Value::as_str)
+            .context("source projection id missing")?;
+        if !current_ids.contains(id) {
+            writer.tombstone_source_projection("business_module_source_files", id, now)?;
+        }
+    }
     let mut file_ids = Vec::with_capacity(files.len());
     for file in &files {
         let Some(id) = file.get("id").and_then(Value::as_str) else {
             continue;
         };
-        upsert_business_record(&conn, "business_module_source_files", id, now, file.clone())?;
+        writer.upsert_source_projection("business_module_source_files", id, now, file.clone())?;
         file_ids.push(id.to_string());
     }
     Ok(serde_json::json!({
@@ -3944,7 +3965,7 @@ fn save_module_source_record_inner(
     let app_root = resolve_business_os_app_root(root)?;
     let module_id = source_sanitize_slug(&mutation.module_id);
     anyhow::ensure!(!module_id.is_empty(), "module_id is required");
-    let (module_root, source_app_root) =
+    let (module_root, _source_app_root) =
         resolve_module_source_root_for_root(root, &app_root, &module_id)?;
     let rel = normalize_source_relative_path(&mutation.path)?;
     anyhow::ensure!(
@@ -4017,7 +4038,7 @@ fn save_module_source_record_inner(
     )?;
     drop(conn);
     if changed {
-        record_module_version(root, &source_app_root, &module_id, "edit", "", "")?;
+        super::module_lifecycle::record_module_version_at(root, &module_root, &module_id)?;
     }
     Ok(serde_json::json!({
         "ok": true,
@@ -4025,6 +4046,7 @@ fn save_module_source_record_inner(
         "path": rel_display,
         "source_file_id": file_id,
         "source_file_ids": [file_id],
+        "app_directory": module_root.strip_prefix(root).unwrap_or(&module_root).to_string_lossy().replace('\\', "/"),
         "size_bytes": metadata.len(),
         "modified_at_ms": modified_at_ms(&metadata),
         "sha256": next_sha256,
@@ -4975,6 +4997,10 @@ fn collect_module_source_files(
 ) -> anyhow::Result<()> {
     for entry in fs::read_dir(current)? {
         let entry = entry?;
+        // Source reads must not follow file symlinks out of the app either.
+        if entry.file_type()?.is_symlink() {
+            continue;
+        }
         let path = entry.path();
         let name = entry.file_name();
         let name = name.to_string_lossy();
@@ -5045,13 +5071,13 @@ pub(super) fn resolve_module_source_root(
     app_root: &Path,
     module_id: &str,
 ) -> anyhow::Result<PathBuf> {
-    let core = app_root.join("modules").join(module_id);
-    if core.join("module.json").is_file() {
-        return Ok(core);
-    }
-    let installed = app_root.join("installed-modules").join(module_id);
-    if installed.join("module.json").is_file() {
-        return Ok(installed);
+    for namespace in ["modules", "installed-modules", "local-modules"] {
+        if let Some(manifest) = checked_module_manifest_candidate(app_root, namespace, module_id)? {
+            return Ok(manifest
+                .parent()
+                .context("module manifest parent missing")?
+                .to_path_buf());
+        }
     }
     anyhow::bail!("module `{module_id}` was not found")
 }
@@ -5061,9 +5087,42 @@ pub(super) fn resolve_module_source_root_for_root(
     app_root: &Path,
     module_id: &str,
 ) -> anyhow::Result<(PathBuf, PathBuf)> {
-    let manifest_path = module_manifest_path(root, app_root, module_id)?;
+    // The served catalog excludes store templates from the bundled namespace.
+    // Resolve its native selection rather than letting a same-id template shadow
+    // an installed app. Never trust a caller/projection supplied filesystem path.
+    let installed_root = resolve_business_os_installed_app_root(root);
+    let catalog = load_module_manifests(root, app_root, &installed_root)?;
+    let manifest_path = if let Some(selected) = catalog.manifests.iter().find(|m| m.id == module_id)
+    {
+        let selected_path = PathBuf::from(&selected.local_manifest_path);
+        let namespace = selected_path
+            .parent()
+            .and_then(Path::parent)
+            .context("selected module namespace missing")?;
+        let base = namespace.parent().context("selected module root missing")?;
+        let namespace = namespace
+            .file_name()
+            .and_then(|name| name.to_str())
+            .context("selected module namespace invalid")?;
+        let checked = checked_module_manifest_candidate(base, namespace, module_id)?
+            .context("selected module source disappeared")?;
+        anyhow::ensure!(checked == selected_path, "selected module source changed");
+        anyhow::ensure!(
+            hex_sha256(&fs::read(&checked)?) == selected.manifest_sha256,
+            "selected module manifest changed; reload before editing"
+        );
+        checked
+    } else {
+        // Preserve source-only lifecycle operations before catalog publication.
+        module_manifest_path(root, app_root, module_id)?
+    };
     let source_app_root = app_root_for_module_manifest(app_root, &manifest_path);
-    let module_root = resolve_module_source_root(&source_app_root, module_id)?;
+    // Keep the exact selected manifest; re-searching another root can pick a
+    // shadowed module with the same id instead of the authorized source.
+    let module_root = manifest_path
+        .parent()
+        .context("module manifest parent missing")?
+        .to_path_buf();
     Ok((module_root, source_app_root))
 }
 
@@ -5258,7 +5317,10 @@ pub(super) fn compute_module_bundle(
 /// Deterministic bundle hash over an explicit module directory (used for the
 /// live install dir, a catalog source, and a freshly fetched github archive so
 /// they are all comparable).
-fn compute_module_bundle_at(module_root: &Path, module_id: &str) -> anyhow::Result<ModuleBundle> {
+pub(super) fn compute_module_bundle_at(
+    module_root: &Path,
+    module_id: &str,
+) -> anyhow::Result<ModuleBundle> {
     let mut raw = Vec::new();
     collect_module_source_files(module_id, module_root, module_root, &mut raw)?;
     let mut files: Vec<Value> = raw
@@ -5961,23 +6023,88 @@ pub(super) fn module_manifest_path(
     let module_id = module_id.trim();
     let installed_app_root = resolve_business_os_installed_app_root(root);
     let mut candidates = vec![
-        app_root.join("modules").join(module_id).join("module.json"),
-        app_root
-            .join("installed-modules")
-            .join(module_id)
-            .join("module.json"),
-        installed_app_root
-            .join("installed-modules")
-            .join(module_id)
-            .join("module.json"),
+        (app_root, "modules"),
+        (app_root, "installed-modules"),
+        (installed_app_root.as_path(), "installed-modules"),
+        (app_root, "local-modules"),
+        (installed_app_root.as_path(), "local-modules"),
     ];
     candidates.dedup();
-    for candidate in candidates {
-        if candidate.is_file() {
+    for (base, namespace) in candidates {
+        if let Some(candidate) = checked_module_manifest_candidate(base, namespace, module_id)? {
+            let module_dir = candidate
+                .parent()
+                .context("module manifest parent missing")?;
+            let manifest: Value = serde_json::from_slice(&fs::read(&candidate)?)?;
+            if namespace == "modules" {
+                super::customer_apps::authorize_global_module(module_dir, &manifest)?;
+            } else {
+                super::customer_apps::authorize_runtime_module(root, module_dir, &manifest)?;
+            }
             return Ok(candidate);
         }
     }
     anyhow::bail!("module manifest not found: {module_id}")
+}
+
+fn checked_module_manifest_candidate(
+    app_root: &Path,
+    namespace: &str,
+    module_id: &str,
+) -> anyhow::Result<Option<PathBuf>> {
+    anyhow::ensure!(
+        !module_id.is_empty()
+            && module_id
+                .bytes()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == b'-' || ch == b'_'),
+        "unsafe module id"
+    );
+    // A shared namespace may be symlinked without containing this module.
+    // Skip only an absent module directory, not a present (even dangling)
+    // module symlink, so lower-priority installed sources remain reachable
+    // without relaxing the checks on an actual source candidate.
+    let module_directory = app_root.join(namespace).join(module_id);
+    match fs::symlink_metadata(&module_directory) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
+    let relative = PathBuf::from(namespace).join(module_id).join("module.json");
+    ensure_source_path_has_no_symlink_components(app_root, &relative)?;
+    let candidate = app_root.join(relative);
+    if !candidate.is_file() {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        candidate
+            .canonicalize()?
+            .starts_with(app_root.canonicalize()?),
+        "module manifest escapes its source root"
+    );
+    let manifest: Value = serde_json::from_slice(&fs::read(&candidate)?)?;
+    anyhow::ensure!(
+        manifest.get("id").and_then(Value::as_str) == Some(module_id),
+        "module manifest id does not match source directory"
+    );
+    Ok(Some(candidate))
+}
+
+/// Source tools can resolve operator-owned local modules, but delegated app
+/// authoring currently only has installed/source sandbox and validator modes.
+/// Resolve the authorized source, never a caller-supplied install_target/path:
+/// admitting a local app here would create an installed-module shadow.
+pub(super) fn ensure_delegated_app_modify_target_supported(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<()> {
+    let app_root = resolve_business_os_app_root(root)?;
+    let (module_root, _) = resolve_module_source_root_for_root(root, &app_root, module_id)?;
+    anyhow::ensure!(
+        module_root.parent().and_then(Path::file_name).and_then(|name| name.to_str())
+            != Some("local-modules"),
+        "local_app_authoring_unsupported: module `{module_id}` is operator-owned under local-modules; delegated modify_app has no local sandbox/validation lifecycle contract and must not create an installed-module shadow"
+    );
+    Ok(())
 }
 
 pub(super) fn app_root_for_module_manifest(
@@ -5993,7 +6120,7 @@ pub(super) fn app_root_for_module_manifest(
     if collection_dir
         .file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| matches!(name, "modules" | "installed-modules"))
+        .is_some_and(|name| matches!(name, "modules" | "installed-modules" | "local-modules"))
     {
         return collection_dir
             .parent()
@@ -6410,16 +6537,34 @@ pub fn list_revoked_business_peers(root: &Path) -> anyhow::Result<Vec<Value>> {
     Ok(rows)
 }
 
-pub fn record_command(
+pub fn record_command(root: &Path, command: BusinessCommand) -> anyhow::Result<CommandAccepted> {
+    record_command_inner(root, command, None)
+}
+
+pub(super) fn record_mcp_app_command(
+    root: &Path,
+    authority: Option<super::mcp_channel::AuthenticatedMcpAppCommand>,
+    command: BusinessCommand,
+) -> anyhow::Result<CommandAccepted> {
+    record_command_inner(root, command, authority.as_ref())
+}
+
+fn record_command_inner(
     root: &Path,
     mut command: BusinessCommand,
+    authority: Option<&super::mcp_channel::AuthenticatedMcpAppCommand>,
 ) -> anyhow::Result<CommandAccepted> {
     let command_id = command
         .id
         .clone()
         .unwrap_or_else(|| format!("cmd_{}", Uuid::new_v4()));
     command.id = Some(command_id.clone());
-    if let Some(_decision) = reject_app_build_command_if_denied(root, &command)? {
+    let authenticated_session = authority
+        .map(|authority| authority.session(root, &command))
+        .transpose()?;
+    if let Some(_decision) =
+        reject_app_build_command_if_denied(root, &command, authenticated_session.as_ref())?
+    {
         return Ok(CommandAccepted {
             ok: false,
             command_id,
@@ -6429,7 +6574,16 @@ pub fn record_command(
             ..CommandAccepted::default()
         });
     }
-    let native_authorization = queue_command_native_authorization(root, &command)?;
+    if command.command_type == "ctox.business_os.app.modify" {
+        let (_, module_id) = app_build_command_policy_target(&command)
+            .context("app modification target is missing")?;
+        ensure_delegated_app_modify_target_supported(root, &module_id)?;
+    }
+    let mut native_authorization =
+        queue_command_native_authorization(root, &command, authenticated_session.as_ref())?;
+    if let (Some(authority), Some(receipt)) = (authority, native_authorization.as_mut()) {
+        receipt["managed_mcp_authority"] = authority.receipt()?;
+    }
     {
         let conn = open_store(root)?;
         if let Some(denied) = claim_or_reject_business_chat(root, &conn, &command_id, &command)? {
@@ -8097,11 +8251,15 @@ pub(super) fn claim_or_reject_business_chat(
 fn reject_app_build_command_if_denied(
     root: &Path,
     command: &BusinessCommand,
+    authenticated_session: Option<&BusinessOsSession>,
 ) -> anyhow::Result<Option<PolicyDecision>> {
     let Some((permission, module_id)) = app_build_command_policy_target(command) else {
         return Ok(None);
     };
-    let session = rxdb_authenticated_session(root, command)?;
+    let session = match authenticated_session {
+        Some(session) => session.clone(),
+        None => rxdb_authenticated_session(root, command)?,
+    };
     let decision = match permission {
         BusinessOsPermission::AppsModify => {
             module_policy_decision(root, &session, permission, &module_id)?
@@ -8114,7 +8272,16 @@ fn reject_app_build_command_if_denied(
         )?,
     };
     if decision.allowed {
-        record_business_policy_decision_event(root, command, &decision)?;
+        if let Some(session) = authenticated_session {
+            record_business_policy_decision_event_with_actor(
+                root,
+                command,
+                &decision,
+                session_audit_actor_context(session),
+            )?;
+        } else {
+            record_business_policy_decision_event(root, command, &decision)?;
+        }
         return Ok(None);
     }
     reject_command_if_policy_denied(root, command, &decision)?;
@@ -8145,11 +8312,15 @@ pub(super) fn queue_command_policy_target(
 fn queue_command_native_authorization(
     root: &Path,
     command: &BusinessCommand,
+    authenticated_session: Option<&BusinessOsSession>,
 ) -> anyhow::Result<Option<Value>> {
-    if !matches!(command.origin, CommandOrigin::ReplicatedPeer) {
+    if authenticated_session.is_none() && !matches!(command.origin, CommandOrigin::ReplicatedPeer) {
         return Ok(None);
     }
-    let session = rxdb_authenticated_session(root, command)?;
+    let session = match authenticated_session {
+        Some(session) => session.clone(),
+        None => rxdb_authenticated_session(root, command)?,
+    };
     let decision = queue_command_policy_decision(root, &session, command)?;
     anyhow::ensure!(
         decision.allowed,
@@ -8181,7 +8352,14 @@ fn revalidate_queue_native_authorization(
         authorization.get("allowed").and_then(Value::as_bool) == Some(true),
         "Business OS command was not authorized at admission"
     );
-    let (permission, module_id, _) = queue_command_policy_target(command);
+    let control_permission = recoverable_background_control_permission(&command.command_type);
+    let (permission, module_id) = match control_permission {
+        Some(permission) => (permission, command.module.clone()),
+        None => {
+            let (permission, module_id, _) = queue_command_policy_target(command);
+            (permission, module_id)
+        }
+    };
     anyhow::ensure!(
         authorization.get("permission").and_then(Value::as_str) == Some(permission.as_str()),
         "Business OS command authorization permission changed"
@@ -8206,6 +8384,30 @@ fn revalidate_queue_native_authorization(
         .and_then(Value::as_str)
         .map(normalize_business_role)
         .context("Business OS command authorized actor role is missing")?;
+    if let Some(receipt) = authorization.get("managed_mcp_authority") {
+        let authority =
+            super::mcp_channel::AuthenticatedMcpAppCommand::from_native_receipt(receipt)?;
+        let session = authority.session(root, command)?;
+        let user = session
+            .user
+            .as_ref()
+            .context("managed MCP app actor is missing")?;
+        anyhow::ensure!(
+            user.id == actor_id && user.role == authorized_role,
+            "native managed MCP authorization actor changed"
+        );
+        let decision = if control_permission.is_some() {
+            module_policy_decision(root, &session, permission, &module_id)?
+        } else {
+            queue_command_policy_decision(root, &session, command)?
+        };
+        anyhow::ensure!(
+            decision.allowed,
+            "Business OS execution permission was revoked: {}",
+            decision.display_reason
+        );
+        return Ok((session, decision));
+    }
     let conn = open_store(root)?;
     seed_configured_business_users(&conn)?;
     let user = active_business_user(&conn, actor_id)?
@@ -8227,7 +8429,11 @@ fn revalidate_queue_native_authorization(
         login_url: None,
         reason: None,
     };
-    let decision = queue_command_policy_decision(root, &session, command)?;
+    let decision = if control_permission.is_some() {
+        module_policy_decision(root, &session, permission, &module_id)?
+    } else {
+        queue_command_policy_decision(root, &session, command)?
+    };
     anyhow::ensure!(
         decision.allowed,
         "Business OS execution permission was revoked: {}",
@@ -8259,6 +8465,11 @@ pub(crate) fn revalidate_business_command_execution_authorization(
         session.authenticated,
         "Business OS actor is no longer authenticated at harness lease"
     );
+    if command.command_type == "ctox.business_os.app.modify" {
+        let (_, module_id) = app_build_command_policy_target(&command)
+            .context("app modification target is missing")?;
+        ensure_delegated_app_modify_target_supported(root, &module_id)?;
+    }
     let missing_dependencies = missing_business_command_dependencies(root, &command)?;
     anyhow::ensure!(
         missing_dependencies.is_empty(),
@@ -8391,6 +8602,20 @@ pub(super) fn record_business_policy_decision_event(
     command: &BusinessCommand,
     decision: &PolicyDecision,
 ) -> anyhow::Result<()> {
+    record_business_policy_decision_event_with_actor(
+        root,
+        command,
+        decision,
+        policy_audit_actor_context(root, command),
+    )
+}
+
+fn record_business_policy_decision_event_with_actor(
+    root: &Path,
+    command: &BusinessCommand,
+    decision: &PolicyDecision,
+    actor: Value,
+) -> anyhow::Result<()> {
     let command_id = command.id.as_deref().context("command id is required")?;
     let event_type = if decision.allowed {
         "business_os.policy.allowed"
@@ -8398,7 +8623,6 @@ pub(super) fn record_business_policy_decision_event(
         "business_os.policy.denied"
     };
     let observed_at_ms = now_ms() as i64;
-    let actor = policy_audit_actor_context(root, command);
     let client_context = policy_audit_client_context(command);
     let conn = open_store(root)?;
     insert_business_event(
@@ -10964,6 +11188,184 @@ pub fn pull_latest_collection_records(
     }))
 }
 
+fn mcp_rxdb_document(record_id: &str, raw: &str, sql_deleted: i64) -> anyhow::Result<Value> {
+    let mut document: Value = serde_json::from_str(raw)
+        .with_context(|| format!("parse native RxDB document `{record_id}` for MCP read"))?;
+    let deleted = sql_deleted != 0 || is_rxdb_deleted_document(&document);
+    let object = document
+        .as_object_mut()
+        .with_context(|| format!("native RxDB document `{record_id}` is not an object"))?;
+    if object
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|id| id != record_id)
+    {
+        anyhow::bail!("native RxDB document `{record_id}` has a different payload id");
+    }
+    object.insert("id".to_string(), Value::String(record_id.to_string()));
+    object.insert("_deleted".to_string(), Value::Bool(deleted));
+    for alias in ["deleted", "is_deleted"] {
+        if object.contains_key(alias) {
+            object.insert(alias.to_string(), Value::Bool(deleted));
+        }
+    }
+    Ok(document)
+}
+
+/// MCP app reads prefer the native RxDB row that the browser sees. A tombstone
+/// is a present row; falling back to an older shadow would resurrect it.
+pub fn pull_mcp_app_collection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let path = rxdb_store_path(root);
+    if path.is_file() {
+        let conn = Connection::open(&path)?;
+        if let Some(table) = rxdb_collection_table_name(&path, &conn, collection) {
+            let columns = rxdb_table_columns(&conn, &table)?;
+            let deleted_column = if columns.contains("deleted") {
+                "deleted"
+            } else if columns.contains("_deleted") {
+                "_deleted"
+            } else {
+                "0"
+            };
+            let row = conn
+                .query_row(
+                    &format!("SELECT data, {deleted_column} FROM {table} WHERE id = ?1"),
+                    [record_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                )
+                .optional()?;
+            if let Some((raw, deleted)) = row {
+                return Ok(Some(mcp_rxdb_document(record_id, &raw, deleted)?));
+            }
+        }
+    }
+    pull_collection_record(root, collection, record_id)
+}
+
+/// RxDB owns each ID it contains. Merge shadow-only IDs by write time before
+/// applying the limit so a recent fallback cannot disappear behind older rows.
+pub fn pull_mcp_app_collection_records(
+    root: &Path,
+    collection: &str,
+    limit: Option<usize>,
+) -> anyhow::Result<Value> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    let limit = limit.unwrap_or(500).clamp(1, 2_000);
+    let path = rxdb_store_path(root);
+    let rxdb = if path.is_file() {
+        let conn = Connection::open(&path)?;
+        rxdb_collection_table_name(&path, &conn, collection).map(|table| (conn, table))
+    } else {
+        None
+    };
+    let mut documents = Vec::new();
+    if let Some((conn, table)) = rxdb.as_ref() {
+        let columns = rxdb_table_columns(conn, table)?;
+        let deleted_column = if columns.contains("deleted") {
+            "deleted"
+        } else if columns.contains("_deleted") {
+            "_deleted"
+        } else {
+            "0"
+        };
+        let write_clock = if columns.contains("lastWriteTime") {
+            "lastWriteTime"
+        } else {
+            "CAST(COALESCE(json_extract(data, '$._meta.lwt'), json_extract(data, '$.updated_at_ms'), 0) AS REAL)"
+        };
+        let mut statement = conn.prepare(&format!(
+            "SELECT id, data, {deleted_column}, {write_clock} AS write_clock FROM {table}
+             ORDER BY {write_clock} DESC, id DESC LIMIT ?1"
+        ))?;
+        let rows = statement.query_map([limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        })?;
+        for row in rows {
+            let (id, raw, deleted, write_time) = row?;
+            documents.push((
+                write_time,
+                id.clone(),
+                mcp_rxdb_document(&id, &raw, deleted)?,
+            ));
+        }
+    }
+    let shadow_only = with_store_connection(root, |conn| {
+        let mut statement = conn.prepare(
+            "SELECT record_id, deleted, updated_at_ms, payload_json
+                 FROM business_records WHERE collection = ?1
+                 ORDER BY updated_at_ms DESC, record_id DESC",
+        )?;
+        let mut rows = statement.query([collection])?;
+        let mut fallback = Vec::new();
+        while fallback.len() < limit {
+            let Some(row) = rows.next()? else { break };
+            let id: String = row.get(0)?;
+            if let Some((rxdb_conn, table)) = rxdb.as_ref() {
+                let exists = rxdb_conn
+                    .query_row(
+                        &format!("SELECT 1 FROM {table} WHERE id = ?1"),
+                        [&id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()?
+                    .is_some();
+                if exists {
+                    continue;
+                }
+            }
+            let deleted: i64 = row.get(1)?;
+            let updated_at_ms: i64 = row.get(2)?;
+            let raw: String = row.get(3)?;
+            let mut document: Value = serde_json::from_str(&raw)
+                .with_context(|| format!("parse shadow document `{collection}/{id}`"))?;
+            let object = document
+                .as_object_mut()
+                .with_context(|| format!("shadow document `{collection}/{id}` is not an object"))?;
+            object
+                .entry("id".to_string())
+                .or_insert_with(|| Value::String(id.clone()));
+            object.insert("_deleted".to_string(), Value::Bool(deleted != 0));
+            object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+            fallback.push((updated_at_ms as f64, id, document));
+        }
+        Ok(fallback)
+    })?;
+    documents.extend(shadow_only);
+    documents.sort_by(|left, right| {
+        right
+            .0
+            .total_cmp(&left.0)
+            .then_with(|| right.1.cmp(&left.1))
+    });
+    documents.truncate(limit);
+    let documents: Vec<Value> = documents
+        .into_iter()
+        .map(|(_, _, document)| document)
+        .collect();
+    Ok(serde_json::json!({
+        "ok": true,
+        "collection": collection,
+        "count": documents.len(),
+        "documents": documents,
+        "since_ms": 0,
+        "source": "mcp_rxdb_priority"
+    }))
+}
+
 pub fn pull_business_command_status_record(
     root: &Path,
     command_id: &str,
@@ -11218,6 +11620,169 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
     Ok(Some((id, record)))
 }
 
+/// Exact-match lookup over one JSON field of an RxDB collection table.
+///
+/// The JSON path is a literal and `deleted` leads the predicate so SQLite can
+/// use the `("deleted", json_extract(data, '$.field'), "id")` expression index
+/// that RxDB schema indexes and [`ensure_rxdb_string_field_lookup_index`]
+/// create. The former `CAST(json_extract(data, ?1) AS TEXT) = ?2` could use no
+/// index: each Sellify lookup parsed every row, e.g. 92,875 campaign rows
+/// (118 MB) per campaign import on THESEN (26.09.2026). The caller must have
+/// validated `field` as `[A-Za-z0-9_]+`.
+fn rxdb_string_field_lookup_sql(table: &str, field: &str) -> String {
+    format!(
+        "SELECT id, data
+         FROM {table}
+         WHERE deleted IN (0, 1)
+           AND json_extract(data, '$.{field}') IN (?1, ?2)
+         ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
+         LIMIT ?3"
+    )
+}
+
+/// Creates the expression index a string-field lookup needs when the RxDB
+/// schema does not declare one (e.g. `sellify_campaigns.name`). Best effort:
+/// without the index the lookup stays correct, only slower.
+fn ensure_rxdb_string_field_lookup_index(path: &Path, conn: &Connection, table: &str, field: &str) {
+    static CHECKED: std::sync::OnceLock<std::sync::Mutex<BTreeSet<String>>> =
+        std::sync::OnceLock::new();
+    let key = format!("{}|{table}|{field}", path.display());
+    let checked = CHECKED.get_or_init(|| std::sync::Mutex::new(BTreeSet::new()));
+    if checked
+        .lock()
+        .map(|set| set.contains(&key))
+        .unwrap_or(false)
+    {
+        return;
+    }
+    let expression = format!("json_extract(data, '$.{field}')");
+    let result = (|| -> rusqlite::Result<()> {
+        let mut statement = conn.prepare(
+            "SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'index' AND tbl_name = ?1",
+        )?;
+        let covered = statement
+            .query_map(params![table], |row| row.get::<_, String>(0))?
+            .filter_map(Result::ok)
+            .any(|sql| sql.contains(&format!("(\"deleted\", {expression}")));
+        if !covered {
+            conn.execute_batch(&format!(
+                "CREATE INDEX IF NOT EXISTS \"{table}_lookup_{field}_idx\"
+                 ON \"{table}\"(\"deleted\", {expression}, \"id\");"
+            ))?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            if let Ok(mut set) = checked.lock() {
+                set.insert(key);
+            }
+        }
+        Err(error) => {
+            eprintln!("[business-os] lookup index on {table}.{field} not available yet: {error}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod rxdb_string_field_lookup_tests {
+    use super::*;
+
+    #[test]
+    fn grouped_contains_search_counts_live_rows_per_value() {
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE group_table (id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                 deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0);
+             INSERT INTO group_table (id, data, deleted) VALUES
+                 ('a', '{\"name\":\"Maschinenbau - Welle 1\"}', 0),
+                 ('b', '{\"name\":\"Maschinenbau - Welle 1\"}', 0),
+                 ('c', '{\"name\":\"Maschinenbau - Welle 1\",\"is_deleted\":true}', 0),
+                 ('d', '{\"name\":\"Maschinenbau - Welle 1\"}', 1),
+                 ('e', '{\"name\":\"Chemie - Welle 1\"}', 0),
+                 ('f', '{\"name\":\"Beauty\"}', 0);",
+        )
+        .expect("seed");
+        let path = Path::new("/nonexistent/group-test.sqlite3");
+        ensure_rxdb_string_field_lookup_index(path, &conn, "group_table", "name");
+        let mut statement = conn
+            .prepare(&rxdb_string_field_group_sql("group_table", "name"))
+            .expect("prepare");
+        let mut groups = statement
+            .query_map(params!["%welle%"], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .expect("query")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("rows");
+        groups.sort();
+        assert_eq!(
+            groups,
+            vec![
+                ("Chemie - Welle 1".to_string(), 1),
+                ("Maschinenbau - Welle 1".to_string(), 2)
+            ]
+        );
+    }
+
+    #[test]
+    fn string_field_lookup_uses_an_expression_index_and_matches_text_and_numbers() {
+        let conn = Connection::open_in_memory().expect("open");
+        conn.execute_batch(
+            "CREATE TABLE lookup_table (id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                 deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0);
+             INSERT INTO lookup_table (id, data) VALUES
+                 ('a', '{\"name\":\"Maschinenbau\",\"updated_at_ms\":2}'),
+                 ('b', '{\"name\":\"Chemie\",\"updated_at_ms\":1}'),
+                 ('c', '{\"contact_id\":123,\"updated_at_ms\":3}'),
+                 ('d', '{\"contact_id\":\"123\",\"updated_at_ms\":4}');",
+        )
+        .expect("seed");
+        let path = Path::new("/nonexistent/lookup-test.sqlite3");
+        ensure_rxdb_string_field_lookup_index(path, &conn, "lookup_table", "name");
+        ensure_rxdb_string_field_lookup_index(path, &conn, "lookup_table", "contact_id");
+
+        let lookup = |field: &str, expected: &str| -> Vec<String> {
+            let numeric = expected.parse::<i64>().ok();
+            let mut statement = conn
+                .prepare(&rxdb_string_field_lookup_sql("lookup_table", field))
+                .expect("prepare");
+            statement
+                .query_map(params![expected, numeric, 10_i64], |row| {
+                    row.get::<_, String>(0)
+                })
+                .expect("query")
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("rows")
+        };
+        assert_eq!(lookup("name", "Maschinenbau"), vec!["a".to_string()]);
+        assert_eq!(
+            lookup("contact_id", "123"),
+            vec!["d".to_string(), "c".to_string()]
+        );
+        assert!(lookup("name", "Bau").is_empty());
+
+        let plan = conn
+            .prepare(&format!(
+                "EXPLAIN QUERY PLAN {}",
+                rxdb_string_field_lookup_sql("lookup_table", "name")
+            ))
+            .expect("prepare plan")
+            .query_map(
+                params!["Maschinenbau", Option::<i64>::None, 10_i64],
+                |row| row.get::<_, String>(3),
+            )
+            .expect("plan")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("plan rows")
+            .join("\n");
+        assert!(
+            plan.contains("lookup_table_lookup_name_idx"),
+            "lookup must use the expression index, plan: {plan}"
+        );
+    }
+}
+
 pub(super) fn find_rxdb_collection_records_by_string_field(
     root: &Path,
     collection: &str,
@@ -11242,19 +11807,17 @@ pub(super) fn find_rxdb_collection_records_by_string_field(
         return Ok(Vec::new());
     }
     let conn = Connection::open(&path)?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
     let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
         return Ok(Vec::new());
     };
-    let json_path = format!("$.{field}");
-    let mut stmt = conn.prepare(&format!(
-        "SELECT id, data
-         FROM {table}
-         WHERE CAST(json_extract(data, ?1) AS TEXT) = ?2
-         ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
-         LIMIT ?3"
-    ))?;
+    ensure_rxdb_string_field_lookup_index(&path, &conn, &table, field);
+    // A numeric JSON value must still match its decimal text (the former
+    // `CAST(... AS TEXT) = ?` semantics), so the integer form is probed too.
+    let numeric = expected.parse::<i64>().ok();
+    let mut stmt = conn.prepare(&rxdb_string_field_lookup_sql(&table, field))?;
     let rows = stmt
-        .query_map(params![json_path, expected, limit as i64], |row| {
+        .query_map(params![expected, numeric, limit as i64], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -11275,6 +11838,78 @@ pub(super) fn find_rxdb_collection_records_by_string_field(
 /// CRM company matching, where names drift over time (legal-form suffixes,
 /// renames): the browser must not scan 17k replicated documents itself, so
 /// the LIKE scan runs natively over the SQLite store instead.
+/// Counts live records per value of one JSON string field whose value
+/// contains `needle` (case-insensitive LIKE), largest groups first.
+///
+/// A Sellify campaign search needs only names and member counts. Loading every
+/// matching membership row (up to 50,000 full documents) and grouping in Rust
+/// took 8 s for "Welle" and silently undercounted once the cap was reached
+/// (THESEN 26.09.2026). Grouping in SQL over the `("deleted", name, "id")`
+/// expression index reads the name from the index and touches a row only for
+/// its `is_deleted` flag.
+pub(super) fn group_rxdb_collection_string_field_contains(
+    root: &Path,
+    collection: &str,
+    field: &str,
+    needle: &str,
+    max_groups: usize,
+) -> anyhow::Result<(Vec<(String, u64)>, u64)> {
+    if !is_safe_rxdb_collection_name(collection) {
+        anyhow::bail!("invalid collection name `{collection}`");
+    }
+    if !field
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+    {
+        anyhow::bail!("invalid RxDB JSON field `{field}`");
+    }
+    let needle = needle.trim();
+    if max_groups == 0 || needle.len() < 2 {
+        return Ok((Vec::new(), 0));
+    }
+    let path = rxdb_store_path(root);
+    if !path.is_file() {
+        return Ok((Vec::new(), 0));
+    }
+    let conn = Connection::open(&path)?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let Some(table) = rxdb_collection_table_name(&path, &conn, collection) else {
+        return Ok((Vec::new(), 0));
+    };
+    ensure_rxdb_string_field_lookup_index(&path, &conn, &table, field);
+    let escaped = needle
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let pattern = format!("%{escaped}%");
+    let mut stmt = conn.prepare(&rxdb_string_field_group_sql(&table, field))?;
+    let groups = stmt
+        .query_map(params![pattern], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let scanned = groups.iter().map(|(_, count)| (*count).max(0) as u64).sum();
+    let mut groups = groups
+        .into_iter()
+        .map(|(name, count)| (name.trim().to_string(), count.max(0) as u64))
+        .filter(|(name, _)| !name.is_empty())
+        .collect::<Vec<_>>();
+    groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    groups.truncate(max_groups);
+    Ok((groups, scanned))
+}
+
+fn rxdb_string_field_group_sql(table: &str, field: &str) -> String {
+    format!(
+        "SELECT json_extract(data, '$.{field}') AS grouped_value, COUNT(*)
+         FROM {table}
+         WHERE deleted = 0
+           AND json_extract(data, '$.{field}') LIKE ?1 ESCAPE '\\'
+           AND COALESCE(json_extract(data, '$.is_deleted'), 0) NOT IN (1, 'true')
+         GROUP BY grouped_value"
+    )
+}
+
 pub(super) fn find_rxdb_collection_records_by_string_field_contains(
     root: &Path,
     collection: &str,
@@ -11974,6 +12609,74 @@ impl RxdbCollectionWriter {
     }
 }
 
+/// Repair documents written by older native projections before RxDB opens.
+/// Missing envelope fields can break collection queries and replication even
+/// when only one projected document is malformed.
+pub(super) fn repair_missing_rxdb_envelopes(
+    root: &Path,
+    collection: &str,
+) -> anyhow::Result<usize> {
+    let Some(mut writer) = RxdbCollectionWriter::open(root, collection)? else {
+        return Ok(0);
+    };
+    let deleted_column = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column));
+    let rows = {
+        let mut statement = writer.conn.prepare(&format!(
+            "SELECT id, data, {} FROM {}",
+            deleted_column.unwrap_or("NULL"),
+            writer.table
+        ))?;
+        let mapped = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        })?;
+        mapped.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+    let mut repaired = 0;
+    for (id, raw, sql_deleted) in rows {
+        let document: Value = serde_json::from_str(&raw)
+            .with_context(|| format!("parse projected {collection} document {id}"))?;
+        let json_deleted = document.get("_deleted").and_then(Value::as_bool);
+        // A legacy SQLite tombstone must never become live because its JSON
+        // deletion marker was lost or contradicted during projection.
+        let deleted = sql_deleted.is_some_and(|value| value != 0)
+            || json_deleted
+                .or_else(|| document.get("is_deleted").and_then(Value::as_bool))
+                .unwrap_or(false);
+        let valid_envelope = document
+            .pointer("/_meta/lwt")
+            .and_then(Value::as_f64)
+            .is_some()
+            && document
+                .get("_rev")
+                .and_then(Value::as_str)
+                .is_some_and(|revision| direct_rxdb_revision_height(revision).is_some())
+            && json_deleted.is_some()
+            && document.get("_attachments").is_some_and(Value::is_object)
+            && json_deleted == Some(deleted)
+            && sql_deleted.is_none_or(|value| (value != 0) == deleted);
+        if valid_envelope {
+            continue;
+        }
+        let source_updated_at_ms = document
+            .get("updated_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or_else(|| now_ms().min(i64::MAX as u128) as i64);
+        if deleted {
+            writer.replace_source(&id, source_updated_at_ms, document, true)?;
+        } else {
+            writer.upsert_source_projection(&id, source_updated_at_ms, document)?;
+        }
+        repaired += 1;
+    }
+    Ok(repaired)
+}
+
 fn upsert_rxdb_collection_record_with_writer(
     conn: &Connection,
     table: &str,
@@ -11987,6 +12690,7 @@ fn upsert_rxdb_collection_record_with_writer(
     merge_existing: bool,
 ) -> anyhow::Result<()> {
     let mut previous_revision = None;
+    let mut existing_row = false;
     if let Some(existing_json) = conn
         .query_row(
             &format!("SELECT data FROM {table} WHERE id = ?1"),
@@ -11995,10 +12699,12 @@ fn upsert_rxdb_collection_record_with_writer(
         )
         .optional()?
     {
+        existing_row = true;
         if let Ok(mut existing) = serde_json::from_str::<Value>(&existing_json) {
             previous_revision = existing
                 .get("_rev")
                 .and_then(Value::as_str)
+                .filter(|revision| direct_rxdb_revision_height(revision).is_some())
                 .map(str::to_string);
             if merge_existing {
                 merge_json_object_values(&mut existing, &payload);
@@ -12006,17 +12712,53 @@ fn upsert_rxdb_collection_record_with_writer(
             }
         }
     }
+    if existing_row && previous_revision.is_none() {
+        if let Some(revision_column) = ["revision", "_rev"]
+            .into_iter()
+            .find(|column| table_columns.contains(*column))
+        {
+            previous_revision = conn
+                .query_row(
+                    &format!("SELECT {revision_column} FROM {table} WHERE id = ?1"),
+                    [record_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+                .flatten()
+                .filter(|revision| direct_rxdb_revision_height(revision).is_some());
+        }
+    }
     let rev = next_direct_rxdb_revision(previous_revision.as_deref());
     if let Some(object) = payload.as_object_mut() {
         object.insert("id".to_string(), Value::String(record_id.to_string()));
         object.insert("_rev".to_string(), Value::String(rev.clone()));
+        object.insert("_deleted".to_string(), Value::Bool(deleted));
+        // A live re-projection must clear legacy deletion aliases left by a
+        // merged tombstone, or readers can still treat the revived row as dead.
+        for alias in ["deleted", "is_deleted"] {
+            if object.contains_key(alias) {
+                object.insert(alias.to_string(), Value::Bool(deleted));
+            }
+        }
+        let meta = object
+            .entry("_meta".to_string())
+            .or_insert_with(|| serde_json::json!({}));
+        if !meta.is_object() {
+            *meta = serde_json::json!({});
+        }
+        meta.as_object_mut().expect("_meta is an object").insert(
+            "lwt".to_string(),
+            Value::Number(serde_json::Number::from(replication_lwt_ms)),
+        );
+        if !object.get("_attachments").is_some_and(Value::is_object) {
+            object.insert("_attachments".to_string(), serde_json::json!({}));
+        }
         object.insert(
             "updated_at_ms".to_string(),
             Value::Number(serde_json::Number::from(payload_updated_at_ms)),
         );
         if deleted {
             object.insert("is_deleted".to_string(), Value::Bool(true));
-            object.insert("_deleted".to_string(), Value::Bool(true));
         }
     }
     // SECURITY: strip bearer credentials from client_context on the FINAL merged
@@ -13719,39 +14461,47 @@ pub(super) fn handle_workspace_control_command(
                         .map(str::trim)
                         .filter(|value| !value.is_empty())
                         .context("target command has no cancellable execution task")?;
-            let actor = session_user_id(&session).unwrap_or("unknown");
-            let cancellation = serde_json::json!({
-                "ok": true,
-                "target_command_id": target_command_id,
-                "execution_task_id": task_id,
-                "cancelled_by": actor,
-                "cancelled_at_ms": now_ms(),
-                "reason": reason,
-                "side_effects_may_have_started": target
-                    .pointer("/command/execution_phase")
-                    .and_then(Value::as_str)
-                    .is_some_and(|phase| !matches!(phase, "accepted" | "queued" | "waiting_dependencies")),
-            });
-            channels::transition_business_command_for_task(
-                root,
-                task_id,
-                "cancelled",
-                Some(&cancellation),
-                None,
-                None,
-                &format!("cancelled by {actor}: {reason}"),
-            )?;
-            return write_rxdb_control_command_outcome(
-                root,
-                &command,
-                "completed",
-                Some(task_id),
-                Some("cancelled"),
-                cancellation,
-            );
-            },
-        )?
-        .into_outcome();
+                    let actor = session_user_id(&session).unwrap_or("unknown");
+                    // Leasing hands the task to a worker before the command projection
+                    // necessarily advances. Once leased, side effects may have begun
+                    // even if the projected execution phase still says "accepted".
+                    let side_effects_may_have_started = target
+                        .pointer("/command/execution_phase")
+                        .and_then(Value::as_str)
+                        .is_some_and(|phase| {
+                            !matches!(phase, "accepted" | "queued" | "waiting_dependencies")
+                        })
+                        || channels::load_queue_task(root, task_id)?
+                            .is_some_and(|task| task.attempt > 0);
+                    let cancellation = serde_json::json!({
+                        "ok": true,
+                        "target_command_id": target_command_id,
+                        "execution_task_id": task_id,
+                        "cancelled_by": actor,
+                        "cancelled_at_ms": now_ms(),
+                        "reason": reason,
+                        "side_effects_may_have_started": side_effects_may_have_started,
+                    });
+                    channels::transition_business_command_for_task(
+                        root,
+                        task_id,
+                        "cancelled",
+                        Some(&cancellation),
+                        None,
+                        None,
+                        &format!("cancelled by {actor}: {reason}"),
+                    )?;
+                    return write_rxdb_control_command_outcome(
+                        root,
+                        &command,
+                        "completed",
+                        Some(task_id),
+                        Some("cancelled"),
+                        cancellation,
+                    );
+                },
+            )?
+            .into_outcome();
         }
         "ctox.runtime_settings.save" => {
             let mutation: RuntimeSettingsRequest = serde_json::from_value(command.payload.clone())
@@ -14150,10 +14900,32 @@ pub(super) fn handle_app_lifecycle_command(
                         "permission must be data.read or data.write"
                     );
                     let owned_prefix = format!("{}_", module_id.replace('-', "_"));
-                    anyhow::ensure!(
-                        !module_id.is_empty() && collection.starts_with(&owned_prefix),
-                        "collection must be owned by the target module"
-                    );
+                    anyhow::ensure!(!module_id.is_empty(), "module_id is required");
+                    if !collection.starts_with(&owned_prefix) {
+                        // Shared operational views (for example Mail) do not
+                        // own the canonical collections they display. Their
+                        // read grants need an explicit operator review; app
+                        // installation or a manifest declaration is not consent.
+                        anyhow::ensure!(
+                            permission == "data.read"
+                                && command.payload.get("reviewed_shared_read")
+                                    .and_then(Value::as_bool) == Some(true)
+                                && command.payload.get("reason")
+                                    .and_then(Value::as_str)
+                                    .is_some_and(|reason| !reason.trim().is_empty()),
+                            "shared collection access requires an explicit reviewed read grant and reason"
+                        );
+                        let decision = scoped_policy_decision(
+                            root,
+                            &session,
+                            BusinessOsPermission::DataRead,
+                            BusinessOsScope::collection(collection),
+                        )?;
+                        anyhow::ensure!(
+                            decision.allowed,
+                            "reviewing operator cannot read the requested shared collection"
+                        );
+                    }
                     let inspection = app_runtime::inspect_module(root, module_id)?;
                     anyhow::ensure!(
                         inspection
@@ -16179,6 +16951,8 @@ pub(super) fn is_outbound_active_command(command_type: &str) -> bool {
             // panel opens, and every read became a worker task that mostly
             // failed.
             | "outbound.research_source.registry_read"
+            // "Jetzt testen" of the Update-Verteiler: native, deterministic.
+            | "outbound.update_digest.send_now"
     )
 }
 
@@ -16749,6 +17523,98 @@ pub(super) fn ensure_legacy_collection_grants(
     }
     tx.commit()?;
     Ok(())
+}
+
+/// First-party catalog apps (Mail, Documents, Auth-Handoff) run as installed
+/// modules, and the browser shell gives installed apps only collections with
+/// an explicit, reviewed grant. Their shared collections (mail, commands) only
+/// ever had `migration.sync.*` grants for founder/user, which the shell
+/// deliberately ignores, so the Mail app could read nothing — not even for an
+/// admin (thesen 22.09.2026: "Mail konnte nicht geladen werden", then 0 mails).
+/// Server policy already lets admin/chef read and write all business data;
+/// this materialises exactly that for the collections the first-party apps
+/// declare. Third-party apps and ordinary roles are unchanged.
+pub(super) fn ensure_first_party_catalog_collection_grants(
+    root: &Path,
+    installed_app_root: &Path,
+) -> anyhow::Result<usize> {
+    let modules_dir = installed_app_root.join("installed-modules");
+    let Ok(entries) = fs::read_dir(&modules_dir) else {
+        return Ok(0);
+    };
+    let mut declared: Vec<(String, String)> = Vec::new();
+    for entry in entries.flatten() {
+        let manifest_path = entry.path().join("module.json");
+        let Ok(raw) = fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let Ok(manifest) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if manifest.get("source").and_then(Value::as_str) != Some("catalog") {
+            continue;
+        }
+        let Some(module_id) = manifest
+            .get("id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            continue;
+        };
+        for collection in manifest
+            .get("collections")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if collection == "ctox_queue_tasks" || policy::is_cockpit_projection(collection) {
+                continue;
+            }
+            declared.push((module_id.to_string(), collection.to_string()));
+        }
+    }
+    if declared.is_empty() {
+        return Ok(0);
+    }
+    let server_owned_collections =
+        super::external_sql_sync::server_owned_projection_collections(root)?;
+    let mut conn = open_store(root)?;
+    let tx = conn.transaction()?;
+    let now = now_ms() as i64;
+    let mut inserted = 0usize;
+    for (module_id, collection) in &declared {
+        let server_owned_write = super::threads::is_threads_owned_collection(collection)
+            || server_owned_collections.contains(collection.as_str());
+        for role in ["admin", "chef"] {
+            for permission in [
+                BusinessOsPermission::DataRead,
+                BusinessOsPermission::DataWrite,
+            ] {
+                if permission == BusinessOsPermission::DataWrite && server_owned_write {
+                    continue;
+                }
+                let grant_id = format!(
+                    "catalog.first_party.{module_id}.{role}.{}.{collection}",
+                    permission.as_str().replace('.', "_")
+                );
+                inserted += tx.execute(
+                    "INSERT OR IGNORE INTO business_permission_grants
+                        (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
+                         active, reason, created_by, created_at_ms, updated_at_ms)
+                     VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
+                             'First-party catalog app data access for administrators',
+                             'business-os-first-party-catalog', ?5, ?5)",
+                    params![grant_id, role, permission.as_str(), collection, now],
+                )?;
+            }
+        }
+    }
+    tx.commit()?;
+    Ok(inserted)
 }
 
 fn business_os_collection_names_for_legacy_grants() -> Vec<String> {
@@ -19476,51 +20342,22 @@ fn systematic_research_evidence_snapshot(
     let run_id = first_string_field(&command.payload, &["research_run_id", "run_id"])
         .or_else(|| first_string_field(&command.client_context, &["research_run_id", "run_id"]))
         .context("systematic research completion requires an immutable research_run_id")?;
-    let path = rxdb_store_path(root);
-    anyhow::ensure!(
-        path.is_file(),
-        "systematic research completion requires the RxDB store"
-    );
-    let conn = Connection::open(&path)?;
-    let table = rxdb_collection_table_name(&path, &conn, "knowledge_tables")
-        .context("systematic research completion requires Knowledge tables")?;
-    let mut statement = conn.prepare(&format!("SELECT data FROM {table}"))?;
-    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-    let mut domain_tables = Vec::new();
-    for raw in rows {
-        let document: Value = serde_json::from_str(&raw?)?;
-        let source = document
-            .get("payload")
-            .filter(|value| value.is_object())
-            .unwrap_or(&document);
-        if first_string_field(source, &["domain", "knowledge_domain"]).as_deref()
-            == Some(domain.as_str())
-        {
-            domain_tables.push(document);
-        }
-    }
+    // Parquet is the row source. One manifest entry per catalog table, not per
+    // RxDB projection chunk. `knowledge_active_tables` already orders by table_id.
+    let domain_tables = crate::knowledge::knowledge_active_tables(root, Some(&domain))?;
     anyhow::ensure!(
         !domain_tables.is_empty(),
         "systematic research completion requires authoritative Knowledge tables for {domain}"
     );
-    domain_tables.sort_by_key(|document| {
-        first_string_field(document, &["id", "table_id"]).unwrap_or_default()
-    });
 
     let mut identified_count = 0_i64;
     let mut source_receipt_links = Vec::new();
     let mut snapshot_hashes = Vec::new();
     let mut run_manifest = Vec::new();
-    for document in &domain_tables {
-        let source = document
-            .get("payload")
-            .filter(|value| value.is_object())
-            .unwrap_or(document);
-        let table_key = first_string_field(source, &["table_key"]).unwrap_or_default();
-        let table_id = first_string_field(source, &["id", "table_id"])
-            .or_else(|| first_string_field(document, &["id", "table_id"]))
-            .unwrap_or_default();
-        let run_rows = document_knowledge_table_rows(document)
+    for (catalog_id, _table_domain, table_key) in &domain_tables {
+        let table_id = format!("table:{catalog_id}");
+        let run_rows = crate::knowledge::knowledge_table_all_rows(root, catalog_id)?
+            .rows
             .into_iter()
             .filter(|row| {
                 first_string_field(row, &["research_run_id", "run_id"]).as_deref()
@@ -19988,20 +20825,6 @@ fn document_source_receipt_snapshot_hash(link: &Value) -> Option<String> {
     )
 }
 
-fn document_knowledge_table_rows(document: &Value) -> Vec<Value> {
-    [
-        document.get("rows"),
-        document.pointer("/payload/rows"),
-        document.get("records"),
-        document.pointer("/payload/records"),
-    ]
-    .into_iter()
-    .flatten()
-    .find_map(Value::as_array)
-    .cloned()
-    .unwrap_or_default()
-}
-
 fn document_source_receipt_row_matches(row: &Value, reference: &str) -> bool {
     ["source_id", "receipt_id", "evidence_id", "id"]
         .iter()
@@ -20025,37 +20848,58 @@ fn document_source_receipt_from_knowledge_tables(
             "table_ref",
         ],
     );
-    if let Some(table_id) = table_reference {
-        if let Some(document) = load_rxdb_collection_record(root, "knowledge_tables", &table_id)? {
-            if let Some(row) = document_knowledge_table_rows(&document)
-                .into_iter()
-                .find(|row| document_source_receipt_row_matches(row, &reference))
-            {
-                return Ok(Some(row));
-            }
+    let mut already_read = None;
+    if let Some(raw_table_id) = table_reference.as_deref() {
+        let table_id = knowledge_receipt_table_id(raw_table_id);
+        already_read = Some(table_id.clone());
+        match knowledge_receipt_row(root, &table_id, &reference)? {
+            Some(row) => return Ok(Some(row)),
+            None => {}
         }
     }
 
-    let path = rxdb_store_path(root);
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let conn = Connection::open(&path)?;
-    let Some(table) = rxdb_collection_table_name(&path, &conn, "knowledge_tables") else {
-        return Ok(None);
-    };
-    let mut statement = conn.prepare(&format!("SELECT data FROM {table}"))?;
-    let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
-    for raw in rows {
-        let document: Value = serde_json::from_str(&raw?)?;
-        if let Some(row) = document_knowledge_table_rows(&document)
-            .into_iter()
-            .find(|row| document_source_receipt_row_matches(row, &reference))
-        {
+    for (table_id, _domain, _table_key) in crate::knowledge::knowledge_active_tables(root, None)? {
+        if already_read.as_deref() == Some(table_id.as_str()) {
+            continue;
+        }
+        if let Some(row) = knowledge_receipt_row(root, &table_id, &reference)? {
             return Ok(Some(row));
         }
     }
     Ok(None)
+}
+
+/// Strip one `table:` prefix and a trailing `:chunk:` + digits suffix.
+fn knowledge_receipt_table_id(raw: &str) -> String {
+    let stripped = raw.strip_prefix("table:").unwrap_or(raw);
+    match stripped.rsplit_once(":chunk:") {
+        Some((table_id, suffix))
+            if !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            table_id.to_string()
+        }
+        _ => stripped.to_string(),
+    }
+}
+
+fn knowledge_table_lookup_miss(err: &anyhow::Error) -> bool {
+    crate::knowledge::is_knowledge_table_not_found(err)
+}
+
+fn knowledge_receipt_row(
+    root: &Path,
+    table_id: &str,
+    reference: &str,
+) -> anyhow::Result<Option<Value>> {
+    let window = match crate::knowledge::knowledge_table_all_rows(root, table_id) {
+        Ok(window) => window,
+        Err(err) if knowledge_table_lookup_miss(&err) => return Ok(None),
+        Err(err) => return Err(err),
+    };
+    Ok(window
+        .rows
+        .into_iter()
+        .find(|row| document_source_receipt_row_matches(row, reference)))
 }
 
 fn document_source_receipt_candidate(root: &Path, link: &Value) -> anyhow::Result<Option<Value>> {
@@ -25706,60 +26550,42 @@ pub(super) mod tests {
     fn research_report_lineage_binds_eligible_receipts_and_knowledge_version() -> anyhow::Result<()>
     {
         let root = tempdir()?;
-        let snapshot_path = root.path().join("runtime/research/snapshots/source-7.html");
+        let snapshot_path = root.path().join("research/snapshots/source-7.html");
         fs::create_dir_all(snapshot_path.parent().context("snapshot parent")?)?;
         fs::write(&snapshot_path, b"authoritative publisher content")?;
         let receipt_hash = format!("sha256:{}", hex_sha256(b"authoritative publisher content"));
-        let rxdb_path = rxdb_store_path(root.path());
-        fs::create_dir_all(rxdb_path.parent().context("RxDB parent")?)?;
-        let rxdb_conn = Connection::open(&rxdb_path)?;
-        let table = format!(
-            "ctox_business_os__knowledge_tables__v{}",
-            rxdb_schema_version("knowledge_tables")
-        );
-        rxdb_conn.execute(
-            &format!(
-                "CREATE TABLE {} (
-                    id TEXT PRIMARY KEY NOT NULL,
-                    revision TEXT,
-                    deleted INTEGER NOT NULL DEFAULT 0,
-                    lastWriteTime REAL NOT NULL DEFAULT 0,
-                    data TEXT NOT NULL
-                )",
-                sqlite_quote_identifier(&table)
-            ),
-            [],
-        )?;
-        drop(rxdb_conn);
-        upsert_rxdb_collection_record(
+        let snapshot_path_value = snapshot_path
+            .canonicalize()
+            .context("canonicalize source snapshot")?
+            .display()
+            .to_string();
+        crate::knowledge::seed_knowledge_table_for_test(
             root.path(),
-            "knowledge_tables",
             "table-evidence",
-            1700000000000,
-            serde_json::json!({
-                "table_key": "source_catalog",
-                "rows": [{
-                    "id": "source-7",
-                    "source_id": "source-7",
-                    "evidence_id": "evidence-7",
-                    "snapshot_id": "snapshot-7",
-                    "trace_id": "trace-7",
-                    "snapshot_path": "runtime/research/snapshots/source-7.html",
-                    "snapshot_hash": receipt_hash.clone(),
-                    "retrieved_at": "2026-07-17T00:00:00Z",
-                    "url_role": "publisher_full_text",
-                    "content_scope": "full_text",
-                    "verification_status": "verified",
-                    "transport_verified": true,
-                    "content_extracted": true,
-                    "actual_full_text_or_data": true,
-                    "evidence_relevance_score": 9,
-                    "http_status": 200,
-                    "canonical_url": "https://publisher.example/source-7",
-                    "source_tier": "primary",
-                    "evidence_eligible": true
-                }]
-            }),
+            "bearing_design",
+            "source_catalog",
+            &[serde_json::json!({
+                "id": "source-7",
+                "source_id": "source-7",
+                "evidence_id": "evidence-7",
+                "snapshot_id": "snapshot-7",
+                "trace_id": "trace-7",
+                "snapshot_path": snapshot_path_value,
+                "snapshot_hash": receipt_hash.clone(),
+                "retrieved_at": "2026-07-17T00:00:00Z",
+                "url_role": "publisher_full_text",
+                "content_scope": "full_text",
+                "verification_status": "verified",
+                "transport_verified": true,
+                "content_extracted": true,
+                "actual_full_text_or_data": true,
+                "evidence_relevance_score": 9,
+                "http_status": 200,
+                "canonical_url": "https://publisher.example/source-7",
+                "source_tier": "primary",
+                "evidence_eligible": true
+            })],
+            None,
         )?;
         let linked_records = vec![
             serde_json::json!({ "kind": "research_task", "id": "task-42" }),
@@ -25808,6 +26634,48 @@ pub(super) mod tests {
         assert_ne!(
             lineage.source_receipt_snapshot_hashes[0],
             hex_sha256(b"the generated DOCX bytes")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn document_source_receipt_finds_row_past_projection_cap() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let row_total = 5_100usize;
+        // Every row carries `marker`: Parquet schema inference drops a column
+        // that appears in only one of 5,100 rows.
+        let rows = (0..row_total)
+            .map(|index| {
+                serde_json::json!({
+                    "source_id": format!("source-{}", index + 1),
+                    "marker": format!("row-{}", index + 1),
+                })
+            })
+            .collect::<Vec<_>>();
+        crate::knowledge::seed_knowledge_table_for_test(
+            root.path(),
+            "kdt-wide",
+            "wide_domain",
+            "notes",
+            &rows,
+            None,
+        )?;
+
+        let found = document_source_receipt_from_knowledge_tables(
+            root.path(),
+            &serde_json::json!({
+                "id": "source-5050",
+                "table_id": "table:kdt-wide:chunk:0009",
+            }),
+        )?
+        .context("row 5050 must be readable past the 5000-row projection cap")?;
+        assert_eq!(
+            found.get("source_id").and_then(Value::as_str),
+            Some("source-5050")
+        );
+        assert_eq!(
+            found.get("marker").and_then(Value::as_str),
+            Some("row-5050")
         );
         Ok(())
     }
@@ -27403,6 +28271,138 @@ pub(super) mod tests {
                 == Some("app-access:grantrefreshapp:role:admin:data.read:grantrefreshapp_records")
                 && grant.get("active").and_then(Value::as_bool) == Some(true)
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn app_shared_read_grant_requires_review_and_preserves_write_boundary() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let module_id = "sharedreadapp";
+        fs::write(root.path().join("index.html"), "<main></main>\n")?;
+        write_minimal_runtime_app_artifacts(root.path(), module_id)?;
+        seed_business_user(root.path(), "admin1", "admin")?;
+        seed_business_user(root.path(), "user1", "user")?;
+        // The fixture declares business_commands, which is shared and remains
+        // server-owned. A read review must never authorize writes or other data.
+        for (id, actor, role, permission, collection, reviewed, reason) in [
+            (
+                "missing-review",
+                "admin1",
+                "admin",
+                "data.read",
+                "business_commands",
+                false,
+                "review",
+            ),
+            (
+                "missing-reason",
+                "admin1",
+                "admin",
+                "data.read",
+                "business_commands",
+                true,
+                "  ",
+            ),
+            (
+                "shared-write",
+                "admin1",
+                "admin",
+                "data.write",
+                "business_commands",
+                true,
+                "review",
+            ),
+            (
+                "undeclared",
+                "admin1",
+                "admin",
+                "data.read",
+                "business_users",
+                true,
+                "review",
+            ),
+            (
+                "unprivileged",
+                "user1",
+                "user",
+                "data.read",
+                "business_commands",
+                true,
+                "review",
+            ),
+        ] {
+            let outcome = accept_rxdb_business_command(
+                root.path(),
+                serde_json::json!({
+                    "id": id, "command_id": id, "module": module_id,
+                    "command_type": "ctox.app.access.grant",
+                    "payload": {
+                        "module_id": module_id, "subject_type": "user", "subject_id": "admin1",
+                        "permission": permission, "collection": collection,
+                        "reviewed_shared_read": reviewed, "reason": reason
+                    },
+                    "client_context": {"actor": {"id": actor, "role": role}}
+                }),
+            );
+            assert!(
+                outcome
+                    .as_ref()
+                    .ok()
+                    .and_then(|value| value.get("status"))
+                    .and_then(Value::as_str)
+                    != Some("completed"),
+                "{id} must fail closed"
+            );
+        }
+        let conn = open_store(root.path())?;
+        let unexpected: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_permission_grants WHERE grant_id LIKE 'app-access:sharedreadapp:%' AND active=1",
+            [], |row| row.get(0),
+        )?;
+        assert_eq!(unexpected, 0);
+        for (id, action, active) in [
+            ("reviewed-read", "ctox.app.access.grant", true),
+            ("revoke-read", "ctox.app.access.revoke", false),
+        ] {
+            let outcome = accept_rxdb_business_command(
+                root.path(),
+                serde_json::json!({
+                    "id": id, "command_id": id, "module": module_id,
+                    "command_type": action,
+                    "payload": {
+                        "module_id": module_id, "subject_type": "user", "subject_id": "admin1",
+                        "permission": "data.read", "collection": "business_commands",
+                        "reviewed_shared_read": true, "reason": "Operator reviewed command-status display"
+                    },
+                    "client_context": {"actor": {"id": "admin1", "role": "admin"}}
+                }),
+            )?;
+            assert_eq!(
+                outcome.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
+            let stored: bool = conn.query_row(
+                "SELECT active FROM business_permission_grants WHERE grant_id='app-access:sharedreadapp:user:admin1:data.read:business_commands'",
+                [], |row| row.get(0),
+            )?;
+            assert_eq!(stored, active);
+            let catalog = load_rxdb_collection_record(
+                root.path(),
+                "business_module_catalog",
+                "module-catalog",
+            )?
+            .context("catalog missing")?;
+            let grants = catalog
+                .pointer("/governance/permission_model/explicit_grants")
+                .and_then(Value::as_array)
+                .context("governance grants missing")?;
+            let projected_active = grants.iter().any(|grant| {
+                grant.get("grant_id").and_then(Value::as_str)
+                    == Some("app-access:sharedreadapp:user:admin1:data.read:business_commands")
+                    && grant.get("active").and_then(Value::as_bool) == Some(true)
+            });
+            assert_eq!(projected_active, active);
+        }
         Ok(())
     }
 
@@ -30398,6 +31398,58 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(founder_count, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn first_party_catalog_apps_get_admin_grants_for_declared_collections_only(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let conn = open_store(root)?;
+        drop(conn);
+        let installed = root.join("runtime/business-os");
+        let write_manifest = |id: &str, source: &str, collections: &[&str]| -> anyhow::Result<()> {
+            let dir = installed.join("installed-modules").join(id);
+            fs::create_dir_all(&dir)?;
+            fs::write(
+                dir.join("module.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "id": id, "source": source, "collections": collections
+                }))?,
+            )?;
+            Ok(())
+        };
+        write_manifest(
+            "mail",
+            "catalog",
+            &["communication_messages", "business_commands"],
+        )?;
+        write_manifest("thirdparty", "user", &["customer_accounts"])?;
+
+        let inserted = ensure_first_party_catalog_collection_grants(root, &installed)?;
+        assert!(inserted > 0);
+        let conn = open_store(root)?;
+        let count = |role: &str, permission: &str, collection: &str| -> anyhow::Result<i64> {
+            Ok(conn.query_row(
+                "SELECT COUNT(*) FROM business_permission_grants
+                 WHERE subject_type='role' AND subject_id=?1 AND permission=?2
+                   AND scope_type='collection' AND scope_id=?3 AND active=1
+                   AND grant_id NOT LIKE 'migration.sync.%'",
+                params![role, permission, collection],
+                |row| row.get(0),
+            )?)
+        };
+        let read = BusinessOsPermission::DataRead.as_str();
+        assert_eq!(count("admin", read, "communication_messages")?, 1);
+        assert_eq!(count("chef", read, "business_commands")?, 1);
+        assert_eq!(count("user", read, "communication_messages")?, 0);
+        assert_eq!(count("admin", read, "customer_accounts")?, 0);
+        // Idempotent across restarts.
+        assert_eq!(
+            ensure_first_party_catalog_collection_grants(root, &installed)?,
+            0
+        );
         Ok(())
     }
 
@@ -38349,75 +39401,15 @@ pub(super) mod tests {
                 "updated_at_ms": 1
             }),
         )?;
-        let snapshot_path = root.join("runtime/research/snapshots/source-1.html");
+        let snapshot_path = root.join("research/snapshots/source-1.html");
         fs::create_dir_all(snapshot_path.parent().context("snapshot parent")?)?;
         fs::write(&snapshot_path, b"verified source bytes")?;
         let snapshot_hash = format!("sha256:{}", hex_sha256(b"verified source bytes"));
-        // Seed with a valid RxDB revision envelope ("<height>-<token>") so the
-        // knowledge_tables projection sync can read and tombstone this stale
-        // document instead of failing on an unparseable revision.
-        rxdb_conn.execute(
-            "INSERT INTO ctox_business_os__knowledge_tables__v0
-             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
-            params![
-                "knowledge_source_catalog",
-                "1-test",
-                1.0_f64,
-                serde_json::to_string(&serde_json::json!({
-                    "id": "knowledge_source_catalog",
-                    "domain": "drone_bearing_design",
-                    "table_key": "source_catalog",
-                    "rows": [{
-                        "source_id": "source-1",
-                        "research_run_id": "research_run_1",
-                        "research_command_id": "cmd_research_completed",
-                        "evidence_id": "evidence-1",
-                        "snapshot_id": "snapshot-1",
-                        "snapshot_path": "runtime/research/snapshots/source-1.html",
-                        "snapshot_hash": snapshot_hash,
-                        "canonical_url": "https://publisher.example/source-1",
-                        "url_role": "original_content",
-                        "content_scope": "full_text",
-                        "retrieved_at": "2026-07-17T00:00:00Z",
-                        "source_type": "publisher",
-                        "source_tier": "primary",
-                        "verification_status": "verified",
-                        "transport_verified": true,
-                        "content_extracted": true,
-                        "actual_full_text_or_data": true,
-                        "evidence_relevance_score": 9,
-                        "http_status": 200,
-                        "evidence_eligible": true
-                    }, {
-                        "source_id": "stale-source",
-                        "research_run_id": "research_run_stale",
-                        "research_command_id": "cmd_research_stale",
-                        "evidence_id": "stale-evidence",
-                        "snapshot_id": "snapshot-1",
-                        "snapshot_path": "runtime/research/snapshots/source-1.html",
-                        "snapshot_hash": snapshot_hash,
-                        "canonical_url": "https://publisher.example/stale",
-                        "url_role": "original_content",
-                        "content_scope": "full_text",
-                        "retrieved_at": "2026-07-17T00:00:00Z",
-                        "source_type": "publisher",
-                        "source_tier": "primary",
-                        "verification_status": "verified",
-                        "transport_verified": true,
-                        "content_extracted": true,
-                        "actual_full_text_or_data": true,
-                        "evidence_relevance_score": 9,
-                        "http_status": 200,
-                        "evidence_eligible": true
-                    }],
-                    "updated_at_ms": 2,
-                    "_rev": "1-test",
-                    "_meta": { "lwt": 1.0 },
-                    "_attachments": {},
-                    "_deleted": false
-                }))?
-            ],
-        )?;
+        let snapshot_path_value = snapshot_path
+            .canonicalize()
+            .context("canonicalize source snapshot")?
+            .display()
+            .to_string();
         drop(rxdb_conn);
 
         // The native writeback gate requires the completed research workspace
@@ -38506,7 +39498,7 @@ pub(super) mod tests {
         fs::write(
             dashboard_dir.join("source_catalog.csv"),
             format!(
-                "research_run_id,research_command_id,source_id,canonical_url,snapshot_hash\n{lineage},source-1,https://publisher.example/source-1,{snapshot_hash}\n"
+                "research_run_id,research_command_id,source_id,canonical_url,snapshot_hash,evidence_id,snapshot_id,snapshot_path,retrieved_at,url_role,content_scope,verification_status,transport_verified,content_extracted,actual_full_text_or_data,evidence_relevance_score,http_status,source_type,source_tier,trace_id\n{lineage},source-1,https://publisher.example/source-1,{snapshot_hash},evidence-1,snapshot-1,{snapshot_path_value},2026-07-17T00:00:00Z,original_content,full_text,verified,true,true,true,9,200,publisher,primary,trace-1\n"
             ),
         )?;
 
@@ -38883,6 +39875,185 @@ pub(super) mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(last_write_time, 1_004.0);
+        let document: Value = serde_json::from_str(&conn.query_row(
+            &format!("SELECT data FROM {table} WHERE id = 'probe-4'"),
+            [],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert_eq!(
+            document.pointer("/_meta/lwt"),
+            Some(&serde_json::json!(1_004))
+        );
+        assert_eq!(document.get("_deleted"), Some(&Value::Bool(false)));
+        assert_eq!(document.get("_attachments"), Some(&serde_json::json!({})));
+        Ok(())
+    }
+
+    #[test]
+    fn repair_missing_command_envelopes_preserves_result_and_advances_checkpoint(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = format!(
+            "ctox_business_os__business_commands__v{}",
+            rxdb_schema_version("business_commands")
+        );
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            &format!("CREATE TABLE {table} (id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"),
+            [],
+        )?;
+        let original = serde_json::json!({
+            "id": "writeback_probe", "_rev": "4-old", "status": "completed",
+            "updated_at_ms": 42, "result": {"count": 7}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["writeback_probe", "4-old", original.to_string()],
+        )?;
+        let malformed_live = serde_json::json!({
+            "id": "malformed_live", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": "false", "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["malformed_live", "1-old", malformed_live.to_string()],
+        )?;
+        let missing_revision = serde_json::json!({
+            "id": "missing_revision", "_meta": {"lwt": 42},
+            "_deleted": false, "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["missing_revision", "1-old", missing_revision.to_string()],
+        )?;
+        for (id, json_revision) in [("empty_revision", ""), ("malformed_revision", "broken")] {
+            let document = serde_json::json!({
+                "id": id, "_rev": json_revision, "_meta": {"lwt": 42},
+                "_deleted": false, "_attachments": {}, "updated_at_ms": 42,
+                "result": {"preserve": true}
+            });
+            conn.execute(
+                &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+                params![id, "4-old", document.to_string()],
+            )?;
+        }
+        let malformed_tombstone = serde_json::json!({
+            "id": "malformed_tombstone", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": "invalid", "is_deleted": true, "_attachments": {}, "updated_at_ms": 42
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["malformed_tombstone", "1-old", malformed_tombstone.to_string()],
+        )?;
+        let sql_tombstone_without_json_flag = serde_json::json!({
+            "id": "sql_tombstone_without_json_flag", "_rev": "2-old",
+            "_meta": {"lwt": 42}, "_attachments": {}, "updated_at_ms": 42,
+            "result": {"preserve": true}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 1, 42, ?3)"),
+            params!["sql_tombstone_without_json_flag", "2-old", sql_tombstone_without_json_flag.to_string()],
+        )?;
+        let sql_tombstone_with_live_json_flag = serde_json::json!({
+            "id": "sql_tombstone_with_live_json_flag", "_rev": "3-old",
+            "_meta": {"lwt": 42}, "_deleted": false, "_attachments": {},
+            "updated_at_ms": 42, "result": {"preserve": true}
+        });
+        conn.execute(
+            &format!("INSERT INTO {table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 1, 42, ?3)"),
+            params!["sql_tombstone_with_live_json_flag", "3-old", sql_tombstone_with_live_json_flag.to_string()],
+        )?;
+        drop(conn);
+
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 8);
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_commands")?, 0);
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let (revision, lwt, raw): (String, f64, String) = conn.query_row(
+            &format!(
+                "SELECT revision, lastWriteTime, data FROM {table} WHERE id='writeback_probe'"
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let repaired: Value = serde_json::from_str(&raw)?;
+        assert_eq!(repaired["result"], original["result"]);
+        assert_eq!(repaired["updated_at_ms"], original["updated_at_ms"]);
+        assert_eq!(repaired["_rev"], revision);
+        assert!(revision.starts_with("5-"));
+        assert!(lwt > 42.0);
+        assert_eq!(
+            repaired.pointer("/_meta/lwt").and_then(Value::as_f64),
+            Some(lwt)
+        );
+        assert_eq!(repaired["_deleted"], false);
+        assert_eq!(repaired["_attachments"], serde_json::json!({}));
+        for (id, expected_deleted) in [
+            ("malformed_live", false),
+            ("missing_revision", false),
+            ("empty_revision", false),
+            ("malformed_revision", false),
+            ("malformed_tombstone", true),
+            ("sql_tombstone_without_json_flag", true),
+            ("sql_tombstone_with_live_json_flag", true),
+        ] {
+            let (revision_column, deleted_column, raw): (String, i64, String) = conn.query_row(
+                &format!("SELECT revision, deleted, data FROM {table} WHERE id = ?1"),
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            let repaired: Value = serde_json::from_str(&raw)?;
+            assert_eq!(repaired["_deleted"], expected_deleted);
+            assert_eq!(deleted_column != 0, expected_deleted);
+            assert!(repaired["_rev"]
+                .as_str()
+                .is_some_and(|revision| !revision.is_empty()));
+            assert_eq!(repaired["_rev"], revision_column);
+            if id == "missing_revision" {
+                assert!(revision_column.starts_with("2-"));
+            }
+            if id == "empty_revision" || id == "malformed_revision" {
+                assert!(revision_column.starts_with("5-"));
+                assert_eq!(repaired["result"], serde_json::json!({"preserve": true}));
+            }
+            if id.starts_with("sql_tombstone") {
+                assert_eq!(repaired["result"], serde_json::json!({"preserve": true}));
+                let expected_revision = if id.ends_with("without_json_flag") {
+                    "3-"
+                } else {
+                    "4-"
+                };
+                assert!(repaired["_rev"]
+                    .as_str()
+                    .is_some_and(|revision| revision.starts_with(expected_revision)));
+            }
+        }
+
+        let chats_table = format!(
+            "ctox_business_os__business_chats__v{}",
+            rxdb_schema_version("business_chats")
+        );
+        conn.execute(
+            &format!("CREATE TABLE {chats_table} (id TEXT PRIMARY KEY, revision TEXT, deleted INTEGER NOT NULL DEFAULT 0, lastWriteTime REAL NOT NULL DEFAULT 0, data TEXT NOT NULL)"),
+            [],
+        )?;
+        let chat = serde_json::json!({
+            "id": "chat_probe", "_rev": "1-old", "_meta": {"lwt": 42},
+            "_deleted": false, "updated_at_ms": 42, "title": "Preserved"
+        });
+        conn.execute(
+            &format!("INSERT INTO {chats_table} (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, 42, ?3)"),
+            params!["chat_probe", "1-old", chat.to_string()],
+        )?;
+        assert_eq!(repair_missing_rxdb_envelopes(root, "business_chats")?, 1);
+        let repaired_chat: Value = serde_json::from_str(&conn.query_row(
+            &format!("SELECT data FROM {chats_table} WHERE id='chat_probe'"),
+            [],
+            |row| row.get::<_, String>(0),
+        )?)?;
+        assert_eq!(repaired_chat["title"], "Preserved");
+        assert_eq!(repaired_chat["_attachments"], serde_json::json!({}));
         Ok(())
     }
 
@@ -38940,6 +40111,76 @@ pub(super) mod tests {
         let payload: Value = serde_json::from_str(&payload)?;
         assert_eq!(payload["_deleted"], true);
         assert_eq!(payload["is_deleted"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn source_projection_revives_tombstone_without_stale_deletion_flags() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        fs::create_dir_all(root.join("runtime"))?;
+        let table = "ctox_business_os__writer_delete_probe__v0";
+        let conn = Connection::open(rxdb_store_path(root))?;
+        conn.execute(
+            &format!(
+                "CREATE TABLE {table} (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    revision TEXT,
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    lastWriteTime REAL NOT NULL DEFAULT 0,
+                    data TEXT NOT NULL
+                )"
+            ),
+            [],
+        )?;
+        drop(conn);
+
+        let mut writer = BusinessProjectionWriter::open(root)?;
+        writer.upsert_source_projection(
+            "writer_delete_probe",
+            "probe-1",
+            1_000,
+            serde_json::json!({"id":"probe-1","name":"Old"}),
+        )?;
+        writer.tombstone_source_projection("writer_delete_probe", "probe-1", 2_000)?;
+        writer.upsert_source_projection(
+            "writer_delete_probe",
+            "probe-1",
+            3_000,
+            serde_json::json!({"id":"probe-1","name":"Restored"}),
+        )?;
+        drop(writer);
+
+        let conn = Connection::open(rxdb_store_path(root))?;
+        let (revision, deleted, raw): (String, i64, String) = conn.query_row(
+            &format!("SELECT revision,deleted,data FROM {table} WHERE id='probe-1'"),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let document: Value = serde_json::from_str(&raw)?;
+        assert_eq!(deleted, 0);
+        assert_eq!(document["_deleted"], false);
+        assert_eq!(document["is_deleted"], false);
+        assert_eq!(document["name"], "Restored");
+        assert_eq!(document["_rev"], revision);
+        assert!(revision.starts_with("3-"));
+        assert_eq!(
+            repair_missing_rxdb_envelopes(root, "writer_delete_probe")?,
+            0
+        );
+
+        let conn = open_store(root)?;
+        let (deleted, payload): (i64, String) = conn.query_row(
+            "SELECT deleted,payload_json FROM business_records
+             WHERE collection='writer_delete_probe' AND record_id='probe-1'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(deleted, 0);
+        let payload: Value = serde_json::from_str(&payload)?;
+        assert_eq!(payload["name"], "Restored");
+        assert_eq!(payload["_deleted"], false);
+        assert!(payload.get("is_deleted").is_none());
         Ok(())
     }
 
@@ -39676,6 +40917,63 @@ pub(super) mod tests {
         assert!(!is_recoverable_background_control_command_type(
             "office.document.create"
         ));
+    }
+
+    #[test]
+    fn research_control_revalidation_uses_native_actor_and_original_permission(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        seed_business_user(root, "operator", "chef")?;
+        for command_type in [
+            "outbound.research_source.generate_adapter",
+            "outbound.research_source.test",
+        ] {
+            // Reactivation changes capability_epoch; it cannot resurrect the
+            // previous case's token. Each admission needs a fresh capability.
+            let (token, _) = issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+            assert_eq!(
+                verify_capability_actor(root, &token),
+                Some(("operator".into(), "chef".into()))
+            );
+            let mut command = BusinessCommand {
+                origin: CommandOrigin::ReplicatedPeer,
+                id: Some(format!("cmd_{command_type}")),
+                module: "outbound".into(),
+                command_type: command_type.into(),
+                record_id: None,
+                payload: serde_json::json!({"company":"Fixture GmbH"}),
+                client_context: serde_json::json!({"capability_token":token.clone()}),
+            };
+            let receipt = recoverable_background_control_authorization(root, &command)
+                .with_context(|| format!("authorization receipt for {command_type}"))?;
+            command.client_context = serde_json::json!({"actor":{"id":"forged","role":"admin"}, "owner_user_id":"forged"});
+            let (session, decision) =
+                revalidate_queue_native_authorization(root, &command, &receipt)?;
+            assert_eq!(session.user.as_ref().unwrap().id, "operator");
+            assert_eq!(decision.permission, receipt["permission"].as_str().unwrap());
+            let mut wrong = receipt.clone();
+            wrong["permission"] = Value::String("data.read".into());
+            assert!(revalidate_queue_native_authorization(root, &command, &wrong).is_err());
+            wrong = receipt.clone();
+            wrong["actor"]["role"] = Value::String("user".into());
+            assert!(revalidate_queue_native_authorization(root, &command, &wrong).is_err());
+            let conn = open_store(root)?;
+            conn.execute(
+                "UPDATE business_users SET active=0 WHERE user_id='operator'",
+                [],
+            )?;
+            assert!(revalidate_queue_native_authorization(root, &command, &receipt).is_err());
+            conn.execute(
+                "UPDATE business_users SET active=1 WHERE user_id='operator'",
+                [],
+            )?;
+            assert!(
+                verify_capability_actor(root, &token).is_none(),
+                "reactivation must not resurrect a revoked capability"
+            );
+        }
+        Ok(())
     }
 
     #[test]

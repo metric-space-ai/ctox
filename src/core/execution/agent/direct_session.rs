@@ -166,7 +166,10 @@ fn business_os_mcp_thread_config(
                 },
                 "enabled": true,
                 "required": true,
-                "startup_timeout_sec": 10,
+                // 10 s was too short under business-os.sqlite3 write contention:
+                // seven research runs failed on 25.09.2026 with "timed out
+                // handshaking with MCP server after 10s" while a browser synced.
+                "startup_timeout_sec": 45,
                 "tool_timeout_sec": 120,
                 "enabled_tools": BUSINESS_OS_MCP_SESSION_TOOLS
             }
