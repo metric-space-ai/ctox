@@ -1371,7 +1371,21 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   // starts reading or learning, or the first pool load after boot needs the
   // full render — the in-place path does not touch the creatures.
   const crewPoolUnchanged = (root.dataset?.crewPoolSignature || '') === crewPoolSignature(state);
+  // The dock strip must still hold exactly the chips a full render would
+  // draw. The in-place path only restyles chips; when a chat joins or leaves
+  // the strip (an empty chat is discarded, a minimized one appears) the dock
+  // class would switch to has-no-chats around a stale chip and the new-chat
+  // button would wrap into a second row.
+  const renderedStrip = root.querySelector('[data-chat-strip]');
+  const renderedChipIds = renderedStrip
+    ? Array.from(renderedStrip.querySelectorAll('[data-chat-focus]'), (chip) => chip.dataset.chatFocus).sort()
+    : null;
+  const expectedChipIds = showChatStrip ? visibleChats.map((chat) => chat.id).sort() : null;
+  const dockShapeUnchanged = JSON.stringify(renderedChipIds) === JSON.stringify(expectedChipIds)
+    && Boolean(root.querySelector('[data-chat-prev]')) === showChatNav
+    && Boolean(root.querySelector('[data-chat-overflow-open]')) === (showChatStrip && hiddenChatCount > 0);
   const canUpdateInPlace = windowShapeUnchanged &&
+                           dockShapeUnchanged &&
                            attachmentsUnchanged &&
                            composerShapeUnchanged &&
                            crewPoolUnchanged &&
