@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad (Owner 27.09.: „leg los und setze alles um“): Rust-Fix Signaling (lokal committet 76d61182d, Test wartet auf Build-Sperre) → push → welsch `ctox upgrade --dev`; parallel signierter Slot beta.61 (a3b3ed341) aus dem Actions-Stau → stage/activate.
+Kritischer Pfad (Owner 27.09.: „leg los und setze alles um“): Rust-Fix Signaling (lokal committet 76d61182d, Test wartet auf Build-Sperre) → push → welsch `ctox upgrade --dev`; parallel signierter Slot beta.62 (2e89a09ab) aus dem Actions-Stau → stage/activate.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -26,10 +26,12 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 - **Actions-Stau entschärft (27.09. 08:47 UTC)** — nur ~2 gleichzeitige Runner; 36 überholte, noch nicht gestartete Läufe abgebrochen (je Workflow+Branch bleibt der neueste; laufende/geplante/Shell-Release unberührt; per `gh run rerun` wiederherstellbar), angekündigt im Codex-Thread (`01a0e20a-…`). Queue 56 → 20.
 - **Leisten-Fix (main `99f91c68d`, Stempel v407 `a3b3ed341`)** — In-Place-Pfad verlangt jetzt, dass Streifen-Chips/Navigation/Überlauf dem Soll entsprechen; Browser-Szenario `dock-strip-follows-a-chat-that-leaves` reproduziert ohne Fix exakt den welsch-Zustand (1 Chip bei has-no-chats, 92 px, 2 Reihen), mit Fix grün. welsch: v407 per Datei-Deploy (Backup `files-20260927T090210Z`, 10 Hashes = main), geladen `app.js?v=…crew-dock-v407`, Leiste 56 px.
 
+- **Crew zu Hause steht auf einem Boden (main `2e89a09ab`, v408)** — 96-px-Figuren auf gemeinsamer flacher Bodenlinie auf Fußhöhe (Modulvertrag „keine Verläufe“ eingehalten, erster Entwurf mit Verlauf vom Test „Presentation layer stays compact“ zurückgewiesen). ctox 46/46, Layout 7/7, Geometrie 3/3. welsch per Datei-Deploy (Backup `files-20260927T090555Z`, Hashes = main).
+
 ## Working
 
 - **(erledigt) welsch-Upgrade Binary → main** — 1. Versuch `ctox-crew-genome-upgrade-20260927` scheiterte am Platzgate (20 GiB verlangt, 19,5 frei; nichts verändert, Wartung nicht aktiv). Freigemacht: `~/.cache/ctox/build-office-20260906` (7,1 GB, reines Cargo-Target vom 06.09., kein Prozess). 2. Versuch Unit `ctox-crew-genome-upgrade-20260927b`, target `branch-main-20260927T075827Z` (Quelle = main mit S1–S3+v404), Phase building. Fertig heißt: phase=completed, current_release neu, Wartung completed, Dienst aktiv; Symlink-Falle prüfen.
-- **Shell-Release beta.61** — Tag → `a3b3ed341` (enthält v407-Leistenfix); beta.60 (`36306886765`) als überholt abgebrochen. Fertig heißt: Run success → welsch `shell-update stage --version 0.1.46-beta.61` → activate → restart; „Recovery“ verschwindet.
+- **Shell-Release beta.62** — Tag → `2e89a09ab` (v408); beta.60/61 als überholt abgebrochen. Fertig heißt: Run success → welsch `shell-update stage --version 0.1.46-beta.62` → activate → restart; „Recovery“ verschwindet.
 - **Rust-Fix Signaling-Env** — lokal `76d61182d` im Klon `ctox-crew-genome` (`signaling_urls_config_with_override`, Env nur prozesslokal, `persist_signaling_urls` entfernt, 2 Tests, Doku). Test `cargo test --bin ctox signaling_` via `dev-heavy-run.py --task signaling-env` wartet auf Lease (Codex `o04-connector-proof`). Log: Scratchpad `rust-signaling.log`. Fertig heißt: 2 Tests grün → rebase + push → welsch `ctox upgrade --dev`.
 
 ## To-Do
