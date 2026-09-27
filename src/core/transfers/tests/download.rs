@@ -186,6 +186,11 @@ async fn unreachable_wrong_and_truncated_mirrors_fall_through_without_mixing_byt
             .map(|p| p.unwrap().file_name())
             .collect::<Vec<_>>()
     );
+    assert_eq!(
+        std::fs::read(partial_dir.join("payload")).unwrap(),
+        vec![0x65; 1024]
+    );
+    assert_eq!(truncated.gets.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

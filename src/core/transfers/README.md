@@ -41,7 +41,7 @@ remains open. An accepted cancellation cannot be reversed by a late pause/resume
 ## Engine source and limits
 
 The private Git dependency is `mkh-welsch/aria2-rust` at
-`b15efab203ababa20f2e0ba6eb9251cef58a7299`, based on remote main
+`85d4eda67ab43c22021910824aedbb9dfc8f2504`, based on remote main
 `7bfacc2cf27e55d4755b06623c1b997880d0c697`. Its LICENSE and manifest declare
 GPL-2.0-or-later. The patch adds optional `ctox-expected-length` checks before
 allocation and at all storage write entry points, with a direct boundary test.
