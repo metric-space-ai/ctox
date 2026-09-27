@@ -329,9 +329,60 @@ mod command_binding_tests {
     }
 }
 
+/// Authority for one probe of a provider account that the account state
+/// holds as inactive. It is built only from a Business OS command
+/// authorization that the server-side policy allowed for a trusted, logged-in
+/// user (the Outbound source test). The CLI and worker command sessions
+/// cannot create one; a `--probe-account` flag carries no authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AccountProbeGrant {
+    command_id: String,
+    actor_id: String,
+}
+
+impl AccountProbeGrant {
+    /// `authorization` is the `ctox-business-command-authorization-v1`
+    /// record of the command (allowed, actor.trusted, actor.id).
+    pub(crate) fn from_command_authorization(
+        command_id: &str,
+        authorization: &Value,
+    ) -> Option<Self> {
+        let command_id = command_id.trim();
+        let actor = authorization.get("actor")?;
+        let actor_id = actor.get("id").and_then(Value::as_str)?.trim();
+        let valid = !command_id.is_empty()
+            && !actor_id.is_empty()
+            && authorization.get("contract").and_then(Value::as_str)
+                == Some("ctox-business-command-authorization-v1")
+            && authorization.get("allowed").and_then(Value::as_bool) == Some(true)
+            && actor.get("trusted").and_then(Value::as_bool) == Some(true);
+        valid.then(|| Self {
+            command_id: command_id.to_string(),
+            actor_id: actor_id.to_string(),
+        })
+    }
+}
+
+/// A probe needs a grant and never runs inside a worker command session,
+/// whatever the arguments say.
+pub(super) fn account_probe_authorized(
+    grant: Option<&AccountProbeGrant>,
+    session_owner_user_id: Option<&str>,
+) -> bool {
+    grant.is_some() && session_owner_user_id.is_none()
+}
+
 pub(crate) fn execute_scrape_with_outcome(
     root: &Path,
     args: &[String],
+) -> Result<ScrapeExecutionOutcome> {
+    execute_scrape_with_probe_grant(root, args, None)
+}
+
+pub(crate) fn execute_scrape_with_probe_grant(
+    root: &Path,
+    args: &[String],
+    probe_grant: Option<&AccountProbeGrant>,
 ) -> Result<ScrapeExecutionOutcome> {
     let execution_started = Instant::now();
     let target_key = required_flag_value(args, "--target-key")
@@ -410,12 +461,21 @@ pub(crate) fn execute_scrape_with_outcome(
     );
     // Provider account state (account_state.rs): while the provider refuses
     // the account, calls are answered from the stored state without
-    // contacting it; one probe runs per credential change, authorized
-    // operator request (`--probe-account`, never from a worker session) or
-    // due backoff.
+    // contacting it; one probe runs per credential change, per policy-granted
+    // operator request (AccountProbeGrant, never from a worker session) or
+    // when the backoff is due.
     let credential = target_credential(root, &target);
-    let authorized_probe =
-        args.iter().any(|arg| arg == "--probe-account") && session_owner_user_id.is_none();
+    let authorized_probe = account_probe_authorized(probe_grant, session_owner_user_id.as_deref());
+    anyhow::ensure!(
+        !args.iter().any(|arg| arg == "--probe-account") || authorized_probe,
+        "--probe-account is refused: a provider account probe needs a policy-granted operator request (Outbound source test); the CLI and worker sessions cannot authorize it"
+    );
+    if let Some(grant) = probe_grant.filter(|_| authorized_probe) {
+        eprintln!(
+            "[scrape] account probe granted for {} by command {} (actor {})",
+            target.view.target_key, grant.command_id, grant.actor_id
+        );
+    }
     let probe_generation = match super::account_state::admit(
         &conn,
         &target.view.target_id,
@@ -822,49 +882,65 @@ fn now_millis() -> i64 {
         .unwrap_or(0)
 }
 
-/// The stored credential the target depends on: `credential_secret_name` in
-/// the target config, else the name the source's recipe or id implies (as for
-/// protected capture). The version is the secret record's `updated_at`; the
-/// value is never read.
+/// The stored credential the target depends on, by name: `credential_secret_name`
+/// in the target config, else the config's `credential_ref`
+/// (`ctox-secret://<scope>/<NAME>`, the form installed Outbound manifests
+/// carry, e.g. the LinkedIn target's Bright Data key), else the name the
+/// source's recipe or id implies (as for protected capture). Never the value.
+pub(super) fn target_credential_name(config: &Value) -> Option<String> {
+    let text = |key: &str| {
+        config
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    if let Some(name) = text("credential_secret_name") {
+        return Some(name.to_string());
+    }
+    if let Some(reference) = text("credential_ref") {
+        if super::reauth::valid_credential_reference(reference) {
+            let prefix = format!("ctox-secret://{}/", crate::secrets::credential_scope());
+            return reference.strip_prefix(prefix.as_str()).map(str::to_string);
+        }
+    }
+    let provider = text("expected_provider")?;
+    Some(
+        ctox_web_stack::sources::find(provider)
+            .and_then(|module| module.browser_recipe())
+            .and_then(|recipe| recipe.required_secret_name.map(str::to_string))
+            .unwrap_or_else(|| super::reauth::derived_secret_name(provider)),
+    )
+}
+
+/// Version of the named secret: its record's `updated_at`, `absent` when the
+/// store has no such record. A store that cannot be read yields `None`, which
+/// is NOT "absent": an unreadable store must neither look like a credential
+/// change (and trigger a probe) nor overwrite the version the state recorded.
+pub(super) fn credential_version(
+    records: Result<Vec<crate::secrets::SecretRecordView>>,
+    name: &str,
+) -> Option<String> {
+    let records = records.ok()?;
+    Some(
+        records
+            .into_iter()
+            .find(|record| record.secret_name == name)
+            .map(|record| record.updated_at)
+            .unwrap_or_else(|| "absent".to_string()),
+    )
+}
+
 fn target_credential(
     root: &Path,
     target: &RegisteredTarget,
 ) -> Option<super::account_state::Credential> {
-    let name = target
-        .view
-        .config
-        .get("credential_secret_name")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            let provider = target
-                .view
-                .config
-                .get("expected_provider")
-                .and_then(Value::as_str)?
-                .trim();
-            if provider.is_empty() {
-                return None;
-            }
-            Some(
-                ctox_web_stack::sources::find(provider)
-                    .and_then(|module| module.browser_recipe())
-                    .and_then(|recipe| recipe.required_secret_name.map(str::to_string))
-                    .unwrap_or_else(|| super::reauth::derived_secret_name(provider)),
-            )
-        })?;
+    let name = target_credential_name(&target.view.config)?;
     let scope = crate::secrets::credential_scope();
-    let version = crate::secrets::list_secret_records(root, Some(scope))
-        .ok()
-        .and_then(|records| {
-            records
-                .into_iter()
-                .find(|record| record.secret_name == name)
-                .map(|record| record.updated_at)
-        })
-        .unwrap_or_else(|| "absent".to_string());
+    let version = credential_version(
+        crate::secrets::list_secret_records(root, Some(scope)),
+        &name,
+    );
     Some(super::account_state::Credential {
         reference: format!("{scope}/{name}"),
         version,

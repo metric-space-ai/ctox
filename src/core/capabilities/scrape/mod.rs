@@ -5,7 +5,9 @@ use registry::{
     show_api, show_target, upsert_target,
 };
 mod execute;
-pub(crate) use execute::execute_scrape_with_outcome;
+pub(crate) use execute::{
+    execute_scrape_with_outcome, execute_scrape_with_probe_grant, AccountProbeGrant,
+};
 use execute::{execute_scrape, CommandExecution, ProbeResult};
 mod semantic_enrichment;
 pub(crate) use semantic_enrichment::service_semantic_search;
