@@ -5,7 +5,7 @@ use std::{
     net::TcpListener,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::Duration,
 };
@@ -15,6 +15,8 @@ struct Source {
     url: String,
     stop: Arc<AtomicBool>,
     gets: Arc<AtomicUsize>,
+    bytes: Arc<AtomicUsize>,
+    ranges: Arc<Mutex<Vec<(usize, usize)>>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Source {
@@ -29,6 +31,10 @@ impl Source {
         let stopped = stop.clone();
         let gets = Arc::new(AtomicUsize::new(0));
         let get_count = gets.clone();
+        let bytes = Arc::new(AtomicUsize::new(0));
+        let sent_bytes = bytes.clone();
+        let ranges = Arc::new(Mutex::new(Vec::new()));
+        let seen_ranges = ranges.clone();
         let thread = std::thread::spawn(move || {
             while !stopped.load(Ordering::Acquire) {
                 let (mut stream, _) = match listener.accept() {
@@ -84,12 +90,14 @@ impl Source {
                 if start > end || end >= body.len() {
                     continue;
                 }
+                seen_ranges.lock().unwrap().push((start, end));
                 let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n", end-start+1, body.len());
                 let delivered_end = cut_after.map(|n| (start + n - 1).min(end)).unwrap_or(end);
                 for bytes in body[start..=delivered_end].chunks(4096) {
                     if stopped.load(Ordering::Acquire) || stream.write_all(bytes).is_err() {
                         break;
                     }
+                    sent_bytes.fetch_add(bytes.len(), Ordering::SeqCst);
                     std::thread::sleep(delay);
                 }
             }
@@ -98,6 +106,8 @@ impl Source {
             url,
             stop,
             gets,
+            bytes,
+            ranges,
             thread: Some(thread),
         }
     }
@@ -123,6 +133,162 @@ fn open(temp: &tempfile::TempDir) -> Store {
         temp.path().join("transfers"),
     )
     .unwrap()
+}
+
+#[tokio::test]
+async fn parallel_mirrors_contribute_distinct_ranges_to_one_durable_receipt() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let temp = tempfile::tempdir().unwrap();
+        let body: Vec<u8> = (0..512 * 1024).map(|n| (n % 239) as u8).collect();
+        let a = Source::new(body.clone(), Duration::ZERO);
+        let b = Source::new(body.clone(), Duration::ZERO);
+        let store = open(&temp);
+        let mut req = request("parallel", a.url.clone(), &body);
+        req.sources.push(b.url.clone());
+        store.enqueue(req.clone()).unwrap();
+        let worker = store.worker().unwrap();
+        worker.run_next(&AtomicBool::new(false)).await.unwrap();
+        let result = store.get("parallel").unwrap();
+        assert_eq!(result.state, "completed", "{result:?}");
+        let receipt = result.receipt.unwrap();
+        assert_eq!(
+            receipt.engine_revision.as_deref(),
+            Some(ctox_transfers::ENGINE_REVISION)
+        );
+        assert_eq!(
+            std::fs::read(temp.path().join("transfers").join(&receipt.artifact)).unwrap(),
+            body
+        );
+        assert_eq!(a.gets.load(Ordering::SeqCst), 1);
+        assert_eq!(b.gets.load(Ordering::SeqCst), 1);
+        let a_bytes = a.bytes.load(Ordering::SeqCst);
+        let b_bytes = b.bytes.load(Ordering::SeqCst);
+        assert!(a_bytes > 0 && b_bytes > 0);
+        assert_eq!(
+            a_bytes + b_bytes,
+            body.len(),
+            "mirrors contribute ranges, not duplicate whole downloads"
+        );
+        assert!(!temp
+            .path()
+            .join("transfers/staging/parallel/source-0")
+            .exists());
+        drop(worker);
+        assert_eq!(open(&temp).enqueue(req).unwrap().receipt.unwrap(), receipt);
+    })
+    .await
+    .expect("bounded durable multi-source download");
+}
+
+#[tokio::test]
+async fn corrupt_combined_payload_is_quarantined_before_independent_mirror_fallback() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let temp = tempfile::tempdir().unwrap();
+        let body = vec![0x42; 256 * 1024];
+        let a = Source::new(body.clone(), Duration::ZERO);
+        let b = Source::new(vec![0x43; body.len()], Duration::ZERO);
+        let store = open(&temp);
+        let mut req = request("combined-fallback", a.url.clone(), &body);
+        req.sources.push(b.url.clone());
+        store.enqueue(req).unwrap();
+        store
+            .worker()
+            .unwrap()
+            .run_next(&AtomicBool::new(false))
+            .await
+            .unwrap();
+        let result = store.get("combined-fallback").unwrap();
+        assert_eq!(result.state, "completed", "{result:?}");
+        let rejected = std::fs::read(
+            temp.path()
+                .join("transfers/staging/combined-fallback/combined/rejected-0"),
+        )
+        .unwrap();
+        assert_eq!(rejected.len(), body.len());
+        assert_ne!(rejected, body);
+        assert_eq!(
+            std::fs::read(
+                temp.path()
+                    .join("transfers")
+                    .join(result.receipt.unwrap().artifact)
+            )
+            .unwrap(),
+            body
+        );
+        assert!(a.gets.load(Ordering::SeqCst) > 1);
+        assert_eq!(b.gets.load(Ordering::SeqCst), 1);
+    })
+    .await
+    .expect("bounded corrupt-mirror fallback");
+}
+
+#[tokio::test]
+async fn parallel_pause_reopen_resumes_only_missing_ranges() {
+    tokio::time::timeout(Duration::from_secs(15), async {
+        let temp = tempfile::tempdir().unwrap();
+        let body: Vec<u8> = (0..2 * 1024 * 1024).map(|n| (n % 239) as u8).collect();
+        let half = body.len() / 2;
+        let fast = Source::new(body.clone(), Duration::ZERO);
+        let slow = Source::new(body.clone(), Duration::from_millis(10));
+        let store = open(&temp);
+        let mut req = request("parallel-resume", fast.url.clone(), &body);
+        req.sources.push(slow.url.clone());
+        store.enqueue(req).unwrap();
+        let worker = store.worker().unwrap();
+        let stop = AtomicBool::new(false);
+        let pause = async {
+            while fast.bytes.load(Ordering::SeqCst) < half || slow.bytes.load(Ordering::SeqCst) == 0
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            // Let the engine consume the fast response and mark its range complete.
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            store.control("parallel-resume", "pause").unwrap();
+        };
+        let (result, ()) = tokio::join!(worker.run_next(&stop), pause);
+        result.unwrap();
+        let paused = store.get("parallel-resume").unwrap();
+        assert_eq!(paused.state, "paused");
+        assert!(paused.receipt.is_none());
+        let fast_before = fast.ranges.lock().unwrap().len();
+        let slow_before = slow.ranges.lock().unwrap().len();
+        let partial = temp
+            .path()
+            .join("transfers/staging/parallel-resume/combined/payload");
+        let before = std::fs::read(&partial).unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(
+            std::fs::read(&partial).unwrap(),
+            before,
+            "pause quiesces both writers"
+        );
+        drop(worker);
+        let reopened = open(&temp);
+        reopened.control("parallel-resume", "resume").unwrap();
+        reopened.worker().unwrap().run_next(&stop).await.unwrap();
+        let result = reopened.get("parallel-resume").unwrap();
+        assert_eq!(result.state, "completed", "{result:?}");
+        assert_eq!(
+            std::fs::read(
+                temp.path()
+                    .join("transfers")
+                    .join(result.receipt.unwrap().artifact)
+            )
+            .unwrap(),
+            body
+        );
+        let mut resumed = fast.ranges.lock().unwrap()[fast_before..].to_vec();
+        resumed.extend_from_slice(&slow.ranges.lock().unwrap()[slow_before..]);
+        resumed.sort();
+        assert!(!resumed.is_empty());
+        assert_eq!(resumed.first().unwrap().0, half);
+        assert_eq!(resumed.last().unwrap().1, body.len() - 1);
+        assert!(resumed
+            .windows(2)
+            .all(|ranges| ranges[0].1 + 1 == ranges[1].0));
+    })
+    .await
+    .expect("bounded multi-source pause/reopen/resume");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

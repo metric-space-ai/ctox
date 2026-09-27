@@ -1,4 +1,4 @@
-# CTOX durable transfers (first slice)
+# CTOX durable transfers
 
 CTOX owns download intent and lifecycle in `runtime/ctox.sqlite3` (`ctox_transfer_jobs`).
 The service owns a single transfer worker protected by an OS file lock. Closing a
@@ -29,19 +29,25 @@ and directories are flushed before a receipt commits. An interrupted publication
 is recovered by re-verifying the object. Existing objects are never overwritten.
 Receipts identify content and engine revision; they grant no execution authority.
 
-The adapter tries each source once per attempt using one engine connection.
-All candidate URLs bind to the same caller-supplied content identity. Unreachable,
-truncated, wrong-length or wrong-hash sources fall through to the next mirror;
-partial bytes are never mixed between sources. Completed rejected payloads are
-quarantined so explicit resume can retry repaired sources. Quarantine is bounded
-at sixteen rejected payloads per source, then requires operator cleanup. Only a
-complete verified source can produce a receipt. Parallel multi-source assembly
-remains open. An accepted cancellation cannot be reversed by a late pause/resume.
+For multiple candidates, the adapter first assembles ranges with at most two
+connections in a separate `staging/ID/combined` directory. Candidate length and
+range support are checked, and the caller-pinned SHA-256 must match the complete
+assembled object. The engine owns all range futures and records a progress bitmap
+before parallel writes; even an empty loaded bitmap takes precedence over sparse
+file length on resume. Pause settles writers before the worker lease is released.
+
+A failed assembly falls back to one independent connection per source, trying
+each candidate once. Unreachable, truncated, wrong-length or wrong-hash sources
+fall through to the next mirror. Combined and independent partials never mix.
+Completed rejected payloads are quarantined so explicit resume can retry repaired
+sources; quarantine is bounded at sixteen payloads per staging directory, then
+requires operator cleanup. Only complete SHA-256/length-verified bytes can produce
+a receipt. An accepted cancellation cannot be reversed by a late pause/resume.
 
 ## Engine source and limits
 
 The private Git dependency is `mkh-welsch/aria2-rust` at
-`85d4eda67ab43c22021910824aedbb9dfc8f2504`, based on remote main
+`aea4d55e3ce0bcd1b5dd9e4832e3888c070b9504`, based on remote main
 `7bfacc2cf27e55d4755b06623c1b997880d0c697`. Its LICENSE and manifest declare
 GPL-2.0-or-later. The patch adds optional `ctox-expected-length` checks before
 allocation and at all storage write entry points, with a direct boundary test.
@@ -106,9 +112,14 @@ socket/storage regressions on engine `85d4eda67`.
 The standalone harness uses the exact archived private dependency via a local path.
 It verifies known-empty content and rejects truncated HTTP responses, retaining
 the received prefix for resume. Earlier platform and framing failures were repaired.
-Root native integration and installed acceptance remain unverified.
-Directory durability is implemented for Unix only; Windows
+The later engine-only run on `aea4d55e` passed all eight bounds/socket and
+real HTTP mirror/sparse-resume tests in 58.102 seconds. New worker-level tests
+cover distinct range contributions, corrupt assembly falling back to a clean
+mirror, and pause/reopen fetching only missing ranges; those tests are added
+but have not yet run. Root native integration and installed acceptance remain
+unverified. Directory durability is implemented for Unix only; Windows
 activation explicitly fails instead of issuing an unproven durable receipt.
 No platform is claimed accepted yet. Native command/progress projection through
-CTOX Sync, peer capability-scoped requests, peer interruption/resume, parallel
-multi-source assembly, Git worktree integration and DevOps two-host acceptance remain open.
+CTOX Sync, peer capability-scoped requests, native peer interruption/resume,
+worker multi-source verification, Git worktree integration and DevOps two-host
+acceptance remain open.

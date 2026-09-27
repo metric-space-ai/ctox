@@ -23,7 +23,7 @@ use tokio::sync::watch;
 mod peer;
 pub use peer::{PeerRangeSource, PeerSource};
 
-pub const ENGINE_REVISION: &str = "85d4eda67ab43c22021910824aedbb9dfc8f2504";
+pub const ENGINE_REVISION: &str = "aea4d55e3ce0bcd1b5dd9e4832e3888c070b9504";
 
 /// Local authorized callers supply immutable content identity, never arbitrary engine options.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -295,11 +295,27 @@ impl Worker {
             };
             return self.publish_partial(request, &partial, &object, stop);
         }
+        // Shared ranges have their own immutable-request staging area. A failed
+        // assembly never contaminates the independent single-mirror fallbacks.
+        if request.sources.len() > 1 {
+            let combined = staging.join("combined");
+            private_directory(&combined)?;
+            match self
+                .download_source(request, &request.sources, &combined, stop)
+                .await?
+            {
+                SourceOutcome::Ready(partial) => {
+                    return self.publish_partial(request, &partial, &object, stop);
+                }
+                SourceOutcome::Interrupted => return self.settle_interruption(&request.id),
+                SourceOutcome::Failed => {}
+            }
+        }
         for (source_index, source) in request.sources.iter().enumerate() {
             let source_dir = staging.join(format!("source-{source_index}"));
             private_directory(&source_dir)?;
             match self
-                .download_source(request, source, &source_dir, stop)
+                .download_source(request, std::slice::from_ref(source), &source_dir, stop)
                 .await?
             {
                 SourceOutcome::Ready(partial) => {
@@ -340,7 +356,7 @@ impl Worker {
     async fn download_source(
         &self,
         request: &DownloadRequest,
-        source: &str,
+        sources: &[String],
         staging: &Path,
         stop: &AtomicBool,
     ) -> Result<SourceOutcome> {
@@ -358,10 +374,13 @@ impl Worker {
             quarantine_partial(staging)?;
         }
         let mut opts = OptionSet::with_defaults();
+        let connections = if sources.len() > 1 { "2" } else { "1" };
         for (key, value) in [
             ("file-allocation", "none"),
-            ("split", "1"),
-            ("max-connection-per-server", "1"),
+            ("split", connections),
+            ("max-connection-per-server", connections),
+            ("min-split-size", "64K"),
+            ("uri-selector", "inorder"),
             ("continue", "true"),
             ("always-resume", "false"),
             ("auto-file-renaming", "false"),
@@ -379,10 +398,13 @@ impl Worker {
             opts.set(key, value);
         }
         opts.set("ctox-expected-length", request.size.to_string());
+        if sources.len() > 1 {
+            opts.set("checksum", format!("sha-256={}", request.sha256));
+        }
         let progress = HttpProgress::new();
         let (cancel, receive) = watch::channel(false);
         let download = http::download(HttpJob {
-            uris: vec![source.to_owned()],
+            uris: sources.to_vec(),
             dest: partial.clone(),
             opts,
             progress: progress.clone(),
@@ -406,12 +428,18 @@ impl Worker {
             }
         };
         // Do not drop a live engine future or release its lease when cancellation is requested.
-        // Single-connection mode has no detached range writers; auto-save task is disabled.
+        // The pinned engine owns all range futures; its auto-save task is disabled.
         if interrupted || stop.load(Ordering::Acquire) || self.store.desired(&request.id)? != "run"
         {
             return Ok(SourceOutcome::Interrupted);
         }
         if result.is_err() {
+            if partial.try_exists()?
+                && fs::metadata(&partial)?.len() >= request.size
+                && verify_file(&partial, request).is_err()
+            {
+                quarantine_partial(staging)?;
+            }
             return Ok(SourceOutcome::Failed);
         }
         if verify_file(&partial, request).is_err() {
