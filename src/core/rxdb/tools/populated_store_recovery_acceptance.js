@@ -247,8 +247,10 @@ async function waitForAcceptedWrites(timeoutMs = 60000) {
         // Origin is TrustedLocal, so queue policy is skipped; native receipt
         // status/task_id still come from record_command, never from this JSON.
         // business_os.chat.task is the supported synthetic admission used by
-        // the rust recovery regression; empty writeback collections keep this
-        // off provider/data-modify execution.
+        // the rust recovery regression. writeback_contract.allowed_collections
+        // only limits later writebacks; it does not prevent provider execution.
+        // This fixture starts ctox business-os serve (HTTP workers + native
+        // RxDB peer warmup) and does not start the mission/queue executor.
         const response = runCtox(['business-os', 'commands', 'dispatch', '--json', JSON.stringify({
           id: POST_CUTOVER_COMMAND_ID,
           command_id: POST_CUTOVER_COMMAND_ID,
