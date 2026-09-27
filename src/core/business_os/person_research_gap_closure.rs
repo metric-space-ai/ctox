@@ -1656,6 +1656,10 @@ pub(super) fn handle_research_writeback(
     add_field_status_evidence(&mut projection_result, &request.field_status)?;
     let now = super::person_research_command::now_ms();
     let previous_keys = previous_research_keys(&lead);
+    let previous_person_statuses = lead
+        .get("person_field_status")
+        .cloned()
+        .unwrap_or(Value::Null);
     let patch = outbound_lead_generation_research_outcome_patch(&lead, &projection_result, now);
     merge_json_object_values(&mut lead, &patch);
     union_research_keys(&mut lead, &previous_keys);
@@ -1681,6 +1685,13 @@ pub(super) fn handle_research_writeback(
             .map(|(workspace, contract)| (workspace.as_path(), contract)),
     ));
     project_person_field_status(&mut lead);
+    // The worker can still report the old "daemon will check this" placeholder
+    // after experte.de has already returned. Restore only a native verdict for
+    // the same person and unchanged address before computing open fields.
+    super::contact_email_validation::restore_native_email_verdicts(
+        &mut lead,
+        &previous_person_statuses,
+    );
     // A field is answered only when the lead now carries a verified value or a
     // documented `no_match`. Everything else stays open — including a field the
     // evidence gate downgraded from `verified` because it carried a single
