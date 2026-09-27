@@ -208,6 +208,38 @@ try {
     assert.equal(documents.size, 0);
   }
 
+  // A command can begin acquiring authority before its bridge reconnects.
+  // Never insert the pre-handshake token after readiness renewed or rejected it.
+  for (const rejected of [false, true]) {
+    resetBusinessOsCapabilityTokenCacheForTests();
+    let calls = 0;
+    globalThis.fetch = async () => ++calls === 1
+      ? capabilityResponse('before-bridge-reconnect')
+      : rejected ? terminalResponse(403) : capabilityResponse('after-bridge-reconnect');
+    const { db, documents } = mockDb();
+    const sync = {
+      async startCollection(name) {
+        assert.equal(name, 'business_commands');
+        await getBusinessOsCapabilityToken({ refresh: true });
+        return null;
+      },
+    };
+    const submission = createCommandBus({ db, sync }).submit({
+      id: 'cmd-auth-reconnect-before-insert',
+      command_type: 'business_os.test', sync_queue_tasks: false,
+    });
+    if (rejected) {
+      await assert.rejects(submission, (error) =>
+        error.code === 'auth_required' && error.transient === false);
+      assert.equal(documents.size, 0, 'rejected reconnect never inserts stale authority');
+    } else {
+      await submission;
+      assert.equal(documents.get('cmd-auth-reconnect-before-insert').client_context.capability_token,
+        'after-bridge-reconnect', 'insert binds authority after bridge readiness');
+    }
+    assert.equal(calls, 2, 'post-readiness acquisition reuses renewal or negative cache');
+  }
+
   // A host-provided device identity must not silently become the HTTP session
   // identity on reconnect. The host remains responsible for renewing it.
   {

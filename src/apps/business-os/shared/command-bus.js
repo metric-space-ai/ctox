@@ -432,6 +432,21 @@ async function acquireCapabilityTokenForSubmit() {
   return result;
 }
 
+function requireCommandCapability(commandId, capability) {
+  if (
+    CTOX_COMMAND_AUTHORIZATION.defaultRequirement === 'capability'
+    && !CTOX_COMMAND_AUTHORIZATION.offlineIntentAllowed
+    && !capability.token
+  ) {
+    throw commandError(commandId, 'Business OS authorization is currently unavailable.', {
+      code: 'auth_required',
+      transient: capability.transient,
+      retryable: true,
+    });
+  }
+  return capability.token;
+}
+
 async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt = 0 }) {
   const submitStartedAt = Date.now();
   const commandId = command.id || `cmd_${crypto.randomUUID()}`;
@@ -445,24 +460,13 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
     );
   }
   const capability = await acquireCapabilityTokenForSubmit();
-  const capabilityToken = capability.token;
+  const capabilityToken = requireCommandCapability(commandId, capability);
   emitCommandLifecycle(commandId, command.command_type || command.type, 'capability_resolved', submitStartedAt);
   // Every Business OS command mutates native/domain state. Offline reads stay
   // local-first, but mutation intent without a current server-issued actor
   // capability would be immutable and can never become authorized later.
   // Fail before insertion instead of creating a command that is guaranteed to
   // be rejected after replication.
-  if (
-    CTOX_COMMAND_AUTHORIZATION.defaultRequirement === 'capability'
-    && !CTOX_COMMAND_AUTHORIZATION.offlineIntentAllowed
-    && !capabilityToken
-  ) {
-    throw commandError(commandId, 'Business OS authorization is currently unavailable.', {
-      code: 'auth_required',
-      transient: capability.transient,
-      retryable: true,
-    });
-  }
   const doc = await commandDocument(
     command,
     commandId,
@@ -495,6 +499,12 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
         submitStartedAt,
       );
     }
+    // Bridge readiness/dependency delivery can span a native reconfiguration.
+    // Bind the latest acquired authority at the immutable local-insert boundary,
+    // not the token captured before the reconnect. This is not command replay.
+    const readyCapability = await acquireCapabilityTokenForSubmit();
+    doc.client_context.capability_token = requireCommandCapability(commandId, readyCapability);
+    assertCommandDocumentTransportBudget(doc, commandId);
     const localWriteStartedAt = Date.now();
     await insertOrPatchCommandDocument(collection, commandId, doc);
     emitCommandLifecycle(commandId, command.command_type || command.type, 'local_inserted', submitStartedAt);

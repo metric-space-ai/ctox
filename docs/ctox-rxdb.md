@@ -1625,7 +1625,10 @@ failures retain their negative cache, and host-injected device tokens remain
 host-owned rather than being replaced with an HTTP-session identity. Before
 signing the epoch, native issuance materializes the same first-party catalog
 grants as peer bring-up. Role/grant revocation and all native verification
-remain enforced; refresh does not replay or rewrite an existing command.
+remain enforced. Before the initial local command insert, acquisition is checked
+again after bridge readiness and dependency delivery, so a reconnect cannot
+leave the prepared document bound to the pre-handshake token. Refresh does not
+replay or rewrite an already inserted command.
 
 Cancelled replication transfers must re-check their lifetime after asynchronous
 storage reads, dirty-marker updates, and transport responses. A retired state
