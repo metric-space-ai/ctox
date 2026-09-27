@@ -148,6 +148,15 @@ to3000ms; fully healthy typed advanced status and the requested visible app must
 arrive within the existing70000ms readiness window. Early shell paint alone is
 not readiness. Failure diagnostics omit launch/session configuration.
 
+This integration fixture explicitly leases desktop_files and desktop_file_chunks
+through the normal scoped Sync API after observing shell visibility. Its file
+readiness assertions cover that requested consumer, not passive CTOX startup.
+The consumer acquires once, retains the original 70-second health deadline and
+releases in finally; pending acquisitions release any late lease, and the owned
+browser context closes on every exit. No records are seeded and no product
+startup warmup is added. Normal user file-open and installed acceptance remain
+separate requirements.
+
 Demand-file smoke payloads decode each independently Base64-encoded frame before
 joining the decoded bytes. Padding in intermediate frames is valid; malformed
 frames still fail. Native stored-chunk integrity does not establish browser

@@ -45,6 +45,11 @@ function startupDiagnostics(state) {
     shellVisible: state.shellVisible, windows: state.windows,
     moduleCount: state.moduleCount, expectedTextFound: state.expectedTextFound,
     timings: state.timings, dbBuild: state.dbBuild,
+    fileConsumer: state.fileConsumer ? {
+      phase: ['waiting', 'acquiring', 'active', 'failed', 'closed'].includes(state.fileConsumer.phase)
+        ? state.fileConsumer.phase : 'unknown',
+      collections: names(state.fileConsumer.collections),
+    } : null,
     advancedStatus: state.advancedStatus ? {
       version: state.advancedStatus.version, ok: state.advancedStatus.ok,
       checks: state.advancedStatus.checks, failures: state.advancedStatus.failures,

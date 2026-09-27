@@ -20,6 +20,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawnSync } = require('child_process');
 const { startupReadiness, startupDiagnostics } = require('./business_os_startup_readiness.js');
+const { ensureStartupFileConsumer, releaseStartupFileConsumer } = require('./business_os_startup_file_consumer.js');
 
 const root = path.resolve(__dirname, '../../../..');
 const playwrightModule =
@@ -203,6 +204,8 @@ async function checkMode(browser, mode, url) {
     }
     return {
       mode,
+      acceptanceScope: 'startup-and-explicit-file-consumer-readiness',
+      fileConsumer: state.fileConsumer,
       url: smokeUrl,
       appHosting: state.config.app_hosting || '',
       activeModule: state.activeModule || '',
@@ -218,7 +221,19 @@ async function checkMode(browser, mode, url) {
       consoleIssues,
     };
   } finally {
-    await context.close().catch(() => {});
+    let cleanupTimer;
+    try {
+      const cleanup = await Promise.race([
+        page.evaluate(releaseStartupFileConsumer),
+        new Promise((_, reject) => {
+          cleanupTimer = setTimeout(() => reject(new Error('file consumer cleanup exceeded 2000ms')), 2000);
+        }),
+      ]);
+      if (cleanup.failed) throw new Error('file consumer lease release failed');
+    } finally {
+      clearTimeout(cleanupTimer);
+      await context.close().catch(() => {});
+    }
   }
 }
 
@@ -335,7 +350,16 @@ async function waitForReady(page, mode) {
       }
       statusEvidenceOk = true;
     }
-    if (readiness.ready && statusEvidenceOk) {
+    // Observe the original shell-visibility milestone first. Explicitly
+    // request file transport only for this fixture's file-consumer contract;
+    // local diagnostic reads are not a production file lease.
+    if (firstShellVisibleMs !== null) {
+      lastState.fileConsumer = await page.evaluate(ensureStartupFileConsumer);
+      if (lastState.fileConsumer.phase === 'failed') {
+        throw new Error(`${mode}: file consumer acquisition failed`);
+      }
+    }
+    if (readiness.ready && statusEvidenceOk && lastState.fileConsumer?.phase === 'active') {
       return lastState;
     }
     await new Promise((resolve) => setTimeout(resolve, readinessPollMs));
