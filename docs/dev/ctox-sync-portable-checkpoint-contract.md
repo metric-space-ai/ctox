@@ -28,7 +28,22 @@ symlink, and platform-reserved-name checks.
 
 Credential bytes, live database files, and unresolved external effects are not
 portable payloads. The session manifest may contain credential references only.
-Any pending effect prevents a durable copy receipt, artifact restore, and workspace reconstruction.
+Any pending effect prevents a durable copy receipt, artifact restore, and
+workspace reconstruction.
+
+For a Codex checkpoint, every `history` artifact is explicitly gated to
+format `ctox-codex-rollout-jsonl` version `1`; checkpoint version `2` and
+session manifest version `1` select that input format. Capture, publication,
+receipt verification, and restore verify its exact SHA-256/length, bounded
+UTF-8 newline-delimited records, metadata as the first record, independent
+RFC 3339 outer and metadata timestamps, session identity, supported record
+variants, duplicate-free JSON keys, unknown-field rejection, a nonempty
+history, and inner metadata completeness. Diagnostics expose only structural
+categories. A syntax-valid journal does not prove provider resume: provider
+continuation remains unresolved until a separately certified adapter consumes
+provider state. External effects remain unknown from journal syntax alone,
+while nonempty checkpoint `pendingEffects` still blocks restore and
+reconstruction.
 
 ## Restore boundary
 
@@ -43,6 +58,16 @@ start a provider, or reconcile an external effect. Artifact restore is not
 workspace reconstruction. Provider export/import/resume remains a separate
 adapter acceptance gate for Codex and Claude; a fresh thread is not an
 acceptable fallback.
+
+## Operational integration status
+
+The strict validator is consumed by the portable checkpoint capture,
+publication/receipt verification, and restore primitives. This is not yet a
+complete operational portability path: no CTOX daemon or provider adapter
+currently invokes those primitives at a proven turn-quiescence boundary, imports
+provider state, or resumes Codex/Claude on another host. Consequently #175 and
+#97 remain open. This contract does not claim portable session export/import,
+provider resume, cross-host failover, or production portability.
 
 ## Workspace reconstruction consumer
 
