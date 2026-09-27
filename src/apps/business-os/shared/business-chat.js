@@ -1,5 +1,5 @@
-import { normalizeCrewAppearance, renderCrewCreature, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260927-crew-genome-v3';
-import { syncCrewMotion } from './crew-motion.js?v=20260927-crew-genome-v3';
+import { normalizeCrewAppearance, renderCrewCreature, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260927-crew-genome-v4';
+import { syncCrewMotion } from './crew-motion.js?v=20260927-crew-genome-v4';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
   FILE_CHUNK_HASH_SCHEME,

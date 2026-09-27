@@ -18,7 +18,7 @@
  * work stays on the compositor; eye moves are rare and short.
  */
 
-import { CREW_CREATURE_CSS } from './crew-renderer.js?v=20260927-crew-genome-v3';
+import { CREW_CREATURE_CSS } from './crew-renderer.js?v=20260927-crew-genome-v4';
 
 const ENGINE_KEY = '__ctoxCrewMotionEngine';
 const STYLE_ID = 'ctox-crew-creature-css';
