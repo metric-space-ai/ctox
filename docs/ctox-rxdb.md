@@ -116,6 +116,15 @@ results, runtime projections and files continue through CTOX Sync/WebRTC.
 The immutable address mechanism alone does not certify bootstrap performance,
 mobile suspend/resume, or full runtime compatibility across all hosts.
 
+The `business-os-ui-regression` fixture exercises optional catalog apps as
+installed apps. Its fresh isolated source root receives private template inputs;
+the browser installs the 17 required catalog apps through the existing native
+`ctox.module.install_template` command and requires completed receipts before
+the unchanged catalog/opening assertions. The fixture never changes the product
+registry or default-installed flags, copies apps directly into installed state,
+or treats a merely accepted command as a completed installation. This setup
+requires real browser/native execution before claiming the UI regression passed.
+
 ### Desktop pin hydration
 
 The shell may paint UI-only defaults before Sync starts. Cached pin state is

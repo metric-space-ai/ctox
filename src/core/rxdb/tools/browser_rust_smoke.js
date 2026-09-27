@@ -4360,6 +4360,9 @@ function ensureCtoxSmokeBinary() {
     threadsScaleSeed = await seedBusinessOsThreadsScaleNativeSetup();
     console.log(`business_os_threads_rightclick_scale_seed_ms=${Date.now() - scaleSeedStartedAt}`);
   }
+  const uiCatalogFixture = smokeMode === 'business-os-ui-regression'
+    ? require('./business_os_ui_catalog_fixture.js').prepareUiCatalogFixture(root, runtimeRoot)
+    : null;
   let ctox = startCtoxServer();
   const browserDiagnostics = {
     warnings: 0,
@@ -7727,7 +7730,7 @@ function ensureCtoxSmokeBinary() {
       })
       : await browserEvaluationTarget.evaluate(async (stateOrArgs, maybeArgs) => {
       const sellifyScaleAppState = maybeArgs ? stateOrArgs : null;
-      const { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes } = maybeArgs || stateOrArgs;
+      const { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes, uiCatalogFixture } = maybeArgs || stateOrArgs;
       if (!globalThis.process) globalThis.process = {};
       if (typeof globalThis.process.nextTick !== 'function') {
         globalThis.process.nextTick = (callback, ...args) => Promise.resolve().then(() => callback(...args));
@@ -7874,6 +7877,7 @@ function ensureCtoxSmokeBinary() {
       const backgroundIndexerSmokeMode = smokeMode === 'workspace-agent-artifacts-background-rust-to-browser';
       const deferInitialFileCollections = smokeMode === 'file-chunk-tombstone-error-browser-status';
       const needsCommandCollections = commandSmokeMode
+        || smokeMode === 'business-os-ui-regression'
         || materializeSmokeMode
         || ticketSmokeMode
         || outboundActiveUiSmokeMode
@@ -8560,6 +8564,34 @@ function ensureCtoxSmokeBinary() {
           'support',
           'threads',
         ];
+        if (!uiCatalogFixture?.installs?.length || !appState?.commandBus?.dispatch) {
+          throw new Error('Business OS UI regression catalog installation prerequisite is missing');
+        }
+        const catalogInstallReceipts = [];
+        const installDeadline = Date.now() + 120000;
+        for (const item of uiCatalogFixture.installs) {
+          if (!expectedSecondaryModules.includes(item.moduleId)) {
+            throw new Error(`Unexpected UI catalog prerequisite: ${item.moduleId}`);
+          }
+          const remaining = installDeadline - Date.now();
+          if (remaining <= 0) throw new Error('UI catalog installation prerequisite timed out');
+          const receipt = await appState.commandBus.dispatch({
+            id: `cmd_ui_catalog_${crypto.randomUUID()}`,
+            module: 'app-store',
+            type: 'ctox.module.install_template',
+            record_id: item.moduleId,
+            payload: { template_id: item.templateId, module_id: item.moduleId, title: item.title },
+            client_context: smokeClientContext({ source: 'business-os-ui-catalog-fixture' }),
+          }, { until: 'terminal', timeoutMs: Math.min(30000, remaining), sync_queue_tasks: false });
+          if (!receipt?.ok || receipt.status !== 'completed' || receipt.result?.module_id !== item.moduleId) {
+            throw new Error(`UI catalog installation failed for ${item.moduleId}: ${JSON.stringify(receipt)}`);
+          }
+          catalogInstallReceipts.push({ moduleId: item.moduleId, commandId: receipt.command_id, status: receipt.status });
+        }
+        // Use the same shell refresh event as App Store after a completed install.
+        window.dispatchEvent(new CustomEvent('ctox-business-os-modules-changed', {
+          detail: { source: 'app-store', command_type: 'ctox.module.install_template' },
+        }));
         const moduleCatalog = await waitFor(() => {
           const moduleIds = Array.isArray(appState?.modules)
             ? appState.modules.map((mod) => mod?.id).filter(Boolean)
@@ -9480,6 +9512,7 @@ function ensureCtoxSmokeBinary() {
           mode: smokeMode,
           moduleCount: moduleIds.length,
           moduleIds,
+          catalogInstallReceipts,
           startMenuItemCount: startMenu.itemCount,
           openedModules,
           secondaryOpenedModules,
@@ -16788,7 +16821,7 @@ function ensureCtoxSmokeBinary() {
           desktop_file_chunks: describeReplicationPool(appChunkReplicationState),
         },
       };
-    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes });
+    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes, uiCatalogFixture });
     outerPhaseTimings.pageEvaluateMs = Date.now() - pageEvaluateStartedAt;
 
     if (result.mode === 'business-os-ui-regression') {
