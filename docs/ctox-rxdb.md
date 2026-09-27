@@ -1775,6 +1775,14 @@ native schemas and both hash registries are regenerated before the pinned
 esbuild 0.28.0 bundle build; the sole bundle URL remains in `shared/rxdb-runtime.js`.
 ### Browser command receipts across reconnects
 
+During peer replacement, `QUERY_GENERATION_REQUIRED` leaves the exact-ID
+tracker pending within its existing finite revalidation schedule and caller
+deadline. This specific condition never falls back to local storage: the next
+strict read still requires a current bridge generation. A permanent push
+refusal is returned to the caller with its original error and immutable command
+identity, rather than being reported as a transient unconfirmed push. Its
+attached local receipt proves saved intent only, not native acceptance.
+
 Command tracking checks its exact command ID in local RxDB storage before
 waiting for bridge readiness and once more if readiness fails. Only a
 non-deleted document with the matching ID and `replication_phase = native_observed`

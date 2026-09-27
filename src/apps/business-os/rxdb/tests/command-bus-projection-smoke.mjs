@@ -480,5 +480,52 @@ for (const scenario of ['completed', 'failed', 'never-arrives', 'explicit-cancel
   assert(unsubscribed >= 1, 'peer-close: watcher is released');
 }
 
+// During peer replacement strict reads have no generation. Wait for the
+// existing exact-ID revalidation; never convert that missing authority into a
+// local-cache read or extend the caller's deadline.
+for (const scenario of ['completed', 'failed', 'never-arrives']) {
+  const id = 'cmd-generation-gap-' + scenario;
+  let queries = 0;
+  let localReads = 0;
+  let unsubscribed = 0;
+  const commands = {
+    storageCollection: { async findDocumentsById() {
+      // The existing pre-readiness lookup precedes any strict read. Only a
+      // subsequent cache lookup could bypass the generation failure.
+      if (queries === 0) return {};
+      localReads++;
+      throw new Error('missing generation must not fall back to local storage');
+    } },
+    async insert() { throw new Error('tracking must never redispatch'); },
+    findOne(selector) {
+      assert((typeof selector === 'string' ? selector : selector.selector.id) === id,
+        'generation gap: exact command ID');
+      return {
+        $: { subscribe() { return { unsubscribe() { unsubscribed++; } }; } },
+        async exec() {
+          queries++;
+          if (queries <= 2 || scenario === 'never-arrives') {
+            throw new Error('QUERY_GENERATION_REQUIRED: strict demand read has no bridge generation');
+          }
+          assert(Boolean(selector.requireRevision), 'recovered result requires an authoritative revision');
+          return { id, status: scenario, replication_phase: 'native_observed',
+            execution_phase: 'terminal', terminal_status: scenario,
+            ...(scenario === 'failed' ? { error_code: 'permission_denied', error_message: 'native rejected' } : {}) };
+        },
+      };
+    },
+  };
+  const bus = createCommandBus({ db: { raw: { business_commands: commands } } });
+  let receipt;
+  let failure;
+  try { receipt = await bus.waitForTerminal(id, { timeoutMs: scenario === 'never-arrives' ? 1000 : 5000 }); }
+  catch (error) { failure = error; }
+  if (scenario === 'completed') assert(!failure && receipt?.status === 'completed', 'generation recovers before receipt');
+  else assert(!receipt && failure?.code === (scenario === 'failed' ? 'permission_denied' : 'projection_delayed'),
+    'generation gap preserves denial or original deadline');
+  assert(localReads === 0, 'strict generation guard is never bypassed with cached data');
+  assert(queries > 1 && queries < 10 && unsubscribed >= 1, 'bounded revalidation and watcher cleanup');
+}
+
 console.log('ctox-rxdb command-bus projection smoke OK');
 process.exit(0);

@@ -1370,6 +1370,11 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
             requireRevision,
           }));
         } catch (error) {
+          // A reconnect can retire the strict-read generation before its
+          // replacement is ready. Keep the existing bounded revalidation and
+          // caller deadline; this condition must never fall back to cache.
+          if (error?.code === 'QUERY_GENERATION_REQUIRED'
+              || error?.message === 'QUERY_GENERATION_REQUIRED: strict demand read has no bridge generation') return;
           if (isLocalFallbackCommandTrackingQueryError(error)) {
             try {
               inspect(await findLocalDoc(currentDb?.raw?.business_commands, commandId));
