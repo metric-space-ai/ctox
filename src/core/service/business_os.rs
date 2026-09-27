@@ -2233,6 +2233,12 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
                     .get("owner_user_id")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_string),
+                resolved_credential.otp_recipient.as_deref(),
+                web_stack_otp_mailbox_granted(
+                    root,
+                    &source_id,
+                    resolved_credential.otp_recipient.as_deref(),
+                ),
                 &recipe,
                 login_started_epoch_s,
                 continuation_source,
@@ -2346,6 +2352,12 @@ fn run_business_os_web_stack_source_capture_with_trust(
         .trim();
     anyhow::ensure!(!company.is_empty(), "source-capture company is empty");
     let country = flag_value(args, "--country").unwrap_or("DE").trim();
+    // One login and capture per provider at a time. Parallel research runs
+    // each logged into D&B with the same account: several e-mail codes arrived
+    // at once (no challenge identity, login_failed) and the shared browser
+    // profile was locked (THESEN 25.09.2026, every D&B run failed from 12:19).
+    let _capture_lock =
+        acquire_source_capture_lock(root, &source_id, std::time::Duration::from_secs(300));
     let source = build_web_stack_authenticated_source_capture(&source_id, company, country)?;
     let credential_ref = optional_web_stack_credential_ref(flag_value(args, "--credential-ref"))?
         .or_else(|| {
@@ -2414,13 +2426,58 @@ fn run_business_os_web_stack_source_capture_with_trust(
         "country": country,
         "records": records,
         "record_count": records.len(),
-        "source_status": result.get("status").and_then(serde_json::Value::as_str).unwrap_or("failed"),
+        // Without a capture result the login itself stopped; name its state
+        // (e.g. mfa_required) and the e-mail code outcome instead of a bare
+        // "failed", so the research can see what blocks it (THESEN 25.09.2026).
+        "source_status": result
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| combined.get("status").and_then(serde_json::Value::as_str))
+            .unwrap_or("failed"),
+        "login_status": combined.get("status").cloned().unwrap_or(serde_json::Value::Null),
+        "email_otp_status": combined.pointer("/email_otp/status").cloned().unwrap_or(serde_json::Value::Null),
+        "email_otp_detail": combined.pointer("/email_otp/detail").cloned().unwrap_or(serde_json::Value::Null),
         "source_url": result.get("source_url").and_then(serde_json::Value::as_str),
         "credential_ref": credential_ref,
         "secret_value_in_payload": false,
         "browser_stream": "rxdb",
         "authenticated_capture": combined,
     }))
+}
+
+/// Exclusive per-provider lock for authenticated captures across CTOX
+/// processes. Returns `None` when the wait expires; the capture then proceeds
+/// and reports what it finds rather than hanging a research turn.
+fn acquire_source_capture_lock(
+    root: &Path,
+    source_id: &str,
+    wait: std::time::Duration,
+) -> Option<std::fs::File> {
+    let dir = crate::paths::runtime_dir(root)
+        .join("browser")
+        .join("locks");
+    std::fs::create_dir_all(&dir).ok()?;
+    let name: String = source_id
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect();
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join(format!("source-capture-{name}.lock")))
+        .ok()?;
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 fn enqueue_web_stack_source_capture_auth_assist(
@@ -2670,7 +2727,9 @@ if (sourceId === "dnbhoovers.com") {{
     const phone = context.match(/(?:\+|00)\d[\d\s()\/-]{{7,}}\d/)?.[0];
     const city = context.match(/\bFolgen\s+([^,]{{2,80}}),/)?.[1];
     const revenue = context.match(/Umsatz\s+EUR:\s*([0-9.,]+\s*[BMK]?)/i)?.[1];
-    const employees = context.match(/Beschäftigte\s*\(Gesamt\):\s*([0-9.,]+\s*[KMB]?)/i)?.[1];
+    // "[KMB]?" also took the M of a following word ("15 M…"): only a
+    // standalone unit letter counts.
+    const employees = context.match(/Beschäftigte\s*\(Gesamt\):\s*([0-9.,]+(?:\s*[KMB]\b)?)/i)?.[1];
     const duns = context.match(/D-U-N-S:\s*([0-9-]+)/i)?.[1];
     const industry = phone
       ? context.match(new RegExp(`${{phone.replace(/[.*+?^${{}}()|[\]\\]/g, "\\$&")}}\\s+(.+?)\\s+(?:Private|Public|Nonprofit)`, "i"))?.[1]
@@ -2683,6 +2742,32 @@ if (sourceId === "dnbhoovers.com") {{
     push("mitarbeiter", employees, "high", "D&B Hoovers employee total", hit.url);
     push("firma_register", duns, "high", "D&B D-U-N-S", hit.url);
     push("konzernstruktur", structure, "medium", "D&B Hoovers organization role", hit.url);
+    // Branchencodes (WZ/NACE/NOGA) stehen nur auf der Firmenseite, nicht in der
+    // Trefferliste. Im selben angemeldeten Lauf die Firmenseite oeffnen; ohne
+    // eindeutigen Code den gefundenen Abschnitt als Rohtext mitgeben, damit die
+    // Recherche ihn selbst lesen kann (THESEN 25.09.2026: CHT ohne WZ-Code).
+    try {{
+      await page.goto(hit.url, {{ waitUntil: "domcontentloaded", timeout: 20000 }});
+      for (let attempt = 0; attempt < 20; attempt += 1) {{
+        await page.waitForTimeout(750);
+        const size = await page.evaluate(() => String(document.body?.innerText || "").length).catch(() => 0);
+        if (size > 4000) break;
+      }}
+      if (hostAllowed(page.url()) && /\/company\//i.test(page.url())) {{
+        const detail = await page.evaluate(() => String(document.body?.innerText || "").replace(/[ \t]+/g, " "));
+        // The classification year is not a code: "WZ 2008" read as wz_code=2008
+        // for HAMM AG (25.09.2026). Label and value may sit on separate lines.
+        const codeRe = /\b(WZ\s*2008|WZ|NACE(?:\s*Rev\.?\s*2)?|ÖNACE(?:\s*2008)?|NOGA(?:\s*2008)?)\b[^0-9]{{0,80}}(?!(?:1993|2003|2008)\b)(\d{{2}}(?:\.\d{{1,2}}){{1,2}}|\d{{4,5}})\b/i;
+        const code = detail.match(codeRe);
+        if (code) {{
+          push("wz_code", code[2], "medium", `D&B Hoovers Firmenseite: ${{code[1]}} ${{code[2]}}`, page.url());
+        }}
+        const marker = detail.search(/\b(Branchencodes?|Industry Codes|NACE|WZ\s*2008|NOGA|ÖNACE|SIC|NAICS)\b/i);
+        if (marker >= 0) {{
+          push("branche_codes_rohtext", detail.slice(Math.max(0, marker - 40), marker + 600).replace(/\n+/g, " | "), "medium", "D&B Hoovers Firmenseite: Abschnitt Branchencodes (Rohtext)", page.url());
+        }}
+      }}
+    }} catch {{}}
   }}
 }} else if (sourceId === "leadfeeder.com") {{
   const companyName = normalized(company);
@@ -3334,23 +3419,66 @@ pub(crate) fn run_business_os_web_stack_context_extract(
     }))
 }
 
+// Bound the custom script at both the CLI reader and the daemon boundary.
+// Other web-stack commands must never read stdin, including when it is a pipe.
+pub(crate) const AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES: usize = 1024 * 1024;
+
+fn read_web_stack_cli_source(args: &[String], reader: impl Read) -> anyhow::Result<Option<String>> {
+    if args.first().map(String::as_str) != Some("authenticated-automation") {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    reader
+        .take(AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .context("failed to read authenticated-automation source from stdin")?;
+    anyhow::ensure!(
+        bytes.len() <= AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES,
+        "authenticated-automation source exceeds 1 MiB"
+    );
+    let source =
+        String::from_utf8(bytes).context("authenticated-automation source must be UTF-8")?;
+    validate_web_stack_cli_source(args, Some(&source))?;
+    Ok(Some(source))
+}
+
+fn validate_web_stack_cli_source(args: &[String], source: Option<&str>) -> anyhow::Result<()> {
+    if args.first().map(String::as_str) == Some("authenticated-automation") {
+        let source = source.context("authenticated-automation requires forwarded script source")?;
+        anyhow::ensure!(
+            source.len() <= AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES,
+            "authenticated-automation source exceeds 1 MiB"
+        );
+        anyhow::ensure!(
+            !source.trim().is_empty(),
+            "authenticated-automation requires a non-empty browser automation source"
+        );
+    } else {
+        anyhow::ensure!(
+            source.is_none(),
+            "script source is only allowed for authenticated-automation"
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn run_business_os_web_stack_cli_json_local(
     root: &Path,
     args: &[String],
+    source: Option<&str>,
 ) -> anyhow::Result<serde_json::Value> {
+    validate_web_stack_cli_source(args, source)?;
     match args.first().map(String::as_str) {
         Some("person-research") => run_business_os_web_stack_person_research(root, args),
         Some("auth-assist-request") => run_business_os_web_stack_auth_assist_request(root, args),
         Some("auth-assist-signup") => run_business_os_web_stack_auth_assist_signup(root, args),
         Some("auth-assist-login") => run_business_os_web_stack_auth_assist_login(root, args),
         Some("source-capture") => run_business_os_web_stack_source_capture(root, args),
-        Some("authenticated-automation") => {
-            let mut source = String::new();
-            std::io::stdin()
-                .read_to_string(&mut source)
-                .context("failed to read authenticated-automation source from stdin")?;
-            run_business_os_web_stack_authenticated_automation(root, args, &source)
-        }
+        Some("authenticated-automation") => run_business_os_web_stack_authenticated_automation(
+            root,
+            args,
+            source.context("authenticated-automation requires forwarded script source")?,
+        ),
         Some("auth-assist-status") => {
             let session_id = flag_value(args, "--session-id").context(
                 "usage: ctox business-os web-stack auth-assist-status --session-id <id>",
@@ -3385,10 +3513,21 @@ pub(crate) fn run_business_os_web_stack_cli_json(
     root: &Path,
     args: &[String],
 ) -> anyhow::Result<serde_json::Value> {
-    if let Some(payload) = crate::service::run_business_os_web_stack_via_service(root, args)? {
+    run_business_os_web_stack_cli_json_with_reader(root, args, std::io::stdin())
+}
+
+pub(super) fn run_business_os_web_stack_cli_json_with_reader(
+    root: &Path,
+    args: &[String],
+    reader: impl Read,
+) -> anyhow::Result<serde_json::Value> {
+    let source = read_web_stack_cli_source(args, reader)?;
+    if let Some(payload) =
+        crate::service::run_business_os_web_stack_via_service(root, args, source.as_deref())?
+    {
         return Ok(payload);
     }
-    run_business_os_web_stack_cli_json_local(root, args)
+    run_business_os_web_stack_cli_json_local(root, args, source.as_deref())
 }
 
 fn run_business_os_web_stack_person_research(
@@ -3752,6 +3891,14 @@ fn business_os_web_stack_workspace(root: &Path, args: &[String]) -> Option<PathB
 }
 
 fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    handle_business_os_web_stack_with_reader(root, args, std::io::stdin())
+}
+
+pub(super) fn handle_business_os_web_stack_with_reader(
+    root: &Path,
+    args: &[String],
+    reader: impl Read,
+) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("person-research") => {
             let payload = run_business_os_web_stack_cli_json(root, args)?;
@@ -3774,11 +3921,7 @@ fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<
             print_json(&capture)
         }
         Some("authenticated-automation") => {
-            let mut source = String::new();
-            std::io::stdin()
-                .read_to_string(&mut source)
-                .context("failed to read authenticated-automation source from stdin")?;
-            let output = run_business_os_web_stack_authenticated_automation(root, args, &source)?;
+            let output = run_business_os_web_stack_cli_json_with_reader(root, args, reader)?;
             print_json(&output)
         }
         Some("auth-assist-status") => {
@@ -5048,6 +5191,15 @@ fn resolve_web_stack_auth_owner_user_id_with_env(
     env_owner_user_id: Option<&str>,
     accept_as_trusted_local: bool,
 ) -> anyhow::Result<Option<String>> {
+    if let Some(task) = channels::load_queue_task(root, requesting_task_id)? {
+        anyhow::ensure!(
+            !matches!(
+                task.route_status.as_str(),
+                "cancelled" | "handled" | "failed"
+            ),
+            "requesting queue task is terminal"
+        );
+    }
     let claimed_owner = flag_value(args, "--owner-user-id")
         .or(env_owner_user_id)
         .map(str::trim)
@@ -5078,7 +5230,23 @@ fn resolve_web_stack_auth_owner_user_id_with_env(
         return Ok(Some(verified));
     }
     if accept_as_trusted_local {
-        return Ok(claimed_owner.map(str::to_string));
+        // Legacy native auth-assist calls explicitly opt into local trust.
+        // The public authenticated-automation path never enables this branch.
+        if let Some(context) =
+            channels::inspect_business_command_for_task(root, requesting_task_id)?
+        {
+            let legacy_owner = context
+                .pointer("/command/payload/owner_user_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|owner| !owner.is_empty());
+            if let Some(owner) = legacy_owner {
+                return Ok(Some(owner.to_string()));
+            }
+        }
+        if let Some(claimed) = claimed_owner {
+            return Ok(Some(claimed.to_string()));
+        }
     }
     if let Some(claimed) = claimed_owner {
         eprintln!(
@@ -5086,7 +5254,69 @@ fn resolve_web_stack_auth_owner_user_id_with_env(
             requesting_task_id, claimed
         );
     }
+    // Company logins (D&B, Leadfeeder) are one shared account. A native
+    // research run or a queue task carries no requesting human, so every
+    // capture and the stored-credential login died with "auth assist owner
+    // unresolved" and D&B stayed dark for a day (thesen, 23./24.09.2026).
+    // The operator can name the owner such runs sign in as, in the runtime
+    // store; without that setting nothing changes.
+    if let Some(default_owner) = web_stack_default_auth_owner(root) {
+        eprintln!(
+            "[business-os] web-stack auth owner defaulted task={} owner={}",
+            requesting_task_id, default_owner
+        );
+        return Ok(Some(default_owner));
+    }
     Ok(None)
+}
+
+const WEB_STACK_DEFAULT_AUTH_OWNER_KEY: &str = "CTOX_WEB_STACK_DEFAULT_AUTH_OWNER";
+
+fn web_stack_default_auth_owner(root: &Path) -> Option<String> {
+    crate::inference::runtime_env::get_runtime_env_value(root, WEB_STACK_DEFAULT_AUTH_OWNER_KEY)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Owner-granted exceptions to the owned-mailbox rule of the e-mail OTP
+/// lookup, one `source_id=mailbox` pair per entry (comma or newline
+/// separated). A pair lets the login of exactly that provider read its own
+/// one-time codes from exactly that mailbox, even though the mailbox is not
+/// owned by or shared with the login owner. Sender, recipient and the
+/// single-code rule still apply. THESEN 25.09.2026: D&B sends its codes to a
+/// staff mailbox that predates mailbox ownership; the owner approved reading
+/// only D&B codes from it.
+const WEB_STACK_OTP_MAILBOX_GRANTS_KEY: &str = "CTOX_WEB_STACK_OTP_MAILBOX_GRANTS";
+
+fn web_stack_otp_source_key(source_id: &str) -> String {
+    let source = source_id.trim().to_ascii_lowercase();
+    source
+        .strip_prefix("app.")
+        .map(str::to_string)
+        .unwrap_or(source)
+}
+
+fn web_stack_otp_mailbox_granted_by(grants: &str, source_id: &str, mailbox: &str) -> bool {
+    let source = web_stack_otp_source_key(source_id);
+    let mailbox = mailbox.trim().to_ascii_lowercase();
+    if source.is_empty() || !mailbox.contains('@') {
+        return false;
+    }
+    grants
+        .split([',', '\n'])
+        .filter_map(|entry| entry.split_once('='))
+        .any(|(granted_source, granted_mailbox)| {
+            web_stack_otp_source_key(granted_source) == source
+                && granted_mailbox.trim().to_ascii_lowercase() == mailbox
+        })
+}
+
+fn web_stack_otp_mailbox_granted(root: &Path, source_id: &str, mailbox: Option<&str>) -> bool {
+    let Some(mailbox) = mailbox else {
+        return false;
+    };
+    crate::inference::runtime_env::get_runtime_env_value(root, WEB_STACK_OTP_MAILBOX_GRANTS_KEY)
+        .is_some_and(|grants| web_stack_otp_mailbox_granted_by(&grants, source_id, mailbox))
 }
 
 fn web_stack_auth_owner_from_command_session(
@@ -5153,34 +5383,29 @@ fn web_stack_auth_owner_from_command_session(
     Ok(Some(session_user_id.to_string()))
 }
 
-fn web_stack_auth_owner_from_command_context(context: &serde_json::Value) -> Option<String> {
-    let parsed_client_context = match context.pointer("/command/client_context") {
-        Some(serde_json::Value::String(value)) => {
-            serde_json::from_str(value).unwrap_or(serde_json::Value::Null)
-        }
-        Some(client_context) => client_context.clone(),
-        None => serde_json::Value::Null,
+fn web_stack_auth_owner_from_command_context(
+    root: &Path,
+    context: &serde_json::Value,
+) -> anyhow::Result<Option<String>> {
+    let Some(admitted_owner) = web_stack_auth_owner_from_native_authorization(context) else {
+        return Ok(None);
     };
-    let from_client_context = ["/owner_user_id", "/actor/id", "/user_id"]
-        .into_iter()
-        .find_map(|pointer| {
-            parsed_client_context
-                .pointer(pointer)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        });
-    from_client_context
-        .or_else(|| web_stack_auth_owner_from_native_authorization(context))
-        .or_else(|| {
-            context
-                .pointer("/command/payload/owner_user_id")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        })
+    let command_id = context
+        .pointer("/command/command_id")
+        .and_then(serde_json::Value::as_str)
+        .context("native authorization has no command identity")?;
+    let current = crate::business_os::store::revalidate_business_command_execution_authorization(
+        root, command_id,
+    )?;
+    let current_owner = current
+        .pointer("/actor/id")
+        .and_then(serde_json::Value::as_str)
+        .context("native authorization has no current actor")?;
+    anyhow::ensure!(
+        current_owner == admitted_owner,
+        "Business OS command authorization actor changed"
+    );
+    Ok(Some(admitted_owner))
 }
 
 fn web_stack_auth_owner_from_native_authorization(context: &serde_json::Value) -> Option<String> {
@@ -5216,11 +5441,10 @@ fn web_stack_auth_owner_from_task_link(
     if requesting_task_id.is_empty() {
         return Ok(None);
     }
-    Ok(
-        channels::inspect_business_command_for_task(root, requesting_task_id)?
-            .as_ref()
-            .and_then(web_stack_auth_owner_from_command_context),
-    )
+    match channels::inspect_business_command_for_task(root, requesting_task_id)? {
+        Some(context) => web_stack_auth_owner_from_command_context(root, &context),
+        None => Ok(None),
+    }
 }
 
 /// Queue tasks spawned by a Business OS command (person-research gap closure)
@@ -5247,9 +5471,17 @@ fn web_stack_auth_owner_from_task_metadata(
     else {
         return Ok(None);
     };
-    Ok(channels::inspect_business_command(root, command_id)?
-        .as_ref()
-        .and_then(web_stack_auth_owner_from_command_context))
+    anyhow::ensure!(
+        !matches!(
+            task.route_status.as_str(),
+            "cancelled" | "handled" | "failed"
+        ),
+        "requesting queue task is terminal"
+    );
+    match channels::inspect_business_command(root, command_id)? {
+        Some(context) => web_stack_auth_owner_from_command_context(root, &context),
+        None => Ok(None),
+    }
 }
 
 fn web_stack_auth_owner_from_command_authorization(
@@ -5260,11 +5492,10 @@ fn web_stack_auth_owner_from_command_authorization(
     if requesting_task_id.is_empty() {
         return Ok(None);
     }
-    Ok(
-        channels::inspect_business_command(root, requesting_task_id)?
-            .as_ref()
-            .and_then(web_stack_auth_owner_from_native_authorization),
-    )
+    match channels::inspect_business_command(root, requesting_task_id)? {
+        Some(context) => web_stack_auth_owner_from_command_context(root, &context),
+        None => Ok(None),
+    }
 }
 
 fn web_stack_auth_owner_from_chat(
@@ -5294,6 +5525,7 @@ struct ResolvedWebStackCredential {
     credential_value: String,
     login_hint: Option<String>,
     login_hint_from_secret: bool,
+    otp_recipient: Option<String>,
 }
 
 fn resolve_web_stack_credential(
@@ -5319,9 +5551,22 @@ fn resolve_web_stack_credential(
             .map(str::to_string)
     });
     let login_hint_from_secret = explicit_login_hint.is_none() && bundled_login_hint.is_some();
+    let otp_recipient = object
+        .and_then(|value| value.get("otp_recipient"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let login_hint = explicit_login_hint.or(bundled_login_hint);
     ResolvedWebStackCredential {
         credential_value: bundled_credential.unwrap_or_else(|| secret_value.to_string()),
-        login_hint: explicit_login_hint.or(bundled_login_hint),
+        otp_recipient: otp_recipient.or_else(|| {
+            login_hint
+                .as_deref()
+                .filter(|value| value.contains('@'))
+                .map(str::to_string)
+        }),
+        login_hint,
         login_hint_from_secret,
     }
 }
@@ -5503,42 +5748,126 @@ fn find_fresh_email_otp(
     root: &Path,
     recipe: &WebStackEmailOtpRecipe,
     not_before_epoch_s: i64,
+    mailbox_address: &str,
+    profile_owner: &str,
+    mailbox_granted: bool,
 ) -> Option<(String, String)> {
     let conn = rusqlite::Connection::open_with_flags(
         crate::paths::core_db(root),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .ok()?;
+    find_fresh_email_otp_in_conn(
+        &conn,
+        recipe,
+        not_before_epoch_s,
+        mailbox_address,
+        profile_owner,
+        mailbox_granted,
+    )
+}
+
+fn find_fresh_email_otp_in_conn(
+    conn: &rusqlite::Connection,
+    recipe: &WebStackEmailOtpRecipe,
+    not_before_epoch_s: i64,
+    mailbox_address: &str,
+    profile_owner: &str,
+    mailbox_granted: bool,
+) -> Option<(String, String)> {
+    let mailbox_address = mailbox_address.trim().to_ascii_lowercase();
+    let profile_owner = profile_owner.trim();
+    if mailbox_address.is_empty() || !mailbox_address.contains('@') || profile_owner.is_empty() {
+        return None;
+    }
+    let account_key = format!("email:{mailbox_address}");
     let mut statement = conn
         .prepare(
-            "SELECT message_key, COALESCE(sender_address, ''), COALESCE(subject, ''),
-                    COALESCE(NULLIF(body_text, ''), preview, '')
-             FROM communication_messages
-             WHERE channel = 'email' AND direction = 'inbound'
-               AND CAST(strftime('%s', COALESCE(external_created_at, observed_at)) AS INTEGER) >= ?1
-             ORDER BY CAST(strftime('%s', COALESCE(external_created_at, observed_at)) AS INTEGER) DESC
+            "SELECT m.message_key, COALESCE(m.sender_address, ''), COALESCE(m.subject, ''),
+                    COALESCE(NULLIF(m.body_text, ''), m.preview, ''),
+                    m.recipient_addresses_json, a.profile_json
+             FROM communication_messages m
+             JOIN communication_accounts a ON a.account_key = m.account_key
+             WHERE m.channel = 'email' AND m.direction = 'inbound'
+               AND m.account_key = ?2 AND a.channel = 'email' AND lower(a.address) = ?3
+               AND CAST(strftime('%s', COALESCE(m.external_created_at, m.observed_at)) AS INTEGER) >= ?1
+             ORDER BY CAST(strftime('%s', COALESCE(m.external_created_at, m.observed_at)) AS INTEGER) DESC
              LIMIT 40",
         )
         .ok()?;
     let rows = statement
-        .query_map(rusqlite::params![not_before_epoch_s], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-            ))
-        })
+        .query_map(
+            rusqlite::params![not_before_epoch_s, account_key, mailbox_address],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
         .ok()?;
-    for (message_key, sender, subject, body) in rows.flatten() {
-        if !email_otp_sender_matches(recipe, &sender) {
+    let mut candidate = None;
+    for (message_key, sender, subject, body, recipient_json, profile_json) in rows.flatten() {
+        let profile: serde_json::Value = serde_json::from_str(&profile_json).ok()?;
+        let owner_matches = profile
+            .get("owner_user_id")
+            .or_else(|| profile.get("ownerUserId"))
+            .and_then(serde_json::Value::as_str)
+            == Some(profile_owner);
+        let shared_matches = profile
+            .get("shared_user_ids")
+            .or_else(|| profile.get("sharedUserIds"))
+            .or_else(|| profile.get("member_user_ids"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|users| {
+                users
+                    .iter()
+                    .any(|user| user.as_str() == Some(profile_owner))
+            });
+        // A tenant mailbox nobody owns (set up before mailbox ownership existed,
+        // e.g. the crew or a staff inbox CTOX syncs for the company) is the one
+        // the stored login itself names as its code recipient. It yields only
+        // this provider's codes (sender check below), so the research can
+        // finish the login on its own. Mailboxes owned by someone else stay
+        // closed unless owned, shared or explicitly granted.
+        let owner_field = profile
+            .get("owner_user_id")
+            .or_else(|| profile.get("ownerUserId"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let has_shared_users = profile
+            .get("shared_user_ids")
+            .or_else(|| profile.get("sharedUserIds"))
+            .or_else(|| profile.get("member_user_ids"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|users| !users.is_empty());
+        let unowned_tenant_mailbox = owner_field.is_empty() && !has_shared_users;
+        if !owner_matches && !shared_matches && !mailbox_granted && !unowned_tenant_mailbox {
+            continue;
+        }
+        let recipients: Vec<String> = serde_json::from_str(&recipient_json).ok()?;
+        if !recipients
+            .iter()
+            .any(|recipient| recipient.trim().eq_ignore_ascii_case(&mailbox_address))
+            || !email_otp_sender_matches(recipe, &sender)
+        {
             continue;
         }
         if let Some(code) = extract_email_otp_code(&subject, &body) {
-            return Some((code, message_key));
+            if candidate.is_some() {
+                // Two simultaneous codes for one mailbox cannot be bound to
+                // this browser challenge from mail headers alone.
+                return None;
+            }
+            candidate = Some((code, message_key));
         }
     }
-    None
+    candidate
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5548,10 +5877,23 @@ fn complete_web_stack_login_with_email_otp(
     browser_dir: Option<PathBuf>,
     timeout_ms: u64,
     profile_owner: Option<String>,
+    otp_recipient: Option<&str>,
+    mailbox_granted: bool,
     recipe: &WebStackEmailOtpRecipe,
     login_started_epoch_s: i64,
     continuation_source: Option<&str>,
 ) -> serde_json::Value {
+    let Some((profile_owner_id, mailbox_address)) = profile_owner
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .zip(otp_recipient.filter(|value| value.contains('@')))
+    else {
+        return serde_json::json!({
+            "ok": false,
+            "status": "otp_mailbox_unbound",
+            "detail": "automatic email OTP requires a bound owner and recipient mailbox",
+        });
+    };
     // Many providers only send the code once the user picks "e-mail" or
     // presses "send code" on the challenge page, so trigger it first and note
     // what the page offered — a silent 150 s wait for a mail nobody sent looks
@@ -5564,8 +5906,9 @@ fn complete_web_stack_login_with_email_otp(
         profile_owner.clone(),
         EMAIL_OTP_TRIGGER_SOURCE.to_string(),
     );
-    // Tolerate some clock skew between the mail server and this host.
-    let not_before = login_started_epoch_s.saturating_sub(90);
+    // Only consider codes created after this login began. Clock skew may
+    // require manual completion; an older challenge must not win the lookup.
+    let not_before = login_started_epoch_s;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(150);
     let mut polls = 0usize;
     let mut found = None;
@@ -5574,7 +5917,14 @@ fn complete_web_stack_login_with_email_otp(
         if let Ok(settings) = crate::inference::runtime_env::effective_operator_env_map(root) {
             let _ = crate::communication::email_native::service_sync(root, &settings);
         }
-        if let Some(hit) = find_fresh_email_otp(root, recipe, not_before) {
+        if let Some(hit) = find_fresh_email_otp(
+            root,
+            recipe,
+            not_before,
+            mailbox_address,
+            profile_owner_id,
+            mailbox_granted,
+        ) {
             found = Some(hit);
             break;
         }
@@ -5731,6 +6081,161 @@ mod email_otp_tests {
         ));
         assert!(!email_otp_sender_matches(&recipe, "noreply@brightdata.com"));
         assert!(web_stack_email_otp_recipe("northdata.de").is_none());
+    }
+
+    #[test]
+    fn otp_lookup_stays_in_the_bound_mailbox_and_owner() {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory mail fixture");
+        conn.execute_batch(
+            "CREATE TABLE communication_accounts (
+                account_key TEXT PRIMARY KEY, channel TEXT, address TEXT, profile_json TEXT
+             );
+             CREATE TABLE communication_messages (
+                message_key TEXT PRIMARY KEY, channel TEXT, account_key TEXT, direction TEXT,
+                sender_address TEXT, subject TEXT, body_text TEXT, preview TEXT,
+                recipient_addresses_json TEXT, external_created_at TEXT, observed_at TEXT
+             );",
+        )
+        .expect("fixture tables");
+        for (key, address, owner) in [
+            ("email:alice@example.com", "alice@example.com", "alice"),
+            ("email:bob@example.com", "bob@example.com", "bob"),
+        ] {
+            conn.execute(
+                "INSERT INTO communication_accounts VALUES (?1, 'email', ?2, ?3)",
+                rusqlite::params![
+                    key,
+                    address,
+                    serde_json::json!({"owner_user_id": owner, "shared_user_ids": []}).to_string()
+                ],
+            )
+            .expect("account");
+        }
+        let insert_code = |key: &str, account: &str, recipient: &str, code: &str| {
+            conn.execute(
+                "INSERT INTO communication_messages VALUES (
+                    ?1, 'email', ?2, 'inbound', 'no-reply@mail.dnb.com',
+                    'Verification code', ?3, '', ?4, '2026-09-24T03:00:00Z',
+                    '2026-09-24T03:00:00Z'
+                 )",
+                rusqlite::params![
+                    key,
+                    account,
+                    format!("Your verification code is {code}."),
+                    serde_json::json!([recipient]).to_string(),
+                ],
+            )
+            .expect("message");
+        };
+        insert_code(
+            "alice-code",
+            "email:alice@example.com",
+            "alice@example.com",
+            "111111",
+        );
+        insert_code(
+            "bob-code",
+            "email:bob@example.com",
+            "bob@example.com",
+            "222222",
+        );
+        insert_code(
+            "wrong-recipient",
+            "email:alice@example.com",
+            "bob@example.com",
+            "333333",
+        );
+        let recipe = web_stack_email_otp_recipe("dnbhoovers.com").expect("recipe");
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice", false),
+            Some(("111111".to_string(), "alice-code".to_string()))
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "bob@example.com", "alice", false),
+            None,
+            "Alice cannot select Bob's code from another account"
+        );
+        insert_code(
+            "alice-second",
+            "email:alice@example.com",
+            "alice@example.com",
+            "444444",
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice", false),
+            None,
+            "two concurrent codes in one mailbox have no challenge identity"
+        );
+        conn.execute(
+            "INSERT INTO communication_accounts VALUES ('email:lena@example.com', 'email', 'lena@example.com', '{}')",
+            [],
+        )
+        .expect("unowned account");
+        insert_code(
+            "lena-code",
+            "email:lena@example.com",
+            "lena@example.com",
+            "555555",
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "lena@example.com", "alice", false),
+            Some(("555555".to_string(), "lena-code".to_string())),
+            "an unowned tenant mailbox named by the login yields the provider code"
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "lena@example.com", "alice", true),
+            Some(("555555".to_string(), "lena-code".to_string())),
+            "the owner-granted mailbox yields the provider code"
+        );
+        conn.execute(
+            "INSERT INTO communication_messages VALUES (
+                'lena-phish', 'email', 'email:lena@example.com', 'inbound', 'alerts@evil.example',
+                'Verification code', 'Your verification code is 999999.', '', '[\"lena@example.com\"]',
+                '2026-09-24T03:05:00Z', '2026-09-24T03:05:00Z'
+             )",
+            [],
+        )
+        .expect("foreign sender");
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "lena@example.com", "alice", false),
+            Some(("555555".to_string(), "lena-code".to_string())),
+            "a code from a foreign sender in the tenant mailbox is never taken"
+        );
+    }
+
+    #[test]
+    fn otp_mailbox_grant_names_exactly_one_provider_and_mailbox() {
+        let grants = "dnbhoovers.com=Lena@Example.com, leadfeeder.com=crew@example.com";
+        assert!(web_stack_otp_mailbox_granted_by(
+            grants,
+            "dnbhoovers.com",
+            "lena@example.com"
+        ));
+        assert!(web_stack_otp_mailbox_granted_by(
+            grants,
+            "app.dnbhoovers.com",
+            "LENA@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            grants,
+            "xing.com",
+            "lena@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            grants,
+            "dnbhoovers.com",
+            "crew@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            "",
+            "dnbhoovers.com",
+            "lena@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            grants,
+            "dnbhoovers.com",
+            "not-a-mailbox"
+        ));
     }
 }
 
@@ -6377,10 +6882,35 @@ const preAuthenticatedVerifyFound = verifySelectorVisible && !stillOnLoginPage;
 // signed in, and reports `credential-field-not-found` on a working session.
 // Landing somewhere other than the login URL with no credential field and no
 // error is the same evidence, and it does not rot when a class name changes.
+// D&B Hoovers serves its signed-in dashboard at the same app root it is opened
+// with ("Willkommen, Lena! ... Suchen & eine Liste erstellen" at
+// https://app.dnbhoovers.com/). Requiring a landing *elsewhere* read that live
+// session as "not signed in", found no login field and reported
+// credential-field-not-found / login_failed on every capture from 12:19 on
+// 25.09.2026, while the session from the 12:02 e-mail code was still valid.
+// Staying on the target URL counts as signed in when the page shows no login
+// or credential field and no sign-in entry point.
+const signInEntryVisible = async () => page.evaluate(() => Array.from(
+  document.querySelectorAll("a, button, [role='button'], input[type='submit']"),
+).some((element) => {
+  if (!element.offsetParent) return false;
+  const label = String(element.innerText || element.value || element.getAttribute("aria-label") || "").trim();
+  return /^(log ?in|sign ?in|anmelden|einloggen|login)$/i.test(label);
+})).catch(() => true);
 const preAuthenticatedByLanding = await (async () => {
   if (preAuthenticatedVerifyFound) return false;
   const landedElsewhere = beforeSignals.url && !samePage(beforeSignals.url, targetUrl);
-  if (!landedElsewhere) return false;
+  if (!landedElsewhere) {
+    if (!beforeSignals.url || looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;
+    const signalsHere = beforeSignals.auth_signals || emptyAuthSignals();
+    if (signalsHere.mfa_required === true || signalsHere.login_error_detected === true) return false;
+    const formHere = beforeSignals.form_state || {};
+    if (Number(formHere.visible_password_fields || 0) > 0 || Number(formHere.visible_email_fields || 0) > 0) return false;
+    const loginHere = await browserCandidateFields("login").catch(() => []);
+    const credentialHere = await browserCandidateFields("credential").catch(() => []);
+    if (loginHere.length || credentialHere.length) return false;
+    return !(await signInEntryVisible());
+  }
   if (looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;
   const signals = beforeSignals.auth_signals || emptyAuthSignals();
   if (signals.mfa_required === true || signals.login_error_detected === true) return false;
@@ -7373,7 +7903,7 @@ mod tests {
                 false,
             )?
             .as_deref(),
-            Some("task-owner")
+            None
         );
         assert_eq!(
             resolve_web_stack_auth_owner_user_id_with_env(root.path(), &[], task_id, None, true)?
@@ -7399,6 +7929,208 @@ mod tests {
                 true,
             )?,
             None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn web_stack_generated_research_control_task_revalidates_persisted_native_owner(
+    ) -> anyhow::Result<()> {
+        for command_type in [
+            "outbound.research_source.generate_adapter",
+            "outbound.research_source.test",
+        ] {
+            let root = tempfile::tempdir()?;
+            let owner = "adapter-owner@example.test";
+            let command_id = "cmd_generated_adapter_owner";
+            let (capability_token, _) =
+                crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                    root.path(),
+                    owner,
+                    "Adapter fixture owner",
+                    "admin",
+                    chrono::Utc::now().timestamp_millis(),
+                )?;
+            let accepted = crate::business_os::store::accept_rxdb_business_command_with_origin(
+                root.path(),
+                serde_json::json!({
+                    "id": command_id, "command_id": command_id,
+                    "module":"outbound", "command_type":command_type,
+                    "record_id":"adapter_fixture", "status":"pending_sync",
+                    "payload": {
+                        "adapter_id":"adapter_fixture", "campaign_id":"fixture-campaign",
+                        "source_id":"research.fixture.example",
+                        "test_input":{"company":"Fixture Research GmbH", "country":"AT"},
+                        "adapter":{
+                            "id":"adapter_fixture", "campaign_id":"fixture-campaign",
+                            "source_id":"research.fixture.example", "label":"Fixture provider",
+                            "url":"https://research.fixture.example/", "adapter_kind":"custom_url",
+                            "target_key":"research-fixture-example", "requires_credential":false
+                        }
+                    },
+                    "client_context":{"capability_token":capability_token,
+                        "actor":{"id":"forged"}, "owner_user_id":"forged"}
+                }),
+                crate::business_os::store::CommandOrigin::ReplicatedPeer,
+            )?;
+            assert_eq!(accepted["status"], "completed", "{accepted}");
+            assert_eq!(
+                accepted
+                    .pointer("/result/adapter/status")
+                    .and_then(serde_json::Value::as_str),
+                Some("generation_queued")
+            );
+            let task_id = accepted
+                .pointer("/result/adapter/payload/scrape_registry_effect/generation_task/task_id")
+                .and_then(serde_json::Value::as_str)
+                .context("actual generated task")?;
+            let task = channels::load_queue_task(root.path(), task_id)?
+                .context("persisted generated task")?;
+            assert_eq!(task.metadata["business_os_command_id"], command_id);
+            assert!(task.prompt.contains("Fixture Research GmbH"));
+            assert!(task.prompt.contains("\"country\":\"AT\""));
+            let canonical = channels::business_command_projection(root.path(), command_id)?;
+            assert_eq!(
+                canonical
+                    .pointer("/native_authorization/permission")
+                    .and_then(serde_json::Value::as_str),
+                Some("data.write")
+            );
+            assert_eq!(
+                canonical
+                    .pointer("/native_authorization/actor/id")
+                    .and_then(serde_json::Value::as_str),
+                Some(owner)
+            );
+            assert_eq!(
+                canonical
+                    .pointer("/payload/test_input/company")
+                    .and_then(serde_json::Value::as_str),
+                Some("Fixture Research GmbH")
+            );
+            assert_eq!(
+                canonical
+                    .pointer("/payload/test_input/country")
+                    .and_then(serde_json::Value::as_str),
+                Some("AT")
+            );
+            let claimed_args = vec!["--owner-user-id".into(), "forged".into()];
+            assert_eq!(
+                resolve_web_stack_auth_owner_user_id_with_env(
+                    root.path(),
+                    &claimed_args,
+                    task_id,
+                    Some("forged-env"),
+                    false,
+                )?
+                .as_deref(),
+                Some(owner)
+            );
+            let conn = crate::business_os::store::open_store(root.path())?;
+            conn.execute(
+                "UPDATE business_users SET active=0 WHERE user_id=?1",
+                rusqlite::params![owner],
+            )?;
+            let error = resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &claimed_args,
+                task_id,
+                Some("forged-env"),
+                false,
+            )
+            .expect_err("deactivated admitted actor must not regain access through claims");
+            assert!(error.to_string().contains("no longer active"), "{error:#}");
+            conn.execute(
+                "UPDATE business_users SET active=1 WHERE user_id=?1",
+                rusqlite::params![owner],
+            )?;
+            assert_eq!(
+                resolve_web_stack_auth_owner_user_id_with_env(
+                    root.path(),
+                    &claimed_args,
+                    task_id,
+                    Some("forged-env"),
+                    false,
+                )?
+                .as_deref(),
+                Some(owner),
+            );
+            // Exercise the supported queue cancel command, not a raw state edit.
+            crate::mission::queue::handle_queue_command(
+                root.path(),
+                &[
+                    "cancel".into(),
+                    "--message-key".into(),
+                    task_id.into(),
+                    "--reason".into(),
+                    "fixture cancellation".into(),
+                ],
+            )?;
+            assert_eq!(
+                channels::load_queue_task(root.path(), task_id)?
+                    .context("cancelled generated task")?
+                    .route_status,
+                "cancelled"
+            );
+            let error = resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &claimed_args,
+                task_id,
+                Some("forged-env"),
+                false,
+            )
+            .expect_err("cancelled requesting task must not regain actor authority");
+            assert!(
+                error
+                    .to_string()
+                    .contains("requesting queue task is terminal"),
+                "{error:#}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn web_stack_auth_owner_falls_back_to_the_configured_default_owner() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                "queue:system::x",
+                None,
+                false
+            )?,
+            None
+        );
+        crate::inference::runtime_env::set_runtime_env_value(
+            root.path(),
+            WEB_STACK_DEFAULT_AUTH_OWNER_KEY,
+            "crew@thesen-ag.com",
+        )?;
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                "queue:system::x",
+                None,
+                false
+            )?
+            .as_deref(),
+            Some("crew@thesen-ag.com")
+        );
+        let claim = vec!["--owner-user-id".to_string(), "someone-else".to_string()];
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &claim,
+                "queue:system::x",
+                None,
+                false
+            )?
+            .as_deref(),
+            Some("crew@thesen-ag.com")
         );
         Ok(())
     }
@@ -7448,6 +8180,54 @@ mod tests {
             .as_deref(),
             Some("michael.welsch@metric-space.ai")
         );
+
+        // Admission already consumed the command's one direct QueueTask spawn.
+        // This adapter fixture descends from that task; keep the metadata-only
+        // command reference and forged owner assertions on the child.
+        let parent = channels::load_queue_task_for_business_os_command(root.path(), command_id)?
+            .context("queue task created by command admission")?;
+        let generated = channels::create_queue_task(
+            root.path(),
+            channels::QueueTaskCreateRequest {
+                title: "Generated adapter fixture".into(),
+                prompt: "Fixture only".into(),
+                thread_key: "fixture/adapter".into(),
+                workspace_root: None,
+                priority: "low".into(),
+                suggested_skill: None,
+                parent_message_key: Some(parent.message_key.clone()),
+                extra_metadata: Some(serde_json::json!({"business_os_command_id":command_id,
+                "owner_user_id":"forged", "actor":{"id":"forged"}})),
+            },
+        )?;
+        assert_eq!(generated.metadata["parent_message_key"], parent.message_key);
+        assert_eq!(generated.metadata["business_os_command_id"], command_id);
+        assert_eq!(generated.metadata["owner_user_id"], "forged");
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                &generated.message_key,
+                Some("forged"),
+                false,
+            )?
+            .as_deref(),
+            Some("michael.welsch@metric-space.ai")
+        );
+        let mut context = channels::inspect_business_command(root.path(), command_id)?
+            .context("command context")?;
+        context["command"]["client_context"] =
+            serde_json::json!({"owner_user_id":"forged", "actor":{"id":"forged"}});
+        context["command"]["payload"]["owner_user_id"] = serde_json::json!("forged");
+        assert_eq!(
+            web_stack_auth_owner_from_command_context(root.path(), &context)?.as_deref(),
+            Some("michael.welsch@metric-space.ai")
+        );
+        context["command"]
+            .as_object_mut()
+            .unwrap()
+            .remove("native_authorization");
+        assert!(web_stack_auth_owner_from_command_context(root.path(), &context)?.is_none());
 
         crate::business_os::store::upsert_projection_record(
             root.path(),
@@ -7782,6 +8562,10 @@ mod tests {
         // A login page that only gained a query token (D&B: /login?F…=_) is not a
         // landing elsewhere; otherwise a username-first step reads as signed in.
         assert!(source.contains("!samePage(beforeSignals.url, targetUrl)"));
+        // D&B keeps its signed-in dashboard on the app root: staying on the
+        // target URL without any login field or sign-in entry is a session.
+        assert!(source.contains("const signInEntryVisible = async () =>"));
+        assert!(source.contains("if (!landedElsewhere) {"));
         assert!(!source.contains("beforeSignals.url !== targetUrl"));
         // A verify selector that also matches on the login page (D&B: a search
         // link) must not count while the login form is still shown.
@@ -7834,6 +8618,7 @@ mod tests {
         );
         assert_eq!(bundled.credential_value, "secret-value");
         assert_eq!(bundled.login_hint.as_deref(), Some("user@example.test"));
+        assert_eq!(bundled.otp_recipient.as_deref(), Some("user@example.test"));
         assert!(bundled.login_hint_from_secret);
 
         let explicit = resolve_web_stack_credential(
@@ -7844,11 +8629,25 @@ mod tests {
             explicit.login_hint.as_deref(),
             Some("operator@example.test")
         );
+        assert_eq!(
+            explicit.otp_recipient.as_deref(),
+            Some("operator@example.test")
+        );
         assert!(!explicit.login_hint_from_secret);
+
+        let separate_mailbox = resolve_web_stack_credential(
+            r#"{"username":"provider-user","password":"secret-value","otp_recipient":"crew@example.test"}"#,
+            None,
+        );
+        assert_eq!(
+            separate_mailbox.otp_recipient.as_deref(),
+            Some("crew@example.test")
+        );
 
         let legacy = resolve_web_stack_credential("legacy-password", None);
         assert_eq!(legacy.credential_value, "legacy-password");
         assert_eq!(legacy.login_hint, None);
+        assert_eq!(legacy.otp_recipient, None);
         assert!(!legacy.login_hint_from_secret);
     }
 
@@ -7900,6 +8699,12 @@ mod tests {
             build_web_stack_authenticated_source_capture("dnbhoovers.com", "Example AG", "DE")?;
         assert!(dnb.contains("app.dnbhoovers.com"));
         assert!(dnb.contains("D&B Hoovers exact company result"));
+        // The classification year "WZ 2008" must never be read as the code, and
+        // the rendered script carries plain regex braces (format escapes gone).
+        assert!(dnb.contains("(?!(?:1993|2003|2008)\\b)"));
+        assert!(dnb.contains("[^0-9]{0,80}"));
+        assert!(dnb.contains("SIC|NAICS)\\b/i"));
+        assert!(dnb.contains("(?:\\s*[KMB]\\b)?"));
 
         let leadfeeder =
             build_web_stack_authenticated_source_capture("leadfeeder.com", "Example AG", "DE")?;
@@ -8097,6 +8902,44 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_automation_stdin_is_bounded_and_command_specific() {
+        struct NoRead;
+        impl std::io::Read for NoRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                panic!("unrelated commands must not read stdin");
+            }
+        }
+        assert!(
+            read_web_stack_cli_source(&["auth-assist-status".into()], NoRead)
+                .unwrap()
+                .is_none()
+        );
+        let args = vec!["authenticated-automation".into()];
+        let source = "return { text: 'Grüße\n世界' };";
+        assert_eq!(
+            read_web_stack_cli_source(&args, source.as_bytes())
+                .unwrap()
+                .as_deref(),
+            Some(source)
+        );
+        let at_limit = vec![b'x'; AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES];
+        assert_eq!(
+            read_web_stack_cli_source(&args, at_limit.as_slice())
+                .unwrap()
+                .unwrap()
+                .len(),
+            at_limit.len()
+        );
+        let over_limit = vec![b'x'; AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES + 1];
+        assert!(read_web_stack_cli_source(&args, over_limit.as_slice())
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds 1 MiB"));
+        assert!(read_web_stack_cli_source(&args, &[0xff][..]).is_err());
+        assert!(read_web_stack_cli_source(&args, b" \n".as_slice()).is_err());
+    }
+
+    #[test]
     fn web_stack_source_capture_command_is_registered() {
         let root = tempfile::tempdir().expect("temp root");
         let args = vec![
@@ -8106,7 +8949,7 @@ mod tests {
             "--company".to_string(),
             "Example AG".to_string(),
         ];
-        let error = run_business_os_web_stack_cli_json_local(root.path(), &args)
+        let error = run_business_os_web_stack_cli_json_local(root.path(), &args, None)
             .expect_err("unsupported source must be rejected")
             .to_string();
 
@@ -9269,4 +10112,40 @@ fn allowed_domains_from_url(target_url: &str) -> Vec<String> {
         .and_then(|url| url.host_str().map(str::to_string))
         .map(|host| vec![host])
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod source_capture_lock_tests {
+    #[test]
+    fn a_second_capture_for_the_same_provider_waits_for_the_first() {
+        let root = tempfile::tempdir().expect("root");
+        let first = super::acquire_source_capture_lock(
+            root.path(),
+            "dnbhoovers.com",
+            std::time::Duration::from_secs(1),
+        )
+        .expect("first lock");
+        let blocked = super::acquire_source_capture_lock(
+            root.path(),
+            "dnbhoovers.com",
+            std::time::Duration::from_millis(600),
+        );
+        assert!(
+            blocked.is_none(),
+            "the provider stays locked while the first capture runs"
+        );
+        let other = super::acquire_source_capture_lock(
+            root.path(),
+            "leadfeeder.com",
+            std::time::Duration::from_millis(600),
+        );
+        assert!(other.is_some(), "another provider is not blocked");
+        drop(first);
+        assert!(super::acquire_source_capture_lock(
+            root.path(),
+            "dnbhoovers.com",
+            std::time::Duration::from_secs(1),
+        )
+        .is_some());
+    }
 }

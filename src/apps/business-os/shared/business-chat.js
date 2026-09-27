@@ -1,4 +1,5 @@
-import { normalizeCrewAppearance, renderCrewCreature, CREW_CREATURE_BASE_CSS } from './crew-renderer.js';
+import { normalizeCrewAppearance, renderCrewCreature, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260927-crew-genome-v4';
+import { syncCrewMotion } from './crew-motion.js?v=20260927-crew-genome-v4';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
   FILE_CHUNK_HASH_SCHEME,
@@ -31,8 +32,6 @@ const CHAT_DELETE_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const ACTIVE_TRACKING_SYNC_INTERVAL_MS = 4000;
 const CHAT_REMOTE_PERSIST_TIMEOUT_MS = 1500;
 const CHAT_REMOTE_PERSIST_DEFER_MS = 0;
-const CREW_NAMES = Object.freeze(['Milo', 'Nori', 'Lumi', 'Pico', 'Tavi', 'Momo', 'Koda', 'Fino']);
-const CREW_COLORS = Object.freeze(['#1685ee', '#00aa9a', '#7d7f84', '#7c6df2', '#e97255', '#34a26f']);
 const CHAT_LIVE_SYNC_COLLECTIONS = Object.freeze([
   CHAT_COLLECTION,
   'business_commands',
@@ -273,7 +272,7 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
 }
 
 function crewMemberCreatureHtml(member, placement = 'fab') {
-  return crewCreatureHtml({ crewKey: member.id, crewIdentity: { name: member.name, shape: member.shape, color: member.color } }, crewMemberExpression(member), placement);
+  return crewCreatureHtml({ crewKey: member.id, crewIdentity: { id: member.id, name: member.name, shape: member.shape, color: member.color } }, crewMemberExpression(member), placement);
 }
 
 function crewPoolSlotHtml(member, placement = 'fab') {
@@ -616,7 +615,7 @@ export function initBusinessChat({
     if (handedMember) {
       chat.crew_member_id = handedMember;
       const identity = detail.crew_identity || detail.crewIdentity || (state.crewMembers || []).find((member) => member.id === handedMember);
-      if (identity?.name) chat.crewIdentity = { name: String(identity.name), shape: String(identity.shape || ''), color: String(identity.color || '') };
+      if (identity?.name) chat.crewIdentity = { id: String(identity.id || handedMember || ''), name: String(identity.name), shape: String(identity.shape || ''), color: String(identity.color || '') };
     }
     markChatExpandedByUser(state, chat, presentationTicket);
     focusChatForUser(state, chat);
@@ -677,7 +676,7 @@ export function initBusinessChat({
     if (handedMember) {
       chat.crew_member_id = handedMember;
       const identity = detail.crew_identity || detail.crewIdentity || (state.crewMembers || []).find((member) => member.id === handedMember) || null;
-      if (identity?.name) chat.crewIdentity = { name: String(identity.name), shape: String(identity.shape || ''), color: String(identity.color || '') };
+      if (identity?.name) chat.crewIdentity = { id: String(identity.id || handedMember || ''), name: String(identity.name), shape: String(identity.shape || ''), color: String(identity.color || '') };
     }
     markChatExpandedByUser(state, chat, presentationTicket);
     focusChatForUser(state, chat);
@@ -703,7 +702,10 @@ export function initBusinessChat({
     state.preCollapseExpandedChatIds = [];
     touchChats(state, [chat]);
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
-    await persistChatState({ state, db });
+    await persistExternalChatOpen(
+      () => persistChatState({ state, db, onRemoteError: detail.onOpenPersistError }),
+      detail.onOpenPersistError,
+    );
     if (!ownsChatOpenOwnership(state, presentationTicket)) return;
     renderChatRoot({ root, state, commandBus, db, getActiveModule });
   };
@@ -1367,7 +1369,21 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
   // starts reading or learning, or the first pool load after boot needs the
   // full render — the in-place path does not touch the creatures.
   const crewPoolUnchanged = (root.dataset?.crewPoolSignature || '') === crewPoolSignature(state);
+  // The dock strip must still hold exactly the chips a full render would
+  // draw. The in-place path only restyles chips; when a chat joins or leaves
+  // the strip (an empty chat is discarded, a minimized one appears) the dock
+  // class would switch to has-no-chats around a stale chip and the new-chat
+  // button would wrap into a second row.
+  const renderedStrip = root.querySelector('[data-chat-strip]');
+  const renderedChipIds = renderedStrip
+    ? Array.from(renderedStrip.querySelectorAll('[data-chat-focus]'), (chip) => chip.dataset.chatFocus).sort()
+    : null;
+  const expectedChipIds = showChatStrip ? visibleChats.map((chat) => chat.id).sort() : null;
+  const dockShapeUnchanged = JSON.stringify(renderedChipIds) === JSON.stringify(expectedChipIds)
+    && Boolean(root.querySelector('[data-chat-prev]')) === showChatNav
+    && Boolean(root.querySelector('[data-chat-overflow-open]')) === (showChatStrip && hiddenChatCount > 0);
   const canUpdateInPlace = windowShapeUnchanged &&
+                           dockShapeUnchanged &&
                            attachmentsUnchanged &&
                            composerShapeUnchanged &&
                            crewPoolUnchanged &&
@@ -2584,42 +2600,15 @@ function takeoverText(name, reasonTitle) {
 }
 
 function crewCreatureMode(chat, taskState = getTaskState(chat)) {
-  if (taskState === 'failed') return 'failed';
-  if (taskState === 'running') {
-    const phase = String(
-      executionProgressForChat(chat)?.phase
-      || chat?.executionPhase
-      || chat?.execution_phase
-      || chat?.routeStatus
-      || chat?.status
-      || '',
-    ).toLowerCase();
-    return ['review', 'awaiting_review', 'awaiting-review', 'reviewing', 'validating'].includes(phase)
-      ? 'review'
-      : 'working';
-  }
-  if (taskState === 'idle'
-      || taskState === 'queued'
-      || taskState === 'scheduled'
-      || taskState === 'success') return 'sleeping';
-  // reading / learning are member expressions (crewMemberExpression).
-  return taskState;
+  const phase = taskState === 'running'
+    ? executionProgressForChat(chat)?.phase || chat?.executionPhase || chat?.execution_phase || chat?.routeStatus || chat?.status || ''
+    : '';
+  return crewModeForTaskState(taskState, phase);
 }
 
-function stopCrewProceduralMotion(root, { reset = true } = {}) {
-  const state = root?.__ctoxCrewProceduralMotion;
-  if (state?.frame) window.cancelAnimationFrame(state.frame);
-  if (reset) {
-    root?.querySelectorAll?.('.ctox-crew-creature')?.forEach((node) => {
-      node.style.transform = '';
-      const body = node.querySelector('.ctox-crew-body');
-      const eyes = node.querySelector('.ctox-crew-eyes');
-      if (body) body.style.transform = '';
-      if (eyes) eyes.style.transform = '';
-    });
-  }
-  if (root) root.__ctoxCrewProceduralMotion = null;
-}
+// Motion is owned by the page-wide engine in crew-motion.js; a chat root has
+// nothing of its own to stop.
+function stopCrewProceduralMotion() {}
 
 function executionActivityTelemetry(chat) {
   const progress = executionProgressForChat(chat);
@@ -2647,123 +2636,19 @@ function syncCrewTelemetryNode(node, chat) {
   return changed;
 }
 
+// Kept for callers that render creatures in place: the page-wide engine picks
+// them up (and their durable telemetry) itself, this only makes it immediate.
 export function syncCrewProceduralMotion(root) {
   if (!root || typeof window === 'undefined') return;
-  if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
-    stopCrewProceduralMotion(root);
-    return;
-  }
-
-  let state = root.__ctoxCrewProceduralMotion;
-  if (!state) {
-    state = { frame: 0, lastFrameAt: 0, profiles: [], seenTurns: new Map() };
-    root.__ctoxCrewProceduralMotion = state;
-  }
-
-  const nowMs = Date.now();
-  const nextProfiles = Array.from(root.querySelectorAll('.ctox-crew-creature.is-working, .ctox-crew-creature.is-review'))
-    .filter((node) => node.closest?.('.ctox-flow-creature-slot') || !node.getClientRects || node.getClientRects().length > 0)
-    .slice(0, 36)
-    .flatMap((node) => {
-      const total = Math.max(0, Number(node.dataset.activityTurns) || 0);
-      const key = String(node.dataset.crewKey || node.dataset.crewSeed || 'ctox-crew');
-      const previous = state.seenTurns.get(key);
-      const previousTotal = typeof previous === 'object' ? previous.total : previous;
-      const mode = node.dataset.crewMode || 'working';
-      const modeChanged = Boolean(previous && typeof previous === 'object' && previous.mode !== mode);
-      state.seenTurns.set(key, { total, mode });
-      const updatedAt = Math.max(0, Number(node.dataset.activityUpdatedAt) || 0);
-      const freshInitialEvent = previous === undefined && total > 0 && nowMs - updatedAt <= 8000;
-      if (!(total > (previousTotal ?? total)) && !freshInitialEvent && !modeChanged) return [];
-      const body = node.querySelector('.ctox-crew-body');
-      const eyes = node.querySelector('.ctox-crew-eyes');
-      if (!body || !eyes) return [];
-      const seed = (Number(node.dataset.crewSeed || 0) ^ Math.imul(total || 1, 2654435761)) >>> 0;
-      const unit = (offset) => ((seed >>> offset) & 1023) / 1023;
-      const kind = node.dataset.activityKind || 'tool';
-      const duration = mode === 'review' ? 2200 : kind === 'thinking' ? 1800 : 1400;
-      return [{
-        key,
-        node,
-        body,
-        eyes,
-        mode,
-        kind,
-        startAt: 0,
-        duration,
-        direction: unit(12) > .5 ? 1 : -1,
-        amplitude: .88 + unit(2) * .28,
-      }];
-    });
-
-  if (nextProfiles.length) {
-    const restartedKeys = new Set(nextProfiles.map((profile) => profile.key));
-    state.profiles = state.profiles.filter((profile) => !restartedKeys.has(profile.key));
-    state.profiles.push(...nextProfiles);
-  }
-  if (state.frame || state.profiles.length === 0) return;
-
-  const tick = (now) => {
-    if (!root.isConnected || root.__ctoxCrewProceduralMotion !== state) return;
-    if (document.visibilityState === 'hidden') {
-      state.frame = window.requestAnimationFrame(tick);
-      return;
-    }
-    if (now - state.lastFrameAt < 33) {
-      state.frame = window.requestAnimationFrame(tick);
-      return;
-    }
-    state.lastFrameAt = now;
-    state.profiles = state.profiles.filter(({ node }) => node.isConnected);
-    state.profiles.forEach((profile) => {
-      if (!profile.startAt) profile.startAt = now;
-      const elapsed = now - profile.startAt;
-      const progress = Math.min(1, elapsed / profile.duration);
-      const envelope = Math.sin(progress * Math.PI);
-      const bounce = Math.sin(progress * Math.PI * 2);
-      if (profile.mode === 'review') {
-        const x = profile.direction * envelope * 7.5 * profile.amplitude;
-        const y = -envelope * 2.5;
-        const rotation = profile.direction * bounce * 8 * envelope;
-        const flow = envelope * .09;
-        profile.node.style.transform = `translate(${x.toFixed(3)}px, ${y.toFixed(3)}px) rotate(${rotation.toFixed(3)}deg)`;
-        profile.body.style.transform = `scale(${(1 + flow).toFixed(4)}, ${(1 - flow * .72).toFixed(4)}) skewX(${(profile.direction * envelope * 5).toFixed(3)}deg)`;
-        profile.eyes.style.transform = `translateX(${(profile.direction * envelope * 5.5).toFixed(3)}px) rotate(${(profile.direction * bounce * 4).toFixed(3)}deg)`;
-      } else if (profile.kind === 'thinking') {
-        const rotation = profile.direction * envelope * 10.5 * profile.amplitude;
-        const y = -envelope * 3;
-        const flow = envelope * .07;
-        profile.node.style.transform = `translateY(${y.toFixed(3)}px) rotate(${rotation.toFixed(3)}deg)`;
-        profile.body.style.transform = `scale(${(1 - flow * .45).toFixed(4)}, ${(1 + flow).toFixed(4)}) skewX(${(-profile.direction * envelope * 4).toFixed(3)}deg)`;
-        profile.eyes.style.transform = `translateX(${(profile.direction * bounce * 5.5).toFixed(3)}px) rotate(${(-rotation * .34).toFixed(3)}deg)`;
-      } else {
-        const impact = Math.sin(progress * Math.PI);
-        const recoil = Math.sin(progress * Math.PI * 3) * envelope;
-        const x = profile.direction * recoil * 2.8;
-        const y = -impact * 7.5 * profile.amplitude;
-        const rotation = profile.direction * recoil * 5.5;
-        const squash = impact * .14;
-        profile.node.style.transform = `translate(${x.toFixed(3)}px, ${y.toFixed(3)}px) rotate(${rotation.toFixed(3)}deg)`;
-        profile.body.style.transform = `scale(${(1 + squash).toFixed(4)}, ${(1 - squash * .92).toFixed(4)}) skewX(${(profile.direction * recoil * 4).toFixed(3)}deg)`;
-        profile.eyes.style.transform = `translateY(${(-impact * 2.4).toFixed(3)}px) rotate(${(-rotation * .45).toFixed(3)}deg)`;
-      }
-    });
-    state.profiles = state.profiles.filter((profile) => {
-      if (now - profile.startAt < profile.duration) return true;
-      profile.node.style.transform = '';
-      profile.body.style.transform = '';
-      profile.eyes.style.transform = '';
-      return false;
-    });
-    if (state.profiles.length > 0) state.frame = window.requestAnimationFrame(tick);
-    else state.frame = 0;
-  };
-  state.frame = window.requestAnimationFrame(tick);
+  syncCrewMotion(root);
 }
 
 export function crewCreatureHtml(chat, taskState = getTaskState(chat), placement = 'dock') {
   return renderCrewCreature({
-    appearance: crewIdentity(chat),
+    // The raw identity: the renderer decides member vs. neutral ghost. The
+    // normalized one already carries the neutral name "Crew" and would turn
+    // every unassigned task into a grey member called Crew.
+    appearance: chat?.crewIdentity || null,
     animationKey: crewIdentityKey(chat),
     taskState,
     mode: crewCreatureMode(chat, taskState),
@@ -4235,7 +4120,7 @@ async function syncTrackedMessages({ state, db, sync = null }) {
       const member = memberId ? memberDocs.get(memberId) || null : null;
       if (member && chat.crew_member_id !== memberId) {
         chat.crew_member_id = memberId;
-        chat.crewIdentity = { name: String(member.name || ''), shape: String(member.shape || ''), color: String(member.color || '') };
+        chat.crewIdentity = { id: String(member.id || ''), name: String(member.name || ''), shape: String(member.shape || ''), color: String(member.color || '') };
         changed = true;
         chatChanged = true;
       }
@@ -4978,7 +4863,26 @@ function isChatLocallyDeleted(state, chat) {
   return !remoteUpdatedAt || deletedAt >= remoteUpdatedAt;
 }
 
-async function persistChatState({ state, db, remote = true }) {
+async function persistExternalChatOpen(persist, onError) {
+  try {
+    await persist();
+    return true;
+  } catch (error) {
+    console.warn?.('[business-chat] chat-open persistence failed', error);
+    reportChatOpenPersistenceError(onError, error);
+    return false;
+  }
+}
+
+function reportChatOpenPersistenceError(onError, error) {
+  try {
+    onError?.(error);
+  } catch (notificationError) {
+    console.error?.('[business-chat] chat-open error notification failed', notificationError);
+  }
+}
+
+async function persistChatState({ state, db, remote = true, onRemoteError = null }) {
   const now = Date.now();
   const ownedChats = state.chats.filter((item) => isOwnedChat(item, state.ownerUserId));
   for (const chat of ownedChats) {
@@ -5001,15 +4905,16 @@ async function persistChatState({ state, db, remote = true }) {
       ? chat.scheduledAttachmentsByCommand
       : {},
   }));
-  scheduleChatRemotePersistence(collection, docs);
+  scheduleChatRemotePersistence(collection, docs, onRemoteError);
 }
 
-function scheduleChatRemotePersistence(collection, docs) {
+function scheduleChatRemotePersistence(collection, docs, onError = null) {
   const timerApi = typeof window !== 'undefined' ? window : globalThis;
   const run = () => {
     persistChatDocsRemote(collection, docs).catch((error) => {
       if (isVolatileChatPersistenceError(error)) return;
       console.warn?.('[business-chat] chat persistence failed', error);
+      reportChatOpenPersistenceError(onError, error);
     });
   };
   if (typeof timerApi.setTimeout === 'function') {
@@ -7213,31 +7118,9 @@ ${CREW_CREATURE_BASE_CSS}
     .ctox-progress-review-row.is-completed {
       color: var(--text);
     }
-    @keyframes ctoxCrewThinkingTick {
-      0% { transform: rotate(0deg) translateY(0); }
-      45% { transform: rotate(-7deg) translateY(-1px); }
-      100% { transform: rotate(0deg) translateY(0); }
-    }
-    @keyframes ctoxCrewToolTick {
-      0% { transform: scale(1, 1); }
-      42% { transform: scale(1.12, 0.88) translateY(2px); }
-      72% { transform: scale(0.96, 1.06) translateY(-1px); }
-      100% { transform: scale(1, 1); }
-    }
-    .ctox-chat-window.is-task-running:not(.is-task-review).has-activity-thinking .ctox-chat-title .ctox-crew-creature {
-      animation: none;
-    }
-    .ctox-chat-window.is-task-running:not(.is-task-review).has-activity-thinking .ctox-chat-title .ctox-crew-eyes {
-      transform: translateX(2px) rotate(-4deg);
-    }
-    .ctox-chat-window.is-task-running:not(.is-task-review).has-activity-tool .ctox-chat-title .ctox-crew-creature {
-      animation: none;
-    }
     @media (prefers-reduced-motion: reduce) {
       .ctox-crew-creature,
       .ctox-crew-creature *,
-      .ctox-chat-window.is-task-running:not(.is-task-review).has-activity-thinking .ctox-chat-title .ctox-crew-creature,
-      .ctox-chat-window.is-task-running:not(.is-task-review).has-activity-tool .ctox-chat-title .ctox-crew-creature,
       .ctox-delegation-spinner,
       .ctox-turn-clock-hand {
         animation: none !important;
@@ -7483,11 +7366,12 @@ ${CREW_CREATURE_BASE_CSS}
         display: none !important;
       }
       .ctox-chat-strip {
-        flex: 0 1 auto !important;
-        min-width: 0 !important;
+        flex: 0 0 auto !important;
+        min-width: 48px !important;
+        width: max-content !important;
       }
       .ctox-chat-dock.has-many-chats .ctox-chat-strip {
-        flex: 1 1 auto !important;
+        flex: 1 0 auto !important;
       }
       .ctox-chat-busy-panel {
         width: calc(100vw - 36px) !important;
@@ -7779,25 +7663,31 @@ ${CREW_CREATURE_BASE_CSS}
       animation: ctoxClockPulse 2s infinite ease-in-out;
     }
 
-    /* Quiet crew surface: chat copy is the only persistent copy. */
+    /* Quiet crew surface: chat copy is the only persistent copy. The window
+       floats one depth step above every app (see --elev-* in app.css): its
+       own surface ladder, a light inner edge and a dark outer outline. */
     .ctox-chat-window,
     .ctox-chat-window.is-active,
     .ctox-chat-window[class*="is-task-"] {
+      --surface: var(--elev-float, #1c1f25);
+      --surface-2: var(--elev-float-2, #252a32);
+      --surface-3: var(--elev-float-3, #2e343d);
+      --line: var(--elev-inner-line, rgb(255 255 255 / 0.08));
       grid-template-rows: 64px minmax(0, 1fr) 56px;
       width: min(460px, calc(100dvw - 24px));
       max-width: min(460px, calc(100dvw - 24px));
       height: min(580px, calc(100dvh - 132px)) !important;
       min-height: min(420px, calc(100dvh - 132px));
       max-height: min(580px, calc(100dvh - 132px));
-      border-color: var(--line) !important;
+      border-color: var(--elev-edge, var(--line)) !important;
       border-radius: 14px !important;
-      background: var(--surface) !important;
-      box-shadow: var(--shadow-lg) !important;
+      background: var(--elev-float, var(--surface)) !important;
+      box-shadow: var(--elev-float-shadow, var(--shadow-lg)) !important;
       animation: none !important;
     }
     .ctox-chat-window.is-active {
-      border-color: color-mix(in srgb, var(--accent) 28%, var(--line)) !important;
-      box-shadow: var(--shadow-lg) !important;
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--elev-edge, var(--line))) !important;
+      box-shadow: var(--elev-float-shadow, var(--shadow-lg)) !important;
     }
     .ctox-chat-stage-inner,
     .ctox-chat-stage-inner.has-maximized {
@@ -8071,12 +7961,30 @@ ${CREW_CREATURE_BASE_CSS}
     .ctox-chat-dock {
       /* Two 24px day arrows, a 30px calendar, gaps, padding and border. */
       --ctox-date-pill-width: 88px;
+      /* Resolve shell theme here, before chips introduce category tokens. */
+      --ctox-dock-control-accent: var(--accent);
+      --ctox-dock-control-accent-soft: var(--accent-soft);
       grid-template-columns: max-content var(--ctox-date-pill-width) 36px;
       gap: 6px;
       padding: 5px;
-      border-color: color-mix(in srgb, var(--line) 48%, transparent);
+      /* The crew bar floats like a dock: its own surface ladder, a light
+         edge, a dark outline and a blur of whatever app lies beneath. */
+      --surface: var(--elev-float-2, #252a32);
+      --surface-2: var(--elev-float, #1c1f25);
+      --surface-3: var(--elev-float-3, #2e343d);
+      --line: var(--elev-inner-line, rgb(255 255 255 / 0.08));
+      border: 1px solid var(--elev-edge, var(--line));
       border-radius: 16px;
-      background: var(--surface);
+      background: color-mix(in srgb, var(--elev-float, var(--surface-2)) 92%, transparent);
+      box-shadow: var(--elev-bar-shadow, var(--shadow-lg));
+      backdrop-filter: blur(18px) saturate(1.35);
+      -webkit-backdrop-filter: blur(18px) saturate(1.35);
+    }
+    /* In side/mobile flex layout, scroll controls at their intended size
+       instead of shrinking the date pill, its arrows or the chat switcher. */
+    .ctox-chat-dock > :is(.ctox-chat-date-pill, .ctox-chat-nav, .ctox-chat-new),
+    .ctox-chat-date-pill > .ctox-date-nav-btn {
+      flex-shrink: 0;
     }
     .ctox-chat-dock.has-visible-chats {
       grid-template-columns: max-content var(--ctox-date-pill-width) minmax(48px, auto) 36px;
@@ -8094,6 +8002,7 @@ ${CREW_CREATURE_BASE_CSS}
       gap: 6px;
       /* Reserve the full overlapping member row, including all six portraits. */
       width: max-content;
+      flex-shrink: 0;
       min-width: 108px;
       height: 42px;
       padding: 0 8px;
@@ -8297,6 +8206,47 @@ ${CREW_CREATURE_BASE_CSS}
     }
     .ctox-chat-overflow-chip span,
     .ctox-chat-overflow-chip small { display: none !important; }
+    /* Dock contrast: use opaque shell surfaces, not the app behind the dock.
+       Keep creature/status colors intact; brighten only control chrome. */
+    .ctox-chat-dock .ctox-chat-date-pill {
+      border-color: var(--muted);
+      background: var(--surface);
+    }
+    .ctox-chat-dock .ctox-chat-chip:not(.is-active),
+    .ctox-chat-dock :is(.ctox-chat-fab, .ctox-date-nav-btn, .ctox-date-picker-trigger, .ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip) {
+      color: var(--text-strong);
+      background: var(--surface);
+    }
+    .ctox-chat-dock .ctox-chat-chip:not(.is-active),
+    .ctox-chat-dock :is(.ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip) {
+      border-color: var(--muted);
+    }
+    .ctox-chat-dock .ctox-date-picker-trigger svg {
+      color: currentColor;
+    }
+    .ctox-chat-dock :is(.ctox-chat-fab, .ctox-date-nav-btn, .ctox-date-picker-trigger, .ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip):not(:disabled):not([aria-disabled="true"]):hover {
+      color: var(--text-strong);
+      background: var(--surface-3);
+    }
+    .ctox-chat-dock :is(.ctox-chat-fab, .ctox-date-nav-btn, .ctox-date-picker-trigger, .ctox-chat-nav, .ctox-chat-new, .ctox-chat-chip):not(:disabled):not([aria-disabled="true"]):active,
+    .ctox-chat-dock .ctox-chat-chip.is-active {
+      color: var(--text-strong);
+      background: var(--ctox-dock-control-accent-soft);
+      border-color: var(--ctox-dock-control-accent);
+    }
+    .ctox-chat-dock :is(button, [role="button"], [tabindex]):focus-visible {
+      /* A solid accent outline stays visible beside the translucent kit ring. */
+      outline: 2px solid var(--ctox-dock-control-accent);
+      outline-offset: -2px;
+      box-shadow: var(--focus-ring);
+    }
+    .ctox-chat-dock :is(button, [role="button"]):is(:disabled, [aria-disabled="true"]) {
+      color: var(--muted);
+      background: var(--surface-2);
+      border-color: var(--line);
+      opacity: 1;
+    }
+    /* End dock contrast. */
     /* The dock has two deliberately opposite geometries. Keep these final
        state rules after all compact/theme overrides so a later generic dock
        rule cannot stretch the collapsed controls or cap the expanded strip. */
@@ -9179,7 +9129,9 @@ export const __businessChatTestInternals = Object.freeze({
   stopCrewProceduralMotion,
   syncCrewProceduralMotion,
   persistChatDocsRemote,
+  persistExternalChatOpen,
   persistChatState,
+  scheduleChatRemotePersistence,
   schedulerDelayMs,
   setAttrIfChanged,
   setClassNameIfChanged,

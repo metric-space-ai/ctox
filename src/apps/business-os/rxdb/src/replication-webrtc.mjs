@@ -37,10 +37,12 @@ import {
   CTOX_PRESENCE_CAPABILITY,
   CTOX_PRESENCE_RPC,
   CTOX_QUERY_FETCH_CAPABILITY,
+  CTOX_ROWS_FETCH_CAPABILITY,
 } from './protocol-contract.generated.mjs';
 import { createDemandLoadingTransport } from './demand-loading-transport.mjs';
 import { createQueryDemandLoader } from './query-demand-loader.mjs';
 import { createFileDemandLoader } from './file-demand-loader.mjs';
+import { createRowsDemandLoader } from './rows-demand-loader.mjs';
 import { QueryMetaStorage } from './query-meta-storage.mjs';
 import { createIndexedDbMetaBackend } from './query-meta-backend-indexeddb.mjs';
 import { createMemoryMetaBackend } from './query-meta-backend-memory.mjs';
@@ -129,6 +131,12 @@ export function remoteSupportsQueryFetch(remoteProtocol) {
   const flag = remoteProtocol.v1_5?.queryDemandLoadingEnabled;
   if (flag === false) return false;
   return true;
+}
+
+export function remoteSupportsRowsFetch(remoteProtocol) {
+  if (!remoteProtocol || typeof remoteProtocol !== 'object') return false;
+  const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
+  return capabilities.includes(CTOX_ROWS_FETCH_CAPABILITY);
 }
 
 export function getConnectionHandlerSimplePeer({ signalingServerUrl, config } = {}) {
@@ -1157,6 +1165,7 @@ class CtoxWebRtcReplicationState {
     this.readPermissionDigest = '';
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
+    this.knowledgeRowsLoader = null;
     this.demandStatus = createV1_5StatusState();
     this.schemaHashValue = null;
     this.peerReadyPromisesByPeer = new Map();
@@ -1310,7 +1319,11 @@ class CtoxWebRtcReplicationState {
         timeoutMs,
       );
     }
-    return this.peer.request(negotiated.peerId, String(method || ''), [params], timeoutMs, this.collection);
+    // The frame's `collection` field is the collection NAME. Passing the
+    // RxCollection object made the native peer drop every such frame, so each
+    // `ctox.outbound.sellify_lookup.v1` ran into its caller's timeout while the
+    // same request with the name answered in under a second (THESEN 26.09.2026).
+    return this.peer.request(negotiated.peerId, String(method || ''), [params], timeoutMs, this.collection?.name || null);
   }
 
   async start(connectionHandlerCreator) {
@@ -2219,11 +2232,13 @@ class CtoxWebRtcReplicationState {
     }
     try { this.demandLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
     try { this.demandFileLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
+    try { this.knowledgeRowsLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
     try { this.demandSidecar?.stopEvictionScheduler?.(); } catch {}
     try { this.multiTabBroker?.close?.(); } catch {}
     try { await this.demandSidecar?.close?.(); } catch {}
     this.demandLoader = null;
     this.demandFileLoader = null;
+    this.knowledgeRowsLoader = null;
     this.multiTabBroker = null;
     this.demandLoaderActive = false;
     this.demandStatus.queryDemandReadyGeneration = null;
@@ -2253,6 +2268,7 @@ class CtoxWebRtcReplicationState {
       }
       this.demandLoader = null;
       this.demandFileLoader = null;
+      this.knowledgeRowsLoader = null;
       this.demandLoaderActive = true;
       return null;
     }
@@ -2337,6 +2353,10 @@ class CtoxWebRtcReplicationState {
       multiTabBroker: this.multiTabBroker,
       queryGeneration: () => this.collectionQueryGenerationToken(this.activeRemotePeerId),
       replicationOrigin: demandReplicationOrigin,
+      // SYNC-12: live provider — runPeerReady recomputes this digest at every
+      // handshake, so a same-session role/grant change takes effect at the
+      // next control-plane read without rebuilding the loader.
+      readPermissionDigest: () => this.readPermissionDigest || '',
     }) : null;
     if (typeof this.collection.setDemandLoader === 'function') {
       this.collection.setDemandLoader(this.demandLoader);
@@ -2361,6 +2381,8 @@ class CtoxWebRtcReplicationState {
         demandTransport.requestFileCancel({ requestId, reason }),
       status: this.demandStatus,
     }) : null;
+
+    this.knowledgeRowsLoader = knowledgeRowsLoaderForState(this, demandTransport);
 
     this.demandLoaderActive = true;
     this.demandStatus.queryDemandLoadingActive = queryDemandEnabled || fileDemandEnabled;
@@ -2442,6 +2464,7 @@ class CtoxWebRtcReplicationState {
     this.queryReady$?.next?.(null);
     try { this.demandLoader?.abortAllInFlight?.(`peer-${reason}`); } catch {}
     try { this.demandFileLoader?.abortAllInFlight?.(`peer-${reason}`); } catch {}
+    try { this.knowledgeRowsLoader?.abortAllInFlight?.(`peer-${reason}`); } catch {}
     try { this.shared?.abortPeerRequests?.(peerId, reason); } catch {}
     if (!peerStates.size) {
       this.demandStatus.peerConnected = false;
@@ -3080,6 +3103,25 @@ function shouldAttachQueryDemandLoader(collectionName = '') {
 
 function shouldAttachFileDemandLoader(collectionName = '') {
   return String(collectionName || '') !== 'desktop_file_chunks';
+}
+
+function knowledgeRowsLoaderForState(state, demandTransport) {
+  if (String(state?.collection?.name || '') !== 'knowledge_tables') return null;
+  if (typeof demandTransport?.fetchRows !== 'function') return null;
+  if (!remoteSupportsRowsFetch(rowsRemoteProtocol(state))) return null;
+  return createRowsDemandLoader({
+    transport: demandTransport,
+    collectionName: 'knowledge_tables',
+  });
+}
+
+function rowsRemoteProtocol(state) {
+  const peerId = state?.activeRemotePeerId || state?.shared?.negotiated?.peerId || '';
+  const fromPeer = peerId
+    ? state?.peerStates$?.getValue?.()?.get?.(peerId)?.remoteProtocol
+    : null;
+  if (fromPeer) return fromPeer;
+  return state?.shared?.negotiated?.remoteProtocol || null;
 }
 
 function shouldAttachFileDemandLoaderBeforeCollectionHandshake(collectionName = '') {

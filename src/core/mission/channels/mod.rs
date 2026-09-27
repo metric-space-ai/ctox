@@ -1861,6 +1861,10 @@ fn load_strategic_directive_authority_events(
 pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
+        "email-account" => print_json(&crate::communication::email_account_cli::run(
+            root,
+            &args[1..],
+        )?),
         "init" => {
             let db_path = resolve_db_path(root, find_flag_value(args, "--db"));
             let conn = open_channel_db(&db_path)?;
@@ -2046,7 +2050,7 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
         }
         _ => {
             anyhow::bail!(
-                "usage:\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send] [--reviewed-communication-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
+                "usage:\n  ctox channel email-account list | upsert --stdin | sync --address <address> [--limit <1..100>]\n  ctox channel init [--db <path>]\n  ctox channel sync --channel <email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [adapter flags]\n  ctox channel take [--db <path>] [--channel <name>] [--limit <n>] [--lease-owner <owner>]\n  ctox channel ack [--db <path>] [--status <status>] [--reason <text>] <message-key>...\n  ctox channel send --channel <tui|email|jami|teams|meeting|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> --account-key <key> --thread-key <key> --body <text> [--subject <text>] [--to <addr>]... [--cc <addr>]... [--attach-file <path>]... [--send-voice] [--reviewed-founder-send] [--reviewed-communication-send]\n  ctox channel founder-reply --message-key <inbound-email-key> --body <text>\n  ctox channel test --channel <tui|email|jami|teams|whatsapp|slack|discord|telegram|matrix|mattermost|zulip|google_chat> [--db <path>] [--account-key <key>]\n  ctox channel ingest-tui --account-key <key> --thread-key <key> --body <text> [--sender-display <name>] [--sender-address <addr>] [--subject <text>]\n  ctox channel list [--db <path>] [--channel <name>] [--limit <n>]\n  ctox channel history --thread-key <key> [--db <path>] [--limit <n>]\n  ctox channel search --query <text> [--db <path>] [--channel <name>] [--sender <addr>] [--limit <n>]\n  ctox channel context --thread-key <key> [--db <path>] [--query <text>] [--sender <addr>] [--limit <n>]\n  ctox channel pipeline-status [--thread-key <key>] [--limit <n>]"
             )
         }
     }
@@ -3453,7 +3457,27 @@ fn update_queue_task_with_optional_terminal_policy_grant(
         current_queue_priority(&current)
     };
     let now = now_iso_string();
-    let sort_at = queue_sort_at(&priority, &now)?;
+    // An update keeps the task's place in the queue unless its priority is
+    // changed explicitly. Dispatch orders pending work by this timestamp, and
+    // recomputing it on every review-feedback or retry note moved a rejected
+    // task behind all fresh work: on THESEN (26.09.2026) research leads queued
+    // at 07:49 waited behind tasks created two hours later, for hours, after a
+    // single review round. Runtime backoff stays in `retry_not_before`.
+    let preserved_sort_at = request
+        .priority
+        .is_none()
+        .then(|| {
+            current_metadata
+                .get("sort_at")
+                .and_then(Value::as_str)
+                .filter(|value| DateTime::parse_from_rfc3339(value).is_ok())
+                .map(str::to_string)
+        })
+        .flatten();
+    let sort_at = match preserved_sort_at {
+        Some(sort_at) => sort_at,
+        None => queue_sort_at(&priority, &now)?,
+    };
     let mut metadata = current_metadata;
     metadata.insert(
         "source".to_string(),

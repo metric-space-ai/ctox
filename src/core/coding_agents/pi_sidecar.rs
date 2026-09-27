@@ -439,6 +439,21 @@ pub fn project_module_source(
     Ok(files)
 }
 
+/// Refresh the native served-source projection before starting a coding turn.
+pub(crate) fn refresh_and_project_module_source(
+    root: &Path,
+    module_id: &str,
+) -> anyhow::Result<serde_json::Map<String, Value>> {
+    crate::business_os::store::load_module_source_records(
+        root,
+        &crate::business_os::store::ModuleSourceLoadMutation {
+            module_id: module_id.to_owned(),
+        },
+    )
+    .map_err(|_| anyhow::anyhow!("pi coding source unavailable: source_read_failed"))?;
+    project_module_source(root, module_id)
+}
+
 /// Apply a turn's returned snapshot back into the module's app source. Each file
 /// is written through the same policy-gated source path that records P0
 /// versions/commits — the agent proposed, the trusted owner disposes. The
@@ -885,7 +900,7 @@ fn run_module_coding_turn_inner(
     model_override: Option<Value>,
     coding_plan_upstream_override: Option<&str>,
 ) -> anyhow::Result<Value> {
-    let files = project_module_source(root, module_id)?;
+    let files = refresh_and_project_module_source(root, module_id)?;
     let mut request = serde_json::json!({
         "id": module_id,
         "prompt": prompt,
@@ -991,7 +1006,7 @@ fn pi_turn_failure_detail(response: &Value) -> String {
     format!("{error}; diagnostics={}", Value::Object(safe))
 }
 
-fn apply_changed_turn_snapshot(
+pub(crate) fn apply_changed_turn_snapshot(
     root: &Path,
     module_id: &str,
     baseline: &serde_json::Map<String, Value>,
@@ -1262,7 +1277,7 @@ mod tests {
             .unwrap_err();
             assert_eq!(
                 error.to_string(),
-                "pi coding source unavailable: empty_module_source"
+                "pi coding source unavailable: source_read_failed"
             );
             let after: String = db.query_row(
                 "SELECT data FROM ctox_business_os__coding_agent_sessions__v0",

@@ -177,6 +177,51 @@ try {
     expect(m.activeWindowLeft >= 0 && m.activeWindowRight <= m.viewportWidth, 'one-crew window must stay inside the viewport');
   });
 
+  // A chat that leaves the strip (e.g. a discarded empty chat) must not leave
+  // a stale chip behind an in-place render: the dock would report
+  // has-no-chats/has-one-chat around the old chip and wrap its new-chat
+  // button into a second row.
+  await scenario(page, 'dock-strip-follows-a-chat-that-leaves', { count: 1 }, async (m) => {
+    expect(m.chipCount === 1, `one chat renders one chip, got ${m.chipCount}`);
+    const after = await page.evaluate(async () => {
+      const { __businessChatTestInternals: internals } = await import('/src/apps/business-os/shared/business-chat.js');
+      const root = document.querySelector('[data-ctox-chat-root]');
+      // The only chat is minimized (no window, chip in the strip) ...
+      document.querySelector('[data-chat-minimize]')?.click();
+      await window.chatHarness.waitForPaint();
+      const state = root.__ctoxChatState;
+      // ... and then leaves, like a discarded empty chat.
+      state.chats = [];
+      state.activeChatId = '';
+      // Same render the scheduler/tracking sync performs after a projection.
+      internals.renderChatRoot({
+        root, state,
+        commandBus: { dispatch: async () => ({}) },
+        db: null,
+        getActiveModule: () => ({ id: 'ctox', name: 'CTOX' }),
+      });
+      await window.chatHarness.waitForPaint();
+      const dock = document.querySelector('[data-chat-dock]');
+      // Rows by vertical centre: centred controls of different heights share
+      // one row; a wrapped control sits a whole row lower.
+      const centres = [...dock.children]
+        .filter((child) => child.getBoundingClientRect().height > 0)
+        .map((child) => { const r = child.getBoundingClientRect(); return r.top + r.height / 2; })
+        .sort((a, b) => a - b);
+      const rows = centres.reduce((count, centre, index) => count + (index && centre - centres[index - 1] > 14 ? 1 : 0), centres.length ? 1 : 0);
+      return {
+        chips: dock.querySelectorAll('[data-chat-focus]').length,
+        dockClass: dock.className,
+        rows,
+        heights: Math.round(dock.getBoundingClientRect().height),
+      };
+    });
+    results.push({ scenario: 'dock-strip-follows-a-chat-that-leaves:after', metrics: after });
+    expect(after.chips === 0, `the strip must drop the chat that left, got ${after.chips} chips (${after.dockClass})`);
+    expect(/has-no-chats/.test(after.dockClass), `dock class must match the strip, got ${after.dockClass}`);
+    expect(after.rows === 1, `dock controls must stay on one row, got ${after.rows} rows (${after.heights}px)`);
+  });
+
   await scenario(page, 'date-workload-popover-heatmap', { count: 100, activeIndex: 50 }, async () => {
     const open = await page.evaluate(async () => {
       document.querySelector('.ctox-date-picker-trigger').click();
