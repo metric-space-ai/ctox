@@ -11,6 +11,29 @@ cluster: research
 - Task spawning is allowed only for real bounded work steps that add mission progress, external waiting, recovery, or explicit decomposition. Do not spawn work merely because review feedback exists.
 - The Review Gate is a quality checkpoint, not a control loop. After review feedback, continue the same main work item whenever possible and incorporate the feedback there.
 - Everything you do goes through the `ctox` CLI. There is no other data path: the CLI runs inside the daemon and writes to the CTOX SQLite stores; the Business OS UI receives results through replication of the collection the command bus writes.
+- **Inside a worker turn the shell sandbox cannot open the CTOX stores** (`ctox … ` from `exec_command` ends with a permission error on `~/.local/state/ctox`). Use the tools instead: `business_os.*` (MCP) for the command, record and writeback; `ctox_web_search` / `ctox_web_read` for the open web; **`ctox_web_scrape` with `mode: "execute"` for every registered source adapter.**
+
+## 0. Mandatory first step: run the registered adapters
+
+Before any open-web search, call `ctox_web_scrape` once for every entry of `source_policy.sources` that has a `target_key` and fits the lead's country:
+
+```json
+{"mode": "execute", "target_key": "<entry.target_key>", "timeout_seconds": 180,
+ "input": {"source_id": "<entry.id>", "company": "<company>", "country": "<DE|AT|CH>",
+           "city": "<city>", "domain": "<domain if known>", "task_id": "<command id>"}}
+```
+
+- `linkedin-com` and `xing-com` need a person: add `"person": {"first_name": "…", "last_name": "…"}` (from the register/Impressum) and give LinkedIn `timeout_seconds: 400`. `mailtester-com` / `experte-de` need `"email"`.
+- Adapters with a credential (D&B Hoovers, Leadfeeder, XING) sign in with the stored login by themselves; `task_id` must be the command id and `timeout_seconds: 400` (a login may wait for an e-mail one-time code).
+- A record from an adapter is a source: `source_id` = the entry id, `url` = the record's `source_url`, `quote` = the record's value. `blocked`, `authorization_required` or `temporary_unreachable` prove nothing — note the status and continue with the next source.
+- **Minimum set per lead** (skip only what `source_policy` does not list):
+  - DE: `handelsregister-de`, `northdata-de`, `bundesanzeiger-de`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum` (with `"domain"` once known).
+  - AT: `firmenabc-at`, `northdata-de`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum`. CH: `zefix-ch`, `moneyhouse-ch`, `shab-ch`, `dnbhoovers-com`, `leadfeeder-com`, `maps-google-com`, `impressum`.
+  - Persons: run `linkedin-com` (Bright Data, `timeout_seconds: 400`) and `xing-com` with `"person"` for the **priority persons only** — at most one per category in the order of the research procedure (Geschäftsführung, Prokura, Finanzen, Einkauf, SCM, Operations, Technik, Entwicklung), **at most 6 LinkedIn searches per lead**. One name search costs about a minute; a lead with 17 register persons otherwise spends the whole turn there and never reaches the writeback. Never open `linkedin.com` or `xing.com` pages with `ctox_web_read` — LinkedIn answers bots with HTTP 999 and XING with its login wall; only the adapters get through.
+  - E-mail: once an address pattern is known, `mailtester-com` with `"email"`.
+- Only then fill the remaining gaps with `ctox_web_search` / `ctox_web_read`. In `result`, list every adapter you ran with its status.
+- **Write back early.** As soon as the register/identity adapters have delivered, send a first writeback with what is proven, then continue and send the rest. A turn that ends after research but before the writeback loses everything (22.09.2026: the command failed with "no successful outbound.lead.research_writeback receipt").
+- Authenticated sources handle a second factor by e-mail themselves (D&B sends its code to the crew mailbox; CTOX reads it and finishes the login). Only `authorization_required` after that is a real stop.
 
 ## 1. Wie die App, der Harness und der Web-Stack zusammenspielen
 
@@ -128,6 +151,7 @@ ctox web unlock <list-probes|list-vectors|baseline|history|add-vector|set-vector
 ### Login sources and the human in the loop
 
 ```bash
+ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <login-url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>]
 ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--task-id <id>]
 ctox business-os web-stack auth-assist-status --session-id <id>
 ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]
@@ -138,11 +162,12 @@ ctox business-os web-stack authenticated-automation --source-id <id> --target-ur
 
 Unblocking with continuation, in this order:
 
+0. **Automatic sign-in first.** When a scrape or capture returns `authorization_required` / `session_expired_*` and its `reauthorization` names a `credential_ref`, run `auth-assist-login --source-id <source_id> --credential-ref <credential_ref> --target-url <login_url> --task-id <your command id> --timeout-ms 240000` yourself. CTOX fills the stored credential in its own browser (you never see or type the value) and completes an e-mail one-time code on its own (D&B/Okta "Send me an email": the code mail arrives in the connected mailbox). Then rerun the same `ctox scrape execute` / `source-capture`. An expired session is routine, not a reason to stop: do this in the same turn before reporting the source as unreachable. Only when `auth-assist-login` itself fails (MFA push, captcha, locked account) go on with step 1.
 1. `auth-assist-request --source-id <id> --task-id <your command id>` — opens the owner's streamed browser on that source and returns the browser `session_id`; the human signs in or solves the challenge in the stream.
 2. `auth-assist-status --session-id <id>` — poll until the session reports authenticated; do not proceed on a pending session.
 3. Continue **in the same session**: `ctox web browser-automation --session-id <id> --script-file <path>` for your own navigation and extraction, `source-capture --source-id <id> --session-id <id> --company <name>` for the built-in extractors of dnbhoovers.com, leadfeeder.com, rocketreach.com and xing.com, `context-capture --session-id <id>` / `context-extract --session-id <id>` for a page the human positioned for you.
 
-Never type credentials yourself; never guess what a login source would have said. If the human does not complete the login within the turn, the field ends `action_required` with the `session_id` and your command id as reference.
+Never type credentials yourself (`auth-assist-login` is CTOX filling the stored credential, not you); never guess what a login source would have said. If the human does not complete the login within the turn, the field ends `action_required` with the `session_id` and your command id as reference.
 
 ### Scraping pipeline (scripts and records live in SQLite)
 
@@ -156,13 +181,19 @@ ctox scrape semantic-search --target-key <key> --query <text> [--limit <n>]
 ctox scrape upsert-target --input <json-path>
 ctox scrape register-script --target-key <key> --script-file <path> [--language <lang>] [--change-reason <text>] [--notes <text>]
 ctox scrape register-source-module --target-key <key> --source-key <key> --module-file <path> [--language <lang>] [--change-reason <text>] [--notes <text>]
-ctox scrape execute --target-key <key> [--trigger-kind <manual|scheduled|repair>] [--timeout-seconds <n>] [--allow-heal] [--thread-key <key>] [--queue-priority <urgent|high|normal|low>]
+ctox scrape execute --target-key <key> --input-json <json> [--trigger-kind <manual|scheduled|repair>] [--timeout-seconds <n>] [--allow-heal] [--thread-key <key>] [--queue-priority <urgent|high|normal|low>]
 ctox scrape record-template-example --target-key <key> --template-key <template> --script-file <path> [--language <lang>] [--result-count <n>] [--challenge-score <n>] [--reason <text>]
 ctox scrape promote-template --template-key <template> --script-file <path> [--language <lang>] --reason <text>
 ctox web scrape --target-key <key> --mode <latest|semantic> [--query <text>] [--limit <n>]
 ```
 
-Where things are: `ctox.sqlite3` holds `scrape_target` (key, start URL, `target_kind`, config, output schema), `scrape_script_revision` (revision number, script body, sha256, change reason), `scrape_source_revision` (per-source extractor modules), `scrape_run` (status, classification, timing), `scrape_record_latest` (the extracted records). Working files (inputs, outputs, artifacts) live under `~/.local/state/ctox/scraping/targets/<target-key>/`. Registered targets today: `handelsregister-de`, `northdata-de`, `bundesanzeiger-de`, `companyhouse-de` (`target_kind = prospect-research`).
+Where things are: `ctox.sqlite3` holds `scrape_target` (key, start URL, `target_kind`, config, output schema), `scrape_script_revision` (revision number, script body, sha256, change reason), `scrape_source_revision` (per-source extractor modules), `scrape_run` (status, classification, timing), `scrape_record_latest` (the extracted records). Working files (inputs, outputs, artifacts) live under `~/.local/state/ctox/scraping/targets/<target-key>/`. Registered targets (`target_kind = prospect-research`): `ctox scrape list-targets` is authoritative; the outbound sources map to `handelsregister-de`, `northdata-de`, `bundesanzeiger-de`, `companyhouse-de`, `dnbhoovers-com`, `leadfeeder-com`, `linkedin-com` (Bright Data API), `xing-com`, `google-de`, `maps-google-com`, `impressum`, `rocketreach-com`, `firmenabc-at`, `moneyhouse-ch`, `zefix-ch`, `shab-ch`, `evi-gv-at`, `justizonline-gv-at`, `experte-de`, `mailtester-com`.
+
+**Run adapters through the tool, not the shell.** Inside a worker turn the shell sandbox cannot open the CTOX state store, so `ctox scrape execute` from `exec_command` fails with a permission error. Use the tool `ctox_web_scrape` with `mode: "execute"`, `target_key`, `input` (the object below) and `timeout_seconds`; it runs the registered adapter in the CTOX process, with stored credentials, and returns status, records and the run manifest. The CLI form above is for operators.
+
+**Input for `execute`.** Every run gets the lead as `input` (CLI: `--input-json`):
+`{"source_id":"<provider id, e.g. northdata.de>","company":"<registered name>","country":"DE|AT|CH","city":"<Ort>","domain":"<firma_domain if known>","task_id":"<research_command_id of this run>"}`.
+Person sources (`linkedin-com`, `xing-com`) also need `"person":{"first_name":"…","last_name":"…"}` or a `"profile_url"`; LinkedIn without a known URL runs a Bright Data name search that takes about four minutes, so give it `--timeout-seconds 400`. E-mail checks (`mailtester-com`, `experte-de`) need `"email"`. `task_id` is mandatory for authenticated targets (D&B Hoovers, Leadfeeder, XING, RocketReach): without it CTOX cannot tie the stored login to the requesting user, the run ends with `auth assist owner unresolved`, and the stored credential is never used.
 
 When to write a script: a source you will hit again for many leads (register lists, company directories) or one whose page needs structured extraction. Look at `show-api`/`show-target` first; if the target exists, `execute --allow-heal`; if the run classifies `portal_drift`, the repair task is already queued — record it and move on, do not retry the same source in this run. If no target exists and the source will recur, write the script (`universal-scraping` skill explains authoring, fixtures and `upsert-target`), register it, run it. For a one-off page, just read or capture it.
 
@@ -195,12 +226,15 @@ rejects the task as incomplete when no successful `execute_writeback` receipt ex
 lead and your research command. Never edit collections directly, never report results as chat
 text only.
 
-Call:
+Call it with `payload` as **one JSON string** that encodes the payload object. MiniMax drops
+large object arguments on the way to the tool (THESEN 26.09.2026: 5 of 6 replayed calls arrived
+as `{}`); a string arrives intact, the server decodes it and names the exact position of any JSON
+error. The payload object inside that string:
 
 ```json
 business_os.execute_writeback({
   "record_id": "<lead-id>",
-  "payload": {
+  "payload": /* JSON.stringify of: */ {
     "field_status": {
       "<field>": {
         "status": "verified|no_match|unsupported|action_required",

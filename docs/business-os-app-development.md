@@ -14,6 +14,28 @@ The platform supplies:
 - a Command Bus for work that must be durable, delegated or executed outside
   the client.
 
+## Registered system app presentation
+
+The registry generator projects module metadata from each source manifest and
+approved icon metadata from the frozen operator selection manifest. This keeps
+registry and offline fallback icons consistent with the shell's operator-icon
+resolver, including explicit render derivatives such as the Knowledge PNG.
+Run `node src/apps/business-os/scripts/generate-module-registry.mjs --check`
+to detect drift; regenerated app.js requires a new shell generation.
+
+
+The source inventory contains 39 modules, including 21 core apps. Creator,
+Explorer and File Viewer are registered core modules, in addition to the
+original 36-module / 18-core inventory. Registry, source manifests, system-app
+installation order and the standard bundle must agree.
+
+File Viewer retains the compact desktop preview contract from its promotion
+to a module: a 520 × 400 minimum window, `launch_kind: desktop-app` and
+`multi_instance: true`, so separate previews can coexist. Other modules retain
+the migration's 480-pixel minimum height and single-instance requirement.
+The inventory guard checks this explicit distinction and rejects drift; adding
+a new module does not automatically authorize another presentation exception.
+
 ## Product contract
 
 The intended developer experience is the same as installing a native desktop
@@ -381,3 +403,22 @@ this complete flow without a developer-triggered daemon restart.
 - `docs/ctox-rxdb.md` — sync architecture and data boundary
 - `docs/business-os-app-platform-refactoring-plan.md` — client-only SDK work
 - `docs/business-os-dynamic-module-schemas-plan.md` — runtime schema loader
+
+## Module-local forms and controls
+
+Knowledge creation, import, export and configuration forms stay inside their
+own module window. Closing or pressing Escape restores focus to the invoking
+control; Tab remains inside the open form. A failed command keeps the entered
+values and exposes a retry action. Pending submission disables another submit,
+and an answer arriving after the form is closed must not reopen it.
+
+AppSec's native dialogs use `show()` and module-relative positioning. Its
+narrow layout scrolls within the allocated app height, so dialog controls remain
+inside the visible module. Reports uses the shared pane-grammar classes for
+search, filtering, reset, counted bands and footers.
+
+`node src/apps/business-os/scripts/module-local-controls.browser.mjs` checks
+these controls at 360, 640 and 1180 pixels, including a controlled command
+failure/retry. It mounts the real modules against explicit in-memory fixtures;
+it does not establish tenant synchronization, native command execution or
+installed Workjet acceptance. Those still require the real application tests.

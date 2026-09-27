@@ -48,7 +48,7 @@ export class QueryMetaStorage {
     return record;
   }
 
-  async upsertQueryWindow({ collection, queryFingerprint, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null }) {
+  async upsertQueryWindow({ collection, queryFingerprint, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null, permissionDigest = undefined }) {
     const now = this.clock();
     const existing = await this.backend.getQueryWindow(
       [collection, queryFingerprint, offset, limit].join('|'),
@@ -71,6 +71,13 @@ export class QueryMetaStorage {
       // fetch satisfied — distinct from the server echo above.
       satisfiedRevision: satisfiedRevision ?? null,
       satisfiedGeneration: satisfiedGeneration ?? null,
+      // SYNC-12: read-permission identity (digest of role+epoch capability
+      // claims) this window's membership was authorized under. The demand
+      // loader refuses to serve control-plane windows whose stamp mismatches
+      // the current digest. Omitted on upsert: keep the previous stamp.
+      permissionDigest: permissionDigest === undefined
+        ? (existing?.permissionDigest ?? null)
+        : (permissionDigest ?? null),
       queryShape: queryShape && typeof queryShape === 'object' ? structuredCloneSafe(queryShape) : null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,

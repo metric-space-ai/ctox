@@ -234,7 +234,7 @@ test('crew identities and SVG bodies are stable per work stream', () => {
   assert.deepEqual(__businessChatTestInternals.crewIdentity(chat), identity);
   assert.ok(['round', 'blob', 'square', 'triangle'].includes(identity.shape));
   assert.match(__businessChatTestInternals.crewCreatureHtml(chat, 'running', 'window'), /ctox-crew-creature is-running/);
-  assert.match(__businessChatTestInternals.crewCreatureHtml(chat, 'running', 'window'), /<svg viewBox="0 0 64 64"/);
+  assert.match(__businessChatTestInternals.crewCreatureHtml(chat, 'running', 'window'), /<svg class="ctox-crew-figure" viewBox="0 0 64 64"/);
 });
 
 test('crew pool members read and learn from projection stamps, then settle', () => {
@@ -339,21 +339,33 @@ test('CTOX normalized camel-case telemetry drives map creature turns and progres
   assert.match(creature, /--ctox-progress-angle:216deg/);
 });
 
-test('crew motion is triggered only by durable turns, finite, and reduced-motion safe', () => {
-  assert.match(businessChatSource, /function syncCrewProceduralMotion/);
-  assert.match(businessChatSource, /now - state\.lastFrameAt < 33/);
-  assert.match(businessChatSource, /\.slice\(0, 36\)/);
-  assert.match(businessChatSource, /document\.visibilityState === 'hidden'/);
-  assert.match(businessChatSource, /total > \(previousTotal \?\? total\)/);
-  assert.match(businessChatSource, /!freshInitialEvent && !modeChanged/);
-  assert.match(businessChatSource, /nowMs - updatedAt <= 8000/);
-  assert.match(businessChatSource, /duration = mode === 'review' \? 2200 : kind === 'thinking' \? 1800 : 1400/);
-  assert.doesNotMatch(businessChatSource, /frequencyB: .*Math\.SQRT2/);
-  assert.match(businessChatSource, /\.ctox-crew-creature\.is-working[\s\S]*?animation: none/);
-  assert.match(businessChatSource, /\.ctox-crew-creature\.is-review[\s\S]*?animation: none/);
-  assert.match(businessChatSource, /\.ctox-crew-creature\.is-failed[\s\S]*?animation: ctoxCrewOops 860ms[^;]* 1 both/);
+test('crew motion: continuous state poses, impulses only from durable turns, reduced-motion safe', async () => {
+  const motionSource = readFileSync(new URL('./crew-motion.js', import.meta.url), 'utf8');
+  const { __crewMotionInternals } = await import('./crew-motion.js');
+  const { basePose, IMPULSES } = __crewMotionInternals;
+  // The chat delegates to the one page-wide engine instead of running its own loop.
+  assert.match(businessChatSource, /import \{ syncCrewMotion \} from '\.\/crew-motion\.js\?v=/);
+  assert.doesNotMatch(businessChatSource, /__ctoxCrewProceduralMotion/);
+  // Impulses come only from a durable turn increase (or a fresh first event) and only while working/reviewing.
+  assert.match(motionSource, /turns > actor\.turns && \(mode === 'working' \|\| mode === 'review'\)/);
+  assert.match(motionSource, /FRESH_EVENT_MS = 8000/);
+  for (const spec of Object.values(IMPULSES)) assert.ok(spec.duration > 0 && spec.duration <= 1600, 'impulses are finite');
+  // Resting creatures breathe but never hop; working ones stay near the ground between turns.
+  const genes = { tempo: 1.2, amplitude: 1.2, irregularity: 0.85, phase: 0.3 };
+  for (let t = 0; t < 30; t += 0.05) {
+    const sleeping = basePose('sleeping', t, genes);
+    assert.ok(sleeping.y >= 0 && sleeping.y <= 1 && Math.abs(sleeping.r) <= 1.5 && Math.abs(sleeping.x) < 0.001, `sleeping pose at ${t}`);
+    const working = basePose('working', t, genes);
+    assert.ok(working.y <= 0 && working.y >= -2.2 && Math.abs(working.r) <= 5, `working pose at ${t}`);
+  }
+  // Only visible creatures in a visible tab are animated; reduced motion clears everything.
+  assert.match(motionSource, /new IntersectionObserver/);
+  assert.match(motionSource, /document\.hidden/);
+  assert.match(motionSource, /prefers-reduced-motion: reduce/);
+  assert.match(motionSource, /if \(reduced\) for \(const actor of actors\.values\(\)\) clearStyles\(actor\)/);
+  // No CSS keyframe loops on creatures any more; failure and idle states are driven by the engine.
+  assert.doesNotMatch(businessChatSource, /\.ctox-crew-creature\.is-(idle|queued|scheduled|success|blocked|working|review|failed)[^}]*animation:/);
   assert.match(businessChatSource, /\.ctox-crew-creature,\n\s+\.ctox-crew-creature \*/);
-  assert.doesNotMatch(businessChatSource, /\.ctox-crew-creature\.is-(idle|queued|scheduled|success|blocked)[^}]*animation:/);
 });
 
 test('routine status updates cannot restart dock or window entry animations', () => {

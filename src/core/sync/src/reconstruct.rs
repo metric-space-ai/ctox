@@ -89,13 +89,16 @@ impl CheckpointStore {
         if !manifest.pending_effects.is_empty() {
             return Err(invalid("session requires external-effect reconciliation"));
         }
-        let source = fs::canonicalize(source_repository)
-            .map_err(|_| invalid("source repository is not a local Git directory"))?;
+        let source = strip_windows_verbatim_prefix(
+            &fs::canonicalize(source_repository)
+                .map_err(|_| invalid("source repository is not a local Git directory"))?,
+        );
         if !source.is_dir() {
             return Err(invalid("source repository is not a directory"));
         }
         if let Some(parent) = target.parent() {
             if let Ok(parent) = fs::canonicalize(parent) {
+                let parent = strip_windows_verbatim_prefix(&parent);
                 if parent == source || parent.starts_with(&source) {
                     return Err(invalid(
                         "reconstruction target may not be created inside the source repository",
@@ -105,9 +108,19 @@ impl CheckpointStore {
         }
 
         let isolation = Isolation::new()?;
-        let source_git = source_git_dir(&isolation, &source)
-            .await
-            .map_err(|_| invalid("source repository is not a local Git directory"))?;
+        let source_git = match source_git_dir(&isolation, &source).await {
+            Ok(path) => path,
+            Err(error)
+                if error.to_string().contains(
+                    "source repository must be the Git workspace root or a bare repository",
+                ) =>
+            {
+                return Err(error);
+            }
+            Err(_) => {
+                return Err(invalid("source repository is not a local Git directory"));
+            }
+        };
         let base = &manifest.workspace_state.base_commit;
         verify_exact_base_commit(&isolation, &source, &source_git, base).await?;
         let object_format = source_object_format(&isolation, &source, &source_git).await?;
@@ -146,7 +159,7 @@ impl CheckpointStore {
         target: &Path,
         object_format: &str,
     ) -> io::Result<()> {
-        let target = fs::canonicalize(target)?;
+        let target = strip_windows_verbatim_prefix(&fs::canonicalize(target)?);
         let source_git = path_to_utf8(source_git)?;
         git(
             isolation,
@@ -198,6 +211,7 @@ impl CheckpointStore {
                 "--work-tree",
                 path_to_utf8(&target)?,
                 "checkout",
+                "-q",
                 "-f",
                 "HEAD",
             ],
@@ -573,7 +587,9 @@ async fn stream_index_symlink_paths(
         Err(_) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err(invalid("Git command exceeded its deadline"));
+            return Err(invalid(
+                "Git command exceeded its deadline (ls-files -s -z)",
+            ));
         }
     };
     if !status.success() {
@@ -936,8 +952,18 @@ fn parse_one_diff_path(input: &str) -> io::Result<(String, &str)> {
 async fn source_git_dir(isolation: &Isolation, source: &Path) -> io::Result<PathBuf> {
     let is_bare = git_line(isolation, source, &["rev-parse", "--is-bare-repository"]).await?;
     if is_bare != "true" {
-        let toplevel = git_line(isolation, source, &["rev-parse", "--show-toplevel"]).await?;
-        if Path::new(&toplevel) != source {
+        let prefix = git(
+            isolation,
+            source,
+            None,
+            &["rev-parse", "--show-prefix"],
+            4096,
+        )
+        .await?;
+        let prefix = std::str::from_utf8(&prefix)
+            .map_err(|_| invalid("Git returned non-UTF-8 metadata"))?
+            .trim();
+        if !prefix.is_empty() {
             return Err(invalid(
                 "source repository must be the Git workspace root or a bare repository",
             ));
@@ -1034,11 +1060,14 @@ async fn transfer_base_objects(
         budget,
     )
     .await?;
+    // Keep the transferred pack as a packfile. `unpack-objects` explodes one
+    // loose object per blob and exceeded the 10s Git deadline on Windows for
+    // the 1200-file index-listing fixture (`unpack-objects -q`).
     git(
         isolation,
         source,
         Some(&pack),
-        &["--git-dir", target_git, "unpack-objects", "-q"],
+        &["--git-dir", target_git, "index-pack", "--strict", "--stdin"],
         4096,
     )
     .await?;
@@ -1073,8 +1102,20 @@ fn git_command(isolation: &Isolation, current_dir: &Path) -> Command {
     if let Some(path) = std::env::var_os("PATH") {
         command.env("PATH", path);
     }
+    #[cfg(windows)]
+    {
+        for key in ["SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "SYSTEMDRIVE"] {
+            if let Some(value) = std::env::var_os(key) {
+                command.env(key, value);
+            }
+        }
+        command.env("USERPROFILE", &isolation.tmp);
+    }
     command
         .env("TMPDIR", &isolation.tmp)
+        .env("TMP", &isolation.tmp)
+        .env("TEMP", &isolation.tmp)
+        .env("HOME", &isolation.tmp)
         .env("LANG", "C")
         .env("LC_ALL", "C")
         .env("GIT_CONFIG_NOSYSTEM", "1")
@@ -1091,7 +1132,9 @@ fn git_command(isolation: &Isolation, current_dir: &Path) -> Command {
         .env("GIT_NO_REPLACE_OBJECTS", "1")
         .env(
             "GIT_CEILING_DIRECTORIES",
-            fs::canonicalize(current_dir).unwrap_or_else(|_| current_dir.to_path_buf()),
+            strip_windows_verbatim_prefix(
+                &fs::canonicalize(current_dir).unwrap_or_else(|_| current_dir.to_path_buf()),
+            ),
         )
         .arg("--no-pager")
         .arg("--no-optional-locks")
@@ -1132,7 +1175,7 @@ fn git_command(isolation: &Isolation, current_dir: &Path) -> Command {
         })
         .arg("-c")
         .arg(format!("init.templateDir={}", isolation.template.display()))
-        .current_dir(current_dir);
+        .current_dir(strip_windows_verbatim_prefix(current_dir));
     command
 }
 
@@ -1190,7 +1233,10 @@ async fn git(
         Err(_) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err(invalid("Git command exceeded its deadline"));
+            return Err(invalid(format!(
+                "Git command exceeded its deadline ({})",
+                args.join(" "),
+            )));
         }
     };
     if !status.success() {
@@ -1248,6 +1294,30 @@ fn read_artifact(
         ));
     }
     Ok(bytes)
+}
+
+fn strip_windows_verbatim_prefix(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+        let mut components = path.components();
+        if let Some(Component::Prefix(prefix)) = components.next() {
+            let mut stripped = match prefix.kind() {
+                Prefix::VerbatimDisk(disk) => PathBuf::from(format!(r"{}:\", disk as char)),
+                Prefix::VerbatimUNC(server, share) => {
+                    let mut root = PathBuf::from(r"\\");
+                    root.push(server);
+                    root.push(share);
+                    root
+                }
+                _ => return path.to_path_buf(),
+            };
+            stripped
+                .extend(components.filter(|component| !matches!(component, Component::RootDir)));
+            return stripped;
+        }
+    }
+    path.to_path_buf()
 }
 
 fn path_to_utf8(path: &Path) -> io::Result<&str> {
@@ -1367,5 +1437,22 @@ index a96aa0e..9daeafb\n\
             parse_diff_git_paths(r#""a/\303\251.txt" b/file with space.txt"#).unwrap();
         assert_eq!(left, "a/é.txt");
         assert_eq!(right, "b/file with space.txt");
+    }
+
+    #[test]
+    fn reconstruct_strips_windows_verbatim_prefixes_for_git() {
+        let disk = PathBuf::from(r"\\?\C:\tmp\workspace");
+        let stripped = strip_windows_verbatim_prefix(&disk);
+        #[cfg(windows)]
+        assert_eq!(stripped, PathBuf::from(r"C:\tmp\workspace"));
+        #[cfg(not(windows))]
+        assert_eq!(stripped, disk);
+
+        let unc = PathBuf::from(r"\\?\UNC\server\share\repo");
+        let stripped = strip_windows_verbatim_prefix(&unc);
+        #[cfg(windows)]
+        assert_eq!(stripped, PathBuf::from(r"\\server\share\repo"));
+        #[cfg(not(windows))]
+        assert_eq!(stripped, unc);
     }
 }

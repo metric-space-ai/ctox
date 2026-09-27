@@ -1,6 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
-import { crewCreatureHtml } from '../../shared/business-chat.js?v=20260906-crew-home-v339';
+import { renderCrewCreature, crewModeForTaskState, crewActivityFromProgress } from '../../shared/crew-renderer.js?v=20260927-crew-genome-v4';
+import { startCrewMotion } from '../../shared/crew-motion.js?v=20260927-crew-genome-v4';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 
 const REFRESH_DEBOUNCE_MS = 80;
@@ -649,11 +650,18 @@ function crewWaitSentence(task) {
 
 function crewCreatureFor(task, placement = 'map') {
   const member = crewMemberFor(task);
-  return crewCreatureHtml({
-    crewKey: member ? member.id : (task?.command_id || task?.id || 'crew'),
-    crewIdentity: member ? { name: member.name, shape: member.shape, color: member.color } : null,
-    executionProgress: task?.execution_progress || null,
-  }, crewTaskState(task), placement);
+  const taskState = crewTaskState(task);
+  const progress = task?.execution_progress || null;
+  startCrewMotion();
+  return renderCrewCreature({
+    appearance: member ? { id: member.id, name: member.name, shape: member.shape, color: member.color } : null,
+    animationKey: member ? member.id : (task?.command_id || task?.id || 'crew'),
+    taskState,
+    mode: crewModeForTaskState(taskState, progress?.phase),
+    placement,
+    progressPercent: Number(progress?.percent) || 0,
+    activity: crewActivityFromProgress(progress),
+  });
 }
 
 function mayAssignCrew() {
