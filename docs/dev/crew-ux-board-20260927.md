@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad (Owner 27.09.: „leg los und setze alles um“): Rust-Fix Signaling (lokal committet 76d61182d, Test wartet auf Build-Sperre) → push → welsch `ctox upgrade --dev`; parallel signierter Slot beta.62 (2e89a09ab) aus dem Actions-Stau → stage/activate.
+Kritischer Pfad (Owner 27.09.: „setze alles um … test in browser, merge zu main, teile Ergebnisse Codex mit“ + „merge auf main und deploye auf thesen.ctox.dev und welsch.ctox.dev“): Rust-Test (Signaling + Lumi-Farbe) läuft unter eigener Lease → push → welsch `ctox upgrade --dev` → Slot beta.63 (bf94a9f3a) sobald signiert → Browser-Abnahme welsch → Bericht Codex-Thread.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -28,11 +28,16 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 
 - **Crew zu Hause steht auf einem Boden (main `2e89a09ab`, v408)** — 96-px-Figuren auf gemeinsamer flacher Bodenlinie auf Fußhöhe (Modulvertrag „keine Verläufe“ eingehalten, erster Entwurf mit Verlauf vom Test „Presentation layer stays compact“ zurückgewiesen). ctox 46/46, Layout 7/7, Geometrie 3/3. welsch per Datei-Deploy (Backup `files-20260927T090555Z`, Hashes = main).
 
+- **Namen + neutraler Geist (main `4e6c7efcd`, v409 `bf94a9f3a`)** — Owner: „für viele Crews fehlen Namen und verschiedene Farben“. Messung welsch: 33 Tasks, 23 mit Mitglied (Lumi 11, Nori 8, Pico 3, Milo 1), 10 ohne; Chats 13/14 mit Mitglied, 7× Lumi. Ursachen: (a) Lumi-Seed = Neutralgrau, (b) Aufgabenliste zeigte keinen Namen, (c) Bug: Chat-Adapter gab normalisierte Identität {name:'Crew'} an den Renderer → jede unzugeordnete Aufgabe wurde graues Mitglied „Crew“ statt Geist. Fix: Name in Mitgliedsfarbe in der Meta-Zeile, „ohne Crew“ + Geist für Unzugeordnete, Namensschild für das ausgewählte Wesen auf der Karte, Rohidentität an Renderer, Palette ohne Grau (Bernstein). Tests: Renderer+Chat 101, ctox 47, Tickets 14, Chat-Harness 146 Szenarien, Layout 7/7. welsch v409 (Backup `files-20260927T09xx`, 15 Hashes = main); Browser: „Lumi · Erledigt · 23.09.“, Karte „ohne Crew · wartet“.
+
+- **thesen auf main-Shell (27.09. 10:07 UTC, verifiziert)** — thesen: Release `branch-main-20260927T005313Z` (Quelle `ccde06f4d`), currentSlot null → src/ gilt; Hash-Stichprobe = ccde06f4d. Seit ccde06f4d nur CREW-UX-Commits in business-os. Deploy 23 Dateien von `bf94a9f3a` (Backup `~/.local/state/ctox/backups/files-20260927T100731Z`, alle Hashes = main); zwei Anläufe scheiterten vorher an Neon-`fetch failed` (Netz), nichts verändert. Browser: `app.js?v=…crew-names-v409`, admin, Signaling wss://signaling.ctox.dev/v2, Engine aktiv, 4 Mitglieder, Leiste 56 px. Angekündigt im Codex-Thread.
+- **Compiler-Grenze eingehalten (Codex-Befund 09:5x)** — btls-sys-cmake (make -j2) + rustc = 3 effektive Compiler; Drossel `signaling-throttle.py` hält eigene Nachfahren von Cargo 95709 per SIGSTOP/SIGCONT auf ≤2 (bis 10:02: 8 Pausen/8 Fortsetzungen). Harte Frist 10:25Z, Cleanup 10:30Z, genau EIN Callback per Wächter v2 (`signaling-run-guard-v2.sh`). Danach kein lokaler Heavy-Job vor dem Greppy-Slot (Thread 01a07f6a-83e8-7901-851c-36521e4916b4).
+
 ## Working
 
 - **(erledigt) welsch-Upgrade Binary → main** — 1. Versuch `ctox-crew-genome-upgrade-20260927` scheiterte am Platzgate (20 GiB verlangt, 19,5 frei; nichts verändert, Wartung nicht aktiv). Freigemacht: `~/.cache/ctox/build-office-20260906` (7,1 GB, reines Cargo-Target vom 06.09., kein Prozess). 2. Versuch Unit `ctox-crew-genome-upgrade-20260927b`, target `branch-main-20260927T075827Z` (Quelle = main mit S1–S3+v404), Phase building. Fertig heißt: phase=completed, current_release neu, Wartung completed, Dienst aktiv; Symlink-Falle prüfen.
-- **Shell-Release beta.62** — Tag → `2e89a09ab` (v408); beta.60/61 als überholt abgebrochen. Fertig heißt: Run success → welsch `shell-update stage --version 0.1.46-beta.62` → activate → restart; „Recovery“ verschwindet.
-- **Rust-Fix Signaling-Env** — lokal `76d61182d` im Klon `ctox-crew-genome` (`signaling_urls_config_with_override`, Env nur prozesslokal, `persist_signaling_urls` entfernt, 2 Tests, Doku). Test `cargo test --bin ctox signaling_` via `dev-heavy-run.py --task signaling-env` wartet auf Lease (Codex `o04-connector-proof`). Log: Scratchpad `rust-signaling.log`. Fertig heißt: 2 Tests grün → rebase + push → welsch `ctox upgrade --dev`.
+- **Shell-Release beta.63** — Tag → `bf94a9f3a` (v409); beta.60/61/62 als überholt abgebrochen. Fertig heißt: Run success → welsch `shell-update stage --version 0.1.46-beta.63` → activate → restart; „Recovery“ verschwindet.
+- **Rust: Signaling-Env + Lumi-Farbe** — im Klon `ctox-crew-genome` (rebased auf main): Signaling-Commit (Env nur prozesslokal, 2 Tests, Doku) + `fix(crew): Lumi gets a real colour` (Seed #e97255, idempotente Migration nur für unverändertes Seed-Grau, Palette ohne Grau, Test). `cargo test --bin ctox -- signaling_ crew::` unter eigener Lease (seit ~09:19 UTC, kalt, -j2). Fertig heißt: grün → push → welsch `ctox upgrade --dev` (Lumi wird Koralle, Env-Falle geschlossen).
 
 ## To-Do
 
