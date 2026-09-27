@@ -1869,7 +1869,7 @@ collections and database replacement discard the cached entry. Other platforms
 keep command-scoped lifetime until their database key includes file identity.
 Each control projection validates schema generation inside an IMMEDIATE
 transaction before reading/merging/writing the current row. A changed generation
-reopens the writer and retries only that projection, at most twice; it never
+reopens the writer for at most two projection attempts total (one retry); it never
 replays the command handler. Notifications follow commit. Schema discovery at
 open uses a single read snapshot. Other projection writes keep their existing
 lifetime and semantics. These guards are correctness boundaries, not evidence
