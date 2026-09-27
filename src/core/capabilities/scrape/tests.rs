@@ -2894,3 +2894,213 @@ fn execute_with_blocked_failure_queues_web_unlock_task() {
     assert!(tasks[0].thread_key.contains("blocked-fixture"));
     let _ = fs::remove_dir_all(root);
 }
+
+// THESEN 27.09.2026: 77 of 80 LinkedIn runs asked Bright Data again although it
+// kept answering "Customer is not active". Through the real execute path:
+// repeated calls stay off the provider, a credential edit probes once,
+// input errors stay separate, a success clears the state.
+mod provider_account_state {
+    use super::*;
+
+    const SCRIPT: &str = r#"
+python3 - <<'CTOX_ACCOUNT_FIXTURE'
+import json,os,pathlib
+inp=json.loads(os.environ['CTOX_SCRAPE_INPUT_JSON'])
+calls=pathlib.Path(inp['calls']); calls.write_text(calls.read_text()+'x' if calls.exists() else 'x')
+mode=pathlib.Path(inp['mode_file']).read_text().strip()
+if mode == 'inactive':
+    print(json.dumps({'records':[],'failure_mode':'temporary_unreachable','detail':'Bright Data antwortete mit HTTP 400: Customer is not active'}))
+elif mode == 'input':
+    print(json.dumps({'records':[],'failure_mode':'portal_drift','detail':'weder LinkedIn-Profil-URL noch Vor- und Nachname im Auftrag'}))
+else:
+    print(json.dumps({'records':[{'id':'p1','name':'Person'}]}))
+CTOX_ACCOUNT_FIXTURE
+"#;
+
+    struct Fixture {
+        root: PathBuf,
+        target: ScrapeTargetView,
+    }
+
+    impl Fixture {
+        fn new(prefix: &str) -> Self {
+            let root = temp_root(prefix);
+            let target = upsert_target(&root, DEFAULT_RUNTIME_ROOT, json!({
+                "target_key":"account-provider", "display_name":"Account Provider",
+                "start_url":"https://provider.test/api", "target_kind":"person",
+                "config":{"skip_probe":true,"expected_min_records":1,"record_key_fields":["id"],
+                          "credential_secret_name":"ACCOUNTPROV_API_KEY","llm_enrichment":{"enabled":false}},
+                "output_schema":{"schema_key":"person.v1","record_key_fields":["id"]}
+            })).unwrap();
+            let path = root.join("account.sh");
+            fs::write(&path, SCRIPT).unwrap();
+            register_script(
+                &root,
+                DEFAULT_RUNTIME_ROOT,
+                &target.target_key,
+                path.to_str().unwrap(),
+                "shell",
+                None,
+                None,
+            )
+            .unwrap();
+            let fixture = Self { root, target };
+            fixture.set_credential("v1");
+            fixture
+        }
+
+        fn set_credential(&self, value: &str) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            crate::secrets::write_secret_record(
+                &self.root,
+                crate::secrets::credential_scope(),
+                "ACCOUNTPROV_API_KEY",
+                value,
+                None,
+                json!({"source":"test"}),
+            )
+            .unwrap();
+        }
+
+        fn mode(&self, mode: &str) {
+            fs::write(self.root.join("mode.txt"), mode).unwrap();
+        }
+
+        fn calls(&self) -> usize {
+            fs::read_to_string(self.root.join("calls.txt"))
+                .map(|text| text.len())
+                .unwrap_or(0)
+        }
+
+        fn execute(&self, extra: &[&str]) -> ScrapeExecutionOutcome {
+            let mut args = vec![
+                "--target-key".to_string(),
+                "account-provider".to_string(),
+                "--input-json".to_string(),
+                json!({"calls": self.root.join("calls.txt"), "mode_file": self.root.join("mode.txt")}).to_string(),
+                "--timeout-seconds".to_string(),
+                "10".to_string(),
+            ];
+            args.extend(extra.iter().map(|value| value.to_string()));
+            execute_scrape_with_outcome(&self.root, &args).unwrap()
+        }
+
+        fn runs(&self) -> i64 {
+            open_db(&self.root)
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM scrape_run WHERE target_id=?1",
+                    params![self.target.target_id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        }
+    }
+
+    #[test]
+    fn repeated_calls_do_not_reach_the_provider_and_name_the_causal_run() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-repeated");
+        fx.mode("inactive");
+        let first = fx.execute(&[]);
+        assert_eq!(
+            first.status,
+            ScrapeRunStatus::ProviderAccountInactive,
+            "{first:?}"
+        );
+        assert!(!first.should_queue_repair);
+        assert!(first.repair_queue_task.is_none());
+        for _ in 0..3 {
+            let again = fx.execute(&[]);
+            assert_eq!(again.status, ScrapeRunStatus::ProviderAccountInactive);
+            assert_eq!(
+                again.run_id, first.run_id,
+                "suppressed call names the causal run"
+            );
+            assert!(again
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("kein Anbieteraufruf"));
+        }
+        assert_eq!(fx.calls(), 1, "only the first call reached the provider");
+        assert_eq!(fx.runs(), 1, "no invented runs");
+        let result: String = open_db(&fx.root)
+            .unwrap()
+            .query_row(
+                "SELECT result_json FROM scrape_run WHERE run_id=?1",
+                params![first.run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&result).unwrap()["failure_mode"],
+            "provider_account_inactive"
+        );
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn a_credential_edit_probes_exactly_once_and_success_clears_the_state() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-credential");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        fx.set_credential("v2");
+        let probe = fx.execute(&[]);
+        assert_eq!(probe.status, ScrapeRunStatus::ProviderAccountInactive);
+        assert_eq!(fx.calls(), 2, "the edited credential was probed once");
+        fx.execute(&[]);
+        assert_eq!(
+            fx.calls(),
+            2,
+            "a failed probe consumed that credential version"
+        );
+        fx.set_credential("v3");
+        fx.mode("ok");
+        let ok = fx.execute(&[]);
+        assert_eq!(ok.status, ScrapeRunStatus::Succeeded, "{ok:?}");
+        assert!(super::super::account_state::load(
+            &open_db(&fx.root).unwrap(),
+            &fx.target.target_id
+        )
+        .unwrap()
+        .is_none());
+        fx.execute(&[]);
+        assert_eq!(fx.calls(), 4, "after success calls go through again");
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn an_authorized_operator_probe_reaches_the_provider_once() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-operator");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        fx.execute(&["--probe-account"]);
+        assert_eq!(
+            fx.calls(),
+            2,
+            "authorized operator probe reached the provider once"
+        );
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn input_errors_stay_separate_from_the_account_state() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-input");
+        fx.mode("input");
+        let outcome = fx.execute(&[]);
+        assert_eq!(outcome.status, ScrapeRunStatus::PortalDrift);
+        fx.execute(&[]);
+        assert_eq!(fx.calls(), 2, "input errors are not suppressed");
+        assert!(super::super::account_state::load(
+            &open_db(&fx.root).unwrap(),
+            &fx.target.target_id
+        )
+        .unwrap()
+        .is_none());
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+}

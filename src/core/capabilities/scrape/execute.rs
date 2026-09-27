@@ -408,6 +408,32 @@ pub(crate) fn execute_scrape_with_outcome(
             run_started_at
         ))
     );
+    // Provider account state (account_state.rs): while the provider refuses
+    // the account, calls are answered from the stored state without
+    // contacting it; one probe runs per credential change, authorized
+    // operator request (`--probe-account`, never from a worker session) or
+    // due backoff.
+    let credential = target_credential(root, &target);
+    let authorized_probe =
+        args.iter().any(|arg| arg == "--probe-account") && session_owner_user_id.is_none();
+    let probe_generation = match super::account_state::admit(
+        &conn,
+        &target.view.target_id,
+        credential.as_ref(),
+        authorized_probe,
+        now_millis(),
+        &run_id,
+    )? {
+        super::account_state::Admission::Suppress(state) => {
+            return Ok(suppressed_account_outcome(
+                &target,
+                &workspace_dir,
+                state,
+                execution_started,
+            ));
+        }
+        super::account_state::Admission::Run { probe_generation } => probe_generation,
+    };
     let run_dir = workspace_dir.join("runs").join(&run_id);
     let output_dir = run_dir.join("outputs");
     fs::create_dir_all(&output_dir).with_context(|| {
@@ -599,6 +625,8 @@ pub(crate) fn execute_scrape_with_outcome(
     };
     let failure_mode = if classification.status == ScrapeRunStatus::AuthorizationRequired {
         Some("authorization_required")
+    } else if classification.status == ScrapeRunStatus::ProviderAccountInactive {
+        Some("provider_account_inactive")
     } else {
         payload.get("failure_mode").and_then(Value::as_str)
     };
@@ -673,6 +701,28 @@ pub(crate) fn execute_scrape_with_outcome(
             output_dir: run_dir.clone(),
             artifacts: artifacts.clone(),
         },
+    )?;
+    super::account_state::record(
+        &conn,
+        &target.view.target_id,
+        &run_id,
+        probe_generation,
+        match classification.status {
+            ScrapeRunStatus::ProviderAccountInactive => {
+                super::account_state::RunResult::AccountInactive(
+                    payload
+                        .get("detail")
+                        .and_then(Value::as_str)
+                        .unwrap_or("provider_account_inactive"),
+                )
+            }
+            ScrapeRunStatus::Succeeded | ScrapeRunStatus::CompletedEmpty => {
+                super::account_state::RunResult::Succeeded
+            }
+            _ => super::account_state::RunResult::OtherFailure,
+        },
+        credential.as_ref(),
+        now_millis(),
     )?;
 
     let template_event = if classification.status == ScrapeRunStatus::Succeeded {
@@ -763,6 +813,101 @@ pub(crate) fn execute_scrape_with_outcome(
         materialization: materialization.as_ref().map(|item| item.summary.clone()),
         run_manifest_path: run_dir.join("run.json"),
     })
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// The stored credential the target depends on: `credential_secret_name` in
+/// the target config, else the name the source's recipe or id implies (as for
+/// protected capture). The version is the secret record's `updated_at`; the
+/// value is never read.
+fn target_credential(
+    root: &Path,
+    target: &RegisteredTarget,
+) -> Option<super::account_state::Credential> {
+    let name = target
+        .view
+        .config
+        .get("credential_secret_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            let provider = target
+                .view
+                .config
+                .get("expected_provider")
+                .and_then(Value::as_str)?
+                .trim();
+            if provider.is_empty() {
+                return None;
+            }
+            Some(
+                ctox_web_stack::sources::find(provider)
+                    .and_then(|module| module.browser_recipe())
+                    .and_then(|recipe| recipe.required_secret_name.map(str::to_string))
+                    .unwrap_or_else(|| super::reauth::derived_secret_name(provider)),
+            )
+        })?;
+    let scope = crate::secrets::credential_scope();
+    let version = crate::secrets::list_secret_records(root, Some(scope))
+        .ok()
+        .and_then(|records| {
+            records
+                .into_iter()
+                .find(|record| record.secret_name == name)
+                .map(|record| record.updated_at)
+        })
+        .unwrap_or_else(|| "absent".to_string());
+    Some(super::account_state::Credential {
+        reference: format!("{scope}/{name}"),
+        version,
+    })
+}
+
+/// The answer for a suppressed call: no provider call and no new run; it
+/// names the run that caused the state and the last probe.
+fn suppressed_account_outcome(
+    target: &RegisteredTarget,
+    workspace_dir: &Path,
+    state: super::account_state::AccountState,
+    started: Instant,
+) -> ScrapeExecutionOutcome {
+    let next_probe = chrono::DateTime::from_timestamp_millis(state.next_probe_at_ms)
+        .map(|at| at.to_rfc3339())
+        .unwrap_or_default();
+    ScrapeExecutionOutcome {
+        ok: false,
+        target_key: target.view.target_key.clone(),
+        run_id: state.last_probe_run_id.clone(),
+        status: ScrapeRunStatus::ProviderAccountInactive,
+        records_found: 0,
+        fields_extracted: Vec::new(),
+        latency_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        reason: "provider_account_inactive_suppressed".to_string(),
+        error: Some(format!(
+            "Konto beim Anbieter inaktiv: {} (erfasst in {}, zuletzt geprüft in {}); kein Anbieteraufruf. Nächste automatische Prüfung {next_probe}, früher nach geänderten Zugangsdaten oder autorisierter Prüfung.",
+            state.reason, state.causal_run_id, state.last_probe_run_id
+        )),
+        query_completion: None,
+        probe: Value::Null,
+        should_queue_repair: false,
+        repair_request_path: None,
+        repair_queue_task: None,
+        reauthorization: None,
+        template_event: None,
+        materialization: None,
+        run_manifest_path: workspace_dir
+            .join("runs")
+            .join(&state.last_probe_run_id)
+            .join("run.json"),
+    }
 }
 
 pub(super) fn is_preserved_runner_env_key(key: &str) -> bool {
