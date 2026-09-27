@@ -18,7 +18,6 @@ mod autonomy;
 mod business_os;
 mod capabilities;
 mod coding_agents;
-mod transfers_cli;
 mod command_lifecycle;
 mod communication;
 mod communication_store;
@@ -39,6 +38,7 @@ mod secrets;
 mod service;
 mod skill_store;
 mod sync_host;
+mod transfers_cli;
 mod ui;
 mod web_stack;
 
