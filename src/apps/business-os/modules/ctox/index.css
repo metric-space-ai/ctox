@@ -970,7 +970,17 @@
   animation: ctox-flow-creature-focus 1.6s ease-out infinite;
 }
 
-/* What the selected, working creature is doing: plan step and last turn. */
+/* Who works on a task, in the member's own colour. */
+.ctox-task-meta-member {
+  color: color-mix(in srgb, var(--crew-color, var(--muted)) 72%, var(--text-strong, var(--text)));
+  font-weight: 650;
+}
+.ctox-task-meta-member.is-unassigned {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* The selected creature's name tag: who, and what it does or where it is. */
 .ctox-flow-crew-bubble rect,
 .ctox-flow-crew-bubble path {
   fill: var(--elev-float-2, var(--surface-2));

@@ -13,8 +13,10 @@ import {
 const SEEDS = [
   { id: 'crew-milo', name: 'Milo', shape: 'round', color: '#1685ee' },
   { id: 'crew-nori', name: 'Nori', shape: 'square', color: '#00aa9a' },
-  { id: 'crew-lumi', name: 'Lumi', shape: 'triangle', color: '#7d7f84' },
+  { id: 'crew-lumi', name: 'Lumi', shape: 'triangle', color: '#e97255' },
   { id: 'crew-pico', name: 'Pico', shape: 'blob', color: '#7c6df2' },
+  // An owner may still pick grey for a member: it stays grey, never the ghost.
+  { id: 'crew-grau', name: 'Grau', shape: 'round', color: '#7d7f84' },
 ];
 
 const pathPoints = (d) => [...d.matchAll(/-?\d+(?:\.\d+)?/g)].map(Number);
@@ -129,6 +131,14 @@ test('every mode draws its own face', () => {
   const working = renderCrewCreature({ appearance: SEEDS[0], animationKey: 'k', taskState: 'running', mode: 'working' });
   assert.doesNotMatch(working, /ctox-crew-eyes-(sleeping|x|review|reading|learning)/);
   assert.match(working, /data-crew-motion="[\d.]+,[\d.]+,[\d.]+,[\d.]+"/);
+});
+
+test('the chat adapter renders the neutral ghost for work without a member', () => {
+  for (const chat of [{ crewKey: 'cmd-2' }, { crewKey: 'cmd-3', crewIdentity: null }, { crewKey: 'cmd-4', crewIdentity: { name: '' } }]) {
+    const html = crewCreatureHtml(chat, 'queued', 'dock');
+    assert.match(html, /is-neutral/, JSON.stringify(chat));
+    assert.doesNotMatch(html, /--crew-fill/);
+  }
 });
 
 test('the chat adapter renders the same member body as the pure renderer', () => {

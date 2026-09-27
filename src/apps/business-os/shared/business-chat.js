@@ -32,8 +32,6 @@ const CHAT_DELETE_TOMBSTONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const ACTIVE_TRACKING_SYNC_INTERVAL_MS = 4000;
 const CHAT_REMOTE_PERSIST_TIMEOUT_MS = 1500;
 const CHAT_REMOTE_PERSIST_DEFER_MS = 0;
-const CREW_NAMES = Object.freeze(['Milo', 'Nori', 'Lumi', 'Pico', 'Tavi', 'Momo', 'Koda', 'Fino']);
-const CREW_COLORS = Object.freeze(['#1685ee', '#00aa9a', '#7d7f84', '#7c6df2', '#e97255', '#34a26f']);
 const CHAT_LIVE_SYNC_COLLECTIONS = Object.freeze([
   CHAT_COLLECTION,
   'business_commands',
@@ -2647,7 +2645,10 @@ export function syncCrewProceduralMotion(root) {
 
 export function crewCreatureHtml(chat, taskState = getTaskState(chat), placement = 'dock') {
   return renderCrewCreature({
-    appearance: crewIdentity(chat),
+    // The raw identity: the renderer decides member vs. neutral ghost. The
+    // normalized one already carries the neutral name "Crew" and would turn
+    // every unassigned task into a grey member called Crew.
+    appearance: chat?.crewIdentity || null,
     animationKey: crewIdentityKey(chat),
     taskState,
     mode: crewCreatureMode(chat, taskState),

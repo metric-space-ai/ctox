@@ -113,6 +113,7 @@ const labels = {
     entryOne: "Eintrag",
     learningFromAssignment: "lernt aus dem Einsatz",
     noCrewMember: "ohne Crew-Zuordnung",
+    noCrewMemberShort: "ohne Crew",
     close: "Schließen",
     memberName: "Name",
     soul: "Seele",
@@ -406,6 +407,7 @@ const labels = {
     entryOne: "entry",
     learningFromAssignment: "learning from the assignment",
     noCrewMember: "no crew member",
+    noCrewMemberShort: "unassigned",
     close: "Close",
     memberName: "Name",
     soul: "Soul",
@@ -1809,15 +1811,19 @@ function taskCardMarkup(task, state) {
   const crewStatus = taskCrewStatus(task);
   const portrait = member
     ? `<span class="ctox-flow-creature-shell ctox-task-portrait" title="${escapeAttr(member.name)}">${memberCreatureHtml(member, state, crewStatus === 'running' ? 'running' : crewStatus === 'failed' ? 'failed' : memberCreatureState(member))}</span>`
-    : '';
+    : `<span class="ctox-flow-creature-shell ctox-task-portrait" title="${escapeAttr(t.noCrewMember)}">${crewCreatureHtml({ crewKey: task.commandId || task.id, crewIdentity: null }, crewStatus === 'failed' ? 'failed' : 'idle', 'map')}</span>`;
+  // Who does it, in the member's own colour; an unassigned task says so.
+  const memberName = member
+    ? `<span class="ctox-task-meta-member" style="--crew-color:${escapeAttr(member.color || NEUTRAL_CREW_COLOR)}">${escapeHtml(member.name)}</span>`
+    : `<span class="ctox-task-meta-member is-unassigned">${escapeHtml(t.noCrewMemberShort)}</span>`;
   const tooltip = [status, source, changed, reason].filter(Boolean).join(' · ');
   return `
-    <article class="ctox-list-item ctox-task-card ${selected ? 'is-selected' : ''} ${pinned ? 'is-pinned' : ''} ${member ? 'has-member' : ''}"
+    <article class="ctox-list-item ctox-task-card ${selected ? 'is-selected' : ''} ${pinned ? 'is-pinned' : ''} has-member"
       data-task-id="${escapeAttr(task.id)}" data-context-record-id="${escapeAttr(task.id)}" data-context-record-type="ctox_task" data-context-label="${escapeAttr(title)}">
       <button type="button" class="ctox-task-selector" data-select-task-id="${escapeAttr(task.id)}" aria-label="${escapeAttr(`${state.lang === 'de' ? 'Aufgabe auswählen' : 'Select task'}: ${title}`)}" title="${escapeAttr(tooltip)}">
         ${portrait}
         <strong>${escapeHtml(title)}</strong>
-        <small class="ctox-task-meta">${status ? `<span class="ctox-task-meta-status ${problem ? 'is-problem' : ''}">${escapeHtml(status)}</span>` : ''}${changed ? `<span>${escapeHtml(changed)}</span>` : ''}</small>
+        <small class="ctox-task-meta">${memberName}${status ? `<span class="ctox-task-meta-status ${problem ? 'is-problem' : ''}">${escapeHtml(status)}</span>` : ''}${changed ? `<span>${escapeHtml(changed)}</span>` : ''}</small>
         ${problem && reason ? `<span class="ctox-task-reason is-problem">${escapeHtml(reason)}</span>` : ''}
         ${taskPipelineMarkup(task, state)}
       </button>
@@ -3085,7 +3091,12 @@ function flowCrewSvg(model, selectedTask, state) {
       crewIdentity: member ? memberIdentity(member) : null,  // null = the neutral crew creature (shared)
       executionProgress: crewProgressForCreature(liveTask.executionProgress || liveTask.execution_progress),
     }, status, 'map');
-    const bubble = selected && status === 'running' ? crewActivityBubbleSvg(liveTask, x + CREW_ON_STATION_SIZE - 2, y + 2, state) : '';
+    // The selected creature always wears a name tag: who it is and what it
+    // does (working: plan step and last turn) or where it stands.
+    const bubble = selected ? crewActivityBubbleSvg(liveTask, x + CREW_ON_STATION_SIZE - 2, y + 2, state, {
+      name: member ? member.name : (labels[state?.lang]?.noCrewMemberShort || labels.de.noCrewMemberShort),
+      status,
+    }) : '';
     return `
       <g class="ctox-flow-creature-pos" data-crew-pos-task="${escapeAttr(task.id)}" data-crew-pos="${x},${y}">
         <foreignObject class="ctox-flow-creature-slot ${selected ? 'is-selected' : ''}" x="${x}" y="${y}" width="${CREW_ON_STATION_SIZE}" height="${CREW_ON_STATION_SIZE}"
@@ -3143,8 +3154,16 @@ function crewActivityBubbleText(task, state) {
   return [verb, stepText].filter(Boolean).join(' · ');
 }
 
-function crewActivityBubbleSvg(task, x, y, state) {
-  const text = clip(crewActivityBubbleText(task, state), 44);
+const CREW_TAG_STATUS = {
+  de: { running: 'arbeitet', failed: 'gescheitert', success: 'fertig', queued: 'wartet' },
+  en: { running: 'working', failed: 'failed', success: 'done', queued: 'waiting' },
+};
+
+function crewActivityBubbleSvg(task, x, y, state, { name = '', status = 'running' } = {}) {
+  const lang = state?.lang === 'en' ? 'en' : 'de';
+  const activity = status === 'running' ? crewActivityBubbleText(task, state) : '';
+  const doing = activity || CREW_TAG_STATUS[lang][status] || CREW_TAG_STATUS[lang].queued;
+  const text = clip([name, doing].filter(Boolean).join(' · '), 48);
   if (!text) return '';
   const width = Math.min(280, 18 + text.length * 6.3);
   // Near the right edge the bubble opens to the creature's left instead.
@@ -5447,7 +5466,8 @@ function wireCrewHome(state, main) {
   });
 }
 
-const CREW_MEMBER_COLORS = Object.freeze(['#1685ee', '#00aa9a', '#7d7f84', '#7c6df2', '#e97255', '#34a26f']);
+// The neutral grey is reserved for "no member yet"; members get a real colour.
+const CREW_MEMBER_COLORS = Object.freeze(['#1685ee', '#00aa9a', '#e0a82e', '#7c6df2', '#e97255', '#34a26f']);
 const CREW_MEMBER_SHAPES = Object.freeze(['round', 'blob', 'square', 'triangle']);
 
 // The pool is owner-managed: a new member starts with a persona and no memory.
