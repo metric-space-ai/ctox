@@ -4113,6 +4113,7 @@ mod tests {
             result: ResearchWritebackResult {
                 fields: serde_json::json!({}),
                 person_records: Vec::new(),
+                person_field_status: Default::default(),
                 evidence: Vec::new(),
             },
         }
