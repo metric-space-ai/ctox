@@ -33,7 +33,7 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: never
       # Reviewed candidate descending from main 09203; full verification required.
-      REVIEWED_SOURCE_REVISION: '9869e48c78d959e20ddd4e6c2d65fdc00c901f6e'
+      REVIEWED_SOURCE_REVISION: 'cc99f2b4af5c10b4f94a6f20ce496433519b66f0'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
