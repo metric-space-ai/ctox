@@ -172,6 +172,93 @@ pub struct ResponsesStreamEvent {
     delta: Option<String>,
     summary_index: Option<i64>,
     content_index: Option<i64>,
+    item_id: Option<String>,
+    output_index: Option<i64>,
+    arguments: Option<String>,
+}
+
+/// Restores function-call arguments that a provider streamed only as
+/// `response.function_call_arguments.delta`/`.done` events.
+///
+/// The harness reads a tool call from its `response.output_item.done` item.
+/// A provider that leaves `arguments` empty there and delivers the JSON only
+/// through the argument events produces a tool call without arguments. In
+/// production (26.09.2026) 241 of 349 failed research writebacks arrived that way
+/// ("execute_writeback arrived without arguments"), while small tool calls in
+/// the same turns kept their arguments.
+#[derive(Debug, Default)]
+pub struct FunctionCallArgumentsRecovery {
+    streamed_by_item: std::collections::HashMap<String, String>,
+    streamed_by_index: std::collections::HashMap<i64, String>,
+    done_by_item: std::collections::HashMap<String, String>,
+    done_by_index: std::collections::HashMap<i64, String>,
+}
+
+impl FunctionCallArgumentsRecovery {
+    pub fn observe(&mut self, event: &mut ResponsesStreamEvent) {
+        match event.kind.as_str() {
+            "response.function_call_arguments.delta" => {
+                if let Some(delta) = event.delta.as_deref() {
+                    if let Some(item_id) = event.item_id.as_ref() {
+                        self.streamed_by_item
+                            .entry(item_id.clone())
+                            .or_default()
+                            .push_str(delta);
+                    }
+                    if let Some(index) = event.output_index {
+                        self.streamed_by_index
+                            .entry(index)
+                            .or_default()
+                            .push_str(delta);
+                    }
+                }
+            }
+            "response.function_call_arguments.done" => {
+                if let Some(arguments) = event.arguments.as_ref() {
+                    if let Some(item_id) = event.item_id.as_ref() {
+                        self.done_by_item.insert(item_id.clone(), arguments.clone());
+                    }
+                    if let Some(index) = event.output_index {
+                        self.done_by_index.insert(index, arguments.clone());
+                    }
+                }
+            }
+            "response.output_item.done" => {
+                let output_index = event.output_index;
+                let Some(item) = event.item.as_mut() else {
+                    return;
+                };
+                if item.get("type").and_then(Value::as_str) != Some("function_call") {
+                    return;
+                }
+                let empty = match item.get("arguments") {
+                    None | Some(Value::Null) => true,
+                    Some(Value::String(arguments)) => arguments.trim().is_empty(),
+                    Some(_) => false,
+                };
+                if !empty {
+                    return;
+                }
+                let item_id = item.get("id").and_then(Value::as_str).map(str::to_string);
+                let recovered = item_id
+                    .as_ref()
+                    .and_then(|id| self.done_by_item.get(id))
+                    .or_else(|| output_index.and_then(|index| self.done_by_index.get(&index)))
+                    .or_else(|| {
+                        item_id
+                            .as_ref()
+                            .and_then(|id| self.streamed_by_item.get(id))
+                    })
+                    .or_else(|| output_index.and_then(|index| self.streamed_by_index.get(&index)))
+                    .filter(|arguments| !arguments.trim().is_empty())
+                    .cloned();
+                if let Some(arguments) = recovered {
+                    item["arguments"] = Value::String(arguments);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 impl ResponsesStreamEvent {
@@ -403,6 +490,7 @@ pub async fn process_sse(
     let mut stream = stream.eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
+    let mut argument_recovery = FunctionCallArgumentsRecovery::default();
 
     loop {
         let start = Instant::now();
@@ -455,6 +543,8 @@ pub async fn process_sse(
             last_server_model = Some(model);
         }
 
+        let mut event = event;
+        argument_recovery.observe(&mut event);
         match process_responses_event(event) {
             Ok(Some(event)) => {
                 let is_completed = matches!(event, ResponseEvent::Completed { .. });
@@ -775,6 +865,50 @@ mod tests {
                 && execution == "client"
                 && arguments == &json!({"query": "calendar create", "limit": 1})
         );
+    }
+
+    #[tokio::test]
+    async fn restores_function_call_arguments_streamed_only_as_deltas() {
+        let events = run_sse(vec![
+            json!({
+                "type": "response.output_item.added",
+                "output_index": 1,
+                "item": {"type": "function_call", "id": "fc_1", "call_id": "call-1",
+                         "name": "business_os__execute_writeback", "arguments": ""}
+            }),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1", "output_index": 1,
+                "delta": "{\"record_id\":\"lead_x\","
+            }),
+            json!({
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_1", "output_index": 1,
+                "delta": "\"payload\":{}}"
+            }),
+            json!({
+                "type": "response.output_item.done",
+                "output_index": 1,
+                "item": {"type": "function_call", "id": "fc_1", "call_id": "call-1",
+                         "name": "business_os__execute_writeback", "arguments": ""}
+            }),
+            json!({
+                "type": "response.completed",
+                "response": { "id": "resp1" }
+            }),
+        ])
+        .await;
+
+        let call = events
+            .iter()
+            .find_map(|event| match event {
+                ResponseEvent::OutputItemDone(ResponseItem::FunctionCall { arguments, .. }) => {
+                    Some(arguments.clone())
+                }
+                _ => None,
+            })
+            .expect("function call item");
+        assert_eq!(call, "{\"record_id\":\"lead_x\",\"payload\":{}}");
     }
 
     #[tokio::test]

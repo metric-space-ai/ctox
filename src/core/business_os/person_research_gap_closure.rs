@@ -59,6 +59,46 @@ fn hoist_top_level_field_entries(mut payload: Value) -> Value {
     let Some(object) = payload.as_object_mut() else {
         return payload;
     };
+    // A carrier key next to the envelope ("unknown field `item`", production
+    // 26.09.2026) wraps the payload members themselves: merge them up.
+    for carrier in ["item", "items", "entry", "entries"] {
+        if let Some(Value::Object(inner)) = object.get(carrier).cloned() {
+            object.remove(carrier);
+            for (key, value) in inner {
+                object.entry(key).or_insert(value);
+            }
+        }
+    }
+    // A bare field value at the top level ("unknown field `firma_telefon`",
+    // production 26.09.2026) is a value without its status entry. It belongs into
+    // `result.fields`; the field then counts as open instead of the whole
+    // writeback being rejected.
+    let bare_values: Vec<String> = object
+        .iter()
+        .filter(|(key, value)| {
+            !ENVELOPE.contains(&key.as_str())
+                && !value.is_object()
+                && ctox_web_stack::sources::FieldKey::from_str(key).is_some()
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+    if !bare_values.is_empty() {
+        let mut result = match object.remove("result") {
+            Some(Value::Object(map)) => map,
+            _ => Map::new(),
+        };
+        let mut fields = match result.remove("fields") {
+            Some(Value::Object(map)) => map,
+            _ => Map::new(),
+        };
+        for key in bare_values {
+            if let Some(value) = object.remove(&key) {
+                fields.entry(key).or_insert(value);
+            }
+        }
+        result.insert("fields".to_string(), Value::Object(fields));
+        object.insert("result".to_string(), Value::Object(result));
+    }
     let stray: Vec<String> = object
         .keys()
         .filter(|key| !ENVELOPE.contains(&key.as_str()))
@@ -3933,6 +3973,26 @@ mod tests {
             ))
             .is_err()
         );
+    }
+
+    #[test]
+    fn bare_field_values_and_item_carriers_do_not_reject_the_writeback() {
+        // production 26.09.2026: "unknown field `firma_telefon`" and "unknown field
+        // `item`" rejected whole research writebacks.
+        let request: ResearchWritebackRequest =
+            serde_json::from_value(hoist_top_level_field_entries(serde_json::json!({
+                "record_id": "lead-x",
+                "module": "outbound-lead-generation",
+                "research_command_id": "research-x",
+                "field_status": {"firma_name": {"status": "verified", "value": "Beispiel GmbH"}},
+                "firma_telefon": "+49 30 123456",
+                "item": {"firma_domain": {"status": "verified", "value": "beispiel.de"}}
+            })))
+            .expect("bare values and an item carrier are normalized, not rejected");
+        assert_eq!(request.result.fields["firma_telefon"], "+49 30 123456");
+        assert!(!request.field_status.contains_key("firma_telefon"));
+        assert_eq!(request.field_status["firma_domain"].status, "verified");
+        assert_eq!(request.field_status["firma_name"].status, "verified");
     }
 
     #[test]

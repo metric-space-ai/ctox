@@ -3454,7 +3454,27 @@ fn update_queue_task_with_optional_terminal_policy_grant(
         current_queue_priority(&current)
     };
     let now = now_iso_string();
-    let sort_at = queue_sort_at(&priority, &now)?;
+    // An update keeps the task's place in the queue unless its priority is
+    // changed explicitly. Dispatch orders pending work by this timestamp, and
+    // recomputing it on every review-feedback or retry note moved a rejected
+    // task behind all fresh work: in production (26.09.2026) research leads queued
+    // at 07:49 waited behind tasks created two hours later, for hours, after a
+    // single review round. Runtime backoff stays in `retry_not_before`.
+    let preserved_sort_at = request
+        .priority
+        .is_none()
+        .then(|| {
+            current_metadata
+                .get("sort_at")
+                .and_then(Value::as_str)
+                .filter(|value| DateTime::parse_from_rfc3339(value).is_ok())
+                .map(str::to_string)
+        })
+        .flatten();
+    let sort_at = match preserved_sort_at {
+        Some(sort_at) => sort_at,
+        None => queue_sort_at(&priority, &now)?,
+    };
     let mut metadata = current_metadata;
     metadata.insert(
         "source".to_string(),

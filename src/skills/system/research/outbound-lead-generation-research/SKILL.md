@@ -226,12 +226,15 @@ rejects the task as incomplete when no successful `execute_writeback` receipt ex
 lead and your research command. Never edit collections directly, never report results as chat
 text only.
 
-Call:
+Call it with `payload` as **one JSON string** that encodes the payload object. MiniMax drops
+large object arguments on the way to the tool (production 26.09.2026: 5 of 6 replayed calls arrived
+as `{}`); a string arrives intact, the server decodes it and names the exact position of any JSON
+error. The payload object inside that string:
 
 ```json
 business_os.execute_writeback({
   "record_id": "<lead-id>",
-  "payload": {
+  "payload": /* JSON.stringify of: */ {
     "field_status": {
       "<field>": {
         "status": "verified|no_match|unsupported|action_required",

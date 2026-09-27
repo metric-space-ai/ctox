@@ -1596,8 +1596,18 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         ),
         write_tool(
             "business_os.execute_writeback",
-            "Persist completed lead research via its contracted native business_command. Requires the signed research task session. The server binds module and research_command_id; no CLI, shell or SQLite access is needed. Check the returned status; failed writeback means the task is not complete. A response with ok:true is accepted and stored: accepted_fields were taken over, open_fields lists what is still missing (not an error: research them and send them together in one further call), rejections lists defective entries only. Send many fields per call, never resend an accepted field, never send probe or debug calls. Exact shape (all keys lowercase, lists are JSON arrays, never strings): {\"record_id\": \"<lead id>\", \"payload\": {\"field_status\": {\"<field>\": {\"status\": \"verified|no_match|unsupported|action_required\", \"value\": <only for verified>, \"reason\": \"<why, for non-verified>\", \"sources\": [{\"source_id\": \"host\", \"url\": \"https://…\", \"quote\": \"verbatim\"}], \"person_key\": \"<for person_* fields>\"}}, \"result\": {\"fields\": {\"<verified field>\": {\"value\": <same as field_status>, \"sources\": [...]}}, \"person_records\": [{\"person_key\": \"…\", \"person_vorname\": \"…\", \"person_nachname\": \"…\", \"person_funktion\": \"…\", \"sources\": [...]}], \"evidence\": [{\"field_key\": \"…\", \"source_id\": \"…\", \"url\": \"…\", \"quote\": \"…\"}]}}}. Do not wrap the payload in \"item\", do not put field keys at the top level, and cover every requested field in field_status.",
-            object_schema(vec![required_string("record_id"), required_object("payload")]),
+            "Persist completed lead research via its contracted native business_command. Requires the signed research task session. The server binds module and research_command_id; no CLI, shell or SQLite access is needed. Check the returned status; failed writeback means the task is not complete. A response with ok:true is accepted and stored: accepted_fields were taken over, open_fields lists what is still missing (not an error: research them and send them together in one further call), rejections lists defective entries only. Send many fields per call, never resend an accepted field, never send probe or debug calls. Send payload as ONE JSON string that encodes the payload object (MiniMax drops large object arguments; a string arrives intact and the server decodes it and names the exact position of any JSON error). Payload object shape (all keys lowercase, lists are JSON arrays, never strings): {\"field_status\": {\"<field>\": {\"status\": \"verified|no_match|unsupported|action_required\", \"value\": <only for verified>, \"reason\": \"<why, for non-verified>\", \"sources\": [{\"source_id\": \"host\", \"url\": \"https://…\", \"quote\": \"verbatim\"}], \"person_key\": \"<for person_* fields>\"}}, \"result\": {\"fields\": {\"<verified field>\": {\"value\": <same as field_status>, \"sources\": [...]}}, \"person_records\": [{\"person_key\": \"…\", \"person_vorname\": \"…\", \"person_nachname\": \"…\", \"person_funktion\": \"…\", \"sources\": [...]}], \"evidence\": [{\"field_key\": \"…\", \"source_id\": \"…\", \"url\": \"…\", \"quote\": \"…\"}]}}. Do not wrap the payload in \"item\", do not put field keys at the top level, and cover every requested field in field_status. Call shape: {\"record_id\": \"<lead id>\", \"payload\": \"{\\\"field_status\\\": {...}, \\\"result\\\": {...}}\"}.",
+            object_schema(vec![
+                required_string("record_id"),
+                (
+                    "payload",
+                    serde_json::json!({
+                        "type": "string",
+                        "description": "The writeback payload object (field_status, result) encoded as one JSON string."
+                    }),
+                    true,
+                ),
+            ]),
         ),
         read_tool(
             "business_os.get_command_status",
