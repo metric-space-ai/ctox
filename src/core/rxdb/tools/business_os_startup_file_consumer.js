@@ -47,4 +47,37 @@ async function releaseStartupFileConsumer(scope = globalThis) {
   };
 }
 
-module.exports = { ensureStartupFileConsumer, releaseStartupFileConsumer };
+
+// Preserve the original readiness evidence if cleanup also fails. The release
+// race is bounded; closing the owned browser context is a separate final step.
+async function finishStartupFileConsumer({ primaryError, release, close, timeoutMs = 2000 }) {
+  const cleanupErrors = [];
+  let timer;
+  try {
+    const cleanup = await Promise.race([
+      Promise.resolve().then(release),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('release deadline')), timeoutMs);
+      }),
+    ]);
+    if (cleanup.failed) cleanupErrors.push(new Error('file consumer lease release failed'));
+  } catch {
+    cleanupErrors.push(new Error('file consumer release rejected or exceeded its deadline'));
+  } finally {
+    clearTimeout(timer);
+  }
+  try {
+    await close();
+  } catch {
+    cleanupErrors.push(new Error('owned browser context close failed'));
+  }
+  if (cleanupErrors.length) {
+    throw new AggregateError(
+      primaryError ? [primaryError, ...cleanupErrors] : cleanupErrors,
+      primaryError?.message || 'startup file consumer cleanup failed',
+      primaryError ? { cause: primaryError } : undefined,
+    );
+  }
+}
+
+module.exports = { ensureStartupFileConsumer, releaseStartupFileConsumer, finishStartupFileConsumer };

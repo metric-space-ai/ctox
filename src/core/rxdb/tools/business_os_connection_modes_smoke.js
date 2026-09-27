@@ -20,7 +20,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawnSync } = require('child_process');
 const { startupReadiness, startupDiagnostics } = require('./business_os_startup_readiness.js');
-const { ensureStartupFileConsumer, releaseStartupFileConsumer } = require('./business_os_startup_file_consumer.js');
+const { ensureStartupFileConsumer, releaseStartupFileConsumer, finishStartupFileConsumer } = require('./business_os_startup_file_consumer.js');
 
 const root = path.resolve(__dirname, '../../../..');
 const playwrightModule =
@@ -172,6 +172,7 @@ function packedWebDeployUrl() {
 async function checkMode(browser, mode, url) {
   const context = await browser.newContext();
   const page = await context.newPage();
+  let primaryError;
   const consoleIssues = [];
   page.on('console', (msg) => {
     if (['error', 'warning'].includes(msg.type())) {
@@ -220,20 +221,15 @@ async function checkMode(browser, mode, url) {
       dataPlane: serverStatus?.data_plane || null,
       consoleIssues,
     };
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    let cleanupTimer;
-    try {
-      const cleanup = await Promise.race([
-        page.evaluate(releaseStartupFileConsumer),
-        new Promise((_, reject) => {
-          cleanupTimer = setTimeout(() => reject(new Error('file consumer cleanup exceeded 2000ms')), 2000);
-        }),
-      ]);
-      if (cleanup.failed) throw new Error('file consumer lease release failed');
-    } finally {
-      clearTimeout(cleanupTimer);
-      await context.close().catch(() => {});
-    }
+    await finishStartupFileConsumer({
+      primaryError,
+      release: () => page.evaluate(releaseStartupFileConsumer),
+      close: () => context.close(),
+    });
   }
 }
 

@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { ensureStartupFileConsumer, releaseStartupFileConsumer } = require('./business_os_startup_file_consumer.js');
+const { ensureStartupFileConsumer, releaseStartupFileConsumer, finishStartupFileConsumer } = require('./business_os_startup_file_consumer.js');
 
 test('absent shell waits without inventing transport or seeding records', () => {
   const scope = {};
@@ -66,4 +66,58 @@ test('release failure remains visible to the fixture', async () => {
   ensureStartupFileConsumer(scope);
   await scope.__ctoxStartupFileConsumer.pending;
   assert.deepEqual(await releaseStartupFileConsumer(scope), { released: 0, failed: 2 });
+});
+
+test('primary readiness evidence survives rejected or timed-out cleanup', async () => {
+  for (const release of [
+    async () => { throw new Error('private cleanup details'); },
+    () => new Promise(() => {}),
+  ]) {
+    const primaryError = new Error('70s readiness: desktop_files checkpoint missing');
+    let closed = 0;
+    await assert.rejects(finishStartupFileConsumer({
+      primaryError, release, close: async () => { closed++; }, timeoutMs: 5,
+    }), error => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.message, primaryError.message);
+      assert.equal(error.cause, primaryError);
+      assert.equal(error.errors[0], primaryError);
+      assert.equal(error.errors.some(entry => entry.message.includes('private')), false);
+      return true;
+    });
+    assert.equal(closed, 1);
+  }
+});
+
+test('cleanup failure fails otherwise successful readiness and still closes context', async () => {
+  let closed = 0;
+  await assert.rejects(finishStartupFileConsumer({
+    release: async () => ({ released: 1, failed: 1 }),
+    close: async () => { closed++; },
+  }), error => {
+    assert.ok(error instanceof AggregateError);
+    assert.match(error.message, /cleanup failed/);
+    assert.equal(error.errors.length, 1);
+    return true;
+  });
+  assert.equal(closed, 1);
+});
+
+test('context close failure is retained separately from primary failure', async () => {
+  const primaryError = new Error('original attributed readiness failure');
+  await assert.rejects(finishStartupFileConsumer({
+    primaryError, release: async () => ({ released: 2, failed: 0 }),
+    close: async () => { throw new Error('private close details'); },
+  }), error => {
+    assert.equal(error.errors[0], primaryError);
+    assert.equal(error.errors[1].message, 'owned browser context close failed');
+    return true;
+  });
+});
+
+test('successful cleanup does not replace the pending original failure', async () => {
+  const primaryError = new Error('original');
+  await finishStartupFileConsumer({
+    primaryError, release: async () => ({ released: 2, failed: 0 }), close: async () => {},
+  });
 });
