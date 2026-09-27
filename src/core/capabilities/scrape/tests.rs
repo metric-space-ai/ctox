@@ -2849,7 +2849,7 @@ fn execute_with_blocked_failure_queues_web_unlock_task() {
     let _ = fs::remove_dir_all(root);
 }
 
-// THESEN 27.09.2026: 77 of 80 LinkedIn runs asked Bright Data again although it
+// A production incident: 77 of 80 LinkedIn runs asked Bright Data again although it
 // kept answering "Customer is not active". Through the real execute path:
 // repeated calls stay off the provider, a credential edit probes once,
 // input errors stay separate, a success clears the state.
@@ -2939,6 +2939,18 @@ CTOX_ACCOUNT_FIXTURE
             execute_scrape_with_outcome(&self.root, &args).unwrap()
         }
 
+        fn execute_granted(&self, grant: &AccountProbeGrant) -> ScrapeExecutionOutcome {
+            let args = vec![
+                "--target-key".to_string(),
+                "account-provider".to_string(),
+                "--input-json".to_string(),
+                json!({"calls": self.root.join("calls.txt"), "mode_file": self.root.join("mode.txt")}).to_string(),
+                "--timeout-seconds".to_string(),
+                "10".to_string(),
+            ];
+            execute_scrape_with_probe_grant(&self.root, &args, Some(grant)).unwrap()
+        }
+
         fn runs(&self) -> i64 {
             open_db(&self.root)
                 .unwrap()
@@ -3025,19 +3037,157 @@ CTOX_ACCOUNT_FIXTURE
         let _ = fs::remove_dir_all(&fx.root);
     }
 
+    fn operator_authorization(allowed: bool, trusted: bool) -> Value {
+        json!({
+            "contract": "ctox-business-command-authorization-v1",
+            "actor": {"id": "user-owner", "role": "admin", "trusted": trusted},
+            "allowed": allowed,
+            "permission": "data_write",
+        })
+    }
+
     #[test]
-    fn an_authorized_operator_probe_reaches_the_provider_once() {
+    fn a_policy_granted_operator_probe_reaches_the_provider_once() {
         let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
         let fx = Fixture::new("account-operator");
         fx.mode("inactive");
         fx.execute(&[]);
-        fx.execute(&["--probe-account"]);
+        let grant = AccountProbeGrant::from_command_authorization(
+            "cmd-source-test",
+            &operator_authorization(true, true),
+        )
+        .expect("allowed trusted operator gets a grant");
+        let probe = fx.execute_granted(&grant);
+        assert_eq!(probe.status, ScrapeRunStatus::ProviderAccountInactive);
+        assert_eq!(fx.calls(), 2, "the granted probe reached the provider once");
+        fx.execute(&[]);
+        assert_eq!(fx.calls(), 2, "without a new grant calls stay suppressed");
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn the_probe_flag_from_cli_or_worker_is_refused_without_a_provider_call() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-refused");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        let args = vec![
+            "--target-key".to_string(),
+            "account-provider".to_string(),
+            "--input-json".to_string(),
+            json!({"calls": fx.root.join("calls.txt"), "mode_file": fx.root.join("mode.txt")})
+                .to_string(),
+            "--timeout-seconds".to_string(),
+            "10".to_string(),
+            "--probe-account".to_string(),
+        ];
+        let error = execute_scrape_with_outcome(&fx.root, &args)
+            .expect_err("an unauthorized --probe-account must be refused");
+        assert!(
+            format!("{error:#}").contains("--probe-account is refused"),
+            "{error:#}"
+        );
         assert_eq!(
             fx.calls(),
-            2,
-            "authorized operator probe reached the provider once"
+            1,
+            "the refused probe never reached the provider"
         );
         let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn a_worker_session_never_probes_even_with_a_grant() {
+        let grant = AccountProbeGrant::from_command_authorization(
+            "cmd-source-test",
+            &operator_authorization(true, true),
+        )
+        .unwrap();
+        assert!(super::super::execute::account_probe_authorized(
+            Some(&grant),
+            None
+        ));
+        assert!(!super::super::execute::account_probe_authorized(
+            Some(&grant),
+            Some("worker-session-owner")
+        ));
+        assert!(!super::super::execute::account_probe_authorized(None, None));
+    }
+
+    #[test]
+    fn only_an_allowed_trusted_authorization_yields_a_grant() {
+        assert!(AccountProbeGrant::from_command_authorization(
+            "cmd",
+            &operator_authorization(false, true)
+        )
+        .is_none());
+        assert!(AccountProbeGrant::from_command_authorization(
+            "cmd",
+            &operator_authorization(true, false)
+        )
+        .is_none());
+        assert!(AccountProbeGrant::from_command_authorization(
+            "",
+            &operator_authorization(true, true)
+        )
+        .is_none());
+        let mut foreign = operator_authorization(true, true);
+        foreign["contract"] = json!("something-else");
+        assert!(AccountProbeGrant::from_command_authorization("cmd", &foreign).is_none());
+    }
+
+    #[test]
+    fn the_installed_credential_ref_form_names_the_credential() {
+        let scope = crate::secrets::credential_scope();
+        let config = json!({
+            "expected_provider": "linkedin.com",
+            "credential_ref": format!("ctox-secret://{scope}/BRIGHTDATA_API_KEY"),
+        });
+        assert_eq!(
+            super::super::execute::target_credential_name(&config).as_deref(),
+            Some("BRIGHTDATA_API_KEY")
+        );
+        // An explicit secret name still wins; a malformed reference falls back.
+        let explicit = json!({"credential_secret_name": "OTHER_KEY", "credential_ref": format!("ctox-secret://{scope}/BRIGHTDATA_API_KEY")});
+        assert_eq!(
+            super::super::execute::target_credential_name(&explicit).as_deref(),
+            Some("OTHER_KEY")
+        );
+        let malformed =
+            json!({"expected_provider": "linkedin.com", "credential_ref": "https://evil.test/KEY"});
+        assert_ne!(
+            super::super::execute::target_credential_name(&malformed).as_deref(),
+            Some("KEY")
+        );
+    }
+
+    #[test]
+    fn an_unreadable_secret_store_is_not_absent() {
+        let record = crate::secrets::SecretRecordView {
+            secret_id: "s1".to_string(),
+            scope: crate::secrets::credential_scope().to_string(),
+            secret_name: "BRIGHTDATA_API_KEY".to_string(),
+            description: None,
+            metadata: json!({}),
+            created_at: "2026-09-27T10:00:00Z".to_string(),
+            updated_at: "2026-09-27T11:00:00Z".to_string(),
+        };
+        assert_eq!(
+            super::super::execute::credential_version(Ok(vec![record]), "BRIGHTDATA_API_KEY")
+                .as_deref(),
+            Some("2026-09-27T11:00:00Z")
+        );
+        assert_eq!(
+            super::super::execute::credential_version(Ok(Vec::new()), "BRIGHTDATA_API_KEY")
+                .as_deref(),
+            Some("absent")
+        );
+        assert_eq!(
+            super::super::execute::credential_version(
+                Err(anyhow::anyhow!("secret store locked")),
+                "BRIGHTDATA_API_KEY"
+            ),
+            None
+        );
     }
 
     #[test]

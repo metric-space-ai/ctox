@@ -1,8 +1,8 @@
 // Provider account state of a scrape target.
 //
 // When a provider refuses the paying account behind a stored credential
-// (Bright Data "HTTP 400: Customer is not active": 77 of 80 LinkedIn runs on
-// THESEN, 27.09.2026), every further call returns the same refusal. The state
+// (Bright Data "HTTP 400: Customer is not active": 77 of 80 LinkedIn runs in
+// one production incident), every further call returns the same refusal. The state
 // is kept per target so that
 // - calls are suppressed without contacting the provider and without
 //   inventing a run; the answer names the run that caused the state,
@@ -43,11 +43,14 @@ pub(super) fn is_provider_account_inactive(detail: &str) -> bool {
 }
 
 /// The stored credential a target depends on, identified by name and the
-/// version (updated_at) of its secret record. Never the value.
+/// version (updated_at) of its secret record, `absent` without a record.
+/// `version` is `None` when the secret store could not be read: that is not
+/// a change and must not replace the version the state recorded. Never the
+/// value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Credential {
     pub(super) reference: String,
-    pub(super) version: String,
+    pub(super) version: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -105,7 +108,10 @@ fn credential_changed(state: &AccountState, credential: Option<&Credential>) -> 
     match credential {
         Some(credential) => {
             state.credential_ref.as_deref() != Some(credential.reference.as_str())
-                || state.credential_version.as_deref() != Some(credential.version.as_str())
+                || credential
+                    .version
+                    .as_deref()
+                    .is_some_and(|version| state.credential_version.as_deref() != Some(version))
         }
         None => false,
     }
@@ -117,6 +123,38 @@ fn credential_changed(state: &AccountState, credential: Option<&Credential>) -> 
 /// generation. Taking the lease records the credential version the probe
 /// uses, so a failed probe consumes that version.
 pub(super) fn admit(
+    conn: &Connection,
+    target_id: &str,
+    credential: Option<&Credential>,
+    authorized_probe: bool,
+    now_ms: i64,
+    run_id: &str,
+) -> Result<Admission> {
+    // Read and lease in one IMMEDIATE transaction, so the decision and the
+    // lease are taken on the same state and a concurrent writer waits on
+    // busy_timeout. (Hardening; no failure of the former separate read and
+    // write was observed.)
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    match admit_in_transaction(
+        conn,
+        target_id,
+        credential,
+        authorized_probe,
+        now_ms,
+        run_id,
+    ) {
+        Ok(admission) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(admission)
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+fn admit_in_transaction(
     conn: &Connection,
     target_id: &str,
     credential: Option<&Credential>,
@@ -149,7 +187,7 @@ pub(super) fn admit(
             run_id,
             now_ms + PROBE_LEASE_MS,
             credential.map(|c| c.reference.as_str()),
-            credential.map(|c| c.version.as_str()),
+            credential.and_then(|c| c.version.as_deref()),
             now_ms,
             target_id,
             state.generation,
@@ -192,6 +230,36 @@ pub(super) fn record(
     credential: Option<&Credential>,
     now_ms: i64,
 ) -> Result<()> {
+    conn.execute_batch("BEGIN IMMEDIATE")?;
+    match record_in_transaction(
+        conn,
+        target_id,
+        run_id,
+        probe_generation,
+        result,
+        credential,
+        now_ms,
+    ) {
+        Ok(()) => {
+            conn.execute_batch("COMMIT")?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            Err(error)
+        }
+    }
+}
+
+fn record_in_transaction(
+    conn: &Connection,
+    target_id: &str,
+    run_id: &str,
+    probe_generation: Option<i64>,
+    result: RunResult<'_>,
+    credential: Option<&Credential>,
+    now_ms: i64,
+) -> Result<()> {
     match (result, probe_generation) {
         (RunResult::AccountInactive(reason), None) => {
             // First detection. A concurrent run may have inserted meanwhile;
@@ -207,7 +275,7 @@ pub(super) fn record(
                     reason,
                     run_id,
                     credential.map(|c| c.reference.as_str()),
-                    credential.map(|c| c.version.as_str()),
+                    credential.and_then(|c| c.version.as_deref()),
                     now_ms + FIRST_BACKOFF_MS,
                     now_ms,
                 ],
@@ -276,6 +344,11 @@ mod tests {
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn);
+        conn
+    }
+
+    fn create_schema(conn: &Connection) {
         conn.execute_batch(
             "CREATE TABLE scrape_account_state (
                 target_id TEXT PRIMARY KEY, generation INTEGER NOT NULL, reason TEXT NOT NULL,
@@ -285,13 +358,12 @@ mod tests {
                 probe_lease_until_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL);",
         )
         .unwrap();
-        conn
     }
 
     fn cred(version: &str) -> Credential {
         Credential {
             reference: "BRIGHTDATA_API_KEY".to_string(),
-            version: version.to_string(),
+            version: Some(version.to_string()),
         }
     }
 
@@ -491,5 +563,171 @@ mod tests {
         assert_eq!(state.generation, 1);
         assert!(state.probe_lease_owner.is_none());
         assert_eq!(state.next_probe_at_ms, H + RETRY_AFTER_OTHER_FAILURE_MS);
+    }
+
+    #[test]
+    fn an_unreadable_secret_store_is_neither_a_change_nor_overwrites_the_version() {
+        let conn = db();
+        inactive(&conn, "r1", None, &cred("v1"), 0);
+        let unreadable = Credential {
+            reference: "BRIGHTDATA_API_KEY".to_string(),
+            version: None,
+        };
+        assert!(matches!(
+            admit(&conn, T, Some(&unreadable), false, H, "u1").unwrap(),
+            Admission::Suppress(_)
+        ));
+        // An authorized probe with an unreadable store keeps the recorded version.
+        assert_eq!(
+            admit(&conn, T, Some(&unreadable), true, H, "op").unwrap(),
+            Admission::Run {
+                probe_generation: Some(1)
+            }
+        );
+        inactive(&conn, "op", Some(1), &unreadable, H + 1);
+        assert_eq!(
+            load(&conn, T)
+                .unwrap()
+                .unwrap()
+                .credential_version
+                .as_deref(),
+            Some("v1")
+        );
+        // "absent" is a real version: deleting the secret is a change.
+        let absent = cred("absent");
+        assert!(matches!(
+            admit(&conn, T, Some(&absent), false, 2 * H, "d1").unwrap(),
+            Admission::Run { .. }
+        ));
+    }
+
+    struct FileDb(std::path::PathBuf);
+
+    impl FileDb {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "ctox-account-state-{name}-{}-{}.sqlite3",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            let conn = Connection::open(&path).unwrap();
+            conn.query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))
+                .unwrap();
+            create_schema(&conn);
+            Self(path)
+        }
+
+        fn open(&self) -> Connection {
+            let conn = Connection::open(&self.0).unwrap();
+            conn.busy_timeout(std::time::Duration::from_secs(10))
+                .unwrap();
+            conn
+        }
+    }
+
+    impl Drop for FileDb {
+        fn drop(&mut self) {
+            for suffix in ["", "-wal", "-shm"] {
+                let _ = std::fs::remove_file(format!("{}{suffix}", self.0.display()));
+            }
+        }
+    }
+
+    #[test]
+    fn concurrent_connections_racing_for_a_due_probe_get_exactly_one_lease() {
+        let file = FileDb::new("race");
+        inactive(&file.open(), "r1", None, &cred("v1"), 0);
+        let due = 7 * H;
+        for round in 0..20 {
+            // Each round starts from a free lease on the same generation.
+            file.open()
+                .execute(
+                    "UPDATE scrape_account_state SET probe_lease_owner = NULL, probe_lease_until_ms = 0",
+                    [],
+                )
+                .unwrap();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+            // Two connections: the host allows at most two test workers.
+            let handles: Vec<_> = (0..2)
+                .map(|worker| {
+                    let barrier = barrier.clone();
+                    let conn = file.open();
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        admit(
+                            &conn,
+                            T,
+                            Some(&cred("v1")),
+                            false,
+                            due,
+                            &format!("w{round}-{worker}"),
+                        )
+                        .unwrap()
+                    })
+                })
+                .collect();
+            let results: Vec<Admission> = handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect();
+            let runs = results
+                .iter()
+                .filter(|result| {
+                    matches!(
+                        result,
+                        Admission::Run {
+                            probe_generation: Some(1)
+                        }
+                    )
+                })
+                .count();
+            assert_eq!(runs, 1, "round {round}: {results:?}");
+        }
+    }
+
+    #[test]
+    fn a_crashed_probe_holds_the_lease_until_it_expires_and_its_late_result_is_ignored() {
+        let file = FileDb::new("crash");
+        let conn = file.open();
+        let c = cred("v1");
+        inactive(&conn, "r1", None, &c, 0);
+        let due = 7 * H;
+        assert_eq!(
+            admit(&conn, T, Some(&c), false, due, "crashed").unwrap(),
+            Admission::Run {
+                probe_generation: Some(1)
+            }
+        );
+        // The holder dies without recording anything. Until the lease
+        // expires nobody else probes.
+        drop(conn);
+        let other = file.open();
+        assert!(matches!(
+            admit(&other, T, Some(&c), false, due + PROBE_LEASE_MS - 1, "b1").unwrap(),
+            Admission::Suppress(_)
+        ));
+        assert_eq!(
+            admit(&other, T, Some(&c), false, due + PROBE_LEASE_MS + 1, "b2").unwrap(),
+            Admission::Run {
+                probe_generation: Some(1)
+            }
+        );
+        // A late success from the crashed run must not clear the state that
+        // the new lease holder is probing.
+        record(
+            &other,
+            T,
+            "crashed",
+            Some(1),
+            RunResult::Succeeded,
+            Some(&c),
+            due + PROBE_LEASE_MS + 2,
+        )
+        .unwrap();
+        let state = load(&other, T).unwrap().expect("state kept");
+        assert_eq!(state.probe_lease_owner.as_deref(), Some("b2"));
     }
 }

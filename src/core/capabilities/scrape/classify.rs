@@ -22,7 +22,7 @@ pub(crate) enum ScrapeRunStatus {
     AuthorizationRequired,
     /// The provider answered, but the paying account behind the stored
     /// credential is not active (Bright Data "HTTP 400: Customer is not
-    /// active", 77 LinkedIn runs on THESEN 27.09.2026). Neither a network
+    /// active" on 77 LinkedIn runs in one production incident). Neither a network
     /// problem nor a missing credential nor bad input; a script repair cannot
     /// fix it, only the account owner can.
     ProviderAccountInactive,

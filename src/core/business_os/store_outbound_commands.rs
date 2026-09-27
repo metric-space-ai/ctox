@@ -1229,6 +1229,7 @@ fn outbound_handle_research_source_registry_read(
                 .collect::<std::collections::BTreeSet<_>>()
         });
     let laeufe = outbound_registry_last_runs(root).unwrap_or_default();
+    let kontozustaende = outbound_registry_account_states(root);
     let mut eintraege = Vec::new();
     for ziel in ziele {
         let key = ziel
@@ -1254,6 +1255,7 @@ fn outbound_handle_research_source_registry_read(
             "latest_script_revision_no": ziel.get("latest_script_revision_no").cloned().unwrap_or(Value::Null),
             "last_run": laeufe.get(ziel.get("target_id").and_then(Value::as_str).unwrap_or_default()).map(|(last, _)| last.clone()).unwrap_or(Value::Null),
             "last_successful_run": laeufe.get(ziel.get("target_id").and_then(Value::as_str).unwrap_or_default()).and_then(|(_, ok)| ok.clone()).unwrap_or(Value::Null),
+            "account_state": kontozustaende.get(ziel.get("target_id").and_then(Value::as_str).unwrap_or_default()).cloned().unwrap_or(Value::Null),
         }));
     }
     let script = match command
@@ -1272,6 +1274,55 @@ fn outbound_handle_research_source_registry_read(
         "targets": eintraege,
         "script": script,
     }))
+}
+
+/// Provider account state per scrape target (capabilities/scrape/
+/// account_state.rs). While a provider refuses the paying account, calls are
+/// answered without contacting it; the app shows why, which run caused it,
+/// the last probe and when the next automatic probe is due. The table exists
+/// only after a first detection, so a missing table means "no state".
+fn outbound_registry_account_states(root: &Path) -> BTreeMap<String, Value> {
+    let mut out = BTreeMap::new();
+    let Ok(conn) = Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return out;
+    };
+    let Ok(mut statement) = conn.prepare(
+        "SELECT target_id, reason, causal_run_id, last_probe_run_id, failed_probes,
+                next_probe_at_ms, probe_lease_owner, probe_lease_until_ms, updated_at_ms
+         FROM scrape_account_state",
+    ) else {
+        return out;
+    };
+    let now = chrono::Utc::now().timestamp_millis();
+    let rows = statement.query_map([], |row| {
+        let next_probe_at_ms: i64 = row.get(5)?;
+        let lease_owner: Option<String> = row.get(6)?;
+        let lease_until_ms: i64 = row.get(7)?;
+        Ok((
+            row.get::<_, String>(0)?,
+            serde_json::json!({
+                "status": "provider_account_inactive",
+                "reason": row.get::<_, String>(1)?.chars().take(300).collect::<String>(),
+                "causal_run_id": row.get::<_, String>(2)?,
+                "last_probe_run_id": row.get::<_, String>(3)?,
+                "failed_probes": row.get::<_, i64>(4)?,
+                "next_probe_at_ms": next_probe_at_ms,
+                "next_probe_at": chrono::DateTime::from_timestamp_millis(next_probe_at_ms)
+                    .map(|at| at.to_rfc3339()),
+                "probe_in_progress": lease_owner.is_some() && lease_until_ms > now,
+                "updated_at_ms": row.get::<_, i64>(8)?,
+            }),
+        ))
+    });
+    if let Ok(rows) = rows {
+        for (target_id, state) in rows.flatten() {
+            out.insert(target_id, state);
+        }
+    }
+    out
 }
 
 /// Last run and last successful run per scrape target. The app list showed
@@ -2894,6 +2945,22 @@ fn outbound_apply_research_adapter_scrape_effect(
         return Some(effect);
     }
 
+    // The source test is the operator's explicit request to check the
+    // source. Its policy-checked authorization (trusted user, DataWrite) may
+    // probe a provider account the scrape state holds as inactive, once and
+    // under the probe lease. Worker sessions cannot produce this grant.
+    let probe_grant = if command_type == "outbound.research_source.test" {
+        super::store::recoverable_background_control_claim_authorization(root, command).and_then(
+            |authorization| {
+                scrape::AccountProbeGrant::from_command_authorization(
+                    command.id.as_deref().unwrap_or_default(),
+                    &authorization,
+                )
+            },
+        )
+    } else {
+        None
+    };
     let test_started = Instant::now();
     match outbound_execute_research_scrape_target(
         root,
@@ -2901,6 +2968,7 @@ fn outbound_apply_research_adapter_scrape_effect(
         test_input
             .as_ref()
             .expect("test input validated before registration"),
+        probe_grant.as_ref(),
     ) {
         Ok(test_outcome) => {
             let expected_fields = record
@@ -3634,10 +3702,12 @@ fn outbound_execute_research_scrape_target(
     root: &Path,
     target_key: &str,
     input: &Value,
+    probe_grant: Option<&scrape::AccountProbeGrant>,
 ) -> anyhow::Result<scrape::ScrapeExecutionOutcome> {
-    scrape::execute_scrape_with_outcome(
+    scrape::execute_scrape_with_probe_grant(
         root,
         &outbound_scrape_test_execution_args(target_key, input)?,
+        probe_grant,
     )
 }
 
@@ -13113,6 +13183,44 @@ mod registry_last_run_detail_tests {
         );
         assert_eq!(ok.as_ref().expect("last success")["run_id"], "run-ok");
         assert!(ok.as_ref().expect("last success")["detail"].is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn registry_projects_the_provider_account_state() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        assert!(
+            outbound_registry_account_states(temp.path()).is_empty(),
+            "no database, no state"
+        );
+        let db = crate::paths::core_db(temp.path());
+        std::fs::create_dir_all(db.parent().expect("core db parent"))?;
+        let conn = Connection::open(&db)?;
+        conn.execute_batch(
+            "CREATE TABLE scrape_account_state (
+                target_id TEXT PRIMARY KEY, generation INTEGER NOT NULL, reason TEXT NOT NULL,
+                causal_run_id TEXT NOT NULL, last_probe_run_id TEXT NOT NULL,
+                credential_ref TEXT, credential_version TEXT, failed_probes INTEGER NOT NULL,
+                next_probe_at_ms INTEGER NOT NULL, probe_lease_owner TEXT,
+                probe_lease_until_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL);
+             INSERT INTO scrape_account_state VALUES
+               ('t-li', 2, 'Bright Data antwortete mit HTTP 400: Customer is not active',
+                'run-causal', 'run-probe', 'credentials/BRIGHTDATA_API_KEY', 'v1', 2,
+                1790600000000, NULL, 0, 1790514000000);",
+        )?;
+        drop(conn);
+        let states = outbound_registry_account_states(temp.path());
+        let state = states.get("t-li").expect("account state");
+        assert_eq!(state["status"], "provider_account_inactive");
+        assert_eq!(state["causal_run_id"], "run-causal");
+        assert_eq!(state["last_probe_run_id"], "run-probe");
+        assert_eq!(state["failed_probes"], 2);
+        assert_eq!(state["next_probe_at_ms"], 1790600000000_i64);
+        assert_eq!(state["probe_in_progress"], false);
+        assert!(
+            state.get("credential_version").is_none(),
+            "no credential details"
+        );
         Ok(())
     }
 }
