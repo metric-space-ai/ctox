@@ -16,13 +16,13 @@ const accepted = { ok: true, status: 'accepted', command_id: commandId, task_id:
 
 function harness(response, tasks = []) {
   let clock = 0;
-  const calls = { dispatch: 0, reads: 0 };
+  const calls = { dispatch: 0, reads: 0, argv: null };
   const wait = new vm.Script(`${source.slice(start, end)}\nwaitForAcceptedWrites;`).runInNewContext({
     POST_CUTOVER_COMMAND_ID: commandId,
     Date: { now: () => clock },
     delay: async (ms) => { clock += ms; },
     table: (collection, version) => `${collection}_v${version}`,
-    runCtox: () => { calls.dispatch += 1; return response; },
+    runCtox: (argv) => { calls.dispatch += 1; calls.argv = argv; return response; },
     sqliteRows: (sql) => {
       calls.reads += 1;
       return sql.includes('FROM business_commands_')
@@ -66,4 +66,19 @@ test('acceptance selects the admitted live task and retains its native receipt',
   assert.equal(result.task.deleted, 0);
   assert.equal(result.admission, accepted);
   assert.equal(calls.dispatch, 1);
+});
+
+test('host dispatch uses supported chat.task admission instead of a dummy type', async () => {
+  const { wait, calls } = harness(accepted, [
+    { id: accepted.task_id, command_id: commandId, deleted: 0 },
+  ]);
+  await wait(1000);
+  assert.equal(calls.dispatch, 1, 'accepted commands must not be redispatched while awaiting projection');
+  const document = JSON.parse(calls.argv.at(-1));
+  assert.equal(document.command_type, 'business_os.chat.task');
+  assert.equal(document.module, 'research');
+  assert.equal(document.command_id, commandId);
+  assert.equal(document.client_context.actor.id, 'recovery-owner');
+  assert.deepEqual(document.payload.writeback_contract, { allowed_collections: [] });
+  assert.equal(document.status, undefined, 'native receipt status is not a dispatch input');
 });

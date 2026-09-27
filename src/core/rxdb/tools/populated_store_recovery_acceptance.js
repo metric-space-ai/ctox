@@ -242,16 +242,27 @@ async function waitForAcceptedWrites(timeoutMs = 60000) {
   while (Date.now() < deadline) {
     try {
       if (!admission) {
+        // CLI dispatch: commands dispatch -> IPC BusinessCommandDispatch while
+        // serve holds the socket, else in-process accept_rxdb_business_command.
+        // Origin is TrustedLocal, so queue policy is skipped; native receipt
+        // status/task_id still come from record_command, never from this JSON.
+        // business_os.chat.task is the supported synthetic admission used by
+        // the rust recovery regression; empty writeback collections keep this
+        // off provider/data-modify execution.
         const response = runCtox(['business-os', 'commands', 'dispatch', '--json', JSON.stringify({
           id: POST_CUTOVER_COMMAND_ID,
           command_id: POST_CUTOVER_COMMAND_ID,
-          module: 'ctox',
-          command_type: 'business_os.test',
-          status: 'accepted',
-          inbound_channel: 'populated-store-recovery',
-          payload: { title: 'post-cutover accepted write' },
-          client_context: { source: 'populated-store-recovery' },
-          updated_at_ms: Date.now(),
+          module: 'research',
+          command_type: 'business_os.chat.task',
+          payload: {
+            title: 'Post-cutover recovery proof',
+            instruction: 'Preserve this admitted task across a denied restore',
+            writeback_contract: { allowed_collections: [] },
+          },
+          client_context: {
+            source: 'populated-store-recovery',
+            actor: { id: 'recovery-owner' },
+          },
         })]);
         if (!response || response.ok !== true || response.status !== 'accepted'
             || response.command_id !== POST_CUTOVER_COMMAND_ID
