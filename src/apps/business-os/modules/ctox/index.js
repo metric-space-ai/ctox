@@ -1,11 +1,19 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260927-shell-v2-threads-integration-v407';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260927-shell-v2-threads-crew-v410';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
 const FLOW_WIDTH = 1760;
 const FLOW_HEIGHT = 1050;
+// The review harness is drawn as a compact "U": the work path runs left to
+// right on the top row, the evidence path returns right to left below it,
+// failures sit underneath. Inbound work enters at the top left, the outcome
+// leaves at the left of the row it ends in. No empty lane padding.
+const HARNESS_FLOW_WIDTH = 1180;
+const HARNESS_FLOW_HEIGHT = 530;
+const HARNESS_COLUMNS = [268, 432, 596, 760, 924, 1088];
+const HARNESS_ROWS = { work: 100, evidence: 236, repair: 356, service: 466 };
 const NODE_WIDTH = 136;
 const NODE_HEIGHT = 76;
 const DEFAULT_ZOOM = 1;
@@ -20,7 +28,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260927-shell-v2-threads-integration-v407';
+const CTOX_STYLE_BUILD = '20260927-shell-v2-threads-crew-v410';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -105,6 +113,7 @@ const labels = {
     entryOne: "Eintrag",
     learningFromAssignment: "lernt aus dem Einsatz",
     noCrewMember: "ohne Crew-Zuordnung",
+    noCrewMemberShort: "ohne Crew",
     close: "Schließen",
     memberName: "Name",
     soul: "Seele",
@@ -398,6 +407,7 @@ const labels = {
     entryOne: "entry",
     learningFromAssignment: "learning from the assignment",
     noCrewMember: "no crew member",
+    noCrewMemberShort: "unassigned",
     close: "Close",
     memberName: "Name",
     soul: "Soul",
@@ -617,22 +627,22 @@ const labels = {
 
 // Canonical display model: src/service/core_state_machine.rs:review_harness_transition_catalog().
 const STATE_MACHINE_NODES = [
-  { id: 'queued', label: 'Waiting in queue', phase: 'Queued', x: 330, y: 520, lines: ['Work is in the review harness queue.'], tools: ['NoProof'] },
-  { id: 'leased', label: 'Picked up', phase: 'Leased', x: 510, y: 520, lines: ['CTOX has leased the queued work.'], tools: ['NoProof'] },
-  { id: 'running', label: 'Working', phase: 'Running', x: 690, y: 520, lines: ['The worker is executing the leased work.'], tools: ['NoProof'] },
-  { id: 'awaiting-review', label: 'Ready for review', phase: 'AwaitingReview', x: 870, y: 520, lines: ['WorkerFinished moved the work into review.'], tools: ['WorkerFinished'] },
-  { id: 'review-queued', label: 'Review waiting', phase: 'ReviewQueued', x: 1050, y: 520, lines: ['StartReview queued the review.'], tools: ['StartReview'] },
-  { id: 'reviewing', label: 'Under review', phase: 'Reviewing', x: 1230, y: 520, lines: ['SpawnReviewer started the reviewer.'], tools: ['SpawnReviewer'] },
-  { id: 'review-passed', label: 'Review passed', phase: 'ReviewPassed', x: 1050, y: 790, lines: ['ReviewPass approved the work for validation.'], tools: ['ReviewPass'] },
-  { id: 'review-rejected', label: 'Review failed', phase: 'ReviewRejected', x: 1230, y: 790, lines: ['ReviewReject sends the work to rework.'], tools: ['ReviewReject'] },
-  { id: 'review-unavailable', label: 'Review unavailable', phase: 'ReviewUnavailable', x: 1230, y: 880, lines: ['The reviewer was unavailable.'], tools: ['ReviewUnavailable'] },
-  { id: 'review-retry', label: 'Retry review', phase: 'ReviewRetry', x: 1050, y: 880, lines: ['RetryReview returns to AwaitingReview.'], tools: ['RetryReview'] },
-  { id: 'rework-required', label: 'Rework needed', phase: 'ReworkRequired', x: 690, y: 880, lines: ['ReworkRequired requeues the same main work or fails after budget.'], tools: ['RequeueSameMainWork', 'ReviewRoundsExhausted', 'ValidatorFail'] },
-  { id: 'awaiting-validation', label: 'Needs evidence', phase: 'AwaitingValidation', x: 870, y: 790, lines: ['ReviewPass requires validation before success.'], tools: ['ReviewPass'] },
-  { id: 'validating', label: 'Checking evidence', phase: 'Validating', x: 690, y: 790, lines: ['RunValidator checks the result evidence.'], tools: ['RunValidator'] },
-  { id: 'passed', label: 'Evidence confirmed', phase: 'Passed', x: 510, y: 790, lines: ['ValidatorPass is the only terminal success.'], tools: ['ValidatorPass'] },
-  { id: 'model-failed', label: 'Work failed', phase: 'ModelFailed', x: 510, y: 880, lines: ['WorkerFailed or exhausted review/validation budget stopped the work.'], tools: ['WorkerFailed', 'ReviewRoundsExhausted', 'ValidatorReworkExhausted'] },
-  { id: 'infra-failed', label: 'Service failed', phase: 'InfraFailed', x: 1050, y: 990, lines: ['InfraError, ReviewRetriesExhausted, or ValidatorInfraError stopped the work.'], tools: ['InfraError', 'ReviewRetriesExhausted', 'ValidatorInfraError'] },
+  { id: 'queued', label: 'Waiting in queue', phase: 'Queued', x: HARNESS_COLUMNS[0], y: HARNESS_ROWS.work, lines: ['Work is in the review harness queue.'], tools: ['NoProof'] },
+  { id: 'leased', label: 'Picked up', phase: 'Leased', x: HARNESS_COLUMNS[1], y: HARNESS_ROWS.work, lines: ['CTOX has leased the queued work.'], tools: ['NoProof'] },
+  { id: 'running', label: 'Working', phase: 'Running', x: HARNESS_COLUMNS[2], y: HARNESS_ROWS.work, lines: ['The worker is executing the leased work.'], tools: ['NoProof'] },
+  { id: 'awaiting-review', label: 'Ready for review', phase: 'AwaitingReview', x: HARNESS_COLUMNS[3], y: HARNESS_ROWS.work, lines: ['WorkerFinished moved the work into review.'], tools: ['WorkerFinished'] },
+  { id: 'review-queued', label: 'Review waiting', phase: 'ReviewQueued', x: HARNESS_COLUMNS[4], y: HARNESS_ROWS.work, lines: ['StartReview queued the review.'], tools: ['StartReview'] },
+  { id: 'reviewing', label: 'Under review', phase: 'Reviewing', x: HARNESS_COLUMNS[5], y: HARNESS_ROWS.work, lines: ['SpawnReviewer started the reviewer.'], tools: ['SpawnReviewer'] },
+  { id: 'review-passed', label: 'Review passed', phase: 'ReviewPassed', x: HARNESS_COLUMNS[4], y: HARNESS_ROWS.evidence, lines: ['ReviewPass approved the work for validation.'], tools: ['ReviewPass'] },
+  { id: 'review-rejected', label: 'Review failed', phase: 'ReviewRejected', x: HARNESS_COLUMNS[5], y: HARNESS_ROWS.evidence, lines: ['ReviewReject sends the work to rework.'], tools: ['ReviewReject'] },
+  { id: 'review-unavailable', label: 'Review unavailable', phase: 'ReviewUnavailable', x: HARNESS_COLUMNS[5], y: HARNESS_ROWS.repair, lines: ['The reviewer was unavailable.'], tools: ['ReviewUnavailable'] },
+  { id: 'review-retry', label: 'Retry review', phase: 'ReviewRetry', x: HARNESS_COLUMNS[4], y: HARNESS_ROWS.repair, lines: ['RetryReview returns to AwaitingReview.'], tools: ['RetryReview'] },
+  { id: 'rework-required', label: 'Rework needed', phase: 'ReworkRequired', x: HARNESS_COLUMNS[2], y: HARNESS_ROWS.repair, lines: ['ReworkRequired requeues the same main work or fails after budget.'], tools: ['RequeueSameMainWork', 'ReviewRoundsExhausted', 'ValidatorFail'] },
+  { id: 'awaiting-validation', label: 'Needs evidence', phase: 'AwaitingValidation', x: HARNESS_COLUMNS[3], y: HARNESS_ROWS.evidence, lines: ['ReviewPass requires validation before success.'], tools: ['ReviewPass'] },
+  { id: 'validating', label: 'Checking evidence', phase: 'Validating', x: HARNESS_COLUMNS[2], y: HARNESS_ROWS.evidence, lines: ['RunValidator checks the result evidence.'], tools: ['RunValidator'] },
+  { id: 'passed', label: 'Evidence confirmed', phase: 'Passed', x: HARNESS_COLUMNS[1], y: HARNESS_ROWS.evidence, lines: ['ValidatorPass is the only terminal success.'], tools: ['ValidatorPass'] },
+  { id: 'model-failed', label: 'Work failed', phase: 'ModelFailed', x: HARNESS_COLUMNS[1], y: HARNESS_ROWS.repair, lines: ['WorkerFailed or exhausted review/validation budget stopped the work.'], tools: ['WorkerFailed', 'ReviewRoundsExhausted', 'ValidatorReworkExhausted'] },
+  { id: 'infra-failed', label: 'Service failed', phase: 'InfraFailed', x: HARNESS_COLUMNS[4], y: HARNESS_ROWS.service, lines: ['InfraError, ReviewRetriesExhausted, or ValidatorInfraError stopped the work.'], tools: ['InfraError', 'ReviewRetriesExhausted', 'ValidatorInfraError'] },
 ];
 
 // Owner-facing copy for the flow nodes. The catalog above keeps the machine
@@ -1837,15 +1847,19 @@ function taskCardMarkup(task, state) {
   const crewStatus = taskCrewStatus(task);
   const portrait = member
     ? `<span class="ctox-flow-creature-shell ctox-task-portrait" title="${escapeAttr(member.name)}">${memberCreatureHtml(member, state, crewStatus === 'running' ? 'running' : crewStatus === 'failed' ? 'failed' : memberCreatureState(member))}</span>`
-    : '';
+    : `<span class="ctox-flow-creature-shell ctox-task-portrait" title="${escapeAttr(t.noCrewMember)}">${crewCreatureHtml({ crewKey: task.commandId || task.id, crewIdentity: null }, crewStatus === 'failed' ? 'failed' : 'idle', 'map')}</span>`;
+  // Who does it, in the member's own colour; an unassigned task says so.
+  const memberName = member
+    ? `<span class="ctox-task-meta-member" style="--crew-color:${escapeAttr(member.color || NEUTRAL_CREW_COLOR)}">${escapeHtml(member.name)}</span>`
+    : `<span class="ctox-task-meta-member is-unassigned">${escapeHtml(t.noCrewMemberShort)}</span>`;
   const tooltip = [status, source, changed, reason].filter(Boolean).join(' · ');
   return `
-    <article class="ctox-list-item ctox-task-card ${selected ? 'is-selected' : ''} ${pinned ? 'is-pinned' : ''} ${member ? 'has-member' : ''}"
+    <article class="ctox-list-item ctox-task-card ${selected ? 'is-selected' : ''} ${pinned ? 'is-pinned' : ''} has-member"
       data-task-id="${escapeAttr(task.id)}" data-context-record-id="${escapeAttr(task.id)}" data-context-record-type="ctox_task" data-context-label="${escapeAttr(title)}">
       <button type="button" class="ctox-task-selector" data-select-task-id="${escapeAttr(task.id)}" aria-label="${escapeAttr(`${state.lang === 'de' ? 'Aufgabe auswählen' : 'Select task'}: ${title}`)}" title="${escapeAttr(tooltip)}">
         ${portrait}
         <strong>${escapeHtml(title)}</strong>
-        <small class="ctox-task-meta">${status ? `<span class="ctox-task-meta-status ${problem ? 'is-problem' : ''}">${escapeHtml(status)}</span>` : ''}${changed ? `<span>${escapeHtml(changed)}</span>` : ''}</small>
+        <small class="ctox-task-meta">${memberName}${status ? `<span class="ctox-task-meta-status ${problem ? 'is-problem' : ''}">${escapeHtml(status)}</span>` : ''}${changed ? `<span>${escapeHtml(changed)}</span>` : ''}</small>
         ${problem && reason ? `<span class="ctox-task-reason is-problem">${escapeHtml(reason)}</span>` : ''}
         ${taskPipelineMarkup(task, state)}
       </button>
@@ -2441,11 +2455,11 @@ function renderMain(state) {
     ${shouldShowCrewHome(state) ? crewHomeMarkup(state) : stateInWorkspace ? emptyWorkspaceMarkup(state) : `<div class="ctox-canvas-container ctox-flow-well">
       <div class="ctox-flow-toolbar" aria-label="${escapeAttr(t.flowControls)}" data-flow-control>
         <button type="button" class="ctox-pane-icon" data-zoom="-" aria-label="${escapeAttr(t.zoomOut)}" title="${escapeAttr(t.zoomOut)}" ${state.zoom <= MIN_ZOOM ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
-        <span>${Math.round(state.zoom * 100)}%</span>
+        <button type="button" class="ctox-flow-zoom-fit" data-zoom="fit" data-zoom-label aria-label="${escapeAttr(state.lang === 'de' ? 'Einpassen' : 'Fit')}" title="${escapeAttr(state.lang === 'de' ? 'Einpassen' : 'Fit')}">${Math.round(state.zoom * 100)}%</button>
         <button type="button" class="ctox-pane-icon" data-zoom="+" aria-label="${escapeAttr(t.zoomIn)}" title="${escapeAttr(t.zoomIn)}" ${state.zoom >= MAX_ZOOM ? 'disabled' : ''}>${actionIcon(state, 'add')}</button>
       </div>
       <div class="ctox-flow-canvas" data-flow-canvas>
-        <div class="ctox-flow-canvas-inner" style="width:${FLOW_WIDTH * state.zoom}px;height:${viewBox.height * state.zoom}px;min-height:${viewBox.height * state.zoom}px">
+        <div class="ctox-flow-canvas-inner" data-flow-width="${viewBox.width}" data-flow-height="${viewBox.height}" style="width:${viewBox.width * state.zoom}px;height:${viewBox.height * state.zoom}px;min-height:${viewBox.height * state.zoom}px">
           ${flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskStepView, viewBox)}
         </div>
       </div>
@@ -2535,8 +2549,68 @@ function renderMain(state) {
     });
   });
   wireCanvasDrag(main.querySelector('[data-flow-canvas]'));
+  fitFlowToCanvas(state, main);
   syncCrewProceduralMotion(main);
+  walkCrewToNewStations(state, main);
   updateLiveIndicators(state);
+}
+
+// Unless the operator zoomed by hand, the flow fills the canvas width (never
+// above 100 %, never below the readable minimum) and follows window resizes.
+function fitFlowToCanvas(state, main) {
+  const canvas = main.querySelector('[data-flow-canvas]');
+  const inner = canvas?.querySelector('.ctox-flow-canvas-inner');
+  if (!canvas || !inner) return;
+  const apply = () => {
+    if (state.zoomMode === 'manual' || !inner.isConnected) return;
+    const available = canvas.clientWidth - 8;
+    const flowWidth = Number(inner.dataset.flowWidth) || HARNESS_FLOW_WIDTH;
+    const flowHeight = Number(inner.dataset.flowHeight) || HARNESS_FLOW_HEIGHT;
+    if (!(available > 0)) return;
+    const next = clampMetric(Math.floor((available / flowWidth) * 100) / 100, MIN_ZOOM, DEFAULT_ZOOM);
+    if (next !== state.zoom) {
+      state.zoom = next;
+      const label = main.querySelector('[data-zoom-label]');
+      if (label) label.textContent = `${Math.round(next * 100)}%`;
+    }
+    inner.style.width = `${flowWidth * state.zoom}px`;
+    inner.style.height = `${flowHeight * state.zoom}px`;
+    inner.style.minHeight = `${flowHeight * state.zoom}px`;
+  };
+  apply();
+  state.flowFitObserver?.disconnect?.();
+  if (typeof ResizeObserver === 'function') {
+    state.flowFitObserver = new ResizeObserver(() => apply());
+    state.flowFitObserver.observe(canvas);
+  }
+}
+
+// A creature whose task moved to another station walks there instead of
+// jumping: it starts at its old spot and travels along a low arc.
+function walkCrewToNewStations(state, main) {
+  const previous = state.crewMapPositions || new Map();
+  const next = new Map();
+  const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+  main.querySelectorAll('[data-crew-pos-task]').forEach((group) => {
+    const taskId = group.dataset.crewPosTask;
+    const [x, y] = String(group.dataset.crewPos || '').split(',').map(Number);
+    next.set(taskId, { x, y });
+    const before = previous.get(taskId);
+    if (reduced || !before || typeof group.animate !== 'function') return;
+    const dx = before.x - x;
+    const dy = before.y - y;
+    if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+    const lift = Math.min(40, 14 + Math.hypot(dx, dy) * 0.08);
+    const duration = Math.min(1400, 520 + Math.hypot(dx, dy) * 1.4);
+    group.animate([
+      { transform: `translate(${dx}px, ${dy}px)` },
+      { transform: `translate(${dx / 2}px, ${dy / 2 - lift}px)` },
+      { transform: 'translate(0px, 0px)' },
+    ], { duration, easing: 'cubic-bezier(.45,.05,.35,1)' });
+    const creature = group.querySelector('.ctox-crew-creature');
+    if (creature) creature.dataset.crewTravel = String(Math.round(duration));
+  });
+  state.crewMapPositions = next;
 }
 
 // A phase the locale does not know is shown as words, never as the enum.
@@ -2669,7 +2743,7 @@ function flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskSte
   // damit die Frage "wo steckt er" ohne Suchen beantwortet ist.
   const standortNodeId = selectedTask ? (taskCrewNodeId(selectedTask, model) || '') : '';
   return `
-    <svg class="ctox-flow-diagram" viewBox="0 ${viewBox.y} ${FLOW_WIDTH} ${viewBox.height}" preserveAspectRatio="xMidYMin meet" role="img" aria-label="${escapeAttr(t.flowDiagram)}">
+    <svg class="ctox-flow-diagram" viewBox="0 ${viewBox.y} ${viewBox.width} ${viewBox.height}" preserveAspectRatio="xMidYMin meet" role="img" aria-label="${escapeAttr(t.flowDiagram)}">
       <defs>
         <marker id="ctox-flow-arrow" markerHeight="8" markerWidth="8" orient="auto" refX="7" refY="4">
           <path d="M0,0 L8,4 L0,8 Z"></path>
@@ -2681,10 +2755,10 @@ function flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskSte
           <text x="34" y="44">${escapeHtml(t.laneCommunication)}</text>
         ` : `
           <g transform="translate(0 ${harnessOffsetY})">
-          <rect x="18" y="388" width="${FLOW_WIDTH - 36}" height="260" rx="16"></rect>
-          <rect x="18" y="688" width="${FLOW_WIDTH - 36}" height="340" rx="16"></rect>
-          <text x="34" y="414">${escapeHtml(t.laneQueue)}</text>
-          <text x="34" y="714">${escapeHtml(t.laneEvidence)}</text>
+          <rect x="8" y="8" width="${HARNESS_FLOW_WIDTH - 16}" height="${HARNESS_ROWS.work + 52}" rx="14"></rect>
+          <rect x="8" y="${HARNESS_ROWS.evidence - 76}" width="${HARNESS_FLOW_WIDTH - 16}" height="${HARNESS_FLOW_HEIGHT - HARNESS_ROWS.evidence + 68}" rx="14"></rect>
+          <text x="24" y="26">${escapeHtml(t.laneQueue)}</text>
+          <text x="24" y="${HARNESS_ROWS.evidence - 56}">${escapeHtml(t.laneEvidence)}</text>
           </g>
         `}
       </g>
@@ -2707,12 +2781,12 @@ function flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskSte
 }
 
 function flowViewBox(selectedTask, state) {
-  if (isCommunicationFlow(selectedTask, state)) return { y: 0, height: 380 };
-  return { y: 54, height: 740 };
+  if (isCommunicationFlow(selectedTask, state)) return { y: 0, width: FLOW_WIDTH, height: 380 };
+  return { y: 0, width: HARNESS_FLOW_WIDTH, height: HARNESS_FLOW_HEIGHT };
 }
 
-function reviewHarnessOffsetY(selectedTask, state) {
-  return isCommunicationFlow(selectedTask, state) ? 0 : -300;
+function reviewHarnessOffsetY() {
+  return 0;
 }
 
 function selectedNodeVisualY(node, selectedTask, state) {
@@ -2833,7 +2907,7 @@ function inboundEndpointFlowSvg(model, selectedTask, state) {
   const selected = channels.find((channel) => channel.id === selectedChannel);
   const endpoint = selected || channels[0] || null;
   const queued = model.nodeMap.get('queued') || { x: 330, y: 520 };
-  const nodeX = 44;
+  const nodeX = 18;
   const nodeWidth = 144;
   const nodeY = queued.y - 26;
   const selectedEdgeY = nodeY + 26;
@@ -2850,20 +2924,7 @@ function inboundEndpointFlowSvg(model, selectedTask, state) {
         <text class="ctox-flow-channel-name" x="12" y="19">${escapeHtml(clip(endpoint.label, 18))}</text>
         <text class="ctox-flow-channel-count" x="12" y="36">${escapeHtml(clip(detail || endpoint.kind, 20))}</text>
       </g>
-      ${channels.filter((channel) => channel.id !== endpoint.id).slice(0, 4).map((channel, index) => {
-        const x = nodeX;
-        const y = nodeY + 66 + index * 56;
-        const edgeY = y + 22;
-        const d = `M ${x + nodeWidth} ${edgeY} L ${queueApproachX} ${edgeY} L ${queueApproachX} ${queued.y} L ${queueLeft} ${queued.y}`;
-        return `
-          <path class="ctox-flow-channel-edge" d="${d}"></path>
-          <g class="ctox-flow-channel-node" transform="translate(${x} ${y})">
-            <rect width="${nodeWidth}" height="44" rx="12"></rect>
-            <text class="ctox-flow-channel-name" x="12" y="18">${escapeHtml(clip(channel.label, 18))}</text>
-            <text class="ctox-flow-channel-count" x="12" y="34">${escapeHtml(`${channel.count} ${t.inboundItems}`)}</text>
-          </g>
-        `;
-      }).join('')}
+      ${channels.length > 1 ? `<text class="ctox-flow-channel-count ctox-flow-channel-more" x="${nodeX}" y="${nodeY + 70}">+${channels.length - 1} ${escapeHtml(state.lang === 'de' ? 'weitere Kanäle' : 'more channels')}</text>` : ''}
     </g>
   `;
 }
@@ -2873,15 +2934,23 @@ function outboundEndpointFlowSvg(model, selectedTask, selectedNode, visibleTrace
   const endpoint = outboundEndpointForTask(selectedTask, selectedNode, state);
   const sourceNode = endpoint.fromNodeId ? model.nodeMap.get(endpoint.fromNodeId) : null;
   if (!sourceNode) return '';
-  const x = FLOW_WIDTH - 176;
-  const y = Math.max(126, Math.min(FLOW_HEIGHT - 84, sourceNode.y - 26));
+  // The outcome sits at the open end of the U, left of "evidence confirmed";
+  // a settled task connects its final station to it.
+  const x = 18;
+  const y = HARNESS_ROWS.evidence - 26;
   const sourceHalfW = (sourceNode.shape === 'diamond' ? NODE_WIDTH * 0.58 : NODE_WIDTH) / 2;
-  const d = `M ${sourceNode.x + sourceHalfW} ${sourceNode.y} L ${x - 24} ${sourceNode.y} L ${x - 24} ${y + 26} L ${x} ${y + 26}`;
+  const startX = sourceNode.x - sourceHalfW;
+  const endX = x + 144;
+  const endY = y + 26;
+  const bend = Math.max(30, (startX - endX) * 0.45);
+  const d = endpoint.closed
+    ? `M ${startX} ${sourceNode.y} C ${startX - bend} ${sourceNode.y}, ${endX + bend} ${endY}, ${endX} ${endY}`
+    : '';
   const observed = Boolean(visibleTrace.nodeStrength.get(sourceNode.id)) || endpoint.closed;
   return `
     <g class="ctox-flow-outbound" aria-label="Task outcome endpoint">
       <text class="ctox-flow-inbound-label" x="${x}" y="${y - 12}">${escapeHtml(t.outboundEndpoint)}</text>
-      <path class="ctox-flow-channel-edge is-outbound ${observed ? 'is-selected' : ''} ${endpoint.closed ? 'is-terminal' : 'is-open'}" d="${d}"></path>
+      ${d ? `<path class="ctox-flow-channel-edge is-outbound ${observed ? 'is-selected' : ''} is-terminal" d="${d}"></path>` : ''}
       <g class="ctox-flow-channel-node is-outbound ${observed ? 'is-selected' : ''} ${endpoint.closed ? 'is-terminal' : 'is-open'}" transform="translate(${x} ${y})">
         <rect width="144" height="52" rx="12"></rect>
         <text class="ctox-flow-channel-name" x="12" y="19">${escapeHtml(clip(endpoint.label, 20))}</text>
@@ -3032,10 +3101,10 @@ function flowCrewSvg(model, selectedTask, state) {
     if (!node) return '';
     const slot = occupied.get(node.id) || 0;
     occupied.set(node.id, slot + 1);
-    const column = slot % 4;
-    const row = Math.floor(slot / 4);
-    const x = node.x - 82 + column * 42;
-    const y = node.y - NODE_HEIGHT / 2 - 52 - row * 40;
+    // Creatures stand ON their station: feet on the top edge of the node,
+    // centred, neighbours spread left and right of the first one.
+    const x = node.x - CREW_ON_STATION_SIZE / 2 + CREW_ON_STATION_SPREAD[slot % CREW_ON_STATION_SPREAD.length];
+    const y = node.y - NODE_HEIGHT / 2 - CREW_ON_STATION_SIZE + 5 - Math.floor(slot / CREW_ON_STATION_SPREAD.length) * 30;
     const selected = task.id === selectedTask?.id;
     // Without a live channel, or before the first complete read, nothing on
     // screen is current: the crew sleeps.
@@ -3056,16 +3125,93 @@ function flowCrewSvg(model, selectedTask, state) {
       // keep showing the same creature for the same task; the title says so.
       crewKey: member ? member.id : (task.commandId || task.command_id || task.taskId || task.task_id || task.id),
       crewIdentity: member ? memberIdentity(member) : null,  // null = the neutral crew creature (shared)
-      executionProgress: liveTask.executionProgress || liveTask.execution_progress,
+      executionProgress: crewProgressForCreature(liveTask.executionProgress || liveTask.execution_progress),
     }, status, 'map');
+    // The selected creature always wears a name tag: who it is and what it
+    // does (working: plan step and last turn) or where it stands.
+    const bubble = selected ? crewActivityBubbleSvg(liveTask, x + CREW_ON_STATION_SIZE - 2, y + 2, state, {
+      name: member ? member.name : (labels[state?.lang]?.noCrewMemberShort || labels.de.noCrewMemberShort),
+      status,
+    }) : '';
     return `
-      <foreignObject class="ctox-flow-creature-slot ${selected ? 'is-selected' : ''}" x="${x}" y="${y}" width="48" height="48"
-        data-task-id="${escapeAttr(task.id)}" data-creature-node-id="${escapeAttr(node.id)}" role="button" tabindex="0"
-        aria-label="${escapeAttr(title)}">
-        <div class="ctox-flow-creature-shell" xmlns="http://www.w3.org/1999/xhtml" title="${escapeAttr(title)}">${creature}</div>
-      </foreignObject>
+      <g class="ctox-flow-creature-pos" data-crew-pos-task="${escapeAttr(task.id)}" data-crew-pos="${x},${y}">
+        <foreignObject class="ctox-flow-creature-slot ${selected ? 'is-selected' : ''}" x="${x}" y="${y}" width="${CREW_ON_STATION_SIZE}" height="${CREW_ON_STATION_SIZE}"
+          data-task-id="${escapeAttr(task.id)}" data-creature-node-id="${escapeAttr(node.id)}" role="button" tabindex="0"
+          aria-label="${escapeAttr(title)}">
+          <div class="ctox-flow-creature-shell" xmlns="http://www.w3.org/1999/xhtml" title="${escapeAttr(title)}">${creature}</div>
+        </foreignObject>
+        ${bubble}
+      </g>
     `;
   }).join('');
+}
+
+// The chat adapter reads durable telemetry in the wire shape
+// (activity_turns / updated_at_ms); the CTOX model keeps a normalized copy.
+function crewProgressForCreature(progress) {
+  if (!progress || typeof progress !== 'object' || progress.activity_turns) return progress || null;
+  if (!('totalTurns' in progress) && !('lastActivityKind' in progress)) return progress;
+  return {
+    ...progress,
+    current_step: progress.currentStep,
+    activity_turns: {
+      total: progress.totalTurns || 0,
+      thinking: progress.thinkingTurns || 0,
+      tools: progress.toolTurns || 0,
+      last_kind: progress.lastActivityKind || '',
+    },
+    updated_at_ms: progress.updatedAtMs || 0,
+  };
+}
+
+const CREW_ON_STATION_SIZE = 44;
+const CREW_ON_STATION_SPREAD = [0, 34, -34, 68];
+
+// What the creature on the map is doing right now, from durable telemetry
+// only: the plan step it is on and whether its last turn was thinking, a tool
+// or review. No telemetry, no bubble.
+function crewActivityBubbleText(task, state) {
+  const de = state?.lang !== 'en';
+  const progress = task?.executionProgress || task?.execution_progress;
+  if (!progress || typeof progress !== 'object') return '';
+  const steps = Array.isArray(progress.steps) ? progress.steps : [];
+  const turns = progress.activity_turns || progress.activityTurns || {};
+  const kind = String(progress.lastActivityKind || turns.last_kind || turns.lastKind || '').toLowerCase();
+  const phase = String(progress.phase || '').toLowerCase();
+  const reviewing = ['review', 'awaiting_review', 'reviewing', 'validating'].includes(phase);
+  const verb = reviewing ? (de ? 'prüft' : 'reviewing')
+    : kind === 'thinking' ? (de ? 'denkt nach' : 'thinking')
+      : kind === 'tool' ? (de ? 'nutzt ein Werkzeug' : 'using a tool')
+        : '';
+  const currentIndex = Math.max(0, (Number(progress.current_step ?? progress.currentStep) || 1) - 1);
+  const step = steps.find((entry) => String(entry?.status || '').toLowerCase() === 'in_progress') || steps[currentIndex] || null;
+  const stepLabel = step?.label ? String(step.label) : '';
+  const stepText = stepLabel && steps.length ? `${steps.indexOf(step) + 1}/${steps.length} ${stepLabel}` : '';
+  return [verb, stepText].filter(Boolean).join(' · ');
+}
+
+const CREW_TAG_STATUS = {
+  de: { running: 'arbeitet', failed: 'gescheitert', success: 'fertig', queued: 'wartet' },
+  en: { running: 'working', failed: 'failed', success: 'done', queued: 'waiting' },
+};
+
+function crewActivityBubbleSvg(task, x, y, state, { name = '', status = 'running' } = {}) {
+  const lang = state?.lang === 'en' ? 'en' : 'de';
+  const activity = status === 'running' ? crewActivityBubbleText(task, state) : '';
+  const doing = activity || CREW_TAG_STATUS[lang][status] || CREW_TAG_STATUS[lang].queued;
+  const text = clip([name, doing].filter(Boolean).join(' · '), 48);
+  if (!text) return '';
+  const width = Math.min(280, 18 + text.length * 6.3);
+  // Near the right edge the bubble opens to the creature's left instead.
+  const left = x + width + 16 > HARNESS_FLOW_WIDTH;
+  const originX = left ? x - CREW_ON_STATION_SIZE + 4 : x;
+  return `
+    <g class="ctox-flow-crew-bubble ${left ? 'is-left' : ''}" transform="translate(${originX} ${y})" aria-hidden="true">
+      ${left
+        ? `<path d="M 0 12 L -8 7 L -8 17 Z"></path><rect x="${-7 - width}" y="0" width="${width}" height="24" rx="12"></rect><text x="${-7 - width + 10}" y="16">${escapeHtml(text)}</text>`
+        : `<path d="M 0 12 L 8 7 L 8 17 Z"></path><rect x="7" y="0" width="${width}" height="24" rx="12"></rect><text x="${7 + 10}" y="16">${escapeHtml(text)}</text>`}
+    </g>
+  `;
 }
 
 function taskCrewCandidates(model) {
@@ -5215,7 +5361,7 @@ const SPECIALTY_KEYS = Object.freeze(['modules', 'command_types', 'skills', 'tag
 
 function memberIdentity(member) {
   if (!member) return null;
-  return { name: String(member.name || ''), color: String(member.color || NEUTRAL_CREW_COLOR), shape: String(member.shape || 'round') };
+  return { id: String(member.id || ''), name: String(member.name || ''), color: String(member.color || NEUTRAL_CREW_COLOR), shape: String(member.shape || 'round') };
 }
 
 function taskCrewMember(task, state) {
@@ -5287,7 +5433,7 @@ function memberCreatureHtml(member, state, taskState = memberCreatureState(membe
   return crewCreatureHtml({
     crewKey: member.id,
     crewIdentity: memberIdentity(member),
-    executionProgress: liveTask?.executionProgress || liveTask?.execution_progress || null,
+    executionProgress: crewProgressForCreature(liveTask?.executionProgress || liveTask?.execution_progress || null),
   }, taskState, 'map');
 }
 
@@ -5356,7 +5502,8 @@ function wireCrewHome(state, main) {
   });
 }
 
-const CREW_MEMBER_COLORS = Object.freeze(['#1685ee', '#00aa9a', '#7d7f84', '#7c6df2', '#e97255', '#34a26f']);
+// The neutral grey is reserved for "no member yet"; members get a real colour.
+const CREW_MEMBER_COLORS = Object.freeze(['#1685ee', '#00aa9a', '#e0a82e', '#7c6df2', '#e97255', '#34a26f']);
 const CREW_MEMBER_SHAPES = Object.freeze(['round', 'blob', 'square', 'triangle']);
 
 // The pool is owner-managed: a new member starts with a persona and no memory.
@@ -6195,6 +6342,7 @@ function wireCanvasDrag(scroller) {
     if (!state) return;
     const previousZoom = state.zoom;
     const nextZoom = state.zoom + (event.deltaY < 0 ? 0.12 : -0.12);
+    state.zoomMode = 'manual';
     setFlowZoom(state, nextZoom);
     if (state.zoom === previousZoom) return;
     state.flowViewport = {
@@ -6208,6 +6356,12 @@ function wireCanvasDrag(scroller) {
 function zoomFlowFromControl(state, action) {
   const scroller = state.ctx.host.querySelector('[data-flow-canvas]');
   const previousZoom = state.zoom;
+  if (action === 'fit') {
+    state.zoomMode = 'fit';
+    renderMain(state);
+    return;
+  }
+  state.zoomMode = 'manual';
   const nextZoom = action === 'reset'
     ? DEFAULT_ZOOM
     : state.zoom + (action === '+' ? 0.12 : -0.12);
