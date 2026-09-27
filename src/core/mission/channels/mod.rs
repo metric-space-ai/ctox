@@ -7039,7 +7039,13 @@ pub(crate) fn ensure_account(
     provider: &str,
     profile_json: Value,
 ) -> Result<()> {
-    let tx = conn.unchecked_transaction()?;
+    // IMMEDIATE, not deferred: ensure_account_tx reads the stored profile and
+    // then writes. A deferred transaction that started as a reader cannot
+    // upgrade once another connection has committed (WAL snapshot) and fails
+    // at once with "database is locked", bypassing busy_timeout. Under
+    // research load every native e-mail send hit that (THESEN 27.09.2026,
+    // Outbound update digest, twice in a row).
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     ensure_account_tx(&tx, account_key, channel, address, provider, profile_json)?;
     tx.commit()?;
     Ok(())
@@ -7223,3 +7229,57 @@ mod queue_task_metadata_tests {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod ensure_account_lock_tests {
+    use super::*;
+
+    // THESEN 27.09.2026: every native e-mail send failed with "database is
+    // locked" while research tasks were writing. ensure_account read the
+    // stored profile in a deferred transaction and then wrote; once another
+    // connection committed in between, SQLite refused the upgrade at once.
+    #[test]
+    fn ensure_account_waits_for_a_concurrent_writer_instead_of_failing() {
+        let root = tempfile::tempdir().expect("temp root");
+        let path = root.path().join("ctox.sqlite3");
+        let mut conn = crate::communication_store::open_channel_db(&path).expect("open");
+        conn.execute_batch("PRAGMA journal_mode=WAL;").expect("wal");
+        ensure_account(
+            &mut conn,
+            "email:a@example.com",
+            "email",
+            "a@example.com",
+            "owa",
+            json!({}),
+        )
+        .expect("seed account");
+
+        let writer_path = path.clone();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let writer =
+                crate::communication_store::open_channel_db(&writer_path).expect("open writer");
+            writer.execute_batch("BEGIN IMMEDIATE;").expect("begin");
+            writer
+                .execute(
+                    "UPDATE communication_accounts SET updated_at = 'x' WHERE account_key = ?1",
+                    ["email:a@example.com"],
+                )
+                .expect("write");
+            locked_tx.send(()).expect("signal");
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            writer.execute_batch("COMMIT;").expect("commit");
+        });
+        locked_rx.recv().expect("writer holds the lock");
+        ensure_account(
+            &mut conn,
+            "email:a@example.com",
+            "email",
+            "a@example.com",
+            "owa",
+            json!({}),
+        )
+        .expect("ensure_account must wait for the writer, not fail with database is locked");
+        writer.join().expect("writer thread");
+    }
+}
