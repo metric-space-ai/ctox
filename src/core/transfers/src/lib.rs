@@ -379,7 +379,7 @@ impl Worker {
             ("file-allocation", "none"),
             ("split", connections),
             ("max-connection-per-server", connections),
-            ("min-split-size", "64K"),
+            ("min-split-size", "65536"),
             ("uri-selector", "inorder"),
             ("continue", "true"),
             ("always-resume", "false"),
