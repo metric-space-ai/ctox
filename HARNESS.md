@@ -53,6 +53,14 @@ reasoning section contributes one activity turn. Streaming deltas, tool ends,
 and transport replays do not. Reasoning contents are never copied into this
 store.
 
+The direct-session adapter accepts both typed `TurnPlanUpdated` notifications
+and legacy `PlanUpdate` events. Typed plans require the current thread and turn
+ids; their explicit identity does not depend on receiving a legacy turn-start
+event first. Both forms normalize to the same plan payload and deduplicate
+within the turn before progress counters and durable persistence. A real plan
+is still required before review: the adapter never invents completed steps
+from a reply or a writeback receipt.
+
 Plan steps own the first 90 percent of progress, divided equally and rounded:
 `round(90 * completed_steps / total_steps)`. Completed model work remains at
 90 percent through pending or failed native review; validated review sets 100
