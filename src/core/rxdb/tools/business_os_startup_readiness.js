@@ -53,6 +53,14 @@ function startupDiagnostics(state) {
       sync: sync ? {
         requiredCollections: names(sync.requiredCollections),
         missingRequiredCollections: names(sync.missingRequiredCollections),
+        requiredCollectionEvidence: Object.fromEntries((names(sync.requiredCollections) || []).map(name => {
+          const row = sync.requiredCollectionEvidence?.[name];
+          return [name, {
+            hasCollection: typeof row?.hasCollection === 'boolean' ? row.hasCollection : null,
+            hasData: typeof row?.hasData === 'boolean' ? row.hasData : null,
+            readFailed: row ? typeof row.error === 'string' && row.error.length > 0 : null,
+          }];
+        })),
         collectionTotal: Number.isInteger(sync.collectionTotal) ? sync.collectionTotal : null,
         initialSync: {
           missingInitialReplication: names(sync.initialSync?.missingInitialReplication),

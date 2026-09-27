@@ -96,6 +96,11 @@ test('failure diagnostics preserve checks and timing without launch/session conf
   observed.advancedStatus.sync = {
     requiredCollections: ['business_module_catalog', 'desktop_file_chunks'],
     missingRequiredCollections: ['desktop_file_chunks', { credential: 'do-not-export' }],
+    requiredCollectionEvidence: {
+      business_module_catalog: { hasCollection: true, hasData: true },
+      desktop_file_chunks: { hasCollection: false, hasData: false, error: 'do-not-export' },
+      other: { credential: 'do-not-export' },
+    },
     collectionTotal: 21,
     initialSync: {
       missingInitialReplication: ['desktop_file_chunks'],
@@ -113,6 +118,10 @@ test('failure diagnostics preserve checks and timing without launch/session conf
   assert.deepEqual(diagnostic.advancedStatus.sync, {
     requiredCollections: ['business_module_catalog', 'desktop_file_chunks'],
     missingRequiredCollections: ['desktop_file_chunks'], collectionTotal: 21,
+    requiredCollectionEvidence: {
+      business_module_catalog: { hasCollection: true, hasData: true, readFailed: false },
+      desktop_file_chunks: { hasCollection: false, hasData: false, readFailed: true },
+    },
     initialSync: {
       missingInitialReplication: ['desktop_file_chunks'],
       missingStreamingReady: ['desktop_file_chunks'],
