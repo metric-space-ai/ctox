@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad: welsch-Upgrade (Binary → main 40a6b4616) + Release-Lauf beta.58 → Slot beta.58 aktivieren → Browser-Abnahme; parallel S4 Shell-Tiefe und S5 Crew-App für beta.59.
+Kritischer Pfad: welsch-Upgrade (Binary → main, Quelle 07:58) fertig → Business-OS-Dateien von main 9da8daca2 per Datei-Deploy in current/src + Slot deaktivieren → Browser-Abnahme auf welsch. Signierter Slot beta.59 folgt, sobald die GitHub-Warteschlange abfließt.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -15,10 +15,15 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 - **S3 · Einbindung (main `9c9cf4df9`, verifiziert)** — CSS-Kopien in app.css/tickets/ctox auf Größen reduziert; Engine installiert `CREW_CREATURE_CSS` (id `ctox-crew-creature-css`); Tickets rendert über Renderer (kein zweites business-chat v339); gemeinsamer Buster `?v=20260927-crew-genome-v1`; kein `will-change` in foreignObject (WebKit). foreignObject selbst bleibt vorerst (S5).
 - **Stempel v404 (main `40a6b4616`, gepusht 07:51 UTC)** — `20260927-shell-v2-crew-genome-v404` in 6 Dateien/38 Stellen; Wächter shell-generation+thesen-contract 8/8, data-plane, registry, allowlists, rxdb-only, Branding, Chrome, Content-Audit, shell-artifact 16/16 grün.
 
+- **S4 · Tiefenstaffel (main `e9e1cf800`, verifiziert lokal)** — `--elev-*` in app.css (hell/dunkel): App-Fenster mit heller Außenkante + dunkler Kontur + tiefem Schatten; Chatfenster und Crew-Leiste eine Stufe höher (hellere Fläche #1c1f25/#252a32, Innenkante, Außenkontur, Leiste mit Blur); innere Flächen über gescopte --surface/--line. Prototyp auf welsch per temporärem Stylesheet verglichen und entfernt. Layout-Wächter `assert-business-chat-layout.mjs` auf Engine umgestellt.
+- **S5 · Crew-App (main `14b2ca826`, verifiziert lokal)** — Karte als kompaktes U 1180×530 (vorher 1760×740), Einpassen-Zoom (76 % bei 1280, ganze Karte ohne Scrollen), Wesen stehen auf der Station, laufen per Bogen + `travel`-Geste zur nächsten, Blase „nutzt ein Werkzeug · 2/4 Quellen sammeln“ nur aus Telemetrie, Turn-Zahl erreicht das Karten-Wesen (normierter Fortschritt → Wire-Form). Tests: ctox 46/46 inkl. neuem Layout-Test, Layout 7/7, Crew-Karte, Geometrie-Labor ctox+tickets 6/6.
+- **Stempel v405 (main `9da8daca2`)** — `20260927-shell-v2-crew-live-v405`, Crew-Buster `?v=20260927-crew-genome-v2`.
+- **beta.58 abgebrochen (überholt)** — Run `36304466632` cancelled; Tag bleibt als Historie.
+
 ## Working
 
-- **welsch-Upgrade Binary → main** — Unit `ctox-crew-genome-upgrade-20260927` (gestartet ~07:52 UTC, RuntimeMaxSec 5400). Fertig heißt: `update_state.json` phase=completed, current_release neu, Wartung completed, Dienst aktiv. Achtung Symlink-Falle (Wartungssperre-Memory). Grund: Shell von main erwartet workjet_computers-Hash + rowsFetch.
-- **Shell-Release beta.58** — Tag `business-os-shell-v0.1.46-beta.58` → `40a6b4616`, GitHub-Run `36304466632` (letzter Lauf 55 min). Fertig heißt: Run success, Release-Assets signiert.
+- **welsch-Upgrade Binary → main** — 1. Versuch `ctox-crew-genome-upgrade-20260927` scheiterte am Platzgate (20 GiB verlangt, 19,5 frei; nichts verändert, Wartung nicht aktiv). Freigemacht: `~/.cache/ctox/build-office-20260906` (7,1 GB, reines Cargo-Target vom 06.09., kein Prozess). 2. Versuch Unit `ctox-crew-genome-upgrade-20260927b`, target `branch-main-20260927T075827Z` (Quelle = main mit S1–S3+v404), Phase building. Fertig heißt: phase=completed, current_release neu, Wartung completed, Dienst aktiv; Symlink-Falle prüfen.
+- **Shell-Release beta.59** — Tag → `9da8daca2`, Run `36305874044` queued. GitHub-Actions-Stau: 50+ Läufe queued seit 26.09. 20:09, nur 2 in_progress. Fertig heißt: Run success.
 
 ## To-Do
 
@@ -30,6 +35,7 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 ## Backlog / Owner
 
 - **Code-Fix Env-Persistenz** — `store.rs::signaling_urls_config` schreibt Env-Übersteuerung dauerhaft in den State-Root; Release-Checks mit gesetzter Variable vergiften so Produktion. Rust → gebündeltes Upgrade später.
+- **Code-Fix Env-Persistenz: zurückgestellt** — Env ist in `docs/business-os.md` als Konfigurationsweg dokumentiert, Abschalten der Persistierung = Verhaltensänderung + eigener Rust-Build (Worker-Worktrees bauen kein Rust; Sol am 27.09. 08:27Z `health_timeout`). Vorschlag: Env nur prozesslokal, Datei nur explizit; Doku-Satz anpassen; Test „Env schreibt keine Datei“.
 - **OWNER: Seelen-Achsen → Temperament?** — Seele ist nicht in der öffentlichen Projektion (`public_fields` ohne soul); Temperament kommt vorerst aus dem Genom-Seed.
 
 ## Environment traps
