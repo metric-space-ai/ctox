@@ -28,6 +28,8 @@ try {
   const url = `http://127.0.0.1:${port}/`;
   await page.goto(url, { waitUntil: 'domcontentloaded' });
   const first = await collectSelections(page, true);
+  await assertReducedMotionStops(page);
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
 
   await page.reload({ waitUntil: 'domcontentloaded' });
   const reloaded = await collectSelections(page, false);
@@ -38,7 +40,7 @@ try {
 
   const report = { ok: true, url, first, reloaded, consoleErrors };
   fs.writeFileSync(path.join(outputDir, 'ctox-crew-map.json'), JSON.stringify(report, null, 2));
-  console.log(JSON.stringify({ ok: true, scenarios: 6, outputDir }, null, 2));
+  console.log(JSON.stringify({ ok: true, scenarios: 7, outputDir }, null, 2));
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
@@ -62,11 +64,13 @@ async function collect(page, selected) {
   await page.evaluate(() => window.__triggerCrewTurn?.());
   await page.waitForTimeout(220);
   return page.evaluate((selected) => {
+    const snapshot = window.__ctoxCrewMotionEngine?.snapshot?.() || [];
+    const impulsesFor = (node) => snapshot.find((actor) => actor.node === node)?.impulses || [];
     const slots = Array.from(document.querySelectorAll('.ctox-flow-creature-slot'));
     const byTask = Object.fromEntries(slots.map((slot) => [slot.dataset.taskId, {
       node: slot.dataset.creatureNodeId,
       mode: slot.querySelector('.ctox-crew-creature')?.dataset.crewMode || '',
-      transform: slot.querySelector('.ctox-crew-creature')?.style.transform || '',
+      impulses: impulsesFor(slot.querySelector('.ctox-crew-creature')),
       activityTurns: slot.querySelector('.ctox-crew-creature')?.dataset.activityTurns || '',
       activityUpdatedAt: slot.querySelector('.ctox-crew-creature')?.dataset.activityUpdatedAt || '',
       xEyes: slot.querySelectorAll('.ctox-crew-eyes-x path').length,
@@ -86,21 +90,33 @@ async function collect(page, selected) {
       identityColor: document.querySelector('[data-task-id="task-working"] .ctox-crew-creature')?.style.getPropertyValue('--crew-color') || '',
       chatIdentityColor: document.querySelector('[data-chat-creature] .ctox-crew-creature')?.style.getPropertyValue('--crew-color') || '',
       visibilityState: document.visibilityState,
-      motionProfiles: document.querySelector('main')?.__ctoxCrewProceduralMotion?.profiles?.length ?? -1,
-      motionFrame: document.querySelector('main')?.__ctoxCrewProceduralMotion?.frame || 0,
+      motionRunning: Boolean(window.__ctoxCrewMotionEngine?.running),
     };
   }, selected);
 }
 
+// A turn gesture is finite: after it the working creature returns to its
+// continuous working pose (the engine keeps running for the base motion).
 async function assertMotionSettles(page) {
   await page.waitForTimeout(1500);
-  const settled = await page.evaluate(() => ({
-    transform: document.querySelector('[data-task-id="task-working"] .ctox-crew-creature')?.style.transform || '',
-    frame: document.querySelector('main')?.__ctoxCrewProceduralMotion?.frame || 0,
-  }));
-  if (settled.transform || settled.frame) {
-    throw new Error(`turn animation did not settle and release its frame loop: ${JSON.stringify(settled)}`);
+  const settled = await page.evaluate(() => {
+    const node = document.querySelector('[data-task-id="task-working"] .ctox-crew-creature');
+    const actor = (window.__ctoxCrewMotionEngine?.snapshot?.() || []).find((entry) => entry.node === node);
+    return { impulses: actor?.impulses || null, mode: actor?.mode || '', moving: Boolean(actor?.transform) };
+  });
+  if (!settled.impulses || settled.impulses.length || settled.mode !== 'working' || !settled.moving) {
+    throw new Error(`turn gesture did not settle back into the working pose: ${JSON.stringify(settled)}`);
   }
+}
+
+async function assertReducedMotionStops(page) {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.waitForTimeout(200);
+  const state = await page.evaluate(() => ({
+    running: Boolean(window.__ctoxCrewMotionEngine?.running),
+    transforms: Array.from(document.querySelectorAll('.ctox-crew-figure')).filter((node) => node.style.transform).length,
+  }));
+  if (state.running || state.transforms) throw new Error(`reduced motion must stop all creature motion: ${JSON.stringify(state)}`);
 }
 
 function assertResult(result) {
@@ -111,8 +127,9 @@ function assertResult(result) {
   if (result.selectedIds.length !== 1 || result.selectedIds[0] !== result.selected) throw new Error('selected creature is not marked');
   if (result.selected === 'task-waiting' && (result.byTask['task-waiting']?.node !== 'queued' || result.byTask['task-waiting']?.mode !== 'sleeping')) throw new Error('waiting creature is not sleeping at queued');
   if (result.byTask['task-working']?.node !== 'running' || result.byTask['task-working']?.mode !== 'working') throw new Error('working creature is not active at running');
-  if (!result.byTask['task-working']?.transform) throw new Error(`fresh durable tool turn did not trigger a finite creature impulse: ${JSON.stringify(result)}`);
-  if (result.byTask['task-waiting']?.transform) throw new Error('waiting creature must remain still');
+  if (!result.byTask['task-working']?.impulses?.includes('tool')) throw new Error(`fresh durable tool turn did not trigger a finite creature impulse: ${JSON.stringify(result)}`);
+  if (result.byTask['task-waiting']?.impulses?.length) throw new Error('a waiting creature gets no activity gesture without a durable turn');
+  if (!result.motionRunning) throw new Error('visible working crew must be animated');
   if (result.selected === 'task-failed' && (result.byTask['task-failed']?.node !== 'model-failed' || result.byTask['task-failed']?.xEyes !== 2)) throw new Error('failed creature lacks the failed node or X eyes');
   if (result.focusedAfterClick !== result.selected || result.focusedAfterKeyboard !== 'task-working') throw new Error('map creature selection is not mouse/keyboard reachable');
   if (result.fullTaskId !== 'queue:system::task_1234567890abcdef' || !result.visibleTaskId.startsWith('…')) throw new Error('chat task id deep-link is missing');

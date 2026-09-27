@@ -848,6 +848,10 @@
 
 .ctox-flow-canvas {
   position: relative;
+  /* Column flex + auto margins centre a flow smaller than the canvas and
+     still let a larger one scroll from its top-left edge. */
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   width: 100%;
   height: 100%;
@@ -909,7 +913,8 @@
   color: var(--text);
 }
 
-.ctox-flow-toolbar span {
+.ctox-flow-toolbar span,
+.ctox-flow-toolbar .ctox-flow-zoom-fit {
   min-width: 42px;
   color: var(--muted);
   font-size: var(--fs-meta);
@@ -918,10 +923,11 @@
   user-select: none;
 }
 
+/* The flow is sized by its fitted zoom (fitFlowToCanvas); no fixed minimum
+   that would force scrolling in a normal window. */
 .ctox-flow-canvas-inner {
-  min-width: 980px;
-  min-height: 780px;
-  margin: var(--space-2) auto var(--space-4);
+  flex: none;
+  margin: auto;
   contain: layout paint style;
 }
 
@@ -964,54 +970,35 @@
   animation: ctox-flow-creature-focus 1.6s ease-out infinite;
 }
 
+/* Who works on a task, in the member's own colour. */
+.ctox-task-meta-member {
+  color: color-mix(in srgb, var(--crew-color, var(--muted)) 72%, var(--text-strong, var(--text)));
+  font-weight: 650;
+}
+.ctox-task-meta-member.is-unassigned {
+  color: var(--muted);
+  font-weight: 500;
+}
+
+/* The selected creature's name tag: who, and what it does or where it is. */
+.ctox-flow-crew-bubble rect,
+.ctox-flow-crew-bubble path {
+  fill: var(--elev-float-2, var(--surface-2));
+  stroke: var(--elev-edge, var(--line));
+  stroke-width: 1;
+}
+.ctox-flow-crew-bubble path { stroke: none; }
+.ctox-flow-crew-bubble text {
+  fill: var(--text-strong, var(--text));
+  font-size: 11.5px;
+  font-weight: 620;
+}
+
+/* Creature look and motion come from shared/crew-renderer.js and
+   shared/crew-motion.js; the map only sizes the wrapper. */
 .ctox-flow-creature-shell .ctox-crew-creature {
-  display: inline-grid;
-  place-items: center;
   width: 100%;
   height: 100%;
-  contain: layout style;
-  transform-origin: 50% 78%;
-}
-
-.ctox-flow-creature-shell .ctox-crew-creature:is(.is-working, .is-review),
-.ctox-flow-creature-shell .ctox-crew-creature:is(.is-working, .is-review) .ctox-crew-body,
-.ctox-flow-creature-shell .ctox-crew-creature:is(.is-working, .is-review) .ctox-crew-eyes {
-  will-change: transform;
-}
-
-.ctox-flow-creature-shell .ctox-crew-creature svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-
-.ctox-flow-creature-shell .ctox-crew-body {
-  fill: var(--crew-color);
-  filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--crew-color) 32%, transparent));
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.ctox-flow-creature-shell .ctox-crew-eyes,
-.ctox-flow-creature-shell .ctox-crew-eyes-x,
-.ctox-flow-creature-shell .ctox-crew-eyes-sleeping {
-  fill: none;
-  /* Illustration ink matches shared/business-chat.js in both themes. */
-  stroke: #090a0c;
-  stroke-width: 5;
-  stroke-linecap: round;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.ctox-flow-creature-shell .ctox-crew-creature.is-failed {
-  transform: translateY(10px) scale(1.08, .7);
-}
-
-.ctox-flow-creature-shell .ctox-crew-creature.is-failed .ctox-crew-body {
-  transform: scale(1.14, .72);
-  transform-origin: 50% 90%;
 }
 
 @keyframes ctox-flow-creature-focus {
@@ -1044,7 +1031,8 @@
   fill: none;
   stroke: var(--ctox-flow-edge);
   stroke-width: 1.05;
-  opacity: 0.42;
+  /* Possible transitions stay quiet; the observed path carries the eye. */
+  opacity: 0.26;
   marker-end: url("#ctox-flow-arrow");
 }
 
@@ -1609,11 +1597,30 @@
   padding: 28px 24px;
 }
 .ctox-crew-home-row {
+  --crew-home-size: 96px;
+  isolation: isolate;
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   gap: 28px 34px;
   max-width: 100%;
+  padding-inline: 24px;
+}
+/* The crew stands together on one floor instead of floating in the pane:
+   a flat line exactly at the creatures' feet (ground line 58/64 of the
+   creature box, below the 10px card padding); each creature brings its own
+   coloured ground shadow. */
+.ctox-crew-home-row::before {
+  content: '';
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: calc(10px + var(--crew-home-size) * 58 / 64);
+  height: 1px;
+  background: var(--elev-edge, var(--line));
+  pointer-events: none;
+  z-index: -1;
 }
 .ctox-crew-home-member {
   display: grid;
@@ -1660,8 +1667,8 @@
 }
 .ctox-crew-home-creature {
   display: block;
-  width: 72px;
-  height: 72px;
+  width: var(--crew-home-size, 96px);
+  height: var(--crew-home-size, 96px);
 }
 .ctox-crew-home-member.is-home .ctox-crew-home-creature,
 .ctox-crew-home-member.is-resting_after_failure .ctox-crew-home-creature {
