@@ -646,6 +646,11 @@ until the current digest is known and matches, or a newly authorized fetch
 re-stamps the window.
 If replication cancellation detaches the demand loader, control-plane `find`,
 `findOne`, `count`, and live subscriptions return no cached lifecycle rows.
+For `find` and `findOne` with a nonempty `requireRevision`, a missing loader
+instead rejects with `QUERY_GENERATION_REQUIRED`; replacement during the read
+rejects with `QUERY_CANCELLED` and `generationChanged`. These states cannot
+confirm document absence. A stable authorized query returning no rows remains
+a successful empty result. Ordinary reads keep their fail-closed empty results.
 The loader transition immediately clears existing subscription snapshots,
 even without a storage change, and discards responses from its prior bridge.
 Control-plane `count()` walks authorized 200-row demand windows, retaining

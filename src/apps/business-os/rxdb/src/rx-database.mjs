@@ -757,6 +757,12 @@ class CtoxRxQuery {
     } else if (isControlPlaneStatusCollection(this.collection.name)) {
       // Replication cancellation detaches the loader. A warm local row is not
       // evidence that the current actor may still read it after reconnect.
+      if (this.query.requireRevision) {
+        throw Object.assign(new Error('QUERY_GENERATION_REQUIRED: strict demand read has no loader'), {
+          code: 'QUERY_GENERATION_REQUIRED',
+          retryable: false,
+        });
+      }
       docs = [];
     } else if (typeof this.collection.storageCollection.queryDocuments === 'function') {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {
@@ -777,6 +783,13 @@ class CtoxRxQuery {
     if (isControlPlaneStatusCollection(this.collection.name) && demandLoader !== this.collection.demandLoader) {
       // A response authorized under the previous bridge must not reach a
       // subscriber after that bridge has been detached or replaced.
+      if (this.query.requireRevision) {
+        throw Object.assign(new Error('QUERY_CANCELLED: generation-replaced'), {
+          code: 'QUERY_CANCELLED',
+          retryable: false,
+          generationChanged: true,
+        });
+      }
       docs = [];
     }
     const wrapped = docs.map((doc) => new CtoxRxDocument(this.collection, doc));
