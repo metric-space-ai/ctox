@@ -38,19 +38,49 @@ impl PeerSource {
 /// NativeSyncSession::file_range and must cancel an in-flight range on drop.
 /// They return bytes only; this worker exclusively owns filesystem writes.
 pub trait PeerRangeSource: Send + Sync {
+    /// Revalidate this exact job against the current enrolled account, session
+    /// generation and file policy. Content identity is not an authorization grant.
+    /// There is deliberately no permissive default for this required check.
+    fn authorize<'a>(
+        &'a self,
+        request: &'a DownloadRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
     fn read_range<'a>(
         &'a self,
-        source: &'a PeerSource,
+        request: &'a DownloadRequest,
         offset: u64,
         length: u64,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>>;
 }
 
 impl Worker {
+    pub(super) async fn authorize_peer(
+        &self,
+        request: &DownloadRequest,
+        stop: &AtomicBool,
+    ) -> Result<bool> {
+        let provider = self
+            .peer
+            .as_ref()
+            .context("native peer transfer resolver is unavailable")?;
+        let check = provider.authorize(request);
+        tokio::pin!(check);
+        let mut ticker = tokio::time::interval(Duration::from_millis(100));
+        loop {
+            if stop.load(Ordering::Acquire) || self.store.desired(&request.id)? != "run" {
+                return Ok(false);
+            }
+            tokio::select! {
+                result = &mut check => { result?; return Ok(true); }
+                _ = ticker.tick() => {}
+            }
+        }
+    }
+
     pub(super) async fn download_peer(
         &self,
         request: &DownloadRequest,
-        source: &PeerSource,
         staging: &Path,
         stop: &AtomicBool,
     ) -> Result<Option<PathBuf>> {
@@ -87,7 +117,10 @@ impl Worker {
                 return Ok(None);
             }
             let length = (request.size - offset).min(RANGE_BYTES);
-            let read = provider.read_range(source, offset, length);
+            if !self.authorize_peer(request, stop).await? {
+                return Ok(None);
+            }
+            let read = provider.read_range(request, offset, length);
             tokio::pin!(read);
             let bytes = loop {
                 tokio::select! {

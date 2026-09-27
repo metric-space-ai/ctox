@@ -283,16 +283,25 @@ impl Worker {
         let staging = self.store.artifacts.join("staging").join(&request.id);
         private_directory(&staging)?;
         let object = self.store.artifacts.join("objects").join(&request.sha256);
+        if request.peer_source.is_some() && !self.authorize_peer(request, stop).await? {
+            return self.settle_interruption(&request.id);
+        }
         // Recover publication-before-receipt crashes without redownloading, but never trust existence.
         if object.try_exists()? {
             verify_file(&object, request)?;
+            if request.peer_source.is_some() && !self.authorize_peer(request, stop).await? {
+                return self.settle_interruption(&request.id);
+            }
             return self.publish_receipt(request, &object, stop);
         }
-        if let Some(source) = &request.peer_source {
-            let partial = self.download_peer(request, source, &staging, stop).await?;
+        if request.peer_source.is_some() {
+            let partial = self.download_peer(request, &staging, stop).await?;
             let Some(partial) = partial else {
                 return self.settle_interruption(&request.id);
             };
+            if !self.authorize_peer(request, stop).await? {
+                return self.settle_interruption(&request.id);
+            }
             return self.publish_partial(request, &partial, &object, stop);
         }
         // Shared ranges have their own immutable-request staging area. A failed

@@ -14,9 +14,15 @@ struct PendingPeer {
     dropped: Arc<AtomicBool>,
 }
 impl PeerRangeSource for PendingPeer {
+    fn authorize<'a>(
+        &'a self,
+        _: &'a DownloadRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
     fn read_range<'a>(
         &'a self,
-        _: &'a PeerSource,
+        _: &'a DownloadRequest,
         _: u64,
         _: u64,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<u8>>> + Send + 'a>> {
@@ -68,9 +74,15 @@ struct Peer {
     reads: Mutex<Vec<u64>>,
 }
 impl PeerRangeSource for Peer {
+    fn authorize<'a>(
+        &'a self,
+        _: &'a DownloadRequest,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
+    }
     fn read_range<'a>(
         &'a self,
-        _: &'a PeerSource,
+        _: &'a DownloadRequest,
         offset: u64,
         length: u64,
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<u8>>> + Send + 'a>> {

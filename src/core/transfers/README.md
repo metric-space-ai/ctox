@@ -80,8 +80,14 @@ HTTP sources must be empty for this form. These fields are immutable claims,
 not authorization. `worker_with_peer` requires a native-owned range resolver;
 the ordinary HTTP-only daemon rejects peer work when no resolver is installed.
 The native binding verifies the enrolled source proof on its admitted Sync
-connection and then consumes the existing `rxdb.file.fetch` range API. The
-production command/session registration remains to be connected and verified.
+connection and then consumes the existing `rxdb.file.fetch` range API. It requires
+a daemon-owned admission hook for the exact immutable job and connection. That
+hook must consult current enrolled account/epoch, session generation and file
+policy; source identity and a previous receipt cannot substitute for admission.
+The worker checks admission before cache reuse, each range and publication,
+including fully checkpointed resumes, and cancels pending admission on pause or
+cancel. Range reads carry the complete job identity. The daemon hook implementation
+and production command/session registration remain to be connected and verified.
 
 Peer ranges are at most 1 MiB. The worker flushes each range before committing
 its offset to the existing SQLite job. Reopen truncates uncommitted tail bytes;
@@ -91,17 +97,20 @@ offset reset for explicit retry. Peer receipts identify the WebRTC transport
 and carry no aria2 revision. This provides no checkpoint protection, execution
 handoff or guest readiness. Those require the existing native authority APIs.
 
-The peer-store interruption/reopen and identity tests use a range provider
+The peer-store interruption/reopen, identity and authorization tests use a range provider
 fixture; they do not prove native networking or two-host acceptance.
 
 ## Verification and remaining work
 
 `tests/download.rs` exercises real loopback HTTP, durable receipt/reopen/idempotency,
 wrong hashes/lengths, exclusive worker ownership, pause/resume, terminal cancellation,
-mirror isolation/failover, rejected-prefix recovery and publication-crash recovery. Run with two test workers via the shared admission gate on the Mac:
+mirror isolation/failover, rejected-prefix recovery and publication-crash recovery.
+`tests/peer_authorization.rs` covers cache reuse across jobs, missing admission,
+revocation before publication/fully checkpointed reopen, and cancellation during
+admission. Run with two compiler workers and one test thread via the shared admission gate on the Mac:
 
 ```
-cargo test --manifest-path src/core/transfers/Cargo.toml -j 2 -- --test-threads=2
+cargo test --manifest-path src/core/transfers/Cargo.toml -j 2 -- --test-threads=1
 ```
 
 The macOS run on 2026-09-27 passed all 27 targeted checks: five native file
@@ -113,13 +122,14 @@ The standalone harness uses the exact archived private dependency via a local pa
 It verifies known-empty content and rejects truncated HTTP responses, retaining
 the received prefix for resume. Earlier platform and framing failures were repaired.
 The later engine-only run on `aea4d55e` passed all eight bounds/socket and
-real HTTP mirror/sparse-resume tests in 58.102 seconds. New worker-level tests
-cover distinct range contributions, corrupt assembly falling back to a clean
-mirror, and pause/reopen fetching only missing ranges; those tests are added
-but have not yet run. Root native integration and installed acceptance remain
+real HTTP mirror/sparse-resume tests in 58.102 seconds. Adapter `c8279d353`
+passed all twelve HTTP and four peer-provider tests in 14.738 seconds, including
+distinct range contributions, corrupt assembly fallback and pause/reopen fetching
+only missing ranges. That run excludes the later job-authorization consumer
+changes and their three new tests. Root native integration and installed acceptance remain
 unverified. Directory durability is implemented for Unix only; Windows
 activation explicitly fails instead of issuing an unproven durable receipt.
 No platform is claimed accepted yet. Native command/progress projection through
 CTOX Sync, peer capability-scoped requests, native peer interruption/resume,
-worker multi-source verification, Git worktree integration and DevOps two-host
+Git worktree integration and DevOps two-host
 acceptance remain open.
