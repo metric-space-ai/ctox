@@ -15,8 +15,9 @@ acceptance evidence or a replacement for the full portability requirement.
 | CTOX `src/core/sync/src/native_execution.rs::activate` | Starts the private authority listener and supervises authenticated peer-route discovery. | Does not capture, stream, restore or resume a checkpoint. |
 | CTOX `src/core/sync/src/capture.rs::CheckpointStore::capture` | Captures Git plus caller-supplied history/provider artifacts; requires the caller to establish quiescence. | No production session owner supplies that boundary and those artifacts. |
 | CTOX `src/core/business_os/workjet_transfer_git.rs` | CLI pack/apply helpers reconstruct a working copy. | They are not called by the native session handoff lifecycle and do not establish account/principal permission. |
-| CTOX `src/core/sync/src/authority/handoff.rs` | Verifies signed gate results and discards old evidence during revalidation. | Implementations and transfer invocations remain test-only. |
-| CTOX `business_session_handoff_bindings` | Migration creates binding fields and indexes. | No production binding enrollment, reader or policy adapter consumes this table. |
+| CTOX `src/core/sync/src/authority/handoff.rs` | Verifies signed gate results and discards old evidence during revalidation. | The production gate adapter now exists (see below); transfer invocations remain absent — no production consumer calls `SessionHandoffTransfer`. |
+| CTOX `business_session_handoff_bindings` | Migration creates binding fields and indexes; a production reader now exists. | No production binding enrollment path writes this table yet; rows are the gate's only authority. |
+| CTOX `src/core/business_os/session_handoff_gate.rs` | Production `SessionHandoffGate`: per call re-reads the active binding by digest, matches side/phase, job, session, scope, checkpoint, ownership generation, harness/model-route/account/model against the row, requires this instance's enrolled identity for the side, resolves the principal's current role and capability epoch from `business_users`, demands the exact `session_handoff` grant on the binding, then mints a 60s signed permit. | Not yet invoked by an authenticated checkpoint sender/receiver; no enrollment writer feeds the binding table in production. |
 
 The older Workjet snapshot module records an August decision to transfer only
 a context brief. That behavior must not be relabeled as satisfying the current
@@ -51,6 +52,35 @@ its acceptance evidence exists.
 5. Wire desktop, web and mobile requests through their host to that same native
    lifecycle. Remove replaced execution/transfer paths only once the new path
    and migration/recovery behavior are verified across those surfaces.
+
+## Absent transfer consumer: owner contract
+
+Source evidence (2026-09-27, CTOX `40569ba9f`): `SessionHandoffGate`,
+`SessionHandoffTransfer` and `native_session_handoff_gate` have no production
+caller. `src/core/sync/src/host_runtime.rs`, `native.rs`, `native_execution.rs`,
+`ipc.rs`, `capture.rs` and `checkpoint.rs` contain no handoff reference; the
+only constructions are in `src/core/sync/tests/session_handoff.rs` and the
+adapter's own unit tests. The gate adapter therefore ships without its
+consumer rather than with a fabricated one.
+
+The smallest owner contract that closes step 3:
+
+1. An **authenticated checkpoint sender** (owner: the native session owner
+   from step 1) constructs `SessionHandoffTransfer::begin(gate, request)`
+   before the first protected manifest or blob byte and calls `revalidate()`
+   at every bounded chunk boundary; a denial stops the transfer and forbids
+   resume until a fresh `begin` succeeds.
+2. An **authenticated receiver** performs the same begin/revalidate fencing
+   with `SessionHandoffPhase::Receive` before ingesting any protected byte.
+3. The **target executor** obtains a `Resume` decision through the same gate
+   after reconstruction verification and before starting execution (step 4).
+4. The gate instance comes from
+   `business_os::native_session_handoff_gate(root)` so permits are minted by
+   the enrolled instance identity from the CTOX secret store; no consumer may
+   substitute a caller-supplied key or a permit-returning stub.
+5. Binding rows are written only by a separately authorized enrollment path
+   that resolves the fields listed in step 2; that writer is still
+   unimplemented and remains part of this owner contract.
 
 ## Acceptance evidence
 

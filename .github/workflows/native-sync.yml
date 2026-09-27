@@ -324,6 +324,10 @@ jobs:
           tests=(
             business_os::store_policy::handoff_grant_scope_tests::handoff_grants_require_named_actor_and_exact_binding_scope
             business_os::store::grant_scope_migration_tests::grant_scope_migration_rolls_back_and_retries_inside_transaction
+            business_os::session_handoff_gate::tests::authorized_disclose_mints_a_verifiable_current_permit
+            business_os::session_handoff_gate::tests::unknown_or_revoked_binding_denies
+            business_os::session_handoff_gate::tests::wrong_instance_or_missing_grant_denies
+            business_os::session_handoff_gate::tests::tampered_request_fields_deny_as_binding_mismatch
           )
           for test in "${tests[@]}"; do
             log="$RUNNER_TEMP/ctox-host-proof/${test##*::}.log"
