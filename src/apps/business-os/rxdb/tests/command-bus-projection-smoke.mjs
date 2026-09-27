@@ -19,6 +19,45 @@
 
 import { createCommandBus } from '../../shared/command-bus.js';
 
+import { createQueryDemandLoader, createSidecarWithMemoryBackend } from '../src/index.mjs';
+import { replicationWebRtcTestInternals } from '../src/replication-webrtc.mjs';
+
+// Join the real peer-close -> removePeer -> demand-loader cancellation path
+// to the real command tracker, without opening a network connection.
+async function peerCancelledCommandRead(id, reason) {
+  const loader = createQueryDemandLoader({
+    collectionName: 'business_commands', schemaVersion: 1,
+    storageCollection: {
+      databaseName: 'command-peer-cancel',
+      async findDocumentsById() { return {}; },
+      async queryDocuments() { return []; },
+      async bulkWrite() {},
+    },
+    sidecar: createSidecarWithMemoryBackend({ databaseName: 'cancel-' + id }),
+    requestQueryFetch: () => new Promise(() => {}),
+    queryGeneration: () => 'old-connection',
+    readPermissionDigest: () => 'actor',
+  });
+  const pending = loader.resolveQuery({ selector: { id }, requireRevision: 'native-receipt' });
+  const observed = pending.catch(error => {
+    assert(error.code === 'QUERY_CANCELLED' && error.message === 'QUERY_CANCELLED: ' + reason,
+      'real peer cancellation must retain its exact reason');
+    throw error;
+  });
+  await Promise.resolve();
+  const State = replicationWebRtcTestInternals.getReplicationStateClass();
+  const state = Object.assign(Object.create(State.prototype), {
+    peerStates$: { getValue: () => new Map([['native', {}]]), next() {} },
+    checkpointValidityKeyForPeer: () => null,
+    pullCheckpointsByPeer: new Map(), pushCheckpointsByPeer: new Map(),
+    publishTransportStatus() {}, demandStatus: {}, active$: { next() {} },
+    demandLoader: loader,
+  });
+  state.onSharedEvent('peer-close', { peerId: 'native', reason: reason.slice('peer-'.length) });
+  return observed;
+}
+
+
 globalThis.CTOX_BUSINESS_OS_SESSION = {
   capability_token: 'projection-smoke-capability-token',
   capability_expires_at_ms: Date.now() + 60 * 60 * 1000,
@@ -432,13 +471,15 @@ for (const arrival of ['before', 'during', 'absent', 'deleted', 'wrong-id', 'fai
 // A native schema reconfiguration closes the current peer while an accepted
 // command is being tracked. Keep the same id and finite deadline; never dispatch
 // again, fabricate success from local intent, or swallow other cancellations.
-for (const scenario of ['completed', 'failed', 'never-arrives', 'explicit-cancel']) {
-  const id = 'cmd-peer-close-' + scenario;
+for (const closeReason of ['peer-peer-close', 'peer-capability-authority-changed']) {
+for (const scenario of ['completed', 'failed', 'never-arrives', 'explicit-cancel', 'other-peer-cancel']) {
+  const id = 'cmd-' + closeReason + '-' + scenario;
   let queries = 0;
   let unsubscribed = 0;
   const local = { id, status: 'pending_sync', replication_phase: 'local_only' };
   const closed = Object.assign(new Error(scenario === 'explicit-cancel'
-    ? 'QUERY_CANCELLED: user-cancelled' : 'QUERY_CANCELLED: peer-peer-close'), { code: 'QUERY_CANCELLED' });
+    ? 'QUERY_CANCELLED: user-cancelled' : scenario === 'other-peer-cancel'
+      ? 'QUERY_CANCELLED: peer-unknown-reason' : 'QUERY_CANCELLED: ' + closeReason), { code: 'QUERY_CANCELLED' });
   const commands = {
     storageCollection: { async findDocumentsById(ids) {
       assert(ids.length === 1 && ids[0] === id, 'peer-close: exact local id only');
@@ -452,7 +493,8 @@ for (const scenario of ['completed', 'failed', 'never-arrives', 'explicit-cancel
         $: { subscribe() { return { unsubscribe() { unsubscribed++; } }; } },
         async exec() {
           queries++;
-          if (queries === 1 || scenario === 'never-arrives' || scenario === 'explicit-cancel') throw closed;
+          if (['explicit-cancel', 'other-peer-cancel'].includes(scenario)) throw closed;
+          if (queries === 1 || scenario === 'never-arrives') return peerCancelledCommandRead(id, closeReason);
           return {
             id, status: scenario, replication_phase: 'native_observed',
             execution_phase: 'terminal', terminal_status: scenario,
@@ -468,7 +510,7 @@ for (const scenario of ['completed', 'failed', 'never-arrives', 'explicit-cancel
   try { receipt = await bus.waitForTerminal(id, { timeoutMs: ['completed', 'failed'].includes(scenario) ? 5000 : 1000 }); }
   catch (error) { failure = error; }
   if (scenario === 'completed') {
-    assert(!failure && receipt?.status === 'completed', 'peer-close: authoritative later result survives reconnect');
+    assert(!failure && receipt?.status === 'completed', 'peer-close: authoritative later result survives reconnect ' + JSON.stringify({ closeReason, queries, code: failure?.code, message: failure?.message }));
   } else if (scenario === 'failed') {
     assert(!receipt && failure?.code === 'permission_denied', 'peer-close: native denial is retained ' + JSON.stringify({ code: failure?.code, message: failure?.message, receipt, queries }));
   } else if (scenario === 'never-arrives') {
@@ -478,6 +520,7 @@ for (const scenario of ['completed', 'failed', 'never-arrives', 'explicit-cancel
     assert(!receipt && failure === closed && queries === 1, 'peer-close: unrelated cancellation is not hidden');
   }
   assert(unsubscribed >= 1, 'peer-close: watcher is released');
+}
 }
 
 // During peer replacement strict reads have no generation. Wait for the
