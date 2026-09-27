@@ -3095,6 +3095,118 @@ CTOX_ACCOUNT_FIXTURE
         let _ = fs::remove_dir_all(&fx.root);
     }
 
+    /// A real worker command session: an accepted Outbound research chat task
+    /// authorized by a signed managed-user capability, and the session token
+    /// the harness issues for it. Verification runs the production path.
+    fn worker_command_session(fx: &Fixture) -> String {
+        let contract = json!({
+            "mechanism": "business_command",
+            "command_type": "outbound.lead.research_writeback",
+            "collection": "outbound_lead_generation_leads",
+            "record_ids": ["lead-worker"],
+        });
+        let (capability, _) =
+            crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                &fx.root,
+                "operator",
+                "Operator",
+                "admin",
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .unwrap();
+        crate::business_os::store::accept_rxdb_business_command_with_origin(
+            &fx.root,
+            json!({
+                "id": "worker-research-account", "module": "outbound-lead-generation",
+                "command_type": "business_os.chat.task", "record_id": "lead-worker",
+                "payload": {
+                    "instruction": "Research the lead", "mode": "data",
+                    "lead_id": "lead-worker", "company": "UITEST Account GmbH", "country": "DE",
+                    "source_policy": {"sources": [{"id": "provider.test", "target_key": "account-provider"}]},
+                    "writeback_contract": contract,
+                },
+                "client_context": {"capability_token": capability},
+            }),
+            crate::business_os::store::CommandOrigin::ReplicatedPeer,
+        )
+        .unwrap();
+        let parent = crate::mission::channels::business_command_projection(
+            &fx.root,
+            "worker-research-account",
+        )
+        .unwrap();
+        let token = crate::business_os::mcp_channel::issue_internal_command_session_token(
+            &fx.root,
+            "worker-research-account",
+            parent["payload_hash"].as_str().unwrap(),
+            "operator",
+            "admin",
+            "research-workspace",
+            &contract,
+        )
+        .unwrap();
+        // The session is genuinely valid, so a refusal below is the probe
+        // rule and not a broken session.
+        crate::business_os::mcp_channel::verify_internal_command_session_token(&fx.root, &token)
+            .expect("worker command session verifies");
+        token
+    }
+
+    #[test]
+    fn a_valid_worker_command_session_never_reaches_the_provider_with_flag_or_grant() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-worker-session");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        assert_eq!(fx.calls(), 1);
+        let token = worker_command_session(&fx);
+        let args = |extra: &[&str]| {
+            let mut args = vec![
+                "--target-key".to_string(),
+                "account-provider".to_string(),
+                "--input-json".to_string(),
+                json!({"calls": fx.root.join("calls.txt"), "mode_file": fx.root.join("mode.txt")})
+                    .to_string(),
+                "--timeout-seconds".to_string(),
+                "10".to_string(),
+                "--command-session".to_string(),
+                token.clone(),
+            ];
+            args.extend(extra.iter().map(|value| value.to_string()));
+            args
+        };
+        let refused = execute_scrape_with_outcome(&fx.root, &args(&["--probe-account"]))
+            .expect_err("a worker session cannot authorize a probe");
+        assert!(
+            format!("{refused:#}").contains("--probe-account is refused"),
+            "{refused:#}"
+        );
+        assert_eq!(
+            fx.calls(),
+            1,
+            "the refused worker probe never reached the provider"
+        );
+        let grant = AccountProbeGrant::from_command_authorization(
+            "cmd-source-test",
+            &operator_authorization(true, true),
+        )
+        .unwrap();
+        let suppressed =
+            execute_scrape_with_probe_grant(&fx.root, &args(&[]), Some(&grant)).unwrap();
+        assert_eq!(suppressed.status, ScrapeRunStatus::ProviderAccountInactive);
+        assert!(suppressed
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("kein Anbieteraufruf"));
+        assert_eq!(
+            fx.calls(),
+            1,
+            "a grant inside a worker session does not probe"
+        );
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
     #[test]
     fn a_worker_session_never_probes_even_with_a_grant() {
         let grant = AccountProbeGrant::from_command_authorization(

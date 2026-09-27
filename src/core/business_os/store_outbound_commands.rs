@@ -2949,18 +2949,7 @@ fn outbound_apply_research_adapter_scrape_effect(
     // source. Its policy-checked authorization (trusted user, DataWrite) may
     // probe a provider account the scrape state holds as inactive, once and
     // under the probe lease. Worker sessions cannot produce this grant.
-    let probe_grant = if command_type == "outbound.research_source.test" {
-        super::store::recoverable_background_control_claim_authorization(root, command).and_then(
-            |authorization| {
-                scrape::AccountProbeGrant::from_command_authorization(
-                    command.id.as_deref().unwrap_or_default(),
-                    &authorization,
-                )
-            },
-        )
-    } else {
-        None
-    };
+    let probe_grant = outbound_source_test_probe_grant(root, command);
     let test_started = Instant::now();
     match outbound_execute_research_scrape_target(
         root,
@@ -3696,6 +3685,24 @@ fn outbound_scrape_test_execution_args(
         "--input-json".to_string(),
         input.to_string(),
     ])
+}
+
+/// The account probe grant of an Outbound source test: derived only from the
+/// command's server-side authorization (signed capability session, module
+/// policy DataWrite) and only for `outbound.research_source.test`.
+fn outbound_source_test_probe_grant(
+    root: &Path,
+    command: &BusinessCommand,
+) -> Option<scrape::AccountProbeGrant> {
+    if command.command_type != "outbound.research_source.test" {
+        return None;
+    }
+    let authorization =
+        super::store::recoverable_background_control_claim_authorization(root, command)?;
+    scrape::AccountProbeGrant::from_command_authorization(
+        command.id.as_deref().unwrap_or_default(),
+        &authorization,
+    )
 }
 
 fn outbound_execute_research_scrape_target(
@@ -13220,6 +13227,74 @@ mod registry_last_run_detail_tests {
         assert!(
             state.get("credential_version").is_none(),
             "no credential details"
+        );
+        Ok(())
+    }
+
+    // The source test's probe grant comes from the real authorization path:
+    // a signed capability session and the module policy, never from the
+    // claimed actor or the command type alone.
+    #[test]
+    fn source_test_probe_grant_follows_the_signed_session_and_policy() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let (capability, _) =
+            super::super::store::issue_business_os_capability_token_for_managed_user(
+                root,
+                "operator",
+                "Operator",
+                "admin",
+                chrono::Utc::now().timestamp_millis(),
+            )?;
+        let command = |command_type: &str, client_context: Value| BusinessCommand {
+            id: Some("cmd-source-test-grant".to_string()),
+            module: "outbound-lead-generation".to_string(),
+            command_type: command_type.to_string(),
+            record_id: Some("adapter-linkedin".to_string()),
+            payload: serde_json::json!({}),
+            client_context,
+            origin: super::super::store::CommandOrigin::ReplicatedPeer,
+        };
+        let granted = outbound_source_test_probe_grant(
+            root,
+            &command(
+                "outbound.research_source.test",
+                serde_json::json!({ "capability_token": capability }),
+            ),
+        );
+        assert!(
+            granted.is_some(),
+            "signed admin session with policy gets a grant"
+        );
+        assert!(
+            outbound_source_test_probe_grant(
+                root,
+                &command("outbound.research_source.test", serde_json::json!({})),
+            )
+            .is_none(),
+            "no session, no grant"
+        );
+        assert!(
+            outbound_source_test_probe_grant(
+                root,
+                &command(
+                    "outbound.research_source.test",
+                    serde_json::json!({ "actor": { "id": "operator", "role": "admin" } }),
+                ),
+            )
+            .is_none(),
+            "a claimed actor without a signed session is not authority"
+        );
+        assert!(
+            outbound_source_test_probe_grant(
+                root,
+                &command(
+                    "business_os.chat.task",
+                    serde_json::json!({ "capability_token": capability }),
+                ),
+            )
+            .is_none(),
+            "only the source test grants a probe"
         );
         Ok(())
     }
