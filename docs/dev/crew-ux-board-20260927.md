@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad (Owner 27.09.: „leg los und setze alles um“): Rust-Fix Signaling (lokal committet 76d61182d, Test wartet auf Build-Sperre) → push → welsch `ctox upgrade --dev`; parallel signierter Slot beta.62 (2e89a09ab) aus dem Actions-Stau → stage/activate.
+Kritischer Pfad (Stand 27.09. 14:40 UTC): v410 ist auf main und live auf welsch (Slot beta.64) und thesen (Dateien). Offen ist allein der Rust-Test (Signaling-Env, Lumi-Farbe; `crew-ux/rust-fixes` `6d6c2c27d`). Er startet erst nach dem Greppy-Slot und mit koordinierter Admission; danach merge → `ctox upgrade --dev` welsch/thesen.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -28,22 +28,31 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 
 - **Crew zu Hause steht auf einem Boden (main `2e89a09ab`, v408)** — 96-px-Figuren auf gemeinsamer flacher Bodenlinie auf Fußhöhe (Modulvertrag „keine Verläufe“ eingehalten, erster Entwurf mit Verlauf vom Test „Presentation layer stays compact“ zurückgewiesen). ctox 46/46, Layout 7/7, Geometrie 3/3. welsch per Datei-Deploy (Backup `files-20260927T090555Z`, Hashes = main).
 
+- **Namen + neutraler Geist (main `4e6c7efcd`, v409 `bf94a9f3a`)** — Owner: „für viele Crews fehlen Namen und verschiedene Farben“. Messung welsch: 33 Tasks, 23 mit Mitglied (Lumi 11, Nori 8, Pico 3, Milo 1), 10 ohne; Chats 13/14 mit Mitglied, 7× Lumi. Ursachen: (a) Lumi-Seed = Neutralgrau, (b) Aufgabenliste zeigte keinen Namen, (c) Bug: Chat-Adapter gab normalisierte Identität {name:'Crew'} an den Renderer → jede unzugeordnete Aufgabe wurde graues Mitglied „Crew“ statt Geist. Fix: Name in Mitgliedsfarbe in der Meta-Zeile, „ohne Crew“ + Geist für Unzugeordnete, Namensschild für das ausgewählte Wesen auf der Karte, Rohidentität an Renderer, Palette ohne Grau (Bernstein). Tests: Renderer+Chat 101, ctox 47, Tickets 14, Chat-Harness 146 Szenarien, Layout 7/7. welsch v409 (Backup `files-20260927T09xx`, 15 Hashes = main); Browser: „Lumi · Erledigt · 23.09.“, Karte „ohne Crew · wartet“.
+
+- **thesen auf main-Shell (27.09. 10:07 UTC, verifiziert)** — thesen: Release `branch-main-20260927T005313Z` (Quelle `ccde06f4d`), currentSlot null → src/ gilt; Hash-Stichprobe = ccde06f4d. Seit ccde06f4d nur CREW-UX-Commits in business-os. Deploy 23 Dateien von `bf94a9f3a` (Backup `~/.local/state/ctox/backups/files-20260927T100731Z`, alle Hashes = main); zwei Anläufe scheiterten vorher an Neon-`fetch failed` (Netz), nichts verändert. Browser: `app.js?v=…crew-names-v409`, admin, Signaling wss://signaling.ctox.dev/v2, Engine aktiv, 4 Mitglieder, Leiste 56 px. Angekündigt im Codex-Thread.
+- **Compiler-Grenze eingehalten (Codex-Befund 09:5x)** — btls-sys-cmake (make -j2) + rustc = 3 effektive Compiler; Drossel `signaling-throttle.py` hält eigene Nachfahren von Cargo 95709 per SIGSTOP/SIGCONT auf ≤2 (bis 10:02: 8 Pausen/8 Fortsetzungen). Harte Frist 10:25Z, Cleanup 10:30Z, genau EIN Callback per Wächter v2 (`signaling-run-guard-v2.sh`). Danach kein lokaler Heavy-Job vor dem Greppy-Slot (Thread 01a07f6a-83e8-7901-851c-36521e4916b4).
+
+- **welsch Slot beta.63 aktiv (27.09. 10:26:48 UTC, verifiziert)** — Binary `branch-main-20260927T075827Z`, Slot `0.1.46-beta.63` (= `bf94a9f3a`, v409) signiert aktiv, `recoveryShell=false`; Browser geprüft.
+- **Rust-Test lokal abgebrochen (10:25Z harte Frist, exit 143)** — Lease + Drossel beendet, genau ein Callback. Negatives Ergebnis: kein Testergebnis.
+- **Rust-Test gpu3 gestoppt (13:45 UTC, negatives Ergebnis)** — Run `run-1790516105681-238414-41ac8534` (Standard Worker gpu3). Supervisor (Root01a0cf50/Crew01a0879f via Outbound01a0c046): Target lag auf der Systemplatte, frei 21,9 → 15,7 GB in 3 min. `workjet stop` 13:45:00Z, `runs mark abandoned`; PID 240795 + Wrapper 275824 weg, kein Prozess im Workdir, kein cargo. Workdir gelöscht (target 19G + Klon 813M); frei danach root 21G / nvme 21G. Logs: `/mnt/nvme1/ctox-crew-ux-test-20260927-logs` + lokal Scratchpad `gpu3-rust-test-20260927/`. Kein Testergebnis (Abbruch während `Compiling ctox`). Ursache: mein Brief hatte kein Platz-/Lock-Gate (Workjet-Learning erfasst). Rückmeldung Codex-Queue `01a0e31e-70f8-7252-8038-7a5f07e81d0b`.
+
+- **JS-Release v410 → main (gepusht 14:01 UTC, main `706b45117`, Tag beta.64)** — `083259f7e` Lade-/Fehler-Platzhalter der CTOX-App = neutraler Geist (statt schwarzer Scheibe), `startCrewMotion()` beim Mount; Stempel `20260927-shell-v2-crew-ghost-v410`. Vor Push: Renderer+Chat 101/101, ctox 6/6, Shell-Vertrag 37/37, Crew-Karte 7, Chat-Layout, Chat-Verhalten 146; volle CI-Liste mit System-Chrome grün bis auf 3 Altbefunde, die auf `bf94a9f3a` identisch rot sind (`customer-identifier-inventory-smoke`, `assert-shell-chat-composition`, Visual-Diff 24/24). Rust-Commits bewusst NICHT enthalten (ungetestet).
+- **thesen v410 (27.09. 14:03 UTC, verifiziert)** — Drift-Prüfung vorher: 7/7 Hashes = `bf94a9f3a`; Datei-Deploy aus `git archive 706b45117` (Backup `~/.local/state/ctox/backups/files-20260927T140309Z`, 7/7 Hashes = main). Browser: `app.js?v=…crew-ghost-v410`, Engine aktiv, Sync wss, 10 connected/1 pending, Lade-Platzhalter = gestrichelter Geist. Befund: Crew-App bleibt bei „Wird geladen…“, weil der Demand-Fetch `ctox_queue_tasks` nie antwortet (Server 250 % CPU, Load 7,4; 580 Docs/13,7 MB) → Feldbefund `docs/ctox-sync-feldbefund-20260927-thesen-queue-tasks-fetch.md`; unabhängig von v410 (welsch zeigt mit identischem Code 34 Aufgaben, `assert-ctox-data-state` grün).
+- **Actions-Stau 14:10 UTC** — 16 überholte, nicht gestartete Läufe abgebrochen (Regel wie 08:47), Queue 33 → 17; Codex-Queue `01a0e333-…`.
+- **beta.64 signiert (Run `36324414007` success 14:28 UTC)** → welsch stage 14:29 (Unit success, phase ready) → activate + Restart 14:31:25 (idle geprüft). Status: active `0.1.46-beta.64`, healthy, recoveryShell false, Wartung aus. Browser: `_shell/0.1.46-beta.64/app.js?v=…crew-ghost-v410`, Engine aktiv, 23 connected/6 reused, Crew-App 34 Aufgaben, „Lumi · Erledigt“, Karte „ohne Crew · wartet“. Lumi noch grau (Rust-Fix ausstehend).
+
 ## Working
 
-- **(erledigt) welsch-Upgrade Binary → main** — 1. Versuch `ctox-crew-genome-upgrade-20260927` scheiterte am Platzgate (20 GiB verlangt, 19,5 frei; nichts verändert, Wartung nicht aktiv). Freigemacht: `~/.cache/ctox/build-office-20260906` (7,1 GB, reines Cargo-Target vom 06.09., kein Prozess). 2. Versuch Unit `ctox-crew-genome-upgrade-20260927b`, target `branch-main-20260927T075827Z` (Quelle = main mit S1–S3+v404), Phase building. Fertig heißt: phase=completed, current_release neu, Wartung completed, Dienst aktiv; Symlink-Falle prüfen.
-- **Shell-Release beta.62** — Tag → `2e89a09ab` (v408); beta.60/61 als überholt abgebrochen. Fertig heißt: Run success → welsch `shell-update stage --version 0.1.46-beta.62` → activate → restart; „Recovery“ verschwindet.
-- **Rust-Fix Signaling-Env** — lokal `76d61182d` im Klon `ctox-crew-genome` (`signaling_urls_config_with_override`, Env nur prozesslokal, `persist_signaling_urls` entfernt, 2 Tests, Doku). Test `cargo test --bin ctox signaling_` via `dev-heavy-run.py --task signaling-env` wartet auf Lease (Codex `o04-connector-proof`). Log: Scratchpad `rust-signaling.log`. Fertig heißt: 2 Tests grün → rebase + push → welsch `ctox upgrade --dev`.
+- (nichts) — Sol/Standard Worker 0 aktiv; lokal kein Heavy-Job (Greppy zuerst).
 
 ## To-Do
 
-- **welsch Slot beta.58 aktivieren** — Trigger: Upgrade completed UND Run success. `shell-update stage --version 0.1.46-beta.58` (systemd-run) → activate → `systemctl --user restart ctox.service`; dann Browser-Abnahme (Wesen, Engine, Sync).
-- **S4 · Shell-Tiefe** — Trigger: jetzt (parallel). Fenster/Chatfenster/Crew-Leiste mit Haarlinie, Ebenenschatten, angehobener Fläche; Geometrie-Labor + Vertrag grün.
-- **S5 · CTOX/Crew-App** — Trigger: S4 committed. Owner: "im Harness-Flow zu viel scrollen, zu viele freie Flächen, Crew schwebt nur komisch rum". Harness-Flow kompakt, Crew lebt im Flow.
-- **S6 · Shell-Release welsch** — Trigger: jede grüne Scheibe ab S3. Stempel-Bump, Tag `business-os-shell-v0.1.46-beta.58+`, welsch `shell-update stage/activate`, Browser-Abnahme. thesen NICHT.
+- **Rust-Test Signaling + Lumi** — Trigger: Greppy-Slot freigegeben UND Admission mit Greppy abgestimmt (Thread 01a07f6a-83e8-7901-851c-36521e4916b4). gpu3 nur mit Target auf /mnt/nvme1, `df -h / /mnt/nvme1` ≥ 20 GiB je Platte, persistentem Lock `/mnt/nvme1/.greppy-heavy.lock`, genau ein Compiler. Lokal nur über `dev-heavy-run.py`. Fertig heißt: `test result: ok` für `signaling_` + `crew::` → rebase auf main → push.
+- **Binary-Upgrades** — Trigger: Rust-Fixes auf main. welsch `ctox upgrade --dev` (systemd-run, ≥ 20 GiB, Wartungs-Ack über `[data-maintenance-retry]`), thesen nur idle und angekündigt. Fertig heißt: Lumi `#e97255` in `ctox_crew_members`, Env-Datei wird nicht mehr geschrieben.
 
 ## Backlog / Owner
 
-- **Code-Fix Env-Persistenz** — `store.rs::signaling_urls_config` schreibt Env-Übersteuerung dauerhaft in den State-Root; Release-Checks mit gesetzter Variable vergiften so Produktion. Rust → gebündeltes Upgrade später.
 - **OWNER: Seelen-Achsen → Temperament?** — Seele ist nicht in der öffentlichen Projektion (`public_fields` ohne soul); Temperament kommt vorerst aus dem Genom-Seed.
 
 ## Environment traps
@@ -60,6 +69,7 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 1. Env-Übersteuerung wird dauerhaft persistiert → Testläufe vergiften Produktion (1×, 26.09.).
 2. Baseline-Vergleich per `git checkout <rev> -- <dir>` überschreibt UNCOMMITTETE Arbeit im selben Baum (1×, 27.09., S4 verloren und neu eingespielt; stellte außerdem gelöschte Dateien als staged wieder her). Regel: vor jedem Baseline-Vergleich committen oder `git show <rev>:<pfad>` in eine Scratch-Datei / eigener `git worktree`.
 3. Eigene Wächterliste unvollständig: `assert-business-chat-layout.mjs` (ci.yml) nicht vor dem Push gefahren → Keyframe-Assertion auf main kurz rot (1×, 27.09., mit e9e1cf800 behoben). Regel: vor Push alle Business-OS-Schritte aus ci.yml + crew-ui-acceptance.yml + business-os-shell-release.yml lokal.
+4. Remote-Build-Brief ohne Platz-/Lock-Gate: Rust-Target auf der vollen gpu3-Systemplatte, Supervisor-Stopp nach 10 min (1×, 27.09.). Regel: jeder Heavy-Brief nennt Target-Pfad, `df`-Gate je Platte, Host-Lock und Compiler-Zahl.
 
 ## Altbefunde (nicht von dieser Kampagne)
 
@@ -69,6 +79,9 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 - `assert-shell-chat-composition.mjs` rot auch auf main `ccde06f4d`: "Shell-V2 windows expose exactly one title-bar control: [layout, close]" + drei Snap-Kanten null (Layout-Menü-Arbeit auf Branch `codex/shell-v2-layout-menu`).
 
 ## Evidence map
+
+- gpu3-Rust-Lauf (gestoppt): `/mnt/nvme1/ctox-crew-ux-test-20260927-logs/` (gpu3) + Scratchpad `gpu3-rust-test-20260927/`; Brief `~/.local/state/workjet-launchpads/ctox-crew-remote-test/brief-rust-test.md`.
+- Release-Branches: JS `crew-ux/release-v410-js`, JS+Rust `crew-ux/release-v410` (lokal, ungetestet), Rust `crew-ux/rust-fixes` (origin).
 
 - Diagnoseskripte: Session-Scratchpad `welsch-diag-signal*.sh`, `welsch-fix-signal.sh` (flüchtig).
 - welsch-Backup: `/home/ctox/.local/state/ctox/backups/signaling-urls-loopback-20260926T191537.json`.

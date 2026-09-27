@@ -1,7 +1,8 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260927-shell-v2-crew-integration-v411';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260927-shell-v2-crew-strict-read-v412';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
+import { startCrewMotion } from '../../shared/crew-motion.js?v=20260927-crew-genome-v4';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
 const FLOW_WIDTH = 1760;
@@ -28,7 +29,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260927-shell-v2-crew-integration-v411';
+const CTOX_STYLE_BUILD = '20260927-shell-v2-crew-strict-read-v412';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -769,6 +770,9 @@ export async function mount(ctx) {
   // fail-soft: the windowed Business OS shell replaces the whole host with a
   // recovery dialog on any thrown mount error, so secondary wiring (readiness,
   // realtime, i18n) must never take the app down once the harness is visible.
+  // The creature stylesheet and the motion engine come with the shared engine,
+  // also when this app runs without the chat bar (standalone/mobile host).
+  startCrewMotion();
   ctx.host.innerHTML = await loadModuleMarkup();
   const launchFocusTask = normalizeFocusTask(ctx.args);
   if (launchFocusTask) persistFocusTask(launchFocusTask);
@@ -1072,10 +1076,10 @@ function showDataError(state, error) {
 // Anonymous placeholder: asleep while loading or offline, X eyes on a failure —
 // the two must not look alike (Review-Befund B4).
 function dataPlaceholderMarkup(kind = 'loading') {
-  const eyes = kind === 'error'
-    ? '<path class="ctox-data-placeholder-eyes" d="M22 27l8 10M30 27l-8 10M37 27l8 10M45 27l-8 10"/>'
-    : '<path class="ctox-data-placeholder-eyes" d="M21 32q5 5 10 0M36 32q5 5 10 0"/>';
-  return `<div class="ctox-data-placeholder is-${escapeAttr(kind)}" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M32 7c15 0 26 10 26 25S48 58 32 58 7 48 7 32 17 7 32 7Z"/>${eyes}</svg></div>`;
+  // The crew as a whole — the neutral ghost from the shared renderer — sleeps
+  // while data loads and shows X eyes when the read failed.
+  const creature = crewCreatureHtml({ crewKey: 'ctox-data-placeholder', crewIdentity: null }, kind === 'error' ? 'failed' : 'idle', 'map');
+  return `<div class="ctox-data-placeholder is-${escapeAttr(kind)}" aria-hidden="true">${creature}</div>`;
 }
 
 // The flow canvas without a selected task and without current data: the state
