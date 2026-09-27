@@ -1,15 +1,48 @@
-# Shared crew renderer
+# Crew creatures: genome renderer and motion engine
 
-`crew-renderer.js` extracts the existing Business OS creature presentation from `business-chat.js`. It has no imports, DOM access, timers, network or persistence. It is browser ESM; do not import the chat runtime just to display a creature.
+Two browser ESM files, no imports from the chat runtime:
 
-- `normalizeCrewAppearance(appearance)` preserves explicit name, six-digit hex colour and one of the existing round/blob/square/triangle shapes. Missing or invalid values retain the existing neutral Crew fallback.
-- `renderCrewCreature({ appearance, animationKey, taskState, mode, placement, progressPercent, activity })` returns the existing decorative SVG wrapper. The caller supplies the resolved state and telemetry (`total`, `lastKind`, `updatedAt`). No actor, permission or identity is inferred from them.
-- `CREW_CREATURE_CSS` supplies the original base styles and reduced-motion behavior for a standalone host. Load it once in that host; give the wrapper its layout dimensions. `CREW_CREATURE_BASE_CSS` is exposed for the existing chat adapter, which inserts those exact bytes at their previous cascade position and retains its existing broader reduced-motion rules.
+- `crew-renderer.js` — pure. No DOM access, timers, network, persistence or randomness.
+- `crew-motion.js` — the one page-wide motion engine (browser only).
 
-The chat adapter still owns `crewIdentityKey`, task/progress/mode resolution, activity telemetry, presence, procedural activity animation and all application state. Its `crewCreatureHtml` export remains compatible. The extracted local rendering functions are removed from that adapter.
+## Appearance is generated, not drawn
 
-`animationKey` is only an input to the existing motion hash. In the legacy chat it may come from a chat, command or task reference. It is **not** a WorkerProfileId mapping, an appearance allocator or an authority token. Workjet must supply the confirmed profile/appearance association through its existing authoritative model. This extraction does not establish that missing contract or publish a Workjet package.
+A member's look comes from a **genome** (`crewGenome(appearance)`), seeded by the member id (without an id: its name). The owner sets two genes — archetype (`round | blob | square | triangle`, the `crew_members.shape` column) and colour — everything else is derived deterministically:
 
-The fixture records SHA-256 references for 360 pre-extraction outputs from CTOX commit `e00ecbeb131808797aafb04fad5862a8ea17aa4c`: four shapes, nine task/expression states, five placements and work/review progress. `crew-renderer.test.mjs` checks both the pure renderer and the legacy adapter against those references, plus the original CSS bytes, neutral fallbacks and escaped caller values. Existing procedural-motion guards continue to check the composed chat stylesheet.
+- outline: superellipse with low-frequency wobble (round, square), lobed cloud (blob), rounded polygon with per-corner radii, side bulges and apex offset (triangle); width, height, underside flattening and lean
+- face: eye line height, eye spacing from the body width at that line, eye size, stroke, slant, gaze offset, slight asymmetry
+- tone: the owner colour with an individual hue/saturation/lightness shift (grey stays grey), a darker shade and a cheek tint
+- extras: shine, optional cheeks, optional tuft (not on triangles)
+- motion temperament: `tempo`, `amplitude`, `irregularity`, `phase` (written to `data-crew-motion`)
 
-Focused validation: `node --test --test-concurrency=1 --test-name-pattern='crew|creature' src/apps/business-os/shared/crew-renderer.test.mjs src/apps/business-os/shared/business-chat.test.mjs` (17 passed). This is not a live Desktop/Mobile, animation-performance or full Sync/Command acceptance. No shell slot or tenant has been deployed from this extraction branch.
+The same member therefore looks identical in the chat bar, chat windows, the CTOX map, tickets and app badges, and two members of the same archetype and colour are never twins. No schema change: the genome is a pure function of the authoritative `id`, `shape` and `color`.
+
+Without a member (`appearance` missing or unnamed) the creature is the **neutral crew ghost** (`is-neutral`: dashed outline, translucent body) — never mistaken for a member, not even for a grey one.
+
+`renderCrewCreature({ appearance, animationKey, taskState, mode, placement, progressPercent, activity })` returns
+
+```
+span.ctox-crew-creature[data-crew-mode, data-crew-key, data-crew-motion, data-activity-*]
+  span.ctox-crew-ground          soft coloured ground shadow (no filter)
+  svg.ctox-crew-figure           tuft, body, shine, cheeks, eyes
+```
+
+`CREW_CREATURE_BASE_CSS` is the only creature stylesheet (hosts size the wrapper and nothing else); `CREW_CREATURE_CSS` adds the reduced-motion rules for standalone hosts. The stylesheet has no keyframe loops and no per-frame filters.
+
+## Motion is procedural and alive
+
+`crew-motion.js` observes the whole document (MutationObserver) and animates every creature from three layers:
+
+1. **base pose** — continuous, per state, shaped by the temperament: sleeping breathes, working bobs and sways, review peers and scans, reading scans lines, learning floats, failed slumps, anything else waits (breathes, looks around)
+2. **impulse** — a finite gesture triggered only by durable telemetry: a hop for a tool turn, a tilt for a thinking turn, a sway in review (`data-activity-turns` increases, or a fresh first event ≤ 8 s); plus a stretch when waking, a shake when failing, a cheer when learning
+3. **face** — blinks and glances on the eyes group
+
+Mode changes blend from the last pose (480 ms). Only creatures that are on screen in a visible tab are animated (IntersectionObserver, `document.hidden`); `prefers-reduced-motion` clears every transform and stops the loop. The body moves as one element (`svg.ctox-crew-figure`, `will-change` only while visible), so per-frame work stays on the compositor; eye moves are quantised so a held glance costs nothing. One engine per page (`window.__ctoxCrewMotionEngine`), even if the module is loaded under several URLs.
+
+`syncCrewMotion(root)` makes pickup immediate after an in-place render; `business-chat.js` keeps `syncCrewProceduralMotion` as a compatible wrapper. `crewMotionSnapshot()` is the acceptance view (`scripts/assert-ctox-crew-map.mjs`).
+
+## Validation
+
+- `node --test shared/crew-renderer.test.mjs shared/business-chat.test.mjs` — determinism, no twins, frame/face bounds, archetype and colour fidelity, neutral ghost, faces per mode, escaping, motion contract.
+- `node scripts/assert-ctox-crew-map.mjs` — browser: durable tool turn → finite gesture, waiting creature gets none, gesture settles back into the working pose, reduced motion stops everything.
+- `scripts/crew-gallery.html` — visual gallery (archetypes × individuals × states × sizes, turn buttons); serve the repo root statically and open it.

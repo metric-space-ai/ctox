@@ -5179,7 +5179,7 @@ const SPECIALTY_KEYS = Object.freeze(['modules', 'command_types', 'skills', 'tag
 
 function memberIdentity(member) {
   if (!member) return null;
-  return { name: String(member.name || ''), color: String(member.color || NEUTRAL_CREW_COLOR), shape: String(member.shape || 'round') };
+  return { id: String(member.id || ''), name: String(member.name || ''), color: String(member.color || NEUTRAL_CREW_COLOR), shape: String(member.shape || 'round') };
 }
 
 function taskCrewMember(task, state) {

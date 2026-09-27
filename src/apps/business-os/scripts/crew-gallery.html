@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crew Gallery</title>
+<style>
+  :root { color-scheme: dark; --bg: #0f1012; --panel: #17181b; --line: #2a2c31; --text: #e8e9ec; --muted: #8b8f98; }
+  body { margin: 0; padding: 20px; background: var(--bg); color: var(--text); font: 13px/1.4 system-ui, sans-serif; }
+  body.is-light { --bg: #f3f4f6; --panel: #ffffff; --line: #d9dce1; --text: #1b1d21; --muted: #626874; color-scheme: light; }
+  h2 { margin: 26px 0 10px; font-size: 13px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .toolbar button { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 10px; }
+  .cell { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 6px 8px; text-align: center; }
+  .cell .slot { width: 64px; height: 64px; margin: 0 auto 6px; }
+  .cell small { display: block; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sizes { display: flex; gap: 18px; align-items: end; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px; }
+  .sizes .slot { flex: none; }
+  .modes { display: grid; grid-template-columns: 90px repeat(6, 72px); gap: 8px; align-items: center; }
+  .modes .slot { width: 56px; height: 56px; }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <strong>Crew Gallery</strong>
+  <button type="button" data-theme-toggle>Hell/Dunkel</button>
+  <button type="button" data-turn="tool">Werkzeug-Turn</button>
+  <button type="button" data-turn="thinking">Denk-Turn</button>
+  <span id="status" style="color:var(--muted)"></span>
+</div>
+<h2>Seed-Crew · Größen</h2>
+<div class="sizes" id="sizes"></div>
+<h2>Individuen je Archetyp (gleiche Farbe, verschiedene IDs)</h2>
+<div class="grid" id="individuals"></div>
+<h2>Zustände</h2>
+<div class="modes" id="modes"></div>
+<script type="module">
+  import { renderCrewCreature, CREW_CREATURE_CSS } from '../shared/crew-renderer.js';
+  let motion = null;
+  try { motion = await import('../shared/crew-motion.js'); } catch { motion = null; }
+  const style = document.createElement('style');
+  style.textContent = CREW_CREATURE_CSS;
+  document.head.appendChild(style);
+
+  const seeds = [
+    { id: 'crew-milo', name: 'Milo', shape: 'round', color: '#1685ee' },
+    { id: 'crew-nori', name: 'Nori', shape: 'square', color: '#00aa9a' },
+    { id: 'crew-lumi', name: 'Lumi', shape: 'triangle', color: '#7d7f84' },
+    { id: 'crew-pico', name: 'Pico', shape: 'blob', color: '#7c6df2' },
+  ];
+  const creature = (appearance, taskState, mode, placement = 'map', activity) => renderCrewCreature({
+    appearance, animationKey: appearance?.id || 'neutral', taskState, mode, placement, progressPercent: 40,
+    activity: activity || { total: 0, lastKind: '', updatedAt: 0 },
+  });
+  const slot = (size, html) => `<div class="slot" style="width:${size}px;height:${size}px">${html}</div>`;
+
+  const sizes = document.getElementById('sizes');
+  for (const size of [96, 64, 40, 28, 18]) {
+    sizes.insertAdjacentHTML('beforeend', seeds.map((s) => slot(size, creature(s, 'idle', 'sleeping', size < 24 ? 'badge' : 'map'))).join('') + slot(size, creature(null, 'idle', 'sleeping', 'map')));
+  }
+
+  const individuals = document.getElementById('individuals');
+  for (const base of seeds) {
+    for (let index = 0; index < 6; index += 1) {
+      const appearance = index === 0 ? base : { ...base, id: `crew-${base.shape}-${index}`, name: `${base.name}${index}` };
+      individuals.insertAdjacentHTML('beforeend', `<div class="cell">${slot(64, creature(appearance, 'running', 'working'))}<small>${appearance.name}</small></div>`);
+    }
+  }
+  individuals.insertAdjacentHTML('beforeend', `<div class="cell">${slot(64, creature(null, 'idle', 'sleeping'))}<small>ohne Mitglied</small></div>`);
+
+  const modes = document.getElementById('modes');
+  const modeList = [['idle', 'sleeping'], ['running', 'working'], ['running', 'review'], ['reading', 'reading'], ['learning', 'learning'], ['failed', 'failed']];
+  modes.insertAdjacentHTML('beforeend', `<div></div>${modeList.map(([, m]) => `<small style="color:var(--muted)">${m}</small>`).join('')}`);
+  for (const s of [...seeds, null]) {
+    modes.insertAdjacentHTML('beforeend', `<small>${s ? s.name : 'Crew'}</small>` + modeList.map(([task, m]) => slot(56, creature(s, task, m, 'map', { total: 1, lastKind: 'tool', updatedAt: 0 }))).join(''));
+  }
+
+  document.querySelector('[data-theme-toggle]').addEventListener('click', () => document.body.classList.toggle('is-light'));
+  document.querySelectorAll('[data-turn]').forEach((button) => button.addEventListener('click', () => {
+    document.querySelectorAll('.ctox-crew-creature.is-working, .ctox-crew-creature.is-review').forEach((node) => {
+      node.dataset.activityTurns = String(Number(node.dataset.activityTurns || 0) + 1);
+      node.dataset.activityKind = button.dataset.turn;
+      node.dataset.activityUpdatedAt = String(Date.now());
+    });
+    motion?.syncCrewMotion?.(document);
+  }));
+  motion?.startCrewMotion?.(document);
+  document.getElementById('status').textContent = motion ? 'Bewegung aktiv' : 'ohne Bewegungs-Engine';
+  window.__crewGalleryReady = true;
+</script>
+</body>
+</html>

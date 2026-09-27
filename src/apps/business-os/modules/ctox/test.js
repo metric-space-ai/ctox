@@ -1168,7 +1168,7 @@ test('Task creatures carry the crew member identity, unassigned tasks stay neutr
   const state = { lang: 'de', crewMembers: crewFixture, model };
   assert.equal(taskCrewMember(working, state).name, 'Milo');
   assert.equal(taskCrewMember(orphan, state), null);
-  assert.deepEqual(memberIdentity(crewFixture[0]), { name: 'Milo', color: '#00aa9a', shape: 'blob' });
+  assert.deepEqual(memberIdentity(crewFixture[0]), { id: 'crew:milo', name: 'Milo', color: '#00aa9a', shape: 'blob' });
   const html = flowCrewSvg(model, working, state);
   assert.match(html, /data-task-id="queue-task-working"[^>]*aria-label="Milo · /);
   assert.match(html, /--crew-color:#00aa9a/);

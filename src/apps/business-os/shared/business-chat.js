@@ -1,4 +1,5 @@
 import { normalizeCrewAppearance, renderCrewCreature, CREW_CREATURE_BASE_CSS } from './crew-renderer.js';
+import { syncCrewMotion } from './crew-motion.js';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
   FILE_CHUNK_HASH_SCHEME,
@@ -273,7 +274,7 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
 }
 
 function crewMemberCreatureHtml(member, placement = 'fab') {
-  return crewCreatureHtml({ crewKey: member.id, crewIdentity: { name: member.name, shape: member.shape, color: member.color } }, crewMemberExpression(member), placement);
+  return crewCreatureHtml({ crewKey: member.id, crewIdentity: { id: member.id, name: member.name, shape: member.shape, color: member.color } }, crewMemberExpression(member), placement);
 }
 
 function crewPoolSlotHtml(member, placement = 'fab') {
@@ -616,7 +617,7 @@ export function initBusinessChat({
     if (handedMember) {
       chat.crew_member_id = handedMember;
       const identity = detail.crew_identity || detail.crewIdentity || (state.crewMembers || []).find((member) => member.id === handedMember);
-      if (identity?.name) chat.crewIdentity = { name: String(identity.name), shape: String(identity.shape || ''), color: String(identity.color || '') };
+      if (identity?.name) chat.crewIdentity = { id: String(identity.id || handedMember || ''), name: String(identity.name), shape: String(identity.shape || ''), color: String(identity.color || '') };
     }
     markChatExpandedByUser(state, chat, presentationTicket);
     focusChatForUser(state, chat);
@@ -677,7 +678,7 @@ export function initBusinessChat({
     if (handedMember) {
       chat.crew_member_id = handedMember;
       const identity = detail.crew_identity || detail.crewIdentity || (state.crewMembers || []).find((member) => member.id === handedMember) || null;
-      if (identity?.name) chat.crewIdentity = { name: String(identity.name), shape: String(identity.shape || ''), color: String(identity.color || '') };
+      if (identity?.name) chat.crewIdentity = { id: String(identity.id || handedMember || ''), name: String(identity.name), shape: String(identity.shape || ''), color: String(identity.color || '') };
     }
     markChatExpandedByUser(state, chat, presentationTicket);
     focusChatForUser(state, chat);
@@ -2609,20 +2610,9 @@ function crewCreatureMode(chat, taskState = getTaskState(chat)) {
   return taskState;
 }
 
-function stopCrewProceduralMotion(root, { reset = true } = {}) {
-  const state = root?.__ctoxCrewProceduralMotion;
-  if (state?.frame) window.cancelAnimationFrame(state.frame);
-  if (reset) {
-    root?.querySelectorAll?.('.ctox-crew-creature')?.forEach((node) => {
-      node.style.transform = '';
-      const body = node.querySelector('.ctox-crew-body');
-      const eyes = node.querySelector('.ctox-crew-eyes');
-      if (body) body.style.transform = '';
-      if (eyes) eyes.style.transform = '';
-    });
-  }
-  if (root) root.__ctoxCrewProceduralMotion = null;
-}
+// Motion is owned by the page-wide engine in crew-motion.js; a chat root has
+// nothing of its own to stop.
+function stopCrewProceduralMotion() {}
 
 function executionActivityTelemetry(chat) {
   const progress = executionProgressForChat(chat);
@@ -2650,118 +2640,11 @@ function syncCrewTelemetryNode(node, chat) {
   return changed;
 }
 
+// Kept for callers that render creatures in place: the page-wide engine picks
+// them up (and their durable telemetry) itself, this only makes it immediate.
 export function syncCrewProceduralMotion(root) {
   if (!root || typeof window === 'undefined') return;
-  if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
-    stopCrewProceduralMotion(root);
-    return;
-  }
-
-  let state = root.__ctoxCrewProceduralMotion;
-  if (!state) {
-    state = { frame: 0, lastFrameAt: 0, profiles: [], seenTurns: new Map() };
-    root.__ctoxCrewProceduralMotion = state;
-  }
-
-  const nowMs = Date.now();
-  const nextProfiles = Array.from(root.querySelectorAll('.ctox-crew-creature.is-working, .ctox-crew-creature.is-review'))
-    .filter((node) => node.closest?.('.ctox-flow-creature-slot') || !node.getClientRects || node.getClientRects().length > 0)
-    .slice(0, 36)
-    .flatMap((node) => {
-      const total = Math.max(0, Number(node.dataset.activityTurns) || 0);
-      const key = String(node.dataset.crewKey || node.dataset.crewSeed || 'ctox-crew');
-      const previous = state.seenTurns.get(key);
-      const previousTotal = typeof previous === 'object' ? previous.total : previous;
-      const mode = node.dataset.crewMode || 'working';
-      const modeChanged = Boolean(previous && typeof previous === 'object' && previous.mode !== mode);
-      state.seenTurns.set(key, { total, mode });
-      const updatedAt = Math.max(0, Number(node.dataset.activityUpdatedAt) || 0);
-      const freshInitialEvent = previous === undefined && total > 0 && nowMs - updatedAt <= 8000;
-      if (!(total > (previousTotal ?? total)) && !freshInitialEvent && !modeChanged) return [];
-      const body = node.querySelector('.ctox-crew-body');
-      const eyes = node.querySelector('.ctox-crew-eyes');
-      if (!body || !eyes) return [];
-      const seed = (Number(node.dataset.crewSeed || 0) ^ Math.imul(total || 1, 2654435761)) >>> 0;
-      const unit = (offset) => ((seed >>> offset) & 1023) / 1023;
-      const kind = node.dataset.activityKind || 'tool';
-      const duration = mode === 'review' ? 2200 : kind === 'thinking' ? 1800 : 1400;
-      return [{
-        key,
-        node,
-        body,
-        eyes,
-        mode,
-        kind,
-        startAt: 0,
-        duration,
-        direction: unit(12) > .5 ? 1 : -1,
-        amplitude: .88 + unit(2) * .28,
-      }];
-    });
-
-  if (nextProfiles.length) {
-    const restartedKeys = new Set(nextProfiles.map((profile) => profile.key));
-    state.profiles = state.profiles.filter((profile) => !restartedKeys.has(profile.key));
-    state.profiles.push(...nextProfiles);
-  }
-  if (state.frame || state.profiles.length === 0) return;
-
-  const tick = (now) => {
-    if (!root.isConnected || root.__ctoxCrewProceduralMotion !== state) return;
-    if (document.visibilityState === 'hidden') {
-      state.frame = window.requestAnimationFrame(tick);
-      return;
-    }
-    if (now - state.lastFrameAt < 33) {
-      state.frame = window.requestAnimationFrame(tick);
-      return;
-    }
-    state.lastFrameAt = now;
-    state.profiles = state.profiles.filter(({ node }) => node.isConnected);
-    state.profiles.forEach((profile) => {
-      if (!profile.startAt) profile.startAt = now;
-      const elapsed = now - profile.startAt;
-      const progress = Math.min(1, elapsed / profile.duration);
-      const envelope = Math.sin(progress * Math.PI);
-      const bounce = Math.sin(progress * Math.PI * 2);
-      if (profile.mode === 'review') {
-        const x = profile.direction * envelope * 7.5 * profile.amplitude;
-        const y = -envelope * 2.5;
-        const rotation = profile.direction * bounce * 8 * envelope;
-        const flow = envelope * .09;
-        profile.node.style.transform = `translate(${x.toFixed(3)}px, ${y.toFixed(3)}px) rotate(${rotation.toFixed(3)}deg)`;
-        profile.body.style.transform = `scale(${(1 + flow).toFixed(4)}, ${(1 - flow * .72).toFixed(4)}) skewX(${(profile.direction * envelope * 5).toFixed(3)}deg)`;
-        profile.eyes.style.transform = `translateX(${(profile.direction * envelope * 5.5).toFixed(3)}px) rotate(${(profile.direction * bounce * 4).toFixed(3)}deg)`;
-      } else if (profile.kind === 'thinking') {
-        const rotation = profile.direction * envelope * 10.5 * profile.amplitude;
-        const y = -envelope * 3;
-        const flow = envelope * .07;
-        profile.node.style.transform = `translateY(${y.toFixed(3)}px) rotate(${rotation.toFixed(3)}deg)`;
-        profile.body.style.transform = `scale(${(1 - flow * .45).toFixed(4)}, ${(1 + flow).toFixed(4)}) skewX(${(-profile.direction * envelope * 4).toFixed(3)}deg)`;
-        profile.eyes.style.transform = `translateX(${(profile.direction * bounce * 5.5).toFixed(3)}px) rotate(${(-rotation * .34).toFixed(3)}deg)`;
-      } else {
-        const impact = Math.sin(progress * Math.PI);
-        const recoil = Math.sin(progress * Math.PI * 3) * envelope;
-        const x = profile.direction * recoil * 2.8;
-        const y = -impact * 7.5 * profile.amplitude;
-        const rotation = profile.direction * recoil * 5.5;
-        const squash = impact * .14;
-        profile.node.style.transform = `translate(${x.toFixed(3)}px, ${y.toFixed(3)}px) rotate(${rotation.toFixed(3)}deg)`;
-        profile.body.style.transform = `scale(${(1 + squash).toFixed(4)}, ${(1 - squash * .92).toFixed(4)}) skewX(${(profile.direction * recoil * 4).toFixed(3)}deg)`;
-        profile.eyes.style.transform = `translateY(${(-impact * 2.4).toFixed(3)}px) rotate(${(-rotation * .45).toFixed(3)}deg)`;
-      }
-    });
-    state.profiles = state.profiles.filter((profile) => {
-      if (now - profile.startAt < profile.duration) return true;
-      profile.node.style.transform = '';
-      profile.body.style.transform = '';
-      profile.eyes.style.transform = '';
-      return false;
-    });
-    if (state.profiles.length > 0) state.frame = window.requestAnimationFrame(tick);
-    else state.frame = 0;
-  };
-  state.frame = window.requestAnimationFrame(tick);
+  syncCrewMotion(root);
 }
 
 export function crewCreatureHtml(chat, taskState = getTaskState(chat), placement = 'dock') {
@@ -4238,7 +4121,7 @@ async function syncTrackedMessages({ state, db, sync = null }) {
       const member = memberId ? memberDocs.get(memberId) || null : null;
       if (member && chat.crew_member_id !== memberId) {
         chat.crew_member_id = memberId;
-        chat.crewIdentity = { name: String(member.name || ''), shape: String(member.shape || ''), color: String(member.color || '') };
+        chat.crewIdentity = { id: String(member.id || ''), name: String(member.name || ''), shape: String(member.shape || ''), color: String(member.color || '') };
         changed = true;
         chatChanged = true;
       }
@@ -7236,31 +7119,9 @@ ${CREW_CREATURE_BASE_CSS}
     .ctox-progress-review-row.is-completed {
       color: var(--text);
     }
-    @keyframes ctoxCrewThinkingTick {
-      0% { transform: rotate(0deg) translateY(0); }
-      45% { transform: rotate(-7deg) translateY(-1px); }
-      100% { transform: rotate(0deg) translateY(0); }
-    }
-    @keyframes ctoxCrewToolTick {
-      0% { transform: scale(1, 1); }
-      42% { transform: scale(1.12, 0.88) translateY(2px); }
-      72% { transform: scale(0.96, 1.06) translateY(-1px); }
-      100% { transform: scale(1, 1); }
-    }
-    .ctox-chat-window.is-task-running:not(.is-task-review).has-activity-thinking .ctox-chat-title .ctox-crew-creature {
-      animation: none;
-    }
-    .ctox-chat-window.is-task-running:not(.is-task-review).has-activity-thinking .ctox-chat-title .ctox-crew-eyes {
-      transform: translateX(2px) rotate(-4deg);
-    }
-    .ctox-chat-window.is-task-running:not(.is-task-review).has-activity-tool .ctox-chat-title .ctox-crew-creature {
-      animation: none;
-    }
     @media (prefers-reduced-motion: reduce) {
       .ctox-crew-creature,
       .ctox-crew-creature *,
-      .ctox-chat-window.is-task-running:not(.is-task-review).has-activity-thinking .ctox-chat-title .ctox-crew-creature,
-      .ctox-chat-window.is-task-running:not(.is-task-review).has-activity-tool .ctox-chat-title .ctox-crew-creature,
       .ctox-delegation-spinner,
       .ctox-turn-clock-hand {
         animation: none !important;

@@ -651,7 +651,7 @@ function crewCreatureFor(task, placement = 'map') {
   const member = crewMemberFor(task);
   return crewCreatureHtml({
     crewKey: member ? member.id : (task?.command_id || task?.id || 'crew'),
-    crewIdentity: member ? { name: member.name, shape: member.shape, color: member.color } : null,
+    crewIdentity: member ? { id: member.id, name: member.name, shape: member.shape, color: member.color } : null,
     executionProgress: task?.execution_progress || null,
   }, crewTaskState(task), placement);
 }
