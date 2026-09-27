@@ -93,8 +93,30 @@ test('failure diagnostics preserve checks and timing without launch/session conf
   observed.config = { capability_token: 'do-not-export', password: 'do-not-export' };
   observed.textSample = 'do-not-export';
   observed.advancedStatus.config = observed.config;
+  observed.advancedStatus.sync = {
+    requiredCollections: ['business_module_catalog', 'desktop_file_chunks'],
+    missingRequiredCollections: ['desktop_file_chunks', { credential: 'do-not-export' }],
+    collectionTotal: 21,
+    initialSync: {
+      missingInitialReplication: ['desktop_file_chunks'],
+      missingStreamingReady: ['desktop_file_chunks'],
+      missingCheckpointEpoch: ['desktop_file_chunks', 'wss://do-not-export'],
+      session: observed.config,
+    },
+    config: observed.config, session: observed.config,
+    syncRoom: 'do-not-export', signalingUrls: ['wss://do-not-export'],
+  };
   const diagnostic = startupDiagnostics(observed);
   assert.equal(JSON.stringify(diagnostic).includes('do-not-export'), false);
   assert.deepEqual(diagnostic.advancedStatus.checks, observed.advancedStatus.checks);
   assert.equal(diagnostic.advancedStatus.bootTimings.shellVisibleMs, 829);
+  assert.deepEqual(diagnostic.advancedStatus.sync, {
+    requiredCollections: ['business_module_catalog', 'desktop_file_chunks'],
+    missingRequiredCollections: ['desktop_file_chunks'], collectionTotal: 21,
+    initialSync: {
+      missingInitialReplication: ['desktop_file_chunks'],
+      missingStreamingReady: ['desktop_file_chunks'],
+      missingCheckpointEpoch: ['desktop_file_chunks'],
+    },
+  });
 });

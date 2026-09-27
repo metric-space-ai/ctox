@@ -37,6 +37,9 @@ function startupReadiness(state, expectedModule, requiredStatusVersion) {
 
 function startupDiagnostics(state) {
   if (!state) return null;
+  const sync = state.advancedStatus?.sync;
+  const names = value => Array.isArray(value) ? value.filter(name =>
+    typeof name === 'string' && /^[a-zA-Z0-9_-]{1,160}$/.test(name)).slice(0, 512) : null;
   return {
     activeModule: state.activeModule, loading: state.loading,
     shellVisible: state.shellVisible, windows: state.windows,
@@ -46,6 +49,17 @@ function startupDiagnostics(state) {
       version: state.advancedStatus.version, ok: state.advancedStatus.ok,
       checks: state.advancedStatus.checks, failures: state.advancedStatus.failures,
       bootTimings: state.advancedStatus.shell?.bootTimings,
+      // Attribution only: never copy connection/session/credential structures.
+      sync: sync ? {
+        requiredCollections: names(sync.requiredCollections),
+        missingRequiredCollections: names(sync.missingRequiredCollections),
+        collectionTotal: Number.isInteger(sync.collectionTotal) ? sync.collectionTotal : null,
+        initialSync: {
+          missingInitialReplication: names(sync.initialSync?.missingInitialReplication),
+          missingStreamingReady: names(sync.initialSync?.missingStreamingReady),
+          missingCheckpointEpoch: names(sync.initialSync?.missingCheckpointEpoch),
+        },
+      } : null,
     } : null,
   };
 }
