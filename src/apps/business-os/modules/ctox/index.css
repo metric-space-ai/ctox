@@ -1587,11 +1587,30 @@
   padding: 28px 24px;
 }
 .ctox-crew-home-row {
+  --crew-home-size: 96px;
+  isolation: isolate;
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   gap: 28px 34px;
   max-width: 100%;
+  padding-inline: 24px;
+}
+/* The crew stands together on one floor instead of floating in the pane:
+   a flat line exactly at the creatures' feet (ground line 58/64 of the
+   creature box, below the 10px card padding); each creature brings its own
+   coloured ground shadow. */
+.ctox-crew-home-row::before {
+  content: '';
+  position: absolute;
+  left: 8%;
+  right: 8%;
+  top: calc(10px + var(--crew-home-size) * 58 / 64);
+  height: 1px;
+  background: var(--elev-edge, var(--line));
+  pointer-events: none;
+  z-index: -1;
 }
 .ctox-crew-home-member {
   display: grid;
@@ -1638,8 +1657,8 @@
 }
 .ctox-crew-home-creature {
   display: block;
-  width: 72px;
-  height: 72px;
+  width: var(--crew-home-size, 96px);
+  height: var(--crew-home-size, 96px);
 }
 .ctox-crew-home-member.is-home .ctox-crew-home-creature,
 .ctox-crew-home-member.is-resting_after_failure .ctox-crew-home-creature {
