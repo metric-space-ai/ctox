@@ -32,12 +32,12 @@
 //! bundle.
 
 pub mod connection_handler_rs;
+pub mod file_fetch_client;
 pub mod file_fetch_handler;
 pub mod index_mod;
 pub mod local_session;
 pub(super) mod protocol_contract_generated;
 pub mod query_fetch_client;
-pub mod file_fetch_client;
 pub mod query_fetch_handler;
 pub mod rows_fetch_handler;
 pub mod signaling_client;
