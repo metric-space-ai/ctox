@@ -320,6 +320,30 @@ export function crewGenome(appearanceInput) {
   return genome;
 }
 
+// ---- state ----------------------------------------------------------------
+
+const REVIEW_PHASES = new Set(['review', 'awaiting_review', 'awaiting-review', 'reviewing', 'validating']);
+
+/** Creature mode for a task state (and, while running, its execution phase). */
+export function crewModeForTaskState(taskState, phase = '') {
+  if (taskState === 'failed') return 'failed';
+  if (taskState === 'running') return REVIEW_PHASES.has(String(phase || '').toLowerCase()) ? 'review' : 'working';
+  if (['idle', 'queued', 'scheduled', 'success'].includes(taskState)) return 'sleeping';
+  // reading / learning are member expressions; blocked and others wait awake.
+  return taskState;
+}
+
+/** Durable activity telemetry from a raw `execution_progress` document. */
+export function crewActivityFromProgress(progress) {
+  const turns = progress?.activity_turns || progress?.activityTurns || {};
+  const kind = turns.last_kind || turns.lastKind;
+  return {
+    total: Math.max(0, Number(turns.total) || 0),
+    lastKind: kind === 'thinking' || kind === 'tool' ? kind : '',
+    updatedAt: Math.max(0, Number(progress?.updated_at_ms ?? progress?.updatedAtMs) || 0),
+  };
+}
+
 // ---- face -----------------------------------------------------------------
 
 function eyesMarkup(eyes, mode) {

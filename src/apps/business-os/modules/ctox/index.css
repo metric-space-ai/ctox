@@ -964,54 +964,11 @@
   animation: ctox-flow-creature-focus 1.6s ease-out infinite;
 }
 
+/* Creature look and motion come from shared/crew-renderer.js and
+   shared/crew-motion.js; the map only sizes the wrapper. */
 .ctox-flow-creature-shell .ctox-crew-creature {
-  display: inline-grid;
-  place-items: center;
   width: 100%;
   height: 100%;
-  contain: layout style;
-  transform-origin: 50% 78%;
-}
-
-.ctox-flow-creature-shell .ctox-crew-creature:is(.is-working, .is-review),
-.ctox-flow-creature-shell .ctox-crew-creature:is(.is-working, .is-review) .ctox-crew-body,
-.ctox-flow-creature-shell .ctox-crew-creature:is(.is-working, .is-review) .ctox-crew-eyes {
-  will-change: transform;
-}
-
-.ctox-flow-creature-shell .ctox-crew-creature svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-
-.ctox-flow-creature-shell .ctox-crew-body {
-  fill: var(--crew-color);
-  filter: drop-shadow(0 3px 5px color-mix(in srgb, var(--crew-color) 32%, transparent));
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.ctox-flow-creature-shell .ctox-crew-eyes,
-.ctox-flow-creature-shell .ctox-crew-eyes-x,
-.ctox-flow-creature-shell .ctox-crew-eyes-sleeping {
-  fill: none;
-  /* Illustration ink matches shared/business-chat.js in both themes. */
-  stroke: #090a0c;
-  stroke-width: 5;
-  stroke-linecap: round;
-  transform-box: fill-box;
-  transform-origin: center;
-}
-
-.ctox-flow-creature-shell .ctox-crew-creature.is-failed {
-  transform: translateY(10px) scale(1.08, .7);
-}
-
-.ctox-flow-creature-shell .ctox-crew-creature.is-failed .ctox-crew-body {
-  transform: scale(1.14, .72);
-  transform-origin: 50% 90%;
 }
 
 @keyframes ctox-flow-creature-focus {

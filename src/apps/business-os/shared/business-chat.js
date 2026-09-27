@@ -1,5 +1,5 @@
-import { normalizeCrewAppearance, renderCrewCreature, CREW_CREATURE_BASE_CSS } from './crew-renderer.js';
-import { syncCrewMotion } from './crew-motion.js';
+import { normalizeCrewAppearance, renderCrewCreature, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260927-crew-genome-v1';
+import { syncCrewMotion } from './crew-motion.js?v=20260927-crew-genome-v1';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
   FILE_CHUNK_HASH_SCHEME,
@@ -2588,26 +2588,10 @@ function takeoverText(name, reasonTitle) {
 }
 
 function crewCreatureMode(chat, taskState = getTaskState(chat)) {
-  if (taskState === 'failed') return 'failed';
-  if (taskState === 'running') {
-    const phase = String(
-      executionProgressForChat(chat)?.phase
-      || chat?.executionPhase
-      || chat?.execution_phase
-      || chat?.routeStatus
-      || chat?.status
-      || '',
-    ).toLowerCase();
-    return ['review', 'awaiting_review', 'awaiting-review', 'reviewing', 'validating'].includes(phase)
-      ? 'review'
-      : 'working';
-  }
-  if (taskState === 'idle'
-      || taskState === 'queued'
-      || taskState === 'scheduled'
-      || taskState === 'success') return 'sleeping';
-  // reading / learning are member expressions (crewMemberExpression).
-  return taskState;
+  const phase = taskState === 'running'
+    ? executionProgressForChat(chat)?.phase || chat?.executionPhase || chat?.execution_phase || chat?.routeStatus || chat?.status || ''
+    : '';
+  return crewModeForTaskState(taskState, phase);
 }
 
 // Motion is owned by the page-wide engine in crew-motion.js; a chat root has

@@ -344,7 +344,7 @@ test('crew motion: continuous state poses, impulses only from durable turns, red
   const { __crewMotionInternals } = await import('./crew-motion.js');
   const { basePose, IMPULSES } = __crewMotionInternals;
   // The chat delegates to the one page-wide engine instead of running its own loop.
-  assert.match(businessChatSource, /import \{ syncCrewMotion \} from '\.\/crew-motion\.js'/);
+  assert.match(businessChatSource, /import \{ syncCrewMotion \} from '\.\/crew-motion\.js\?v=/);
   assert.doesNotMatch(businessChatSource, /__ctoxCrewProceduralMotion/);
   // Impulses come only from a durable turn increase (or a fresh first event) and only while working/reviewing.
   assert.match(motionSource, /turns > actor\.turns && \(mode === 'working' \|\| mode === 'review'\)/);

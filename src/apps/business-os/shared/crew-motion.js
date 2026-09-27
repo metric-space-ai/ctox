@@ -18,7 +18,10 @@
  * work stays on the compositor; eye moves are rare and short.
  */
 
+import { CREW_CREATURE_CSS } from './crew-renderer.js?v=20260927-crew-genome-v1';
+
 const ENGINE_KEY = '__ctoxCrewMotionEngine';
+const STYLE_ID = 'ctox-crew-creature-css';
 const CREATURE_SELECTOR = '.ctox-crew-creature';
 const CALM_MODES = new Set(['sleeping', 'failed']);
 const OPEN_EYE_MODES = new Set(['working', 'review', 'learning', 'waiting']);
@@ -254,6 +257,8 @@ function createEngine() {
       unit: 0,
       glance: { x: 0, y: 0, at: 0 },
       blinkAt: 0,
+      // WebKit misplaces composited layers inside foreignObject: no layer hint there.
+      layerHint: !node.closest('foreignObject'),
     };
     scheduleIn(actor, now);
     if (remembered && now - remembered.at < MEMORY_TTL_MS) {
@@ -443,6 +448,13 @@ function createEngine() {
       return;
     }
     started = true;
+    // The one creature stylesheet, first in <head> so hosts can size wrappers.
+    if (!document.getElementById(STYLE_ID)) {
+      const style = document.createElement('style');
+      style.id = STYLE_ID;
+      style.textContent = CREW_CREATURE_CSS;
+      (document.head || document.documentElement).prepend(style);
+    }
     if (typeof IntersectionObserver === 'function') {
       intersection = new IntersectionObserver((entries) => {
         for (const entry of entries) {
@@ -450,7 +462,7 @@ function createEngine() {
           if (!actor) continue;
           actor.visible = entry.isIntersecting;
           if (entry.boundingClientRect.width) actor.unit = entry.boundingClientRect.width / 64;
-          if (actor.visible && !reduced) actor.figure.style.willChange = 'transform';
+          if (actor.visible && !reduced && actor.layerHint) actor.figure.style.willChange = 'transform';
           else if (!actor.visible) actor.figure.style.willChange = '';
         }
         ensureLoop();
