@@ -2524,6 +2524,121 @@ pub fn ack_leased_messages_for_attempt(
     Ok(updated)
 }
 
+/// Stop a deterministic plan-finalization failure even when this same attempt
+/// already applied a nonterminal hold. Never clear/reuse its effect marker.
+/// The current lease, plan revision and command owner must still match.
+pub(crate) fn fail_incomplete_plan_for_attempt(
+    root: &Path,
+    attempt_id: &str,
+    message_keys: &[String],
+    lease_worker_id: Option<&str>,
+    incomplete: &crate::context::lcm::IncompleteTaskExecutionPlan,
+    reason: &str,
+) -> Result<usize> {
+    anyhow::ensure!(
+        message_keys.len() == 1,
+        "plan failure requires one command task"
+    );
+    anyhow::ensure!(!reason.trim().is_empty(), "plan failure requires a reason");
+    let task_id = &message_keys[0];
+    let mut conn = open_channel_db(&resolve_db_path(root, None))?;
+    attach_queue_projection_store(root, &conn)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let owns_attempt: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM worker_attempt_finalizations a
+         WHERE a.attempt_id=?1 AND a.work_key=?2 AND a.agent_outcome='Success'
+           AND a.effects_completed=0
+           AND NOT EXISTS(SELECT 1 FROM worker_attempt_finalizations newer
+             WHERE newer.work_key=a.work_key AND newer.rowid>a.rowid))",
+        params![attempt_id, incomplete.work_key],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(
+        owns_attempt,
+        "plan failure attempt no longer owns this work"
+    );
+    let (command_id, phase, terminal): (String, String, String) = tx.query_row(
+        "SELECT a.command_id,a.execution_phase,a.terminal_status
+         FROM business_command_task_links l
+         JOIN business_command_aggregates a ON a.command_id=l.command_id
+         WHERE l.task_id=?1 AND a.command_type='business_os.chat.task'",
+        [task_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    if phase == "terminal" {
+        // The operator or another terminal owner won. This also covers a
+        // crash after our own committed failure, before effects_completed.
+        tx.commit()?;
+        return Ok(0);
+    }
+    anyhow::ensure!(terminal == "none", "command has a different terminal owner");
+    let owns_plan: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM task_execution_plan_revisions
+         WHERE work_key=?1 AND revision=?2 AND task_id=?3 AND command_id=?4
+           AND attempt_id=?5 AND completed_steps=?6 AND total_steps=?7
+           AND revision=(SELECT MAX(revision) FROM task_execution_plan_revisions WHERE work_key=?1))",
+        params![incomplete.work_key, incomplete.revision, task_id, command_id,
+            attempt_id, incomplete.completed, incomplete.total],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(
+        owns_plan,
+        "plan failure evidence no longer owns the current revision"
+    );
+    let worker_id = lease_worker_id.context("plan failure has no owned queue lease")?;
+    let owns_lease: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM communication_routing_state
+         WHERE message_key=?1 AND route_status='leased' AND lease_worker_id=?2)",
+        params![task_id, worker_id],
+        |row| row.get(0),
+    )?;
+    anyhow::ensure!(owns_lease, "plan failure queue lease changed owner");
+    // All failure evidence is fenced together, before any new owner or plan
+    // revision can interleave. Reuse the canonical review/outbox writer.
+    anyhow::ensure!(
+        command_saga::record_business_command_review_in_transaction(
+            &tx,
+            task_id,
+            "failed",
+            "failed",
+            &serde_json::json!({
+                "disposition": "terminal-queue-failure",
+                "failure_class": "incomplete_execution_plan",
+                "attempt_id": attempt_id,
+                "work_key": incomplete.work_key,
+                "plan_revision": incomplete.revision,
+                "completed_steps": incomplete.completed,
+                "total_steps": incomplete.total,
+                "summary": reason,
+            }),
+        )?,
+        "plan failure lost its command/task link"
+    );
+    tx.execute(
+        "UPDATE task_execution_plan_revisions
+         SET review_status='failed',phase='review',percent=?3,updated_at_ms=?4
+         WHERE work_key=?1 AND revision=?2",
+        params![
+            incomplete.work_key,
+            incomplete.revision,
+            (90.0 * incomplete.completed as f64 / incomplete.total as f64).round() as i64,
+            epoch_millis()
+        ],
+    )?;
+    let updated =
+        ack_messages_in_transaction(&tx, message_keys, "failed", Some(reason), None, None)?;
+    tx.execute(
+        "UPDATE worker_attempt_finalizations
+         SET queue_effects_applied_at=COALESCE(queue_effects_applied_at,?2), updated_at=?2
+         WHERE attempt_id=?1",
+        params![attempt_id, now_iso_string()],
+    )?;
+    let tasks = load_queue_projection_tasks(&tx, message_keys)?;
+    refresh_queue_projection_tasks(root, &tx, &tasks)?;
+    tx.commit()?;
+    Ok(updated)
+}
+
 /// Bind an already-durable queue outcome to its worker attempt without
 /// rewriting the queue row. This closes the recovery window for effects (such
 /// as Business OS command writeback) that terminalize the queue in their own
