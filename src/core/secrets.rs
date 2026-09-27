@@ -27,7 +27,7 @@ use crate::persistence;
 
 const MASTER_KEY_STORAGE_KEY: &str = "secret_master_key_b64";
 const SECRET_STORE_FILE: &str = "ctox-secrets.sqlite3";
-const SECRET_MASTER_KEY_FILE: &str = "ctox-secrets.key";
+pub(crate) const SECRET_MASTER_KEY_FILE: &str = "ctox-secrets.key";
 const SECRET_KV_TABLE: &str = "ctox_secret_kv";
 const SECRET_PUT_USAGE: &str = "usage: ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]";
 const SECRET_INTAKE_USAGE: &str = "usage: ctox secret intake --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]";

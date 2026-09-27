@@ -61,6 +61,37 @@ pub(super) fn show_target(root: &Path, target_key: &str) -> Result<Option<Value>
     })))
 }
 
+/// Report the activated library revision without importing a source-tree script
+/// or changing target configuration. Files are checked execution materializations.
+pub(crate) fn target_script_registration(root: &Path, target_key: &str) -> Result<Option<Value>> {
+    let conn = open_db(root)?;
+    let Some(target) = load_target_view(&conn, target_key)? else {
+        return Ok(None);
+    };
+    let active = target.latest_script_revision_no.map(|revision| {
+        conn.query_row(
+            "SELECT script_path, script_sha256, script_body FROM scrape_script_revision WHERE target_id=?1 AND revision_no=?2",
+            params![target.target_id, revision],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+        ).optional()
+    }).transpose()?.flatten();
+    let usable = active.as_ref().is_some_and(|(path, hash, body)| {
+        !body.trim().is_empty()
+            && target.latest_script_sha256.as_deref() == Some(hash.as_str())
+            && compute_sha256(body.trim()) == *hash
+            && registered_script_matches(&resolve_input_path(root, path), hash)
+    });
+    Ok(Some(json!({
+        "ok": true,
+        "target_key": target.target_key,
+        "registered_from": "runtime_sqlite",
+        "workspace_dir": resolve_registered_workspace(root, &target),
+        "script_registered": usable,
+        "revision_no": target.latest_script_revision_no,
+        "script_sha256": target.latest_script_sha256,
+    })))
+}
+
 pub(super) fn show_api(root: &Path, target_key: &str) -> Result<Option<Value>> {
     let conn = open_db(root)?;
     let Some(target) = load_target_view(&conn, target_key)? else {
@@ -201,6 +232,12 @@ pub(super) fn register_script(
     let source_path = resolve_input_path(root, script_file_arg);
     let script_body = fs::read_to_string(&source_path)
         .with_context(|| format!("failed to read script file {}", source_path.display()))?;
+    if script_body.trim().is_empty() {
+        anyhow::bail!(
+            "scrape script {} must contain non-whitespace content",
+            source_path.display()
+        );
+    }
     let script_sha256 = compute_sha256(script_body.trim());
     if let Some((revision_no, script_path, created_at)) = conn
         .query_row(
@@ -250,25 +287,23 @@ pub(super) fn register_script(
                 .parent()
                 .context("deduplicated scrape script revision has no parent")?,
         )?;
-        if source_path != revision_path {
-            fs::copy(&source_path, &revision_path).with_context(|| {
-                format!(
-                    "failed to materialize deduplicated script revision {} -> {}",
-                    source_path.display(),
-                    revision_path.display()
-                )
-            })?;
-        }
+        fs::write(&revision_path, &script_body).with_context(|| {
+            format!(
+                "failed to publish deduplicated script revision to {}",
+                revision_path.display()
+            )
+        })?;
+
         let current_path = workspace_dir
             .join("scripts")
             .join(format!("current{extension}"));
-        fs::copy(&revision_path, &current_path).with_context(|| {
+        fs::write(&current_path, &script_body).with_context(|| {
             format!(
-                "failed to reactivate script revision {} -> {}",
-                revision_path.display(),
+                "failed to reactivate script revision to {}",
                 current_path.display()
             )
         })?;
+
         let activated_at = now_iso_string();
         let persisted_revision_path = path_for_storage(root, &revision_path);
         conn.execute(
@@ -330,20 +365,19 @@ pub(super) fn register_script(
     let current_path = workspace_dir
         .join("scripts")
         .join(format!("current{}", extension));
-    fs::copy(&source_path, &revision_path).with_context(|| {
+    fs::write(&revision_path, &script_body).with_context(|| {
         format!(
-            "failed to copy script revision {} -> {}",
-            source_path.display(),
+            "failed to publish script revision to {}",
             revision_path.display()
         )
     })?;
-    fs::copy(&source_path, &current_path).with_context(|| {
+    fs::write(&current_path, &script_body).with_context(|| {
         format!(
-            "failed to copy current script {} -> {}",
-            source_path.display(),
+            "failed to publish current script to {}",
             current_path.display()
         )
     })?;
+
     let created_at = now_iso_string();
     let entry_command = default_entry_command(language);
     let stored_revision_path = path_for_storage(root, &revision_path);
@@ -412,6 +446,12 @@ pub(super) fn register_source_module(
     let source_path = resolve_input_path(root, module_file_arg);
     let module_body = fs::read_to_string(&source_path)
         .with_context(|| format!("failed to read source module {}", source_path.display()))?;
+    if module_body.trim().is_empty() {
+        anyhow::bail!(
+            "scrape source module {} must contain non-whitespace content",
+            source_path.display()
+        );
+    }
     let module_sha256 = compute_sha256(module_body.trim());
     if let Some((revision_no, module_path, created_at)) = conn
         .query_row(
@@ -443,27 +483,32 @@ pub(super) fn register_source_module(
             .unwrap_or_else(|| script_extension(language, &source_path));
         let source_dir = workspace_dir.join("sources").join(&source.source_key);
         fs::create_dir_all(&source_dir)?;
+        fs::write(&revision_path, &module_body).with_context(|| {
+            format!(
+                "failed to publish deduplicated source module revision to {}",
+                revision_path.display()
+            )
+        })?;
         let current_path = source_dir.join(format!("current{extension}"));
         let configured_path = workspace_dir.join(&source.extraction_module);
         if let Some(parent) = configured_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::copy(&revision_path, &current_path).with_context(|| {
+        fs::write(&current_path, &module_body).with_context(|| {
             format!(
-                "failed to reactivate source module revision {} -> {}",
-                revision_path.display(),
+                "failed to reactivate source module revision to {}",
                 current_path.display()
             )
         })?;
         if configured_path != current_path {
-            fs::copy(&revision_path, &configured_path).with_context(|| {
+            fs::write(&configured_path, &module_body).with_context(|| {
                 format!(
-                    "failed to reactivate configured source module {} -> {}",
-                    revision_path.display(),
+                    "failed to reactivate configured source module to {}",
                     configured_path.display()
                 )
             })?;
         }
+
         write_target_manifest(root, &target)?;
         return Ok(json!({
             "target_key": target.target_key,
@@ -501,25 +546,22 @@ pub(super) fn register_source_module(
     if let Some(parent) = configured_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::copy(&source_path, &revision_path).with_context(|| {
+    fs::write(&revision_path, &module_body).with_context(|| {
         format!(
-            "failed to copy source module revision {} -> {}",
-            source_path.display(),
+            "failed to publish source module revision to {}",
             revision_path.display()
         )
     })?;
-    fs::copy(&source_path, &current_path).with_context(|| {
+    fs::write(&current_path, &module_body).with_context(|| {
         format!(
-            "failed to copy source module {} -> {}",
-            source_path.display(),
+            "failed to publish source module current file to {}",
             current_path.display()
         )
     })?;
     if configured_path != current_path {
-        fs::copy(&source_path, &configured_path).with_context(|| {
+        fs::write(&configured_path, &module_body).with_context(|| {
             format!(
-                "failed to copy source module {} -> {}",
-                source_path.display(),
+                "failed to publish configured source module to {}",
                 configured_path.display()
             )
         })?;

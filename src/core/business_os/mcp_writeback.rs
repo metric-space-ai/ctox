@@ -34,9 +34,15 @@ fn bound_payload(parent_id: &str, contract: &Value, arguments: &Value) -> anyhow
         .get("payload")
         .cloned()
         .context("writeback payload is required")?;
+    // The tool declares payload as a JSON string: MiniMax drops large object
+    // arguments (THESEN 26.09.2026, 5 of 6 replayed calls arrived as "{}"),
+    // a string arrives intact. An object is still accepted.
+    if let Some(text) = payload.as_str() {
+        payload = decode_payload_text(text)?;
+    }
     let object = payload
         .as_object_mut()
-        .context("writeback payload must be an object")?;
+        .context("writeback payload must be a JSON object encoded as a string")?;
     for (key, expected) in [
         ("record_id", record_id.as_str()),
         ("module", RESEARCH_MODULE),
@@ -52,6 +58,31 @@ fn bound_payload(parent_id: &str, contract: &Value, arguments: &Value) -> anyhow
         object.insert(key.to_string(), Value::String(expected.to_string()));
     }
     Ok(payload)
+}
+
+/// Decodes the payload string and, when it is not valid JSON, names the
+/// position and the surrounding text so the worker can repair that spot.
+fn decode_payload_text(text: &str) -> anyhow::Result<Value> {
+    match serde_json::from_str::<Value>(text) {
+        Ok(value) if value.is_object() => Ok(value),
+        Ok(_) => anyhow::bail!("writeback payload must encode a JSON object"),
+        Err(error) => {
+            let offset = text
+                .lines()
+                .take(error.line().saturating_sub(1))
+                .map(|line| line.len() + 1)
+                .sum::<usize>()
+                + error.column().saturating_sub(1);
+            let near: String = text
+                .char_indices()
+                .filter(|(index, _)| *index + 60 >= offset && *index <= offset + 30)
+                .map(|(_, character)| character)
+                .collect();
+            anyhow::bail!(
+                "writeback payload is not valid JSON: {error}; near: {near:?}. Fix that spot and send the payload again as one JSON string."
+            )
+        }
+    }
 }
 
 pub(super) fn execute(
@@ -229,6 +260,47 @@ mod tests {
             .to_string();
         assert!(error.contains("without arguments"), "{error}");
         assert!(error.contains("in parts"), "{error}");
+    }
+
+    #[test]
+    fn a_payload_sent_as_json_text_is_decoded() -> anyhow::Result<()> {
+        let contract = serde_json::json!({
+            "mechanism": "business_command", "command_type": RESEARCH_WRITEBACK_COMMAND,
+            "collection": RESEARCH_COLLECTION, "record_ids": ["lead-a"]
+        });
+        let arguments = serde_json::json!({"record_id": "lead-a",
+            "payload": "{\"field_status\": {}, \"result\": {\"fields\": {}}}"});
+        let bound = bound_payload("research-a", &contract, &arguments)?;
+        assert_eq!(bound["record_id"], "lead-a");
+        assert!(bound["field_status"].is_object());
+        let error = bound_payload(
+            "research-a",
+            &contract,
+            &serde_json::json!({"record_id": "lead-a", "payload": "not json"}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("not valid JSON"), "{error}");
+        // A broken payload names the position and the text around it.
+        let error = bound_payload(
+            "research-a",
+            &contract,
+            &serde_json::json!({"record_id": "lead-a",
+                "payload": "{\"field_status\": {\"umsatz\": {\"status\": \"no_match\" \"reason\": \"x\"}}}"}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("line 1 column"), "{error}");
+        assert!(error.contains("no_match"), "{error}");
+        let error = bound_payload(
+            "research-a",
+            &contract,
+            &serde_json::json!({"record_id": "lead-a", "payload": "[1, 2]"}),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("must encode a JSON object"), "{error}");
+        Ok(())
     }
 
     #[test]

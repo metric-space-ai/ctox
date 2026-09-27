@@ -14,6 +14,7 @@
   ],
   "layout": {
     "shell": "windowed",
+    "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/explorer.png",
     "shell_contract": "v2",
     "shell_geometry_contract": "business-os-v2-global-1",
     "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-explorer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-explorer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#06b6d4\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><path d=\"M3 7.5h7l2-2h9v13.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5Z\" fill=\"url(#grad-explorer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-explorer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M3 10h18\" stroke=\"url(#grad-explorer)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",

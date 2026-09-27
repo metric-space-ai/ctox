@@ -1424,7 +1424,7 @@
         "is_deleted"
       ],
       "type": "object",
-      "version": 0
+      "version": 1
     },
     "workjet_project_chats": {
       "additionalProperties": false,
@@ -2101,6 +2101,52 @@
     "ctox_runs": {
       "1": {
         "operations": []
+      }
+    },
+    "workjet_computers": {
+      "1": {
+        "operations": [
+          {
+            "default": "",
+            "field": "device_binding_id",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "device_binding_id"
+            ]
+          },
+          {
+            "default": 0,
+            "field": "actor_epoch",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "actor_epoch"
+            ]
+          },
+          {
+            "default": 0,
+            "field": "last_seen_at_ms",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "last_seen_at_ms"
+            ]
+          },
+          {
+            "default": false,
+            "field": "replication_up",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "replication_up"
+            ]
+          },
+          {
+            "default": false,
+            "field": "is_deleted",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "is_deleted"
+            ]
+          }
+        ]
       }
     }
   },

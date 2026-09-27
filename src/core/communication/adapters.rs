@@ -121,6 +121,8 @@ pub(crate) struct EmailSendCommandRequest<'a> {
     pub sender_display: Option<&'a str>,
     pub subject: &'a str,
     pub body: &'a str,
+    /// Optional rich rendering of `body`; `body` stays the text alternative.
+    pub body_html: Option<&'a str>,
     pub attachments: &'a [String],
 }
 

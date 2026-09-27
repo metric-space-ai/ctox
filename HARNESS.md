@@ -39,10 +39,10 @@ for example `runtime/ticket_local.db` and `runtime/ctox_scraping.db`.
 Every service-owned queue attempt starts with `update_plan` as its required
 initial harness tool. Until that call succeeds, the fork exposes no other tool
 to the model. A plan contains at least one ordered step and is valid only as a
-completed prefix, at most one active step, and a pending suffix. Successful
-assistant persistence fails closed unless the latest durable plan exists and
-all model-owned steps are completed; only then may the native CTOX review
-begin.
+completed prefix, at most one active step, and a pending suffix. Assistant
+persistence requires a durable plan, but incomplete plans may enter review so
+blocked work can retain honest pending steps. Only validated completion with
+all model-owned steps completed may reach terminal success and 100 percent.
 
 `task_execution_plan_revisions` is the authoritative plan history. Status-only
 updates rewrite the current revision, while changed labels, count, or order
@@ -248,17 +248,27 @@ execution:
 
 Plan-step messages force continuity refresh because they are task boundaries.
 Normal worker slices reuse one named, non-ephemeral harness thread. Its rollout
-is resumed after a service restart. Jobs with a replacement base prompt or a
-narrow no-MCP profile remain deliberately isolated sessions because they have a
-different capability/instruction contract. A queue job's workspace is applied
-as the typed per-turn cwd rather than encoded only in prompt prose.
+is resumed after a service restart. If lookup of that named thread fails, or
+resume of an identified thread fails, or `turn/start` is rejected on the bound
+thread, the native adapter returns an actionable error. It does not start a
+replacement thread and does not resubmit the turn. Ambiguous `turn/start`
+outcomes (timeout, transport, or decode) still poison the process-local session
+so a duplicate turn cannot be issued. First-time creation remains allowed when
+lookup completes and finds no named durable thread. Jobs with a replacement
+base prompt or a narrow no-MCP profile remain deliberately isolated sessions
+because they have a different capability/instruction contract; isolated
+sessions still start fresh/ephemeral threads and may rotate once after a
+definitive `turn/start` rejection. A queue job's workspace is applied as the
+typed per-turn cwd rather than encoded only in prompt prose.
 Systematic-research jobs are also isolated: each attempt starts a fresh
 non-persistent session with the typed CTOX Web tools. This prevents prior
 research history from influencing a new evidence run while preserving the
 server-authoritative research toolchain.
 Before reuse, the worker compares the current composed base instructions and
 model with the live session contract. A mismatch rebuilds the process-local
-client and resumes the durable thread with the new contract.
+client and resumes the durable thread with the new contract. This native
+in-process continuity is not Codex/Claude export/import, cross-device restore,
+or checkpoint-certified provider failover.
 
 Turn timeout defaults follow the resolved provider boundary. Native local
 inference keeps the long local budget; a local proxy/process that resolves to
@@ -388,7 +398,14 @@ only and do not decide refresh behavior.
 A successful model turn does not automatically close work. The service starts a
 completion review unless the source is internal queue-guard maintenance. The
 reviewer runs as a separate skeptical pass over the worker result and returns a
-typed disposition:
+typed disposition. Review reports separately declare
+`TASK_OUTCOME: completed|blocked|unverified`. Only `completed` with acceptable
+independent proof can pass. Missing, unknown, or conflicting declarations fail
+closed. A truthful blocker report does not complete requested execution; a
+verified query with zero matches can complete it. Review admission preserves
+incomplete plan steps and their actual progress.
+
+The supported dispositions are:
 
 - `Approved`
 - `Hold`
@@ -799,7 +816,15 @@ Fehlschläge in der Tätigkeit nur ohne Alternative. Die Antwort ist JSON
 (`member_id`, `reason`); ein unbrauchbares oder unerreichbares Urteil fällt auf
 die deterministische Punktzahl (`crew::select`) zurück, und die Begründung sagt
 das. Archivierte Mitglieder werden nicht neu ausgewählt. Ein wiederaufgenommener
-Versuch behält seine ursprüngliche Identität. Die wörtliche Begründung steht im
+Versuch behält seine ursprüngliche Identität. Die Zulassung prüft die bestehende
+Attempt-Zeile innerhalb derselben Schreibtransaktion wie die Crew-Bindung:
+Aufgabe und Mitglied müssen übereinstimmen, und der Attempt darf noch nicht
+finalisiert sein. Ein Konflikt verbraucht keine manuelle Zuweisung und schreibt
+keine neue Auswahl. Ein neuer Versuch benötigt eine neue Attempt-ID. Diese
+Prüfung ist eine Voraussetzung für die externe Crew-Anbindung, noch keine
+externe Laufzulassungs-API. Der separate [MCP-Kontextabruf](docs/workjet-crew-context.md)
+liefert nur den gebundenen Kontext eines bereits zugelassenen Versuchs unter
+bestehenden privaten Crew-Leserechten. Die wörtliche Begründung steht im
 Harness-Flow-Ereignis `crew_selected` (`selection_kind` routed/selected/
 assigned/continuity) und in dessen Cockpit-Projektion; das Lesen des
 Gedächtnisses erzeugt `crew.memory_read`. In Tests ist kein Router-Urteil

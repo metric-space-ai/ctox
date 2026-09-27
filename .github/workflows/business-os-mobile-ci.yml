@@ -4,16 +4,20 @@ on:
   pull_request:
     paths:
       - "src/apps/business-os-mobile/**"
+      - "src/scripts/android-framework-diagnostics.py"
       - ".github/workflows/business-os-mobile-ci.yml"
       - "docs/ctox-business-os-mobile.md"
       - "src/apps/business-os/**"
+      - "tests/test_android_framework_diagnostics.py"
   push:
     branches: [main]
     paths:
       - "src/apps/business-os-mobile/**"
+      - "src/scripts/android-framework-diagnostics.py"
       - ".github/workflows/business-os-mobile-ci.yml"
       - "docs/ctox-business-os-mobile.md"
       - "src/apps/business-os/**"
+      - "tests/test_android_framework_diagnostics.py"
 
 permissions:
   contents: read
@@ -28,6 +32,30 @@ env:
   MOBILE_ROOT: src/apps/business-os-mobile
 
 jobs:
+  framework-diagnostics-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Run focused framework diagnostics suite
+        id: framework-tests
+        run: |
+          set -o pipefail
+          python3 -m unittest -v tests/test_android_framework_diagnostics.py 2>&1 | tee "$RUNNER_TEMP/android-framework-diagnostics-tests.log"
+      - name: Upload focused framework diagnostics test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-framework-diagnostics-focused-test-log
+          path: ${{ runner.temp }}/android-framework-diagnostics-tests.log
+          if-no-files-found: error
+          retention-days: 7
+
   portable:
     runs-on: ubuntu-24.04
     steps:
@@ -139,6 +167,8 @@ jobs:
           java-version: "17"
           cache: gradle
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Install pinned Android SDK
         run: |
           yes | sdkmanager --licenses >/dev/null || true
@@ -148,7 +178,19 @@ jobs:
       - name: Unit tests and unsigned debug build
         working-directory: ${{ env.MOBILE_ROOT }}/android
         run: ./gradlew --no-daemon testDebugUnitTest assembleDebug
+      - name: Grant and verify phone KVM access
+        run: |
+          set -euo pipefail
+          id
+          test -c /dev/kvm
+          stat -Lc 'device=%t:%T inode=%i owner=%U group=%G mode=%a' /dev/kvm
+          getfacl -p /dev/kvm
+          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          getfacl -p /dev/kvm
+          "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check
       - name: Emulator launch smoke
+        id: phone
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -156,11 +198,30 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
+          disable-linux-hw-accel: false
           script: |
             adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk
             adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity
             adb exec-out screencap -p > "$RUNNER_TEMP/android-phone.png"
+      - name: Grant and verify tablet KVM access after phone shutdown
+        run: |
+          set -euo pipefail
+          id
+          test -c /dev/kvm
+          stat -Lc 'device=%t:%T inode=%i owner=%U group=%G mode=%a' /dev/kvm
+          getfacl -p /dev/kvm
+          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          getfacl -p /dev/kvm
+          "$ANDROID_SDK_ROOT/emulator/emulator" -accel-check
+      - name: Start bounded tablet framework diagnostics
+        run: |
+          python3 src/scripts/android-framework-diagnostics.py start \
+            --ownership "$RUNNER_TEMP/android-tablet-framework-diagnostics.ownership.json" \
+            --output "$RUNNER_TEMP/android-tablet-framework-diagnostics.jsonl" \
+            --phone-outcome "${{ steps.phone.outcome }}"
       - name: 4:3 tablet launch smoke
+        id: tablet
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -168,14 +229,31 @@ jobs:
           arch: x86_64
           profile: "Nexus 9"
           disable-animations: true
+          disable-linux-hw-accel: false
           script: |
             adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk
             adb shell settings put system accelerometer_rotation 0
-            adb shell settings put system user_rotation 1
+            # Nexus 9 boots at 2048x1536; rotation 1 turns it into portrait.
+            adb shell settings put system user_rotation 0
             adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity
             sleep 2
             adb exec-out screencap -p > "$RUNNER_TEMP/android-tablet-4x3.png"
             python3 src/scripts/assert_android_tablet_screenshot.py "$RUNNER_TEMP/android-tablet-4x3.png"
+      - name: Finalize bounded tablet framework diagnostics
+        if: always()
+        run: |
+          python3 src/scripts/android-framework-diagnostics.py stop \
+            --ownership "$RUNNER_TEMP/android-tablet-framework-diagnostics.ownership.json" \
+            --output "$RUNNER_TEMP/android-tablet-framework-diagnostics.json" \
+            --tablet-outcome "${{ steps.tablet.outcome }}"
+      - name: Upload sanitized tablet framework diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: business-os-mobile-android-tablet-framework-diagnostics
+          path: ${{ runner.temp }}/android-tablet-framework-diagnostics.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Package checksums and manifests
         run: |
           cp "$MOBILE_ROOT/android/app/build/outputs/apk/debug/app-debug.apk" "$RUNNER_TEMP/CTOXBusinessOSMobile-android-debug.apk"
