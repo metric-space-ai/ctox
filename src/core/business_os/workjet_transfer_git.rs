@@ -272,6 +272,7 @@ pub fn apply_git_working_copy(
 
     match apply_in_temp(artifacts_dir, manifest, &temp_dir) {
         Ok(report) => {
+            sync_materialized_tree(&temp_dir)?;
             if target_dir.exists() {
                 fs::remove_dir(target_dir).with_context(|| {
                     format!("failed to remove empty target {}", target_dir.display())
@@ -284,9 +285,57 @@ pub fn apply_git_working_copy(
                     target_dir.display()
                 )
             })?;
+            let parent = target_dir
+                .parent()
+                .filter(|parent| !parent.as_os_str().is_empty())
+                .unwrap_or_else(|| Path::new("."));
+            sync_materialized_directory(parent)?;
             Ok(report)
         }
         Err(error) => Err(anyhow!("{error:#}; temporary_dir={}", temp_dir.display())),
+    }
+}
+
+/// Flush every materialized file and then directories in child-before-parent order.
+fn sync_materialized_tree(root: &Path) -> anyhow::Result<()> {
+    // Include Git objects, refs and index, not just the dirty-file manifest.
+    // Never follow symlinks: their entries are made durable by the parent sync.
+    let mut pending = vec![root.to_path_buf()];
+    let mut directories = Vec::new();
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                pending.push(entry.path());
+            } else if kind.is_file() {
+                File::open(entry.path())?.sync_all()?;
+            } else {
+                ensure!(
+                    kind.is_symlink(),
+                    "{UNSUPPORTED_FILE_TYPE}: materialized entry"
+                );
+            }
+        }
+        directories.push(directory);
+    }
+    for directory in directories.into_iter().rev() {
+        sync_materialized_directory(&directory)?;
+    }
+    Ok(())
+}
+
+fn sync_materialized_directory(path: &Path) -> anyhow::Result<()> {
+    #[cfg(unix)]
+    {
+        File::open(path)?
+            .sync_all()
+            .context("flush materialized directory")
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        bail!("durable Git target publication is not certified on this platform")
     }
 }
 

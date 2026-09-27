@@ -13,7 +13,11 @@ The canonical manifest hash binds this proof. Apply verifies the index patch
 hash before use, restores the working patch without staging it, applies the
 index patch with `--cached`, and compares `git write-tree` with the proof.
 Only then can the existing file-manifest verification and target publication
-finish. Index-only changes count as dirty even if working bytes match HEAD.
+finish. Publication flushes every materialized regular file (including Git
+objects, refs and index), then directories from children to parents, then the
+target's parent after the rename. Symlinks are never traversed. Directory
+durability is currently Unix-only; other platforms fail without an apply receipt.
+ Index-only changes count as dirty even if working bytes match HEAD.
 Unresolved merges and intent-to-add entries are rejected; the latter has no
 ordinary Git tree representation. This does not claim support for arbitrary
 index flags, submodules, every ref, or an independently running source writer.
