@@ -968,7 +968,7 @@ fn suppressed_account_outcome(
         latency_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
         reason: "provider_account_inactive_suppressed".to_string(),
         error: Some(format!(
-            "Konto beim Anbieter inaktiv: {} (erfasst in {}, zuletzt geprüft in {}); kein Anbieteraufruf. Nächste automatische Prüfung {next_probe}, früher nach geänderten Zugangsdaten oder autorisierter Prüfung.",
+            "Konto beim Anbieter inaktiv: {} (erfasst in {}, zuletzt geprüft in {}); kein Anbieteraufruf. Automatische Wiederprüfung beim nächsten Abruf ab {next_probe}, früher nach geänderten Zugangsdaten oder autorisierter Prüfung.",
             state.reason, state.causal_run_id, state.last_probe_run_id
         )),
         query_completion: None,
