@@ -1618,6 +1618,10 @@ function isLocalFallbackCommandTrackingQueryError(error) {
   const codes = [error?.code, error?.cause?.code, error?.data?.code]
     .map((code) => String(code || ''));
   const message = String(error?.message || error || '');
+  // A native schema reconfiguration cancels reads tied to the old peer.
+  // Keep tracking this exact command within the existing finite retry/deadline
+  // budget; neither redispatch it nor turn other cancellations into retries.
+  if (message === 'QUERY_CANCELLED: peer-peer-close') return true;
   return [
     'SQLITE_QUERY_STREAM_UNSUPPORTED',
     'QUERY_FETCH_STREAM_UNSUPPORTED',
