@@ -1775,6 +1775,22 @@ native schemas and both hash registries are regenerated before the pinned
 esbuild 0.28.0 bundle build; the sole bundle URL remains in `shared/rxdb-runtime.js`.
 ### Browser command receipts across reconnects
 
+Before dependency writes or a new command insert, the command bus renews its
+capability and compares its account/device and permission identity with the
+first protocol payload on the current connection. The browser stores only
+change-detection metadata, never a second bearer-token authority store. A changed
+permission epoch/role or expired captured capability closes that connection and
+uses the regular fresh-connection handshake (including native device challenge
+validation). Sending another payload on the old connection does not establish
+renewal. An account/device identity change fails closed and requires the host's
+database scope lifecycle.
+
+Room-wide renewal is coalesced. The command bus reacquires authority after a
+renewal and requires convergence within two rounds and the original readiness
+deadline, including the readiness of any replacement collection bridges.
+Neither renewal failure nor timeout inserts or replays a command. Native
+capability, collection and device-proof checks remain authoritative.
+
 During peer replacement, `QUERY_GENERATION_REQUIRED` leaves the exact-ID
 tracker pending within its existing finite revalidation schedule and caller
 deadline. This specific condition never falls back to local storage: the next

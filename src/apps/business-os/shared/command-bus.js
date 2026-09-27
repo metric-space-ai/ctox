@@ -482,6 +482,7 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
   const syncPlan = await prepareCommandSync({ db: currentDb, sync, command });
   emitCommandLifecycle(commandId, command.command_type || command.type, 'sync_ready', submitStartedAt);
   try {
+    doc.client_context.capability_token = await acquireCommandPeerAuthority(commandId, syncPlan);
     try {
       await flushSyncBridges(syncPlan.beforeCommand, [], syncPlan.flushTimeoutMs);
     } catch (error) {
@@ -504,8 +505,9 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
     // not the token captured before the reconnect. This is not command replay.
     // A grant change need not have caused a reconnect yet. Revalidate at this
     // mutation boundary rather than reusing even an unexpired positive cache.
-    const readyCapability = await acquireCapabilityTokenForSubmit({ refresh: true });
-    doc.client_context.capability_token = requireCommandCapability(commandId, readyCapability);
+    if (syncPlan.beforeCommand.length) {
+      doc.client_context.capability_token = await acquireCommandPeerAuthority(commandId, syncPlan);
+    }
     assertCommandDocumentTransportBudget(doc, commandId);
     const localWriteStartedAt = Date.now();
     const inserted = await insertOrPatchCommandDocument(collection, commandId, doc);
@@ -916,6 +918,7 @@ async function prepareCommandSync({ db, sync, command = null }) {
   const dependencyCollections = commandDependencySyncCollections(command);
   const queueProjectionRequired = command?.sync_queue_tasks !== false;
   const readyTimeoutMs = commandSyncReadyTimeoutMs(command);
+  const readyDeadlineAtMs = Date.now() + readyTimeoutMs;
   const leases = [];
   try {
     const dependencyBridges = await Promise.all(
@@ -947,11 +950,13 @@ async function prepareCommandSync({ db, sync, command = null }) {
       : [...dependencyBridges, ...submitBridges];
     await Promise.all(
       bridgesRequiredBeforeInsert.map((bridge) => (
-        waitForSyncBridgeReady(bridge, readyTimeoutMs)
+        waitForSyncBridgeReady(bridge, Math.max(1, readyDeadlineAtMs - Date.now()))
       )),
     );
     return {
       beforeCommand: dependencyBridges,
+      authorityBridges: bridgesRequiredBeforeInsert,
+      readyDeadlineAtMs,
       submitBridges,
       afterCommand,
       leases,
@@ -962,6 +967,42 @@ async function prepareCommandSync({ db, sync, command = null }) {
     await releaseSyncLeases(leases);
     throw error;
   }
+}
+
+async function acquireCommandPeerAuthority(commandId, syncPlan) {
+  const timeoutError = {
+    code: 'native_unavailable',
+    message: 'Peer authority renewal did not finish before the command deadline.',
+  };
+  const remaining = () => {
+    const milliseconds = syncPlan.readyDeadlineAtMs - Date.now();
+    if (milliseconds <= 0) throw commandError(commandId, timeoutError.message, {
+      code: timeoutError.code, retryable: true,
+    });
+    return milliseconds;
+  };
+  // Renewal can itself acquire a newer epoch. Reacquire once after reconnect,
+  // then require convergence before any dependency push or immutable insert.
+  for (let round = 0; round < 2; round++) {
+    const capability = await withTimeout(
+      () => acquireCapabilityTokenForSubmit({ refresh: true }), remaining(), timeoutError,
+    );
+    const token = requireCommandCapability(commandId, capability);
+    const bridges = syncPlan.authorityBridges;
+    const states = bridges.map(bridge => syncBridgeFromHandle(bridge)?.state);
+    const distinct = [...new Set(states.filter(Boolean))];
+    const renewed = await withTimeout(
+      () => Promise.all(distinct.map(state => state.ensurePeerAuthority?.(token) || false)),
+      remaining(), timeoutError,
+    );
+    await Promise.all(bridges.map(bridge => waitForSyncBridgeReady(bridge, remaining())));
+    remaining();
+    const replaced = bridges.some((bridge, index) => syncBridgeFromHandle(bridge)?.state !== states[index]);
+    if (!renewed.some(Boolean) && !replaced) return token;
+  }
+  throw commandError(commandId, 'Peer authority changed again during command preparation.', {
+    code: 'native_unavailable', retryable: true,
+  });
 }
 
 function commandSyncFlushTimeoutMs(command) {

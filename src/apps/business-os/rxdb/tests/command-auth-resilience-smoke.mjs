@@ -72,6 +72,58 @@ const originalFetch = globalThis.fetch;
 const nativeSetTimeout = globalThis.setTimeout;
 
 try {
+
+  // Renew the already-open peer before dependencies or immutable insertion.
+  for (const mode of ['renew', 'reject', 'timeout', 'unstable']) {
+    resetBusinessOsCapabilityTokenCacheForTests();
+    const { db, documents } = mockDb();
+    const events = [];
+    let authority = 'old-peer';
+    let checks = 0;
+    globalThis.fetch = async () => capabilityResponse('current-peer');
+    const state = {
+      async awaitInSync() {},
+      async ensurePeerAuthority(value) {
+        assert.equal(documents.size, 0);
+        checks++;
+        events.push('authority');
+        if (mode === 'reject') throw Object.assign(new Error('fresh proof rejected'), { code: 'auth_required' });
+        if (mode === 'timeout') return new Promise(() => {});
+        if (mode === 'unstable') return true;
+        const changed = authority !== value;
+        authority = value;
+        return changed;
+      },
+      async pushToRemotePeers() {
+        assert.equal(authority, 'current-peer', 'dependencies require renewed authority');
+        events.push('dependency');
+        return true;
+      },
+      async pushDocumentsToRemotePeers() {
+        assert.equal(authority, 'current-peer');
+        assert.equal(documents.size, 1);
+        events.push('command');
+        return true;
+      },
+    };
+    const sync = { async startCollection() { return { state }; } };
+    const submission = createCommandBus({ db, sync }).submit({
+      id: 'cmd-peer-authority-' + mode, command_type: 'business_os.test',
+      sync_queue_tasks: false, sync_collections: ['test_dependency'],
+      sync_ready_timeout_ms: mode === 'timeout' ? 30 : 2000,
+    });
+    if (mode === 'renew') {
+      await submission;
+      assert.deepEqual(events, ['authority', 'authority', 'dependency', 'authority', 'command']);
+      assert.equal(documents.size, 1);
+    } else {
+      await assert.rejects(submission, error => error.code === (mode === 'reject' ? 'auth_required' : 'native_unavailable'));
+      assert.equal(documents.size, 0, 'failed renewal creates no doomed intent');
+      assert.ok(!events.includes('dependency'));
+      assert.equal(checks, mode === 'unstable' ? 2 : 1);
+    }
+  }
+
   // A grant change can precede any reconnect/handshake. The mutation boundary
   // must obtain current authority even when the earlier token has not expired.
   for (const revoked of [false, true]) {
