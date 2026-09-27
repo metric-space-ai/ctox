@@ -271,11 +271,19 @@ async function waitForReady(page, mode) {
         return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
       };
       const windowElements = [...document.querySelectorAll('[data-shell-window][data-owner-id]')];
-      const windows = (app?.windowManager?.listWindows?.() || []).map(entry => ({
-        ownerId: entry.ownerId,
-        visible: entry.state !== 'minimized'
-          && visible(windowElements.find(element => element.dataset.ownerId === entry.ownerId)),
-      }));
+      const windows = (app?.windowManager?.listWindows?.() || []).map(entry => {
+        const element = windowElements.find(element => element.dataset.ownerId === entry.ownerId);
+        const moduleRoot = element?.querySelector('[data-module-root]');
+        return {
+          ownerId: entry.ownerId,
+          visible: entry.state !== 'minimized' && visible(element),
+          moduleId: moduleRoot?.dataset?.moduleRoot || '',
+          mountComplete: moduleRoot?.dataset?.moduleReady === 'true',
+          loadFailed: moduleRoot?.dataset?.moduleLoadFailed === 'true',
+          recovery: Boolean(element?.querySelector('.shell-app-recovery')),
+          loading: Boolean(element?.querySelector('[data-loading-shadow], .module-loading-note')),
+        };
+      });
       return {
         title: document.title,
         config: globalThis.CTOX_BUSINESS_OS_CONFIG || app?.sync?.config || inlineConfig || storedConfig,

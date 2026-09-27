@@ -18,7 +18,9 @@ function startupReadiness(state, expectedModule, requiredStatusVersion) {
   const checks = validStatus ? status.checks || {} : {};
   const moduleReady = expectedModule
     ? state.activeModule === expectedModule || (state.windows || []).some(window =>
-      window.ownerId === `desktop-app:${expectedModule}` && window.visible === true)
+      window.ownerId === `desktop-app:${expectedModule}` && window.visible === true
+      && window.moduleId === expectedModule && window.mountComplete === true
+      && window.loadFailed === false && window.recovery === false && window.loading === false)
     : Boolean(state.activeModule);
   const bootValue = status?.shell?.bootTimings?.shellVisibleMs;
   const bootTimingMs = typeof bootValue === 'number' && Number.isFinite(bootValue) && bootValue >= 0

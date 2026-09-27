@@ -6,7 +6,8 @@ const version = 'business-os-advanced-status-v1';
 function state() {
   return {
     activeModule: 'desktop', loading: false, shellVisible: true, moduleCount: 21,
-    expectedTextFound: true, windows: [{ ownerId: 'desktop-app:ctox', visible: true }],
+    expectedTextFound: true, windows: [{ ownerId: 'desktop-app:ctox', visible: true,
+      moduleId: 'ctox', mountComplete: true, loadFailed: false, recovery: false, loading: false }],
     advancedStatus: { version, ok: true, checks: {
       authenticated: true, shellLoaded: true, activeModuleLoaded: true,
       workspaceNotLoading: true, dataPlaneWebrtc: true, rxdbRuntimeAppLocal: true,
@@ -41,6 +42,27 @@ test('early shell visibility cannot substitute for complete sync readiness', () 
     delete observed.advancedStatus.checks[check];
     assert.equal(startupReadiness(observed, 'ctox', version).ready, false, check);
   }
+});
+
+test('a visible requested window must complete its own mount without loading or recovery', () => {
+  for (const flags of [
+    { mountComplete: false, loading: true },
+    // Production finally marks the mount complete even after a caught error.
+    { mountComplete: true, loadFailed: true, recovery: true },
+    { mountComplete: true, loadFailed: false, recovery: true },
+    { mountComplete: true, loading: true },
+    { moduleId: 'other' },
+    { mountComplete: undefined },
+    { loadFailed: undefined },
+  ]) {
+    const observed = state(); Object.assign(observed.windows[0], flags);
+    const result = startupReadiness(observed, 'ctox', version);
+    assert.equal(result.shellVisible, true);
+    assert.equal(result.healthy, true, 'global Desktop health alone is insufficient');
+    assert.equal(result.moduleReady, false);
+    assert.equal(result.ready, false);
+  }
+  assert.equal(startupReadiness(state(), 'ctox', version).ready, true);
 });
 
 test('wrong or hidden app, shell, status, timing and explicit expected text remain failures', () => {

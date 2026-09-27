@@ -126,7 +126,8 @@ or treats a merely accepted command as a completed installation. This setup
 requires real browser/native execution before claiming the UI regression passed.
 
 The launch-mode smoke recognizes requested apps in Shell-V2 desktop windows,
-without relying on the obsolete CTOX status text. Visible shell remains bounded
+requiring their completed mount without loading or recovery markers, rather
+than relying on obsolete CTOX status text or window visibility alone. Visible shell remains bounded
 to3000ms; fully healthy typed advanced status and the requested visible app must
 arrive within the existing70000ms readiness window. Early shell paint alone is
 not readiness. Failure diagnostics omit launch/session configuration.
