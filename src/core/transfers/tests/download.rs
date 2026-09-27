@@ -4,7 +4,7 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     time::Duration,
@@ -14,6 +14,7 @@ use std::{
 struct Source {
     url: String,
     stop: Arc<AtomicBool>,
+    gets: Arc<AtomicUsize>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Source {
@@ -26,6 +27,8 @@ impl Source {
         listener.set_nonblocking(true).unwrap();
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
+        let gets = Arc::new(AtomicUsize::new(0));
+        let get_count = gets.clone();
         let thread = std::thread::spawn(move || {
             while !stopped.load(Ordering::Acquire) {
                 let (mut stream, _) = match listener.accept() {
@@ -61,6 +64,7 @@ impl Source {
                     );
                     continue;
                 }
+                get_count.fetch_add(1, Ordering::SeqCst);
                 let range = text.lines().find_map(|l| {
                     l.to_lowercase()
                         .strip_prefix("range: bytes=")
@@ -93,6 +97,7 @@ impl Source {
         Self {
             url,
             stop,
+            gets,
             thread: Some(thread),
         }
     }
@@ -171,10 +176,16 @@ async fn unreachable_wrong_and_truncated_mirrors_fall_through_without_mixing_byt
         .path()
         .join("transfers/staging/mirrors/source-1/rejected-0");
     assert_eq!(std::fs::read(rejected).unwrap(), vec![0x64; body.len()]);
-    assert!(temp
-        .path()
-        .join("transfers/staging/mirrors/source-2/payload")
-        .exists());
+    let partial_dir = temp.path().join("transfers/staging/mirrors/source-2");
+    assert!(
+        partial_dir.join("payload").exists(),
+        "truncated GETs={}, source directory entries={:?}",
+        truncated.gets.load(Ordering::SeqCst),
+        std::fs::read_dir(partial_dir)
+            .unwrap()
+            .map(|p| p.unwrap().file_name())
+            .collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
