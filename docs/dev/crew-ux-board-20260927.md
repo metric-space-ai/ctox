@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad: welsch läuft auf main (Binary branch-main-20260927T075827Z + Business-OS-Dateien von main 2e4e36858, Slot aus). Offen: signierter Slot beta.60 (Tag auf main), sobald die GitHub-Actions-Warteschlange abfließt → stage/activate.
+Kritischer Pfad (Owner 27.09.: „leg los und setze alles um“): Rust-Fix Signaling (lokal committet 76d61182d, Test wartet auf Build-Sperre) → push → welsch `ctox upgrade --dev`; parallel signierter Slot beta.61 (a3b3ed341) aus dem Actions-Stau → stage/activate.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -23,10 +23,14 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 - **welsch auf main (27.09. 08:32–08:40 UTC, verifiziert im Browser)** — Upgrade 2. Versuch fertig (`current` → `releases/branch-main-20260927T075827Z`, Unit success). Datei-Deploy 13 Dateien (v405, Backup `~/.local/state/ctox/backups/files-20260927T083227Z`) + 7 Dateien (v406, Backup `files-20260927T083801Z`), alle sha256 = main. Slot aus: `business_os_shell_update_state.state_json.currentSlot` beta.54 → null (Zeilen-Backup `backups/shell-update-state-20260927T083255Z.json`), Restart. Wartung `waiting_replication` → per `[data-maintenance-retry]` bestätigt → completed. Browser: `app.js?v=…crew-depth-v406`, crew-renderer/motion v2, Engine aktiv, Signaling wss://signaling.ctox.dev/v2, 25 connected/5 reused; App-Fenster-Schatten = Tiefenleiter; Chatfenster #1c1f25 + Kante + Kontur; Leiste #1c1f25/92 % + Blur; Crew-Karte kompakt 80 %, Wesen auf Station.
 - **Fix v406 (main `2e4e36858`)** — Regel für Fenster mit Workjet-Kategorie setzte den alten schwarzen Schatten per !important erneut; jetzt Token. (Beim Live-Test gefunden.)
 
+- **Actions-Stau entschärft (27.09. 08:47 UTC)** — nur ~2 gleichzeitige Runner; 36 überholte, noch nicht gestartete Läufe abgebrochen (je Workflow+Branch bleibt der neueste; laufende/geplante/Shell-Release unberührt; per `gh run rerun` wiederherstellbar), angekündigt im Codex-Thread (`01a0e20a-…`). Queue 56 → 20.
+- **Leisten-Fix (main `99f91c68d`, Stempel v407 `a3b3ed341`)** — In-Place-Pfad verlangt jetzt, dass Streifen-Chips/Navigation/Überlauf dem Soll entsprechen; Browser-Szenario `dock-strip-follows-a-chat-that-leaves` reproduziert ohne Fix exakt den welsch-Zustand (1 Chip bei has-no-chats, 92 px, 2 Reihen), mit Fix grün. welsch: v407 per Datei-Deploy (Backup `files-20260927T090210Z`, 10 Hashes = main), geladen `app.js?v=…crew-dock-v407`, Leiste 56 px.
+
 ## Working
 
 - **(erledigt) welsch-Upgrade Binary → main** — 1. Versuch `ctox-crew-genome-upgrade-20260927` scheiterte am Platzgate (20 GiB verlangt, 19,5 frei; nichts verändert, Wartung nicht aktiv). Freigemacht: `~/.cache/ctox/build-office-20260906` (7,1 GB, reines Cargo-Target vom 06.09., kein Prozess). 2. Versuch Unit `ctox-crew-genome-upgrade-20260927b`, target `branch-main-20260927T075827Z` (Quelle = main mit S1–S3+v404), Phase building. Fertig heißt: phase=completed, current_release neu, Wartung completed, Dienst aktiv; Symlink-Falle prüfen.
-- **Shell-Release beta.60** — ersetzt beta.59 (ohne v406-Fix, Run `36305874044` abgebrochen). GitHub-Actions-Stau: 50+ Läufe queued seit 26.09. 20:09, nur 2 in_progress. Fertig heißt: Run success → welsch `shell-update stage --version 0.1.46-beta.60` → activate → restart; danach verschwindet die Kopf-Kennzeichnung „Recovery“.
+- **Shell-Release beta.61** — Tag → `a3b3ed341` (enthält v407-Leistenfix); beta.60 (`36306886765`) als überholt abgebrochen. Fertig heißt: Run success → welsch `shell-update stage --version 0.1.46-beta.61` → activate → restart; „Recovery“ verschwindet.
+- **Rust-Fix Signaling-Env** — lokal `76d61182d` im Klon `ctox-crew-genome` (`signaling_urls_config_with_override`, Env nur prozesslokal, `persist_signaling_urls` entfernt, 2 Tests, Doku). Test `cargo test --bin ctox signaling_` via `dev-heavy-run.py --task signaling-env` wartet auf Lease (Codex `o04-connector-proof`). Log: Scratchpad `rust-signaling.log`. Fertig heißt: 2 Tests grün → rebase + push → welsch `ctox upgrade --dev`.
 
 ## To-Do
 
@@ -38,7 +42,6 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 ## Backlog / Owner
 
 - **Code-Fix Env-Persistenz** — `store.rs::signaling_urls_config` schreibt Env-Übersteuerung dauerhaft in den State-Root; Release-Checks mit gesetzter Variable vergiften so Produktion. Rust → gebündeltes Upgrade später.
-- **Code-Fix Env-Persistenz: zurückgestellt** — Env ist in `docs/business-os.md` als Konfigurationsweg dokumentiert, Abschalten der Persistierung = Verhaltensänderung + eigener Rust-Build (Worker-Worktrees bauen kein Rust; Sol am 27.09. 08:27Z `health_timeout`). Vorschlag: Env nur prozesslokal, Datei nur explizit; Doku-Satz anpassen; Test „Env schreibt keine Datei“.
 - **OWNER: Seelen-Achsen → Temperament?** — Seele ist nicht in der öffentlichen Projektion (`public_fields` ohne soul); Temperament kommt vorerst aus dem Genom-Seed.
 
 ## Environment traps
@@ -58,7 +61,7 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 
 ## Altbefunde (nicht von dieser Kampagne)
 
-- Crew-Leiste: Nach Aufklappen ohne Chats entsteht ein minimierter leerer Crew-Chip, die Leiste meldet aber `has-no-chats has-no-nav` (3 Spalten) → 4 Kinder, „+“ bricht in eine zweite Zeile. Nach Reload weg. Klassenlogik in business-chat.js (nicht geändert).
+- (behoben 99f91c68d) Crew-Leiste: veralteter Chip bei `has-no-chats` → „+“ in zweiter Zeile.
 - Kopf zeigt „Recovery“ statt Version, solange welsch `src/` statt signiertem Slot serviert (erwartet bis beta.60 aktiv).
 
 - `assert-shell-chat-composition.mjs` rot auch auf main `ccde06f4d`: "Shell-V2 windows expose exactly one title-bar control: [layout, close]" + drei Snap-Kanten null (Layout-Menü-Arbeit auf Branch `codex/shell-v2-layout-menu`).
