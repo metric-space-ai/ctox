@@ -59,8 +59,11 @@ range requests, bounded chunks, cancellation and transport backpressure over Web
 Peer jobs will reuse that facility; signaling remains rendezvous/control.
 
 Existing `business_os/workjet_transfer_git.rs` owns Git bundle/patch/untracked
-packing and staged apply. Reuse that manifest/receipt boundary for the subsequent
-worktree slice rather than copying `.git` pointers or inventing a second format.
+packing and apply. Its index extension preserves staged and unstaged changes
+separately within that same manifest/receipt boundary; see
+[`docs/transfer-git-index.md`](../../../docs/transfer-git-index.md) for rollout
+and legacy semantics. Never copy `.git` pointers as a worktree transport.
+
 Execution fencing remains Crew-owned; destination capabilities are VM-owned;
 Workjet owns move/continue UX. A directory transfer is not a resumed harness run.
 
@@ -95,8 +98,11 @@ mirror isolation/failover, rejected-prefix recovery and publication-crash recove
 cargo test --manifest-path src/core/transfers/Cargo.toml -j 2 -- --test-threads=2
 ```
 
-The macOS run on 2026-09-27 passed all nine download tests and both engine
-socket/storage regressions on adapter `e9f987e42` and engine `85d4eda67`.
+The macOS run on 2026-09-27 passed all 27 targeted checks: five native file
+and seven shared query-reader tests on native `ff5b233225`, nine HTTP download
+and four peer-provider tests on adapter `6292318bee`, and two engine
+socket/storage regressions on engine `85d4eda67`.
+
 The standalone harness uses the exact archived private dependency via a local path.
 It verifies known-empty content and rejects truncated HTTP responses, retaining
 the received prefix for resume. Earlier platform and framing failures were repaired.

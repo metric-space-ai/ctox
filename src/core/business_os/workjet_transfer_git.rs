@@ -26,6 +26,7 @@ pub const MANIFEST_ENTRY_LIMIT_EXCEEDED: &str = "manifest_entry_limit_exceeded";
 
 const BUNDLE_NAME: &str = "bundle.gitbundle";
 const PATCH_NAME: &str = "tracked.patch";
+const INDEX_PATCH_NAME: &str = "index.patch";
 const UNTRACKED_NAME: &str = "untracked.tar";
 const MANIFEST_NAME: &str = "manifest.json";
 const MAX_MANIFEST_ENTRIES: usize = 1_000_000;
@@ -49,6 +50,16 @@ pub struct GitManifestProof {
     pub patch_sha256: String,
     pub untracked_sha256: String,
     pub dirty: bool,
+    /// Absent in legacy packs, which stage the combined working-tree patch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<GitIndexProof>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitIndexProof {
+    pub tree: String,
+    pub patch_sha256: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -120,6 +131,7 @@ pub fn pack_git_working_copy(
     })?;
     let bundle_path = artifacts_dir.join(BUNDLE_NAME);
     let patch_path = artifacts_dir.join(PATCH_NAME);
+    let index_patch_path = artifacts_dir.join(INDEX_PATCH_NAME);
     let untracked_path = artifacts_dir.join(UNTRACKED_NAME);
     let manifest_path = artifacts_dir.join(MANIFEST_NAME);
     if bundle_path.exists() {
@@ -141,7 +153,18 @@ pub fn pack_git_working_copy(
 
     let patch_output = git_output(
         source_dir,
-        &["diff", "--binary", "--full-index", "HEAD", "--"],
+        &[
+            "diff",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "HEAD",
+            "--",
+        ],
     )?;
     ensure!(
         patch_output.status.success(),
@@ -150,6 +173,61 @@ pub fn pack_git_working_copy(
     );
     fs::write(&patch_path, patch_output.stdout)
         .with_context(|| format!("{GIT_PACK_FAILED}: write {}", patch_path.display()))?;
+    // A tree identity binds staging independently from the working files. An
+    // unresolved index cannot produce a tree and is rejected before publication.
+    let index_tree = git_text(source_dir, &["write-tree"])?;
+    validate_object_id(&index_tree, "index.tree")?;
+    // Intent-to-add has no tree representation. Refuse it instead of silently
+    // turning it into an ordinary untracked file at the destination.
+    let visible = git_paths(
+        source_dir,
+        &[
+            "diff",
+            "--cached",
+            "--ita-visible-in-index",
+            "--name-only",
+            "-z",
+            "HEAD",
+            "--",
+        ],
+    )?;
+    let invisible = git_paths(
+        source_dir,
+        &[
+            "diff",
+            "--cached",
+            "--ita-invisible-in-index",
+            "--name-only",
+            "-z",
+            "HEAD",
+            "--",
+        ],
+    )?;
+    ensure!(
+        visible == invisible,
+        "{GIT_PACK_FAILED}: intent-to-add index entries are unsupported"
+    );
+    let index_patch = git_output(
+        source_dir,
+        &[
+            "diff",
+            "--cached",
+            "--binary",
+            "--full-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "HEAD",
+            "--",
+        ],
+    )?;
+    ensure!(
+        index_patch.status.success(),
+        "{GIT_PACK_FAILED}: index diff failed"
+    );
+    fs::write(&index_patch_path, index_patch.stdout)?;
     write_untracked_tar(source_dir, &untracked_paths, &untracked_path)?;
 
     let patch_sha256 = sha256_file(&patch_path)?;
@@ -164,6 +242,10 @@ pub fn pack_git_working_copy(
             patch_sha256,
             untracked_sha256,
             dirty,
+            index: Some(GitIndexProof {
+                tree: index_tree,
+                patch_sha256: sha256_file(&index_patch_path)?,
+            }),
         },
         manifest_sha256: String::new(),
     };
@@ -247,11 +329,13 @@ pub(crate) fn execute_cli(args: &[String]) -> anyhow::Result<Value> {
                 "hashes": {
                     "manifest_sha256": manifest.manifest_sha256,
                     "patch_sha256": manifest.git.patch_sha256,
+                    "index_patch_sha256": manifest.git.index.as_ref().map(|index| &index.patch_sha256),
                     "untracked_sha256": manifest.git.untracked_sha256,
                 },
                 "artifacts": {
                     "bundle": Path::new(artifacts).join(BUNDLE_NAME),
                     "patch": Path::new(artifacts).join(PATCH_NAME),
+                    "index_patch": Path::new(artifacts).join(INDEX_PATCH_NAME),
                     "untracked": Path::new(artifacts).join(UNTRACKED_NAME),
                     "manifest": Path::new(artifacts).join(MANIFEST_NAME),
                 }
@@ -288,6 +372,13 @@ fn apply_in_temp(
     let bundle = artifacts_dir.join(BUNDLE_NAME);
     let patch = artifacts_dir.join(PATCH_NAME);
     let untracked = artifacts_dir.join(UNTRACKED_NAME);
+    let index_patch = artifacts_dir.join(INDEX_PATCH_NAME);
+    if let Some(index) = &manifest.git.index {
+        ensure!(
+            sha256_file(&index_patch)? == index.patch_sha256,
+            "{APPLY_HASH_MISMATCH}: index patch hash differs from manifest"
+        );
+    }
     let actual_patch_sha256 = sha256_file(&patch)?;
     let actual_untracked_sha256 = sha256_file(&untracked)?;
     ensure!(
@@ -327,15 +418,29 @@ fn apply_in_temp(
 
     let applied_patch = fs::metadata(&patch)?.len() > 0;
     if applied_patch {
-        run_git_owned(
-            temp_dir,
-            &[
-                "apply".to_owned(),
-                "--binary".to_owned(),
-                "--index".to_owned(),
-                path_arg(&patch)?,
-            ],
-        )?;
+        let mut args = vec!["apply".to_owned(), "--binary".to_owned()];
+        if manifest.git.index.is_none() {
+            args.push("--index".to_owned());
+        }
+        args.push(path_arg(&patch)?);
+        run_git_owned(temp_dir, &args)?;
+    }
+    if let Some(index) = &manifest.git.index {
+        if fs::metadata(&index_patch)?.len() > 0 {
+            run_git_owned(
+                temp_dir,
+                &[
+                    "apply".to_owned(),
+                    "--binary".to_owned(),
+                    "--cached".to_owned(),
+                    path_arg(&index_patch)?,
+                ],
+            )?;
+        }
+        ensure!(
+            git_text(temp_dir, &["write-tree"])? == index.tree,
+            "{APPLY_HASH_MISMATCH}: restored index tree differs"
+        );
     }
     let untracked_files = extract_untracked_tar(&untracked, temp_dir)?;
 
@@ -358,6 +463,7 @@ fn apply_in_temp(
             patch_sha256: actual_patch_sha256,
             untracked_sha256: actual_untracked_sha256,
             dirty: !manifest.files.is_empty(),
+            index: manifest.git.index.clone(),
         },
         manifest_sha256: String::new(),
     };
@@ -403,6 +509,13 @@ fn read_manifest(artifacts_dir: &Path) -> anyhow::Result<GitPackManifest> {
 }
 
 fn validate_manifest(manifest: &GitPackManifest) -> anyhow::Result<()> {
+    if let Some(index) = &manifest.git.index {
+        validate_object_id(&index.tree, "index.tree")?;
+        ensure!(
+            is_lower_hex_64(&index.patch_sha256),
+            "{APPLY_HASH_MISMATCH}: invalid index patch SHA-256"
+        );
+    }
     validate_object_id(&manifest.git.head, "git.head")?;
     validate_object_id(&manifest.git.base_commit, "git.base_commit")?;
     ensure!(
@@ -440,9 +553,14 @@ fn validate_manifest(manifest: &GitPackManifest) -> anyhow::Result<()> {
 
 fn collect_manifest_files(repo: &Path) -> anyhow::Result<Vec<GitManifestFile>> {
     let tracked = git_paths(repo, &["diff", "--name-only", "-z", "HEAD", "--"])?;
+    let staged = git_paths(
+        repo,
+        &["diff", "--cached", "--name-only", "-z", "HEAD", "--"],
+    )?;
     let untracked = git_paths(repo, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     let mut paths = BTreeSet::new();
     paths.extend(tracked);
+    paths.extend(staged);
     paths.extend(untracked);
     ensure!(
         paths.len() <= MAX_MANIFEST_ENTRIES,
@@ -1115,6 +1233,120 @@ mod tests {
         repo
     }
 
+    #[test]
+    fn workjet_transfer_git_preserves_index_and_worktree_independently() {
+        let repo = repository();
+        fs::write(repo.path().join("tracked.txt"), b"staged\n").unwrap();
+        fs::write(repo.path().join("staged-new.bin"), [0, 7, 255]).unwrap();
+        git(repo.path(), &["add", "."]);
+        fs::write(repo.path().join("tracked.txt"), b"unstaged\n").unwrap();
+        fs::remove_file(repo.path().join("staged-new.bin")).unwrap();
+        fs::write(repo.path().join("untracked.txt"), b"untracked\n").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = root.path().join("artifacts");
+        let target = root.path().join("target");
+        let manifest = pack_git_working_copy(repo.path(), &artifacts).unwrap();
+        apply_git_working_copy(&artifacts, &manifest, &target).unwrap();
+        for args in [
+            vec!["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            vec!["diff", "--binary", "--full-index"],
+            vec!["diff", "--cached", "--binary", "--full-index"],
+            vec!["log", "--format=%H", "HEAD"],
+            vec!["write-tree"],
+        ] {
+            assert_eq!(
+                git_output(repo.path(), &args).unwrap().stdout,
+                git_output(&target, &args).unwrap().stdout,
+                "{args:?}"
+            );
+        }
+        assert!(!target.join("staged-new.bin").exists());
+        assert_eq!(fs::read(target.join("tracked.txt")).unwrap(), b"unstaged\n");
+    }
+
+    #[test]
+    fn workjet_transfer_git_index_only_change_is_dirty() {
+        let repo = repository();
+        fs::write(repo.path().join("tracked.txt"), b"staged\n").unwrap();
+        git(repo.path(), &["add", "tracked.txt"]);
+        fs::write(repo.path().join("tracked.txt"), b"before\n").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = root.path().join("artifacts");
+        let target = root.path().join("target");
+        let manifest = pack_git_working_copy(repo.path(), &artifacts).unwrap();
+        assert!(manifest.git.dirty);
+        assert_eq!(manifest.git.patch_sha256, sha256_bytes(&[]));
+        apply_git_working_copy(&artifacts, &manifest, &target).unwrap();
+        assert_eq!(
+            git_text(repo.path(), &["write-tree"]).unwrap(),
+            git_text(&target, &["write-tree"]).unwrap()
+        );
+        assert_eq!(fs::read(target.join("tracked.txt")).unwrap(), b"before\n");
+    }
+
+    #[test]
+    fn workjet_transfer_git_rejects_index_tamper_and_tree_mismatch() {
+        let repo = dirty_repository();
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = root.path().join("artifacts");
+        let mut manifest = pack_git_working_copy(repo.path(), &artifacts).unwrap();
+        fs::write(artifacts.join(INDEX_PATCH_NAME), b"tampered").unwrap();
+        let target = root.path().join("target-tamper");
+        assert!(apply_git_working_copy(&artifacts, &manifest, &target)
+            .unwrap_err()
+            .to_string()
+            .contains(APPLY_HASH_MISMATCH));
+        assert!(!target.exists());
+        fs::write(artifacts.join(INDEX_PATCH_NAME), b"").unwrap();
+        manifest.git.index.as_mut().unwrap().tree = "1".repeat(40);
+        manifest.manifest_sha256 = sha256_bytes(&canonical_manifest_bytes(&manifest).unwrap());
+        let target = root.path().join("target-tree");
+        assert!(apply_git_working_copy(&artifacts, &manifest, &target)
+            .unwrap_err()
+            .to_string()
+            .contains("restored index tree differs"));
+        assert!(!target.exists());
+    }
+
+    #[test]
+    fn workjet_transfer_git_legacy_manifest_retains_legacy_staging_semantics() {
+        let repo = dirty_repository();
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = root.path().join("artifacts");
+        let target = root.path().join("target");
+        let mut manifest = pack_git_working_copy(repo.path(), &artifacts).unwrap();
+        manifest.git.index = None;
+        manifest.manifest_sha256 = sha256_bytes(&canonical_manifest_bytes(&manifest).unwrap());
+        fs::write(
+            artifacts.join(MANIFEST_NAME),
+            canonical_manifest_bytes(&manifest).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(artifacts.join(INDEX_PATCH_NAME)).unwrap();
+        assert_eq!(read_manifest(&artifacts).unwrap(), manifest);
+        apply_git_working_copy(&artifacts, &manifest, &target).unwrap();
+        assert!(git_output(&target, &["diff", "--exit-code"])
+            .unwrap()
+            .status
+            .success());
+        assert!(!git_output(&target, &["diff", "--cached", "--exit-code"])
+            .unwrap()
+            .status
+            .success());
+    }
+
+    #[test]
+    fn workjet_transfer_git_rejects_intent_to_add() {
+        let repo = repository();
+        fs::write(repo.path().join("new.txt"), b"pending\n").unwrap();
+        git(repo.path(), &["add", "--intent-to-add", "new.txt"]);
+        let artifacts = tempfile::tempdir().unwrap();
+        assert!(pack_git_working_copy(repo.path(), artifacts.path())
+            .unwrap_err()
+            .to_string()
+            .contains("intent-to-add"));
+    }
+
     fn is_hash(value: &str) -> bool {
         is_lower_hex_64(value)
     }
@@ -1125,7 +1357,13 @@ mod tests {
         let artifacts = tempfile::tempdir().unwrap();
         let manifest = pack_git_working_copy(repo.path(), artifacts.path()).unwrap();
 
-        for name in [BUNDLE_NAME, PATCH_NAME, UNTRACKED_NAME, MANIFEST_NAME] {
+        for name in [
+            BUNDLE_NAME,
+            PATCH_NAME,
+            INDEX_PATCH_NAME,
+            UNTRACKED_NAME,
+            MANIFEST_NAME,
+        ] {
             assert!(artifacts.path().join(name).is_file(), "missing {name}");
         }
         assert_eq!(manifest.git.branch.as_deref(), Some("workjet/test"));
