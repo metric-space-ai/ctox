@@ -33,7 +33,7 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: never
       # Reviewed candidate including main ccde06f4d; full verification required.
-      REVIEWED_SOURCE_REVISION: '4d1684e50d1d4cdbc76e6d0873deed07667c1291'
+      REVIEWED_SOURCE_REVISION: 'd5ebef86ca27553c347c384d58abb2596e0b113d'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
