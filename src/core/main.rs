@@ -39,6 +39,7 @@ mod service;
 mod skill_store;
 mod sync_host;
 mod transfers_cli;
+mod transfers_peer;
 mod ui;
 mod web_stack;
 

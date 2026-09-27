@@ -20,6 +20,9 @@ use std::{
 };
 use tokio::sync::watch;
 
+mod peer;
+pub use peer::{PeerRangeSource, PeerSource};
+
 pub const ENGINE_REVISION: &str = "85d4eda67ab43c22021910824aedbb9dfc8f2504";
 
 /// Local authorized callers supply immutable content identity, never arbitrary engine options.
@@ -28,6 +31,8 @@ pub const ENGINE_REVISION: &str = "85d4eda67ab43c22021910824aedbb9dfc8f2504";
 pub struct DownloadRequest {
     pub id: String,
     pub sources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_source: Option<PeerSource>,
     pub sha256: String,
     pub size: u64,
 }
@@ -52,6 +57,13 @@ impl DownloadRequest {
             "expected lowercase SHA-256 required"
         );
         ensure!(self.size <= i64::MAX as u64, "content too large");
+        if let Some(peer) = &self.peer_source {
+            ensure!(
+                self.sources.is_empty(),
+                "peer and HTTP sources cannot be mixed"
+            );
+            return peer.validate();
+        }
         ensure!(
             !self.sources.is_empty() && self.sources.len() <= 16,
             "one to sixteen sources required"
@@ -82,7 +94,9 @@ pub struct Receipt {
     pub size: u64,
     /// Relative to the daemon's private artifact root, never a caller-selected destination.
     pub artifact: String,
-    pub engine_revision: String,
+    pub engine_revision: Option<String>,
+    #[serde(default)]
+    pub transport: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -184,6 +198,16 @@ impl Store {
 
     /// Exclusive OS lease covers recovery, writes and activation; a PID/clock is not a lease.
     pub fn worker(&self) -> Result<Worker> {
+        self.worker_with_source(None)
+    }
+
+    /// The native host supplies an already authorized peer resolver. Persisted
+    /// source claims alone cannot create a connection or select credentials.
+    pub fn worker_with_peer(&self, peer: Arc<dyn PeerRangeSource>) -> Result<Worker> {
+        self.worker_with_source(Some(peer))
+    }
+
+    fn worker_with_source(&self, peer: Option<Arc<dyn PeerRangeSource>>) -> Result<Worker> {
         let lease_path = self.artifacts.join("worker.lock");
         regular_or_absent(&lease_path)?;
         let lease = OpenOptions::new()
@@ -200,6 +224,7 @@ impl Store {
             store: self.clone(),
             _lease: lease,
             run_gate: tokio::sync::Mutex::new(()),
+            peer,
         })
     }
 
@@ -216,6 +241,7 @@ pub struct Worker {
     store: Store,
     _lease: File,
     run_gate: tokio::sync::Mutex<()>,
+    peer: Option<Arc<dyn PeerRangeSource>>,
 }
 
 enum SourceOutcome {
@@ -262,6 +288,13 @@ impl Worker {
             verify_file(&object, request)?;
             return self.publish_receipt(request, &object, stop);
         }
+        if let Some(source) = &request.peer_source {
+            let partial = self.download_peer(request, source, &staging, stop).await?;
+            let Some(partial) = partial else {
+                return self.settle_interruption(&request.id);
+            };
+            return self.publish_partial(request, &partial, &object, stop);
+        }
         for (source_index, source) in request.sources.iter().enumerate() {
             let source_dir = staging.join(format!("source-{source_index}"));
             private_directory(&source_dir)?;
@@ -270,24 +303,33 @@ impl Worker {
                 .await?
             {
                 SourceOutcome::Ready(partial) => {
-                    File::open(&partial)?.sync_all()?;
-                    // Mirrors never share writable partial bytes.
-                    match fs::hard_link(&partial, &object) {
-                        Ok(()) => sync_directory(object.parent().unwrap())?,
-                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                            verify_file(&object, request)?
-                        }
-                        Err(e) => return Err(e.into()),
-                    }
-                    fs::remove_file(&partial)?;
-                    sync_directory(&source_dir)?;
-                    return self.publish_receipt(request, &object, stop);
+                    return self.publish_partial(request, &partial, &object, stop);
                 }
                 SourceOutcome::Interrupted => return self.settle_interruption(&request.id),
                 SourceOutcome::Failed => continue,
             }
         }
         bail!("all sources failed identity or transport validation")
+    }
+
+    fn publish_partial(
+        &self,
+        request: &DownloadRequest,
+        partial: &Path,
+        object: &Path,
+        stop: &AtomicBool,
+    ) -> Result<()> {
+        File::open(partial)?.sync_all()?;
+        match fs::hard_link(partial, object) {
+            Ok(()) => sync_directory(object.parent().unwrap())?,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                verify_file(object, request)?
+            }
+            Err(e) => return Err(e.into()),
+        }
+        fs::remove_file(partial)?;
+        sync_directory(partial.parent().unwrap())?;
+        self.publish_receipt(request, object, stop)
     }
 
     fn settle_interruption(&self, id: &str) -> Result<()> {
@@ -393,7 +435,16 @@ impl Worker {
             sha256: request.sha256.clone(),
             size: request.size,
             artifact: format!("objects/{}", request.sha256),
-            engine_revision: ENGINE_REVISION.into(),
+            engine_revision: request
+                .peer_source
+                .is_none()
+                .then(|| ENGINE_REVISION.into()),
+            transport: if request.peer_source.is_some() {
+                "ctox-webrtc-file-v1"
+            } else {
+                "aria2-http"
+            }
+            .into(),
         };
         let mut c = self.store.connection()?;
         let tx = c.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -511,7 +562,12 @@ pub struct DaemonWorker {
 }
 impl DaemonWorker {
     pub fn start(store: Store) -> Result<Self> {
-        let worker = store.worker()?;
+        Self::start_worker(store.worker()?)
+    }
+    pub fn start_with_peer(store: Store, peer: Arc<dyn PeerRangeSource>) -> Result<Self> {
+        Self::start_worker(store.worker_with_peer(peer)?)
+    }
+    fn start_worker(worker: Worker) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let stopped = stop.clone();
         let runtime = tokio::runtime::Builder::new_multi_thread()

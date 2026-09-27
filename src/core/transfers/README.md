@@ -64,6 +64,27 @@ worktree slice rather than copying `.git` pointers or inventing a second format.
 Execution fencing remains Crew-owned; destination capabilities are VM-owned;
 Workjet owns move/continue UX. A directory transfer is not a resumed harness run.
 
+## Native peer jobs
+
+`DownloadRequest.peer_source` binds an instance/key, collection and file ID;
+HTTP sources must be empty for this form. These fields are immutable claims,
+not authorization. `worker_with_peer` requires a native-owned range resolver;
+the ordinary HTTP-only daemon rejects peer work when no resolver is installed.
+The native binding verifies the enrolled source proof on its admitted Sync
+connection and then consumes the existing `rxdb.file.fetch` range API. The
+production command/session registration remains to be connected and verified.
+
+Peer ranges are at most 1 MiB. The worker flushes each range before committing
+its offset to the existing SQLite job. Reopen truncates uncommitted tail bytes;
+missing/truncated staging resets the offset. A complete SHA-256/length check
+still precedes immutable publication. Rejected content is quarantined and the
+offset reset for explicit retry. Peer receipts identify the WebRTC transport
+and carry no aria2 revision. This provides no checkpoint protection, execution
+handoff or guest readiness. Those require the existing native authority APIs.
+
+The peer-store interruption/reopen and identity tests use a range provider
+fixture; they do not prove native networking or two-host acceptance.
+
 ## Verification and remaining work
 
 `tests/download.rs` exercises real loopback HTTP, durable receipt/reopen/idempotency,

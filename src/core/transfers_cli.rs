@@ -19,6 +19,7 @@ pub fn handle(root: &Path, args: &[String]) -> Result<()> {
             sha256: args[2].clone(),
             size: args[3].parse()?,
             sources: args[4..].to_vec(),
+            peer_source: None,
         })?,
         Some("status") if args.len() == 2 => store.get(&args[1])?,
         Some(action @ ("pause" | "resume" | "cancel")) if args.len() == 2 => {
