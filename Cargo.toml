@@ -132,6 +132,7 @@ exclude = [
     "src/core/mailserver",
     "src/core/rxdb",
     "src/core/sync",
+    "src/core/transfers",
     "src/tools/appsec-pentest",
     "src/tools/doc-stack",
     "src/tools/pdf-parse",
