@@ -1847,7 +1847,7 @@ impl WebRTCRsConnectionHandler {
             if current_local_peer_id.is_some() && entry.local_peer_id != current_local_peer_id {
                 Some(PeerRemoval::Generation(entry.generation))
             } else if should_rebuild_peer_for_inbound_offer(true, entry.data_channel_open) {
-                Some(PeerRemoval::Unopened(entry.generation))
+                Some(PeerRemoval::Generation(entry.generation))
             } else {
                 None
             }
@@ -1863,8 +1863,11 @@ impl WebRTCRsConnectionHandler {
     }
 }
 
-fn should_rebuild_peer_for_inbound_offer(peer_exists: bool, data_channel_open: bool) -> bool {
-    peer_exists && !data_channel_open
+fn should_rebuild_peer_for_inbound_offer(peer_exists: bool, _data_channel_open: bool) -> bool {
+    // The browser creates a new RTCPeerConnection for every offer. A fresh
+    // offer can arrive before the old channel-close event, so the old open
+    // responder must also be retired before this offer is answered.
+    peer_exists
 }
 
 #[async_trait]
@@ -3806,7 +3809,6 @@ fn superseded_send_queue_error(peer: &str) -> RxError {
 
 enum PeerRemoval<'a> {
     Generation(u64),
-    Unopened(u64),
     SendQueue(&'a Arc<tokio::sync::Notify>),
 }
 
@@ -3860,9 +3862,6 @@ fn remove_peer_inner(
                 PeerRemoval::Generation(generation) => peers
                     .get(peer)
                     .is_some_and(|entry| entry.generation == generation),
-                PeerRemoval::Unopened(generation) => peers.get(peer).is_some_and(|entry| {
-                    entry.generation == generation && !entry.data_channel_open
-                }),
                 PeerRemoval::SendQueue(available) => handler.is_current_send_queue(peer, available),
             };
             if !matches {
@@ -5815,10 +5814,26 @@ mod tests {
     }
 
     #[test]
-    fn inbound_offer_rebuilds_only_unopened_responder_peer() {
+    fn inbound_offer_rebuilds_even_before_old_channel_close() {
         assert!(!should_rebuild_peer_for_inbound_offer(false, false));
         assert!(should_rebuild_peer_for_inbound_offer(true, false));
-        assert!(!should_rebuild_peer_for_inbound_offer(true, true));
+        assert!(should_rebuild_peer_for_inbound_offer(true, true));
+    }
+
+    #[tokio::test]
+    async fn renewed_offer_retires_open_peer_and_its_old_authority() {
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = install_test_connection(&handler, "renewed-offer", 2).await;
+        handler
+            .peer_capability_tokens
+            .lock()
+            .insert(peer.peer_id().to_owned(), "old-token".into());
+
+        handler.remove_obsolete_peer_before_offer(peer.peer_id());
+
+        assert!(handler.connection_for_peer(peer.peer_id()).is_none());
+        assert!(!handler.peer_capability_tokens.lock().contains_key(peer.peer_id()));
+        handler.close().await.unwrap();
     }
 
     #[test]
@@ -6121,36 +6136,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stale_offer_cleanup_cannot_remove_an_open_or_replaced_connection() {
+    async fn stale_offer_cleanup_cannot_remove_a_replacement_connection() {
         let handler = WebRTCRsConnectionHandler::new();
         let peer = install_test_connection(&handler, "offer-route", 2).await;
         assert!(!remove_peer_inner(
             &handler,
             peer.peer_id(),
-            PeerRemoval::Unopened(2),
+            PeerRemoval::Generation(1),
             None
         ));
         assert_eq!(
             handler.connection_for_peer(peer.peer_id()),
             Some(peer.clone())
         );
-        handler
-            .peers
-            .lock()
-            .get_mut(peer.peer_id())
-            .unwrap()
-            .data_channel_open = false;
-        assert!(!remove_peer_inner(
-            &handler,
-            peer.peer_id(),
-            PeerRemoval::Unopened(1),
-            None
-        ));
-        assert!(handler.peers.lock().contains_key(peer.peer_id()));
         assert!(remove_peer_inner(
             &handler,
             peer.peer_id(),
-            PeerRemoval::Unopened(2),
+            PeerRemoval::Generation(2),
             None
         ));
         assert!(!handler.peers.lock().contains_key(peer.peer_id()));

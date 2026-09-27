@@ -989,9 +989,11 @@ documents is `runtime/business-os-rxdb.sqlite3` as above.
     later browser offer hit the fast path in `ensure_peer_connection` and
     never receive an answer." The responder PeerConnection is created when
     the actual offer arrives in `handle_signal`.
-  - On an inbound offer, `remove_unopened_peer_before_offer` drops an
-    existing peer entry whose DataChannel never opened, so a renewed browser
-    offer always gets a fresh responder (glare repair).
+  - On an inbound offer, `remove_obsolete_peer_before_offer` retires an
+    existing responder generation before answering. This includes a still-open
+    DataChannel: a browser authority refresh creates a new PeerConnection and
+    its offer can arrive before the old channel-close event. Generation-guarded
+    teardown prevents a late old-channel callback from erasing the replacement.
 - The browser creates the DataChannel (label `ctox-rxdb`); offer/answer/ICE
   flow over the signaling relay. Rust answers offers and adds candidates in
   `handle_signal`; per-peer builds are deduplicated via a `OnceCell` claim
