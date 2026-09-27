@@ -1285,7 +1285,21 @@ fn outbound_registry_last_runs(
         crate::paths::core_db(root),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )?;
+    // failure_mode and detail travel with the run: without them the app
+    // could not tell "account inactive at the provider" (Bright Data "Customer
+    // is not active", 77 of 80 LinkedIn runs on 27.09.2026) from a network
+    // hiccup or a missing credential.
     let run = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(String, Value)> {
+        let result = row
+            .get::<_, Option<String>>(5)?
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .unwrap_or(Value::Null);
+        let text = |key: &str| {
+            result
+                .get(key)
+                .and_then(Value::as_str)
+                .map(|value| value.chars().take(300).collect::<String>())
+        };
         Ok((
             row.get::<_, String>(0)?,
             serde_json::json!({
@@ -1293,12 +1307,14 @@ fn outbound_registry_last_runs(
                 "status": row.get::<_, String>(2)?,
                 "started_at": row.get::<_, Option<String>>(3)?,
                 "finished_at": row.get::<_, Option<String>>(4)?,
+                "failure_mode": text("failure_mode"),
+                "detail": text("detail"),
             }),
         ))
     };
     let mut out: BTreeMap<String, (Value, Option<Value>)> = BTreeMap::new();
     let mut last = conn.prepare(
-        "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at FROM scrape_run r
+        "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at, r.result_json FROM scrape_run r
          WHERE r.started_at = (SELECT MAX(started_at) FROM scrape_run WHERE target_id = r.target_id)",
     )?;
     for entry in last.query_map([], run)? {
@@ -1306,7 +1322,7 @@ fn outbound_registry_last_runs(
         out.insert(target_id, (value, None));
     }
     let mut ok = conn.prepare(
-        "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at FROM scrape_run r
+        "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at, r.result_json FROM scrape_run r
          WHERE r.status IN ('succeeded', 'completed_empty')
            AND r.started_at = (SELECT MAX(started_at) FROM scrape_run
                                WHERE target_id = r.target_id AND status IN ('succeeded', 'completed_empty'))",
@@ -13055,4 +13071,44 @@ pub(super) fn outbound_mark_source_authenticated(
         }
     }
     Ok(touched)
+}
+
+#[cfg(test)]
+mod registry_last_run_detail_tests {
+    use super::*;
+
+    // THESEN 27.09.2026: 77 of 80 LinkedIn runs ended with Bright Data
+    // "Customer is not active"; the app only saw "temporary unreachable".
+    #[test]
+    fn last_run_carries_failure_mode_and_detail() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let db = crate::paths::core_db(temp.path());
+        std::fs::create_dir_all(db.parent().expect("db parent"))?;
+        let conn = Connection::open(&db)?;
+        conn.execute_batch(
+            "CREATE TABLE scrape_run (run_id TEXT, target_id TEXT, status TEXT,
+                started_at TEXT, finished_at TEXT, result_json TEXT);",
+        )?;
+        conn.execute(
+            "INSERT INTO scrape_run VALUES ('run-ok', 't-li', 'succeeded', '2026-09-26T13:22', '2026-09-26T13:23', '{}')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO scrape_run VALUES ('run-fail', 't-li', 'temporary_unreachable', '2026-09-27T11:02', '2026-09-27T11:02',
+             '{\"failure_mode\":\"temporary_unreachable\",\"detail\":\"Bright Data antwortete mit HTTP 400: Customer is not active\"}')",
+            [],
+        )?;
+        drop(conn);
+        let runs = outbound_registry_last_runs(temp.path())?;
+        let (last, ok) = runs.get("t-li").expect("target runs");
+        assert_eq!(last["run_id"], "run-fail");
+        assert_eq!(last["failure_mode"], "temporary_unreachable");
+        assert_eq!(
+            last["detail"],
+            "Bright Data antwortete mit HTTP 400: Customer is not active"
+        );
+        assert_eq!(ok.as_ref().expect("last success")["run_id"], "run-ok");
+        assert!(ok.as_ref().expect("last success")["detail"].is_null());
+        Ok(())
+    }
 }
