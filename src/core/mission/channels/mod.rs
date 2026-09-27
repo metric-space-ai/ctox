@@ -7043,8 +7043,8 @@ pub(crate) fn ensure_account(
     // then writes. A deferred transaction that started as a reader cannot
     // upgrade once another connection has committed (WAL snapshot) and fails
     // at once with "database is locked", bypassing busy_timeout. Under
-    // research load every native e-mail send hit that (THESEN 27.09.2026,
-    // Outbound update digest, twice in a row).
+    // research load native e-mail sends hit that twice in a row while
+    // generating an Outbound update digest.
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     ensure_account_tx(&tx, account_key, channel, address, provider, profile_json)?;
     tx.commit()?;
@@ -7234,8 +7234,8 @@ mod tests;
 mod ensure_account_lock_tests {
     use super::*;
 
-    // THESEN 27.09.2026: every native e-mail send failed with "database is
-    // locked" while research tasks were writing. ensure_account read the
+    // Native e-mail sends failed with "database is locked" while research
+    // tasks were writing. ensure_account read the
     // stored profile in a deferred transaction and then wrote; once another
     // connection committed in between, SQLite refused the upgrade at once.
     #[test]

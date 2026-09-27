@@ -13081,7 +13081,7 @@ pub(super) fn outbound_mark_source_authenticated(
 mod registry_last_run_detail_tests {
     use super::*;
 
-    // THESEN 27.09.2026: 77 of 80 LinkedIn runs ended with Bright Data
+    // A production incident had 77 of 80 LinkedIn runs end with Bright Data
     // "Customer is not active"; the app only saw "temporary unreachable".
     #[test]
     fn last_run_carries_failure_mode_and_detail() -> anyhow::Result<()> {
