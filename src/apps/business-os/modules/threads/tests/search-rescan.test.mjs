@@ -11,22 +11,35 @@ const timers = new Map();
 let timerId = 0;
 let rows = [];
 let pendingPage;
+let pendingRecord;
+let onRecordLookup;
+let attentionStates = [];
+const listeners = new Map();
 const context = vm.createContext({
-  collectUniquePages, console,
+  collectUniquePages, console, isVisible: true,
   window: {
     setTimeout(fn) { timers.set(++timerId, fn); return timerId; },
     clearTimeout(id) { timers.delete(id); },
     setInterval() { return 0; }, clearInterval() {},
   },
-  document: { addEventListener() {}, removeEventListener() {} },
+  document: { addEventListener(name, fn) { listeners.set(name, fn); }, removeEventListener(name) { listeners.delete(name); } },
   database: { collection(name) { return {
     observe(fn) { observers.set(name, fn); return () => observers.delete(name); },
-    find({ skip = 0, limit = 100 }) { return { exec: () => pendingPage || Promise.resolve(rows.slice(skip, skip + limit)) }; },
+    find({ skip = 0, limit = 100 }) { return { exec: () => name === 'user_threads'
+      ? pendingPage || Promise.resolve(rows.slice(skip, skip + limit))
+      : Promise.resolve(name === 'user_thread_states' ? attentionStates : []) }; },
+    findOne(id) { return { exec: () => {
+      onRecordLookup?.();
+      return pendingRecord || Promise.resolve(rows.find((row) => row.id === id));
+    } }; },
   }; } },
 });
 vm.runInContext(source.replace(/^import[\s\S]*?;\n/gm, '').replace(/^export /gm, '').replaceAll('import.meta.url', '"file:///threads/index.js"') + `
-  moduleIsVisible = () => true;
+  moduleIsVisible = () => globalThis.isVisible;
   render = () => {};
+  updateConnectivity = () => {};
+  notifyActionRequired = () => {};
+  currentUserId = () => 'alice';
   clearLoadError = () => {};
   showError = (error) => { throw error; };
   hydrateSelectedThread = async () => {};
@@ -36,9 +49,9 @@ vm.runInContext(source.replace(/^import[\s\S]*?;\n/gm, '').replace(/^export /gm,
     searchCorpusComplete: false, searchScanGeneration: 0,
     threadsReadiness: { ready: true }, searchScanInFlight: null,
   });
-  globalThis.api = { state, scheduleSearchScan, wireRealtime };
+  globalThis.api = { state, scheduleSearchScan, wireRealtime, refreshOnce };
 `, context);
-const { state, scheduleSearchScan, wireRealtime } = context.api;
+const { state, scheduleSearchScan, wireRealtime, refreshOnce } = context.api;
 const stop = wireRealtime();
 async function scan() {
   scheduleSearchScan();
@@ -86,6 +99,52 @@ rows = [];
 await scan();
 assert.equal(state.searchCorpusComplete, true);
 assert.equal(state.searchCorpus.length, 0);
+// A refresh that already fetched old rows must not undo a later tombstone.
+rows = [{ id: 'removed', updated_at_ms: 3 }];
+state.searchCorpusComplete = false;
+await scan();
+pendingPage = new Promise((resolve) => { resolvePage = resolve; });
+const oldRefresh = refreshOnce();
+observers.get('user_threads')({ success: { removed: { id: 'removed', _deleted: true } } });
+resolvePage(rows);
+await oldRefresh;
+assert.equal(state.data.threads.length, 0, 'late recent-window response cannot resurrect a tombstone');
+assert.equal(state.recentThreadsComplete, false);
+pendingPage = undefined;
+
+// Exercise the later await boundary too: recent rows arrived, personal lookup
+// is pending when the deletion lands.
+attentionStates = [{ id: 'state-removed', user_id: 'alice', thread_id: 'removed', attention_score: 50 }];
+let resolveRecord;
+pendingRecord = new Promise((resolve) => { resolveRecord = resolve; });
+const recordRequested = new Promise((resolve) => { onRecordLookup = resolve; });
+const oldPersonalRefresh = refreshOnce();
+await recordRequested;
+observers.get('user_threads')({ success: { removed: { id: 'removed', is_deleted: true } } });
+resolveRecord(rows[0]);
+await oldPersonalRefresh;
+assert.equal(state.data.threads.length, 0, 'late personal response cannot resurrect a tombstone');
+assert.equal(state.personalComplete, false);
+pendingRecord = undefined;
+onRecordLookup = undefined;
+attentionStates = [];
+
+state.searchCorpusComplete = false;
+await scan();
+assert.equal(state.searchCorpusComplete, true);
+context.isVisible = false;
+observers.get('user_threads')({ success: { removed: { id: 'removed', _deleted: true } } });
+assert.equal(state.searchCorpusComplete, false, 'hidden deletion invalidates completed search');
+assert.equal(state.data.threads.length, 0);
+rows = [];
+context.isVisible = true;
+listeners.get('visibilitychange')();
+await state.refreshInFlight;
+assert.equal(state.data.threads.length, 0, 'visible refresh cannot merge deleted cached row back');
+assert.equal(state.searchCorpusComplete, false, 'visible refresh does not substitute for a complete rescan');
+await scan();
+assert.equal(state.searchCorpusComplete, true);
+assert.equal(state.selectedId, '');
 stop();
 
 let active = true;

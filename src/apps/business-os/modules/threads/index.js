@@ -510,7 +510,6 @@ function wireRealtime() {
     // snapshot. Observe stored deltas instead; the poll covers missed events.
     if (!collection?.observe) return null;
     return collection.observe((event) => {
-      if (!moduleIsVisible()) return;
       const changed = event?.success || event?.detail?.success || {};
       const documents = Object.values(changed);
       if (!documents.length) return;
@@ -520,12 +519,14 @@ function wireRealtime() {
           state.searchScanGeneration += 1;
           state.searchCorpusComplete = false;
           state.recentThreadsComplete = false;
+          state.personalComplete = false;
           state.searchCorpus = state.searchCorpus.filter((item) => !removed.has(item.id));
           state.data.threads = state.data.threads.filter((item) => !removed.has(item.id));
           reconcileSearchSelection();
           scheduleSearchScan();
         }
       }
+      if (!moduleIsVisible()) return;
       if (name === 'user_threads' && state.search.trim()) {
         for (const doc of documents) {
           if (!doc?.id) continue;
@@ -647,6 +648,7 @@ async function refresh(options = {}) {
 
 async function refreshOnce(options = {}) {
   const mountCtx = state.ctx;
+  const generation = state.searchScanGeneration;
   if (options.restartSync) startSync().catch((error) => showError(error));
   const me = currentUserId();
   const [recentThreads, pendingApprovals, recentApprovals, states, preferences] = await Promise.all([
@@ -659,7 +661,7 @@ async function refreshOnce(options = {}) {
     me ? loadCollection('user_thread_states', { selector: { user_id: me, thread_id: '__preferences__' }, limit: 1 })
       : Promise.resolve([]),
   ]);
-  if (state.ctx !== mountCtx) return;
+  if (state.ctx !== mountCtx || generation !== state.searchScanGeneration) return;
   const personalStates = mergeRecords(states, preferences);
   state.personalStateByThread = new Map(personalStates.filter((item) => item.user_id === me).map((item) => [item.thread_id, item]));
   state.recentThreadsComplete = state.searchCorpusComplete || recentThreads.length < THREAD_LIST_LIMIT;
@@ -686,7 +688,7 @@ async function refreshOnce(options = {}) {
   ].filter(Boolean);
   const personalThreadIds = [...actionableThreadIds, state.requestedThreadId].filter(Boolean);
   const personalThreads = await loadRecordsByIds('user_threads', personalThreadIds, { strict: true });
-  if (state.ctx !== mountCtx) return;
+  if (state.ctx !== mountCtx || generation !== state.searchScanGeneration) return;
   const availableThreadIds = new Set(personalThreads.map((item) => item.id));
   state.personalComplete = Boolean(me)
     && actionableThreadIds.every((id) => availableThreadIds.has(id));
@@ -709,7 +711,7 @@ async function refreshOnce(options = {}) {
         NOTIFICATION_LIST_LIMIT, me ? { user_id: me } : {},
       )),
     ]).then(([unreadNotifications, recentNotifications]) => {
-      if (state.ctx !== mountCtx) return;
+      if (state.ctx !== mountCtx || generation !== state.searchScanGeneration) return;
       state.data.notifications = mergeRecords(state.data.notifications, unreadNotifications, recentNotifications);
       notifyActionRequired(recentNotifications);
       render();
@@ -851,7 +853,7 @@ function reconcileSearchSelection() {
     const available = new Set(state.data.threads.map((item) => item.id));
     state.data.approvals = state.data.approvals.filter((item) => available.has(item.thread_id));
     state.data.notifications = state.data.notifications.filter((item) => available.has(item.thread_id));
-    if (state.selectedId) hydrateSelectedThread(state.selectedId)
+    if (state.selectedId && moduleIsVisible()) hydrateSelectedThread(state.selectedId)
       .catch((error) => showError({ threadsLoadFailure: true, cause: error }));
   }
   render();
