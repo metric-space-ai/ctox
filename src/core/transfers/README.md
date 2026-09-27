@@ -74,11 +74,13 @@ mirror isolation/failover, rejected-prefix recovery and publication-crash recove
 cargo test --manifest-path src/core/transfers/Cargo.toml -j 2 -- --test-threads=2
 ```
 
-The second macOS verification compiled the engine and adapter: seven download
-tests passed and two failed (empty content and a missing truncated mirror partial).
-The engine now distinguishes a known zero Content-Length from an absent length;
-that repair and the mirror diagnostics await execution. Engine socket/bounds
-tests and native integration remain unverified. Directory durability is implemented for Unix only; Windows
+The macOS run on 2026-09-27 passed all nine download tests and both engine
+socket/storage regressions on adapter `e9f987e42` and engine `85d4eda67`.
+The standalone harness uses the exact archived private dependency via a local path.
+It verifies known-empty content and rejects truncated HTTP responses, retaining
+the received prefix for resume. Earlier platform and framing failures were repaired.
+Root native integration and installed acceptance remain unverified.
+Directory durability is implemented for Unix only; Windows
 activation explicitly fails instead of issuing an unproven durable receipt.
 No platform is claimed accepted yet. Native command/progress projection through
 CTOX Sync, peer capability-scoped requests, peer interruption/resume, parallel
