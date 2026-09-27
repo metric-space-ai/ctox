@@ -424,11 +424,11 @@ function injectedBusinessOsCapabilityToken(now = Date.now()) {
   return null;
 }
 
-async function acquireCapabilityTokenForSubmit() {
-  let result = await acquireBusinessOsCapabilityToken();
+async function acquireCapabilityTokenForSubmit({ refresh = false } = {}) {
+  let result = await acquireBusinessOsCapabilityToken({ refresh });
   if (result.token || !result.transient) return result;
   await delay(COMMAND_CAPABILITY_REFRESH_RETRY_BACKOFF_MS);
-  result = await acquireBusinessOsCapabilityToken();
+  result = await acquireBusinessOsCapabilityToken({ refresh });
   return result;
 }
 
@@ -502,7 +502,9 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
     // Bridge readiness/dependency delivery can span a native reconfiguration.
     // Bind the latest acquired authority at the immutable local-insert boundary,
     // not the token captured before the reconnect. This is not command replay.
-    const readyCapability = await acquireCapabilityTokenForSubmit();
+    // A grant change need not have caused a reconnect yet. Revalidate at this
+    // mutation boundary rather than reusing even an unexpired positive cache.
+    const readyCapability = await acquireCapabilityTokenForSubmit({ refresh: true });
     doc.client_context.capability_token = requireCommandCapability(commandId, readyCapability);
     assertCommandDocumentTransportBudget(doc, commandId);
     const localWriteStartedAt = Date.now();

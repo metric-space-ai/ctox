@@ -72,6 +72,35 @@ const originalFetch = globalThis.fetch;
 const nativeSetTimeout = globalThis.setTimeout;
 
 try {
+  // A grant change can precede any reconnect/handshake. The mutation boundary
+  // must obtain current authority even when the earlier token has not expired.
+  for (const revoked of [false, true]) {
+    resetBusinessOsCapabilityTokenCacheForTests();
+    let epochChanged = false;
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return epochChanged
+        ? revoked ? terminalResponse(403) : capabilityResponse('current-mutation-authority')
+        : capabilityResponse('cached-before-grant-change');
+    };
+    const { db, documents } = mockDb();
+    const sync = { async startCollection() { epochChanged = true; return null; } };
+    const submission = createCommandBus({ db, sync }).submit({
+      id: 'cmd-grant-change-without-reconnect', command_type: 'business_os.test',
+      sync_queue_tasks: false,
+    });
+    if (revoked) {
+      await assert.rejects(submission, (error) => error.code === 'auth_required' && !error.transient);
+      assert.equal(documents.size, 0, 'revoked authority never reaches the local insert');
+    } else {
+      await submission;
+      assert.equal(documents.get('cmd-grant-change-without-reconnect').client_context.capability_token,
+        'current-mutation-authority', 'preinsert must not reuse the prior epoch cache');
+    }
+    assert.equal(calls, 2, 'initial authority plus one mutation-boundary renewal');
+  }
+
   // 1. A real timeout on the first POST is retried once inside the same submit.
   {
     resetBusinessOsCapabilityTokenCacheForTests();
@@ -97,7 +126,7 @@ try {
     });
 
     globalThis.setTimeout = nativeSetTimeout;
-    assert.equal(calls, 2, 'submit performs exactly one refresh retry after timeout');
+    assert.equal(calls, 3, 'one initial timeout retry plus mutation-boundary renewal');
     assert.equal(receipt.ok, true);
     assert.equal(documents.get(receipt.command_id)?.client_context?.capability_token, 'capability-after-timeout');
   }
@@ -131,7 +160,7 @@ try {
     const elapsedMs = Date.now() - startedAt;
 
     assert.equal(receipt.ok, true, 'the immediately following submit can refresh and succeed');
-    assert.equal(calls, 3, 'the follow-up reaches the token endpoint instead of the 10-second cache');
+    assert.equal(calls, 4, 'the follow-up acquires and renews authority instead of retaining the negative cache');
     assert.ok(elapsedMs < 2_000, `transient cache recovery is short (observed ${elapsedMs}ms)`);
   }
 
@@ -160,7 +189,7 @@ try {
   }
 
   // Reconfiguration can revoke a token before its wall-clock expiry. Only a
-  // handshake requests refresh; ordinary permission reads keep using the cache.
+  // handshake and mutation boundary request refresh; permission reads retain the cache.
   {
     resetBusinessOsCapabilityTokenCacheForTests();
     let calls = 0;
@@ -168,7 +197,7 @@ try {
     globalThis.fetch = async () => {
       calls += 1;
       if (calls === 1) return capabilityResponse('epoch-before-install');
-      await new Promise((resolve) => { releaseRefresh = resolve; });
+      if (calls === 2) await new Promise((resolve) => { releaseRefresh = resolve; });
       return capabilityResponse('epoch-after-install');
     };
     assert.equal(await getBusinessOsCapabilityToken(), 'epoch-before-install');
@@ -187,7 +216,7 @@ try {
     });
     assert.equal(documents.get('cmd-auth-after-reconfiguration').client_context.capability_token,
       'epoch-after-install', 'subsequent commands use the renewed capability');
-    assert.equal(calls, 2, 'commands share the renewed cache');
+    assert.equal(calls, 3, 'the later mutation independently renews authority');
   }
 
   // A refresh is not permission to retain a rejected old token or bypass the
@@ -237,7 +266,7 @@ try {
       assert.equal(documents.get('cmd-auth-reconnect-before-insert').client_context.capability_token,
         'after-bridge-reconnect', 'insert binds authority after bridge readiness');
     }
-    assert.equal(calls, 2, 'post-readiness acquisition reuses renewal or negative cache');
+    assert.equal(calls, rejected ? 2 : 3, 'mutation renews positive authority but respects terminal negative cache');
   }
 
   // A host-provided device identity must not silently become the HTTP session
