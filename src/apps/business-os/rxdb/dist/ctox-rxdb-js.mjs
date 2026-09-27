@@ -10935,7 +10935,7 @@ var CtoxWebRtcReplicationState = class {
   }
   async buildProtocolPayload(deviceProofNonce = null) {
     const checkpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
-    const capabilityToken = await resolveCapabilityToken(this.ctox);
+    const capabilityToken = await resolveCapabilityToken(this.ctox, { refresh: true });
     const deviceProof = await resolveDeviceProof(this.ctox, deviceProofNonce);
     return buildProtocolPayload({
       collectionName: this.collection.name,
@@ -12250,10 +12250,10 @@ function isStalePendingBusinessCommandConflict(row = {}) {
   const masterStatus = String(master.status || "").trim();
   return localStatus === "pending_sync" && masterStatus && masterStatus !== "pending_sync";
 }
-async function resolveCapabilityToken(ctox = {}) {
+async function resolveCapabilityToken(ctox = {}, options = {}) {
   if (typeof ctox?.capabilityTokenProvider === "function") {
     try {
-      const token = await ctox.capabilityTokenProvider();
+      const token = await ctox.capabilityTokenProvider(options);
       return typeof token === "string" && token.trim() ? token.trim() : null;
     } catch {
       return null;

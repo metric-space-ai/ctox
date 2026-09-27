@@ -506,7 +506,15 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
     doc.client_context.capability_token = requireCommandCapability(commandId, readyCapability);
     assertCommandDocumentTransportBudget(doc, commandId);
     const localWriteStartedAt = Date.now();
-    await insertOrPatchCommandDocument(collection, commandId, doc);
+    const inserted = await insertOrPatchCommandDocument(collection, commandId, doc);
+    if (!inserted) {
+      // Same immutable payload already exists. Track that persisted command;
+      // never push this freshly prepared document with a different capability
+      // or reset the native status through the explicit submit path.
+      rememberActiveCommandId(commandId);
+      recordCommandMetric(sync, 'submit_receipt', commandId, Date.now() - submitStartedAt);
+      return localCommandReceipt({ db, sync, commandId, pushConfirmed: false });
+    }
     emitCommandLifecycle(commandId, command.command_type || command.type, 'local_inserted', submitStartedAt);
     recordCommandMetric(sync, 'local_submit', commandId, Date.now() - localWriteStartedAt);
 
@@ -1126,7 +1134,7 @@ function desktopFileAttachmentRefs(payload) {
 async function insertOrPatchCommandDocument(collection, commandId, doc) {
   try {
     await collection.insert(doc);
-    return;
+    return true;
   } catch (error) {
     if (!isRxDbConflictError(error)) throw error;
   }
@@ -1134,7 +1142,7 @@ async function insertOrPatchCommandDocument(collection, commandId, doc) {
   const existing = existingDoc?.toJSON?.() || existingDoc || null;
   if (!existing) {
     await collection.insert(doc);
-    return;
+    return true;
   }
   const existingHash = String(existing.payload_hash || await payloadHashForCommandDocument(existing));
   if (existingHash !== doc.payload_hash) {
@@ -1143,6 +1151,7 @@ async function insertOrPatchCommandDocument(collection, commandId, doc) {
       retryable: false,
     });
   }
+  return false;
 }
 
 async function payloadHashForCommandDocument(document) {
