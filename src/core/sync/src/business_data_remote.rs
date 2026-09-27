@@ -2300,8 +2300,9 @@ pub fn spawn_remote_event_pump(
     session: SessionRef,
     events: mpsc::Sender<crate::business_data_ipc::QueuedBusinessDataEvent>,
     authority: EventAuthorityCheck,
+    publication: Arc<crate::business_data_ipc::WatchLifetime>,
 ) -> OwnedEventPump {
-    let alive = Arc::new(crate::business_data_ipc::WatchLifetime::new());
+    let alive = publication;
     let failed = Arc::new(AtomicBool::new(false));
     let release = Arc::new(AtomicBool::new(false));
     let notify = Arc::new(Notify::new());

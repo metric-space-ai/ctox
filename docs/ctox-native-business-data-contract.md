@@ -365,6 +365,14 @@ snapshot. Buffer overflow and missed events also reset; they never silently
 skip ahead. Removed records must yield remove events, including records that
 leave an authorized query because their scope or policy changed. Revocation
 invalidates data visibility and ends the subscription.
+At the private IPC boundary, the shared publication fence linearizes at the
+first transport-accepted byte of a watch event or gated response. A zero-byte
+Pending frame is cancellable by Close, revoke, shutdown or account invalidation;
+once its first byte is accepted, that frame finishes intact to preserve framing
+under the authority captured when it was admitted. This is a host-session
+boundary, not proof that an external native SQLite policy mutation is fenced
+atomically at the remote source transport; that policy owner must share its own
+revision/guard with source response and event publication.
 
 Cancellation is owned by the existing native session lifecycle. A slow renderer
 gets bounded backpressure or a visible reset/error, not an unbounded queue or

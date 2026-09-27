@@ -158,6 +158,9 @@ struct OwnedSession {
     connection: rxdb::plugins::replication_webrtc::WebRTCRsConnection,
     pool: crate::native::NativePool,
     watches: Arc<tokio::sync::Mutex<HashMap<String, OwnedWatch>>>,
+    /// Shared first-byte gate for every response and event published under
+    /// this owned session generation.
+    publication: Arc<crate::business_data_ipc::WatchLifetime>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -180,6 +183,10 @@ struct SessionEntry {
 pub struct BusinessDataService {
     host: Arc<dyn BusinessDataSessionHost>,
     sessions: Mutex<HashMap<String, SessionEntry>>,
+    /// Response guards awaiting dispatcher handoff. Entry is synchronous with
+    /// the final authority check and is retained even after revocation so the
+    /// retrieved guard is already dead.
+    pending_publications: Mutex<HashMap<String, Arc<crate::business_data_ipc::WatchLifetime>>>,
     stopped: std::sync::atomic::AtomicBool,
 }
 
@@ -188,6 +195,7 @@ impl BusinessDataService {
         Self {
             host,
             sessions: Mutex::new(HashMap::new()),
+            pending_publications: Mutex::new(HashMap::new()),
             stopped: std::sync::atomic::AtomicBool::new(false),
         }
     }
@@ -229,7 +237,14 @@ impl BusinessDataService {
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .drain()
-            .map(|(_, entry)| entry)
+            .map(|(_, entry)| {
+                if let Some(owned) = &entry.session {
+                    // This synchronous publication fence happens under the same
+                    // handle-table mutation that withdraws session authority.
+                    owned.publication.invalidate();
+                }
+                entry
+            })
             .collect();
         let watches: Vec<_> = entries
             .iter()
@@ -378,6 +393,7 @@ impl BusinessDataService {
                     connection: connection.clone(),
                     pool: session.pool_clone(),
                     watches: Arc::default(),
+                    publication: Arc::new(crate::business_data_ipc::WatchLifetime::new()),
                 };
                 let registered = {
                     let mut sessions = self
@@ -625,6 +641,15 @@ impl BusinessDataService {
             };
             entry.lifecycle = Lifecycle::Revoked;
             entry.revocation = Some((generation, reason.to_owned()));
+            if entry
+                .session
+                .as_ref()
+                .is_some_and(|owned| owned.generation == generation)
+            {
+                // Fence already-revalidated events/responses before dropping
+                // the authority lock and before the async watch-map drain.
+                entry.session.as_ref().unwrap().publication.invalidate();
+            }
             entry.transport.take()
         };
         let watches = {
@@ -667,13 +692,19 @@ impl BusinessDataService {
             }
             return Err(unknown("BusinessData session is still resolving"));
         };
-        // Fence new responses before asynchronous watch shutdown begins.
-        let native = self
-            .sessions
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .remove(&handle)
-            .and_then(|entry| entry.transport);
+        // Fence already-authorized publication before asynchronous watch
+        // shutdown begins.
+        let native = {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let entry = sessions.remove(&handle);
+            if let Some(owned) = entry.as_ref().and_then(|entry| entry.session.as_ref()) {
+                owned.publication.invalidate();
+            }
+            entry.and_then(|entry| entry.transport)
+        };
         let Some(native) = native else {
             return Err(invalid("BusinessData session has no owned transport"));
         };
@@ -778,6 +809,13 @@ impl BusinessDataService {
             } if returned == session => {
                 // Authority can change while the source awaits snapshot pages.
                 self.ensure_owned_is_current(session, &owned).await?;
+                // Capture the publication guard synchronously after the final
+                // resolve: revocation between this point and IPC queueing can
+                // invalidate the guard, but cannot bypass it.
+                self.pending_publications
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .insert(request_id.to_owned(), owned.publication.clone());
                 Ok(response)
             }
             Result::Rejected { .. } => rejected_response(response),
@@ -804,6 +842,7 @@ impl BusinessDataService {
             session.clone(),
             events,
             self.event_authority(session.clone(), &owned),
+            owned.publication.clone(),
         );
         let request = Request {
             version: crate::business_data_contract::CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
@@ -971,6 +1010,7 @@ impl BusinessDataService {
             session.clone(),
             events,
             self.event_authority(session.clone(), &owned),
+            owned.publication.clone(),
         );
         let request = Request {
             version: crate::business_data_contract::CTOX_BUSINESS_DATA_PROTOCOL_VERSION,
@@ -1032,6 +1072,17 @@ impl BusinessDataService {
 /// The first dispatcher intentionally owns lifecycle only. Every data-bearing
 /// operation fails closed until policy-scoped transport operations land.
 impl BusinessDataDispatcher for BusinessDataServiceDispatcher {
+    fn response_publication(
+        &self,
+        response: &Response,
+    ) -> Option<Arc<crate::business_data_ipc::WatchLifetime>> {
+        self.service
+            .pending_publications
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .remove(&response.request_id)
+    }
+
     fn response_sent<'a>(
         &'a self,
         response: &'a Response,

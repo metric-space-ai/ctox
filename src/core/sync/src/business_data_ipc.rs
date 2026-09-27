@@ -13,10 +13,11 @@ use std::{collections::HashSet, future::Future, io, pin::Pin, sync::Arc};
 use tokio::sync::mpsc;
 
 const MAX_IN_FLIGHT: usize = 4;
-const MAX_PENDING_WRITES: usize = 8;
-/// Serializes watch invalidation with the first accepted frame byte. A pending
-/// write has not published anything and must remain cancellable. Once any byte
-/// is accepted, finish that frame to preserve the connection's framing.
+/// Serializes authority invalidation with the first accepted frame byte for a
+/// watch event or gated response. A pending write has published nothing and is
+/// cancellable. Acceptance of the first byte is the linearization point: the
+/// authority valid at queueing wins, and the frame then finishes uninterrupted
+/// so the private stream never mixes a partial frame with another frame.
 pub(crate) struct WatchLifetime {
     state: std::sync::Mutex<WatchLifetimeState>,
 }
@@ -162,11 +163,21 @@ impl QueuedBusinessDataEvent {
         Some(self)
     }
 }
+struct GatedBusinessDataResponse {
+    response: Response,
+    publication: Option<Arc<WatchLifetime>>,
+}
+
 pub type BusinessDataDispatchFuture = Pin<Box<dyn Future<Output = io::Result<Response>> + Send>>;
 pub trait BusinessDataDispatcher: Send + Sync {
     /// Must own only this private connection's handles and authorization state.
     /// Dropping its pending future cancels the operation; no detached work.
     fn dispatch(&self, request: Request) -> BusinessDataDispatchFuture;
+    /// Return the publication authority captured atomically with response
+    /// admission. Returning None is reserved for control/error responses.
+    fn response_publication(&self, _response: &Response) -> Option<Arc<WatchLifetime>> {
+        None
+    }
     /// Release response-dependent events only after the response was written.
     fn response_sent<'a>(&'a self, _response: &'a Response) -> BusinessDataShutdownFuture<'a> {
         Box::pin(async { Ok(()) })
@@ -188,7 +199,11 @@ pub type BusinessDataConnectionFactory = Arc<
 >;
 
 enum OutboundBusinessDataFrame {
-    Frame(Frame),
+    Control(Frame),
+    Response {
+        response: Response,
+        publication: Option<Arc<WatchLifetime>>,
+    },
     Event(QueuedBusinessDataEvent),
 }
 
@@ -232,12 +247,37 @@ impl BusinessDataIpc {
         let write = async {
             while let Some(outbound) = to_write.recv().await {
                 let response = match outbound {
-                    OutboundBusinessDataFrame::Frame(frame) => {
+                    OutboundBusinessDataFrame::Control(frame) => {
                         write_host_frame(&mut writer, &frame).await?;
-                        match frame {
-                            Frame::Response { response } => Some(response),
-                            _ => None,
+                        None
+                    }
+                    OutboundBusinessDataFrame::Response {
+                        response,
+                        publication,
+                    } => {
+                        let frame = Frame::Response {
+                            response: response.clone(),
+                        };
+                        match publication {
+                            Some(publication) => {
+                                let mut guarded = WatchFrameWriter {
+                                    writer: &mut writer,
+                                    lifetime: &publication,
+                                    started: false,
+                                    cancelled: false,
+                                };
+                                let result = write_host_frame(&mut guarded, &frame).await;
+                                // A revoked response consumes the normal write
+                                // acknowledgement without publishing any byte.
+                                // response_sent remains safe because it resolves
+                                // the stale session before releasing any watch.
+                                if !guarded.cancelled {
+                                    result?;
+                                }
+                            }
+                            None => write_host_frame(&mut writer, &frame).await?,
                         }
+                        Some(response)
                     }
                     OutboundBusinessDataFrame::Event(queued) => {
                         let mut guarded = WatchFrameWriter {
@@ -298,7 +338,7 @@ impl BusinessDataIpc {
                     },
                     challenge = credentials.next_challenge(), if has_credentials && pending_writes < MAX_PENDING_WRITES => {
                         if let Some(challenge) = challenge {
-                            outgoing.try_send(OutboundBusinessDataFrame::Frame(Frame::CredentialChallenge { challenge })).map_err(|_| invalid())?;
+                            outgoing.try_send(OutboundBusinessDataFrame::Control(Frame::CredentialChallenge { challenge })).map_err(|_| invalid())?;
                             pending_writes += 1;
                         } else { has_credentials = false; }
                     },
@@ -319,14 +359,20 @@ impl BusinessDataIpc {
                     },
                     result = work.next(), if !work.is_empty() => {
                         let response = result.ok_or_else(invalid)??;
+                        let publication = dispatcher.response_publication(&response);
                         // IDs remain reserved until write acknowledgement, so
                         // completed responses are bounded by MAX_IN_FLIGHT.
                         // Poll operations even when the output queue is full.
-                        responses.push_back(response);
+                        responses.push_back(GatedBusinessDataResponse { response, publication });
                     },
                     _ = async {}, if !responses.is_empty() && pending_writes < MAX_PENDING_WRITES => {
-                        let response = responses.pop_front().ok_or_else(invalid)?;
-                        outgoing.try_send(OutboundBusinessDataFrame::Frame(Frame::Response { response })).map_err(|_| invalid())?;
+                        let GatedBusinessDataResponse { response, publication } =
+                            responses.pop_front().ok_or_else(invalid)?;
+                        outgoing.try_send(OutboundBusinessDataFrame::Response {
+                            response,
+                            publication,
+                        })
+                        .map_err(|_| invalid())?;
                         pending_writes += 1;
                     },
                     completed = completed_writes.recv(), if pending_writes > 0 => {

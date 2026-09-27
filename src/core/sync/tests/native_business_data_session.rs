@@ -46,6 +46,65 @@ use tokio::time::timeout;
 
 const AUTHORIZATION_EPOCH: u64 = 12;
 const ACCOUNT_EPOCH: u64 = 34;
+/// Gates only native-to-host writes after Open so a completed response can be
+/// held before its first byte is accepted.
+#[derive(Default)]
+struct ResponsePublicationGate {
+    armed: AtomicBool,
+    blocked: AtomicBool,
+    entered: tokio::sync::Notify,
+    writer_waker: futures_util::task::AtomicWaker,
+}
+
+struct GatedNativeIpcStream {
+    inner: tokio::io::DuplexStream,
+    gate: Arc<ResponsePublicationGate>,
+}
+
+impl tokio::io::AsyncRead for GatedNativeIpcStream {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for GatedNativeIpcStream {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        if self.gate.armed.load(Ordering::SeqCst) && !self.gate.blocked.swap(true, Ordering::SeqCst)
+        {
+            self.gate.writer_waker.register(cx.waker());
+            self.gate.entered.notify_one();
+            return std::task::Poll::Pending;
+        }
+        if self.gate.blocked.load(Ordering::SeqCst) {
+            self.gate.writer_waker.register(cx.waker());
+            return std::task::Poll::Pending;
+        }
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
 const NO_EVENT_WINDOW: Duration = Duration::from_millis(250);
 
 /// Reads retain partial transport bytes across bounded silence checks.
@@ -440,7 +499,7 @@ async fn dropped_stream_awaits_owned_open_startup_cleanup() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn command_subscription_identity_survives_overlap_and_replacement() {
-    tokio::time::timeout(Duration::from_secs(40), async {
+    tokio::time::timeout(Duration::from_secs(60), async {
         let signaling =
             signaling_fixture::SignalingFixture::with_roles(["ctox_instance", "browser"]).await;
         let device = device_key();
@@ -582,11 +641,139 @@ async fn command_subscription_identity_survives_overlap_and_replacement() {
             &source_pin,
             device.clone(),
             credential_requests.clone(),
+            None,
         )
         .await;
-        let (b_root, b_db, mut client_b, session_b, service_b, serve_b) =
-            open_ipc_client(&signaling.url, &source_pin, device, credential_requests).await;
+        let (b_root, b_db, mut client_b, session_b, service_b, serve_b) = open_ipc_client(
+            &signaling.url,
+            &source_pin,
+            device.clone(),
+            credential_requests.clone(),
+            None,
+        )
+        .await;
+        let publication_gate = Arc::new(ResponsePublicationGate::default());
+        let (p_root, p_db, mut publication_client, session_p, service_p, serve_p) =
+            open_ipc_client(
+                &signaling.url,
+                &source_pin,
+                device.clone(),
+                credential_requests.clone(),
+                Some(publication_gate.clone()),
+            )
+            .await;
         assert_ne!(session_a, session_b);
+
+        // Exercise the real Query service path, hold its completed response at
+        // the native writer before byte zero, then run production Close.
+        publication_gate.armed.store(true, Ordering::SeqCst);
+        send_request(
+            &mut publication_client,
+            "blocked-query",
+            query_request_with_cursor(&session_p, None),
+        )
+        .await;
+        publication_gate.entered.notified().await;
+        send_request(
+            &mut publication_client,
+            "close-before-first-byte",
+            NativeBusinessDataOperation::Close {
+                session: session_p.clone(),
+            },
+        )
+        .await;
+        // Close must invalidate the shared publication guard before async watch
+        // transport draining; the wake itself proves the writer was fenced.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        publication_gate.blocked.store(false, Ordering::SeqCst);
+        publication_gate.writer_waker.wake();
+        match read_frame(&mut publication_client).await {
+            Frame::Response { response } if response.request_id == "close-before-first-byte" => {
+                let NativeBusinessDataResult::Session {
+                    state: NativeBusinessDataSessionState::Disconnected { session, .. },
+                } = response.result
+                else {
+                    panic!("expected disconnected session: {response:?}");
+                };
+                assert_eq!(session, session_p);
+            }
+            other => panic!("old query published instead of Close response: {other:?}"),
+        }
+        drop(publication_client);
+        assert!(serve_p.await.unwrap().is_err());
+        // Repeat the fence against the real Watch event publication path: the
+        // subscription response installs, a matching event reaches the native
+        // writer, and Close cancels it before byte zero.
+        let event_gate = Arc::new(ResponsePublicationGate::default());
+        let (e_root, e_db, mut event_client, session_e, service_e, serve_e) = open_ipc_client(
+            &signaling.url,
+            &source_pin,
+            device,
+            credential_requests,
+            Some(event_gate.clone()),
+        )
+        .await;
+        event_gate.armed.store(true, Ordering::SeqCst);
+        send_request(
+            &mut event_client,
+            "publication-watch",
+            watch_request(&session_e, None),
+        )
+        .await;
+        event_gate.entered.notified().await;
+        event_gate.blocked.store(false, Ordering::SeqCst);
+        event_gate.writer_waker.wake();
+        let _subscription_id =
+            read_subscribed(&mut event_client, &session_e, "publication-watch").await;
+        // Drain the deterministic empty-snapshot marker before arming the
+        // targeted adversarial event, so Close fences that event, not setup.
+        event_gate.entered.notified().await;
+        event_gate.blocked.store(false, Ordering::SeqCst);
+        event_gate.writer_waker.wake();
+        let caught_up = read_event(&mut event_client, "publication snapshot").await;
+        assert!(matches!(
+            caught_up.payload,
+            NativeBusinessDataEventPayload::CaughtUp { .. }
+        ));
+        server_db
+            .collection("records")
+            .unwrap()
+            .insert(json!({"id": "native-publication-fence"}))
+            .await
+            .unwrap();
+        event_gate.armed.store(true, Ordering::SeqCst);
+        event_gate.entered.notified().await;
+        send_request(
+            &mut event_client,
+            "close-before-event-byte",
+            NativeBusinessDataOperation::Close {
+                session: session_e.clone(),
+            },
+        )
+        .await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        event_gate.blocked.store(false, Ordering::SeqCst);
+        event_gate.writer_waker.wake();
+        match read_frame(&mut event_client).await {
+            Frame::Response { response } if response.request_id == "close-before-event-byte" => {
+                let NativeBusinessDataResult::Session {
+                    state: NativeBusinessDataSessionState::Disconnected { .. },
+                } = response.result
+                else {
+                    panic!("expected disconnected session: {response:?}");
+                };
+            }
+            other => panic!("stale event published instead of Close response: {other:?}"),
+        }
+        drop(event_client);
+        assert!(serve_e.await.unwrap().is_err());
+        service_e.shutdown().await.unwrap();
+        e_db.close().await.unwrap();
+        drop(e_root);
+
+        service_p.shutdown().await.unwrap();
+        p_db.close().await.unwrap();
+        drop(p_root);
 
         // A installs the deterministic command subscription. B's identical ID
         // collides only after authorization and command resolution; it must not
@@ -947,6 +1134,7 @@ async fn open_ipc_client(
     source_pin: &str,
     device: Arc<EcdsaKeyPair>,
     credential_requests: Arc<AtomicU8>,
+    response_gate: Option<Arc<ResponsePublicationGate>>,
 ) -> (
     tempfile::TempDir,
     Arc<rxdb::rx_database::RxDatabase>,
@@ -982,6 +1170,13 @@ async fn open_ipc_client(
     }));
     let (stream, native) = tokio::io::duplex(64 * 1024);
     let mut stream = BufReader::new(stream);
+    let native: Box<dyn ctox_sync::ipc::LocalIpcStream> = match response_gate {
+        Some(gate) => Box::new(GatedNativeIpcStream {
+            inner: native,
+            gate,
+        }),
+        None => Box::new(native),
+    };
     let serve = tokio::spawn(async move { ipc.serve(Box::new(native)).await });
     send_request(&mut stream, "open", open_request()).await;
     let response =
