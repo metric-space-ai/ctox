@@ -6,7 +6,7 @@ license = "AGPL-3.0-only"
 
 [dependencies]
 anyhow = "1"
-aria2-rust = { git = "https://github.com/mkh-welsch/aria2-rust", rev = "a5a2431f3c8265c3ef457a181d43b5e7af119655" }
+aria2-rust = { git = "https://github.com/mkh-welsch/aria2-rust", rev = "b325b0895eaec60795cf462a2bd1ca7cee5878e5" }
 fs2 = "0.4"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

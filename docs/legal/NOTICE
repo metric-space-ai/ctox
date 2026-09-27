@@ -7,7 +7,7 @@ Primary integrated source trees:
 
 - src/core/transfers (Git dependency aria2-rust)
   https://github.com/mkh-welsch/aria2-rust at
-  a5a2431f3c8265c3ef457a181d43b5e7af119655 (based on 7bfacc2cf27e55d4755b06623c1b997880d0c697).
+  b325b0895eaec60795cf462a2bd1ca7cee5878e5 (based on 7bfacc2cf27e55d4755b06623c1b997880d0c697).
   Dependency license: GPL-2.0-or-later, per its LICENSE and Cargo.toml.
   Source is private and is not vendored or redistributed by this PR.
   Source availability/distribution must be resolved before a public release.

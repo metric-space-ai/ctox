@@ -41,10 +41,12 @@ remains open. An accepted cancellation cannot be reversed by a late pause/resume
 ## Engine source and limits
 
 The private Git dependency is `mkh-welsch/aria2-rust` at
-`a5a2431f3c8265c3ef457a181d43b5e7af119655`, based on remote main
+`b325b0895eaec60795cf462a2bd1ca7cee5878e5`, based on remote main
 `7bfacc2cf27e55d4755b06623c1b997880d0c697`. Its LICENSE and manifest declare
 GPL-2.0-or-later. The patch adds optional `ctox-expected-length` checks before
 allocation and at all storage write entry points, with a direct boundary test.
+It also guards Linux-only QuickAck and uses SO_NOSIGPIPE on Darwin for socket
+writes; a regression test exercises scalar/vectored TCP and UDP output.
 Private source has not been copied into this public repository. Authenticated
 build access is required; public CI/release source distribution remains unresolved
 pending the owner’s publication decision. The upstream README is historical and
@@ -72,8 +74,9 @@ mirror isolation/failover, rejected-prefix recovery and publication-crash recove
 cargo test --manifest-path src/core/transfers/Cargo.toml -j 2 -- --test-threads=2
 ```
 
-The first implementation is unverified until that suite and native integration
-checks have executed. Directory durability is implemented for Unix only; Windows
+The first macOS verification stopped during engine compilation at Linux-only
+socket options; no tests ran. The pinned repair still requires a new run of the
+suite and native integration checks. Directory durability is implemented for Unix only; Windows
 activation explicitly fails instead of issuing an unproven durable receipt.
 No platform is claimed accepted yet. Native command/progress projection through
 CTOX Sync, peer capability-scoped requests, peer interruption/resume, parallel

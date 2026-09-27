@@ -20,7 +20,7 @@ use std::{
 };
 use tokio::sync::watch;
 
-pub const ENGINE_REVISION: &str = "a5a2431f3c8265c3ef457a181d43b5e7af119655";
+pub const ENGINE_REVISION: &str = "b325b0895eaec60795cf462a2bd1ca7cee5878e5";
 
 /// Local authorized callers supply immutable content identity, never arbitrary engine options.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
