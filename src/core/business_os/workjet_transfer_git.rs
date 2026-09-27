@@ -252,6 +252,24 @@ pub fn pack_git_working_copy(
     manifest.manifest_sha256 = sha256_bytes(&canonical_manifest_bytes(&manifest)?);
     fs::write(&manifest_path, canonical_manifest_bytes(&manifest)?)
         .with_context(|| format!("{GIT_PACK_FAILED}: write {}", manifest_path.display()))?;
+    // A successful pack is an artifact-publication boundary: callers may now
+    // record it durably or hand it to another peer. Flush every artifact before
+    // confirming the pack, then persist the directory entries and parent link.
+    for artifact in [
+        &bundle_path,
+        &patch_path,
+        &index_patch_path,
+        &untracked_path,
+        &manifest_path,
+    ] {
+        File::open(artifact)?
+            .sync_all()
+            .with_context(|| format!("{GIT_PACK_FAILED}: flush {}", artifact.display()))?;
+    }
+    sync_materialized_directory(&artifacts_dir)?;
+    if let Some(parent) = artifacts_dir.parent() {
+        sync_materialized_directory(parent)?;
+    }
     Ok(manifest)
 }
 

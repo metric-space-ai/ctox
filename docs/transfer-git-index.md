@@ -16,8 +16,10 @@ Only then can the existing file-manifest verification and target publication
 finish. Publication flushes every materialized regular file (including Git
 objects, refs and index), then directories from children to parents, then the
 target's parent after the rename. Symlinks are never traversed. Directory
-durability is currently Unix-only; other platforms fail without an apply receipt.
- Index-only changes count as dirty even if working bytes match HEAD.
+durability is currently Unix-only; other platforms fail without a success receipt.
+Pack creation also flushes the bundle, both patches, untracked archive and
+manifest, then the artifact directory and its parent, before returning success.
+Index-only changes count as dirty even if working bytes match HEAD.
 Unresolved merges and intent-to-add entries are rejected; the latter has no
 ordinary Git tree representation. This does not claim support for arbitrary
 index flags, submodules, every ref, or an independently running source writer.
