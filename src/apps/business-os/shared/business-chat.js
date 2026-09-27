@@ -7648,25 +7648,31 @@ ${CREW_CREATURE_BASE_CSS}
       animation: ctoxClockPulse 2s infinite ease-in-out;
     }
 
-    /* Quiet crew surface: chat copy is the only persistent copy. */
+    /* Quiet crew surface: chat copy is the only persistent copy. The window
+       floats one depth step above every app (see --elev-* in app.css): its
+       own surface ladder, a light inner edge and a dark outer outline. */
     .ctox-chat-window,
     .ctox-chat-window.is-active,
     .ctox-chat-window[class*="is-task-"] {
+      --surface: var(--elev-float, #1c1f25);
+      --surface-2: var(--elev-float-2, #252a32);
+      --surface-3: var(--elev-float-3, #2e343d);
+      --line: var(--elev-inner-line, rgb(255 255 255 / 0.08));
       grid-template-rows: 64px minmax(0, 1fr) 56px;
       width: min(460px, calc(100dvw - 24px));
       max-width: min(460px, calc(100dvw - 24px));
       height: min(580px, calc(100dvh - 132px)) !important;
       min-height: min(420px, calc(100dvh - 132px));
       max-height: min(580px, calc(100dvh - 132px));
-      border-color: var(--line) !important;
+      border-color: var(--elev-edge, var(--line)) !important;
       border-radius: 14px !important;
-      background: var(--surface) !important;
-      box-shadow: var(--shadow-lg) !important;
+      background: var(--elev-float, var(--surface)) !important;
+      box-shadow: var(--elev-float-shadow, var(--shadow-lg)) !important;
       animation: none !important;
     }
     .ctox-chat-window.is-active {
-      border-color: color-mix(in srgb, var(--accent) 28%, var(--line)) !important;
-      box-shadow: var(--shadow-lg) !important;
+      border-color: color-mix(in srgb, var(--accent) 45%, var(--elev-edge, var(--line))) !important;
+      box-shadow: var(--elev-float-shadow, var(--shadow-lg)) !important;
     }
     .ctox-chat-stage-inner,
     .ctox-chat-stage-inner.has-maximized {
@@ -7946,9 +7952,18 @@ ${CREW_CREATURE_BASE_CSS}
       grid-template-columns: max-content var(--ctox-date-pill-width) 36px;
       gap: 6px;
       padding: 5px;
-      border-color: var(--line);
+      /* The crew bar floats like a dock: its own surface ladder, a light
+         edge, a dark outline and a blur of whatever app lies beneath. */
+      --surface: var(--elev-float-2, #252a32);
+      --surface-2: var(--elev-float, #1c1f25);
+      --surface-3: var(--elev-float-3, #2e343d);
+      --line: var(--elev-inner-line, rgb(255 255 255 / 0.08));
+      border: 1px solid var(--elev-edge, var(--line));
       border-radius: 16px;
-      background: var(--surface-2);
+      background: color-mix(in srgb, var(--elev-float, var(--surface-2)) 92%, transparent);
+      box-shadow: var(--elev-bar-shadow, var(--shadow-lg));
+      backdrop-filter: blur(18px) saturate(1.35);
+      -webkit-backdrop-filter: blur(18px) saturate(1.35);
     }
     /* In side/mobile flex layout, scroll controls at their intended size
        instead of shrinking the date pill, its arrows or the chat switcher. */
