@@ -4041,6 +4041,9 @@ mod tests {
     mod query_fetch_client_tests {
         include!("query_fetch_client_tests.rs");
     }
+    mod file_fetch_client_tests {
+        include!("file_fetch_client_tests.rs");
+    }
 
     #[tokio::test]
     async fn lifecycle_owned_auxiliary_contract_cannot_be_registered_twice() {
