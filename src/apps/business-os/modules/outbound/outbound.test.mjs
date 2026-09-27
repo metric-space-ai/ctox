@@ -1,4 +1,5 @@
 import test from 'node:test';
+import './focus-navigation.test.mjs';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import fs from 'node:fs/promises';

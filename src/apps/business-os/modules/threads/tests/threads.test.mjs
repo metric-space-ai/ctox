@@ -188,4 +188,5 @@ for (const locale of ['de', 'en']) {
   assert.ok(messages.syncingThreads, `locales/${locale}.json carries syncingThreads`);
 }
 
+await import('./search-rescan.test.mjs');
 console.log('threads module smoke ok');

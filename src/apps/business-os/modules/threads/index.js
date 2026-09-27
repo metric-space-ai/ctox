@@ -87,6 +87,7 @@ export async function mount(ctx) {
   state.recentThreadsComplete = false;
   state.detailCompleteThreadId = '';
   state.searchCorpus = [];
+  state.searchScanGeneration = 0;
   state.searchCorpusComplete = false;
   state.searchScanError = false;
   state.searchScanInFlight = null;
@@ -513,6 +514,18 @@ function wireRealtime() {
       const changed = event?.success || event?.detail?.success || {};
       const documents = Object.values(changed);
       if (!documents.length) return;
+      if (name === 'user_threads') {
+        const removed = new Set(documents.filter((doc) => doc?._deleted === true || doc?.is_deleted === true).map((doc) => doc.id));
+        if (removed.size) {
+          state.searchScanGeneration += 1;
+          state.searchCorpusComplete = false;
+          state.recentThreadsComplete = false;
+          state.searchCorpus = state.searchCorpus.filter((item) => !removed.has(item.id));
+          state.data.threads = state.data.threads.filter((item) => !removed.has(item.id));
+          reconcileSearchSelection();
+          scheduleSearchScan();
+        }
+      }
       if (name === 'user_threads' && state.search.trim()) {
         for (const doc of documents) {
           if (!doc?.id) continue;
@@ -785,35 +798,34 @@ function scheduleSearchScan() {
       || state.searchScanInFlight || state.refreshInFlight
       || (state.threadsReadiness || readThreadsReadiness())?.ready !== true || !moduleIsVisible()) return;
     const mountCtx = state.ctx;
+    const generation = state.searchScanGeneration;
+    let scanRecords = [];
     let cancelled = false;
     state.searchScanInFlight = loadPersonalPages('user_threads', {}, {
       withCompletion: true,
       shouldContinue: () => {
-        const active = state.ctx === mountCtx && Boolean(state.search.trim())
+        const active = state.ctx === mountCtx && generation === state.searchScanGeneration && Boolean(state.search.trim())
           && moduleIsVisible() && (state.threadsReadiness || readThreadsReadiness())?.ready === true;
         if (!active) cancelled = true;
         return active;
       },
       onPage: (page) => {
-        if (state.ctx !== mountCtx) return;
-        state.searchCorpus = mergeRecords(state.searchCorpus, page);
+        if (state.ctx !== mountCtx || generation !== state.searchScanGeneration) return;
+        scanRecords = mergeRecords(scanRecords, page);
+        state.searchCorpus = scanRecords;
         state.data.threads = mergeRecords(state.data.threads, page);
-        const previousSelectedId = state.selectedId;
-        syncSelection();
-        render();
-        if (state.selectedId && state.selectedId !== previousSelectedId) {
-          hydrateSelectedThread(state.selectedId)
-            .catch((error) => showError({ threadsLoadFailure: true, cause: error }));
-        }
+        reconcileSearchSelection();
       },
     }).then(({ records, complete }) => {
-      if (state.ctx !== mountCtx || !complete || !state.search.trim()
+      if (state.ctx !== mountCtx || generation !== state.searchScanGeneration || !complete || !state.search.trim()
         || !moduleIsVisible() || (state.threadsReadiness || readThreadsReadiness())?.ready !== true) return;
-      state.searchCorpus = mergeRecords(state.searchCorpus, records);
+      // Exhaustion defines the current accessible set, including absences.
+      state.searchCorpus = mergeRecords(records);
+      state.data.threads = state.searchCorpus;
       state.searchCorpusComplete = true;
       state.recentThreadsComplete = true;
       clearLoadError();
-      render();
+      reconcileSearchSelection();
     }).catch((error) => {
       if (state.ctx === mountCtx) {
         state.searchScanError = true;
@@ -822,9 +834,27 @@ function scheduleSearchScan() {
     }).finally(() => {
       if (state.ctx !== mountCtx) return;
       state.searchScanInFlight = null;
-      if (cancelled) scheduleSearchScan();
+      if (cancelled || generation !== state.searchScanGeneration) scheduleSearchScan();
     });
   }, 350);
+}
+
+function reconcileSearchSelection() {
+  const previousSelectedId = state.selectedId;
+  syncSelection();
+  if (state.selectedId !== previousSelectedId) {
+    state.detailCompleteThreadId = '';
+    state.data.messages = [];
+    state.data.links = [];
+    state.data.commands = [];
+    state.data.queue = [];
+    const available = new Set(state.data.threads.map((item) => item.id));
+    state.data.approvals = state.data.approvals.filter((item) => available.has(item.thread_id));
+    state.data.notifications = state.data.notifications.filter((item) => available.has(item.thread_id));
+    if (state.selectedId) hydrateSelectedThread(state.selectedId)
+      .catch((error) => showError({ threadsLoadFailure: true, cause: error }));
+  }
+  render();
 }
 
 function collectionFor(name) {

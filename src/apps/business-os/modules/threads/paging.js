@@ -9,6 +9,7 @@ export async function collectUniquePages(loadPage, {
   for (let skip = 0; ; skip += pageSize) {
     if (!shouldContinue()) return { records, complete: false };
     const page = await loadPage({ skip, limit: pageSize });
+    if (!shouldContinue()) return { records, complete: false };
     if (!Array.isArray(page) || page.length > pageSize) {
       throw new Error('Paginierte Abfrage lieferte ein ungültiges Fenster.');
     }

@@ -1326,16 +1326,22 @@ function focusRequestedOutboundRecord() {
   const engagement = state.engagements?.find((item) => item.id === recordId);
   const researchRun = state.runs.find((item) => item.id === recordId);
   if (campaign) {
+    state.outreachView = false;
+    state.activeView = 'companies';
     state.selectedCampaignId = campaign.id;
     state.selectedCompanyId = '';
     state.selectedPipelineId = '';
     showStatus('Verknüpfte Kampagne geöffnet.');
   } else if (company) {
+    state.outreachView = false;
+    state.selectedPipelineId = '';
     state.selectedCampaignId = company.campaign_id;
     state.selectedCompanyId = company.id;
     state.activeView = 'companies';
     showStatus('Verknüpftes Unternehmen geöffnet.');
   } else if (pipelineItem) {
+    state.outreachView = false;
+    state.selectedCompanyId = '';
     state.selectedCampaignId = pipelineItem.campaign_id;
     state.selectedPipelineId = pipelineItem.id;
     state.activeView = 'pipeline';
@@ -1368,8 +1374,22 @@ function focusRequestedOutboundRecord() {
     showStatus(`Verknüpfter Outbound-Datensatz ${recordId} ist hier nicht verfügbar.`, true);
     return;
   }
-  state.requestedRecordId = '';
-  queueMicrotask(() => reportOutboundFocus('record_focused', recordId));
+  const mountCtx = state.ctx;
+  const focusedId = company?.id || recordId;
+  queueMicrotask(() => {
+    if (state.ctx !== mountCtx || state.requestedRecordId !== recordId) return;
+    const center = mountCtx?.host?.querySelector('.outbound-center');
+    const target = campaign ? center : [...(mountCtx?.host?.querySelectorAll('[data-context-record-id]') || [])]
+      .find((element) => element.dataset.contextRecordId === focusedId && element.getClientRects().length);
+    if (!center || center.dataset.renderedCampaignId !== state.selectedCampaignId
+      || !target || !target.getClientRects().length) {
+      showStatus('Verknüpfter Datensatz ist in der aktuellen Ansicht noch nicht sichtbar.', true);
+      return;
+    }
+    target.scrollIntoView?.({ block: 'nearest' });
+    state.requestedRecordId = '';
+    reportOutboundFocus('record_focused', recordId);
+  });
 }
 
 function reportOutboundFocus(status, recordId) {
