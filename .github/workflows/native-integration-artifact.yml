@@ -32,8 +32,8 @@ jobs:
       RAYON_NUM_THREADS: '2'
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: never
-      # Reviewed candidate including main ccde06f4d; full verification required.
-      REVIEWED_SOURCE_REVISION: '1a1ef3951fc1d6ed21859a2b544b86eebe0c07fa'
+      # Reviewed Threads and Crew shell integration including main bf94a9f3; full verification required.
+      REVIEWED_SOURCE_REVISION: 'fecec1d33d9533847d32e0cefa653cc432e8bfe1'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
