@@ -6546,9 +6546,15 @@ mod tests {
             "outbound_lead_generation_adapters",
             "outbound_lead_generation_research_policies",
         ] {
-            let version = schemas[collection]["version"]
-                .as_u64()
-                .context("reconciliation collection schema version")?;
+            // Sources and policies are app-owned v0 schemas, deliberately not
+            // part of the native core contract. Adapters remain core-owned.
+            let version = match collection {
+                "outbound_lead_generation_sources"
+                | "outbound_lead_generation_research_policies" => 0,
+                _ => schemas[collection]["version"]
+                    .as_u64()
+                    .context("reconciliation collection schema version")?,
+            };
             conn.execute_batch(&format!(
                 "CREATE TABLE ctox_business_os__{collection}__v{version} (
                     id TEXT PRIMARY KEY NOT NULL,
@@ -6559,6 +6565,18 @@ mod tests {
                 );"
             ))?;
         }
+        let tables = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(
+            tables,
+            [
+                "ctox_business_os__outbound_lead_generation_adapters__v2",
+                "ctox_business_os__outbound_lead_generation_research_policies__v0",
+                "ctox_business_os__outbound_lead_generation_sources__v0",
+            ]
+        );
         Ok(())
     }
 
@@ -6710,15 +6728,6 @@ mod tests {
         let root = temp.path();
         create_adapter_reconciliation_rxdb_fixture(root)?;
         let conn = open_store(root)?;
-        for collection in [
-            "outbound_lead_generation_sources",
-            "outbound_lead_generation_adapters",
-            "outbound_lead_generation_research_policies",
-        ] {
-            super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
-                root, collection,
-            )?;
-        }
         let now = 1_000;
         let source = serde_json::json!({
             "id": "example.com",
@@ -6855,14 +6864,6 @@ mod tests {
         let root = temp.path();
         create_adapter_reconciliation_rxdb_fixture(root)?;
         let conn = open_store(root)?;
-        for collection in [
-            "outbound_lead_generation_sources",
-            "outbound_lead_generation_adapters",
-        ] {
-            super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
-                root, collection,
-            )?;
-        }
         let now = 1_000;
         let source = |id: &str| {
             let target_key = id.replace('.', "-");
