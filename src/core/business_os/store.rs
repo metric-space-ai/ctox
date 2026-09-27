@@ -12117,6 +12117,10 @@ pub(super) fn upsert_rxdb_collection_record_cached(
     }
 }
 
+#[path = "store_control_projection_cache.rs"]
+mod control_projection_cache;
+pub(super) use control_projection_cache::with_control_projection_writers;
+
 pub(super) struct RxdbProjectionWriterCache {
     root: PathBuf,
     writers: HashMap<String, Option<RxdbCollectionWriter>>,
@@ -12343,6 +12347,8 @@ struct RxdbCollectionWriter {
     columns: HashSet<String>,
     demand_file_storage: bool,
     last_replication_lwt: i64,
+    database_key: BusinessOsStoreDbKey,
+    schema_version: i64,
 }
 
 impl RxdbCollectionWriter {
@@ -12363,12 +12369,18 @@ impl RxdbCollectionWriter {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             *counts.entry(key).or_insert(0) += 1;
         }
+        let database_key = business_os_store_db_key(&path);
         let conn = Connection::open(&path)?;
         conn.busy_timeout(Duration::from_secs(10))?;
+        // Capture table metadata and its generation in one read snapshot.
+        // No write transaction is held while this writer is idle.
+        let metadata_tx = conn.unchecked_transaction()?;
+        let schema_version: i64 =
+            metadata_tx.query_row("PRAGMA schema_version", [], |row| row.get(0))?;
         // A writer is opened once per collection, or retried after failed delivery.
         // Read the schema here: a table created in WAL need not change the file
         // stamp used by the general read cache during its 60-second lifetime.
-        let tables = rxdb_table_names_uncached(&conn)?;
+        let tables = rxdb_table_names_uncached(&metadata_tx)?;
         let expected = format!(
             "ctox_business_os__{collection}__v{}",
             rxdb_schema_version(collection)
@@ -12377,12 +12389,13 @@ impl RxdbCollectionWriter {
         else {
             return Ok(None);
         };
-        let columns = rxdb_table_columns_for_path(&conn, &path, &table)?;
-        let last_replication_lwt = conn.query_row(
+        let columns = rxdb_table_columns_for_path(&metadata_tx, &path, &table)?;
+        let last_replication_lwt = metadata_tx.query_row(
             &format!("SELECT COALESCE(MAX(lastWriteTime), 0) FROM {table}"),
             [],
             |row| row.get::<_, f64>(0),
         )? as i64;
+        metadata_tx.commit()?;
         Ok(Some(Self {
             conn,
             database_path: path,
@@ -12392,6 +12405,8 @@ impl RxdbCollectionWriter {
                 root, collection,
             ),
             last_replication_lwt,
+            database_key,
+            schema_version,
         }))
     }
 

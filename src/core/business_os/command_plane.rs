@@ -23,9 +23,9 @@ use super::store::{
     record_business_module_lifecycle_event, record_command, record_report_command,
     recoverable_background_control_claim_authorization, run_channel_command,
     rxdb_authenticated_session, rxdb_command_session, rxdb_verified_identity_email,
-    stored_rxdb_business_command_outcome, write_rxdb_failed_control_command_outcome,
-    BusinessCommand, BusinessOsReportMutation, ChannelCommandRequest, CommandOrigin,
-    RxdbProjectionWriterCache, APPSEC_MODULE_ID,
+    stored_rxdb_business_command_outcome, with_control_projection_writers,
+    write_rxdb_failed_control_command_outcome, BusinessCommand, BusinessOsReportMutation,
+    ChannelCommandRequest, CommandOrigin, RxdbProjectionWriterCache, APPSEC_MODULE_ID,
 };
 use super::store_appsec_commands::handle_appsec_business_command;
 use super::store_ats_commands::{handle_ats_active_command, handle_ats_mutating_command};
@@ -2079,38 +2079,41 @@ fn write_rxdb_control_command_state(
         attach_command_timing_to_result(&mut result);
         projection["result"] = result.clone();
     }
-    // Both writes belong to this command. Retain its writer until canonical
-    // completion instead of reopening and inspecting the entire RxDB schema.
-    let mut projection_writers = RxdbProjectionWriterCache::new(root);
-    let projection_started = command_timing_probe_requested(command).then(std::time::Instant::now);
-    projection_writers.upsert("business_commands", command_id, now, projection)?;
-    if let Some(started) = projection_started {
-        let sample = serde_json::json!({
-            "command_id": command_id,
-            "initial_rxdb_projection_ms": started.elapsed().as_secs_f64() * 1_000.0,
-        })
-        .to_string();
-        eprintln!("command_initial_projection_sample={sample}");
-    }
-    // Readers treat the canonical terminal transition as a completion barrier.
-    // Publish it only after the chat and all local/RxDB projections are durable.
-    if let Some(terminal_status) = canonical_terminal_status {
-        complete_and_project_business_control_command(
-            root,
-            command_id,
-            terminal_status,
-            &result,
-            (terminal_status == "failed")
-                .then(|| {
-                    result
-                        .get("error")
-                        .or_else(|| result.pointer("/outcome/stderr"))
-                        .and_then(Value::as_str)
-                })
-                .flatten(),
-            &mut projection_writers,
-        )?;
-    }
+    // Reuse only the bounded control writer; each write fences the actual DB
+    // identity/schema under its transaction. No authorization is cached.
+    with_control_projection_writers(root, |projection_writers| {
+        let projection_started =
+            command_timing_probe_requested(command).then(std::time::Instant::now);
+        projection_writers.upsert_control("business_commands", command_id, now, projection)?;
+        if let Some(started) = projection_started {
+            let sample = serde_json::json!({
+                "command_id": command_id,
+                "initial_rxdb_projection_ms": started.elapsed().as_secs_f64() * 1_000.0,
+            })
+            .to_string();
+            eprintln!("command_initial_projection_sample={sample}");
+        }
+        // Readers treat the canonical terminal transition as a completion barrier.
+        // Publish it only after the chat and all local/RxDB projections are durable.
+        if let Some(terminal_status) = canonical_terminal_status {
+            complete_and_project_business_control_command(
+                root,
+                command_id,
+                terminal_status,
+                &result,
+                (terminal_status == "failed")
+                    .then(|| {
+                        result
+                            .get("error")
+                            .or_else(|| result.pointer("/outcome/stderr"))
+                            .and_then(Value::as_str)
+                    })
+                    .flatten(),
+                projection_writers,
+            )?;
+        }
+        Ok(())
+    })?;
     Ok(serde_json::json!({
         "ok": true,
         "id": command_id,
@@ -2178,7 +2181,7 @@ pub(super) fn complete_and_project_business_control_command(
         .get("updated_at_ms")
         .and_then(Value::as_i64)
         .unwrap_or_else(|| now_ms() as i64);
-    projection_writers.upsert("business_commands", command_id, updated_at_ms, canonical)?;
+    projection_writers.upsert_control("business_commands", command_id, updated_at_ms, canonical)?;
     if let Some((((started, core_ms), read_ms), local_ms)) = completion_started
         .zip(core_completed_ms)
         .zip(canonical_read_ms)
@@ -3968,6 +3971,57 @@ mod tests {
         let persisted: Value = serde_json::from_str(&persisted)?;
         assert_eq!(persisted["execution_phase"], "terminal");
         assert_eq!(persisted["terminal_status"], "completed");
+        Ok(())
+    }
+
+    #[test]
+    fn control_projection_cache_reuses_writer_across_completed_commands() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let rxdb = create_repair_rxdb_tables(root.path())?;
+        super::super::store::reset_rxdb_collection_writer_open_count(
+            root.path(),
+            "business_commands",
+        );
+        for index in 0..3 {
+            let command_id = format!("control_cache_command_{index}");
+            let command = BusinessCommand {
+                origin: CommandOrigin::TrustedLocal,
+                id: Some(command_id.clone()),
+                module: "ctox".to_string(),
+                command_type: "ctox.provider_subscription.status".to_string(),
+                record_id: None,
+                payload: serde_json::json!({}),
+                client_context: serde_json::json!({ "actor": { "id": "local-dev" } }),
+            };
+            channels::claim_business_control_command(
+                root.path(),
+                business_command_core_claim(&command_id, &command)?,
+            )?;
+            write_rxdb_control_command_outcome(
+                root.path(),
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                serde_json::json!({ "ok": true }),
+            )?;
+            let persisted: String = rxdb.query_row(
+                "SELECT data FROM ctox_business_os__business_commands__v1 WHERE id = ?1",
+                [&command_id],
+                |row| row.get(0),
+            )?;
+            let persisted: Value = serde_json::from_str(&persisted)?;
+            assert_eq!(persisted["execution_phase"], "terminal");
+            assert_eq!(persisted["terminal_status"], "completed");
+        }
+        #[cfg(unix)]
+        assert_eq!(
+            super::super::store::rxdb_collection_writer_open_count(
+                root.path(),
+                "business_commands"
+            ),
+            1
+        );
         Ok(())
     }
 

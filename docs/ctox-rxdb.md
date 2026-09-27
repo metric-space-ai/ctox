@@ -1859,10 +1859,23 @@ a visible terminal status alone does not establish the canonical completion
 barrier. The full-host artifact retains those logs. These
 subphase diagnostics never change the seven marks or the total latency budget,
 and contain no token, identity claims or command payload.
-The command state writer retains one command-scoped RxDB projection writer
-through canonical completion. Core control completion attaches queue projection
-stores only after its transaction finds a linked task; unrelated control
-commands do not open them. The linked-task lookup, queue settlement and core
+On Unix, the command state writer retains at most one business_commands
+projection writer per executing thread, across commands and through canonical
+completion. Reuse requires the same root and canonical database device/inode;
+the next invocation discards it after 30 seconds or 64 uses. There is no idle
+transaction, retained authorization decision or business-record cache. Nested
+control execution uses an independent command-scoped writer; errors, missing
+collections and database replacement discard the cached entry. Other platforms
+keep command-scoped lifetime until their database key includes file identity.
+Each control projection validates schema generation inside an IMMEDIATE
+transaction before reading/merging/writing the current row. A changed generation
+reopens the writer and retries only that projection, at most twice; it never
+replays the command handler. Notifications follow commit. Schema discovery at
+open uses a single read snapshot. Other projection writes keep their existing
+lifetime and semantics. These guards are correctness boundaries, not evidence
+that the warm-command budget has passed.
+Core control completion attaches queue projection stores only after its
+transaction finds a linked task; unrelated control commands do not open them. The linked-task lookup, queue settlement and core
 completion remain in the same transaction. The full-host job runs the command
 plane and command transaction regressions before the unchanged browser budget.
 The linked-task regression opens both actual SQLite projection stores and
