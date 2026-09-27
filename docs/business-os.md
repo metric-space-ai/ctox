@@ -40,7 +40,7 @@ flowchart LR
   CTOX -. "join room" .-> Signaling
 ```
 
-1. **Signaling Pairing**: Both the browser client and the Rust daemon connect outbound to a configured signaling server (e.g. `wss://signaling.ctox.dev`, configured via `CTOX_BUSINESS_OS_SIGNALING_URLS` or persisted in `runtime/business-os-signaling-urls.json`) and join a deterministic pairing room (`ctox-business-os:...`) secured by a room password.
+1. **Signaling Pairing**: Both the browser client and the Rust daemon connect outbound to a configured signaling server (e.g. `wss://signaling.ctox.dev`, configured durably in `runtime/business-os-signaling-urls.json`; `CTOX_BUSINESS_OS_SIGNALING_URLS` overrides it for the current process only and is never written back) and join a deterministic pairing room (`ctox-business-os:...`) secured by a room password.
 2. **P2P Channel**: Once paired, a direct WebRTC channel carries all data sync.
 3. **Rust Core Authority**: The Rust daemon remains the authority for command execution and state-machine transitions. The browser writes command documents to RxDB; the daemon peer consumes, validates, and applies them to the authoritative SQLite database, and replicates the resulting projections back to the client.
 
