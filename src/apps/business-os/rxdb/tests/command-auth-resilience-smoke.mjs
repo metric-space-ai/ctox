@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import {
   createCommandBus,
+  getBusinessOsCapabilityToken,
   resetBusinessOsCapabilityTokenCacheForTests,
 } from '../../shared/command-bus.js';
 
@@ -156,6 +157,70 @@ try {
     }
     assert.equal(calls, 1, 'terminal rejection retains the negative cache');
     assert.equal(documents.size, 0, 'terminal rejection remains fail-closed');
+  }
+
+  // Reconfiguration can revoke a token before its wall-clock expiry. Only a
+  // handshake requests refresh; ordinary permission reads keep using the cache.
+  {
+    resetBusinessOsCapabilityTokenCacheForTests();
+    let calls = 0;
+    let releaseRefresh;
+    globalThis.fetch = async () => {
+      calls += 1;
+      if (calls === 1) return capabilityResponse('epoch-before-install');
+      await new Promise((resolve) => { releaseRefresh = resolve; });
+      return capabilityResponse('epoch-after-install');
+    };
+    assert.equal(await getBusinessOsCapabilityToken(), 'epoch-before-install');
+    assert.equal(await getBusinessOsCapabilityToken(), 'epoch-before-install');
+    assert.equal(calls, 1, 'local permission reads reuse the positive cache');
+    const handshake = getBusinessOsCapabilityToken({ refresh: true });
+    const concurrentHandshake = getBusinessOsCapabilityToken({ refresh: true });
+    const concurrentRead = getBusinessOsCapabilityToken();
+    assert.equal(calls, 2, 'handshakes coalesce one actual refresh');
+    releaseRefresh();
+    assert.deepEqual(await Promise.all([handshake, concurrentHandshake, concurrentRead]),
+      ['epoch-after-install', 'epoch-after-install', 'epoch-after-install']);
+    const { db, documents } = mockDb();
+    await createCommandBus({ db }).submit({
+      id: 'cmd-auth-after-reconfiguration', command_type: 'business_os.test',
+    });
+    assert.equal(documents.get('cmd-auth-after-reconfiguration').client_context.capability_token,
+      'epoch-after-install', 'subsequent commands use the renewed capability');
+    assert.equal(calls, 2, 'commands share the renewed cache');
+  }
+
+  // A refresh is not permission to retain a rejected old token or bypass the
+  // negative cache. No local command may be inserted with that old authority.
+  {
+    resetBusinessOsCapabilityTokenCacheForTests();
+    let calls = 0;
+    globalThis.fetch = async () => ++calls === 1
+      ? capabilityResponse('revoked-token') : terminalResponse(403);
+    await getBusinessOsCapabilityToken();
+    assert.equal(await getBusinessOsCapabilityToken({ refresh: true }), null);
+    assert.equal(await getBusinessOsCapabilityToken({ refresh: true }), null);
+    const { db, documents } = mockDb();
+    await assert.rejects(createCommandBus({ db }).submit({
+      id: 'cmd-auth-revoked', command_type: 'business_os.test',
+    }), (error) => error.code === 'auth_required' && error.transient === false);
+    assert.equal(calls, 2, 'forced refresh cannot bypass terminal rejection caching');
+    assert.equal(documents.size, 0);
+  }
+
+  // A host-provided device identity must not silently become the HTTP session
+  // identity on reconnect. The host remains responsible for renewing it.
+  {
+    resetBusinessOsCapabilityTokenCacheForTests();
+    globalThis.CTOX_DESKTOP_SESSION = {
+      capability_token: 'paired-device-token',
+      capability_expires_at_ms: Date.now() + 3_600_000,
+    };
+    globalThis.fetch = async () => { throw new Error('must not replace device identity'); };
+    assert.equal(await getBusinessOsCapabilityToken(), 'paired-device-token');
+    globalThis.CTOX_DESKTOP_SESSION.capability_token = 'renewed-paired-device-token';
+    assert.equal(await getBusinessOsCapabilityToken({ refresh: true }), 'renewed-paired-device-token');
+    clearInjectedCapabilitySessions();
   }
 } finally {
   globalThis.fetch = originalFetch;

@@ -17729,7 +17729,13 @@ fn issue_business_os_capability_token_until_with_identity(
     // deterministic baseline grants before reading capability_epoch; otherwise
     // native peer startup can insert grants moments later and invalidate the
     // freshly issued token before its first collection fetch.
+    // The same ordering applies to first-party catalog grants added when a
+    // newly installed app causes the native peer to reconfigure.
     ensure_default_sync_collection_grants(root)?;
+    ensure_first_party_catalog_collection_grants(
+        root,
+        &resolve_business_os_installed_app_root(root),
+    )?;
     let conn = open_store(root)?;
     seed_configured_business_users(&conn)?;
     let user = active_business_user(&conn, user_id.trim())?
@@ -28568,6 +28574,51 @@ pub(super) mod tests {
             root.path(),
             &token,
             "business_module_catalog",
+            BusinessOsPermission::DataRead
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn capability_token_survives_catalog_grants_after_install() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "catalog-operator", "chef")?;
+        let installed = root.path().join("runtime/business-os");
+        fs::create_dir_all(&installed)?;
+        let now = now_ms() as i64;
+        let (old_token, _) =
+            issue_business_os_capability_token(root.path(), "catalog-operator", now)?;
+        assert!(verify_capability_actor(root.path(), &old_token).is_some());
+
+        let module = installed.join("installed-modules/catalog-epoch-test");
+        fs::create_dir_all(&module)?;
+        fs::write(
+            module.join("module.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "id": "catalog-epoch-test",
+                "source": "catalog",
+                "collections": ["catalog_epoch_records"]
+            }))?,
+        )?;
+        let (fresh_token, _) =
+            issue_business_os_capability_token(root.path(), "catalog-operator", now)?;
+        assert_eq!(
+            ensure_first_party_catalog_collection_grants(root.path(), &installed)?,
+            0,
+            "peer bring-up must not revoke a freshly issued post-install token"
+        );
+        assert!(verify_capability_actor(root.path(), &old_token).is_none());
+        assert!(verify_capability_actor(root.path(), &fresh_token).is_some());
+        assert!(capability_allows_collection_permission(
+            root.path(),
+            &fresh_token,
+            "catalog_epoch_records",
+            BusinessOsPermission::DataRead
+        ));
+        assert!(!capability_allows_collection_permission(
+            root.path(),
+            &fresh_token,
+            "unrelated_catalog_records",
             BusinessOsPermission::DataRead
         ));
         Ok(())

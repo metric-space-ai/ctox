@@ -249,16 +249,18 @@ let capabilityTokenRequestInFlight = null;
 
 export async function getBusinessOsCapabilityToken({
   timeoutMs = COMMAND_CAPABILITY_TIMEOUT_MS,
+  refresh = false,
 } = {}) {
-  const result = await acquireBusinessOsCapabilityToken({ timeoutMs });
+  const result = await acquireBusinessOsCapabilityToken({ timeoutMs, refresh });
   return result.token;
 }
 
 async function acquireBusinessOsCapabilityToken({
   timeoutMs = COMMAND_CAPABILITY_TIMEOUT_MS,
+  refresh = false,
 } = {}) {
   const now = Date.now();
-  if (capabilityTokenCache.token && now < capabilityTokenCache.expiresAtMs - 60_000) {
+  if (!refresh && capabilityTokenCache.token && now < capabilityTokenCache.expiresAtMs - 60_000) {
     return capabilityAcquisitionResult({ token: capabilityTokenCache.token });
   }
   if (now < capabilityTokenCache.failureUntilMs) {
@@ -277,6 +279,13 @@ async function acquireBusinessOsCapabilityToken({
     };
     return capabilityAcquisitionResult({ token: capabilityTokenCache.token });
   }
+  // A native peer reconfiguration can change the grant epoch without expiring
+  // the token. A protocol handshake renews HTTP-session authority; concurrent
+  // reads/submits join that request instead of consuming the old positive cache.
+  // Device-injected authority above stays host-owned and negative caches remain
+  // in force. Renewal never authorizes a locally asserted identity.
+  capabilityTokenCache.token = null;
+  capabilityTokenCache.expiresAtMs = 0;
   if (!capabilityTokenRequestInFlight) {
     capabilityTokenRequestInFlight = requestBusinessOsCapabilityToken(timeoutMs);
   }

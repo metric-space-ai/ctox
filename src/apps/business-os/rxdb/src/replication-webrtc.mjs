@@ -1425,7 +1425,9 @@ class CtoxWebRtcReplicationState {
     // peer can bind this peer to its role for per-collection read authz. Best
     // effort — a missing/failed token simply omits the field (native treats it
     // as least privilege). Never let token resolution break the handshake.
-    const capabilityToken = await resolveCapabilityToken(this.ctox);
+    // Catalog/grant changes can revoke an unexpired token between connections.
+    // Refresh only at the protocol boundary, never on permission-digest reads.
+    const capabilityToken = await resolveCapabilityToken(this.ctox, { refresh: true });
     const deviceProof = await resolveDeviceProof(this.ctox, deviceProofNonce);
     return buildProtocolPayload({
       collectionName: this.collection.name,
@@ -2956,10 +2958,10 @@ function isStalePendingBusinessCommandConflict(row = {}) {
   return localStatus === 'pending_sync' && masterStatus && masterStatus !== 'pending_sync';
 }
 
-async function resolveCapabilityToken(ctox = {}) {
+async function resolveCapabilityToken(ctox = {}, options = {}) {
   if (typeof ctox?.capabilityTokenProvider === 'function') {
     try {
-      const token = await ctox.capabilityTokenProvider();
+      const token = await ctox.capabilityTokenProvider(options);
       return typeof token === 'string' && token.trim() ? token.trim() : null;
     } catch {
       return null;

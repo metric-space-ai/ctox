@@ -1616,6 +1616,17 @@ guard checks this entire chain: shared static assets can remain fresh in
 browser/CDN caches for four hours, so changing only the bundle URL inside
 an unchanged loader URL does not deliver the new runtime to existing users.
 
+**Capability renewal after native reconfiguration.** A WebRTC protocol
+handshake asks the capability provider for `{ refresh: true }`. The shell
+renews its HTTP-session capability through the existing authenticated
+control-plane endpoint; concurrent acquisitions share one request. Ordinary
+read-permission digest lookups keep using the cache. Terminal authorization
+failures retain their negative cache, and host-injected device tokens remain
+host-owned rather than being replaced with an HTTP-session identity. Before
+signing the epoch, native issuance materializes the same first-party catalog
+grants as peer bring-up. Role/grant revocation and all native verification
+remain enforced; refresh does not replay or rewrite an existing command.
+
 Cancelled replication transfers must re-check their lifetime after asynchronous
 storage reads, dirty-marker updates, and transport responses. A retired state
 must not issue another write through its detached peer or advance checkpoints;
