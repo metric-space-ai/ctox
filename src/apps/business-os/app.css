@@ -9151,7 +9151,7 @@ button.shell-window-header-meta:focus-visible,
     linear-gradient(180deg, var(--shell-v2-frame-left-joint) 0 var(--shell-v2-icon-frame-span), var(--shell-v2-frame-left-joint) 100%) top left / 6px 100% no-repeat border-box,
     linear-gradient(var(--shell-v2-frame-end), var(--shell-v2-frame-end)) top right / 6px 100% no-repeat border-box,
     linear-gradient(90deg, var(--shell-v2-frame-left-joint), var(--shell-v2-frame-end)) bottom left / 100% 6px no-repeat border-box !important;
-  box-shadow: 0 24px 72px rgb(0 0 0 / 0.62) !important;
+  box-shadow: var(--elev-window-shadow, 0 24px 72px rgb(0 0 0 / 0.62)) !important;
 }
 
 :root [data-workjet-category].shell-window[data-shell-contract="v2"] > .shell-window-header,
