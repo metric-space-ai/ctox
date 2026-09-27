@@ -11,7 +11,24 @@ function isConflictError(error) {
   return message.includes('conflict') || message.includes('already');
 }
 
-export async function ensureDesktopLayoutWithAuthority({
+export function isDatabaseClosingError(error) {
+  const message = String(error?.message || error || '');
+  return /IDBDatabase.*closing|database connection is closing/i.test(message);
+}
+
+// One boundary owns restart fallback for every local stage. Native read
+// rejection remains unknown authority inside the resolver and never seeds.
+export async function ensureDesktopLayoutWithAuthority(options) {
+  try {
+    return await resolveDesktopLayout(options);
+  } catch (error) {
+    if (!isDatabaseClosingError(error)) throw error;
+    options.onDatabaseClosing?.(error);
+    return options.defaultLayout();
+  }
+}
+
+async function resolveDesktopLayout({
   collection,
   defaultLayout,
   readNativeDocument,

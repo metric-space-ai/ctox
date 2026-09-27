@@ -66,8 +66,7 @@ fn projection_does_not_read_worker_messages_or_initialize_lcm() -> Result<()> {
         }),
     )?;
     let task_id = accepted["task_id"].as_str().expect("task");
-    let rxdb = store_projections::tests::create_repair_rxdb_tables(root.path())?;
-    rxdb.execute_batch("CREATE TABLE ctox_business_os__business_chats__v0(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER DEFAULT 0,lastWriteTime REAL DEFAULT 0,data TEXT NOT NULL)")?;
+    store_projections::tests::create_repair_rxdb_tables(root.path())?;
     let core = Connection::open(crate::paths::core_db(root.path()))?;
     core.execute(
         "UPDATE communication_routing_state SET attempt=1 WHERE message_key=?1",
@@ -112,8 +111,7 @@ fn retry_wait_delivers_interim_without_closing_gates_or_replaying_trimmed_status
             }),
         )?;
         let task_id = accepted["task_id"].as_str().expect("queue task");
-        let rxdb = store_projections::tests::create_repair_rxdb_tables(root.path())?;
-        rxdb.execute_batch("CREATE TABLE ctox_business_os__business_chats__v0(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER DEFAULT 0,lastWriteTime REAL DEFAULT 0,data TEXT NOT NULL);")?;
+        store_projections::tests::create_repair_rxdb_tables(root.path())?;
         channels::lease_queue_task(root.path(), task_id, "fixture-worker")?;
         for phase in ["leased", "running"] {
             channels::transition_business_command_for_task(
@@ -246,8 +244,7 @@ fn terminal_chats_are_delivered_once_and_skipped_afterwards() -> Result<()> {
         }),
     )?;
     let task_id = accepted["task_id"].as_str().expect("queue task");
-    let rxdb = store_projections::tests::create_repair_rxdb_tables(root.path())?;
-    rxdb.execute_batch("CREATE TABLE ctox_business_os__business_chats__v0(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER DEFAULT 0,lastWriteTime REAL DEFAULT 0,data TEXT NOT NULL);")?;
+    store_projections::tests::create_repair_rxdb_tables(root.path())?;
     channels::lease_queue_task(root.path(), task_id, "fixture-worker")?;
     for phase in ["leased", "running"] {
         channels::transition_business_command_for_task(

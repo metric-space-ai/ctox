@@ -53,6 +53,7 @@ export {
   KNOWLEDGE_TABLE_QUERY_META_BUDGET_BYTES,
   getConnectionHandlerSimplePeer,
   remoteSupportsQueryFetch,
+  remoteSupportsRowsFetch,
   replicateWebRTC,
   replicationWebRtcTestInternals,
 } from './replication-webrtc.mjs';
@@ -164,6 +165,8 @@ export {
   FILE_CHUNK_PRESENCE_KEY,
   createFileDemandLoader,
 } from './file-demand-loader.mjs';
+
+export { createRowsDemandLoader } from './rows-demand-loader.mjs';
 
 export { decodeChunk } from './chunk-decoder.mjs';
 export { buildBusinessOsAdvancedStatus } from './advanced-status-bridge.mjs';

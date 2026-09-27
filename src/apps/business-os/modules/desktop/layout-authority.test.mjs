@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { ensureDesktopLayoutWithAuthority } from './layout-authority.js';
+import { ensureDesktopLayoutWithAuthority } from './layout-authority.js?v=20260919-layout-boundary-v2';
 
 const defaultLayout = () => ({
   wallpaper_url: '',

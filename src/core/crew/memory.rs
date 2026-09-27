@@ -92,7 +92,40 @@ pub(crate) fn load_member_memory_from_conn(conn: &Connection, member_id: &str) -
     }
 }
 
+/// Strict read for execution-context restoration: absent documents mean no
+/// memory, but a broken store or dangling head must never become empty memory.
+pub(crate) fn load_member_memory_checked_from_conn(
+    conn: &Connection,
+    member_id: &str,
+) -> Result<MemberMemory> {
+    let read = |kind: &str| -> Result<(String, String)> {
+        let row: Option<(Option<String>, String)> = conn
+            .query_row(
+                "SELECT c.rendered_text,d.updated_at FROM continuity_documents d
+             LEFT JOIN continuity_commits c ON c.commit_id=d.head_commit_id
+             WHERE d.conversation_id=?1 AND d.kind=?2",
+                params![member_conversation_id(member_id), kind],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        match row {
+            None => Ok((String::new(), String::new())),
+            Some((text, updated)) => {
+                Ok((text.context("crew memory head is unavailable")?, updated))
+            }
+        }
+    };
+    let (anchors, anchors_updated) = read("anchors")?;
+    let (narrative, narrative_updated) = read("narrative")?;
+    Ok(MemberMemory {
+        anchors,
+        narrative,
+        updated_at: anchors_updated.max(narrative_updated),
+    })
+}
+
 /// Entries of a continuity document as one dense line each.
+
 fn entry_lines(
     content: &str,
     start_key: &str,

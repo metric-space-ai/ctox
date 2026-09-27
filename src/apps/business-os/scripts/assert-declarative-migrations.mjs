@@ -34,7 +34,7 @@ for (const id of readdirSync(modulesRoot).sort()) {
 // Native startup migrates these packaged collections transactionally. Every
 // intervening version must exist, even when an additive change needs no edits.
 const cockpit = documentsByModule.get('ctox');
-for (const name of ['business_commands', 'ctox_queue_tasks', 'ctox_runs']) {
+for (const name of ['business_commands', 'ctox_queue_tasks', 'ctox_runs', 'workjet_computers']) {
   const version = cockpit?.collections?.[name]?.version ?? 0;
   const strategies = executableDeclarativeMigrationStrategies(cockpit?.migration_strategies?.[name]);
   for (let step = 1; step <= version; step += 1) {

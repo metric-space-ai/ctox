@@ -94,7 +94,9 @@ pub(crate) fn finalize_attempt(
         chrono::DateTime::parse_from_rfc3339(finished)?.to_rfc3339()
     };
     let finished = finished.as_str();
-    let tx = conn.unchecked_transaction()?;
+    // Claim the writer before reading finalized_at. A deferred transaction can
+    // otherwise lose its WAL snapshot to another writer and fail on promotion.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
 
     let member: Option<String> = tx
         .query_row(
@@ -218,6 +220,85 @@ mod tests {
             "Antwort"
         );
     }
+    #[test]
+    fn finalization_reserves_writer_before_reading_attempt() -> Result<()> {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        use std::sync::{Arc, Mutex};
+
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("crew.sqlite");
+        let conn = Connection::open(&path)?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.execute_batch(
+            "CREATE TABLE communication_routing_state(message_key TEXT PRIMARY KEY,route_status TEXT,leased_at TEXT);
+             INSERT INTO communication_routing_state(message_key) VALUES ('existing');",
+        )?;
+        super::super::ensure_schema(&conn)?;
+        conn.execute(
+            "INSERT INTO crew_attempts(attempt_id,task_id,member_id,selected_at)
+             VALUES('concurrent','t','crew-milo','2026-09-09T12:00:00Z')",
+            [],
+        )?;
+        let writer = Connection::open(&path)?;
+        writer.busy_timeout(std::time::Duration::ZERO)?;
+        let observed = Arc::new(Mutex::new(None));
+        let observed_in_hook = Arc::clone(&observed);
+        // Preparing the first UPDATE happens after the finalized_at SELECT.
+        // Use the already-enabled SQLite hook to place a second writer exactly
+        // in that gap, without sleeps, scheduler races or production test hooks.
+        conn.authorizer(Some(move |context: AuthContext<'_>| {
+            if matches!(context.action, AuthAction::Update { table_name: "crew_attempts", .. }) {
+                let mut observed = observed_in_hook.lock().unwrap();
+                if observed.is_none() {
+                    *observed = Some(writer.execute(
+                        "UPDATE communication_routing_state SET route_status='raced' WHERE message_key='existing'",
+                        [],
+                    ));
+                }
+            }
+            Authorization::Allow
+        }));
+        let result = finalize_attempt(
+            &conn,
+            "concurrent",
+            "failed",
+            None,
+            "2026-09-09T12:01:00Z",
+            None,
+            "Failed",
+            None,
+        );
+        let observed = observed.lock().unwrap();
+        let writer_result = observed.as_ref().context("competing writer did not run")?;
+        assert_eq!(
+            writer_result
+                .as_ref()
+                .err()
+                .and_then(rusqlite::Error::sqlite_error_code),
+            Some(rusqlite::ErrorCode::DatabaseBusy),
+            "another writer must not commit between finalization's read and write",
+        );
+        result?;
+        finalize_attempt(
+            &conn,
+            "concurrent",
+            "failed",
+            None,
+            "2026-09-09T12:02:00Z",
+            None,
+            "Repeated",
+            None,
+        )?;
+        let (total, failed): (i64, i64) = conn.query_row(
+            "SELECT json_extract(stats_json,'$.tasks_total'),json_extract(stats_json,'$.failed')
+             FROM crew_members WHERE id='crew-milo'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!((total, failed), (1, 1));
+        Ok(())
+    }
+
     #[test]
     fn finalization_is_idempotent_deduplicated_and_requires_passed_review() {
         let conn = super::super::tests::fixture();
