@@ -125,8 +125,11 @@ The later engine-only run on `aea4d55e` passed all eight bounds/socket and
 real HTTP mirror/sparse-resume tests in 58.102 seconds. Adapter `c8279d353`
 passed all twelve HTTP and four peer-provider tests in 14.738 seconds, including
 distinct range contributions, corrupt assembly fallback and pause/reopen fetching
-only missing ranges. That run excludes the later job-authorization consumer
-changes and their three new tests. Root native integration and installed acceptance remain
+only missing ranges. Exact `0d0bc6ef5` subsequently passed all seven peer-provider
+tests, the existing HTTP offline-publication recovery test and the updated native
+binding compile check in one bounded 87.451-second run. The native check emitted
+only unused-item warnings from the isolated harness; it does not exercise a real
+daemon account-admission implementation. Full root integration and installed acceptance remain
 unverified. Directory durability is implemented for Unix only; Windows
 activation explicitly fails instead of issuing an unproven durable receipt.
 No platform is claimed accepted yet. Native command/progress projection through
