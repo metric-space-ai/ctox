@@ -438,6 +438,19 @@ missing tools, zero samples and oversized recordings are explicit unavailable
 results, not successful profiles. See
 [perf-record(1)](https://man7.org/linux/man-pages/man1/perf-record.1.html).
 
+Linux perf 6.8 may exit255 during initial task metadata synthesis if an owned
+thread disappears. The fixture allows one recovery only when that exact
+non-leader TID was observed under the same native PID before attachment,
+its task stat now returns ENOENT, the native start identity remains unchanged,
+and the terminal diagnostic names that TID within the first five seconds.
+Unknown ownership, permission errors, PID/TID reuse, a stop request or a second
+failure remain unavailable. Both attempts retain diagnostics and separate data
+files; the second attempt consumes the original monotonic30-second deadline
+and the remaining cumulative32-MiB recording budget. A failed attempt is never
+reported as a sample; recovery still requires a successful nonempty perf report.
+This addresses the owned-thread exit observed in FullHost36332356644 and does
+not rerun or alter its unprofiled product measurements.
+
 Artifacts under `ctox-host-proof/symbol-profile/` include tool version, fixture
 exit status, flat symbol report, recording and process identity metadata.
 The workflow requires a successful real Linux owned-child profiler check and

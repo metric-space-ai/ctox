@@ -406,3 +406,140 @@ test('verbose recorder diagnostics retain a bounded terminal error without accep
   assert.equal(result.recordStderrTruncated, true);
   assert.equal(reports, 0);
 });
+
+test('one evidenced startup thread exit recovers within the original time and byte budgets', async t => {
+  const native = child(), outputPrefix = temporary(t);
+  let spawned = 0, reports = 0;
+  const profile = startNativeSymbolProfile(native, { outputPrefix, delayMs: 0, durationMs: 120 }, {
+    platform: 'linux', readStart: () => 10,
+    readThreads: () => [{ tid: 4343, startedTicks: 11 }],
+    readThreadStart(pid, tid) {
+      assert.equal(pid, 4242); assert.equal(tid, 4343);
+      throw Object.assign(new Error('gone'), { code: 'ENOENT' });
+    },
+    spawnRecord(executable, args) {
+      spawned++;
+      const output = args[args.indexOf('--output') + 1];
+      const recorder = fakeRecorder(output, { exitSignal: 'SIGINT' });
+      if (spawned === 1) setTimeout(() => {
+        fs.writeFileSync(output, 'partial');
+        recorder.stderr.write("perf_event__synthesize_bpf_events: can't get next program: Operation not permitted\n");
+        recorder.stderr.write("couldn't open /proc/4343/status\n");
+        recorder.exitCode = 255; recorder.emit('close', 255, null);
+      }, 35);
+      else {
+        assert.equal(output, outputPrefix + '.retry-1.perf.data');
+        assert.equal(args[args.indexOf('--max-size') + 1], String(32 * 1024 * 1024 - 7));
+        assert.equal(args[args.indexOf('--pid') + 1], '4242');
+      }
+      return recorder;
+    },
+    async runReport(executable, args) {
+      reports++;
+      assert.equal(args.at(-1), outputPrefix + '.retry-1.perf.data');
+      return { stdout: '# Samples: 9 of event cpu-clock:u\nctox::work\n' };
+    },
+  });
+  const result = await profile.completion;
+  assert.equal(result.available, true); assert.equal(spawned, 2); assert.equal(reports, 1);
+  assert.equal(result.recordingDeadlineAtMs, result.startedAtMs + 120);
+  assert.ok(result.attempts[1].recordingBudgetMs < 100, 'recovery must consume the original budget');
+  assert.equal(result.attempts[0].code, 255);
+  assert.equal(result.attempts[0].recovery.tid, 4343);
+  assert.equal(result.attempts[0].recovery.threadStartedTicks, 11);
+  assert.match(result.attempts[0].stderr, /couldn't open/);
+  assert.equal(result.attempts[1].controlledInterrupt, true);
+  assert.equal(result.dataFile, 'native.retry-1.perf.data');
+  assert.equal(fs.readFileSync(outputPrefix + '.perf.data', 'utf8'), 'partial');
+  assert.deepEqual(JSON.parse(fs.readFileSync(outputPrefix + '.json', 'utf8')), result);
+  assert.equal(native.listenerCount('exit'), 0);
+});
+
+test('thread recovery rejects missing ownership, live or reused tasks, identity changes and inspection errors', async t => {
+  for (const cause of ['unknown-thread', 'leader', 'live-thread', 'reused-thread', 'permission', 'native-reused', 'native-exited', 'wrong-exit', 'wrong-terminal', 'perf-permission', 'truncated', 'snapshot-error']) {
+    const native = child(), outputPrefix = temporary(t);
+    let failed = false, spawned = 0;
+    const tid = cause === 'leader' ? 4242 : 4343;
+    const profile = startNativeSymbolProfile(native, { outputPrefix, delayMs: 0, durationMs: 100 }, {
+      platform: 'linux', readStart: () => failed && cause === 'native-reused' ? 20 : 10,
+      readThreads() {
+        if (cause === 'snapshot-error') throw Object.assign(new Error('denied'), { code: 'EACCES' });
+        return cause === 'unknown-thread' ? [] : [{ tid, startedTicks: 11 }];
+      },
+      readThreadStart() {
+        if (cause === 'live-thread') return 11;
+        if (cause === 'reused-thread') return 22;
+        throw Object.assign(new Error('inspection failed'), { code: cause === 'permission' ? 'EACCES' : 'ENOENT' });
+      },
+      spawnRecord(executable, args) {
+        spawned++;
+        const recorder = fakeRecorder(args.at(-1));
+        setImmediate(() => {
+          failed = true;
+          if (cause === 'native-exited') native.exitCode = 0;
+          if (cause === 'perf-permission') recorder.stderr.write('perf_event_open failed: Permission denied\n');
+          if (cause === 'truncated') recorder.stderr.write('x'.repeat(20000) + '\n');
+          recorder.stderr.write(`couldn't open /proc/${tid}/status\n`);
+          if (cause === 'wrong-terminal') recorder.stderr.write('perf_event_open failed: Permission denied\n');
+          const code = cause === 'wrong-exit' ? 1 : 255;
+          recorder.exitCode = code; recorder.emit('close', code, null);
+        });
+        return recorder;
+      },
+      async runReport() { assert.fail('failed recording cannot become valid'); },
+    });
+    const result = await profile.completion;
+    assert.equal(result.available, false, cause);
+    assert.equal(result.reason, 'perf-record-failed', cause);
+    assert.equal(spawned, 1, cause);
+    assert.equal(result.attempts.length, 1, cause);
+  }
+});
+
+test('a second vanished thread is terminal and preserves both failed attempts', async t => {
+  const outputPrefix = temporary(t);
+  let spawned = 0;
+  const { completion } = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 100 }, {
+    platform: 'linux', readStart: () => 10,
+    readThreads: () => [{ tid: 4343, startedTicks: 11 }],
+    readThreadStart() { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); },
+    spawnRecord(executable, args) {
+      spawned++;
+      const recorder = fakeRecorder(args.at(-1));
+      setImmediate(() => {
+        fs.writeFileSync(args.at(-1), 'partial-' + spawned);
+        recorder.stderr.write("couldn't open /proc/4343/status\n");
+        recorder.exitCode = 255; recorder.emit('close', 255, null);
+      });
+      return recorder;
+    },
+    async runReport() { assert.fail('no valid recording'); },
+  });
+  const result = await completion;
+  assert.equal(result.reason, 'perf-record-failed');
+  assert.equal(result.available, false); assert.equal(spawned, 2);
+  assert.deepEqual(result.attempts.map(attempt => attempt.code), [255, 255]);
+  assert.equal(fs.readFileSync(outputPrefix + '.perf.data', 'utf8'), 'partial-1');
+  assert.equal(fs.readFileSync(outputPrefix + '.retry-1.perf.data', 'utf8'), 'partial-2');
+});
+
+test('a requested stop cannot trigger thread-exit recovery', async t => {
+  const outputPrefix = temporary(t);
+  let spawned = 0;
+  const { completion } = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 5 }, {
+    platform: 'linux', readStart: () => 10,
+    readThreads: () => [{ tid: 4343, startedTicks: 11 }],
+    readThreadStart() { assert.fail('must not inspect for recovery after stopping'); },
+    spawnRecord(executable, args) {
+      spawned++;
+      const recorder = fakeRecorder(args.at(-1), { exitCode: 255 });
+      recorder.stderr.write("couldn't open /proc/4343/status\n");
+      return recorder;
+    },
+    async runReport() { assert.fail('stopped failure is not a sample'); },
+  });
+  const result = await completion;
+  assert.equal(result.reason, 'perf-record-failed');
+  assert.equal(result.available, false); assert.equal(spawned, 1);
+  assert.equal(result.stopReason, 'duration-limit');
+});
