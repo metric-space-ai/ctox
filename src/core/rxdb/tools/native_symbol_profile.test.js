@@ -199,6 +199,52 @@ test('recording failures retain bounded stdout and stderr without accepting data
   assert.equal(result.recordStderrTruncated, true);
 });
 
+test('report failures preserve exit, signal, timing and bounded diagnostics', async t => {
+  for (const timedOut of [false, true]) {
+    const outputPrefix = temporary(t);
+    const profile = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 5 }, {
+      platform: 'linux', readStart: () => 10,
+      spawnRecord: () => fakeRecorder(outputPrefix + '.perf.data'),
+      async runReport(executable, args, options) {
+        assert.equal(options.timeout, 5000);
+        if (timedOut) {
+          // Exercise Node's actual execFile timeout error shape, without perf
+          // or a native host. The owned child is terminated by execFile.
+          const { execFile } = require('node:child_process');
+          const { promisify } = require('node:util');
+          return promisify(execFile)(process.execPath,
+            ['-e', 'setInterval(() => {}, 1000)'], { timeout: 40 });
+        }
+        throw Object.assign(new Error('report failed'), {
+          code: 2, signal: null, killed: false,
+          stdout: '# Samples: 12\n' + 'x'.repeat(20000),
+          stderr: 'y'.repeat(20000) + 'report terminal error',
+        });
+      },
+    });
+    const result = await profile.completion;
+    assert.equal(result.reason, 'perf-report-failed');
+    assert.equal(result.available, false);
+    assert.equal(result.reportTimeoutMs, 5000);
+    assert.ok(result.reportStartedAtMs >= result.recordStoppedAtMs);
+    assert.ok(result.reportFinishedAtMs >= result.reportStartedAtMs);
+    assert.equal(result.reportDurationMs, result.reportFinishedAtMs - result.reportStartedAtMs);
+    assert.equal(result.reportKilled, timedOut);
+    assert.equal(result.reportSignal, timedOut ? 'SIGTERM' : null);
+    assert.equal(result.reportCode, timedOut ? null : 2);
+    if (!timedOut) {
+      assert.equal(result.reportStdout.length, 16384);
+      assert.equal(result.reportStderr.length, 16384);
+      assert.equal(result.reportStderrTail.length, 16384);
+      assert.ok(result.reportStderrTail.endsWith('report terminal error'));
+      assert.equal(result.reportStdoutTruncated, true);
+      assert.equal(result.reportStderrTruncated, true);
+    }
+    assert.deepEqual(JSON.parse(fs.readFileSync(outputPrefix + '.json', 'utf8')), result);
+    assert.equal(fs.existsSync(outputPrefix + '.report.txt'), false);
+  }
+});
+
 test('empty sample reports are explicitly unavailable', async t => {
   const outputPrefix = temporary(t);
   const profile = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 5 }, {

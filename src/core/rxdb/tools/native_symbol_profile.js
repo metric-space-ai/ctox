@@ -122,9 +122,14 @@ function startNativeSymbolProfile(child, {
           if (size === 0 || size > 32 * 1024 * 1024) {
             finish('profile-size-out-of-bounds', { bytes: size }); return;
           }
+          metadata.reportTimeoutMs = 5000;
+          metadata.reportStartedAtMs = Date.now();
+          write();
           const report = await runReport(perfExecutable,
             ['report', '--stdio', '--no-children', '--percent-limit', '0.5', '--input', dataPath],
-            { encoding: 'utf8', timeout: 5000, maxBuffer: 2 * 1024 * 1024, env: perfEnvironment });
+            { encoding: 'utf8', timeout: metadata.reportTimeoutMs, maxBuffer: 2 * 1024 * 1024, env: perfEnvironment });
+          metadata.reportFinishedAtMs = Date.now();
+          metadata.reportDurationMs = metadata.reportFinishedAtMs - metadata.reportStartedAtMs;
           fs.writeFileSync(reportPath, report.stdout);
           // A readable report without samples is not a successful CPU profile.
           const samples = /# Samples:\s+([\d.,]+[KMG]?)/i.exec(report.stdout)?.[1] || null;
@@ -134,7 +139,26 @@ function startNativeSymbolProfile(child, {
             reportFile: path.basename(reportPath), dataFile: path.basename(dataPath),
           });
         } catch (error) {
-          finish('perf-report-failed', { error: error.code || error.message });
+          // Preserve the subprocess result instead of collapsing a timeout,
+          // signal or report exit into the same unstructured command message.
+          // Partial output is diagnostic only and can never establish samples.
+          const reportStdout = String(error.stdout || '');
+          const reportStderr = String(error.stderr || '');
+          const reportFinishedAtMs = Date.now();
+          finish('perf-report-failed', {
+            error: error.code ?? error.message,
+            reportCode: error.code ?? null,
+            reportSignal: error.signal ?? null,
+            reportKilled: error.killed === true,
+            reportFinishedAtMs,
+            reportDurationMs: metadata.reportStartedAtMs === undefined ? null
+              : reportFinishedAtMs - metadata.reportStartedAtMs,
+            reportStdout: reportStdout.slice(0, 16384),
+            reportStdoutTruncated: reportStdout.length > 16384,
+            reportStderr: reportStderr.slice(0, 16384),
+            reportStderrTruncated: reportStderr.length > 16384,
+            reportStderrTail: reportStderr.length > 16384 ? reportStderr.slice(-16384) : '',
+          });
         }
       });
       durationTimer = setTimeout(() => { void stop('duration-limit'); }, durationMs);
