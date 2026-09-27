@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260927-shell-v2-capability-epoch-v413';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260927-shell-v2-peer-authority-v414';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
