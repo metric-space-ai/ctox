@@ -114,6 +114,7 @@ This check prevents "unanchored proactive resends" — the reviewer treats those
 - Reuse the existing email thread when the topic matches.
 - Start a new thread only when the subject materially changes.
 - When replying to an inbound email, preserve the thread subject. Do not send `(no subject)` or invent a fresh subject for an existing owner thread.
+- The reply you hand to the reviewed send path is the message body only. Subject, recipients and CC come from the thread and job metadata; never put `Subject:`, `Betreff:`, `To:`, `An:`, `Cc:` or `Bcc:` lines into the body. The communication review rejects such a body, and repeating it burns the retry budget (THESEN 28.09.2026: two attempts lost to `Subject: Re: …` as the first body line).
 - If the prior thread or recent owner communication already contains promises, partial work, blockers, approvals, handoffs, or open questions, explicitly account for them in the new reply instead of answering as if the topic started now.
 - Use email for durable summaries, approvals, decisions, handoffs, and anything the owner may need to revisit later.
 - If the incoming email concerns a critical, risky, or urgent operational topic, reply by email that the owner must continue in the local TUI before CTOX performs the action.
