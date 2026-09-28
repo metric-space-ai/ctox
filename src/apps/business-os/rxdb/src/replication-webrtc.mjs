@@ -1624,8 +1624,18 @@ class CtoxWebRtcReplicationState {
       const response = await this.requestMasterChangesSince(activePeerId, checkpoint, batchSize);
       if (this.cancelled) return;
       activePeerId = response.peerId || activePeerId;
-      const result = response.result || {};
-      const documents = Array.isArray(result?.documents) ? result.documents : [];
+      const result = response.result;
+      // An absent or malformed master reply is not an empty collection. Leave
+      // the pull checkpoint and first-pull readiness untouched for retry.
+      if (!result || typeof result !== 'object' || !Array.isArray(result.documents)) {
+        const error = new Error(`masterChangesSince returned no documents array for ${this.collection.name}`);
+        error.code = 'ctox_replication_invalid_master_changes_result';
+        error.phase = 'replication-io';
+        error.direction = 'pull';
+        error.collection = this.collection.name;
+        throw error;
+      }
+      const documents = result.documents;
       if (documents.length) {
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId),
@@ -1835,7 +1845,7 @@ class CtoxWebRtcReplicationState {
           throw replicationErrorResultError(masterWriteResult, this.collection.name);
         }
         const conflicts = masterWriteResult;
-        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
         if (!conflictMap.size) {
           rows = [];
           break;
@@ -1915,7 +1925,7 @@ class CtoxWebRtcReplicationState {
         }
         throw replicationErrorResultError(conflicts, this.collection.name);
       }
-      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
       if (!conflictMap.size) {
         rows = [];
         break;
@@ -2826,9 +2836,19 @@ function hashString(value) {
   return (hash >>> 0).toString(36);
 }
 
-function documentsByPrimaryPath(documents = [], primaryPath = 'id') {
+function documentsByPrimaryPath(documents, primaryPath = 'id', collection = '') {
+  // Only a conflicts ARRAY acknowledges masterWrite. A missing or malformed
+  // reply must leave the local push checkpoint behind the pending document.
+  if (!Array.isArray(documents)) {
+    const error = new Error(`masterWrite returned no conflict array for ${collection || 'unknown collection'}`);
+    error.code = 'ctox_replication_invalid_master_write_result';
+    error.phase = 'replication-io';
+    error.direction = 'push';
+    error.collection = collection;
+    throw error;
+  }
   const map = new Map();
-  for (const doc of Array.isArray(documents) ? documents : []) {
+  for (const doc of documents) {
     const id = primaryValue(doc, primaryPath);
     if (id) map.set(id, doc);
   }
