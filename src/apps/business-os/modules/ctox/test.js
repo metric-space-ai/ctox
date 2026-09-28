@@ -196,13 +196,19 @@ test('Harness diagram renders complete nodes with and without a selected task', 
   const working = { id: 'flow-render-task', status: 'running', executionPhase: 'running' };
   for (const selectedTask of [null, working]) {
     const html = flowSvg(model, model.nodeMap.get('queued'), trace, selectedTask, { lang: 'en' });
-    assert.match(html, /class="ctox-flow-diagram"/);
+    assert.match(html, selectedTask ? /class="ctox-flow-diagram has-focus"/ : /class="ctox-flow-diagram"/);
     assert.equal((html.match(/class="ctox-flow-node-g /g) || []).length, model.nodes.length);
     if (selectedTask) {
       assert.match(html, /class="ctox-flow-node-g [^"]*is-crew-hier[^>]*\sdata-node-id="running"/);
       assert.equal((html.match(/is-crew-hier/g) || []).length, 1);
+      // The map reads as the task's route: the steps it can take next start
+      // exactly where it stands, and their target stations stand out.
+      const nextTargets = model.edges.filter((edge) => edge.from === 'running').map((edge) => edge.to);
+      assert.ok(nextTargets.length > 0);
+      assert.equal((html.match(/class="ctox-flow-edge\s+is-next/g) || []).length, nextTargets.length);
+      for (const id of nextTargets) assert.match(html, new RegExp(`class="ctox-flow-node-g [^"]*is-next[^>]*\\sdata-node-id="${id}"`));
     } else {
-      assert.doesNotMatch(html, /is-crew-hier/);
+      assert.doesNotMatch(html, /is-crew-hier|has-focus|is-next/);
     }
   }
 });

@@ -3563,3 +3563,22 @@ test('completed tracking keeps syncing until an actual answer arrives', () => {
   chat.messages.push({ role: 'ctox', kind: 'reply', text: '12 minus 5 ergibt 7.', commandId: 'cmd-final', taskId: 'queue-final', status: 'completed' });
   assert.equal(hooks.hasTrackedMessagesNeedingSync(state), false);
 });
+
+// The crew bar tells at a glance how much each member is doing (Owner
+// 28.09.2026: the bar must answer "who of my crew does what").
+test('crew workload counts each member\'s running tasks from the queue', async () => {
+  const { crewWorkloadFromTasks } = await import('./business-chat.js');
+  const load = crewWorkloadFromTasks([
+    { status: 'running', crew_member_id: 'crew-lumi' },
+    { status: 'review', crew_member_id: 'crew-lumi' },
+    { status: 'leased', crew_member_id: 'crew-pico' },
+    { status: 'handled', crew_member_id: 'crew-pico' },
+    { status: 'failed', crew_member_id: 'crew-milo' },
+    { status: 'running', crew_member_id: '' },
+    { status: 'running' },
+  ]);
+  assert.equal(load.get('crew-lumi'), 2);
+  assert.equal(load.get('crew-pico'), 1);
+  assert.equal(load.has('crew-milo'), false, 'finished or failed work is not workload');
+  assert.equal(load.size, 2, 'unassigned work belongs to nobody\'s seat');
+});
