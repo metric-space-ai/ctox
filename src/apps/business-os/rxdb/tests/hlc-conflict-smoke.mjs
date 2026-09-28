@@ -90,13 +90,13 @@ assert(hybridLogicalClockStatus().nativeClockOffsetMs === 60_000,
 const rejectedPeerB = setHybridLogicalClockTimeAnchorFromRoundTrip(
   sampleStart + 60_100, sampleStart, sampleStart + 20_000, 20_000, peerB,
 );
-assert(rejectedPeerB.nativeClockOffsetMs === 0 && rejectedPeerB.nativeClockSource === null,
+assert(rejectedPeerB.nativeClockOffsetMs === 0,
   'a rejected new-peer sample must not reuse the previous peer offset');
 setHybridLogicalClockTimeAnchorFromRoundTrip(
-  sampleStart + 100, sampleStart, sampleStart + 200, 200, peerB,
+  sampleStart + 30_100, sampleStart, sampleStart + 200, 200, peerB,
 );
 clearHybridLogicalClockTimeAnchor(peerA);
-assert(hybridLogicalClockStatus().nativeClockSource === peerB,
+assert(hybridLogicalClockStatus().nativeClockOffsetMs === 30_000,
   'closing an old peer must not erase the replacement peer anchor');
 clearHybridLogicalClockTimeAnchor(peerB);
 

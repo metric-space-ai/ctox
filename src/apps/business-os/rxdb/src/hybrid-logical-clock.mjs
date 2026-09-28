@@ -53,7 +53,6 @@ export function hybridLogicalClockStatus() {
     clockSkewDetected,
     nativeClockOffsetMs,
     nativeClockObservedAtMs,
-    nativeClockSource,
   };
 }
 
