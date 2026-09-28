@@ -599,7 +599,15 @@ mailQa: try {
   const buttonBlock = editorFrame.locator('.ctox-frame-block-item')
     .filter({ hasText: 'Button' })
     .locator('[draggable="true"]');
-  await buttonBlock.dragTo(editorFrame.locator('.email-block').last());
+  const dropBlock = editorFrame.locator('.email-block').last();
+  const sourceBox = await buttonBlock.boundingBox();
+  const targetBox = await dropBlock.boundingBox();
+  assert.ok(sourceBox && targetBox, 'Button and email canvas must be visible for drag');
+  await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + targetBox.height / 2, { steps: 18 });
+  await page.waitForTimeout(80);
+  await page.mouse.up();
   await editorFrame.locator('.email-block').nth(blockCountBeforeDrag).waitFor({ state: 'attached' });
   await page.locator('[data-mail-editor-open-panel="design"]').click();
   await editorFrame.getByRole('tab', { name: 'Element', exact: true }).waitFor({ state: 'visible' });
@@ -988,7 +996,8 @@ mailQa: try {
     if (state.editorFrames) {
       const frame = page.frameLocator('[data-mail-easy-email-host] iframe');
       console.error('[mail QA] editor contenteditables', JSON.stringify(await frame.locator('[contenteditable="true"]').allTextContents()));
-      console.error('[mail QA] editor body', (await frame.locator('body').textContent())?.slice(0, 500));
+      console.error('[mail QA] editor blocks', await frame.locator('.email-block').count());
+      console.error('[mail QA] editor body', (await frame.locator('body').first().textContent())?.slice(0, 500));
     }
   } catch (diagnosticError) {
     console.error('[mail QA] state capture failed', diagnosticError);
