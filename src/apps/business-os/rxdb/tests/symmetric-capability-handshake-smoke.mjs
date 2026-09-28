@@ -1,6 +1,10 @@
 import { replicationWebRtcTestInternals } from '../src/replication-webrtc.mjs';
 import { CtoxWebRtcNativePeer } from '../src/webrtc-native.mjs';
-import { hybridLogicalClockStatus, setHybridLogicalClockTimeAnchor } from '../src/hybrid-logical-clock.mjs';
+import {
+  clearHybridLogicalClockTimeAnchor,
+  hybridLogicalClockStatus,
+  setHybridLogicalClockTimeAnchor,
+} from '../src/hybrid-logical-clock.mjs';
 import { CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_RXDB_PROTOCOL } from '../src/protocol-contract.generated.mjs';
 import { webcrypto } from 'node:crypto';
 
@@ -80,6 +84,47 @@ assert(await shared.negotiatePeer('native-1') === null,
   'a connection replaced during authorization must not complete negotiation');
 assert(hybridLogicalClockStatus().nativeClockOffsetMs === 60_000,
   'a replaced peer generation must not change the clock anchor');
+
+// The native response can be prompt even when symmetric authorization waits
+// much longer. Anchor the clock to the captured response round trip, not the
+// time at which waitForRequest finally permits the handshake to finish.
+const delayedShared = new SharedRoomPeer({
+  key: 'post-response-delay-test',
+  signalingUrl: 'wss://signaling.invalid',
+  room: 'room-post-response-delay',
+  expectedNativePeerId: 'native-1',
+});
+delayedShared.representativeCollection = () => ({ collection: 'records' });
+const originalDateNow = Date.now;
+const responseTimeMs = 1_722_000_000_000;
+let simulatedNowMs = responseTimeMs;
+let authorizationWaited = false;
+try {
+  Date.now = () => simulatedNowMs;
+  delayedShared.peer = {
+    connections: new Map([['native-1', openConnection()]]),
+    async protocolPayload() { return protocol; },
+    async request() {
+      return { ...protocol, peerSession: { role: 'ctox_instance' }, nativeTimeMs: responseTimeMs + 30_000 };
+    },
+    async waitForRequest() {
+      simulatedNowMs += 16 * 60 * 1000;
+      authorizationWaited = true;
+    },
+    send() { return true; },
+  };
+  assert((await delayedShared.negotiatePeer('native-1'))?.peerId === 'native-1',
+    'the authorized peer must complete negotiation after the delayed token observation');
+  const anchored = hybridLogicalClockStatus();
+  assert(authorizationWaited, 'the post-response authorization wait must be exercised');
+  assert(Math.abs(anchored.nativeClockOffsetMs - 30_000) < 1_000,
+    'a 16-minute post-response wait must not become native clock skew');
+  assert(Math.abs(anchored.nativeClockObservedAtMs - responseTimeMs) < 1_000,
+    'the anchor must retain the protocol response midpoint, not the later authorization time');
+} finally {
+  Date.now = originalDateNow;
+  clearHybridLogicalClockTimeAnchor(delayedShared.clockAnchorSource);
+}
 
 const peer = new CtoxWebRtcNativePeer({
   signalingUrl: 'wss://signaling.invalid',
