@@ -92,6 +92,7 @@ async function collect(page, selected) {
       chatHasCreatureCopy: Boolean(document.querySelector('[data-chat-creature] .ctox-crew-creature')),
       miloBeings: Array.from(document.querySelectorAll('.ctox-flow-creature-slot .ctox-crew-creature')).filter((node) => node.style.getPropertyValue('--crew-color') === '#00aa9a').length,
       miloCount: document.querySelector('[data-crew-pos-key="member:crew:milo"]')?.dataset.crewCount || '',
+      seatAway: Object.fromEntries(Array.from(document.querySelectorAll('#bar [data-seat]')).map((seat) => [seat.dataset.seat, seat.querySelector('.ctox-crew-creature')?.dataset.crewAway === 'true'])),
       visibilityState: document.visibilityState,
       motionRunning: Boolean(window.__ctoxCrewMotionEngine?.running),
     };
@@ -138,6 +139,12 @@ function assertResult(result) {
   if (result.fullTaskId !== 'queue:system::task_1234567890abcdef' || !result.visibleTaskId.startsWith('…')) throw new Error('chat task id deep-link is missing');
   if (!result.identityColor || result.identityColor !== result.chatIdentityColor) throw new Error('chat and map do not share the same creature identity');
   if (result.chatHasCreatureCopy) throw new Error('a chat names its member with a reference badge, never a creature copy');
+  // One living body per member per screen: whoever stands on the map shows
+  // only its still portrait in the crew bar; everyone else lives in the bar.
+  const onMap = { 'crew:milo': true, 'crew:nori': result.selected === 'task-waiting', 'crew:tavi': result.selected === 'task-failed' };
+  for (const [member, expected] of Object.entries(onMap)) {
+    if (result.seatAway[member] !== expected) throw new Error(`crew bar seat of ${member} must ${expected ? 'show the portrait while its body is on the map' : 'keep the living body'}: ${JSON.stringify(result.seatAway)}`);
+  }
   if (result.miloBeings !== 1 || result.miloCount !== '2') throw new Error(`a member with two running tasks must stand on the map exactly once with a count of 2: ${JSON.stringify({ beings: result.miloBeings, count: result.miloCount })}`);
 }
 
@@ -168,9 +175,9 @@ function harnessHtml() {
   return `<!doctype html><html lang="de"><head><meta charset="utf-8"><style>
     :root{--background:#080d10;--surface:#10181d;--text:#dce7ea;--muted:#718187;--accent:#1685ee;--success:#34a26f;--danger:#e75c62;--ctox-flow-node-fill:#10181d;--ctox-flow-node-stroke:#314047;--ctox-flow-lane-fill:#0b1216;--ctox-flow-lane-stroke:#213039;--ctox-flow-muted-fill:#718187;--ctox-flow-edge:#314047}
     body{margin:0;background:var(--background);color:var(--text);font-family:system-ui}main{width:1200px;margin:40px auto}svg{width:100%;height:660px}.proof-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.demo-node{fill:var(--surface);stroke:#314047}.demo-label{fill:var(--text);font:700 18px system-ui;text-anchor:middle}
-  </style><link rel="stylesheet" href="/src/apps/business-os/modules/ctox/index.css"></head><body><main><svg viewBox="0 0 1000 620"><g><rect class="demo-node" x="110" y="202" width="140" height="76" rx="12"/><text class="demo-label" x="180" y="246">Queue</text><rect class="demo-node" x="430" y="202" width="140" height="76" rx="12"/><text class="demo-label" x="500" y="246">Working</text><rect class="demo-node" x="750" y="402" width="140" height="76" rx="12"/><text class="demo-label" x="820" y="446">Failed</text></g><g id="crew"></g></svg><div class="proof-only" id="chat"></div><div class="proof-only" data-chat-creature id="chat-creature"></div></main><script type="module">
+  </style><link rel="stylesheet" href="/src/apps/business-os/modules/ctox/index.css"></head><body><main><svg viewBox="0 0 1000 620"><g><rect class="demo-node" x="110" y="202" width="140" height="76" rx="12"/><text class="demo-label" x="180" y="246">Queue</text><rect class="demo-node" x="430" y="202" width="140" height="76" rx="12"/><text class="demo-label" x="500" y="246">Working</text><rect class="demo-node" x="750" y="402" width="140" height="76" rx="12"/><text class="demo-label" x="820" y="446">Failed</text></g><g id="crew"></g></svg><div class="proof-only" id="chat"></div><div class="proof-only" data-chat-creature id="chat-creature"></div><div id="bar" style="display:flex;gap:6px;height:32px"></div></main><script type="module">
     import { __ctoxTestHooks } from '/src/apps/business-os/modules/ctox/index.js?v=20260831-crew-telemetry-v331';
-    import { __businessChatTestInternals, crewReferenceHtml, syncCrewProceduralMotion } from '/src/apps/business-os/shared/business-chat.js?v=20260831-crew-telemetry-v331';
+    import { __businessChatTestInternals, crewReferenceHtml, crewCreatureHtml, syncCrewProceduralMotion } from '/src/apps/business-os/shared/business-chat.js?v=20260831-crew-telemetry-v331';
     const crewMembers=[{id:'crew:milo',name:'Milo',shape:'blob',color:'#00aa9a',archived:false},{id:'crew:nori',name:'Nori',shape:'square',color:'#7c6df2',archived:false},{id:'crew:tavi',name:'Tavi',shape:'triangle',color:'#e97255',archived:false}];
     const working={id:'task-working',commandId:'cmd-working',crewMemberId:'crew:milo',title:'Working task',status:'running',executionPhase:'running',executionProgress:{version:1,revision:1,phase:'work',percent:45,current_step:2,completed_steps:1,total_steps:2,steps:[{position:1,label:'Collect',status:'completed',activity_turns:1},{position:2,label:'Verify',status:'in_progress',activity_turns:1}],review:{status:'pending'},activity_turns:{total:2,thinking:1,tools:1,last_kind:'tool'},updated_at_ms:Date.now()-10000}};
     // Milo has a second running task: he is still ONE being on the map (Owner 28.09.2026).
@@ -185,6 +192,8 @@ function harnessHtml() {
       document.querySelectorAll('.ctox-flow-creature-slot').forEach((slot)=>{const select=()=>window.__focusedTask=slot.dataset.taskId;slot.addEventListener('click',select);slot.addEventListener('keydown',(event)=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();select()}})});
       syncCrewProceduralMotion(document.querySelector('main'));
     };
+    // The crew bar: one seat per member, like the shell dock.
+    document.querySelector('#bar').innerHTML=crewMembers.map((m)=>'<span data-seat="'+m.id+'" style="display:inline-grid;width:28px;height:28px">'+crewCreatureHtml({id:'seat-'+m.id,crewKey:m.id,crewIdentity:{id:m.id,name:m.name,shape:m.shape,color:m.color}},'idle','fab')+'</span>').join('');
     window.__selectCrewTask(working.id);
     document.querySelector('#chat').innerHTML=__businessChatTestInternals.messageMarkup({id:'m1',role:'ctox',text:'Recherche gestartet.',taskId:'queue:system::task_1234567890abcdef',commandId:'cmd-working',status:'running'});
     document.querySelector('#chat-creature').innerHTML=crewReferenceHtml({id:'chat-random',crewIdentity:{id:'crew:milo',name:'Milo',shape:'blob',color:'#00aa9a'},messages:[{commandId:'cmd-working',taskId:'task-working'}]},26);

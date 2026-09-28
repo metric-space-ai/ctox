@@ -1,5 +1,5 @@
-import { normalizeCrewAppearance, renderCrewCreature, renderCrewReference, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260928-crew-one-being-v5';
-import { syncCrewMotion } from './crew-motion.js?v=20260928-crew-one-being-v5';
+import { normalizeCrewAppearance, renderCrewCreature, renderCrewReference, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260928-crew-portrait-v6';
+import { syncCrewMotion } from './crew-motion.js?v=20260928-crew-portrait-v6';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
   FILE_CHUNK_HASH_SCHEME,
@@ -141,7 +141,7 @@ function crewAppPresenceHtml(entries) {
     ? `${names} ${entries.length === 1 ? 'arbeitet' : 'arbeiten'} hier`
     : `${names} ${entries.length === 1 ? 'is' : 'are'} working here`;
   const more = entries.length > shown.length ? `<b>+${entries.length - shown.length}</b>` : '';
-  return `<span class="ctox-crew-app-presence" data-crew-presence data-crew-presence-signature="${escapeAttr(crewAppPresenceSignature(entries))}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${shown.map((entry) => renderCrewReference({ appearance: { id: entry.member.id, name: entry.member.name, shape: entry.member.shape, color: entry.member.color }, size: 14 })).join('')}${more}</span>`;
+  return `<span class="ctox-crew-app-presence" data-crew-presence data-crew-presence-signature="${escapeAttr(crewAppPresenceSignature(entries))}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${shown.map((entry) => renderCrewReference({ appearance: { id: entry.member.id, name: entry.member.name, shape: entry.member.shape, color: entry.member.color }, size: 18, mode: 'working' })).join('')}${more}</span>`;
 }
 
 function crewAppPresenceHosts() {
@@ -1554,8 +1554,8 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       // The window names its member with a reference badge; the being itself
       // stays in the crew bar. Only a changed assignment redraws the badge.
       const reference = win.querySelector('.ctox-chat-title .ctox-crew-ref');
-      if (reference && crewChanged) {
-        reference.outerHTML = crewReferenceHtml(chat, 26);
+      if (reference && (crewChanged || reference.dataset?.crewRefMode !== crewCreatureMode(chat, taskState))) {
+        reference.outerHTML = crewReferenceHtml(chat, 30, taskState);
         inPlaceDomChanged = true;
       }
 
@@ -2637,11 +2637,12 @@ export function syncCrewProceduralMotion(root) {
   syncCrewMotion(root);
 }
 
-// Chats, chips and app icons NAME a member; they never draw another copy of
-// it (Owner 28.09.2026: "jedes Lumi darf es nur einmal geben!"). The being
-// itself lives in the crew bar (crewPoolSlotHtml) and once on the CTOX map.
-export function crewReferenceHtml(chat, size = 18) {
-  return renderCrewReference({ appearance: chat?.crewIdentity || null, size });
+// Chats, chips and app icons show the member's PORTRAIT (same face, still,
+// framed); its living body exists once per screen — crew bar seat or CTOX map
+// (Owner 28.09.2026: "jedes Lumi darf es nur einmal geben!"). The portrait's
+// eyes follow the chat's task state.
+export function crewReferenceHtml(chat, size = 18, taskState = getTaskState(chat)) {
+  return renderCrewReference({ appearance: chat?.crewIdentity || null, size, mode: crewCreatureMode(chat, taskState) });
 }
 
 // Same key the reference badge carries in data-crew-ref: member id (or name),
@@ -3020,7 +3021,7 @@ function chatWindow(chat, activeId, relation = 'center') {
     <section class="ctox-chat-window no-left-transition ${chat.maximized ? 'is-maximized' : ''} ${chat.id === activeId ? 'is-active' : ''} ${isMinimizedClass} ${taskStateClass} ${creatureMode === 'review' ? 'is-task-review' : ''} ${executionActivityClass(chat)}" data-chat-id="${escapeAttr(chat.id)}" data-chat-module="${escapeAttr(moduleName)}" data-workjet-category="${escapeAttr(category)}" style="${escapeAttr(categoryStyleText)}" data-chat-rel="${escapeAttr(relation)}" data-chat-attachment-signature="${escapeAttr(attachmentSignature(chat))}" data-chat-composer-signature="${escapeAttr(chatComposerSignature(chat))}" data-activity-turns="${escapeAttr(executionProgressForChat(chat)?.activity_turns?.total || 0)}">
       <header>
         <button class="ctox-chat-title" type="button" data-chat-title="${escapeAttr(chat.id)}" aria-label="${escapeAttr(windowTitle)}" title="${escapeAttr(windowTitle)}">
-          ${crewReferenceHtml(chat, 26)}
+          ${crewReferenceHtml(chat, 30, taskState)}
         </button>
         <div class="ctox-chat-header-actions">
           <button type="button" data-chat-maximize aria-label="${chat.maximized ? 'Arbeitsfenster wiederherstellen' : 'Arbeitsfenster maximieren'}" title="${chat.maximized ? 'Wiederherstellen' : 'Maximieren'}">
@@ -3443,7 +3444,7 @@ function busyChatRow(chat, activeId) {
 // rebuild of the chat bar — which is why the strip visibly jumped on every
 // research status refresh.
 function chatChipMarkHtml(chat, taskState) {
-  const creature = crewReferenceHtml(chat, 20);
+  const creature = crewReferenceHtml(chat, 24, taskState);
   if (taskState === 'running') {
     return `<span class="ctox-chat-chip-mark is-running" aria-hidden="true">${creature}<span class="ctox-crew-state-dot"><span class="ctox-chip-spinner"></span></span></span>`;
   }
@@ -8039,27 +8040,42 @@ ${CREW_CREATURE_BASE_CSS}
       margin-left: -8px;
       filter: saturate(0.9);
     }
+    /* Every member keeps its own seat (Owner 28.09.2026 — the crew must be
+       told apart at a glance), within the 88 px the row always had: up to
+       four members stand side by side without touching. */
+    .ctox-chat-fab-creatures.is-members {
+      gap: 1px;
+      padding-left: 0;
+    }
     .ctox-chat-fab-creatures.is-members .ctox-chat-crew-slot {
       display: inline-grid;
-      width: 28px;
-      height: 28px;
-      flex: 0 0 28px;
-      margin-left: -8px;
+      width: 21px;
+      height: 21px;
+      flex: 0 0 21px;
+      margin-left: 0;
     }
     .ctox-chat-fab-creatures.is-members .ctox-crew-creature {
       margin-left: 0;
     }
-    /* Keep five/six full-size portraits within the four-member row width,
-       leaving both date controls and the reporter reservation their space. */
+    /* Five or six members only fit by standing closer: each figure gets a cut
+       edge in the bar colour so it still reads as its own individual. */
     .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) {
-      padding-left: 16px;
+      gap: 0;
     }
     .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) .ctox-chat-crew-slot {
-      margin-left: -16px;
+      width: 20px;
+      height: 20px;
+      flex: 0 0 20px;
+      margin-left: -6px;
     }
-    /* A member at work on an app: its reference badge (initial in its colour)
-       in the corner of the window icon and on the desktop icon. Never a copy
-       of the creature: the being itself stays in the crew bar. */
+    .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) .ctox-chat-crew-slot:first-child {
+      margin-left: 0;
+    }
+    .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) .ctox-chat-crew-slot + .ctox-chat-crew-slot .ctox-crew-creature {
+      filter: drop-shadow(-1.5px 0 0 var(--elev-float, #1c1f25));
+    }
+    /* A member at work on an app: its portrait (same face, still, framed) in
+       the corner of the window icon and on the desktop icon. */
     .ctox-crew-app-presence {
       position: absolute;
       right: 1px;
@@ -8070,9 +8086,9 @@ ${CREW_CREATURE_BASE_CSS}
       pointer-events: none;
     }
     .ctox-crew-app-presence .ctox-crew-ref {
-      margin-left: -4px;
-      background: color-mix(in srgb, var(--crew-color) 26%, #101216);
-      box-shadow: inset 0 0 0 1.5px var(--crew-color), 0 1px 2px rgba(0, 0, 0, 0.5);
+      margin-left: -5px;
+      background: color-mix(in srgb, var(--crew-color) 22%, #15181d);
+      box-shadow: inset 0 0 0 1.5px var(--crew-color), 0 1px 3px rgba(0, 0, 0, 0.55);
     }
     .ctox-crew-app-presence .ctox-crew-ref:first-child {
       margin-left: 0;
@@ -8112,8 +8128,8 @@ ${CREW_CREATURE_BASE_CSS}
       cursor: grabbing;
     }
     .ctox-chat-crew-slot .ctox-crew-creature {
-      width: 26px;
-      height: 26px;
+      width: 100%;
+      height: 100%;
     }
     /* The carried member: hanging from a hook, wriggling until it is dropped. */
     .ctox-crew-drag-ghost {

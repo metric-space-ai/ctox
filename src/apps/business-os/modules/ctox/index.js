@@ -1,9 +1,9 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-one-being-v412';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-portrait-v413';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
-import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-one-being-v5';
-import { renderCrewReference } from '../../shared/crew-renderer.js?v=20260928-crew-one-being-v5';
+import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-portrait-v6';
+import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-portrait-v6';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
 const FLOW_WIDTH = 1760;
@@ -30,7 +30,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-one-being-v412';
+const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-portrait-v413';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -1818,7 +1818,7 @@ function taskCardMarkup(task, state) {
   // A row NAMES its member with the reference badge; it never draws another
   // copy of the creature (Owner 28.09.2026: "jedes Lumi darf es nur einmal
   // geben!"). The being stands once on the map and sits in the crew bar.
-  const portrait = `<span class="ctox-task-portrait" title="${escapeAttr(member ? member.name : t.noCrewMember)}">${renderCrewReference({ appearance: member ? memberIdentity(member) : null, size: 26 })}</span>`;
+  const portrait = `<span class="ctox-task-portrait" title="${escapeAttr(member ? member.name : t.noCrewMember)}">${renderCrewReference({ appearance: member ? memberIdentity(member) : null, size: 28, mode: crewModeForTaskState(taskCrewStatus(task)) })}</span>`;
   // Who does it, in the member's own colour; an unassigned task says so.
   const memberName = member
     ? `<span class="ctox-task-meta-member" style="--crew-color:${escapeAttr(member.color || NEUTRAL_CREW_COLOR)}">${escapeHtml(member.name)}</span>`
@@ -5466,7 +5466,7 @@ function crewStripMarkup(state) {
     return `
       <button type="button" class="ctox-crew-strip-member is-${escapeAttr(stateClass)}" data-crew-member-id="${escapeAttr(member.id)}"
         aria-label="${escapeAttr(`${member.name}: ${line}`)}" title="${escapeAttr(`${member.name} · ${line}`)}">
-        <span class="ctox-crew-strip-creature">${renderCrewReference({ appearance: memberIdentity(member), size: 24 })}</span>
+        <span class="ctox-crew-strip-creature">${renderCrewReference({ appearance: memberIdentity(member), size: 26, mode: crewModeForTaskState(memberCreatureState(member)) })}</span>
       </button>`;
   }).join('');
   return `<section class="ctox-crew-strip" aria-label="${escapeAttr(t.crewHome)}">${items}</section>`;
