@@ -972,6 +972,9 @@
   color: color-mix(in srgb, var(--crew-color, var(--muted)) 72%, var(--text-strong, var(--text)));
   font-weight: 650;
 }
+.ctox-task-meta-member.is-pending {
+  color: var(--muted);
+}
 .ctox-task-meta-member.is-unassigned {
   color: var(--muted);
   font-weight: 500;

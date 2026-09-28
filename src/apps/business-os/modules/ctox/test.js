@@ -1268,6 +1268,21 @@ test('Task cards name the member in its colour; unassigned work says so', () => 
   assert.doesNotMatch(orphanHtml, /ctox-crew-creature/);
 });
 
+test('While the crew roster loads, assigned work never claims to be unassigned', () => {
+  // Observed on thesen 28.09.2026: every row said "ohne Crew" and the map showed
+  // one ghost for all running work until the members arrived.
+  const t = { ...labels.de };
+  const loading = { lang: 'de', crewMembers: [], selectedTaskId: '', pinnedTaskIds: new Set(), model: { tasks: [] } };
+  const assigned = { id: 'queue-task-a', taskId: 'task-a', title: 'Recherche', status: 'running', routeStatus: 'running', crewMemberId: 'crew:milo' };
+  const row = taskCardMarkup(assigned, loading);
+  assert.doesNotMatch(row, new RegExp(t.noCrewMemberShort));
+  assert.match(row, /ctox-task-meta-member is-pending/);
+  const model = { activeTask: assigned, activeNodeId: 'running', tasks: [assigned], nodeMap: new Map([['running', { id: 'running', x: 400, y: 160 }]]) };
+  assert.doesNotMatch(flowCrewSvg(model, null, loading), /ctox-flow-creature-slot/, 'no false ghost on the map');
+  const loaded = taskCardMarkup(assigned, { ...loading, crewMembers: crewFixture });
+  assert.match(loaded, />Milo</);
+});
+
 test('Crew at home shows every active member with its state, only while nothing runs', () => {
   const state = { lang: 'de', crewMembers: crewFixture, model: { liveWork: false, tasks: [{ id: 'queue-task-working', taskId: 'task-working', title: 'Recherche Kunde X', status: 'queued', routeStatus: 'queued' }] } };
   assert.equal(shouldShowCrewHome(state), true);

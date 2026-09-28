@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-portrait-v413';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-portrait-v414';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-portrait-v6';
 import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-portrait-v6';
@@ -30,7 +30,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-portrait-v413';
+const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-portrait-v414';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -1818,11 +1818,16 @@ function taskCardMarkup(task, state) {
   // A row NAMES its member with the reference badge; it never draws another
   // copy of the creature (Owner 28.09.2026: "jedes Lumi darf es nur einmal
   // geben!"). The being stands once on the map and sits in the crew bar.
-  const portrait = `<span class="ctox-task-portrait" title="${escapeAttr(member ? member.name : t.noCrewMember)}">${renderCrewReference({ appearance: member ? memberIdentity(member) : null, size: 28, mode: crewModeForTaskState(taskCrewStatus(task)) })}</span>`;
+  // Assigned, but the crew roster has not arrived yet: say nothing rather than
+  // claim "ohne Crew" (it flashed on every row while members loaded).
+  const memberPending = !member && Boolean(taskAssignedMemberId(task));
+  const portrait = `<span class="ctox-task-portrait" title="${escapeAttr(member ? member.name : memberPending ? '' : t.noCrewMember)}">${renderCrewReference({ appearance: member ? memberIdentity(member) : null, size: 28, mode: memberPending ? 'sleeping' : crewModeForTaskState(taskCrewStatus(task)) })}</span>`;
   // Who does it, in the member's own colour; an unassigned task says so.
   const memberName = member
     ? `<span class="ctox-task-meta-member" style="--crew-color:${escapeAttr(member.color || NEUTRAL_CREW_COLOR)}">${escapeHtml(member.name)}</span>`
-    : `<span class="ctox-task-meta-member is-unassigned">${escapeHtml(t.noCrewMemberShort)}</span>`;
+    : memberPending
+      ? `<span class="ctox-task-meta-member is-pending" aria-hidden="true">…</span>`
+      : `<span class="ctox-task-meta-member is-unassigned">${escapeHtml(t.noCrewMemberShort)}</span>`;
   const tooltip = [status, source, changed, reason].filter(Boolean).join(' · ');
   return `
     <article class="ctox-list-item ctox-task-card ${selected ? 'is-selected' : ''} ${pinned ? 'is-pinned' : ''} has-member"
@@ -3076,6 +3081,8 @@ function flowCrewSvg(model, selectedTask, state) {
   const beings = new Map();
   for (const task of tasks) {
     const member = taskCrewMember(task, state);
+    // Assigned, but the roster has not arrived: no false "ohne Crew" ghost.
+    if (!member && taskAssignedMemberId(task) && !(selectedTask && task.id === selectedTask.id)) continue;
     const key = member ? `member:${member.id}` : 'ghost';
     const being = beings.get(key);
     if (!being) beings.set(key, { key, anchor: task, count: 1 });
@@ -5379,6 +5386,10 @@ const SPECIALTY_KEYS = Object.freeze(['modules', 'command_types', 'skills', 'tag
 function memberIdentity(member) {
   if (!member) return null;
   return { id: String(member.id || ''), name: String(member.name || ''), color: String(member.color || NEUTRAL_CREW_COLOR), shape: String(member.shape || 'round') };
+}
+
+function taskAssignedMemberId(task) {
+  return String(task?.crewMemberId || task?.crew_member_id || task?.crewAssignedMemberId || task?.crew_assigned_member_id || '').trim();
 }
 
 function taskCrewMember(task, state) {
