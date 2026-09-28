@@ -639,7 +639,7 @@ pub(super) fn ensure_founder_outbound_body_clean(request: &ChannelSendRequest) -
 // mismatched or additional headers still fail the normal body-clean gate.
 pub(super) fn reviewed_reply_body_only(body: &str, subject: &str) -> Result<String> {
     let trimmed = body.trim();
-    let Some((first_line, rest)) = trimmed.split_once('\n') else {
+    let Some((first_line, rest)) = body.trim_start().split_once('\n') else {
         return Ok(trimmed.to_string());
     };
     let Some((name, value)) = first_line.trim().split_once(':') else {
