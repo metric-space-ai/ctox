@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad (Stand 27.09. 14:40 UTC): v410 ist auf main und live auf welsch (Slot beta.64) und thesen (Dateien). Offen ist allein der Rust-Test (Signaling-Env, Lumi-Farbe; `crew-ux/rust-fixes` `6d6c2c27d`). Er startet erst nach dem Greppy-Slot und mit koordinierter Admission; danach merge → `ctox upgrade --dev` welsch/thesen.
+Kritischer Pfad (Stand 28.09. 06:16 UTC, Owner: „du hättest deine Aufgabe abschließen müssen“): Rust-Test auf gpu3 (Unit `crew-ux-rust-test-20260928`, Greppy-Lock gehalten) → grün → `crew-ux/rust-fixes` `70ae7ac90` auf main → `ctox upgrade --dev` welsch + thesen (Skripte `*-upgrade-rustfix.sh`) → Wartungs-Ack → Browser-Abnahme (Lumi Koralle) → Codex-Bericht.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -42,9 +42,11 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 - **Actions-Stau 14:10 UTC** — 16 überholte, nicht gestartete Läufe abgebrochen (Regel wie 08:47), Queue 33 → 17; Codex-Queue `01a0e333-…`.
 - **beta.64 signiert (Run `36324414007` success 14:28 UTC)** → welsch stage 14:29 (Unit success, phase ready) → activate + Restart 14:31:25 (idle geprüft). Status: active `0.1.46-beta.64`, healthy, recoveryShell false, Wartung aus. Browser: `_shell/0.1.46-beta.64/app.js?v=…crew-ghost-v410`, Engine aktiv, 23 connected/6 reused, Crew-App 34 Aufgaben, „Lumi · Erledigt“, Karte „ohne Crew · wartet“. Lumi noch grau (Rust-Fix ausstehend).
 
+- **KORREKTUR thesen-Aufgabenliste (28.09. 06:13 UTC, verifiziert)** — Das Hängen bei „Wird geladen…“ ist KEIN thesen-Defekt. Frischer Headless-Chrome über den eigenen Tunnel `127.0.0.1:18775` (Skript `output/tunnel-thesen-robust.ts`, Probe `thesen-crew-probe.mjs` im Scratchpad) zeigt die Crew-App in 28 s mit Alle 98 / Arbeitet 6 / Wartet 12 / Erledigt 39, Geist bei „ohne Crew“, Pico-Namensschild. Ursache war das Browser-Panel: sein Profil wird mit anderen Sitzungen geteilt, ein fremder thesen-Tab hielt den Sync-Web-Lock (Leader `b4386db7`), das Panel lief als Follower mit leerem Fenster. Feldbefund mit KORREKTUR-Block ergänzt (`2490a08c5`).
+
 ## Working
 
-- (nichts) — Sol/Standard Worker 0 aktiv; lokal kein Heavy-Job (Greppy zuerst).
+- **Rust-Test gpu3 (Claude direkt per ssh, 28.09. ab 06:04:52 UTC)** — `crew-ux/rust-fixes` `70ae7ac90` (= main `6ce58e5f3` + Signaling `8a23c0e00` + Lumi `70ae7ac90`). systemd --user Unit `crew-ux-rust-test-20260928` (RuntimeMaxSec 8400, Frist 08:30Z), `flock -n /mnt/nvme1/.greppy-heavy.lock` für die ganze Dauer, cargo `-j1`, MAKEFLAGS/CMAKE -j1, Target+TMPDIR `/mnt/nvme1/crew-ux-rust-test-20260928`, ohne Debuginfo; Plattenwächter < 8 GiB → Stopp; Cleanup per trap. Vorher 06:02Z: root 21G, nvme 22G, Lock frei, 0 Compiler. Angekündigt Greppy-Thread (`01a0e69d-75f3-…`) + Crew-Thread (`01a0e69d-763d-…`). Log `run.log` + `cargo-test.log` im Workdir. Fertig heißt: `CARGO_EXIT 0` + `test result: ok` für `signaling_` und `crew::`, CLEANUP-Zeile, Lock frei.
 
 ## To-Do
 
@@ -56,6 +58,8 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 - **OWNER: Seelen-Achsen → Temperament?** — Seele ist nicht in der öffentlichen Projektion (`public_fields` ohne soul); Temperament kommt vorerst aus dem Genom-Seed.
 
 ## Environment traps
+
+- Built-in-Browser-Panel teilt sein Profil mit anderen Claude-Sitzungen: ein fremder Tab derselben Instanz wird Sync-Leader, das Panel ist dann Follower und zeigt bei demand-only-Collections leere Listen. Abnahme deshalb im frischen Headless-Chrome über eigenen Tunnel (Port ≠ 18765, den hält eine andere Sitzung).
 
 - `~/Documents/ctox` ist abgedriftet (305 vor / 1109 hinter origin/main) — nur im Klon arbeiten.
 - Shell-Slots übersteuern `src/` auf welsch (aktiv `0.1.46-beta.54`, desired `beta.57`); sichtbar nur über Release-Tag + stage/activate + Restart.
