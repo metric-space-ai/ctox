@@ -6,6 +6,7 @@ import {
   crewGenome,
   normalizeCrewAppearance,
   renderCrewCreature,
+  renderCrewReference,
   CREW_CREATURE_BASE_CSS,
   CREW_CREATURE_CSS,
 } from './crew-renderer.js';
@@ -166,4 +167,24 @@ test('creature CSS carries no keyframe loops and standalone hosts keep reduced-m
   assert.ok(CREW_CREATURE_CSS.startsWith(CREW_CREATURE_BASE_CSS));
   assert.match(CREW_CREATURE_CSS, /prefers-reduced-motion: reduce/);
   assert.match(CREW_CREATURE_CSS, /animation: none !important/);
+});
+
+// Owner 28.09.2026: "jedes Lumi darf es nur einmal geben!" Everywhere a member
+// is only NAMED (rows, chips, chat windows, app icons) the reference badge is
+// used: initial in the member colour, never a body, face or motion hook.
+test('renderCrewReference names a member without drawing a copy of it', () => {
+  const lumi = { id: 'crew-lumi', name: 'Lumi', shape: 'triangle', color: '#e97255' };
+  const html = renderCrewReference({ appearance: lumi, size: 26 });
+  assert.match(html, /^<span class="ctox-crew-ref" data-crew-ref="crew-lumi" style="--crew-color:#e97255;--crew-ref-size:26px" title="Lumi" aria-hidden="true">L<\/span>$/);
+  for (const forbidden of ['ctox-crew-creature', 'ctox-crew-figure', 'ctox-crew-eyes', 'data-crew-mode', 'data-crew-motion', '<svg']) {
+    assert.ok(!html.includes(forbidden), `a reference carries no ${forbidden}`);
+  }
+  const ghost = renderCrewReference({ appearance: null });
+  assert.match(ghost, /class="ctox-crew-ref is-neutral" data-crew-ref=""/);
+  assert.match(ghost, />\s*<\/span>$/, 'no initial for unassigned work');
+  assert.equal(renderCrewReference({ appearance: lumi }), renderCrewReference({ appearance: lumi }), 'deterministic');
+  assert.match(renderCrewReference({ appearance: { name: 'Ölf', color: '#1685ee' } }), />Ö<\/span>$/);
+  assert.match(renderCrewReference({ appearance: { name: '<b>x</b>', color: 'red' } }), /title="&lt;b&gt;x&lt;\/b&gt;"[^>]*>&lt;<\/span>$/, 'escaped, invalid colour falls back');
+  assert.match(renderCrewReference({ appearance: lumi, size: 400 }), /--crew-ref-size:64px/, 'size is clamped');
+  assert.match(CREW_CREATURE_BASE_CSS, /\.ctox-crew-ref \{/);
 });

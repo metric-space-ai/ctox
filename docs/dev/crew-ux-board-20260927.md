@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad (Stand 27.09. 14:40 UTC): v410 ist auf main und live auf welsch (Slot beta.64) und thesen (Dateien). Offen ist allein der Rust-Test (Signaling-Env, Lumi-Farbe; `crew-ux/rust-fixes` `6d6c2c27d`). Er startet erst nach dem Greppy-Slot und mit koordinierter Admission; danach merge → `ctox upgrade --dev` welsch/thesen.
+Kritischer Pfad (Stand 28.09. 08:05 UTC): ABGESCHLOSSEN. main `11afab683` (Shell v412 „ein Wesen je Mitglied“ + Rust-Fixes) läuft auf welsch (Slot beta.66) und thesen (Datei-Deploy v412, ohne Slot). Kein offener Arbeitsschritt.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -42,20 +42,30 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 - **Actions-Stau 14:10 UTC** — 16 überholte, nicht gestartete Läufe abgebrochen (Regel wie 08:47), Queue 33 → 17; Codex-Queue `01a0e333-…`.
 - **beta.64 signiert (Run `36324414007` success 14:28 UTC)** → welsch stage 14:29 (Unit success, phase ready) → activate + Restart 14:31:25 (idle geprüft). Status: active `0.1.46-beta.64`, healthy, recoveryShell false, Wartung aus. Browser: `_shell/0.1.46-beta.64/app.js?v=…crew-ghost-v410`, Engine aktiv, 23 connected/6 reused, Crew-App 34 Aufgaben, „Lumi · Erledigt“, Karte „ohne Crew · wartet“. Lumi noch grau (Rust-Fix ausstehend).
 
+- **KORREKTUR thesen-Aufgabenliste (28.09. 06:13 UTC, verifiziert)** — Das Hängen bei „Wird geladen…“ ist KEIN thesen-Defekt. Frischer Headless-Chrome über den eigenen Tunnel `127.0.0.1:18775` (Skript `output/tunnel-thesen-robust.ts`, Probe `thesen-crew-probe.mjs` im Scratchpad) zeigt die Crew-App in 28 s mit Alle 98 / Arbeitet 6 / Wartet 12 / Erledigt 39, Geist bei „ohne Crew“, Pico-Namensschild. Ursache war das Browser-Panel: sein Profil wird mit anderen Sitzungen geteilt, ein fremder thesen-Tab hielt den Sync-Web-Lock (Leader `b4386db7`), das Panel lief als Follower mit leerem Fenster. Feldbefund mit KORREKTUR-Block ergänzt (`2490a08c5`).
+
+- **Upgrades gestartet (28.09. 06:25–06:27 UTC)** — Rust-Test gpu3 grün (38/38, exit 0, 06:23:38Z, Lock frei, Target gelöscht) → main `a5e19e88f` (ff, rustfmt ok). welsch Unit `ctox-crew-rustfix-upgrade-20260928` → Ziel `branch-main-20260928T062516Z`; thesen gleiche Unit → Ziel `branch-main-20260928T062643Z`, Start 06:26:42Z (beide Quellen enthalten `signaling_urls_config_with_override` + `#e97255`). Vorher idle: welsch busy false/0 Worker, thesen busy false/0 Worker/15 pending.
+- **Supervisor-Intervention THESEN (28.09. ~06:32 UTC)** — Outbound/Digest-Claude hält das nächste THESEN-Writerfenster (Digest-Test seit 06:09Z). Regel: KEIN zweiter THESEN-Upgrade, keine fremde Unit abbrechen, eigenen Lauf nur lesend bis terminal verfolgen, danach terminalen Status + Revision + Health + Rollback an Crew (01a0879f) und Digest-Owner übergeben; nächster THESEN-Lauf erst danach. Zustand 06:32:51Z gemeldet (Codex `01a0e6b7-9476-…`): genau meine Unit, phase building, Wartung aktiv. WELSCH läuft unabhängig.
+
+- **Rust-Fixes live auf welsch + thesen (28.09. 07:20 UTC, verifiziert)** — Beide Upgrade-Units Result=success (welsch Ende 06:59:34Z, thesen 07:02:38Z). welsch: `branch-main-20260928T062516Z`, ctox.service seit 06:57:35Z, Wartung completed 07:17:06Z (Karenz-Freigabe), Slot `0.1.46-beta.64` healthy; Headless-Chrome über eigenen Tunnel: Kopf `v0.1.46-beta.64` (kein Recovery), Lumi `#e97255` in Liste/Karte/Leiste, 33 Aufgaben, wss-Signaling. thesen: `branch-main-20260928T062643Z`, ctox.service seit 07:00:43Z, Wartung completed 07:10:53Z (Karenz, kein Klick), DB Lumi `#e97255` (07:00:43Z), reine Ansicht ohne Klick: Leiste Lumi Koralle, v410, wss. Beide: keine persistierte Signaling-Datei. Rollback: welsch previous `branch-main-20260927T075827Z` + Backup `update-20260928T062536Z`; thesen previous `branch-main-20260927T005313Z` + Backup `update-20260928T062659Z`. Terminal-Callback Codex `01a0e6e1-67fe-…`. Nebenbefund (nicht angefasst): welsch hat zwei `ctox-real`-Hilfsprozesse mit gelöschtem Executable (jami-daemon seit 27 Tagen, `business-os mcp connect` seit 21 Tagen), thesen einen (jami-daemon).
+
+- **Ein Wesen je Mitglied (28.09. 07:30–08:05 UTC, verifiziert)** — Owner-Screenshot thesen: „wie kann es sein, dass es immer noch gleich aussehende Lumis gibt?“ + „jedes Lumi darf es nur einmal geben!“. Ursache: `flowCrewSvg` zeichnete je laufendem Task ein Wesen (Lumi 4×, Pico 3×); Zeilen, Chips, Chatfenster, App-Symbole zeichneten weitere Kopien. Fix `0d4e9dc23` (v411): Karte gruppiert je Mitglied (unzugeordnet = ein Geist), Anker = ausgewählter Task sonst relevantester laufender, Zähler ×N, Laufanimation je Wesen; neu `renderCrewReference` (Initial in Mitgliedsfarbe, ohne Körper/Gesicht/Bewegung) für Aufgaben-/Ticketzeilen, Crew-Zeile, Chat-Chips, Chatfenster, App-Symbole; Wesen nur noch Crew-Leiste + einmal Karte/Zuhause. Wächter auf die neue Regel umgestellt (Crew-Karte: Milo einmal mit ×2, keine Wesen-Kopie im Chat; Chat-Verhalten 146/146: Abzeichen, 0 Wesen in Fenstern/Chips/App-Symbolen; neue Unit-Tests). Nachbesserung `11afab683` (v412): auf thesen standen drei Wesen einer Station 34 px auseinander und überlappten, Namensschild verdeckte Nachbarn → 52 px Abstand, Schild über dem Kopf. Tests: ctox 48/48, Renderer+Chat 102/102, Tickets 14/14, Crew-Karte, Layout, Geometrie 6/6, Vertrag 37/37; volle CI-Liste bis auf die 3 bekannten Altbefunde. Ausrollung: thesen Datei-Deploy v411 (Backup `files-20260928T075539Z`, 14/14) + v412 (Backup `files-20260928T080132Z`, 6/6, Drift je vorher geprüft); welsch beta.66 (Run `36394691403` success) stage+activate 08:02 UTC, healthy. Abnahme frischer Headless-Chrome über eigene Tunnel: thesen Lumi 1× Karte (×4) + 1× Leiste, Pico 1× (×3), Milo 1× (×2), 93 Aufgaben mit Abzeichen; welsch Lumi 1× Karte + 1× Leiste, Kopf `v0.1.46-beta.66`.
+
 ## Working
 
-- (nichts) — Sol/Standard Worker 0 aktiv; lokal kein Heavy-Job (Greppy zuerst).
+- (nichts) — kein eigener Lauf aktiv; gpu3-Lock frei, lokal kein Build, eigene Tunnel 18775/18776 beendet.
 
 ## To-Do
 
-- **Rust-Test Signaling + Lumi** — Trigger: Greppy-Slot freigegeben UND Admission mit Greppy abgestimmt (Thread 01a07f6a-83e8-7901-851c-36521e4916b4). gpu3 nur mit Target auf /mnt/nvme1, `df -h / /mnt/nvme1` ≥ 20 GiB je Platte, persistentem Lock `/mnt/nvme1/.greppy-heavy.lock`, genau ein Compiler. Lokal nur über `dev-heavy-run.py`. Fertig heißt: `test result: ok` für `signaling_` + `crew::` → rebase auf main → push.
-- **Binary-Upgrades** — Trigger: Rust-Fixes auf main. welsch `ctox upgrade --dev` (systemd-run, ≥ 20 GiB, Wartungs-Ack über `[data-maintenance-retry]`), thesen nur idle und angekündigt. Fertig heißt: Lumi `#e97255` in `ctox_crew_members`, Env-Datei wird nicht mehr geschrieben.
+- (leer)
 
 ## Backlog / Owner
 
 - **OWNER: Seelen-Achsen → Temperament?** — Seele ist nicht in der öffentlichen Projektion (`public_fields` ohne soul); Temperament kommt vorerst aus dem Genom-Seed.
 
 ## Environment traps
+
+- Built-in-Browser-Panel teilt sein Profil mit anderen Claude-Sitzungen: ein fremder Tab derselben Instanz wird Sync-Leader, das Panel ist dann Follower und zeigt bei demand-only-Collections leere Listen. Abnahme deshalb im frischen Headless-Chrome über eigenen Tunnel (Port ≠ 18765, den hält eine andere Sitzung).
 
 - `~/Documents/ctox` ist abgedriftet (305 vor / 1109 hinter origin/main) — nur im Klon arbeiten.
 - Shell-Slots übersteuern `src/` auf welsch (aktiv `0.1.46-beta.54`, desired `beta.57`); sichtbar nur über Release-Tag + stage/activate + Restart.

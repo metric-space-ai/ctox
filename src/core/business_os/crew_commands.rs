@@ -90,7 +90,8 @@ pub(super) fn control(
                 );
                 let color = text(p, "color")?;
                 ensure!(
-                    ["#1685ee", "#00aa9a", "#7d7f84", "#7c6df2", "#e97255", "#34a26f"]
+                    // No neutral grey: it is the "no member yet" creature.
+                    ["#1685ee", "#00aa9a", "#e0a82e", "#7c6df2", "#e97255", "#34a26f"]
                         .contains(&color),
                     "color is not a CREW_COLOR"
                 );

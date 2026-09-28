@@ -1,5 +1,5 @@
-import { normalizeCrewAppearance, renderCrewCreature, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260927-crew-genome-v4';
-import { syncCrewMotion } from './crew-motion.js?v=20260927-crew-genome-v4';
+import { normalizeCrewAppearance, renderCrewCreature, renderCrewReference, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260928-crew-one-being-v5';
+import { syncCrewMotion } from './crew-motion.js?v=20260928-crew-one-being-v5';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
   FILE_CHUNK_HASH_SCHEME,
@@ -141,7 +141,7 @@ function crewAppPresenceHtml(entries) {
     ? `${names} ${entries.length === 1 ? 'arbeitet' : 'arbeiten'} hier`
     : `${names} ${entries.length === 1 ? 'is' : 'are'} working here`;
   const more = entries.length > shown.length ? `<b>+${entries.length - shown.length}</b>` : '';
-  return `<span class="ctox-crew-app-presence" data-crew-presence data-crew-presence-signature="${escapeAttr(crewAppPresenceSignature(entries))}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${shown.map((entry) => crewMemberCreatureHtml(entry.member, 'badge')).join('')}${more}</span>`;
+  return `<span class="ctox-crew-app-presence" data-crew-presence data-crew-presence-signature="${escapeAttr(crewAppPresenceSignature(entries))}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${shown.map((entry) => renderCrewReference({ appearance: { id: entry.member.id, name: entry.member.name, shape: entry.member.shape, color: entry.member.color }, size: 14 })).join('')}${more}</span>`;
 }
 
 function crewAppPresenceHosts() {
@@ -1423,8 +1423,8 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       if (chat) {
         const category = chatWorkjetCategory(chat);
         const categoryChanged = setDatasetIfChanged(chip, 'workjetCategory', category);
-        const chipCreature = chip.querySelector('.ctox-crew-creature');
-        const crewChanged = Boolean(chipCreature && chipCreature.dataset?.crewIdentity !== JSON.stringify(crewIdentity(chat)));
+        const chipReference = chip.querySelector('.ctox-crew-ref');
+        const crewChanged = Boolean(chipReference && chipReference.dataset?.crewRef !== crewReferenceKey(chat));
         if (categoryChanged || crewChanged) {
           if (typeof chip.getAttribute === 'function') {
             if (setAttrIfChanged(chip, 'style', chatWorkjetCategoryStyleText(category, chat))) inPlaceDomChanged = true;
@@ -1457,21 +1457,15 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
           const markHasCorrectState = markStateClass
             ? markEl.classList.contains(markStateClass)
             : markEl.className.trim() === 'ctox-chat-chip-mark';
-          const markCreature = markEl.querySelector?.('.ctox-crew-creature');
-          const markHasCorrectMode = !markCreature
-            || markCreature.dataset?.crewMode === crewCreatureMode(chat, taskState);
-          if (!markHasCorrectState || !markHasCorrectMode || crewChanged) {
+          if (!markHasCorrectState || crewChanged) {
             markEl.outerHTML = chatChipMarkHtml(chat, taskState);
-            inPlaceDomChanged = true;
-          } else if (markCreature && syncCrewTelemetryNode(markCreature, chat)) {
             inPlaceDomChanged = true;
           }
         }
       }
     });
-    root.querySelectorAll('.ctox-chat-fab-creatures:not(.is-members) .ctox-crew-creature').forEach((creature, index) => {
-      const chat = (openChats.length ? openChats : [{ id: 'ctox-crew', title: 'Crew' }])[index];
-      if (chat && syncCrewTelemetryNode(creature, chat)) inPlaceDomChanged = true;
+    root.querySelectorAll('.ctox-chat-fab-creatures:not(.is-members) .ctox-crew-creature').forEach((creature) => {
+      if (syncCrewTelemetryNode(creature, { id: 'ctox-crew', title: 'Crew' })) inPlaceDomChanged = true;
     });
 
     // 3. Update active states, 3D relation tags, maximized and minimized classes on windows
@@ -1511,8 +1505,8 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         inPlaceDomChanged = true;
       }
       const categoryChanged = setDatasetIfChanged(win, 'workjetCategory', category);
-      const windowCreature = win.querySelector('.ctox-crew-creature');
-      const crewChanged = Boolean(windowCreature && windowCreature.dataset?.crewIdentity !== JSON.stringify(crewIdentity(chat)));
+      const windowReference = win.querySelector('.ctox-chat-title .ctox-crew-ref');
+      const crewChanged = Boolean(windowReference && windowReference.dataset?.crewRef !== crewReferenceKey(chat));
       if (categoryChanged || crewChanged) {
         if (typeof win.getAttribute === 'function') {
             if (setAttrIfChanged(win, 'style', chatWorkjetCategoryStyleText(category, chat))) inPlaceDomChanged = true;
@@ -1557,11 +1551,11 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         if (setAttrIfChanged(progressHead, 'title', `${turns} Aktivitäten`)) inPlaceDomChanged = true;
       }
 
-      const creature = win.querySelector('.ctox-crew-creature');
-      if (creature && (creature.dataset?.crewMode !== creatureMode || crewChanged)) {
-        creature.outerHTML = crewCreatureHtml(chat, taskState, 'window');
-        inPlaceDomChanged = true;
-      } else if (creature && syncCrewTelemetryNode(creature, chat)) {
+      // The window names its member with a reference badge; the being itself
+      // stays in the crew bar. Only a changed assignment redraws the badge.
+      const reference = win.querySelector('.ctox-chat-title .ctox-crew-ref');
+      if (reference && crewChanged) {
+        reference.outerHTML = crewReferenceHtml(chat, 26);
         inPlaceDomChanged = true;
       }
 
@@ -1711,7 +1705,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         <span class="ctox-chat-fab-creatures ${(state.crewMembers || []).length ? 'is-members' : ''}" ${(state.crewMembers || []).length ? '' : 'aria-hidden="true"'}>
           ${(state.crewMembers || []).length
             ? state.crewMembers.slice(0, 6).map((member) => crewPoolSlotHtml(member, 'fab')).join('')
-            : (openChats.length ? openChats : [{ id: 'ctox-crew', title: 'Crew' }]).slice(0, 3).map((chat) => crewCreatureHtml(chat, getTaskState(chat), 'fab')).join('')}
+            : crewCreatureHtml({ id: 'ctox-crew', title: 'Crew' }, 'idle', 'fab')}
         </span>
       </button>
 
@@ -2643,6 +2637,22 @@ export function syncCrewProceduralMotion(root) {
   syncCrewMotion(root);
 }
 
+// Chats, chips and app icons NAME a member; they never draw another copy of
+// it (Owner 28.09.2026: "jedes Lumi darf es nur einmal geben!"). The being
+// itself lives in the crew bar (crewPoolSlotHtml) and once on the CTOX map.
+export function crewReferenceHtml(chat, size = 18) {
+  return renderCrewReference({ appearance: chat?.crewIdentity || null, size });
+}
+
+// Same key the reference badge carries in data-crew-ref: member id (or name),
+// empty for unassigned work.
+function crewReferenceKey(chat) {
+  const identity = chat?.crewIdentity;
+  const name = String(identity?.name || '').trim();
+  if (!name) return '';
+  return String(identity?.id || '').trim() || name;
+}
+
 export function crewCreatureHtml(chat, taskState = getTaskState(chat), placement = 'dock') {
   return renderCrewCreature({
     // The raw identity: the renderer decides member vs. neutral ghost. The
@@ -3010,7 +3020,7 @@ function chatWindow(chat, activeId, relation = 'center') {
     <section class="ctox-chat-window no-left-transition ${chat.maximized ? 'is-maximized' : ''} ${chat.id === activeId ? 'is-active' : ''} ${isMinimizedClass} ${taskStateClass} ${creatureMode === 'review' ? 'is-task-review' : ''} ${executionActivityClass(chat)}" data-chat-id="${escapeAttr(chat.id)}" data-chat-module="${escapeAttr(moduleName)}" data-workjet-category="${escapeAttr(category)}" style="${escapeAttr(categoryStyleText)}" data-chat-rel="${escapeAttr(relation)}" data-chat-attachment-signature="${escapeAttr(attachmentSignature(chat))}" data-chat-composer-signature="${escapeAttr(chatComposerSignature(chat))}" data-activity-turns="${escapeAttr(executionProgressForChat(chat)?.activity_turns?.total || 0)}">
       <header>
         <button class="ctox-chat-title" type="button" data-chat-title="${escapeAttr(chat.id)}" aria-label="${escapeAttr(windowTitle)}" title="${escapeAttr(windowTitle)}">
-          ${crewCreatureHtml(chat, taskState, 'window')}
+          ${crewReferenceHtml(chat, 26)}
         </button>
         <div class="ctox-chat-header-actions">
           <button type="button" data-chat-maximize aria-label="${chat.maximized ? 'Arbeitsfenster wiederherstellen' : 'Arbeitsfenster maximieren'}" title="${chat.maximized ? 'Wiederherstellen' : 'Maximieren'}">
@@ -3433,7 +3443,7 @@ function busyChatRow(chat, activeId) {
 // rebuild of the chat bar — which is why the strip visibly jumped on every
 // research status refresh.
 function chatChipMarkHtml(chat, taskState) {
-  const creature = crewCreatureHtml(chat, taskState, 'dock');
+  const creature = crewReferenceHtml(chat, 20);
   if (taskState === 'running') {
     return `<span class="ctox-chat-chip-mark is-running" aria-hidden="true">${creature}<span class="ctox-crew-state-dot"><span class="ctox-chip-spinner"></span></span></span>`;
   }
@@ -8047,8 +8057,9 @@ ${CREW_CREATURE_BASE_CSS}
     .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) .ctox-chat-crew-slot {
       margin-left: -16px;
     }
-    /* A member at work on an app: small portrait in the corner of the window
-       icon and on the desktop icon. Pure presence, no text. */
+    /* A member at work on an app: its reference badge (initial in its colour)
+       in the corner of the window icon and on the desktop icon. Never a copy
+       of the creature: the being itself stays in the crew bar. */
     .ctox-crew-app-presence {
       position: absolute;
       right: 1px;
@@ -8058,14 +8069,12 @@ ${CREW_CREATURE_BASE_CSS}
       align-items: center;
       pointer-events: none;
     }
-    .ctox-crew-app-presence .ctox-crew-creature.is-badge {
-      width: 18px;
-      height: 18px;
-      flex: 0 0 18px;
-      margin-left: -7px;
-      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.45));
+    .ctox-crew-app-presence .ctox-crew-ref {
+      margin-left: -4px;
+      background: color-mix(in srgb, var(--crew-color) 26%, #101216);
+      box-shadow: inset 0 0 0 1.5px var(--crew-color), 0 1px 2px rgba(0, 0, 0, 0.5);
     }
-    .ctox-crew-app-presence .ctox-crew-creature.is-badge:first-child {
+    .ctox-crew-app-presence .ctox-crew-ref:first-child {
       margin-left: 0;
     }
     .ctox-crew-app-presence b {

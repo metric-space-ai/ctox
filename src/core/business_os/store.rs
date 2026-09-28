@@ -25988,10 +25988,26 @@ struct SignalingUrlsConfig {
 }
 
 fn signaling_urls_config(root: &Path) -> SignalingUrlsConfig {
-    if let Ok(raw) = std::env::var("CTOX_BUSINESS_OS_SIGNALING_URLS") {
-        let urls = parse_signaling_urls(&raw);
+    signaling_urls_config_with_override(
+        root,
+        std::env::var("CTOX_BUSINESS_OS_SIGNALING_URLS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+// The environment override applies to this process only. It used to be
+// written into runtime/business-os-signaling-urls.json, so a single test or
+// release-check process started with a loopback signaling URL against a real
+// state root permanently redirected that instance's browsers and native peer
+// (welsch, 26.09.2026). The persisted file stays the durable configuration.
+fn signaling_urls_config_with_override(
+    root: &Path,
+    override_urls: Option<&str>,
+) -> SignalingUrlsConfig {
+    if let Some(raw) = override_urls {
+        let urls = parse_signaling_urls(raw);
         if !urls.is_empty() {
-            persist_signaling_urls(root, &urls);
             return SignalingUrlsConfig {
                 urls,
                 source: "environment",
@@ -26020,20 +26036,6 @@ fn parse_signaling_urls(raw: &str) -> Vec<String> {
 
 fn persisted_signaling_urls_path(root: &Path) -> PathBuf {
     root.join("runtime").join(BUSINESS_OS_SIGNALING_URLS_FILE)
-}
-
-fn persist_signaling_urls(root: &Path, urls: &[String]) {
-    let path = persisted_signaling_urls_path(root);
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    if fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    let Ok(content) = serde_json::to_vec_pretty(urls) else {
-        return;
-    };
-    let _ = fs::write(path, content);
 }
 
 fn read_persisted_signaling_urls(root: &Path) -> Option<Vec<String>> {
@@ -26065,6 +26067,48 @@ fn room_secret_id(value: &str) -> String {
 pub(super) mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn signaling_env_override_is_process_local_and_never_persisted() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        let config = signaling_urls_config_with_override(root, Some(" ws://127.0.0.1:18894 , "));
+        assert_eq!(config.urls, vec!["ws://127.0.0.1:18894".to_string()]);
+        assert_eq!(config.source, "environment");
+        assert!(
+            !persisted_signaling_urls_path(root).exists(),
+            "an environment override must not rewrite the instance's durable signaling config"
+        );
+        // Without the override the instance keeps its default.
+        let config = signaling_urls_config_with_override(root, None);
+        assert_eq!(config.urls, vec![DEFAULT_SIGNALING_URL.to_string()]);
+        assert_eq!(config.source, "default");
+    }
+
+    #[test]
+    fn signaling_persisted_config_stays_durable_below_an_override() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = persisted_signaling_urls_path(root);
+        std::fs::create_dir_all(path.parent().expect("runtime dir")).expect("runtime dir");
+        std::fs::write(&path, r#"["wss://signaling.example.test/v2"]"#).expect("write config");
+        let config = signaling_urls_config_with_override(root, None);
+        assert_eq!(
+            config.urls,
+            vec!["wss://signaling.example.test/v2".to_string()]
+        );
+        assert_eq!(config.source, "runtime");
+        let config = signaling_urls_config_with_override(root, Some("ws://127.0.0.1:1"));
+        assert_eq!(config.source, "environment");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read config"),
+            r#"["wss://signaling.example.test/v2"]"#,
+            "the override leaves the durable file untouched"
+        );
+        // An empty override does not shadow the durable config.
+        let config = signaling_urls_config_with_override(root, Some(" , "));
+        assert_eq!(config.source, "runtime");
+    }
 
     #[test]
     fn desktop_file_dependency_accepts_content_generation_id() {

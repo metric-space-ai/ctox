@@ -15,7 +15,21 @@ A member's look comes from a **genome** (`crewGenome(appearance)`), seeded by th
 - extras: shine, optional cheeks, optional tuft (not on triangles)
 - motion temperament: `tempo`, `amplitude`, `irregularity`, `phase` (written to `data-crew-motion`)
 
-The same member therefore looks identical in the chat bar, chat windows, the CTOX map, tickets and app badges, and two members of the same archetype and colour are never twins. No schema change: the genome is a pure function of the authoritative `id`, `shape` and `color`.
+Two members of the same archetype and colour are never twins. No schema change: the genome is a pure function of the authoritative `id`, `shape` and `color`.
+
+## Every member is one being
+
+Owner rule (28.09.2026): *"jedes Lumi darf es nur einmal geben!"* The creature is drawn in exactly two places:
+- once in the crew bar;
+- once where the member works, either on the CTOX map or in the crew home.
+
+On the map, tasks are grouped by member: all unassigned work is one ghost. Each being stands at the selected task if that task is its own, otherwise at its most relevant running task. A `×N` count stands for the rest. The walk animation is keyed by the being (`data-crew-pos-key`).
+
+Every other place only **names** the member with `renderCrewReference({ appearance, size })`: its initial in its colour, or a dashed empty ring without a member. It has no body, no face and no motion. Those places are:
+- task rows and the CTOX crew strip;
+- ticket rows and ticket detail;
+- chat chips and chat windows;
+- app-icon presence.
 
 Without a member (`appearance` missing or unnamed) the creature is the **neutral crew ghost** (`is-neutral`: dashed outline, translucent body) — never mistaken for a member, not even for a grey one.
 
