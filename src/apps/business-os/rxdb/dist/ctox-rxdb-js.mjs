@@ -965,12 +965,15 @@ var recoveryCryptoTestInternals = Object.freeze({
 });
 
 // src/apps/business-os/rxdb/src/recovery-journal.mjs
-var JOURNAL_VERSION = 3;
+var JOURNAL_VERSION = 4;
 var BATCH_STORE = "batches";
 var BATCH_STATE_COLLECTION_INDEX = "stateCollection";
+var BATCH_STATE_INDEX = "state";
+var BATCH_DOCUMENT_ID_INDEX = "documentIds";
 var CONFLICT_STORE = "conflicts";
 var META_STORE = "meta";
 var ACKED_RETENTION_MS = 24 * 60 * 60 * 1e3;
+var GC_SCAN_INTERVAL_MS = 60 * 60 * 1e3;
 var PREVIEW_TTL_MS = 10 * 60 * 1e3;
 var previews = /* @__PURE__ */ new Map();
 function sweepExpiredPreviews(nowMs = Date.now()) {
@@ -990,6 +993,7 @@ var CtoxRecoveryJournal = class {
     this.instanceId = instanceId;
     this.quotaCoordinator = quotaCoordinator;
     this.replayers = /* @__PURE__ */ new Map();
+    this.lastGcAtMs = 0;
   }
   registerCollection(collection, { schemaHash: schemaHash2 = "", applyBatch, resolveConflict = null, applyMaster = null } = {}) {
     if (!collection || typeof applyBatch !== "function") return;
@@ -1031,25 +1035,34 @@ var CtoxRecoveryJournal = class {
     await this.publishStatus();
   }
   async markMasterAcknowledged(collection, documents = {}) {
-    const batches = await this.listBatches("pending", collection);
-    for (const batch of batches) {
-      if (batch.collection !== collection) continue;
-      const acked = new Set(batch.ackedIds || []);
-      for (const id of batch.documentIds || []) {
-        const master = documents[id];
-        const local = batch.committedDocs?.[id];
-        if (master && local && masterAcknowledgesLocal(master, local, collection)) acked.add(id);
-      }
-      const complete = (batch.documentIds || []).every((id) => acked.has(id));
-      await updateRecord(this.db, BATCH_STORE, batch.batchId, (current) => ({
-        ...current,
-        ackedIds: [...acked],
-        state: complete ? "master_acked" : "pending",
-        masterAckedAtMs: complete ? Date.now() : 0
-      }));
+    const ids = Object.keys(documents).filter((id) => documents[id]);
+    if (!ids.length) return;
+    const batchIds = await getBatchIdsByDocumentIds(this.db, ids);
+    let changed = false;
+    for (const batchId of batchIds) {
+      const updated = await updateRecord(this.db, BATCH_STORE, batchId, (current) => {
+        if (current.state !== "pending" || current.collection !== collection) return null;
+        const acked = new Set(current.ackedIds || []);
+        const previousCount = acked.size;
+        for (const id of current.documentIds || []) {
+          if (acked.has(id)) continue;
+          const master = documents[id];
+          const local = current.committedDocs?.[id];
+          if (master && local && masterAcknowledgesLocal(master, local, collection)) acked.add(id);
+        }
+        const complete = (current.documentIds || []).every((id) => acked.has(id));
+        if (acked.size === previousCount && !complete) return null;
+        return {
+          ...current,
+          ackedIds: [...acked],
+          state: complete ? "master_acked" : "pending",
+          masterAckedAtMs: complete ? Date.now() : 0
+        };
+      });
+      if (updated) changed = true;
     }
-    await this.gc();
-    await this.publishStatus();
+    const pruned = changed || Date.now() - this.lastGcAtMs >= GC_SCAN_INTERVAL_MS ? await this.gc() : 0;
+    if (changed || pruned) await this.publishStatus();
   }
   // SYNC-40: force-acknowledge local writes the native peer terminally REJECTED
   // (authz/schema), not ones it accepted. `markMasterAcknowledged` only clears a
@@ -1061,23 +1074,29 @@ var CtoxRecoveryJournal = class {
   async markReconciled(collection, ids = []) {
     const idSet = new Set((Array.isArray(ids) ? ids : []).map((id) => String(id)));
     if (!idSet.size) return;
-    const batches = await this.listBatches("pending", collection);
-    for (const batch of batches) {
-      if (batch.collection !== collection) continue;
-      const relevant = (batch.documentIds || []).filter((id) => idSet.has(String(id)));
-      if (!relevant.length) continue;
-      const acked = new Set(batch.ackedIds || []);
-      for (const id of relevant) acked.add(id);
-      const complete = (batch.documentIds || []).every((id) => acked.has(id));
-      await updateRecord(this.db, BATCH_STORE, batch.batchId, (current) => ({
-        ...current,
-        ackedIds: [...acked],
-        state: complete ? "master_acked" : "pending",
-        masterAckedAtMs: complete ? Date.now() : current.masterAckedAtMs || 0
-      }));
+    const batchIds = await getBatchIdsByDocumentIds(this.db, [...idSet]);
+    let changed = false;
+    for (const batchId of batchIds) {
+      const updated = await updateRecord(this.db, BATCH_STORE, batchId, (current) => {
+        if (current.state !== "pending" || current.collection !== collection) return null;
+        const acked = new Set(current.ackedIds || []);
+        const previousCount = acked.size;
+        for (const id of current.documentIds || []) {
+          if (idSet.has(String(id))) acked.add(id);
+        }
+        const complete = (current.documentIds || []).every((id) => acked.has(id));
+        if (acked.size === previousCount && !complete) return null;
+        return {
+          ...current,
+          ackedIds: [...acked],
+          state: complete ? "master_acked" : "pending",
+          masterAckedAtMs: complete ? Date.now() : current.masterAckedAtMs || 0
+        };
+      });
+      if (updated) changed = true;
     }
-    await this.gc();
-    await this.publishStatus();
+    const pruned = changed || Date.now() - this.lastGcAtMs >= GC_SCAN_INTERVAL_MS ? await this.gc() : 0;
+    if (changed || pruned) await this.publishStatus();
   }
   async replayRegisteredCollections(collection = null) {
     const batches = await this.listBatches("pending", collection);
@@ -1199,7 +1218,7 @@ var CtoxRecoveryJournal = class {
       databaseName: this.databaseName,
       instanceId: this.instanceId,
       pendingBatches: batches.length,
-      pendingWrites: batches.reduce((sum, batch) => sum + (batch.documentIds?.length || 0), 0),
+      pendingWrites: countOutstandingWrites(batches),
       pendingBytes: bytes,
       oldestPendingAtMs: batches.reduce((oldest, batch) => Math.min(oldest, batch.createdAtMs || oldest), Number.MAX_SAFE_INTEGER) === Number.MAX_SAFE_INTEGER ? 0 : batches.reduce((oldest, batch) => Math.min(oldest, batch.createdAtMs || oldest), Number.MAX_SAFE_INTEGER),
       unresolvedConflicts: conflicts.length,
@@ -1226,7 +1245,7 @@ var CtoxRecoveryJournal = class {
     return {
       filename: `ctox-recovery-${this.instanceId}-${(/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-")}.ctox-recovery`,
       blob: new Blob([text], { type: "application/vnd.ctox.recovery+json" }),
-      pendingWrites: content.pendingBatches.reduce((sum, batch) => sum + (batch.documentIds?.length || 0), 0)
+      pendingWrites: countOutstandingWrites(content.pendingBatches)
     };
   }
   async previewImport(file, passphrase) {
@@ -1256,7 +1275,7 @@ var CtoxRecoveryJournal = class {
     return {
       previewId,
       pendingBatches: content.pendingBatches?.length || 0,
-      pendingWrites: (content.pendingBatches || []).reduce((sum, batch) => sum + (batch.documentIds?.length || 0), 0),
+      pendingWrites: countOutstandingWrites(content.pendingBatches || []),
       conflicts: content.conflicts?.length || 0,
       schemaMismatches,
       createdAtMs: content.createdAtMs
@@ -1282,17 +1301,21 @@ var CtoxRecoveryJournal = class {
     return { imported: true, replay };
   }
   async listBatches(state = null, collection = null) {
-    const rows = (state && collection ? await getAllRecordsByIndex(this.db, BATCH_STORE, BATCH_STATE_COLLECTION_INDEX, [state, collection]) : await getAllRecords(this.db, BATCH_STORE)).sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+    const rows = (state && collection ? await getAllRecordsByIndex(this.db, BATCH_STORE, BATCH_STATE_COLLECTION_INDEX, [state, collection]) : state ? await getAllRecordsByIndex(this.db, BATCH_STORE, BATCH_STATE_INDEX, state) : await getAllRecords(this.db, BATCH_STORE)).sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
     return rows.filter((row) => (!state || row.state === state) && (!collection || row.collection === collection));
   }
   async gc(now = Date.now()) {
     const rows = await this.listBatches("master_acked");
+    let pruned = 0;
     for (const row of rows) {
       if (now - Number(row.masterAckedAtMs || 0) >= ACKED_RETENTION_MS) {
         await deleteRecord(this.db, BATCH_STORE, row.batchId);
+        pruned += 1;
       }
     }
-    await this.gcConflicts(now);
+    pruned += await this.gcConflicts(now);
+    this.lastGcAtMs = Date.now();
+    return pruned;
   }
   // SYNC-53: resolved conflict records hold full local+master+base documents
   // (~3x a document each) and were never reclaimed — `resolveConflict` only
@@ -1362,6 +1385,12 @@ function openJournalDatabase(name) {
       const batches = db.objectStoreNames.contains(BATCH_STORE) ? request.transaction.objectStore(BATCH_STORE) : db.createObjectStore(BATCH_STORE, { keyPath: "batchId" });
       if (!batches.indexNames.contains(BATCH_STATE_COLLECTION_INDEX)) {
         batches.createIndex(BATCH_STATE_COLLECTION_INDEX, ["state", "collection"], { unique: false });
+      }
+      if (!batches.indexNames.contains(BATCH_STATE_INDEX)) {
+        batches.createIndex(BATCH_STATE_INDEX, "state", { unique: false });
+      }
+      if (!batches.indexNames.contains(BATCH_DOCUMENT_ID_INDEX)) {
+        batches.createIndex(BATCH_DOCUMENT_ID_INDEX, "documentIds", { unique: false, multiEntry: true });
       }
       if (!db.objectStoreNames.contains(CONFLICT_STORE)) db.createObjectStore(CONFLICT_STORE, { keyPath: "conflictId" });
       if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE, { keyPath: "key" });
@@ -1445,6 +1474,13 @@ function getAllRecords(db, storeName) {
 function getAllRecordsByIndex(db, storeName, indexName, key) {
   return transact(db, storeName, "readonly", (store) => requestResult(store.index(indexName).getAll(key)));
 }
+function getBatchIdsByDocumentIds(db, ids) {
+  return transact(db, BATCH_STORE, "readonly", async (store) => {
+    const index = store.index(BATCH_DOCUMENT_ID_INDEX);
+    const matches = await Promise.all([...new Set(ids)].map((id) => requestResult(index.getAllKeys(id))));
+    return [...new Set(matches.flat())];
+  });
+}
 function deleteRecord(db, storeName, key) {
   return transact(db, storeName, "readwrite", (store) => requestResult(store.delete(key)));
 }
@@ -1452,9 +1488,17 @@ async function updateRecord(db, storeName, key, update) {
   return transact(db, storeName, "readwrite", async (store) => {
     const current = await requestResult(store.get(key));
     if (!current) return false;
-    await requestResult(store.put(update(current)));
+    const next = update(current);
+    if (next == null) return false;
+    await requestResult(store.put(next));
     return true;
   });
+}
+function countOutstandingWrites(batches) {
+  return batches.reduce((count, batch) => {
+    const acked = new Set(batch.ackedIds || []);
+    return count + (batch.documentIds || []).filter((id) => !acked.has(id)).length;
+  }, 0);
 }
 function documentId(doc = {}, primaryPath = "id") {
   return String(valueAtPath(doc, primaryPath) || doc.id || doc._id || doc.key || doc.uuid || "");
@@ -1543,6 +1587,7 @@ var recoveryJournalTestInternals = Object.freeze({
   ACKED_RETENTION_MS,
   PREVIEW_TTL_MS,
   masterAcknowledgesLocal,
+  countOutstandingWrites,
   previews,
   sweepExpiredPreviews
 });
@@ -2419,11 +2464,20 @@ var CtoxIndexedDbCollection = class {
   }
   async acknowledgePersistedMasterRecovery() {
     const batches = await this.recoveryJournal?.listBatches?.("pending", this.name) || [];
-    const ids = [...new Set(batches.filter((batch) => batch.collection === this.name).flatMap((batch) => batch.documentIds || []))];
+    const ids = [...new Set(batches.filter((batch) => batch.collection === this.name).flatMap((batch) => {
+      const acked = new Set(batch.ackedIds || []);
+      return (batch.documentIds || []).filter((id) => !acked.has(id));
+    }))];
     if (!ids.length) return;
     const documents = {};
-    for (const id of ids) {
-      const record = await this.getStoredRecord(id);
+    const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
+    const done = idbTransactionDone(tx);
+    const store = tx.objectStore(DOCUMENT_STORE);
+    const records = await Promise.all(ids.map((id) => idbRequest(store.get([this.name, id]))));
+    await done;
+    for (let index = 0; index < ids.length; index += 1) {
+      const id = ids[index];
+      const record = records[index];
       if (record?.replicationOriginRole && record.doc) documents[id] = record.doc;
     }
     if (Object.keys(documents).length) {
@@ -10556,13 +10610,13 @@ var SharedRoomPeer = class {
   async routeMasterChangesSince(collection, params, peerId) {
     const registration = collection && this.collections.get(collection);
     if (!registration) {
-      return { documents: [], checkpoint: params?.[0] || null };
+      return missingMasterHandlerResult(collection, "pull");
     }
     return registration.state.masterChangesSince(params, peerId);
   }
   async routeMasterWrite(collection, params, peerId) {
     const registration = collection && this.collections.get(collection);
-    if (!registration) return [];
+    if (!registration) return missingMasterHandlerResult(collection, "push");
     return registration.state.masterWrite(params, peerId);
   }
   async negotiatePeer(peerId) {
@@ -11143,8 +11197,16 @@ var CtoxWebRtcReplicationState = class {
       const response = await this.requestMasterChangesSince(activePeerId, checkpoint, batchSize);
       if (this.cancelled) return;
       activePeerId = response.peerId || activePeerId;
-      const result = response.result || {};
-      const documents = Array.isArray(result?.documents) ? result.documents : [];
+      const result = response.result;
+      if (!result || typeof result !== "object" || !Array.isArray(result.documents)) {
+        const error = new Error(`masterChangesSince returned no documents array for ${this.collection.name}`);
+        error.code = "ctox_replication_invalid_master_changes_result";
+        error.phase = "replication-io";
+        error.direction = "pull";
+        error.collection = this.collection.name;
+        throw error;
+      }
+      const documents = result.documents;
       if (documents.length) {
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId)
@@ -11311,7 +11373,7 @@ var CtoxWebRtcReplicationState = class {
           throw replicationErrorResultError(masterWriteResult, this.collection.name);
         }
         const conflicts = masterWriteResult;
-        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
         if (!conflictMap.size) {
           rows = [];
           break;
@@ -11380,7 +11442,7 @@ var CtoxWebRtcReplicationState = class {
         }
         throw replicationErrorResultError(conflicts, this.collection.name);
       }
-      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
       if (!conflictMap.size) {
         rows = [];
         break;
@@ -12186,9 +12248,17 @@ function hashString(value) {
   }
   return (hash >>> 0).toString(36);
 }
-function documentsByPrimaryPath(documents = [], primaryPath = "id") {
+function documentsByPrimaryPath(documents, primaryPath = "id", collection = "") {
+  if (!Array.isArray(documents)) {
+    const error = new Error(`masterWrite returned no conflict array for ${collection || "unknown collection"}`);
+    error.code = "ctox_replication_invalid_master_write_result";
+    error.phase = "replication-io";
+    error.direction = "push";
+    error.collection = collection;
+    throw error;
+  }
   const map = /* @__PURE__ */ new Map();
-  for (const doc of Array.isArray(documents) ? documents : []) {
+  for (const doc of documents) {
     const id = primaryValue(doc, primaryPath);
     if (id) map.set(id, doc);
   }
@@ -12232,6 +12302,18 @@ function replicationErrorResult(result) {
   return Boolean(
     result && typeof result === "object" && !Array.isArray(result) && result.type === "ctoxError" && result.scope === "replication"
   );
+}
+function missingMasterHandlerResult(collection, direction) {
+  return {
+    type: "ctoxError",
+    scope: "replication",
+    rxdb: true,
+    code: "RC_WEBRTC_PEER",
+    phase: "replication-io",
+    direction,
+    collection: String(collection || ""),
+    message: `no master handler registered for ${collection || "unknown collection"}`
+  };
 }
 function replicationErrorResultError(result, collection) {
   const message = String(result?.message || result?.code || "replication request failed");
