@@ -157,6 +157,14 @@ function crewSlotTitle(member, load = 0) {
   return `${member.name} · ${stateText}${loadText}${domain} · ${german ? 'auf eine App ziehen' : 'drag onto an app'}`;
 }
 
+// While the CTOX app is open it publishes the reconciled count (queue plus
+// command lifecycle); the bar prefers it so both always say the same.
+function crewLoadFor(state, memberId) {
+  const published = typeof window !== 'undefined' ? window.__ctoxCrewWorkload : null;
+  if (published?.counts) return Number(published.counts[memberId]) || 0;
+  return state.crewWorkload?.get(memberId) || 0;
+}
+
 // Refresh the seats in place when the workload changes (no bar rebuild).
 function applyCrewWorkload(state) {
   if (typeof document === 'undefined') return;
@@ -164,7 +172,7 @@ function applyCrewWorkload(state) {
   document.querySelectorAll('.ctox-chat-crew-slot[data-crew-drag]').forEach((slot) => {
     const member = members.get(slot.dataset.crewDrag);
     if (!member) return;
-    const load = state.crewWorkload?.get(member.id) || 0;
+    const load = crewLoadFor(state, member.id);
     if (slot.dataset.crewLoad !== String(load)) slot.dataset.crewLoad = String(load);
     const title = crewSlotTitle(member, load);
     if (slot.getAttribute('title') !== title) slot.setAttribute('title', title);
@@ -292,6 +300,9 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     }
   };
   try { subscriptions.push(db?.raw?.ctox_queue_tasks?.$?.subscribe?.(scheduleReload) || null); } catch {}
+  const onPublishedWorkload = () => { if (!disposed) applyCrewWorkload(state); };
+  window.addEventListener?.('ctox-crew-workload', onPublishedWorkload);
+  readinessCleanups.push(() => window.removeEventListener?.('ctox-crew-workload', onPublishedWorkload));
   try {
     subscriptions.push(db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
       if (disposed) return;
@@ -1740,7 +1751,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         <span class="ctox-chat-fab-label">Crew</span>
         <span class="ctox-chat-fab-creatures ${(state.crewMembers || []).length ? 'is-members' : ''}" ${(state.crewMembers || []).length ? '' : 'aria-hidden="true"'}>
           ${(state.crewMembers || []).length
-            ? state.crewMembers.slice(0, 6).map((member) => crewPoolSlotHtml(member, 'fab', state.crewWorkload?.get(member.id) || 0)).join('')
+            ? state.crewMembers.slice(0, 6).map((member) => crewPoolSlotHtml(member, 'fab', crewLoadFor(state, member.id))).join('')
             : crewCreatureHtml({ id: 'ctox-crew', title: 'Crew' }, 'idle', 'fab')}
         </span>
       </button>

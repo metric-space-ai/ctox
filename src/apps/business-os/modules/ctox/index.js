@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-clarity-v416';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-clarity-v417';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-portrait-v6';
 import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-portrait-v6';
@@ -30,7 +30,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-clarity-v416';
+const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-clarity-v417';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -874,6 +874,7 @@ export async function mount(ctx) {
   }
   return () => {
     state.disposed = true;
+    publishCrewWorkload(state, null);
     window.clearInterval(state.liveTicker);
     window.clearTimeout(state.expressionRefresh);
     try { state.localSubscriptionCleanup?.(); } catch {}
@@ -954,6 +955,7 @@ async function hydrateFromLocal(state) {
   // swaps in the selected task's own event stream when the blob is not about it.
   state.flow = state.blobFlow;
   state.model = buildHarnessModel(state.bundle, state.flow, state.lang, state.channelAccounts);
+  publishCrewWorkload(state);
   state.dataLoaded = true;
   state.dataError = '';
   state.focusTask = state.focusTaskConsumed ? null : readFocusTask();
@@ -5220,8 +5222,28 @@ function applyLiveFlow(state) {
   if (flow === state.flow) return false;
   state.flow = flow;
   state.model = buildHarnessModel(state.bundle, flow, state.lang, state.channelAccounts);
+  publishCrewWorkload(state);
   reconcileSelection(state);
   return true;
+}
+
+// One count per member, the same one the map and the "Arbeitet" view use
+// (queue reconciled with the command lifecycle). The crew bar shows it while
+// this app is open, so the bar never says "Pico 4" next to a map saying "×3".
+function crewWorkloadCounts(model) {
+  const counts = {};
+  for (const task of model?.tasks || []) {
+    if (taskCrewStatus(task) !== 'running') continue;
+    const id = taskAssignedMemberId(task);
+    if (id) counts[id] = (counts[id] || 0) + 1;
+  }
+  return counts;
+}
+
+function publishCrewWorkload(state, counts = crewWorkloadCounts(state.model)) {
+  if (typeof window === 'undefined') return;
+  window.__ctoxCrewWorkload = counts ? { counts, at: Date.now() } : null;
+  try { window.dispatchEvent(new CustomEvent('ctox-crew-workload', { detail: window.__ctoxCrewWorkload })); } catch {}
 }
 
 async function refreshSelectedTaskLive(state) {
@@ -7224,6 +7246,7 @@ function escapeAttr(value) {
 }
 
 export const __ctoxTestHooks = {
+  crewWorkloadCounts,
   outboundEndpointForTask,
   taskCardMarkup,
   displayStatus,

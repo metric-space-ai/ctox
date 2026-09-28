@@ -33,6 +33,7 @@ const {
   taskSelectionSentence,
   memberCreatureState,
   crewStripMarkup,
+  crewWorkloadCounts,
   memberIdentity,
   shouldShowCrewHome,
   taskCrewMember,
@@ -1287,6 +1288,19 @@ test('While the crew roster loads, assigned work never claims to be unassigned',
   assert.doesNotMatch(flowCrewSvg(model, null, loading), /ctox-flow-creature-slot/, 'no false ghost on the map');
   const loaded = taskCardMarkup(assigned, { ...loading, crewMembers: crewFixture });
   assert.match(loaded, />Milo</);
+});
+
+test('The crew bar gets the same per-member count as the map and the Arbeitet view', () => {
+  // thesen 28.09.2026: the bar said "Pico 4" next to a map saying "×3" (a
+  // queue row still "running" whose command had finished). The app publishes
+  // its reconciled count; only running work of a member counts.
+  const run = (id, member) => ({ id, taskId: id, title: id, status: 'running', routeStatus: 'running', crewMemberId: member });
+  const counts = crewWorkloadCounts({ tasks: [
+    run('a', 'crew:tavi'), run('b', 'crew:tavi'), run('c', 'crew:milo'),
+    { id: 'd', taskId: 'd', title: 'd', status: 'completed', routeStatus: 'completed', crewMemberId: 'crew:milo' },
+    { id: 'e', taskId: 'e', title: 'e', status: 'running', routeStatus: 'running' },
+  ] });
+  assert.deepEqual(counts, { 'crew:tavi': 2, 'crew:milo': 1 });
 });
 
 test('Crew at home shows every active member with its state, only while nothing runs', () => {
