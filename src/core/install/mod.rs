@@ -4068,14 +4068,26 @@ fn sync_managed_launch_binaries(
         state_root,
         &current_binary,
     )?;
+    // First installs exposed this copy directly and their release-local
+    // wrappers still refer to it. Never leave a failed candidate's binary at
+    // that legacy path: publish the active release only after `current` moves,
+    // and republish the previous release on every rollback path.
+    let global_wrapper = wrapper_path()?;
+    sync_global_real_binary(&current_binary, &global_wrapper)?;
     let current_desktop_host = current_root.join("bin/ctox-desktop-host");
     if current_desktop_host.is_file() {
         copy_launch_binary(&current_desktop_host, &bin_dir.join("ctox-desktop-host"))?;
     }
-    if let Ok(wrapper) = wrapper_path() {
-        ensure_global_command_shim(&wrapper);
-    }
+    ensure_global_command_shim(&global_wrapper);
     Ok(())
+}
+
+fn sync_global_real_binary(current_binary: &Path, global_wrapper: &Path) -> Result<()> {
+    let global_real = global_wrapper.with_file_name("ctox-real");
+    if let Some(parent) = global_real.parent() {
+        ensure_dir(parent)?;
+    }
+    copy_launch_binary(current_binary, &global_real)
 }
 
 fn select_launch_binary(current_root: &Path) -> Result<Option<PathBuf>> {
@@ -4888,6 +4900,39 @@ mod tests {
             .status()
             .expect("watchdog probe after release");
         assert_eq!(released.code(), Some(99));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_global_real_binary_tracks_activation_and_rollback() {
+        let root = tempdir().expect("temporary managed install");
+        let releases = root.path().join("releases");
+        let old = releases.join("old");
+        let next = releases.join("next");
+        fs::create_dir_all(old.join("bin")).expect("old release");
+        fs::create_dir_all(next.join("bin")).expect("next release");
+        fs::write(old.join("bin/ctox-real"), b"old release binary").expect("old binary");
+        fs::write(next.join("bin/ctox-real"), b"next release binary").expect("next binary");
+        let current = root.path().join("current");
+        switch_current_release(&current, &old).expect("activate old release");
+        let global_wrapper = root.path().join("global-bin/ctox");
+
+        for (release, expected) in [
+            (&old, &b"old release binary"[..]),
+            (&next, &b"next release binary"[..]),
+            (&old, &b"old release binary"[..]),
+        ] {
+            switch_current_release(&current, release).expect("switch active release");
+            let active_binary = select_launch_binary(&current)
+                .expect("inspect active release")
+                .expect("active binary");
+            sync_global_real_binary(&active_binary, &global_wrapper)
+                .expect("publish active legacy binary");
+            assert_eq!(
+                fs::read(global_wrapper.with_file_name("ctox-real")).expect("global binary"),
+                expected
+            );
+        }
     }
 
     fn maintenance_test_layout(root: &Path) -> InstallLayout {
