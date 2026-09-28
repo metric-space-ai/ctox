@@ -64,12 +64,19 @@ listener or discovery. Existing CTOX `rxdb.file.fetch` already offers authorizat
 range requests, bounded chunks, cancellation and transport backpressure over WebRTC.
 Peer jobs reuse that facility; signaling remains rendezvous/control.
 
-Native job creation captures the enrolled target ID, local account epoch and a
+Native job creation captures the issued non-secret grant ID, enrolled target ID,
+durable native account generation (not Electron Main’s process-local epoch), and a
 SHA-256 fingerprint of the existing native principal contract (including device
 and authorization epoch) inside the immutable request. These are non-secret
 binding metadata, not credentials or grants. Resume never replaces that snapshot
 with a newly logged-in account. Legacy requests without a snapshot still decode
-for diagnosis, but the enrolled native adapter rejects them.
+for diagnosis, but the enrolled native adapter rejects them. Grant IDs are also
+immutable: a restart cannot silently mint or select a replacement grant. The
+adapter requires an explicit grant-admission checker with no permissive default;
+current account/file permission alone cannot validate an arbitrary grant ID.
+Workjet owns the permission-checked grant issue/lookup/revoke and source nonce
+validator in existing CTOX policy/secret stores. Those production APIs are still
+pending; the grant ID itself carries no authority.
 
 The enrolled adapter checks current host enrollment/account, a fresh signed peer
 principal, and the existing remote file-fetch policy using an empty range before

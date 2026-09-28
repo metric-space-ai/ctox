@@ -13,20 +13,32 @@ const RANGE_BYTES: u64 = 1024 * 1024;
 #[serde(deny_unknown_fields)]
 pub struct PeerAccountBinding {
     pub target_id: String,
+    /// Durable native account generation, never an Electron process counter.
     pub account_epoch: u64,
+    /// Non-secret reference to an issued, narrowly scoped native grant.
+    /// Legacy rows decode for diagnosis but cannot pass native admission.
+    #[serde(default)]
+    pub grant_id: String,
     /// SHA-256 of the existing native principal's serialized contract, including
     /// its authorization epoch and device. Avoids duplicating that wire schema.
     pub principal_sha256: String,
 }
 
 impl PeerAccountBinding {
-    fn validate(&self) -> Result<()> {
+    pub fn validate(&self) -> Result<()> {
         ensure!(
             !self.target_id.is_empty()
                 && self.target_id.len() <= 256
                 && self.target_id.trim() == self.target_id
                 && !self.target_id.chars().any(char::is_control),
             "invalid enrolled target id"
+        );
+        ensure!(
+            !self.grant_id.is_empty()
+                && self.grant_id.len() <= 256
+                && self.grant_id.trim() == self.grant_id
+                && !self.grant_id.chars().any(char::is_control),
+            "issued native transfer grant id required"
         );
         ensure!(
             self.principal_sha256.len() == 64

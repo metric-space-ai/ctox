@@ -84,6 +84,7 @@ fn original_account_binding_survives_reopen_and_cannot_be_replaced() {
     let temp = tempfile::tempdir().unwrap();
     let original = PeerAccountBinding {
         target_id: "enrolled-target".into(),
+        grant_id: "issued-transfer-grant".into(),
         account_epoch: 7,
         principal_sha256: "a".repeat(64),
     };
@@ -96,6 +97,10 @@ fn original_account_binding_survives_reopen_and_cannot_be_replaced() {
     reopened.control("bound", "resume").unwrap();
     assert_eq!(reopened.get("bound").unwrap().request, req);
     for binding in [
+        PeerAccountBinding {
+            grant_id: "different-grant".into(),
+            ..original.clone()
+        },
         PeerAccountBinding {
             target_id: "other-target".into(),
             ..original.clone()
@@ -126,6 +131,17 @@ fn original_account_binding_survives_reopen_and_cannot_be_replaced() {
         .principal_sha256 = "not-a-digest".into();
     assert!(reopened.enqueue(invalid).is_err());
     assert!(reopened.get("invalid").is_err());
+    // Old persisted bindings remain readable but cannot acquire authority by
+    // silently selecting or minting a new grant during restart.
+    let mut legacy = serde_json::to_value(&original).unwrap();
+    legacy.as_object_mut().unwrap().remove("grant_id");
+    let legacy: PeerAccountBinding = serde_json::from_value(legacy).unwrap();
+    assert!(legacy.validate().is_err());
+    let mut missing_grant = req;
+    missing_grant.id = "missing-grant".into();
+    missing_grant.peer_source.as_mut().unwrap().account_binding = Some(legacy);
+    assert!(reopened.enqueue(missing_grant).is_err());
+    assert!(reopened.get("missing-grant").is_err());
 }
 
 #[tokio::test]

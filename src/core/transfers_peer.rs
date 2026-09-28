@@ -40,6 +40,7 @@ pub(crate) async fn enqueue_enrolled_peer(
     store: &Store,
     host: &dyn BusinessDataSessionHost,
     target_id: &str,
+    grant_id: &str,
     mut request: DownloadRequest,
 ) -> Result<Transfer> {
     let source = request
@@ -64,6 +65,7 @@ pub(crate) async fn enqueue_enrolled_peer(
         .context("target has no current account")?;
     source.account_binding = Some(PeerAccountBinding {
         target_id: target_id.into(),
+        grant_id: grant_id.into(),
         account_epoch: saved.account_epoch,
         principal_sha256: principal_digest(&principal)?,
     });
@@ -79,6 +81,7 @@ pub(crate) async fn enqueue_enrolled_peer(
 struct EnrolledPeerJobAdmission {
     host: Arc<dyn BusinessDataSessionHost>,
     session: Arc<NativeSyncSession>,
+    grant_admission: Arc<dyn NativePeerJobAdmission>,
 }
 
 impl EnrolledPeerJobAdmission {
@@ -91,6 +94,7 @@ impl EnrolledPeerJobAdmission {
             .account_binding
             .as_ref()
             .context("original account binding required")?;
+        binding.validate()?;
         let expected = SavedBusinessDataTarget {
             public_identity: source.public_key.clone(),
             instance_id: source.instance_id.clone(),
@@ -125,6 +129,7 @@ impl NativePeerJobAdmission for EnrolledPeerJobAdmission {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let principal = self.current(request).await?;
+            self.grant_admission.authorize(request, connection).await?;
             let source = request
                 .peer_source
                 .as_ref()
@@ -165,6 +170,7 @@ impl NativePeerJobAdmission for EnrolledPeerJobAdmission {
                 self.current(request).await? == principal,
                 "account changed during peer authorization"
             );
+            self.grant_admission.authorize(request, connection).await?;
             Ok(())
         })
     }
@@ -180,15 +186,19 @@ pub(crate) struct NativePeerRangeSource {
 impl NativePeerRangeSource {
     /// The host resolves a live session for the original saved account. This
     /// adapter independently checks that account and current source file policy.
+    /// `grant_admission` must validate the issued grant ID, exact job scope and
+    /// current revocation/expiry. Account identity cannot replace that check.
     pub(crate) async fn bind_enrolled(
         session: Arc<NativeSyncSession>,
         connection: WebRTCRsConnection,
         request: DownloadRequest,
         host: Arc<dyn BusinessDataSessionHost>,
+        grant_admission: Arc<dyn NativePeerJobAdmission>,
     ) -> Result<Self> {
         let admission = Arc::new(EnrolledPeerJobAdmission {
             host,
             session: session.clone(),
+            grant_admission,
         });
         Self::bind(&session, connection, request, admission).await
     }
