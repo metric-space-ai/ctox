@@ -1089,6 +1089,10 @@ export class CtoxWebRtcNativePeer {
       });
     };
     peer.onconnectionstatechange = () => {
+      // A retired RTCPeerConnection can emit closed/failed after its successor
+      // has been installed under the same peer id. It must not tear down that
+      // successor or announce its state as the current peer's state.
+      if (this.connections.get(remotePeerId) !== connection) return;
       const state = peer.connectionState;
       this.recordConnectionEvent(connection, 'connection-state', { state });
       this.events.emit('peer-state', { peerId: remotePeerId, state });
@@ -1106,7 +1110,7 @@ export class CtoxWebRtcNativePeer {
           const live = this.connections.get(remotePeerId);
           const liveState = live?.peer?.connectionState || '';
           if (live === connection && ['disconnected', 'failed'].includes(liveState)) {
-            this.removeConnection(remotePeerId, 'peer-disconnected-grace-expired');
+            this.removeConnection(remotePeerId, 'peer-disconnected-grace-expired', null, { expectedConnection: connection });
           }
         }, ICE_DISCONNECTED_GRACE_MS));
         return;
@@ -1117,7 +1121,7 @@ export class CtoxWebRtcNativePeer {
         this.disconnectedGraceTimers.delete(remotePeerId);
       }
       if (['closed', 'failed'].includes(state)) {
-        this.removeConnection(remotePeerId, `peer-${state}`);
+        this.removeConnection(remotePeerId, `peer-${state}`, null, { expectedConnection: connection });
       } else if (state === 'connected') {
         updateSelectedCandidatePair(connection).then(() => {
           this.recordConnectionEvent(connection, 'selected-candidate-pair', {
@@ -1298,7 +1302,7 @@ export class CtoxWebRtcNativePeer {
     channel.onclose = () => {
       if (!isCurrentChannel()) return;
       this.recordConnectionEvent(connection, 'datachannel-close', { readyState: channel.readyState || 'closed' });
-      this.removeConnection(connection.remotePeerId, 'channel-close');
+      this.removeConnection(connection.remotePeerId, 'channel-close', null, { expectedConnection: connection });
     };
   }
 
@@ -1928,13 +1932,14 @@ export class CtoxWebRtcNativePeer {
     connection.auxChannels.clear();
   }
 
-  removeConnection(remotePeerId, reason = 'closed', pendingError = null, { reconnect = true } = {}) {
+  removeConnection(remotePeerId, reason = 'closed', pendingError = null, { reconnect = true, expectedConnection = null } = {}) {
     const peerId = String(remotePeerId || '');
+    const connection = this.connections.get(peerId);
+    if (expectedConnection && connection !== expectedConnection) return;
     this.clearObservedRequestsForPeer(
       peerId,
       pendingError || createPeerClosedError(peerId, reason),
     );
-    const connection = this.connections.get(peerId);
     if (!connection) return;
     this.connections.delete(peerId);
     this.inboundRequests.cancel(connection.inboundRequestOwner);

@@ -93,6 +93,62 @@ assert(
   'a reconnect must not reuse an earlier connection token observation',
 );
 
+const retiredConnection = { remotePeerId: 'native-1' };
+const replacementConnection = {
+  remotePeerId: 'native-1',
+  peer: { close() {} },
+  auxChannels: new Map(),
+};
+peer.connections.set('native-1', replacementConnection);
+const closeEvents = [];
+peer.on('peer-close', (event) => closeEvents.push(event.detail));
+setHybridLogicalClockTimeAnchor(observedAtMs + 30_000, observedAtMs, 'replacement-peer');
+peer.removeConnection('native-1', 'old-peer-failed', null, {
+  reconnect: false,
+  expectedConnection: retiredConnection,
+});
+assert(peer.connections.get('native-1') === replacementConnection && closeEvents.length === 0,
+  'a late close from a retired connection must not remove or announce the replacement');
+assert(hybridLogicalClockStatus().nativeClockOffsetMs === 30_000,
+  'a retired connection close must preserve the replacement clock anchor');
+peer.removeConnection('native-1', 'test-cleanup', null, {
+  reconnect: false,
+  expectedConnection: replacementConnection,
+});
+
+const originalRtcPeerConnection = globalThis.RTCPeerConnection;
+try {
+  globalThis.RTCPeerConnection = class FakeRTCPeerConnection {
+    connectionState = 'new';
+    iceConnectionState = 'new';
+    iceGatheringState = 'new';
+    signalingState = 'stable';
+    close() { this.connectionState = 'closed'; }
+  };
+  const generationPeer = new CtoxWebRtcNativePeer({
+    signalingUrl: 'wss://signaling.invalid',
+    room: 'room-stale-peer-close',
+  });
+  generationPeer.shouldInitiate = () => false;
+  const oldConnection = generationPeer.createConnection('native-1');
+  clearTimeout(oldConnection.handshakeTimer);
+  generationPeer.connections.delete('native-1');
+  const liveConnection = generationPeer.createConnection('native-1');
+  clearTimeout(liveConnection.handshakeTimer);
+  const emittedCloses = [];
+  generationPeer.on('peer-close', (event) => emittedCloses.push(event.detail));
+  oldConnection.peer.connectionState = 'failed';
+  oldConnection.peer.onconnectionstatechange();
+  assert(generationPeer.connections.get('native-1') === liveConnection && emittedCloses.length === 0,
+    'a late failed-state callback from the retired RTC peer must leave its successor connected');
+  generationPeer.removeConnection('native-1', 'test-cleanup', null, {
+    reconnect: false,
+    expectedConnection: liveConnection,
+  });
+} finally {
+  globalThis.RTCPeerConnection = originalRtcPeerConnection;
+}
+
 console.log('ctox-rxdb symmetric capability handshake smoke OK');
 
 function assert(condition, message) {
