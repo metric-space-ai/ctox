@@ -1,8 +1,9 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260927-shell-v2-crew-ghost-v410';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-one-being-v412';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
-import { startCrewMotion } from '../../shared/crew-motion.js?v=20260927-crew-genome-v4';
+import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-one-being-v5';
+import { renderCrewReference } from '../../shared/crew-renderer.js?v=20260928-crew-one-being-v5';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
 const FLOW_WIDTH = 1760;
@@ -29,7 +30,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260927-shell-v2-crew-ghost-v410';
+const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-one-being-v412';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -115,6 +116,7 @@ const labels = {
     learningFromAssignment: "lernt aus dem Einsatz",
     noCrewMember: "ohne Crew-Zuordnung",
     noCrewMemberShort: "ohne Crew",
+    crewTaskCount: "{count} Aufgaben",
     close: "Schließen",
     memberName: "Name",
     soul: "Seele",
@@ -409,6 +411,7 @@ const labels = {
     learningFromAssignment: "learning from the assignment",
     noCrewMember: "no crew member",
     noCrewMemberShort: "unassigned",
+    crewTaskCount: "{count} tasks",
     close: "Close",
     memberName: "Name",
     soul: "Soul",
@@ -1812,10 +1815,10 @@ function taskCardMarkup(task, state) {
   // The one exception is a task that stopped — blocked, failed, cancelled —
   // where the reason is the fact the reader came for; it gets one quiet line.
   const member = taskCrewMember(task, state);
-  const crewStatus = taskCrewStatus(task);
-  const portrait = member
-    ? `<span class="ctox-flow-creature-shell ctox-task-portrait" title="${escapeAttr(member.name)}">${memberCreatureHtml(member, state, crewStatus === 'running' ? 'running' : crewStatus === 'failed' ? 'failed' : memberCreatureState(member))}</span>`
-    : `<span class="ctox-flow-creature-shell ctox-task-portrait" title="${escapeAttr(t.noCrewMember)}">${crewCreatureHtml({ crewKey: task.commandId || task.id, crewIdentity: null }, crewStatus === 'failed' ? 'failed' : 'idle', 'map')}</span>`;
+  // A row NAMES its member with the reference badge; it never draws another
+  // copy of the creature (Owner 28.09.2026: "jedes Lumi darf es nur einmal
+  // geben!"). The being stands once on the map and sits in the crew bar.
+  const portrait = `<span class="ctox-task-portrait" title="${escapeAttr(member ? member.name : t.noCrewMember)}">${renderCrewReference({ appearance: member ? memberIdentity(member) : null, size: 26 })}</span>`;
   // Who does it, in the member's own colour; an unassigned task says so.
   const memberName = member
     ? `<span class="ctox-task-meta-member" style="--crew-color:${escapeAttr(member.color || NEUTRAL_CREW_COLOR)}">${escapeHtml(member.name)}</span>`
@@ -2560,10 +2563,12 @@ function walkCrewToNewStations(state, main) {
   const next = new Map();
   const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
   main.querySelectorAll('[data-crew-pos-task]').forEach((group) => {
-    const taskId = group.dataset.crewPosTask;
+    // Keyed by the being (member), not the task: when a member moves on to
+    // another task it walks there instead of vanishing and reappearing.
+    const beingKey = group.dataset.crewPosKey || group.dataset.crewPosTask;
     const [x, y] = String(group.dataset.crewPos || '').split(',').map(Number);
-    next.set(taskId, { x, y });
-    const before = previous.get(taskId);
+    next.set(beingKey, { x, y });
+    const before = previous.get(beingKey);
     if (reduced || !before || typeof group.animate !== 'function') return;
     const dx = before.x - x;
     const dy = before.y - y;
@@ -3062,8 +3067,30 @@ function flowCrewSvg(model, selectedTask, state) {
     const node = model.nodeMap.get('queued');
     if (node) return `<foreignObject x="${node.x - 82}" y="${node.y - NODE_HEIGHT / 2 - 62}" width="56" height="56" aria-hidden="true"><div xmlns="http://www.w3.org/1999/xhtml">${dataPlaceholderMarkup()}</div></foreignObject>`;
   }
+  // Owner-Befund 28.09.2026: "wie kann es sein, dass es immer noch gleich
+  // aussehende Lumis gibt?" One creature per task put the same member on the
+  // map four times. A member is ONE being: it stands at the selected task when
+  // that is its own, otherwise at its most relevant running task (candidates
+  // come sorted), and carries a count for the rest. Unassigned work is one
+  // ghost the same way.
+  const beings = new Map();
+  for (const task of tasks) {
+    const member = taskCrewMember(task, state);
+    const key = member ? `member:${member.id}` : 'ghost';
+    const being = beings.get(key);
+    if (!being) beings.set(key, { key, anchor: task, count: 1 });
+    else {
+      being.count += 1;
+      if (selectedTask && task.id === selectedTask.id) being.anchor = task;
+    }
+  }
+  const beingsPerNode = new Map();
+  for (const { anchor } of beings.values()) {
+    const id = taskCrewNodeId(anchor, model);
+    beingsPerNode.set(id, (beingsPerNode.get(id) || 0) + 1);
+  }
   const occupied = new Map();
-  return tasks.map((task) => {
+  return [...beings.values()].map(({ key, anchor: task, count }) => {
     const nodeId = taskCrewNodeId(task, model);
     const node = model.nodeMap.get(nodeId) || model.nodeMap.get('queued');
     if (!node) return '';
@@ -3083,7 +3110,8 @@ function flowCrewSvg(model, selectedTask, state) {
     if (selected) state.crewStandortNodeId = node.id;
     const member = taskCrewMember(task, state);
     const memberLabel = member ? member.name : (labels[state?.lang]?.noCrewMember || labels.de.noCrewMember);
-    const title = `${memberLabel} · ${taskDisplayTitle(task, state)} · ${task.id}`;
+    const countLabel = count > 1 ? (labels[state?.lang]?.crewTaskCount || labels.de.crewTaskCount).replace('{count}', String(count)) : '';
+    const title = [memberLabel, countLabel, taskDisplayTitle(task, state), task.id].filter(Boolean).join(' · ');
     const liveTask = withLiveActivity(task, state?.selectedLive);
     const creature = crewCreatureHtml({
       ...liveTask,
@@ -3100,14 +3128,23 @@ function flowCrewSvg(model, selectedTask, state) {
     const bubble = selected ? crewActivityBubbleSvg(liveTask, x + CREW_ON_STATION_SIZE - 2, y + 2, state, {
       name: member ? member.name : (labels[state?.lang]?.noCrewMemberShort || labels.de.noCrewMemberShort),
       status,
+      // With neighbours on the same station the tag sits above the head, so
+      // it never covers another member.
+      above: (beingsPerNode.get(taskCrewNodeId(task, model)) || 0) > 1 ? { centerX: x + CREW_ON_STATION_SIZE / 2, top: y } : null,
     }) : '';
+    const countBadge = count > 1 ? `
+        <g class="ctox-flow-creature-count" transform="translate(${x + CREW_ON_STATION_SIZE - 16} ${y + CREW_ON_STATION_SIZE - 16})" aria-hidden="true">
+          <rect x="0" y="0" width="${count > 9 ? 26 : 22}" height="16" rx="8"></rect>
+          <text x="${count > 9 ? 13 : 11}" y="12">×${count}</text>
+        </g>` : '';
     return `
-      <g class="ctox-flow-creature-pos" data-crew-pos-task="${escapeAttr(task.id)}" data-crew-pos="${x},${y}">
+      <g class="ctox-flow-creature-pos" data-crew-pos-task="${escapeAttr(task.id)}" data-crew-pos-key="${escapeAttr(key)}" data-crew-count="${count}" data-crew-pos="${x},${y}">
         <foreignObject class="ctox-flow-creature-slot ${selected ? 'is-selected' : ''}" x="${x}" y="${y}" width="${CREW_ON_STATION_SIZE}" height="${CREW_ON_STATION_SIZE}"
           data-task-id="${escapeAttr(task.id)}" data-creature-node-id="${escapeAttr(node.id)}" role="button" tabindex="0"
           aria-label="${escapeAttr(title)}">
           <div class="ctox-flow-creature-shell" xmlns="http://www.w3.org/1999/xhtml" title="${escapeAttr(title)}">${creature}</div>
         </foreignObject>
+        ${countBadge}
         ${bubble}
       </g>
     `;
@@ -3133,7 +3170,9 @@ function crewProgressForCreature(progress) {
 }
 
 const CREW_ON_STATION_SIZE = 44;
-const CREW_ON_STATION_SPREAD = [0, 34, -34, 68];
+// Neighbours on one station never touch: 52 px pitch for 44 px creatures
+// leaves room for the count badge between them.
+const CREW_ON_STATION_SPREAD = [0, 52, -52, 104, -104];
 
 // What the creature on the map is doing right now, from durable telemetry
 // only: the plan step it is on and whether its last turn was thinking, a tool
@@ -3163,13 +3202,23 @@ const CREW_TAG_STATUS = {
   en: { running: 'working', failed: 'failed', success: 'done', queued: 'waiting' },
 };
 
-function crewActivityBubbleSvg(task, x, y, state, { name = '', status = 'running' } = {}) {
+function crewActivityBubbleSvg(task, x, y, state, { name = '', status = 'running', above = null } = {}) {
   const lang = state?.lang === 'en' ? 'en' : 'de';
   const activity = status === 'running' ? crewActivityBubbleText(task, state) : '';
   const doing = activity || CREW_TAG_STATUS[lang][status] || CREW_TAG_STATUS[lang].queued;
   const text = clip([name, doing].filter(Boolean).join(' · '), 48);
   if (!text) return '';
   const width = Math.min(280, 18 + text.length * 6.3);
+  if (above) {
+    // Centred over the head, pointing down at it, kept inside the map.
+    const left = Math.max(8, Math.min(HARNESS_FLOW_WIDTH - width - 8, above.centerX - width / 2));
+    const top = above.top - 30;
+    return `
+    <g class="ctox-flow-crew-bubble is-above" transform="translate(${left} ${top})" aria-hidden="true">
+      <rect x="0" y="0" width="${width}" height="24" rx="12"></rect><path d="M ${above.centerX - left - 5} 23 L ${above.centerX - left} 29 L ${above.centerX - left + 5} 23 Z"></path><text x="10" y="16">${escapeHtml(text)}</text>
+    </g>
+  `;
+  }
   // Near the right edge the bubble opens to the creature's left instead.
   const left = x + width + 16 > HARNESS_FLOW_WIDTH;
   const originX = left ? x - CREW_ON_STATION_SIZE + 4 : x;
@@ -5417,7 +5466,7 @@ function crewStripMarkup(state) {
     return `
       <button type="button" class="ctox-crew-strip-member is-${escapeAttr(stateClass)}" data-crew-member-id="${escapeAttr(member.id)}"
         aria-label="${escapeAttr(`${member.name}: ${line}`)}" title="${escapeAttr(`${member.name} · ${line}`)}">
-        <span class="ctox-flow-creature-shell ctox-crew-strip-creature">${memberCreatureHtml(member, state)}</span>
+        <span class="ctox-crew-strip-creature">${renderCrewReference({ appearance: memberIdentity(member), size: 24 })}</span>
       </button>`;
   }).join('');
   return `<section class="ctox-crew-strip" aria-label="${escapeAttr(t.crewHome)}">${items}</section>`;
