@@ -349,6 +349,34 @@ for (const [label, reply] of [['missing', undefined], ['null', null], ['array', 
   await state.cancel();
 }
 
+// --- 2c.1 a temporarily missing collection handler cannot fake an ACK ----
+{
+  const SharedRoomPeer = replicationWebRtcTestInternals.getSharedRoomPeerClass();
+  const shared = new SharedRoomPeer({
+    key: 'missing-handler-test',
+    signalingUrl: 'wss://signaling.invalid',
+    room: 'missing-handler-test',
+  });
+  const missingWrite = await shared.routeMasterWrite('outbound_leads', [[{ id: 'lead-1' }]], 'p1');
+  const missingPull = await shared.routeMasterChangesSince('outbound_leads', [null, 5], 'p1');
+  for (const [direction, reply] of [['push', missingWrite], ['pull', missingPull]]) {
+    assert(reply?.type === 'ctoxError' && reply.scope === 'replication',
+      `missing handler must reject ${direction} rather than returning empty success`);
+    assert(reply.direction === direction && reply.collection === 'outbound_leads',
+      `missing handler must identify the ${direction} collection`);
+  }
+  shared.collections.set('outbound_leads', {
+    state: {
+      masterWrite: async () => [],
+      masterChangesSince: async () => ({ documents: [], checkpoint: null }),
+    },
+  });
+  assert(Array.isArray(await shared.routeMasterWrite('outbound_leads', [], 'p1')),
+    'a registered handler must still provide the normal write response');
+  assert(Array.isArray((await shared.routeMasterChangesSince('outbound_leads', [], 'p1')).documents),
+    'a registered handler must still provide the normal pull response');
+}
+
 // --- 2d. stale pending business commands absorb authoritative master ------
 {
   const state = await makeState('business_commands');

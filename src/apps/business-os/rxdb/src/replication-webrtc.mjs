@@ -911,16 +911,14 @@ class SharedRoomPeer {
   async routeMasterChangesSince(collection, params, peerId) {
     const registration = collection && this.collections.get(collection);
     if (!registration) {
-      // Unknown collection — return empty changes rather than leaking another
-      // collection's documents.
-      return { documents: [], checkpoint: params?.[0] || null };
+      return missingMasterHandlerResult(collection, 'pull');
     }
     return registration.state.masterChangesSince(params, peerId);
   }
 
   async routeMasterWrite(collection, params, peerId) {
     const registration = collection && this.collections.get(collection);
-    if (!registration) return [];
+    if (!registration) return missingMasterHandlerResult(collection, 'push');
     return registration.state.masterWrite(params, peerId);
   }
 
@@ -2909,6 +2907,19 @@ function replicationErrorResult(result) {
     && result.type === 'ctoxError'
     && result.scope === 'replication',
   );
+}
+
+function missingMasterHandlerResult(collection, direction) {
+  return {
+    type: 'ctoxError',
+    scope: 'replication',
+    rxdb: true,
+    code: 'RC_WEBRTC_PEER',
+    phase: 'replication-io',
+    direction,
+    collection: String(collection || ''),
+    message: `no master handler registered for ${collection || 'unknown collection'}`,
+  };
 }
 
 function replicationErrorResultError(result, collection) {
