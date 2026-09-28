@@ -762,13 +762,33 @@ var cachedNodeId = null;
 var nativeClockOffsetMs = 0;
 var nativeClockObservedAtMs = null;
 var clockSkewDetected = false;
+var nativeClockSource = null;
 var CLOCK_SKEW_LIMIT_MS = 5 * 60 * 1e3;
-function setHybridLogicalClockTimeAnchor(nativeTimeMs, observedAtMs = Date.now()) {
+var MAX_NATIVE_CLOCK_SAMPLE_RTT_MS = 1e4;
+var MAX_CLOCK_SAMPLE_WALL_DRIFT_MS = 2e3;
+function setHybridLogicalClockTimeAnchor(nativeTimeMs, observedAtMs = Date.now(), source = null) {
   if (!Number.isFinite(nativeTimeMs) || !Number.isFinite(observedAtMs)) return hybridLogicalClockStatus();
   nativeClockOffsetMs = Math.trunc(nativeTimeMs) - Math.trunc(observedAtMs);
   nativeClockObservedAtMs = Math.trunc(observedAtMs);
   clockSkewDetected = Math.abs(nativeClockOffsetMs) > CLOCK_SKEW_LIMIT_MS;
+  nativeClockSource = source;
   return hybridLogicalClockStatus();
+}
+function clearHybridLogicalClockTimeAnchor(source = null) {
+  if (source !== null && source !== nativeClockSource) return hybridLogicalClockStatus();
+  nativeClockOffsetMs = 0;
+  nativeClockObservedAtMs = null;
+  clockSkewDetected = false;
+  nativeClockSource = null;
+  return hybridLogicalClockStatus();
+}
+function setHybridLogicalClockTimeAnchorFromRoundTrip(nativeTimeMs, startedAtMs, receivedAtMs, elapsedMs, source = null) {
+  const wallElapsedMs = receivedAtMs - startedAtMs;
+  if (!Number.isFinite(nativeTimeMs) || !Number.isFinite(startedAtMs) || !Number.isFinite(receivedAtMs) || !Number.isFinite(elapsedMs) || elapsedMs < 0 || elapsedMs > MAX_NATIVE_CLOCK_SAMPLE_RTT_MS || wallElapsedMs < 0 || Math.abs(wallElapsedMs - elapsedMs) > MAX_CLOCK_SAMPLE_WALL_DRIFT_MS) {
+    if (source !== null && source !== nativeClockSource) clearHybridLogicalClockTimeAnchor();
+    return hybridLogicalClockStatus();
+  }
+  return setHybridLogicalClockTimeAnchor(nativeTimeMs, startedAtMs + elapsedMs / 2, source);
 }
 function correctedHybridLogicalClockNowMs(nowMs = Date.now()) {
   return Math.max(0, Math.trunc(Number(nowMs) || 0) + nativeClockOffsetMs);
@@ -9997,6 +10017,8 @@ var SharedRoomPeer = class {
       getPeerId: () => this.activeRemotePeerId
     });
     this.activeRemotePeerId = null;
+    this.clockAnchorSource = null;
+    this.clockAnchorPeerId = null;
     this.started = false;
     this.peerOpenQueue = Promise.resolve();
     this.negotiated = null;
@@ -10283,6 +10305,11 @@ var SharedRoomPeer = class {
         this.demandTransport.abortPeerRequests(event.detail?.peerId, event.detail?.reason || "peer-close");
       } catch {
       }
+      if (this.clockAnchorSource && this.clockAnchorPeerId === event.detail?.peerId) {
+        clearHybridLogicalClockTimeAnchor(this.clockAnchorSource);
+        this.clockAnchorSource = null;
+        this.clockAnchorPeerId = null;
+      }
       if (this.negotiated && this.negotiated.peerId === event.detail?.peerId) {
         this.negotiated = null;
       }
@@ -10533,9 +10560,12 @@ var SharedRoomPeer = class {
     const representative = this.representativeCollection();
     if (!representative) return null;
     if (!this.isPeerOpen(peerId)) return null;
+    const connection = this.peer?.connections?.get?.(peerId);
     this.handshakeMetrics.protocolNegotiations += 1;
     const localProtocol = await this.peer.protocolPayload(peerId, [], representative.collection);
     if (!this.isPeerOpen(peerId)) return null;
+    const clockRequestStartedAtMs = Date.now();
+    const clockRequestStartedMonotonicMs = globalThis.performance?.now?.() ?? null;
     const remoteProtocol = await this.peer.request(
       peerId,
       "ctoxProtocol",
@@ -10543,6 +10573,8 @@ var SharedRoomPeer = class {
       SHARED_HANDSHAKE_TIMEOUT_MS,
       representative.collection
     );
+    const clockResponseReceivedAtMs = Date.now();
+    const clockRequestElapsedMs = clockRequestStartedMonotonicMs === null ? clockResponseReceivedAtMs - clockRequestStartedAtMs : globalThis.performance.now() - clockRequestStartedMonotonicMs;
     const normalizedRemoteProtocol = normalizeRemoteProtocol(remoteProtocol);
     if (!this.isPeerOpen(peerId)) return null;
     const multiplexed = protocolHandshakeIsMultiplexed(
@@ -10580,6 +10612,17 @@ var SharedRoomPeer = class {
       }
     }
     await this.awaitRemoteMasterReady(peerId);
+    if (!connection || !this.isPeerOpen(peerId) || this.peer?.connections?.get?.(peerId) !== connection) return null;
+    const clockAnchorSource = `${this.key}:${generationObjectId(connection)}`;
+    setHybridLogicalClockTimeAnchorFromRoundTrip(
+      normalizedRemoteProtocol.nativeTimeMs,
+      clockRequestStartedAtMs,
+      clockResponseReceivedAtMs,
+      clockRequestElapsedMs,
+      clockAnchorSource
+    );
+    this.clockAnchorSource = clockAnchorSource;
+    this.clockAnchorPeerId = peerId;
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
     this.sendActiveCollections();
@@ -10957,12 +11000,7 @@ var CtoxWebRtcReplicationState = class {
   async runPeerReady(peerId, normalizedRemoteProtocol, queryFetchCapable) {
     if (this.cancelled) return;
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
-    if (Number.isFinite(normalizedRemoteProtocol?.nativeTimeMs)) {
-      Object.assign(
-        this.demandStatus,
-        setHybridLogicalClockTimeAnchor(normalizedRemoteProtocol.nativeTimeMs, Date.now())
-      );
-    }
+    Object.assign(this.demandStatus, hybridLogicalClockStatus());
     this.activeRemotePeerId = peerId;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
@@ -14066,6 +14104,7 @@ export {
   canonicalQueryJson,
   canonicalizeQueryInput,
   clearCollectionSyncProfiles,
+  clearHybridLogicalClockTimeAnchor,
   compareHybridLogicalClocks,
   correctedHybridLogicalClockNowMs,
   createActiveCollectionRegistry,
@@ -14121,6 +14160,7 @@ export {
   schemaHash,
   schemaHashSource,
   setHybridLogicalClockTimeAnchor,
+  setHybridLogicalClockTimeAnchorFromRoundTrip,
   setV15LogSink,
   sha256Hex,
   sha256Json,
