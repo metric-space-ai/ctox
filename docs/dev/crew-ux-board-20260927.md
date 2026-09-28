@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad (Stand 28.09. 16:10 UTC): welsch ABGESCHLOSSEN (beta.74 = v422 live). Offen nur noch thesen: steht wegen des P0-Freezes (Importverlust) auf v418; v420 per Datei-Deploy erst nach Freigabe des Owners im Crew-Thread.
+Kritischer Pfad (Stand 28.09. 16:10 UTC): welsch ABGESCHLOSSEN (beta.74 = v422 live). Offen nur noch thesen: steht wegen des P0-Freezes (Importverlust) auf v418; kommt mit dem kombinierten Owner-Release (PR #223, v424, enthält alle Crew-UX-Commits), danach Bildabnahme durch Crew-UX.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -74,7 +74,7 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 
 ## To-Do
 
-- **thesen v420** — Trigger: Owner hebt P0-Freeze auf (Crew-Thread). Datei-Deploy aus `git archive 303947063` (v422) mit Drift-Prüfung gegen die `11bc5164f`-Hashes (v418, Backup `files-20260928T124454Z`), kein Upgrade aktiv; danach Bild mit echtem Mausklick (`scratchpad/v420-accept.mjs`), auch ×N (thesen hat parallele Arbeit). Hilfsdienste (jami mit gelöschtem Executable) kommen mit dem nächsten regulären Owner-Upgrade.
+- **thesen: Bildabnahme nach dem kombinierten Release** — Entscheidung 17:10 UTC: KEIN eigener Datei-Deploy mehr. Der kombinierte Kandidat PR #223 (Head `29a280b7a`, Stempel `…crew-native-sync-dock-v424`) enthält nachweislich `11bc5164f` (v418), `2848cf6af` (v420), `303947063` (v422) und `b44025952` (Hilfsdienste) (`git merge-base --is-ancestor`); ein eigener Deploy würde gegen diesen signierten Release laufen. Trigger: Owner meldet den Release live auf thesen (nach P0-Freeze). Dann: Bildabnahme mit echtem Mausklick (`scratchpad/v420-accept.mjs`, `v422-accept.mjs`), inkl. ×N-Liste (thesen hat parallele Arbeit), Hilfsdienste auf neuem Binary prüfen.
 
 ## Backlog / Owner
 
