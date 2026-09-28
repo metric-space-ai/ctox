@@ -994,7 +994,9 @@ documents is `runtime/business-os-rxdb.sqlite3` as above.
     existing generation. A rejected SDP or answer-send failure therefore
     leaves the old open DataChannel intact. Candidate callbacks are staged
     until the new generation is registered; a candidate that reaches a
-    terminal state before that handoff cannot replace the old peer. The native peer
+    terminal state before that handoff cannot replace the old peer. Handler
+    close takes the same pending-generation/lifecycle locks before clearing
+    peers, so a late offer cannot register into a closed handler. The native peer
     remembers a bounded set of answered SDP session origins per signaling peer
     and ignores delayed duplicate offers. A genuinely new browser
     PeerConnection replaces the old responder even when its DataChannel is
