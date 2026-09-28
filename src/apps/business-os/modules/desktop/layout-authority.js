@@ -16,6 +16,26 @@ export function isDatabaseClosingError(error) {
   return /IDBDatabase.*closing|database connection is closing/i.test(message);
 }
 
+// The first paint may use an already replicated local layout. Reading it never
+// seeds or patches the collection; native authority is reconciled separately.
+export async function readLocalDesktopLayout({
+  collection,
+  defaultLayout,
+  documentId = 'layout',
+  onDatabaseClosing,
+}) {
+  if (!collection) return defaultLayout();
+  try {
+    const query = await collection.findOne(documentId);
+    const document = await query.exec();
+    return document?.toJSON?.() ?? document ?? defaultLayout();
+  } catch (error) {
+    if (!isDatabaseClosingError(error)) throw error;
+    onDatabaseClosing?.(error);
+    return defaultLayout();
+  }
+}
+
 // One boundary owns restart fallback for every local stage. Native read
 // rejection remains unknown authority inside the resolver and never seeds.
 export async function ensureDesktopLayoutWithAuthority(options) {
@@ -24,19 +44,21 @@ export async function ensureDesktopLayoutWithAuthority(options) {
   } catch (error) {
     if (!isDatabaseClosingError(error)) throw error;
     options.onDatabaseClosing?.(error);
-    return options.defaultLayout();
+    return (options.unknownLayout || options.defaultLayout)();
   }
 }
 
 async function resolveDesktopLayout({
   collection,
   defaultLayout,
+  unknownLayout = defaultLayout,
   readNativeDocument,
   insertMissingSeed,
   documentId = 'layout',
   now = Date.now,
+  isCurrent = () => true,
 }) {
-  if (typeof readNativeDocument !== 'function') return defaultLayout();
+  if (typeof readNativeDocument !== 'function') return unknownLayout();
 
   let authority;
   try {
@@ -44,13 +66,14 @@ async function resolveDesktopLayout({
   } catch {
     // Rejection is unknown state, not authoritative absence. Render locally and
     // leave the replicated document untouched.
-    return defaultLayout();
+    return unknownLayout();
   }
+  if (!isCurrent()) return unknownLayout();
   if (authority) return authority?.toJSON?.() ?? authority;
   if (authority !== null) {
     // Undefined/false are unknown or malformed outcomes. Only the strict
     // reader normalized null represents confirmed native absence.
-    return defaultLayout();
+    return unknownLayout();
   }
 
   // Native authority has confirmed absence. Insert once; if another writer wins

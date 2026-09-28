@@ -3572,7 +3572,7 @@ fn update_queue_task_with_optional_terminal_policy_grant(
     // An update keeps the task's place in the queue unless its priority is
     // changed explicitly. Dispatch orders pending work by this timestamp, and
     // recomputing it on every review-feedback or retry note moved a rejected
-    // task behind all fresh work: in production (26.09.2026) research leads queued
+    // task behind all fresh work: on one tenant (26.09.2026) research leads queued
     // at 07:49 waited behind tasks created two hours later, for hours, after a
     // single review round. Runtime backoff stays in `retry_not_before`.
     let preserved_sort_at = request

@@ -170,6 +170,16 @@ unknown, while a valid array — including `[]` — is a known local selection.
 Startup has no initialization timestamp and performs no pin-cache or layout
 write for unknown state.
 
+The Desktop module's first paint reads its existing `desktop_layout` and
+`desktop_icons` documents from local IndexedDB without waiting for a native
+round trip or icon repair writes. Native layout reconciliation and missing-icon
+repair run after mount in the background. An unavailable or malformed native
+answer keeps the locally painted layout and never authorizes a layout seed;
+only an explicit native `null` may reach the existing insert-if-missing path.
+Unmounted desktops do not start further reconciliation writes. This makes a
+previously loaded desktop usable during a slow or offline reconnect, but does
+not by itself establish that the full tenant data set has converged.
+
 Authoritative reconciliation uses the existing collection lease and
 query-demand-loader with an opaque `requireRevision` hydration token. Query
 readiness means the negotiated peer has query-fetch capability and the actual
@@ -730,6 +740,16 @@ is carried through the existing in-flight identity and sidecar satisfied-token
 fields; it is not a server revision or new transport.
 
 ### 3.2 Shell integration
+
+The native `ctoxProtocol` reply includes a wall-clock sample. The browser may
+use it as an HLC time anchor only at the room handshake that requested it: a
+round trip over 10 seconds, or a wall-clock jump during that round trip, makes
+the sample inconclusive. A fresh sample uses the midpoint of the bounded
+round trip. Later collection catch-up reuses the negotiated protocol for
+schema/checkpoint work but must not compare its old timestamp with the current
+browser clock. An inconclusive sample retains the previous anchor; it neither
+proves skew nor resolves existing conflicts. Conflict resolution still requires
+authoritative review of each local and native revision.
 
 **`shared/db.js` — `createBusinessDb({ name })`.** Imports the bundle through
 the canonical `shared/rxdb-runtime.js` loader and its single versioned URL,
@@ -1481,12 +1501,18 @@ and payload hash are durable. Startup registers collection replayers without
 serially blocking shell schema registration. Each collection starts a
 collection-scoped background replay; every mutating collection method still
 awaits that initialization and therefore remains fail-closed before accepting
-a new local write. Journal v3 adds the compound `stateCollection` index, so
-registration and native acknowledgement inspect only pending batches for the
-requested collection instead of scanning the entire WAL once per registered
-collection. Batches that already carry `primaryCommittedAtMs` are not written
-to the primary store a second time; they wait only for the native round-trip
-acknowledgement. Replication-origin and demand-loading writes bypass this WAL;
+a new local write. Journal v3 added the compound `stateCollection` index for
+collection-scoped replay. Journal v4 adds `state` and multi-entry `documentIds`
+indexes; master acknowledgements inspect only batches containing a returned
+document ID and do not rewrite unchanged batches. Retention GC still runs on
+changes or at most once an hour during idle native traffic. The first-write
+recovery check reads distinct, still-unacknowledged IDs in one primary
+transaction.
+`pendingWrites` counts only unacknowledged document IDs across pending batches,
+not the number of batches or distinct primary rows. Batches that already carry
+`primaryCommittedAtMs` are not written to the primary store a second time;
+they wait only for the native round-trip acknowledgement. Replication-origin
+and demand-loading writes bypass this WAL;
 the acknowledgement moves matching document/HLC entries to `master_acked`,
 which is retained for 24 hours.
 

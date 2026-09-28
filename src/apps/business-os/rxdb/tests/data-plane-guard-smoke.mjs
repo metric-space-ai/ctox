@@ -143,6 +143,38 @@ for (const file of readdirSync(rustPluginDir).filter((name) => name.endsWith('.r
   if (!bundleBuster || bundleBuster !== appBuild || shellEntryBuster !== appBuild) {
     offenders.push('shell entry, APP_BUILD, RxDB loader and bundle must share one cache revision');
   }
+
+  // A versioned app import is only the first hop. The static server rejects
+  // shell-v2 asset requests from a different generation with HTTP 409, so a
+  // stale import inside a module can make its top-level dynamic import fail.
+  const shellRoot = resolve(repoRoot, 'src/apps/business-os');
+  const runtimeFiles = [join(shellRoot, 'app.js'), join(shellRoot, 'index.html')];
+  function collectRuntimeScripts(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (!['tests', 'test', 'dist', 'node_modules'].includes(entry.name)) {
+          collectRuntimeScripts(join(dir, entry.name));
+        }
+      } else if (entry.isFile() && /\.(?:m?js)$/.test(entry.name) && !/\.test\./.test(entry.name)) {
+        runtimeFiles.push(join(dir, entry.name));
+      }
+    }
+  }
+  for (const dir of ['shared', 'modules', 'desktop-apps', 'themes']) {
+    collectRuntimeScripts(join(shellRoot, dir));
+  }
+  for (const path of runtimeFiles) {
+    const source = readFileSync(path, 'utf8');
+    const busters = [
+      ...source.matchAll(/\?v=(\d{8}-shell-v2-[a-z0-9-]+)/g),
+      ...source.matchAll(/\bCTOX_STYLE_BUILD\s*=\s*['"](\d{8}-shell-v2-[a-z0-9-]+)/g),
+    ];
+    for (const match of busters) {
+      if (appBuild && match[1] !== appBuild) {
+        offenders.push(`${relative(repoRoot, path)} requests shell generation ${match[1]} instead of APP_BUILD ${appBuild}`);
+      }
+    }
+  }
 }
 
 if (offenders.length) {

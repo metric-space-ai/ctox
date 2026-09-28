@@ -2,7 +2,7 @@ import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessConfirm, showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { createCtoxLauncher } from './ctoxLauncher.js';
 import { addMissingDesktopIcons, arrangeDesktopIcons, desktopIconWriteAvailability, dispatchDesktopChatOpen, replaceDesktopIcons, runDesktopActionOnce } from './desktopMenuActions.js';
-import { ensureDesktopLayoutWithAuthority, isDatabaseClosingError } from './layout-authority.js?v=20260919-layout-boundary-v2';
+import { ensureDesktopLayoutWithAuthority, isDatabaseClosingError, readLocalDesktopLayout } from './layout-authority.js?v=20260928-desktop-local-first-v1';
 import { makeIconDraggable } from './iconDrag.js?v=20260816-browser-sync-guards-v141';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js?v=20260816-browser-sync-guards-v141';
 import {
@@ -224,9 +224,8 @@ export async function mount(ctx) {
       }
     };
     updateClock();
-    // The timer starts only once the maintenance-sensitive icon persistence has
-    // succeeded: during maintenance `ensureIcons` can reject, and a desktop that
-    // never finished mounting must not keep a second-tick running behind it.
+    // Start only after the local first paint succeeds, so a failed mount cannot
+    // leave a clock ticking behind the shell's loading state.
     startClockTimer = () => {
       const clockInterval = setInterval(updateClock, 1000);
       cleanups.push(() => clearInterval(clockInterval));
@@ -237,12 +236,16 @@ export async function mount(ctx) {
   const iconsCollection = ctx.db?.collection?.('desktop_icons');
   const commandsCollection = ctx.db?.collection?.('business_commands');
 
-  const layout = await ensureLayout(layoutCollection, launcher);
+  let layout = await readLocalDesktopLayout({
+    collection: layoutCollection,
+    documentId: LAYOUT_DOC_ID,
+    defaultLayout: () => defaultLayout(launcher),
+    onDatabaseClosing: () => console.info('[desktop] local layout unavailable during database restart'),
+  });
   let iconPositionCache = readIconPositionCache();
   let iconsReadiness = readIconsReadiness();
-  await ensureIcons(iconsCollection, launcher);
-  startClockTimer?.();
   await renderIcons();
+  startClockTimer?.();
 
   cleanups.push(subscribeIcons());
   cleanups.push(subscribeIconsReadiness());
@@ -275,6 +278,29 @@ export async function mount(ctx) {
   refs.surface.addEventListener('drop', onDropSurface);
   cleanups.push(() => refs.surface.removeEventListener('dragover', onDragOverSurface));
   cleanups.push(() => refs.surface.removeEventListener('drop', onDropSurface));
+
+  // Locally saved icons are already visible. Native layout authority and icon
+  // repair continue after mount instead of holding the shell loading skeleton.
+  const reconciliationTimer = setTimeout(() => {
+    if (disposed) return;
+    void (async () => {
+      const previousGrid = [layout?.grid_cell_w, layout?.grid_cell_h, layout?.grid_offset];
+      const reconciledLayout = await ensureLayout(layoutCollection, launcher, () => layout);
+      if (disposed) return;
+      layout = reconciledLayout;
+      const nextGrid = [layout?.grid_cell_w, layout?.grid_cell_h, layout?.grid_offset];
+      if (previousGrid.some((value, index) => value !== nextGrid[index])) {
+        renderIcons.lastSignature = null;
+        await renderIcons();
+      }
+      if (!disposed) await ensureIcons(iconsCollection, launcher);
+    })().catch((error) => {
+      if (disposed || isDatabaseClosingError(error)) return;
+      if (showManagedAuthorizationError(error)) return;
+      console.error('[desktop] background layout/icon reconciliation failed:', error);
+    });
+  }, 0);
+  cleanups.push(() => clearTimeout(reconciliationTimer));
 
   return () => {
     disposed = true;
@@ -1184,11 +1210,13 @@ export async function mount(ctx) {
     const moduleTitle = titleForModule(doc.module);
     return `${moduleTitle ? `[${moduleTitle}] ` : ''}${doc.command_type || ''}`.trim() || doc.command_id || '';
   }
-  async function ensureLayout(collection, launcherRef) {
+  async function ensureLayout(collection, launcherRef, unknownLayout) {
     return ensureDesktopLayoutWithAuthority({
       collection,
       documentId: LAYOUT_DOC_ID,
       defaultLayout: () => defaultLayout(launcherRef),
+      unknownLayout,
+      isCurrent: () => !disposed,
       readNativeDocument: ctx.readNativeCollectionDocument
         ? () => ctx.readNativeCollectionDocument('desktop_layout', LAYOUT_DOC_ID, { timeoutMs: 5000 })
         : null,
@@ -1344,9 +1372,10 @@ export async function mount(ctx) {
   }
 
   async function ensureIcons(collection, launcherRef, { force = false } = {}) {
-    if (!collection) return;
+    if (disposed || !collection) return;
     try {
       const existing = await collection.find().exec();
+      if (disposed) return;
       const grid = currentGrid();
       const entries = launcherRef.entries();
       const existingById = new Map(existing.map((doc) => [doc.id, doc]));
@@ -1356,6 +1385,7 @@ export async function mount(ctx) {
         hidden: shouldUnhideDefaults ? false : undefined,
       }));
       await Promise.all(seeds.map(async (seed) => {
+        if (disposed) return;
         const existingDoc = existingById.get(seed.id);
         if (existingDoc && !force) {
           const patch = normalizeIconPatch(existingDoc, seed, grid, shouldUnhideDefaults);
@@ -1365,7 +1395,7 @@ export async function mount(ctx) {
         }
         await insertMissingSeed(collection, seed.id, { ...seed, hidden: false });
       }));
-      await normalizeIconLayoutIfNeeded(collection, launcherRef);
+      if (!disposed) await normalizeIconLayoutIfNeeded(collection, launcherRef);
     } catch (error) {
       if (!isDatabaseClosingError(error)) throw error;
       console.info('[desktop] icon seed skipped during database restart; using transient launcher icons');
@@ -1443,6 +1473,7 @@ export async function mount(ctx) {
     const docs = (await collection.find().exec())
       .filter((doc) => !doc.hidden && launcherRef.knows(doc.target_module))
       .sort((a, b) => (a.sort_index ?? 0) - (b.sort_index ?? 0));
+    if (disposed) return;
     const migrationKey = `${desktopIconPositionCacheStorageKey()}.${ROW_MAJOR_LAYOUT_MIGRATION}`;
     let needsRowMajorMigration = true;
     try {
@@ -1461,6 +1492,7 @@ export async function mount(ctx) {
     if (!hasCollision && !needsRowMajorMigration) return;
     const grid = currentGrid();
     await Promise.all(docs.map((doc, index) => {
+      if (disposed) return undefined;
       const position = gridPosition(index, grid);
       iconPositionCache.set(doc.id, {
         x: position.x,

@@ -64,8 +64,9 @@ import { threeWayMergeDocuments } from './conflict-merge.mjs';
 import {
   compareHybridLogicalClocks,
   hybridLogicalClockStatus,
+  clearHybridLogicalClockTimeAnchor,
   isFutureHybridLogicalClock,
-  setHybridLogicalClockTimeAnchor,
+  setHybridLogicalClockTimeAnchorFromRoundTrip,
 } from './hybrid-logical-clock.mjs';
 import { createV1_5StatusState, snapshotV1_5Status } from './v1_5_status.mjs';
 import { createBroadcastChannelBroker } from './multi-tab-broker.mjs';
@@ -272,6 +273,8 @@ class SharedRoomPeer {
       getPeerId: () => this.activeRemotePeerId,
     });
     this.activeRemotePeerId = null;
+    this.clockAnchorSource = null;
+    this.clockAnchorPeerId = null;
     this.started = false;
     this.peerOpenQueue = Promise.resolve();
     // Negotiated remote protocol from the room-level handshake, retained so a
@@ -639,6 +642,11 @@ class SharedRoomPeer {
       // A closed peer invalidates the negotiated handshake; a fresh peer-open
       // will renegotiate and re-drive every collection's catch-up.
       try { this.demandTransport.abortPeerRequests(event.detail?.peerId, event.detail?.reason || 'peer-close'); } catch {}
+      if (this.clockAnchorSource && this.clockAnchorPeerId === event.detail?.peerId) {
+        clearHybridLogicalClockTimeAnchor(this.clockAnchorSource);
+        this.clockAnchorSource = null;
+        this.clockAnchorPeerId = null;
+      }
       if (this.negotiated && this.negotiated.peerId === event.detail?.peerId) {
         this.negotiated = null;
       }
@@ -976,16 +984,14 @@ class SharedRoomPeer {
   async routeMasterChangesSince(collection, params, peerId) {
     const registration = collection && this.collections.get(collection);
     if (!registration) {
-      // Unknown collection — return empty changes rather than leaking another
-      // collection's documents.
-      return { documents: [], checkpoint: params?.[0] || null };
+      return missingMasterHandlerResult(collection, 'pull');
     }
     return registration.state.masterChangesSince(params, peerId);
   }
 
   async routeMasterWrite(collection, params, peerId) {
     const registration = collection && this.collections.get(collection);
-    if (!registration) return [];
+    if (!registration) return missingMasterHandlerResult(collection, 'push');
     return registration.state.masterWrite(params, peerId);
   }
 
@@ -996,9 +1002,12 @@ class SharedRoomPeer {
     const representative = this.representativeCollection();
     if (!representative) return null;
     if (!this.isPeerOpen(peerId)) return null;
+    const connection = this.peer?.connections?.get?.(peerId);
     this.handshakeMetrics.protocolNegotiations += 1;
     const localProtocol = await this.peer.protocolPayload(peerId, [], representative.collection);
     if (!this.isPeerOpen(peerId)) return null;
+    const clockRequestStartedAtMs = Date.now();
+    const clockRequestStartedMonotonicMs = globalThis.performance?.now?.() ?? null;
     const remoteProtocol = await this.peer.request(
       peerId,
       'ctoxProtocol',
@@ -1006,6 +1015,10 @@ class SharedRoomPeer {
       SHARED_HANDSHAKE_TIMEOUT_MS,
       representative.collection,
     );
+    const clockResponseReceivedAtMs = Date.now();
+    const clockRequestElapsedMs = clockRequestStartedMonotonicMs === null
+      ? clockResponseReceivedAtMs - clockRequestStartedAtMs
+      : globalThis.performance.now() - clockRequestStartedMonotonicMs;
     const normalizedRemoteProtocol = normalizeRemoteProtocol(remoteProtocol);
     if (!this.isPeerOpen(peerId)) return null;
     // Startup is asymmetric: either side may have registered the complete
@@ -1049,6 +1062,21 @@ class SharedRoomPeer {
       }
     }
     await this.awaitRemoteMasterReady(peerId);
+    if (!connection || !this.isPeerOpen(peerId)
+      || this.peer?.connections?.get?.(peerId) !== connection) return null;
+    // Only the token-authorized connection may contribute a clock sample.
+    // Its object identity prevents an old close/reconnect generation from
+    // carrying an offset into a newly authenticated peer.
+    const clockAnchorSource = `${this.key}:${generationObjectId(connection)}`;
+    setHybridLogicalClockTimeAnchorFromRoundTrip(
+      normalizedRemoteProtocol.nativeTimeMs,
+      clockRequestStartedAtMs,
+      clockResponseReceivedAtMs,
+      clockRequestElapsedMs,
+      clockAnchorSource,
+    );
+    this.clockAnchorSource = clockAnchorSource;
+    this.clockAnchorPeerId = peerId;
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
     // Phase 2: the native peer cleared its per-peer active set on the prior
@@ -1387,7 +1415,7 @@ class CtoxWebRtcReplicationState {
     // The frame's `collection` field is the collection NAME. Passing the
     // RxCollection object made the native peer drop every such frame, so each
     // `ctox.outbound.sellify_lookup.v1` ran into its caller's timeout while the
-    // same request with the name answered in under a second (production 26.09.2026).
+    // same request with the name answered in under a second (tenant incident 26.09.2026).
     return this.peer.request(negotiated.peerId, String(method || ''), [params], timeoutMs, this.collection?.name || null);
   }
 
@@ -1534,12 +1562,9 @@ class CtoxWebRtcReplicationState {
   async runPeerReady(peerId, normalizedRemoteProtocol, queryFetchCapable) {
     if (this.cancelled) return;
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
-    if (Number.isFinite(normalizedRemoteProtocol?.nativeTimeMs)) {
-      Object.assign(
-        this.demandStatus,
-        setHybridLogicalClockTimeAnchor(normalizedRemoteProtocol.nativeTimeMs, Date.now()),
-      );
-    }
+    // The shared handshake owns the time sample. This collection may catch up
+    // long after the native protocol response was produced.
+    Object.assign(this.demandStatus, hybridLogicalClockStatus());
     this.activeRemotePeerId = peerId;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
@@ -1703,8 +1728,18 @@ class CtoxWebRtcReplicationState {
       const response = await this.requestMasterChangesSince(activePeerId, checkpoint, batchSize);
       if (this.cancelled) return;
       activePeerId = response.peerId || activePeerId;
-      const result = response.result || {};
-      const documents = Array.isArray(result?.documents) ? result.documents : [];
+      const result = response.result;
+      // An absent or malformed master reply is not an empty collection. Leave
+      // the pull checkpoint and first-pull readiness untouched for retry.
+      if (!result || typeof result !== 'object' || !Array.isArray(result.documents)) {
+        const error = new Error(`masterChangesSince returned no documents array for ${this.collection.name}`);
+        error.code = 'ctox_replication_invalid_master_changes_result';
+        error.phase = 'replication-io';
+        error.direction = 'pull';
+        error.collection = this.collection.name;
+        throw error;
+      }
+      const documents = result.documents;
       if (documents.length) {
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId),
@@ -1914,7 +1949,7 @@ class CtoxWebRtcReplicationState {
           throw replicationErrorResultError(masterWriteResult, this.collection.name);
         }
         const conflicts = masterWriteResult;
-        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
         if (!conflictMap.size) {
           rows = [];
           break;
@@ -1994,7 +2029,7 @@ class CtoxWebRtcReplicationState {
         }
         throw replicationErrorResultError(conflicts, this.collection.name);
       }
-      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
       if (!conflictMap.size) {
         rows = [];
         break;
@@ -2905,9 +2940,19 @@ function hashString(value) {
   return (hash >>> 0).toString(36);
 }
 
-function documentsByPrimaryPath(documents = [], primaryPath = 'id') {
+function documentsByPrimaryPath(documents, primaryPath = 'id', collection = '') {
+  // Only a conflicts ARRAY acknowledges masterWrite. A missing or malformed
+  // reply must leave the local push checkpoint behind the pending document.
+  if (!Array.isArray(documents)) {
+    const error = new Error(`masterWrite returned no conflict array for ${collection || 'unknown collection'}`);
+    error.code = 'ctox_replication_invalid_master_write_result';
+    error.phase = 'replication-io';
+    error.direction = 'push';
+    error.collection = collection;
+    throw error;
+  }
   const map = new Map();
-  for (const doc of Array.isArray(documents) ? documents : []) {
+  for (const doc of documents) {
     const id = primaryValue(doc, primaryPath);
     if (id) map.set(id, doc);
   }
@@ -2968,6 +3013,19 @@ function replicationErrorResult(result) {
     && result.type === 'ctoxError'
     && result.scope === 'replication',
   );
+}
+
+function missingMasterHandlerResult(collection, direction) {
+  return {
+    type: 'ctoxError',
+    scope: 'replication',
+    rxdb: true,
+    code: 'RC_WEBRTC_PEER',
+    phase: 'replication-io',
+    direction,
+    collection: String(collection || ''),
+    message: `no master handler registered for ${collection || 'unknown collection'}`,
+  };
 }
 
 function replicationErrorResultError(result, collection) {

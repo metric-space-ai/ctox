@@ -92,6 +92,7 @@ async function collect(page, selected) {
       chatHasCreatureCopy: Boolean(document.querySelector('[data-chat-creature] .ctox-crew-creature')),
       miloBeings: Array.from(document.querySelectorAll('.ctox-flow-creature-slot .ctox-crew-creature')).filter((node) => node.style.getPropertyValue('--crew-color') === '#00aa9a').length,
       miloCount: document.querySelector('[data-crew-pos-key="member:crew:milo"]')?.dataset.crewCount || '',
+      presenceEvents: window.__presenceEvents || 0,
       seatAway: Object.fromEntries(Array.from(document.querySelectorAll('#bar [data-seat]')).map((seat) => [seat.dataset.seat, seat.querySelector('.ctox-crew-creature')?.dataset.crewAway === 'true'])),
       visibilityState: document.visibilityState,
       motionRunning: Boolean(window.__ctoxCrewMotionEngine?.running),
@@ -145,6 +146,7 @@ function assertResult(result) {
   for (const [member, expected] of Object.entries(onMap)) {
     if (result.seatAway[member] !== expected) throw new Error(`crew bar seat of ${member} must ${expected ? 'show the portrait while its body is on the map' : 'keep the living body'}: ${JSON.stringify(result.seatAway)}`);
   }
+  if (result.selected !== 'task-working' && !(result.presenceEvents > 0)) throw new Error('presence changes must be announced so the crew bar tooltip can follow');
   if (result.miloBeings !== 1 || result.miloCount !== '2') throw new Error(`a member with two running tasks must stand on the map exactly once with a count of 2: ${JSON.stringify({ beings: result.miloBeings, count: result.miloCount })}`);
 }
 
@@ -199,6 +201,7 @@ function harnessHtml() {
     document.querySelector('#chat-creature').innerHTML=crewReferenceHtml({id:'chat-random',crewIdentity:{id:'crew:milo',name:'Milo',shape:'blob',color:'#00aa9a'},messages:[{commandId:'cmd-working',taskId:'task-working'}]},26);
     syncCrewProceduralMotion(document.querySelector('main'));
     window.__triggerCrewTurn=()=>{const node=document.querySelector('[data-task-id="task-working"] .ctox-crew-creature');node.dataset.activityTurns=String(Number(node.dataset.activityTurns||0)+1);node.dataset.activityUpdatedAt=String(Date.now());node.dataset.activityKind='tool';syncCrewProceduralMotion(document.querySelector('main'))};
+    window.__presenceEvents=0; window.addEventListener('ctox-crew-presence',()=>{window.__presenceEvents+=1});
     window.__ctoxCrewReady=true;
   </script></body></html>`;
 }

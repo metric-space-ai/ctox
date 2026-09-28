@@ -18,7 +18,7 @@
  * work stays on the compositor; eye moves are rare and short.
  */
 
-import { CREW_CREATURE_CSS } from './crew-renderer.js?v=20260928-crew-portrait-v6';
+import { CREW_CREATURE_CSS } from './crew-renderer.js?v=20260928-crew-truth-v7';
 
 const ENGINE_KEY = '__ctoxCrewMotionEngine';
 const STYLE_ID = 'ctox-crew-creature-css';
@@ -252,16 +252,22 @@ function createEngine() {
       if (!actor.visible || !actor.member || !actor.node.isConnected) continue;
       best.set(actor.member, Math.max(best.get(actor.member) || 0, actor.rank));
     }
+    let changed = false;
     for (const actor of actors.values()) {
       const away = Boolean(actor.member && actor.visible && actor.rank < (best.get(actor.member) || 0));
       if (away === actor.away) continue;
       actor.away = away;
+      changed = true;
       if (away) {
         actor.node.dataset.crewAway = 'true';
         clearStyles(actor);
       } else {
         delete actor.node.dataset.crewAway;
       }
+    }
+    // Hosts (the crew bar tooltip) follow where each member is.
+    if (changed) {
+      try { window.dispatchEvent(new CustomEvent('ctox-crew-presence')); } catch {}
     }
   }
 

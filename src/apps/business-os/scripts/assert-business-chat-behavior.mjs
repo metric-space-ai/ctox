@@ -117,6 +117,42 @@ try {
     });
   }
 
+  // Owner 28.09.2026: clicking Lumi in the crew bar opened a chat with
+  // "Crew". A mouse click on a member seat opens a conversation with that
+  // member, clicking it again returns to it, and the first task names the
+  // member for the router; follow-ups stay by thread continuity.
+  await scenario(page, 'member-seat-click-opens-conversation-with-member', { count: 0, crewMembers: 4 }, async () => {
+    const seat = () => page.locator('.ctox-chat-crew-slot[data-crew-drag="member_1"]').first();
+    await seat().waitFor();
+    const clickSeat = async () => {
+      const box = await seat().boundingBox();
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    };
+    await clickSeat();
+    const active = page.locator('.ctox-chat-window.is-active');
+    await active.waitFor();
+    expect(await active.locator('.ctox-chat-title .ctox-crew-ref').getAttribute('data-crew-ref') === 'member_1', 'the window shows the clicked member, not the whole crew');
+    expect(await active.locator('textarea[name="message"]').getAttribute('placeholder') === 'Aufgabe für Nia...', 'the composer addresses the member');
+    expect(await active.locator('.ctox-chat-delegation-card').count() === 0, 'no empty progress ring before any task exists');
+    await clickSeat();
+    await page.evaluate(() => window.chatHarness.waitForPaint());
+    expect(await page.locator('.ctox-chat-window').count() === 1, 'clicking the member again returns to its conversation');
+    await active.locator('textarea[name="message"]').fill('Bitte die offenen Rechnungen prüfen.');
+    await active.locator('[data-chat-send]').click();
+    const first = await page.evaluate(async () => {
+      await window.chatHarness.waitFor(() => window.chatHarness.lastCommand);
+      return window.chatHarness.lastCommand;
+    });
+    expect(first.payload.crew_member_id === 'member_1', `the first task names the addressed member: ${JSON.stringify(first.payload.crew_member_id)}`);
+    await active.locator('textarea[name="message"]').fill('Und bitte kurz zusammenfassen.');
+    await active.locator('[data-chat-send]').click();
+    const followUp = await page.evaluate(async (firstId) => {
+      await window.chatHarness.waitFor(() => window.chatHarness.lastCommand && window.chatHarness.lastCommand.id !== firstId);
+      return window.chatHarness.lastCommand;
+    }, first.id);
+    expect(!('crew_member_id' in followUp.payload), 'a follow-up stays with the member through continuity, not a new assignment');
+  });
+
   await scenario(page, 'future-date-no-phantom-chat', { count: 0 }, async (m) => {
     const after = await page.evaluate(async () => {
       document.querySelector('[data-chat-date-next]').click();

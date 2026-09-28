@@ -227,7 +227,7 @@ lead and your research command. Never edit collections directly, never report re
 text only.
 
 Call it with `payload` as **one JSON string** that encodes the payload object. MiniMax drops
-large object arguments on the way to the tool (production 26.09.2026: 5 of 6 replayed calls arrived
+large object arguments on the way to the tool (tenant incident 26.09.2026: 5 of 6 replayed calls arrived
 as `{}`); a string arrives intact, the server decodes it and names the exact position of any JSON
 error. The payload object inside that string:
 

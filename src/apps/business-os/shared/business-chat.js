@@ -1,5 +1,5 @@
-import { normalizeCrewAppearance, renderCrewCreature, renderCrewReference, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260928-crew-portrait-v6';
-import { syncCrewMotion } from './crew-motion.js?v=20260928-crew-portrait-v6';
+import { normalizeCrewAppearance, renderCrewCreature, renderCrewReference, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260928-crew-truth-v7';
+import { syncCrewMotion } from './crew-motion.js?v=20260928-crew-truth-v7';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
   FILE_CHUNK_HASH_SCHEME,
@@ -37,6 +37,8 @@ const CHAT_LIVE_SYNC_COLLECTIONS = Object.freeze([
   'business_commands',
   'ctox_queue_tasks',
   'ctox_crew_members',
+  // Worker truth for the bar and app presence (one small document).
+  'ctox_harness_status',
 ]);
 
 // --- The crew pool in the bar: members, draggable onto any app -----------------
@@ -110,12 +112,27 @@ export const CREW_APP_PRESENCE_STATUSES = new Set(['running', 'leased', 'review'
 export const CREW_APP_PRESENCE_LIMIT = 2;
 const CREW_APP_PRESENCE_TASK_LIMIT = 200;
 
-export function crewAppPresenceFromTasks(tasks, members) {
+// Worker truth: a queue row can stay "running"/"leased" while no worker
+// executes it (thesen 28.09.2026: six rows, 21–134 attempts, 0 workers). When
+// ctox_harness_status says which queue keys run, only those count as work.
+export function crewTaskIsWorking(task, liveKeys = null) {
+  const status = String(task?.status || '').trim().toLowerCase();
+  if (!CREW_APP_PRESENCE_STATUSES.has(status)) return false;
+  if (!liveKeys) return true;
+  return [task?.message_key, task?.id, task?.task_id].some((key) => key && liveKeys.has(String(key)));
+}
+
+export function crewLiveKeys(harness) {
+  if (!harness || !Array.isArray(harness.active_task_ids)) return null;
+  if (harness.service_running === false) return new Set();
+  return new Set(harness.active_task_ids.map((key) => String(key)));
+}
+
+export function crewAppPresenceFromTasks(tasks, members, liveKeys = null) {
   const byId = new Map((members || []).map((member) => [member.id, member]));
   const presence = new Map();
   for (const task of Array.isArray(tasks) ? tasks : []) {
-    const status = String(task?.status || '').trim().toLowerCase();
-    if (!CREW_APP_PRESENCE_STATUSES.has(status)) continue;
+    if (!crewTaskIsWorking(task, liveKeys)) continue;
     const memberId = String(task?.crew_member_id || '').trim();
     const member = memberId ? byId.get(memberId) : null;
     if (!member) continue;
@@ -131,18 +148,17 @@ export function crewAppPresenceFromTasks(tasks, members) {
 
 // How much each member is doing right now (same queue source and statuses
 // as the app presence): the crew bar shows it on the member's seat.
-export function crewWorkloadFromTasks(tasks) {
+export function crewWorkloadFromTasks(tasks, liveKeys = null) {
   const load = new Map();
   for (const task of Array.isArray(tasks) ? tasks : []) {
-    const status = String(task?.status || '').trim().toLowerCase();
-    if (!CREW_APP_PRESENCE_STATUSES.has(status)) continue;
+    if (!crewTaskIsWorking(task, liveKeys)) continue;
     const memberId = String(task?.crew_member_id || '').trim();
     if (memberId) load.set(memberId, (load.get(memberId) || 0) + 1);
   }
   return load;
 }
 
-function crewSlotTitle(member, load = 0) {
+function crewSlotTitle(member, load = 0, away = false) {
   const german = chatUiIsGerman();
   const expression = crewMemberExpression(member);
   const stateText = expression === 'reading' ? (german ? 'liest sein Gedächtnis' : 'reading its memory')
@@ -154,7 +170,8 @@ function crewSlotTitle(member, load = 0) {
     ? ` · ${german ? `${load} ${load === 1 ? 'Aufgabe' : 'Aufgaben'} in Arbeit` : `${load} ${load === 1 ? 'task' : 'tasks'} in progress`}`
     : '';
   const domain = member.domain?.length ? ` · ${member.domain.join(', ')}` : '';
-  return `${member.name} · ${stateText}${loadText}${domain} · ${german ? 'auf eine App ziehen' : 'drag onto an app'}`;
+  const where = away ? ` · ${german ? 'steht gerade auf der Crew-Karte' : 'on the crew map right now'}` : '';
+  return `${member.name} · ${stateText}${loadText}${where}${domain} · ${german ? 'auf eine App ziehen' : 'drag onto an app'}`;
 }
 
 // While the CTOX app is open it publishes the reconciled count (queue plus
@@ -174,7 +191,8 @@ function applyCrewWorkload(state) {
     if (!member) return;
     const load = crewLoadFor(state, member.id);
     if (slot.dataset.crewLoad !== String(load)) slot.dataset.crewLoad = String(load);
-    const title = crewSlotTitle(member, load);
+    const away = slot.querySelector('.ctox-crew-creature')?.dataset?.crewAway === 'true';
+    const title = crewSlotTitle(member, load, away);
     if (slot.getAttribute('title') !== title) slot.setAttribute('title', title);
   });
 }
@@ -225,6 +243,18 @@ export function applyCrewAppPresence(presence) {
   }
 }
 
+async function loadCrewHarnessStatus(db) {
+  const collection = db?.raw?.ctox_harness_status;
+  if (!collection || typeof collection.find !== 'function') return null;
+  try {
+    const docs = await collection.find({ selector: { id: 'harness' }, limit: 1 }).exec();
+    const doc = Array.isArray(docs) ? docs[0] : null;
+    return doc ? (doc.toJSON?.() || doc) : null;
+  } catch {
+    return null;
+  }
+}
+
 async function loadCrewAppTasks(db) {
   const collection = db?.raw?.ctox_queue_tasks;
   if (!collection || typeof collection.find !== 'function') return [];
@@ -245,6 +275,7 @@ async function loadCrewAppTasks(db) {
 function wireCrewAppPresence({ state, db, syncFacade }) {
   let disposed = false;
   let tasks = [];
+  let liveKeys = null;
   let reloadTimer = null;
   let expressionTimer = null;
   let busWired = false;
@@ -256,8 +287,8 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
   const apply = () => {
     if (disposed) return;
     const members = state.crewMembers || [];
-    applyCrewAppPresence(crewAppPresenceFromTasks(tasks, members));
-    state.crewWorkload = crewWorkloadFromTasks(tasks);
+    applyCrewAppPresence(crewAppPresenceFromTasks(tasks, members, liveKeys));
+    state.crewWorkload = crewWorkloadFromTasks(tasks, liveKeys);
     applyCrewWorkload(state);
     // Expressions decay (reading -> running, learning -> idle); re-draw when
     // the earliest one ends so the badge does not freeze mid-expression.
@@ -271,9 +302,10 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
   };
   const reload = () => {
     if (disposed) return Promise.resolve();
-    return loadCrewAppTasks(db).then((next) => {
+    return Promise.all([loadCrewAppTasks(db), loadCrewHarnessStatus(db)]).then(([next, harness]) => {
       if (disposed) return;
       tasks = next;
+      liveKeys = crewLiveKeys(harness);
       apply();
     }).catch(() => {});
   };
@@ -300,9 +332,14 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     }
   };
   try { subscriptions.push(db?.raw?.ctox_queue_tasks?.$?.subscribe?.(scheduleReload) || null); } catch {}
+  try { subscriptions.push(db?.raw?.ctox_harness_status?.$?.subscribe?.(scheduleReload) || null); } catch {}
   const onPublishedWorkload = () => { if (!disposed) applyCrewWorkload(state); };
   window.addEventListener?.('ctox-crew-workload', onPublishedWorkload);
-  readinessCleanups.push(() => window.removeEventListener?.('ctox-crew-workload', onPublishedWorkload));
+  window.addEventListener?.('ctox-crew-presence', onPublishedWorkload);
+  readinessCleanups.push(() => {
+    window.removeEventListener?.('ctox-crew-workload', onPublishedWorkload);
+    window.removeEventListener?.('ctox-crew-presence', onPublishedWorkload);
+  });
   try {
     subscriptions.push(db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
       if (disposed) return;
@@ -336,6 +373,14 @@ function crewPoolSlotHtml(member, placement = 'fab', load = 0) {
 }
 
 const CREW_DRAG_THRESHOLD_PX = 6;
+
+export function memberChatOpenDetail(member) {
+  return {
+    member_chat: true,
+    crew_member_id: member.id,
+    crew_identity: { id: member.id, name: member.name, shape: member.shape, color: member.color },
+  };
+}
 
 function wireCrewDrag(root, state) {
   if (root.dataset.crewDragWired === '1') return;
@@ -379,7 +424,17 @@ function wireCrewDrag(root, state) {
     const x = event.clientX;
     const y = event.clientY;
     cleanup();
-    if (!wasActive) return;
+    if (!wasActive) {
+      // Owner 28.09.2026: clicking Lumi opened a chat with "Crew" — the member
+      // was lost exactly when the owner addressed it. A click (no drag) on a
+      // member now opens a chat with that member; the dock toggle the same
+      // click would trigger is swallowed.
+      const slot = event.target?.closest?.('[data-crew-drag]');
+      if (!slot || slot.dataset.crewDrag !== member.id || !root.contains(slot)) return;
+      state.crewDragEndedAt = Date.now();
+      window.dispatchEvent(new CustomEvent(CHAT_OPEN_EVENT, { detail: memberChatOpenDetail(member) }));
+      return;
+    }
     state.crewDragEndedAt = Date.now();
     const crew = {
       id: member.id,
@@ -1622,7 +1677,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
           if (progressCard) {
             progressCard.outerHTML = expectedCard;
             cardUpdated = true;
-          } else if (typeof win.querySelector('header')?.insertAdjacentHTML === 'function') {
+          } else if (expectedCard && typeof win.querySelector('header')?.insertAdjacentHTML === 'function') {
             win.querySelector('header').insertAdjacentHTML('beforeend', expectedCard);
             cardUpdated = true;
           }
@@ -2460,9 +2515,23 @@ function resolveChatForOpenDetail(state, session, detail = {}) {
     return trackedChat;
   }
   if (detail.reuseActive === true) return ensureChat(state, session);
+  if (detail.member_chat === true) {
+    const memberChat = latestOpenMemberChatToday(state, String(detail.crew_member_id || ''));
+    if (memberChat) return memberChat;
+  }
   const chat = createChat(state.ownerUserId, state.selectedDate);
   state.chats.push(chat);
   return chat;
+}
+
+// A member is one conversation partner: clicking it again returns to today's
+// conversation with it instead of stacking empty chats.
+export function latestOpenMemberChatToday(state, memberId) {
+  if (!memberId) return null;
+  const today = getLocalDateString(Date.now());
+  return (state?.chats || [])
+    .filter((chat) => chat.open !== false && chat.crew_member_id === memberId && getLocalDateString(chat.createdAt) === today)
+    .sort((left, right) => chatActivityMs(right) - chatActivityMs(left))[0] || null;
 }
 
 function chatActivityMs(chat) {
@@ -2850,6 +2919,9 @@ function progressShowsActiveReview(progress, taskStatus = '') {
 
 function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskStatus = 'queued' } = {}) {
   const progress = executionProgressForChat(chat);
+  // Nothing was handed over yet: no ring. An empty, disabled ring in every new
+  // chat was noise the owner read as a missing member (28.09.2026).
+  if (!progress && !taskId && !commandId) return '';
   if (!progress) {
     const isPlanning = taskStatus === 'queued' || taskStatus === 'running' || taskStatus === 'blocked';
     const tooltip = isPlanning
@@ -3892,6 +3964,18 @@ function chatInspectionMarkup(chat) {
   return `<details class="ctox-chat-inspection" ${chat.inspectionOpen ? 'open' : ''}><summary>${escapeHtml(content.title)}</summary><div class="ctox-chat-inspection-body">${content.body}</div></details>`;
 }
 
+// The member the owner addressed before any work exists in this chat (member
+// seat click, drop onto a record). Router-assigned chats get their member only
+// with a task, and follow-ups stay with it through the router's thread
+// continuity — so only the first submission names the member.
+export function chatAddressedMemberId(chat) {
+  const memberId = String(chat?.crew_member_id || '').trim();
+  if (!memberId) return '';
+  const hasWork = Boolean(chat.lastTrackingId)
+    || (Array.isArray(chat.messages) && chat.messages.some((message) => message?.commandId || message?.taskId));
+  return hasWork ? '' : memberId;
+}
+
 async function submitChatMessage({
   state,
   chat,
@@ -3914,6 +3998,7 @@ async function submitChatMessage({
   const extraClientContext = meta.client_context && typeof meta.client_context === 'object' ? meta.client_context : {};
   const now = Date.now();
   const commandId = meta.command_id || meta.commandId || `cmd_${crypto.randomUUID()}`;
+  const addressedMemberId = chatAddressedMemberId(chat);
   // Consume a caller-supplied command id: it is valid for this one submission.
   if (chat.contextMeta && typeof chat.contextMeta === 'object') {
     delete chat.contextMeta.command_id;
@@ -3991,6 +4076,7 @@ async function submitChatMessage({
       record_id: meta.record_id || chat.id,
       inbound_channel: meta.inbound_channel || CHAT_CHANNEL,
       payload: {
+        ...(addressedMemberId ? { crew_member_id: addressedMemberId } : {}),
         ...extraPayload,
         title: displayTitle,
         display_title: displayTitle,
