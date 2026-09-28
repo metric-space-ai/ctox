@@ -122,16 +122,18 @@ try {
     }
     other.close();
 
-    // Sanitized backlog fixture: 240 pending historical versions over 60 IDs.
+    // Sanitized backlog fixture: 240 pending historical versions over 60 IDs
+    // and roughly 22 MB of payload, comparable in bytes but not known shape.
     // Capture recovery, first-write and ACK costs without pretending this is
     // the affected tenant's unknown batch mix or browser profile.
     const backlogName = `${databaseName}-backlog`;
     const backlogJournal = await openRecoveryJournal({ databaseName: backlogName });
     const backlogTx = backlogJournal.db.transaction('batches', 'readwrite');
     const backlogStore = backlogTx.objectStore('batches');
+    const backlogPayload = 'x'.repeat(90_000);
     for (let index = 0; index < 240; index += 1) {
       const id = `lead-${index % 60}`;
-      const doc = { id, payload: 'x'.repeat(256), _meta: { ctoxHlc: `${(index + 1).toString(36)}:0:tab-a` } };
+      const doc = { id, payload: backlogPayload, _meta: { ctoxHlc: `${(index + 1).toString(36)}:0:tab-a` } };
       backlogStore.put({
         batchId: `backlog-${index}`, sequence: index + 1,
         collection: 'outbound_leads', state: 'pending',
@@ -144,7 +146,11 @@ try {
       backlogTx.onerror = () => rejectDone(backlogTx.error);
       backlogTx.onabort = () => rejectDone(backlogTx.error);
     });
-    const backlogPendingBefore = (await backlogJournal.getStatus()).pendingWrites;
+    const statusStarted = performance.now();
+    const backlogBefore = await backlogJournal.getStatus();
+    const backlogStatusMs = performance.now() - statusStarted;
+    const backlogPendingBefore = backlogBefore.pendingWrites;
+    const backlogBytesBefore = backlogBefore.pendingBytes;
     backlogJournal.close();
     const backlogStorage = await openCtoxIndexedDbStorage({ databaseName: backlogName });
     const backlogCollection = backlogStorage.collection('outbound_leads', {
@@ -163,7 +169,7 @@ try {
     const backlogPendingAfterFirstWrite = (await backlogStorage.recoveryJournal.getStatus()).pendingWrites;
     const ackStarted = performance.now();
     await backlogStorage.recoveryJournal.markMasterAcknowledged('outbound_leads', {
-      'lead-0': { id: 'lead-0', payload: 'x'.repeat(256), _meta: { ctoxHlc: '51:0:tab-a' } },
+      'lead-0': { id: 'lead-0', payload: backlogPayload, _meta: { ctoxHlc: '51:0:tab-a' } },
     });
     const backlogAckMs = performance.now() - ackStarted;
     const backlogPendingAfter = (await backlogStorage.recoveryJournal.getStatus()).pendingWrites;
@@ -326,6 +332,8 @@ try {
       migratedBatches,
       migratedVersion,
       backlogPendingBefore,
+      backlogBytesBefore,
+      backlogStatusMs,
       backlogPendingAfterFirstWrite,
       backlogPendingAfter,
       backlogRecoveryMs,
@@ -373,7 +381,9 @@ try {
   assert(result.backlogPendingBefore === 240 && result.backlogPendingAfterFirstWrite === 241
     && result.backlogPendingAfter === 240,
   'the new local write adds one pending version; the exact master HLC then drains one historical version');
-  assert([result.backlogRecoveryMs, result.backlogFirstWriteMs, result.backlogAckMs]
+  assert(result.backlogBytesBefore >= 20_000_000,
+    'the sanitized backlog must exercise status and ACK costs at roughly the observed byte scale');
+  assert([result.backlogStatusMs, result.backlogRecoveryMs, result.backlogFirstWriteMs, result.backlogAckMs]
     .every((value) => Number.isFinite(value) && value >= 0),
   'sanitized backlog timings must be recorded for recovery, first write and ACK');
   assert(result.pendingAfterCommandAck.pendingWrites === 0, 'a completed native command must acknowledge the submitted command payload');
@@ -394,7 +404,9 @@ try {
   assert(result.pendingConflictsAfterGc === 1, 'a pending (unresolved) conflict must survive conflict GC');
   assert(result.batchesBeforeConflictGc === result.batchesAfterConflictGc, 'unsynced write batches must survive conflict GC');
   console.log('ctox-rxdb recovery journal browser smoke OK', {
-    syntheticBacklog: '240 pending versions / 60 IDs',
+    syntheticBacklog: '240 pending versions / 60 IDs / ~22 MB',
+    pendingBytes: result.backlogBytesBefore,
+    statusMs: result.backlogStatusMs,
     recoveryMs: result.backlogRecoveryMs,
     firstWriteMs: result.backlogFirstWriteMs,
     ackMs: result.backlogAckMs,
