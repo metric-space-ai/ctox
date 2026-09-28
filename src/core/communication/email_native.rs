@@ -4888,27 +4888,28 @@ mod tests {
             "email:lena@example.test",
             sent.clone()
         )?);
-        let read = |key: &str| -> anyhow::Result<(String, serde_json::Value)> {
-            let (status, metadata): (String, String) = conn.query_row(
-                "SELECT status, metadata_json FROM communication_messages WHERE message_key = ?1",
-                [key],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
-            Ok((status, serde_json::from_str(&metadata)?))
-        };
-        let (status, metadata) = read(&lena)?;
-        assert_eq!(status, "confirmed");
-        assert_eq!(
-            metadata["sentCopyConfirmation"]["remoteId"],
-            "AQMk-provider-item"
-        );
-        assert_eq!(
-            metadata["sentCopyConfirmation"]["internetMessageId"],
-            "<real-id@example.test>"
-        );
-        assert_eq!(metadata["adapterResult"]["delivery"]["confirmed"], false);
-        assert_eq!(read(&other)?.0, "accepted");
-        drop(read);
+        {
+            let read = |key: &str| -> anyhow::Result<(String, serde_json::Value)> {
+                let (status, metadata): (String, String) = conn.query_row(
+                    "SELECT status, metadata_json FROM communication_messages WHERE message_key = ?1",
+                    [key],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                Ok((status, serde_json::from_str(&metadata)?))
+            };
+            let (status, metadata) = read(&lena)?;
+            assert_eq!(status, "confirmed");
+            assert_eq!(
+                metadata["sentCopyConfirmation"]["remoteId"],
+                "AQMk-provider-item"
+            );
+            assert_eq!(
+                metadata["sentCopyConfirmation"]["internetMessageId"],
+                "<real-id@example.test>"
+            );
+            assert_eq!(metadata["adapterResult"]["delivery"]["confirmed"], false);
+            assert_eq!(read(&other)?.0, "accepted");
+        }
         let later = insert_pending(&mut conn, "email:lena@example.test", "later", "Digest")?;
         conn.execute(
             "UPDATE communication_messages SET external_created_at = '2026-09-28T09:48:40Z' WHERE message_key = ?1",
