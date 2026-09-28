@@ -210,6 +210,7 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           bash -n install.sh
+          bash tests/install-release-staging.sh
           bash tests/install_greppy_shim_smoke.sh
           python3 tests/test_build_cache.py
 
