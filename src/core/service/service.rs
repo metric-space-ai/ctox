@@ -9211,6 +9211,48 @@ fn start_prompt_worker(
 /// Failures inside the review path (session start errors, gateway timeouts) are
 /// fail-closed for review-required work. A missing reviewer verdict is not a
 /// worker success proof.
+/// Drops a leading `Subject:`/`Betreff:` line that only repeats the thread
+/// subject (with or without Re:/AW: prefixes). Any other header-like line stays
+/// and is still rejected by the founder body check.
+fn strip_echoed_subject_line(reply: &str, thread_subject: &str) -> String {
+    fn bare_subject(value: &str) -> String {
+        let mut rest = value.trim().to_lowercase();
+        loop {
+            let trimmed = rest.trim_start();
+            let stripped = ["re:", "aw:", "fwd:", "wg:"]
+                .iter()
+                .find_map(|prefix| trimmed.strip_prefix(prefix));
+            match stripped {
+                Some(next) => rest = next.to_string(),
+                None => return trimmed.trim().to_string(),
+            }
+        }
+    }
+    let expected = bare_subject(thread_subject);
+    if expected.is_empty() {
+        return reply.to_string();
+    }
+    let mut consumed = 0usize;
+    for line in reply.split_inclusive('\n') {
+        consumed += line.len();
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lowered = trimmed.to_lowercase();
+        let value = lowered
+            .strip_prefix("subject:")
+            .or_else(|| lowered.strip_prefix("betreff:"));
+        return match value {
+            Some(value) if bare_subject(value) == expected => reply[consumed..]
+                .trim_start_matches(['\n', '\r'])
+                .to_string(),
+            _ => reply.to_string(),
+        };
+    }
+    reply.to_string()
+}
+
 fn run_completion_review(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
@@ -9300,6 +9342,15 @@ fn run_completion_review(
                 .to_string(),
         };
     }
+    // Workers echo the thread subject as the first body line ("Subject: Re:
+    // Import falsch gelandet"); the header check rejected an otherwise fine
+    // reply five times in a row and a rework slice repeated it (thesen
+    // 28.09.2026). The subject comes from the thread, so drop exactly that
+    // echoed line here: review, approval digest and send all use this body.
+    let normalized_reply = email_reply_action
+        .as_ref()
+        .map(|action| strip_echoed_subject_line(reply_text, &action.subject));
+    let reply_text = normalized_reply.as_deref().unwrap_or(reply_text);
     let proactive_founder_action = if email_reply_key.is_none() {
         job.outbound_email.clone()
     } else {
@@ -47270,5 +47321,46 @@ Those are not durable artifact requirements."
             "no founder rework should have been enqueued"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod echoed_subject_tests {
+    use super::strip_echoed_subject_line;
+
+    #[test]
+    fn echoed_thread_subject_is_dropped_from_the_body() {
+        let reply = "Subject: Re: Import falsch gelandet\n\nHallo Michael,\n\ndanke.";
+        assert_eq!(
+            strip_echoed_subject_line(reply, "Import falsch gelandet"),
+            "Hallo Michael,\n\ndanke."
+        );
+        assert_eq!(
+            strip_echoed_subject_line(
+                "Betreff: AW: Import falsch gelandet\nHallo",
+                "Re: Import falsch gelandet"
+            ),
+            "Hallo"
+        );
+    }
+
+    #[test]
+    fn other_headers_and_foreign_subjects_stay_for_the_review() {
+        let to_line = "To: michael@example.com\nHallo";
+        assert_eq!(strip_echoed_subject_line(to_line, "Import"), to_line);
+        let other = "Subject: Ganz anderes Thema\nHallo";
+        assert_eq!(
+            strip_echoed_subject_line(other, "Import falsch gelandet"),
+            other
+        );
+        assert_eq!(
+            strip_echoed_subject_line("\r\n\r\nSubject: Re: Import\r\n\r\nHallo", "Import"),
+            "Hallo"
+        );
+        let plain = "Hallo Michael,\nSubject: Import falsch gelandet";
+        assert_eq!(
+            strip_echoed_subject_line(plain, "Import falsch gelandet"),
+            plain
+        );
     }
 }
