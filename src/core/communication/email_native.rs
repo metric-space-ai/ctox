@@ -940,7 +940,7 @@ fn store_provider_message(
         if matches!(options.provider.as_str(), "ews" | "owa")
             && (!item.body_text.is_empty() || !item.body_html.is_empty())
         {
-            return Ok(conn.execute(
+            let enriched = conn.execute(
                 r#"UPDATE communication_messages
                    SET body_text = ?1, body_html = ?2,
                        preview = CASE WHEN preview = '' OR preview = subject
@@ -957,8 +957,11 @@ fn store_provider_message(
                     item.remote_id,
                     item.folder_hint,
                 ],
-            )? > 0);
+            )? > 0;
+            reconcile_delayed_ews_sent_copy(conn, options, account_key, &item)?;
+            return Ok(enriched);
         }
+        reconcile_delayed_ews_sent_copy(conn, options, account_key, &item)?;
         return Ok(false);
     }
 
@@ -996,8 +999,111 @@ fn store_provider_message(
             metadata_json: &serde_json::to_string(&item.metadata)?,
         },
     )?;
+    reconcile_delayed_ews_sent_copy(conn, options, account_key, &item)?;
     refresh_thread(conn, &thread_key)?;
     Ok(true)
+}
+
+// EWS assigns its own InternetMessageId, so the local id written by send cannot
+// join a later Sent-folder poll. Confirm only a unique, exact account/content/
+// addressing/time match. This updates durable send evidence; it never sends.
+fn reconcile_delayed_ews_sent_copy(
+    conn: &Connection,
+    options: &EmailOptions,
+    account_key: &str,
+    item: &MailboxMessage,
+) -> Result<()> {
+    if !matches!(options.provider.as_str(), "ews" | "owa")
+        || !item.folder_hint.eq_ignore_ascii_case("sent")
+        || item.body_text.trim().is_empty()
+    {
+        return Ok(());
+    }
+    let Some(sent_at) = chrono::DateTime::parse_from_rfc3339(&item.external_created_at)
+        .ok()
+        .map(|time| time.timestamp())
+    else {
+        return Ok(());
+    };
+    let normalize_addresses = |addresses: &[String]| -> BTreeSet<String> {
+        addresses
+            .iter()
+            .map(|address| address.trim().to_lowercase())
+            .collect()
+    };
+    let normalize_body = |body: &str| body.replace("\r\n", "\n").trim().to_string();
+    let mut statement = conn.prepare(
+        "SELECT message_key, sender_address, recipient_addresses_json, cc_addresses_json, \
+                body_text, external_created_at, metadata_json \
+         FROM communication_messages \
+         WHERE channel = 'email' AND account_key = ?1 AND direction = 'outbound' \
+           AND folder_hint = 'sent' AND status = 'accepted' \
+           AND remote_id LIKE 'pending-send-%' AND subject = ?2",
+    )?;
+    let candidates = statement
+        .query_map(rusqlite::params![account_key, item.subject], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let matches = candidates
+        .into_iter()
+        .filter_map(
+            |(key, sender, to_json, cc_json, body, created_at, metadata_json)| {
+                let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)
+                    .ok()?
+                    .timestamp();
+                let to = serde_json::from_str::<Vec<String>>(&to_json).ok()?;
+                let cc = serde_json::from_str::<Vec<String>>(&cc_json).ok()?;
+                let metadata = serde_json::from_str::<Value>(&metadata_json).ok()?;
+                let adapter = metadata.get("adapterResult")?;
+                if metadata.get("source").and_then(Value::as_str) != Some("ctox-send-durability")
+                    || adapter.get("ok").and_then(Value::as_bool) != Some(true)
+                    || adapter.get("status").and_then(Value::as_str) != Some("accepted")
+                    || !sender
+                        .trim()
+                        .eq_ignore_ascii_case(item.sender_address.trim())
+                    || normalize_addresses(&to) != normalize_addresses(&item.recipient_addresses)
+                    || normalize_addresses(&cc) != normalize_addresses(&item.cc_addresses)
+                    || normalize_body(&body) != normalize_body(&item.body_text)
+                    || !(-60..=1800).contains(&(sent_at - created_at))
+                {
+                    return None;
+                }
+                Some((key, metadata))
+            },
+        )
+        .collect::<Vec<_>>();
+    // Repeated identical sends cannot be paired reliably without a provider id.
+    if matches.len() != 1 {
+        return Ok(());
+    }
+    let (message_key, mut metadata) = matches.into_iter().next().expect("one match");
+    metadata["sentCopyConfirmation"] = json!({
+        "provider": options.provider,
+        "remoteId": item.remote_id,
+        "internetMessageId": item.metadata.get("internetMessageId").and_then(Value::as_str).unwrap_or(""),
+        "sentAt": item.external_created_at,
+    });
+    conn.execute(
+        "UPDATE communication_messages SET status = 'confirmed', metadata_json = ?2, \
+                observed_at = ?3 WHERE message_key = ?1 AND account_key = ?4 \
+                AND status = 'accepted' AND folder_hint = 'sent'",
+        rusqlite::params![
+            message_key,
+            serde_json::to_string(&metadata)?,
+            now_iso_string(),
+            account_key
+        ],
+    )?;
+    Ok(())
 }
 
 fn provider_attachment_refs(metadata: &Value) -> Vec<String> {
@@ -4681,6 +4787,139 @@ mod tests {
         assert_eq!(rows[1].2, 2);
         assert!(rows[1].3.starts_with("mail-account:"));
         assert!(!rows[1].1.contains("alice-sender@example.test"));
+        Ok(())
+    }
+
+    #[test]
+    fn delayed_ews_sent_copy_confirms_only_unique_matching_account_without_resend(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut conn = open_channel_db(&temp.path().join("ctox.sqlite3"))?;
+        let insert_pending = |conn: &mut rusqlite::Connection,
+                              account: &str,
+                              suffix: &str,
+                              subject: &str| {
+            let key = format!("{account}::pending_send::{suffix}");
+            upsert_communication_message(
+                conn,
+                UpsertMessage {
+                    message_key: &key,
+                    channel: "email",
+                    account_key: account,
+                    thread_key: &format!("thread-{suffix}"),
+                    remote_id: &format!("pending-send-{suffix}"),
+                    direction: "outbound",
+                    folder_hint: "sent",
+                    sender_display: "Lena",
+                    sender_address: "lena@example.test",
+                    recipient_addresses_json: "[\"one@example.test\",\"two@example.test\"]",
+                    cc_addresses_json: "[]",
+                    bcc_addresses_json: "[]",
+                    subject,
+                    preview: "Exact body",
+                    body_text: "Exact body\r\n",
+                    body_html: "",
+                    raw_payload_ref: "",
+                    trust_level: "high",
+                    status: "accepted",
+                    seen: true,
+                    has_attachments: false,
+                    external_created_at: "2026-09-28T09:48:20Z",
+                    observed_at: "2026-09-28T09:48:20Z",
+                    metadata_json: r#"{"source":"ctox-send-durability","adapterResult":{"ok":true,"status":"accepted","messageId":"<local-id@example.test>","delivery":{"confirmed":false}}}"#,
+                },
+            )?;
+            Ok::<_, anyhow::Error>(key)
+        };
+        let lena = insert_pending(&mut conn, "email:lena@example.test", "lena", "Digest")?;
+        let other = insert_pending(&mut conn, "email:other@example.test", "other", "Digest")?;
+        let mut options = empty_options();
+        options.provider = "owa".into();
+        options.email = "lena@example.test".into();
+        options.trust_level = "low".into();
+        let sent = super::MailboxMessage {
+            remote_id: "AQMk-provider-item".into(),
+            thread_key: "exchange-conversation".into(),
+            folder_hint: "sent".into(),
+            subject: "Digest".into(),
+            sender_display: "Lena".into(),
+            sender_address: "lena@example.test".into(),
+            recipient_addresses: vec!["one@example.test".into(), "two@example.test".into()],
+            cc_addresses: vec![],
+            body_text: "Exact body\n".into(),
+            body_html: String::new(),
+            preview: "Exact body".into(),
+            seen: true,
+            has_attachments: false,
+            external_created_at: "2026-09-28T09:48:23Z".into(),
+            metadata: serde_json::json!({"internetMessageId":"<real-id@example.test>"}),
+        };
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            sent.clone()
+        )?);
+        assert!(!super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            sent
+        )?);
+        let read = |key: &str| -> anyhow::Result<(String, serde_json::Value)> {
+            let (status, metadata): (String, String) = conn.query_row(
+                "SELECT status, metadata_json FROM communication_messages WHERE message_key = ?1",
+                [key],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok((status, serde_json::from_str(&metadata)?))
+        };
+        let (status, metadata) = read(&lena)?;
+        assert_eq!(status, "confirmed");
+        assert_eq!(
+            metadata["sentCopyConfirmation"]["remoteId"],
+            "AQMk-provider-item"
+        );
+        assert_eq!(
+            metadata["sentCopyConfirmation"]["internetMessageId"],
+            "<real-id@example.test>"
+        );
+        assert_eq!(metadata["adapterResult"]["delivery"]["confirmed"], false);
+        assert_eq!(read(&other)?.0, "accepted");
+        drop(read);
+        let first = insert_pending(&mut conn, "email:lena@example.test", "repeat-1", "Repeated")?;
+        let second = insert_pending(&mut conn, "email:lena@example.test", "repeat-2", "Repeated")?;
+        let repeated = super::MailboxMessage {
+            remote_id: "AQMk-repeated".into(),
+            thread_key: "exchange-repeated".into(),
+            folder_hint: "sent".into(),
+            subject: "Repeated".into(),
+            sender_display: "Lena".into(),
+            sender_address: "lena@example.test".into(),
+            recipient_addresses: vec!["one@example.test".into(), "two@example.test".into()],
+            cc_addresses: vec![],
+            body_text: "Exact body".into(),
+            body_html: String::new(),
+            preview: "Exact body".into(),
+            seen: true,
+            has_attachments: false,
+            external_created_at: "2026-09-28T09:48:23Z".into(),
+            metadata: serde_json::json!({"internetMessageId":"<repeated@example.test>"}),
+        };
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            repeated
+        )?);
+        for key in [&first, &second] {
+            let status: String = conn.query_row(
+                "SELECT status FROM communication_messages WHERE message_key = ?1",
+                [key],
+                |row| row.get(0),
+            )?;
+            assert_eq!(status, "accepted");
+        }
         Ok(())
     }
 

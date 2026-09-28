@@ -767,10 +767,7 @@ fn send_email_message_with_html(
                 .and_then(Value::as_str)
                 .unwrap_or("accepted"),
             "delivery_confirmed": existing
-                .get("adapter_result")
-                .or_else(|| existing.get("adapterResult"))
-                .and_then(|value| value.get("delivery"))
-                .and_then(|value| value.get("confirmed"))
+                .get("delivery_confirmed")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             "adapter_result": existing
@@ -981,6 +978,16 @@ pub(super) fn existing_durable_outbound_send_result(
     Ok(Some(json!({
         "status": status,
         "folder_hint": folder_hint,
+        "delivery_confirmed": metadata
+            .get("sentCopyConfirmation")
+            .is_some()
+            || metadata
+                .get("adapterResult")
+                .or_else(|| metadata.get("adapter_result"))
+                .and_then(|value| value.get("delivery"))
+                .and_then(|value| value.get("confirmed"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         "adapter_result": metadata
             .get("adapterResult")
             .or_else(|| metadata.get("adapter_result"))
