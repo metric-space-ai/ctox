@@ -873,6 +873,21 @@ mod tests {
         );
         assert_eq!(lead["research_status"], "completed");
 
+        let mut another_address = lead.clone();
+        another_address["research_status"] = json!("needs_review");
+        another_address["payload"]["native_research_terminal_status"] = json!("needs_review");
+        another_address["contacts"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({
+                "person_email": "b@weicon.de"
+            }));
+        assert!(
+            !super::super::person_research_gap_closure::complete_after_native_email_validation(
+                &mut another_address
+            )
+        );
+
         let mut another_open_field = lead.clone();
         another_open_field["research_status"] = json!("needs_review");
         another_open_field["payload"]["native_research_terminal_status"] = json!("needs_review");

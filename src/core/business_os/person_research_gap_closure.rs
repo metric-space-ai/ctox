@@ -1451,6 +1451,11 @@ pub(super) fn complete_after_native_email_validation(lead: &mut Value) -> bool {
         .iter()
         .filter_map(Value::as_str)
         .collect::<Vec<_>>();
+    if requested.contains(&"person_email_validation")
+        && !super::contact_email_validation::emails_needing_validation(lead, 1).is_empty()
+    {
+        return false;
+    }
     let unanswered = requested
         .iter()
         .any(|field| match open_persons_for_field(lead, field) {
