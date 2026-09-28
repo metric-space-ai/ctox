@@ -1255,12 +1255,16 @@ test('Task cards name the member in its colour; unassigned work says so', () => 
   assert.match(html, /class="ctox-task-meta-member" style="--crew-color:#00aa9a">Milo</);
   // A row names its member with the reference badge and never draws another
   // copy of the creature (Owner 28.09.2026: "jedes Lumi darf es nur einmal geben!").
-  assert.match(html, /class="ctox-crew-ref" data-crew-ref="crew:milo" style="--crew-color:#00aa9a;--crew-ref-size:26px"[^>]*>M</);
-  assert.doesNotMatch(html, /ctox-crew-creature/, 'no creature copy in a task row');
+  // The row shows the member's still portrait (same face, eyes = task state),
+  // never a letter and never a second living body.
+  assert.match(html, /class="ctox-crew-ref" data-crew-ref="crew:milo" data-crew-ref-mode="working" style="--crew-color:#00aa9a;/);
+  assert.match(html, /<svg class="ctox-crew-portrait"/);
+  assert.doesNotMatch(html, /ctox-crew-creature/, 'no living body in a task row');
   const orphan = { id: 'queue-task-b', taskId: 'task-b', title: 'Import', status: 'failed', routeStatus: 'failed' };
   const orphanHtml = taskCardMarkup(orphan, state);
   assert.match(orphanHtml, new RegExp(`ctox-task-meta-member is-unassigned">${t.noCrewMemberShort}<`));
-  assert.match(orphanHtml, /class="ctox-crew-ref is-neutral" data-crew-ref=""/, 'unassigned work shows the empty dashed ring');
+  assert.match(orphanHtml, /class="ctox-crew-ref is-neutral" data-crew-ref="" data-crew-ref-mode="failed"/, 'unassigned failed work shows the ghost portrait with X eyes');
+  assert.match(orphanHtml, /ctox-crew-eyes-x/);
   assert.doesNotMatch(orphanHtml, /ctox-crew-creature/);
 });
 

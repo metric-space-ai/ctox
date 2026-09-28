@@ -1,7 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
-import { renderCrewReference } from '../../shared/crew-renderer.js?v=20260928-crew-one-being-v5';
-import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-one-being-v5';
+import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-portrait-v6';
+import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-portrait-v6';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 
 const REFRESH_DEBOUNCE_MS = 80;
@@ -640,13 +640,16 @@ function crewWaitSentence(task) {
   return displayStatus(status || 'open');
 }
 
-// Tickets NAME the member working on them with its reference badge; the
-// creature itself exists once, in the crew bar and on the CTOX map (Owner
-// 28.09.2026: "jedes Lumi darf es nur einmal geben!").
+// Tickets show the member working on them as its portrait; the living body
+// exists once per screen (crew bar seat or CTOX map), Owner 28.09.2026.
 function crewReferenceFor(task, size = 24) {
   const member = crewMemberFor(task);
-  startCrewMotion(); // installs the shared crew stylesheet (badge included)
-  return renderCrewReference({ appearance: member ? { id: member.id, name: member.name, shape: member.shape, color: member.color } : null, size });
+  startCrewMotion(); // installs the shared crew stylesheet (portrait included)
+  const status = String(task?.route_status || task?.status || '').toLowerCase();
+  const taskState = ['leased', 'running', 'processing'].includes(status) ? 'running'
+    : ['failed', 'error', 'cancelled', 'canceled'].includes(status) ? 'failed'
+      : ['handled', 'completed', 'done', 'success'].includes(status) ? 'success' : 'queued';
+  return renderCrewReference({ appearance: member ? { id: member.id, name: member.name, shape: member.shape, color: member.color } : null, size, mode: crewModeForTaskState(taskState, task?.execution_progress?.phase) });
 }
 
 function mayAssignCrew() {
@@ -671,7 +674,7 @@ function crewCardHtml(ticket) {
     <section class="ctox-card tickets-crew-card">
       <header>${escapeHtml(t('crew', 'Crew'))}</header>
       <div class="ctox-card-body tickets-crew-body">
-        <span class="tickets-crew-portrait">${crewReferenceFor(task)}</span>
+        <span class="tickets-crew-portrait">${crewReferenceFor(task, 32)}</span>
         <div class="tickets-crew-facts">
           <strong>${escapeHtml(member ? member.name : t('crewUnassigned', 'Crew, noch niemand zugeordnet'))}</strong>
           <small>${escapeHtml(crewWaitSentence(task))}</small>
