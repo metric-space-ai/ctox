@@ -7115,6 +7115,8 @@ fn start_prompt_worker(
                     _ => review_disposition,
                 }
             };
+            review_disposition =
+                hold_unsent_founder_communication_rework(&root, &job, review_disposition);
             let review_reason = match &review_disposition {
                 CompletionReviewDisposition::Hold { summary, .. }
                 | CompletionReviewDisposition::NoSend { summary }
@@ -7783,13 +7785,23 @@ fn start_prompt_worker(
                                     }),
                             );
                         }
-                        if founder_send_error.is_none() && !terminal_no_send {
+                        if should_handle_messages
+                            && founder_send_error.is_none()
+                            && !terminal_no_send
+                        {
                             if let Some(message_key) = founder_reply_key.as_deref() {
-                                let _ = close_open_founder_communication_self_work_for_inbound(
+                                if channels::founder_reply_sent_after_review_for_message(
                                     &root,
                                     message_key,
-                                    "Founder communication completed after reviewed outbound send.",
-                                );
+                                )
+                                .unwrap_or(false)
+                                {
+                                    let _ = close_open_founder_communication_self_work_for_inbound(
+                                        &root,
+                                        message_key,
+                                        "Founder communication completed after reviewed outbound send.",
+                                    );
+                                }
                             }
                         }
                         if should_handle_messages
@@ -9249,8 +9261,33 @@ fn run_completion_review(
         .to_string();
     let email_reply_key = inbound_email_reply_message_key(job);
     let founder_reply_key = founder_email_reply_message_key(job);
-    let email_reply_action = email_reply_key
-        .and_then(|message_key| channels::prepare_reviewed_founder_reply(root, message_key).ok());
+    let founder_rework_key = founder_communication_rework_inbound_key(job);
+    let email_reply_action = match email_reply_key {
+        Some(message_key) => match channels::prepare_reviewed_founder_reply(root, message_key) {
+            Ok(action) => Some(action),
+            Err(error) if founder_rework_key.is_some() => {
+                return CompletionReviewDisposition::Hold {
+                    reason: review::HoldReason::Technical {
+                        policy_id: "founder-rework-reply-action".to_string(),
+                    },
+                    summary: format!(
+                        "Founder communication rework cannot prepare its reviewed reply for {message_key}: {error}"
+                    ),
+                };
+            }
+            Err(_) => None,
+        },
+        None => None,
+    };
+    if founder_rework_key.is_some() && email_reply_action.is_none() {
+        return CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "founder-rework-reply-action".to_string(),
+            },
+            summary: "Founder communication rework cannot complete because its inbound email is not leased for a reviewed reply; the email remains open for recovery."
+                .to_string(),
+        };
+    }
     let proactive_founder_action = if email_reply_key.is_none() {
         job.outbound_email.clone()
     } else {
@@ -19776,6 +19813,62 @@ fn founder_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
         return None;
     }
     inbound_email_reply_message_key(job)
+}
+
+fn founder_communication_rework_inbound_key(job: &QueuedPrompt) -> Option<&str> {
+    let kind = job
+        .queue_task_metadata
+        .get("ticket_self_work_kind")
+        .and_then(Value::as_str)
+        .or_else(|| job.queue_task_metadata.get("kind").and_then(Value::as_str));
+    if kind != Some(FOUNDER_COMMUNICATION_REWORK_KIND) {
+        return None;
+    }
+    job.queue_task_metadata
+        .get("inbound_message_key")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            job.queue_task_metadata
+                .get("parent_message_key")
+                .and_then(Value::as_str)
+        })
+        .filter(|key| key.starts_with("email:"))
+        .or_else(|| founder_email_reply_message_key(job))
+}
+
+fn hold_unsent_founder_communication_rework(
+    root: &Path,
+    job: &QueuedPrompt,
+    disposition: CompletionReviewDisposition,
+) -> CompletionReviewDisposition {
+    if !matches!(
+        disposition,
+        CompletionReviewDisposition::Approved { .. } | CompletionReviewDisposition::NoSend { .. }
+    ) {
+        return disposition;
+    }
+    let Some(inbound_key) = founder_communication_rework_inbound_key(job) else {
+        return disposition;
+    };
+    match channels::founder_reply_sent_after_review_for_message(root, inbound_key) {
+        Ok(true) => disposition,
+        Ok(false) => CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "founder-rework-outbound-send".to_string(),
+            },
+            summary: format!(
+                "Founder communication rework for {inbound_key} cannot close before a reviewed outbound email is accepted."
+            ),
+        },
+        Err(error) => CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "founder-rework-outbound-send".to_string(),
+            },
+            summary: format!(
+                "Founder communication rework for {inbound_key} cannot verify its reviewed outbound email: {error}"
+            ),
+        },
+    }
 }
 
 fn inbound_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
@@ -46725,6 +46818,94 @@ Those are not durable artifact requirements."
             outbound_email: None,
             outbound_anchor: None,
         }
+    }
+
+    #[test]
+    fn founder_rework_cannot_close_before_a_reviewed_email_was_sent() {
+        let root = temp_root("ctox-founder-rework-send-gate");
+        let inbound_key = "email:lena@thesen-ag.com::inbox::rework-send-gate";
+        let mut job = self_work_job();
+        job.source_label = "email:admin".to_string();
+        job.queue_task_metadata = serde_json::json!({
+            "ticket_self_work_kind": FOUNDER_COMMUNICATION_REWORK_KIND,
+            "inbound_message_key": inbound_key,
+        });
+        job.leased_message_keys = vec![
+            "queue:system::founder-rework-send-gate".to_string(),
+            inbound_key.to_string(),
+        ];
+
+        let approved = CompletionReviewDisposition::Approved {
+            review_audit_key: "review-send-gate".to_string(),
+        };
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(&root, &job, approved),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(
+                &root,
+                &job,
+                CompletionReviewDisposition::NoSend {
+                    summary: "review chose no send".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("open communication store");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:lena@thesen-ag.com', 'thread-send-gate',
+                'remote-send-gate', 'inbound', 'inbox', 'Michael',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]',
+                'Import falsch gelandet', 'body', 'body', '', '',
+                'normal', 'received', 0, 0,
+                '2026-09-28T16:56:12Z', '2026-09-28T16:56:12Z', '{}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("insert inbound mail");
+        conn.execute(
+            r#"INSERT INTO communication_founder_reply_reviews (
+                approval_key, inbound_message_key, action_digest, action_json, body_sha256,
+                reviewer, review_summary, approved_at, sent_at, send_result_json
+            ) VALUES (
+                'review-send-gate', ?1, 'digest-send-gate', '{}', 'body-send-gate',
+                'external-review', 'approved', '2026-09-28T19:10:00Z',
+                '2026-09-28T19:10:01Z', '{"status":"accepted"}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("insert reviewed accepted send");
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(
+                &root,
+                &job,
+                CompletionReviewDisposition::Approved {
+                    review_audit_key: "review-send-gate".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Approved { .. }
+        ));
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(
+                &root,
+                &self_work_job(),
+                CompletionReviewDisposition::Approved {
+                    review_audit_key: "ordinary-work".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Approved { .. }
+        ));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
