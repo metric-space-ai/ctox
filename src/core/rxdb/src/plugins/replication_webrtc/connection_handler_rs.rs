@@ -1965,7 +1965,7 @@ impl WebRTCRsConnectionHandler {
                 ),
             ));
         }
-        self.remove_obsolete_peer_before_offer(&remote_peer_id);
+        self.retire_obsolete_peer_after_answer(&remote_peer_id);
         {
             let _lifecycle = self.peer_lifecycle.lock();
             self.peers.lock().insert(
@@ -2010,7 +2010,7 @@ impl WebRTCRsConnectionHandler {
         Ok(())
     }
 
-    fn remove_obsolete_peer_before_offer(self: &Arc<Self>, remote_peer_id: &str) {
+    fn retire_obsolete_peer_after_answer(self: &Arc<Self>, remote_peer_id: &str) {
         let current_local_peer_id = self.signaling.as_ref().and_then(|s| s.own_peer_id());
         let removal = {
             let peers = self.peers.lock();
@@ -2029,7 +2029,7 @@ impl WebRTCRsConnectionHandler {
             tracing::warn!(
                 target: "ctox_rxdb::webrtc_rs",
                 peer = %remote_peer_id,
-                "replacing obsolete WebRTC responder before answering renewed offer"
+                "retiring obsolete WebRTC responder after sending renewed answer"
             );
             remove_peer_inner(self, remote_peer_id, removal, None);
         }
@@ -6031,7 +6031,7 @@ mod tests {
             .lock()
             .insert(peer.peer_id().to_owned(), "old-token".into());
 
-        handler.remove_obsolete_peer_before_offer(peer.peer_id());
+        handler.retire_obsolete_peer_after_answer(peer.peer_id());
 
         assert!(handler.connection_for_peer(peer.peer_id()).is_none());
         assert!(!handler
