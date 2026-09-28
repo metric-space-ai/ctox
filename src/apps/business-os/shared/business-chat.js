@@ -129,6 +129,56 @@ export function crewAppPresenceFromTasks(tasks, members) {
   return presence;
 }
 
+// How much each member is doing right now (same queue source and statuses
+// as the app presence): the crew bar shows it on the member's seat.
+export function crewWorkloadFromTasks(tasks) {
+  const load = new Map();
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    const status = String(task?.status || '').trim().toLowerCase();
+    if (!CREW_APP_PRESENCE_STATUSES.has(status)) continue;
+    const memberId = String(task?.crew_member_id || '').trim();
+    if (memberId) load.set(memberId, (load.get(memberId) || 0) + 1);
+  }
+  return load;
+}
+
+function crewSlotTitle(member, load = 0) {
+  const german = chatUiIsGerman();
+  const expression = crewMemberExpression(member);
+  const stateText = expression === 'reading' ? (german ? 'liest sein Gedächtnis' : 'reading its memory')
+    : expression === 'learning' ? (german ? 'lernt aus dem Einsatz' : 'learning from the assignment')
+      : member.state === 'on_duty' ? (german ? 'im Einsatz' : 'on duty')
+        : member.state === 'resting_after_failure' ? (german ? 'erholt sich' : 'recovering')
+          : (german ? 'zu Hause' : 'at home');
+  const loadText = load > 0
+    ? ` · ${german ? `${load} ${load === 1 ? 'Aufgabe' : 'Aufgaben'} in Arbeit` : `${load} ${load === 1 ? 'task' : 'tasks'} in progress`}`
+    : '';
+  const domain = member.domain?.length ? ` · ${member.domain.join(', ')}` : '';
+  return `${member.name} · ${stateText}${loadText}${domain} · ${german ? 'auf eine App ziehen' : 'drag onto an app'}`;
+}
+
+// While the CTOX app is open it publishes the reconciled count (queue plus
+// command lifecycle); the bar prefers it so both always say the same.
+function crewLoadFor(state, memberId) {
+  const published = typeof window !== 'undefined' ? window.__ctoxCrewWorkload : null;
+  if (published?.counts) return Number(published.counts[memberId]) || 0;
+  return state.crewWorkload?.get(memberId) || 0;
+}
+
+// Refresh the seats in place when the workload changes (no bar rebuild).
+function applyCrewWorkload(state) {
+  if (typeof document === 'undefined') return;
+  const members = new Map((state.crewMembers || []).map((member) => [member.id, member]));
+  document.querySelectorAll('.ctox-chat-crew-slot[data-crew-drag]').forEach((slot) => {
+    const member = members.get(slot.dataset.crewDrag);
+    if (!member) return;
+    const load = crewLoadFor(state, member.id);
+    if (slot.dataset.crewLoad !== String(load)) slot.dataset.crewLoad = String(load);
+    const title = crewSlotTitle(member, load);
+    if (slot.getAttribute('title') !== title) slot.setAttribute('title', title);
+  });
+}
+
 function crewAppPresenceSignature(entries, nowMs = Date.now()) {
   return entries.map((entry) => `${entry.member.id}:${crewMemberExpression(entry.member, nowMs)}`).join('|');
 }
@@ -207,6 +257,8 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     if (disposed) return;
     const members = state.crewMembers || [];
     applyCrewAppPresence(crewAppPresenceFromTasks(tasks, members));
+    state.crewWorkload = crewWorkloadFromTasks(tasks);
+    applyCrewWorkload(state);
     // Expressions decay (reading -> running, learning -> idle); re-draw when
     // the earliest one ends so the badge does not freeze mid-expression.
     if (expressionTimer) window.clearTimeout(expressionTimer);
@@ -248,6 +300,9 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     }
   };
   try { subscriptions.push(db?.raw?.ctox_queue_tasks?.$?.subscribe?.(scheduleReload) || null); } catch {}
+  const onPublishedWorkload = () => { if (!disposed) applyCrewWorkload(state); };
+  window.addEventListener?.('ctox-crew-workload', onPublishedWorkload);
+  readinessCleanups.push(() => window.removeEventListener?.('ctox-crew-workload', onPublishedWorkload));
   try {
     subscriptions.push(db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
       if (disposed) return;
@@ -275,17 +330,9 @@ function crewMemberCreatureHtml(member, placement = 'fab') {
   return crewCreatureHtml({ crewKey: member.id, crewIdentity: { id: member.id, name: member.name, shape: member.shape, color: member.color } }, crewMemberExpression(member), placement);
 }
 
-function crewPoolSlotHtml(member, placement = 'fab') {
-  const german = chatUiIsGerman();
-  const expression = crewMemberExpression(member);
-  const stateText = expression === 'reading' ? (german ? 'liest sein Gedächtnis' : 'reading its memory')
-    : expression === 'learning' ? (german ? 'lernt aus dem Einsatz' : 'learning from the assignment')
-      : member.state === 'on_duty' ? (german ? 'im Einsatz' : 'on duty')
-        : member.state === 'resting_after_failure' ? (german ? 'erholt sich' : 'recovering')
-          : (german ? 'zu Hause' : 'at home');
-  const domain = member.domain.length ? ` · ${member.domain.join(', ')}` : '';
+function crewPoolSlotHtml(member, placement = 'fab', load = 0) {
   const focusable = placement === 'fab' ? '' : ' role="button" tabindex="0"';
-  return `<span class="ctox-chat-crew-slot"${focusable} data-crew-drag="${escapeAttr(member.id)}" title="${escapeAttr(`${member.name} · ${stateText}${domain} · ${german ? 'auf eine App ziehen' : 'drag onto an app'}`)}" aria-label="${escapeAttr(member.name)}">${crewMemberCreatureHtml(member, placement)}</span>`;
+  return `<span class="ctox-chat-crew-slot"${focusable} data-crew-drag="${escapeAttr(member.id)}" data-crew-load="${Number(load) || 0}" title="${escapeAttr(crewSlotTitle(member, load))}" aria-label="${escapeAttr(member.name)}">${crewMemberCreatureHtml(member, placement)}</span>`;
 }
 
 const CREW_DRAG_THRESHOLD_PX = 6;
@@ -1704,7 +1751,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         <span class="ctox-chat-fab-label">Crew</span>
         <span class="ctox-chat-fab-creatures ${(state.crewMembers || []).length ? 'is-members' : ''}" ${(state.crewMembers || []).length ? '' : 'aria-hidden="true"'}>
           ${(state.crewMembers || []).length
-            ? state.crewMembers.slice(0, 6).map((member) => crewPoolSlotHtml(member, 'fab')).join('')
+            ? state.crewMembers.slice(0, 6).map((member) => crewPoolSlotHtml(member, 'fab', crewLoadFor(state, member.id))).join('')
             : crewCreatureHtml({ id: 'ctox-crew', title: 'Crew' }, 'idle', 'fab')}
         </span>
       </button>
@@ -8120,6 +8167,25 @@ ${CREW_CREATURE_BASE_CSS}
       cursor: grab;
       touch-action: none;
       transition: transform 140ms ease;
+    }
+    /* How many tasks the member is working on right now. */
+    .ctox-chat-crew-slot { position: relative; }
+    .ctox-chat-crew-slot[data-crew-load]:not([data-crew-load="0"])::after {
+      content: attr(data-crew-load);
+      position: absolute;
+      top: -5px;
+      right: -4px;
+      min-width: 12px;
+      height: 12px;
+      padding: 0 3px;
+      box-sizing: border-box;
+      border-radius: 6px;
+      background: var(--accent, #1685ee);
+      color: #fff;
+      font: 700 8.5px/12px system-ui, -apple-system, sans-serif;
+      text-align: center;
+      box-shadow: 0 0 0 1.5px var(--elev-float, #1c1f25);
+      pointer-events: none;
     }
     .ctox-chat-crew-slot:hover {
       transform: translateY(-2px) scale(1.06);

@@ -33,6 +33,7 @@ const {
   taskSelectionSentence,
   memberCreatureState,
   crewStripMarkup,
+  crewWorkloadCounts,
   memberIdentity,
   shouldShowCrewHome,
   taskCrewMember,
@@ -196,13 +197,19 @@ test('Harness diagram renders complete nodes with and without a selected task', 
   const working = { id: 'flow-render-task', status: 'running', executionPhase: 'running' };
   for (const selectedTask of [null, working]) {
     const html = flowSvg(model, model.nodeMap.get('queued'), trace, selectedTask, { lang: 'en' });
-    assert.match(html, /class="ctox-flow-diagram"/);
+    assert.match(html, selectedTask ? /class="ctox-flow-diagram has-focus"/ : /class="ctox-flow-diagram"/);
     assert.equal((html.match(/class="ctox-flow-node-g /g) || []).length, model.nodes.length);
     if (selectedTask) {
       assert.match(html, /class="ctox-flow-node-g [^"]*is-crew-hier[^>]*\sdata-node-id="running"/);
       assert.equal((html.match(/is-crew-hier/g) || []).length, 1);
+      // The map reads as the task's route: the steps it can take next start
+      // exactly where it stands, and their target stations stand out.
+      const nextTargets = model.edges.filter((edge) => edge.from === 'running').map((edge) => edge.to);
+      assert.ok(nextTargets.length > 0);
+      assert.equal((html.match(/class="ctox-flow-edge\s+is-next/g) || []).length, nextTargets.length);
+      for (const id of nextTargets) assert.match(html, new RegExp(`class="ctox-flow-node-g [^"]*is-next[^>]*\\sdata-node-id="${id}"`));
     } else {
-      assert.doesNotMatch(html, /is-crew-hier/);
+      assert.doesNotMatch(html, /is-crew-hier|has-focus|is-next/);
     }
   }
 });
@@ -1281,6 +1288,19 @@ test('While the crew roster loads, assigned work never claims to be unassigned',
   assert.doesNotMatch(flowCrewSvg(model, null, loading), /ctox-flow-creature-slot/, 'no false ghost on the map');
   const loaded = taskCardMarkup(assigned, { ...loading, crewMembers: crewFixture });
   assert.match(loaded, />Milo</);
+});
+
+test('The crew bar gets the same per-member count as the map and the Arbeitet view', () => {
+  // thesen 28.09.2026: the bar said "Pico 4" next to a map saying "×3" (a
+  // queue row still "running" whose command had finished). The app publishes
+  // its reconciled count; only running work of a member counts.
+  const run = (id, member) => ({ id, taskId: id, title: id, status: 'running', routeStatus: 'running', crewMemberId: member });
+  const counts = crewWorkloadCounts({ tasks: [
+    run('a', 'crew:tavi'), run('b', 'crew:tavi'), run('c', 'crew:milo'),
+    { id: 'd', taskId: 'd', title: 'd', status: 'completed', routeStatus: 'completed', crewMemberId: 'crew:milo' },
+    { id: 'e', taskId: 'e', title: 'e', status: 'running', routeStatus: 'running' },
+  ] });
+  assert.deepEqual(counts, { 'crew:tavi': 2, 'crew:milo': 1 });
 });
 
 test('Crew at home shows every active member with its state, only while nothing runs', () => {
