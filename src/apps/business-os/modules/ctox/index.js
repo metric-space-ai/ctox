@@ -1,9 +1,9 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-clarity-v417';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-truth-v418';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
-import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-portrait-v6';
-import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-portrait-v6';
+import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-truth-v7';
+import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-truth-v7';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
 const FLOW_WIDTH = 1760;
@@ -30,7 +30,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-clarity-v417';
+const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-truth-v418';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -1823,7 +1823,7 @@ function taskCardMarkup(task, state) {
   // Assigned, but the crew roster has not arrived yet: say nothing rather than
   // claim "ohne Crew" (it flashed on every row while members loaded).
   const memberPending = !member && Boolean(taskAssignedMemberId(task));
-  const portrait = `<span class="ctox-task-portrait" title="${escapeAttr(member ? member.name : memberPending ? '' : t.noCrewMember)}">${renderCrewReference({ appearance: member ? memberIdentity(member) : null, size: 28, mode: memberPending ? 'sleeping' : crewModeForTaskState(taskCrewStatus(task)) })}</span>`;
+  const portrait = `<span class="ctox-task-portrait" title="${escapeAttr(member ? member.name : memberPending ? '' : t.noCrewMember)}">${renderCrewReference({ appearance: member ? memberIdentity(member) : null, size: 28, mode: memberPending ? 'sleeping' : crewModeForTaskState(taskCrewDisplayStatus(task, state)) })}</span>`;
   // Who does it, in the member's own colour; an unassigned task says so.
   const memberName = member
     ? `<span class="ctox-task-meta-member" style="--crew-color:${escapeAttr(member.color || NEUTRAL_CREW_COLOR)}">${escapeHtml(member.name)}</span>`
@@ -2497,14 +2497,18 @@ function renderMain(state) {
   });
   wireTimelineStepButtons(state, main);
   main.querySelectorAll('[data-task-id]').forEach((button) => {
+    const grouped = () => String(button.dataset.crewTasks || '').split('|').filter(Boolean).length > 1;
     button.addEventListener('click', () => {
-      selectTask(state, button.dataset.taskId, { drawer: true, center: true });
+      // A member with several tasks shows them all; one task selects directly.
+      if (grouped()) openCrewTasksPopover(state, main, button);
+      else selectTask(state, button.dataset.taskId, { drawer: true, center: true });
     });
     if (button.classList.contains('ctox-flow-creature-slot')) {
       button.addEventListener('keydown', (event) => {
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
-        selectTask(state, button.dataset.taskId, { drawer: true, center: true });
+        if (grouped()) openCrewTasksPopover(state, main, button);
+        else selectTask(state, button.dataset.taskId, { drawer: true, center: true });
       });
     }
   });
@@ -3109,9 +3113,10 @@ function flowCrewSvg(model, selectedTask, state) {
     if (!member && taskAssignedMemberId(task) && !(selectedTask && task.id === selectedTask.id)) continue;
     const key = member ? `member:${member.id}` : 'ghost';
     const being = beings.get(key);
-    if (!being) beings.set(key, { key, anchor: task, count: 1 });
+    if (!being) beings.set(key, { key, anchor: task, count: 1, taskIds: [task.id] });
     else {
       being.count += 1;
+      being.taskIds.push(task.id);
       if (selectedTask && task.id === selectedTask.id) being.anchor = task;
     }
   }
@@ -3121,7 +3126,7 @@ function flowCrewSvg(model, selectedTask, state) {
     beingsPerNode.set(id, (beingsPerNode.get(id) || 0) + 1);
   }
   const occupied = new Map();
-  return [...beings.values()].map(({ key, anchor: task, count }) => {
+  return [...beings.values()].map(({ key, anchor: task, count, taskIds }) => {
     const nodeId = taskCrewNodeId(task, model);
     const node = model.nodeMap.get(nodeId) || model.nodeMap.get('queued');
     if (!node) return '';
@@ -3134,7 +3139,7 @@ function flowCrewSvg(model, selectedTask, state) {
     const selected = task.id === selectedTask?.id;
     // Without a live channel, or before the first complete read, nothing on
     // screen is current: the crew sleeps.
-    const status = state?.ctx && (!syncIsConnected(state) || dataState(state).kind !== 'ready') ? 'queued' : taskCrewStatus(task);
+    const status = state?.ctx && (!syncIsConnected(state) || dataState(state).kind !== 'ready') ? 'queued' : taskCrewDisplayStatus(task, state);
     // Der Knoten, auf dem das ausgewaehlte Wesen steht, ist der Schritt, an dem
     // der Task GERADE arbeitet. Er wird markiert, damit die Karte die Frage
     // "wo steckt er im Loop" ohne Suchen beantwortet.
@@ -3172,6 +3177,7 @@ function flowCrewSvg(model, selectedTask, state) {
       <g class="ctox-flow-creature-pos" data-crew-pos-task="${escapeAttr(task.id)}" data-crew-pos-key="${escapeAttr(key)}" data-crew-count="${count}" data-crew-pos="${x},${y}">
         <foreignObject class="ctox-flow-creature-slot ${selected ? 'is-selected' : ''}" x="${x}" y="${y}" width="${CREW_ON_STATION_SIZE}" height="${CREW_ON_STATION_SIZE}"
           data-task-id="${escapeAttr(task.id)}" data-creature-node-id="${escapeAttr(node.id)}" role="button" tabindex="0"
+          ${count > 1 ? `data-crew-tasks="${escapeAttr([task.id, ...taskIds.filter((id) => id !== task.id)].join('|'))}" aria-haspopup="menu"` : ''}
           aria-label="${escapeAttr(title)}">
           <div class="ctox-flow-creature-shell" xmlns="http://www.w3.org/1999/xhtml" title="${escapeAttr(title)}">${creature}</div>
         </foreignObject>
@@ -3226,6 +3232,84 @@ function crewActivityBubbleText(task, state) {
   const stepLabel = step?.label ? String(step.label) : '';
   const stepText = stepLabel && steps.length ? `${steps.indexOf(step) + 1}/${steps.length} ${stepLabel}` : '';
   return [verb, stepText].filter(Boolean).join(' · ');
+}
+
+// The tasks of one member on the map (its ×N): portrait with state eyes,
+// title, status and station. Rendered inside the app (never on the shell).
+function crewTasksPopoverMarkup(state, taskIds) {
+  const tasks = taskIds.map((id) => (state.model?.tasks || []).find((task) => task.id === id)).filter(Boolean);
+  if (!tasks.length) return '';
+  const t = labels[state.lang] || labels.de;
+  const member = taskCrewMember(tasks[0], state);
+  const name = member ? member.name : (t.noCrewMemberShort || labels.de.noCrewMemberShort);
+  const countLabel = (t.crewTaskCount || labels.de.crewTaskCount).replace('{count}', String(tasks.length));
+  const selectedId = state.selectedTaskId || '';
+  const rows = tasks.map((task) => {
+    const display = taskCrewDisplayStatus(task, state);
+    const station = state.model?.nodeMap?.get(taskCrewNodeId(task, state.model))?.label || '';
+    const status = displayStatus(authoritativeTaskStatus(task) || task.routeStatus || task.status, state.lang);
+    return `<button type="button" role="menuitem" class="ctox-crew-pop-task${task.id === selectedId ? ' is-current' : ''}" data-crew-pop-task="${escapeAttr(task.id)}">
+        ${renderCrewReference({ appearance: member ? memberIdentity(member) : null, size: 22, mode: crewModeForTaskState(display) })}
+        <span><strong>${escapeHtml(taskDisplayTitle(task, state))}</strong><small>${escapeHtml([status, station].filter(Boolean).join(' · '))}</small></span>
+      </button>`;
+  }).join('');
+  return `<header>${renderCrewReference({ appearance: member ? memberIdentity(member) : null, size: 24, mode: 'working' })}<strong>${escapeHtml(name)}</strong><small>${escapeHtml(countLabel)}</small></header>${rows}`;
+}
+
+function closeCrewTasksPopover(main, { restoreFocus = false } = {}) {
+  const pop = main?.querySelector?.('[data-crew-tasks-pop]');
+  if (!pop) return;
+  const opener = pop.__opener;
+  pop.__cleanup?.();
+  pop.remove();
+  if (restoreFocus && opener?.isConnected) opener.focus?.();
+}
+
+function openCrewTasksPopover(state, main, slot) {
+  closeCrewTasksPopover(main);
+  const ids = String(slot.dataset.crewTasks || '').split('|').filter(Boolean);
+  const markup = crewTasksPopoverMarkup(state, ids);
+  const well = main.querySelector('.ctox-flow-well');
+  if (!markup || !well) return;
+  const pop = document.createElement('div');
+  pop.className = 'ctox-crew-tasks-pop';
+  pop.setAttribute('role', 'menu');
+  pop.dataset.crewTasksPop = '';
+  pop.innerHTML = markup;
+  pop.__opener = slot;
+  well.append(pop);
+  const wellRect = well.getBoundingClientRect();
+  const slotRect = slot.getBoundingClientRect();
+  const width = pop.offsetWidth || 300;
+  const left = Math.max(8, Math.min(well.clientWidth - width - 8, slotRect.left - wellRect.left + slotRect.width / 2 - width / 2));
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.top = `${Math.round(slotRect.bottom - wellRect.top + well.scrollTop + 6)}px`;
+  pop.querySelectorAll('[data-crew-pop-task]').forEach((row) => {
+    row.addEventListener('click', () => {
+      closeCrewTasksPopover(main);
+      selectTask(state, row.dataset.crewPopTask, { drawer: true, center: true });
+    });
+  });
+  const onKey = (event) => {
+    if (event.key === 'Escape') { event.preventDefault(); closeCrewTasksPopover(main, { restoreFocus: true }); return; }
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    const rows = [...pop.querySelectorAll('[data-crew-pop-task]')];
+    const index = rows.indexOf(document.activeElement);
+    const next = rows[(index + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length];
+    event.preventDefault();
+    next?.focus();
+  };
+  const doc = main.ownerDocument || document;
+  const onPointer = (event) => {
+    // A re-render replaced the map (and the list with it): just let go.
+    if (!pop.isConnected) { doc.removeEventListener('pointerdown', onPointer, true); return; }
+    if (pop.contains(event.target) || slot.contains(event.target)) return;
+    closeCrewTasksPopover(main);
+  };
+  pop.addEventListener('keydown', onKey);
+  doc.addEventListener('pointerdown', onPointer, true);
+  pop.__cleanup = () => doc.removeEventListener('pointerdown', onPointer, true);
+  pop.querySelector('[data-crew-pop-task]')?.focus();
 }
 
 const CREW_TAG_STATUS = {
@@ -3295,6 +3379,30 @@ function taskCrewStatus(task) {
   if (HARNESS_ACTIVE_STATUSES.has(status) || status === 'review') return 'running';
   if (HARNESS_SUCCESS_STATUSES.has(status)) return 'success';
   return 'queued';
+}
+
+// Worker truth (ctox_harness_status.active_task_ids = the queue keys a worker
+// is executing right now). thesen 28.09.2026: six tasks stood "running" with
+// fresh leases and 21–134 attempts while no worker was active — the crew
+// looked busy although nothing ran. Returns null when the truth is unknown.
+function liveWorkerSignature(harness) {
+  if (!harness || !Array.isArray(harness.active_task_ids)) return '';
+  return `${harness.service_running !== false}|${[...harness.active_task_ids].map(String).sort().join(',')}`;
+}
+
+function taskHasLiveWorker(task, state) {
+  const harness = state?.harnessStatus;
+  if (!harness || !Array.isArray(harness.active_task_ids)) return null;
+  if (harness.service_running === false) return false;
+  const active = new Set(harness.active_task_ids.map((id) => String(id)));
+  return [task?.id, task?.taskId, task?.messageKey, task?.message_key, nativeTaskId(task)]
+    .some((id) => id && active.has(String(id)));
+}
+
+// What the crew shows for a task: a running task nobody executes waits.
+function taskCrewDisplayStatus(task, state) {
+  const status = taskCrewStatus(task);
+  return status === 'running' && taskHasLiveWorker(task, state) === false ? 'queued' : status;
 }
 
 function buildHarnessModel(data, flow, lang = 'de', channelAccounts = []) {
@@ -5008,10 +5116,17 @@ function refreshConfirmedHarnessStatus(state, invalidate = false) {
         if (state.disposed) return;
         if (request !== state.harnessStatusRequest) continue;
         if (status) {
+          const before = liveWorkerSignature(state.harnessStatus);
           state.harnessStatus = status;
           state.harnessHealth = deriveHarnessHealth(state);
           syncHarnessControlStatus(state);
           syncHarnessHealthUiState(state);
+          // Who really works changed: the crew on the map, the row faces and
+          // the bar count follow the worker truth.
+          if (state.model && before !== liveWorkerSignature(status)) {
+            publishCrewWorkload(state);
+            if (state.ctx?.host?.querySelector('[data-ctox-main]')) renderMain(state);
+          }
         }
       } catch (error) {
         if (!state.disposed) console.warn('[ctox] harness status read failed', error);
@@ -5230,17 +5345,17 @@ function applyLiveFlow(state) {
 // One count per member, the same one the map and the "Arbeitet" view use
 // (queue reconciled with the command lifecycle). The crew bar shows it while
 // this app is open, so the bar never says "Pico 4" next to a map saying "×3".
-function crewWorkloadCounts(model) {
+function crewWorkloadCounts(model, state = null) {
   const counts = {};
   for (const task of model?.tasks || []) {
-    if (taskCrewStatus(task) !== 'running') continue;
+    if (taskCrewDisplayStatus(task, state) !== 'running') continue;
     const id = taskAssignedMemberId(task);
     if (id) counts[id] = (counts[id] || 0) + 1;
   }
   return counts;
 }
 
-function publishCrewWorkload(state, counts = crewWorkloadCounts(state.model)) {
+function publishCrewWorkload(state, counts = crewWorkloadCounts(state.model, state)) {
   if (typeof window === 'undefined') return;
   window.__ctoxCrewWorkload = counts ? { counts, at: Date.now() } : null;
   try { window.dispatchEvent(new CustomEvent('ctox-crew-workload', { detail: window.__ctoxCrewWorkload })); } catch {}
@@ -7247,6 +7362,7 @@ function escapeAttr(value) {
 
 export const __ctoxTestHooks = {
   crewWorkloadCounts,
+  crewTasksPopoverMarkup,
   outboundEndpointForTask,
   taskCardMarkup,
   displayStatus,
