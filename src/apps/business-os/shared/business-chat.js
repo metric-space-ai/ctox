@@ -5462,7 +5462,7 @@ function installChatStyles() {
        Leiste ueber die volle Breite laeuft, endet sie unter ihm — deshalb haelt
        sie an ihrem rechten Ende genau seinen Platz frei, statt die Leiste
        vorzeitig abzuschneiden. */
-    body:not([data-shell-chat-dock-side]) .ctox-chat-dock:not(.is-collapsed) {
+    body:not([data-shell-chat-dock-side]) .ctox-chat-dock.has-visible-chats:not(.is-collapsed) {
       padding-right: var(--ctox-chat-reporter-slot, 58px);
     }
     .ctox-chat-dock.has-visible-chats {
