@@ -890,6 +890,15 @@
   padding: calc(var(--space-1) * 0.75) var(--space-1);
 }
 
+/* Zoom lives in the header row, never over the map (it covered the selected
+   creature's name tag on thesen, 28.09.2026). */
+.ctox-flow-toolbar.is-inline {
+  position: static;
+  top: auto;
+  right: auto;
+  z-index: auto;
+}
+
 .ctox-flow-toolbar button {
   display: inline-grid;
   place-items: center;

@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-clarity-v415';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-clarity-v416';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-portrait-v6';
 import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-portrait-v6';
@@ -30,7 +30,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-clarity-v415';
+const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-clarity-v416';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -2400,7 +2400,9 @@ function renderMain(state) {
     state.historyOpen = Boolean(panelTaskId);
   }
   const history = timelinePanel(state, selectedTask, selectedNode, metrics);
-  const hasHistory = selectedTask ? taskSteps(selectedTask, state).length > 1 : state.model.timeline.length > 1;
+  // A selected task always gets its row under the map (progress, metrics and
+  // steps when there are any); without a selection only a real timeline does.
+  const hasHistory = selectedTask ? true : state.model.timeline.length > 1;
   const previousViewport = readFlowViewport(state);
   const viewBox = flowViewBox(selectedTask, state);
   // Without a selected task and without current data the workspace itself
@@ -2415,6 +2417,11 @@ function renderMain(state) {
           <small class="ctox-paused-note" ${state.harnessStatus?.paused ? '' : 'hidden'}>${escapeHtml(t.harnessPaused)}</small>
         </div>
         <div class="ctox-pane-actions">
+          ${shouldShowCrewHome(state) || stateInWorkspace ? '' : `<div class="ctox-flow-toolbar is-inline" aria-label="${escapeAttr(t.flowControls)}" data-flow-control>
+        <button type="button" class="ctox-pane-icon" data-zoom="-" aria-label="${escapeAttr(t.zoomOut)}" title="${escapeAttr(t.zoomOut)}" ${state.zoom <= MIN_ZOOM ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+        <button type="button" class="ctox-flow-zoom-fit" data-zoom="fit" data-zoom-label aria-label="${escapeAttr(state.lang === 'de' ? 'Einpassen' : 'Fit')}" title="${escapeAttr(state.lang === 'de' ? 'Einpassen' : 'Fit')}">${Math.round(state.zoom * 100)}%</button>
+        <button type="button" class="ctox-pane-icon" data-zoom="+" aria-label="${escapeAttr(t.zoomIn)}" title="${escapeAttr(t.zoomIn)}" ${state.zoom >= MAX_ZOOM ? 'disabled' : ''}>${actionIcon(state, 'add')}</button>
+      </div>`}
           ${selectedTask ? `<button type="button" class="ctox-button ctox-job-toggle" data-job-toggle aria-expanded="${Boolean(state.jobEditorOpen)}">${escapeHtml(t.editTask)}</button>` : ''}
           <details class="ctox-more-actions">
             <summary aria-label="${escapeAttr(state.lang === 'de' ? 'Crew verwalten' : 'Manage crew')}">···</summary>
@@ -2431,11 +2438,6 @@ function renderMain(state) {
     </header>
     <section class="ctox-job-panel" data-job-panel ${state.jobEditorOpen ? '' : 'hidden'} aria-label="${escapeAttr(t.editTask)}"></section>
     ${shouldShowCrewHome(state) ? crewHomeMarkup(state) : stateInWorkspace ? emptyWorkspaceMarkup(state) : `<div class="ctox-canvas-container ctox-flow-well">
-      <div class="ctox-flow-toolbar" aria-label="${escapeAttr(t.flowControls)}" data-flow-control>
-        <button type="button" class="ctox-pane-icon" data-zoom="-" aria-label="${escapeAttr(t.zoomOut)}" title="${escapeAttr(t.zoomOut)}" ${state.zoom <= MIN_ZOOM ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
-        <button type="button" class="ctox-flow-zoom-fit" data-zoom="fit" data-zoom-label aria-label="${escapeAttr(state.lang === 'de' ? 'Einpassen' : 'Fit')}" title="${escapeAttr(state.lang === 'de' ? 'Einpassen' : 'Fit')}">${Math.round(state.zoom * 100)}%</button>
-        <button type="button" class="ctox-pane-icon" data-zoom="+" aria-label="${escapeAttr(t.zoomIn)}" title="${escapeAttr(t.zoomIn)}" ${state.zoom >= MAX_ZOOM ? 'disabled' : ''}>${actionIcon(state, 'add')}</button>
-      </div>
       <div class="ctox-flow-canvas" data-flow-canvas>
         <div class="ctox-flow-canvas-inner" data-flow-width="${viewBox.width}" data-flow-height="${viewBox.height}" style="width:${viewBox.width * state.zoom}px;height:${viewBox.height * state.zoom}px;min-height:${viewBox.height * state.zoom}px">
           ${flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskStepView, viewBox)}
@@ -2709,7 +2711,7 @@ function timelinePanel(state, selectedTask, selectedNode, metrics) {
       </div>
       <div class="ctox-timeline-detail">
         <span>${escapeHtml(hasRange ? (current?.label || t.currentStep) : t.notLive)}</span>
-        <p>${escapeHtml(hasRange ? (current?.detail || selectedNode?.lines?.[0] || itemSummary(selectedTask) || t.noRecentWork) : t.timelineUnavailableDetail)}</p>
+        <p>${escapeHtml(hasRange ? (current?.detail || selectedNode?.lines?.[0] || itemSummary(selectedTask) || t.noRecentWork) : (itemSummary(selectedTask) || t.timelineUnavailableDetail))}</p>
         <small>${escapeHtml(current ? `${stepMetaLabel(current, state)} · ${current.metrics || ''}` : selectedNode ? metricsLabel(selectedNode, state.lang) : '')}</small>
       </div>
     </section>
