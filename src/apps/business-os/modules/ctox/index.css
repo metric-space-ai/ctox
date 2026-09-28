@@ -511,7 +511,7 @@
   column-gap: var(--space-2);
   align-items: center;
 }
-.ctox-task-card.has-member .ctox-task-portrait { grid-area: portrait; width: 28px; height: 28px; }
+.ctox-task-card.has-member .ctox-task-portrait { grid-area: portrait; width: 28px; height: 28px; display: grid; place-items: center; }
 .ctox-task-card.has-member .ctox-task-selector > strong { grid-area: title; }
 .ctox-task-card.has-member .ctox-task-selector > .ctox-task-meta { grid-area: meta; }
 .ctox-task-card.has-member .ctox-task-selector > .ctox-task-reason { grid-area: reason; }
@@ -989,6 +989,20 @@
   fill: var(--text-strong, var(--text));
   font-size: 11.5px;
   font-weight: 620;
+}
+
+/* One being per member: a member with several tasks on the map carries a
+   count instead of standing there several times. */
+.ctox-flow-creature-count rect {
+  fill: var(--elev-float-2, var(--surface-2));
+  stroke: var(--elev-edge, var(--line));
+  stroke-width: 1;
+}
+.ctox-flow-creature-count text {
+  fill: var(--text-strong, var(--text));
+  font-size: 10.5px;
+  font-weight: 700;
+  text-anchor: middle;
 }
 
 /* Creature look and motion come from shared/crew-renderer.js and
@@ -1585,7 +1599,7 @@
 .ctox-crew-strip-member:focus-visible {
   box-shadow: var(--focus-ring, 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent));
 }
-.ctox-crew-strip-creature { width: 26px; height: 26px; flex: 0 0 26px; }
+.ctox-crew-strip-creature { width: 26px; height: 26px; flex: 0 0 26px; display: grid; place-items: center; }
 .ctox-crew-strip-member.is-on_duty { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
 
 .ctox-crew-home {

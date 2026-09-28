@@ -421,8 +421,45 @@ export function renderCrewCreature({
   `;
 }
 
+/**
+ * A reference to a crew member, never a copy of it (Owner 28.09.2026: "jedes
+ * Lumi darf es nur einmal geben!"). Every member is ONE being: it lives in the
+ * crew bar and stands once where it works (CTOX map or crew home). Every other
+ * place that names a member — task and ticket rows, chat chips and windows,
+ * app icons — shows this badge: the initial in the member's colour, no face,
+ * no body, no motion. Without a member it is a dashed empty ring.
+ */
+export function renderCrewReference({ appearance, size = 18, title = '' } = {}) {
+  const member = isMemberAppearance(appearance);
+  const crew = normalizeCrewAppearance(appearance);
+  const initial = member ? Array.from(crew.name)[0].toLocaleUpperCase('de-DE') : '';
+  const px = Math.max(10, Math.min(64, Number(size) || 18));
+  const label = title || (member ? crew.name : '');
+  return `<span class="ctox-crew-ref${member ? '' : ' is-neutral'}" data-crew-ref="${escapeAttr(member ? (crew.id || crew.name) : '')}" style="--crew-color:${escapeAttr(crew.color)};--crew-ref-size:${px}px"${label ? ` title="${escapeAttr(label)}"` : ''} aria-hidden="true">${escapeHtml(initial)}</span>`;
+}
+
 /** The one stylesheet for creatures. Hosts only size the wrapper. */
 export const CREW_CREATURE_BASE_CSS = `
+    .ctox-crew-ref {
+      display: inline-grid;
+      place-items: center;
+      flex: none;
+      box-sizing: border-box;
+      width: var(--crew-ref-size, 18px);
+      height: var(--crew-ref-size, 18px);
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--crew-color) 20%, transparent);
+      box-shadow: inset 0 0 0 1.5px var(--crew-color);
+      color: var(--crew-color);
+      font: 700 calc(var(--crew-ref-size, 18px) * 0.54) / 1 system-ui, -apple-system, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+      user-select: none;
+    }
+    .ctox-crew-ref.is-neutral {
+      background: transparent;
+      box-shadow: none;
+      border: 1.5px dashed color-mix(in srgb, var(--crew-color) 80%, transparent);
+    }
     .ctox-crew-creature {
       position: relative;
       display: inline-grid;
