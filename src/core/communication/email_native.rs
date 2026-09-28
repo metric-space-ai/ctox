@@ -1025,6 +1025,28 @@ fn reconcile_delayed_ews_sent_copy(
     else {
         return Ok(());
     };
+    let internet_message_id = item
+        .metadata
+        .get("internetMessageId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    // One Exchange Sent item is evidence for at most one durable send. A later
+    // identical send must not consume an older item's repeat poll.
+    let already_consumed: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM communication_messages \
+         WHERE channel = 'email' AND account_key = ?1 AND direction = 'outbound' \
+           AND folder_hint = 'sent' AND status = 'confirmed' \
+           AND remote_id LIKE 'pending-send-%' \
+           AND (json_extract(metadata_json, '$.sentCopyConfirmation.remoteId') = ?2 \
+             OR json_extract(metadata_json, '$.adapterResult.delivery.remoteId') = ?2 \
+             OR (?3 <> '' AND json_extract(metadata_json, '$.sentCopyConfirmation.internetMessageId') = ?3)))",
+        rusqlite::params![account_key, item.remote_id, internet_message_id],
+        |row| row.get(0),
+    )?;
+    if already_consumed {
+        return Ok(());
+    }
     let normalize_addresses = |addresses: &[String]| -> BTreeSet<String> {
         addresses
             .iter()
@@ -1089,7 +1111,7 @@ fn reconcile_delayed_ews_sent_copy(
     metadata["sentCopyConfirmation"] = json!({
         "provider": options.provider,
         "remoteId": item.remote_id,
-        "internetMessageId": item.metadata.get("internetMessageId").and_then(Value::as_str).unwrap_or(""),
+        "internetMessageId": internet_message_id,
         "sentAt": item.external_created_at,
     });
     conn.execute(
@@ -4864,7 +4886,7 @@ mod tests {
             &mut conn,
             &options,
             "email:lena@example.test",
-            sent
+            sent.clone()
         )?);
         let read = |key: &str| -> anyhow::Result<(String, serde_json::Value)> {
             let (status, metadata): (String, String) = conn.query_row(
@@ -4887,6 +4909,42 @@ mod tests {
         assert_eq!(metadata["adapterResult"]["delivery"]["confirmed"], false);
         assert_eq!(read(&other)?.0, "accepted");
         drop(read);
+        let later = insert_pending(&mut conn, "email:lena@example.test", "later", "Digest")?;
+        conn.execute(
+            "UPDATE communication_messages SET external_created_at = '2026-09-28T09:48:40Z' WHERE message_key = ?1",
+            [&later],
+        )?;
+        // The first provider item is older than B, but still inside the
+        // allowed clock-skew window. Re-polling it must not confirm B.
+        assert!(!super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            sent.clone()
+        )?);
+        let later_status: String = conn.query_row(
+            "SELECT status FROM communication_messages WHERE message_key = ?1",
+            [&later],
+            |row| row.get(0),
+        )?;
+        assert_eq!(later_status, "accepted");
+        let mut second_sent = sent;
+        second_sent.remote_id = "AQMk-second-item".into();
+        second_sent.external_created_at = "2026-09-28T09:48:45Z".into();
+        second_sent.metadata =
+            serde_json::json!({"internetMessageId":"<second-real-id@example.test>"});
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            second_sent
+        )?);
+        let later_status: String = conn.query_row(
+            "SELECT status FROM communication_messages WHERE message_key = ?1",
+            [&later],
+            |row| row.get(0),
+        )?;
+        assert_eq!(later_status, "confirmed");
         let first = insert_pending(&mut conn, "email:lena@example.test", "repeat-1", "Repeated")?;
         let second = insert_pending(&mut conn, "email:lena@example.test", "repeat-2", "Repeated")?;
         let repeated = super::MailboxMessage {
