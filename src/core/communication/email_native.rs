@@ -4979,6 +4979,64 @@ mod tests {
             )?;
             assert_eq!(status, "accepted");
         }
+        let immediately_confirmed = insert_pending(
+            &mut conn,
+            "email:lena@example.test",
+            "immediate-a",
+            "Immediate",
+        )?;
+        conn.execute(
+            "UPDATE communication_messages SET status = 'confirmed', metadata_json = ?2 WHERE message_key = ?1",
+            rusqlite::params![
+                immediately_confirmed,
+                r#"{"source":"ctox-send-durability","adapterResult":{"ok":true,"status":"confirmed","delivery":{"confirmed":true,"remoteId":"AQMk-immediate"}}}"#,
+            ],
+        )?;
+        let immediate_copy = super::MailboxMessage {
+            remote_id: "AQMk-immediate".into(),
+            thread_key: "exchange-immediate".into(),
+            folder_hint: "sent".into(),
+            subject: "Immediate".into(),
+            sender_display: "Lena".into(),
+            sender_address: "lena@example.test".into(),
+            recipient_addresses: vec!["one@example.test".into(), "two@example.test".into()],
+            cc_addresses: vec![],
+            body_text: "Exact body".into(),
+            body_html: String::new(),
+            preview: "Exact body".into(),
+            seen: true,
+            has_attachments: false,
+            external_created_at: "2026-09-28T09:48:23Z".into(),
+            metadata: serde_json::json!({"internetMessageId":"<immediate@example.test>"}),
+        };
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            immediate_copy.clone()
+        )?);
+        let after_immediate = insert_pending(
+            &mut conn,
+            "email:lena@example.test",
+            "immediate-b",
+            "Immediate",
+        )?;
+        conn.execute(
+            "UPDATE communication_messages SET external_created_at = '2026-09-28T09:48:40Z' WHERE message_key = ?1",
+            [&after_immediate],
+        )?;
+        assert!(!super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            immediate_copy
+        )?);
+        let status: String = conn.query_row(
+            "SELECT status FROM communication_messages WHERE message_key = ?1",
+            [&after_immediate],
+            |row| row.get(0),
+        )?;
+        assert_eq!(status, "accepted");
         Ok(())
     }
 
