@@ -11627,7 +11627,7 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
 /// that RxDB schema indexes and [`ensure_rxdb_string_field_lookup_index`]
 /// create. The former `CAST(json_extract(data, ?1) AS TEXT) = ?2` could use no
 /// index: each Sellify lookup parsed every row, e.g. 92,875 campaign rows
-/// (118 MB) per campaign import on THESEN (26.09.2026). The caller must have
+/// (118 MB) per campaign import on tenant (26.09.2026). The caller must have
 /// validated `field` as `[A-Za-z0-9_]+`.
 fn rxdb_string_field_lookup_sql(table: &str, field: &str) -> String {
     format!(
@@ -11844,7 +11844,7 @@ pub(super) fn find_rxdb_collection_records_by_string_field(
 /// A Sellify campaign search needs only names and member counts. Loading every
 /// matching membership row (up to 50,000 full documents) and grouping in Rust
 /// took 8 s for "Welle" and silently undercounted once the cap was reached
-/// (THESEN 26.09.2026). Grouping in SQL over the `("deleted", name, "id")`
+/// (tenant 26.09.2026). Grouping in SQL over the `("deleted", name, "id")`
 /// expression index reads the name from the index and touches a row only for
 /// its `is_deleted` flag.
 pub(super) fn group_rxdb_collection_string_field_contains(
