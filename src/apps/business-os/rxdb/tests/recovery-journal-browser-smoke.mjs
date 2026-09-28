@@ -160,6 +160,7 @@ try {
     const writeStarted = performance.now();
     await backlogCollection.bulkUpsert([{ id: 'lead-new', payload: 'new' }]);
     const backlogFirstWriteMs = performance.now() - writeStarted;
+    const backlogPendingAfterFirstWrite = (await backlogStorage.recoveryJournal.getStatus()).pendingWrites;
     const ackStarted = performance.now();
     await backlogStorage.recoveryJournal.markMasterAcknowledged('outbound_leads', {
       'lead-0': { id: 'lead-0', payload: 'x'.repeat(256), _meta: { ctoxHlc: '51:0:tab-a' } },
@@ -325,6 +326,7 @@ try {
       migratedBatches,
       migratedVersion,
       backlogPendingBefore,
+      backlogPendingAfterFirstWrite,
       backlogPendingAfter,
       backlogRecoveryMs,
       backlogFirstWriteMs,
@@ -368,8 +370,9 @@ try {
   'v3 journals must gain the v4 lookup indexes');
   assert(result.migratedBatches.length === 1 && result.migratedBatches[0].batchId === 'legacy-pending',
     'v3 upgrade must preserve the pending write batch');
-  assert(result.backlogPendingBefore === 240 && result.backlogPendingAfter === 240,
-    'a newer master HLC drains only its exact historical version, preserving other pending edits');
+  assert(result.backlogPendingBefore === 240 && result.backlogPendingAfterFirstWrite === 241
+    && result.backlogPendingAfter === 240,
+  'the new local write adds one pending version; the exact master HLC then drains one historical version');
   assert([result.backlogRecoveryMs, result.backlogFirstWriteMs, result.backlogAckMs]
     .every((value) => Number.isFinite(value) && value >= 0),
   'sanitized backlog timings must be recorded for recovery, first write and ACK');
