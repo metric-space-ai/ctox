@@ -1876,6 +1876,30 @@ impl WebRTCRsConnectionHandler {
             }
         };
 
+        if let Err(error) = pc.set_local_description(answer).await {
+            let _ = pc.close().await;
+            return Err(webrtc_error("set local answer", error));
+        }
+        let Some(local_description) = pc.local_description().await else {
+            let _ = pc.close().await;
+            return Err(new_rx_error(
+                "RC_WEBRTC_SIGNAL",
+                Some(serde_json::json!({ "message": "answer has no local description" })),
+            ));
+        };
+        if let Err(error) = signaling
+            .send_signal(
+                remote_peer_id.clone(),
+                serde_json::to_value(local_description).unwrap_or(Value::Null),
+            )
+            .await
+        {
+            let _ = pc.close().await;
+            return Err(error);
+        }
+        // The answer is now on the signaling socket. No await separates the
+        // retirement from registering its replacement, and any failed answer
+        // path above leaves the old open responder and authority untouched.
         self.remove_obsolete_peer_before_offer(&remote_peer_id);
         {
             let _lifecycle = self.peer_lifecycle.lock();
@@ -1891,27 +1915,6 @@ impl WebRTCRsConnectionHandler {
                     tasks: Vec::new(),
                 },
             );
-        }
-        if let Err(error) = pc.set_local_description(answer).await {
-            remove_peer_generation(self, &remote_peer_id, generation);
-            return Err(webrtc_error("set local answer", error));
-        }
-        let Some(local_description) = pc.local_description().await else {
-            remove_peer_generation(self, &remote_peer_id, generation);
-            return Err(new_rx_error(
-                "RC_WEBRTC_SIGNAL",
-                Some(serde_json::json!({ "message": "answer has no local description" })),
-            ));
-        };
-        if let Err(error) = signaling
-            .send_signal(
-                remote_peer_id.clone(),
-                serde_json::to_value(local_description).unwrap_or(Value::Null),
-            )
-            .await
-        {
-            remove_peer_generation(self, &remote_peer_id, generation);
-            return Err(error);
         }
         let mut accepted = self.accepted_offers.lock();
         accepted.push_back((remote_peer_id, offer_session_id));
@@ -5927,10 +5930,9 @@ mod tests {
     #[tokio::test]
     async fn inbound_offer_validates_before_replacing_and_replays_preserve_the_answered_peer() {
         use futures::SinkExt;
-        use tokio::net::TcpListener;
         use tokio_tungstenite::{accept_async, tungstenite::Message};
 
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let listener = super::super::signaling_client::bind_test_signaling_listener().await;
         let addr = listener.local_addr().unwrap();
         let (frames_tx, mut frames_rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
         let server = tokio::spawn(async move {
@@ -6108,6 +6110,46 @@ mod tests {
                 .map(String::as_str),
             Some("newest-token")
         );
+        let failed_offerer = build_peer_connection(
+            Arc::clone(&handler),
+            Arc::clone(&signaling),
+            "failed-offer-source".to_string(),
+            102,
+        )
+        .await
+        .unwrap();
+        failed_offerer
+            .create_data_channel("rxdb", None)
+            .await
+            .unwrap();
+        let failed_offer = failed_offerer.create_offer(None).await.unwrap();
+        failed_offerer
+            .set_local_description(failed_offer)
+            .await
+            .unwrap();
+        let failed_signal =
+            serde_json::to_value(failed_offerer.local_description().await.unwrap()).unwrap();
+        signaling.close().await;
+        assert!(handler
+            .handle_signal("browser-1".to_string(), failed_signal)
+            .await
+            .is_err());
+        assert_eq!(
+            handler
+                .connection_for_peer("browser-1")
+                .unwrap()
+                .generation(),
+            newest.generation()
+        );
+        assert_eq!(
+            handler
+                .peer_capability_tokens
+                .lock()
+                .get("browser-1")
+                .map(String::as_str),
+            Some("newest-token")
+        );
+        let _ = failed_offerer.close().await;
         let _ = newer_offerer.close().await;
         let _ = offerer.close().await;
         handler.close().await.unwrap();

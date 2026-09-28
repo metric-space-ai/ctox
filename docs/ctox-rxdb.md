@@ -989,9 +989,10 @@ documents is `runtime/business-os-rxdb.sqlite3` as above.
     later browser offer hit the fast path in `ensure_peer_connection` and
     never receive an answer." The responder PeerConnection is created when
     the actual offer arrives in `handle_signal`.
-  - On an inbound offer, Rust parses the SDP and applies it to a newly built,
-    unregistered responder before retiring the existing generation. A rejected
-    SDP therefore leaves the old open DataChannel intact. The native peer
+  - On an inbound offer, Rust parses the SDP, applies it to a newly built,
+    unregistered responder and sends a valid answer before retiring the
+    existing generation. A rejected SDP or answer-send failure therefore
+    leaves the old open DataChannel intact. The native peer
     remembers a bounded set of answered SDP session origins per signaling peer
     and ignores delayed duplicate offers. A genuinely new browser
     PeerConnection replaces the old responder even when its DataChannel is
@@ -1317,7 +1318,7 @@ by `checkpoint-contract-smoke.mjs`, which drives the real
 | Failure | Mechanism | Where |
 |---|---|---|
 | Signaling socket drops (browser) | Self-reconnect with exponential backoff 1 s → 30 s; re-join re-broadcasts the peer list. Backoff resets on the `joined` broadcast, **not** on socket open — open-then-rejected sockets must keep backing off. | `webrtc-native.mjs::scheduleSignalingReconnect`, `handleSignalingMessage` |
-| Signaling socket drops (native) | Supervisor task reconnects with 1 s → 30 s backoff using **fresh URLs from the `url_provider` failover list**: sticky on the last-working candidate, rotates to the next one only after a failed establish attempt (rotation never resets the backoff; that still happens only on `joined`). All configured signaling URLs participate — the list used to be cosmetic (only the first entry was ever tried). Covered by chaos tests in the same file (the extra test-only `TcpListener` binds raised the data-plane-guard ratchet for `signaling_client.rs` from 2 to 7 — an architecture-decision record for that allowlist change). | `signaling_client.rs`, `rxdb_peer.rs::signaling_url_provider` |
+| Signaling socket drops (native) | Supervisor task reconnects with 1 s → 30 s backoff using **fresh URLs from the `url_provider` failover list**: sticky on the last-working candidate, rotates to the next one only after a failed establish attempt (rotation never resets the backoff; that still happens only on `joined`). All configured signaling URLs participate — the list used to be cosmetic (only the first entry was ever tried). Covered by chaos tests in the same file (the test-only local WebSocket listeners now share one helper, tightening the data-plane-guard ratchet for `signaling_client.rs` from 7 to 4; production remains listener-free). | `signaling_client.rs`, `rxdb_peer.rs::signaling_url_provider` |
 | Control-plane rejection | `ctoxError` frames are parsed and surfaced on both sides (the server closes the socket right after); otherwise a rejected join is indistinguishable from a blip and reconnects hammer silently. The browser shell additionally observes them via a WebSocket wrapper and treats them as fatal, non-retryable. | `signaling_client.rs`, `webrtc-native.mjs`, `sync.js::installSignalingErrorObserver` |
 | Request vs disconnect race | `send_message_and_await_answer` subscribes to response **and** disconnect streams before sending and races them against a 60 s deadline; a peer dying mid-request fails the request instead of hanging the handshake/fork forever. Browser requests default to 15 s; a timed-out `ctoxProtocol`/`token` recycles the connection with `forceInitiator`. | `webrtc_helper.rs`, `webrtc-native.mjs::request` |
 | Send-queue wedge / truncated foreign transfer | Exactly one drainer per peer queue (`draining` flag); `DrainResetGuard` re-opens its own drain slot on cancellation, and `remove_peer` drops the whole queue. A caller may complete its receipt only between whole queued messages: inline priority preemption can deliver that receipt while the drainer still owns another collection’s framed response. `QueuedTransferGuard` prevents successful receipt completion from cancelling that response; small messages still preempt on the wire. | `connection_handler_rs.rs`; `interleaved_own_receipt_preserves_the_other_collections_transfer`; [incident evidence](dev/ctox-sync-interleaved-receipt-20260907.md) |
