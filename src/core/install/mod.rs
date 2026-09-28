@@ -2149,7 +2149,7 @@ fn apply_update(
     // process keeps serving the OLD release's UI — the daemon restart above only
     // covers `ctox.service`, which is exactly why `ctox upgrade --dev` appeared
     // to "not take effect" for the Business OS frontend.
-    restart_business_os_web_shell();
+    restart_release_bound_units();
     manifest.previous_release = previous_release.clone();
     manifest.current_release = Some(release.to_string());
     manifest.updated_at = now_rfc3339();
@@ -2448,19 +2448,29 @@ fn maybe_restart_service(previous_release_root: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// Best-effort restart of the Business OS web shell after a release switch, so
-/// it serves the new release's on-disk static assets (`app.js` / `app.css` /
-/// `index.html`).
+/// Every user unit besides `ctox.service` that execs the CTOX binary from the
+/// `current/` release (directly or via `~/.local/bin/ctox`). After a release
+/// switch such a process keeps running the previous release's executable —
+/// deleted by `prune_old_releases` — until it is restarted: observed on
+/// welsch and thesen 28.09.2026, where `cto-jami-daemon.service` had run a
+/// deleted binary since 31.08. and `ctox-business-os-mcp.service` since 06.09.
+/// across several upgrades. `ctox.service` itself is restarted by the upgrade.
+const RELEASE_BOUND_UNITS: &[&str] = &[
+    "ctox-business-os-web.service",
+    "ctox-business-os.service",
+    "cto-jami-daemon.service",
+    "ctox-business-os-mcp.service",
+];
+
+/// Best-effort restart of the release-bound units after a release switch, so
+/// the web shell serves the new release's on-disk assets and the Jami daemon
+/// and managed MCP connector run the new binary.
 ///
-/// No-op on installs that do not run the web shell (the unit is absent/inactive),
-/// so we never spuriously start it. The daemon restart in the upgrade flow only
-/// covers `ctox.service`; without this, `ctox upgrade --dev` switches the release
-/// but the web shell keeps serving the previous release's UI until a manual
-/// `systemctl --user restart`.
-fn restart_business_os_web_shell() {
-    const WEB_UNITS: &[&str] = &["ctox-business-os-web.service", "ctox-business-os.service"];
+/// No-op for units an install does not run (absent/inactive and not enabled),
+/// so we never spuriously start one.
+fn restart_release_bound_units() {
     let mut restarted = false;
-    for unit in WEB_UNITS {
+    for unit in RELEASE_BOUND_UNITS {
         let is_active = Command::new("systemctl")
             .args(["--user", "is-active", unit])
             .output()
@@ -2479,7 +2489,7 @@ fn restart_business_os_web_shell() {
             continue;
         }
         if !restarted {
-            progress_step("restarting Business OS web shell onto the new release");
+            progress_step("restarting release-bound units onto the new release");
             restarted = true;
         }
         let _ = Command::new("systemctl")
@@ -4742,6 +4752,41 @@ mod tests {
             state_root: root.join("state"),
             cache_root: root.join("cache"),
         }
+    }
+
+    #[test]
+    fn every_installed_unit_running_the_ctox_binary_is_restarted_on_upgrade() {
+        // install.sh writes the user units; every one whose ExecStart runs the
+        // CTOX binary must follow a release switch (ctox.service is restarted
+        // by the upgrade itself). A new unit without an entry here would keep
+        // running the deleted previous binary after the next upgrade.
+        let script = include_str!("../../../install.sh");
+        let mut units = Vec::new();
+        let mut current: Option<String> = None;
+        for line in script.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("cat > \"$service_dir/") {
+                current = rest.split('"').next().map(str::to_string);
+            } else if line.starts_with("ExecStart=") && line.contains("ctox") {
+                if let Some(unit) = current.take() {
+                    units.push(unit);
+                }
+            } else if line == "SVCEOF" {
+                current = None;
+            }
+        }
+        assert!(
+            units.iter().any(|unit| unit == "cto-jami-daemon.service"),
+            "parsed units: {units:?}"
+        );
+        for unit in units.iter().filter(|unit| unit.as_str() != "ctox.service") {
+            assert!(
+                RELEASE_BOUND_UNITS.contains(&unit.as_str()),
+                "{unit} runs the CTOX binary but is not restarted after a release switch"
+            );
+        }
+        // Units created outside install.sh (managed MCP connector) follow too.
+        assert!(RELEASE_BOUND_UNITS.contains(&"ctox-business-os-mcp.service"));
     }
 
     #[test]
