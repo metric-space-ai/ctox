@@ -1735,6 +1735,7 @@ pub(super) fn handle_research_writeback(
         .get("person_field_status")
         .cloned()
         .unwrap_or(Value::Null);
+    let previous_contacts = lead.get("contacts").cloned().unwrap_or(Value::Null);
     let patch = outbound_lead_generation_research_outcome_patch(&lead, &projection_result, now);
     merge_json_object_values(&mut lead, &patch);
     union_research_keys(&mut lead, &previous_keys);
@@ -1760,6 +1761,10 @@ pub(super) fn handle_research_writeback(
             .map(|(workspace, contract)| (workspace.as_path(), contract)),
     ));
     project_person_field_status(&mut lead);
+    super::contact_email_validation::invalidate_changed_email_addresses(
+        &mut lead,
+        &previous_contacts,
+    );
     // The worker can still report the old "daemon will check this" placeholder
     // after experte.de has already returned. Restore only a native verdict for
     // the same person and unchanged address before computing open fields.

@@ -26,7 +26,7 @@
 //! overwrites it on every run, so the shared store cannot say which address a
 //! verdict belongs to.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -79,6 +79,92 @@ fn contact_email(contact: &Value) -> Option<String> {
         .iter()
         .filter_map(|key| contact.get(*key).and_then(Value::as_str))
         .find_map(normalize_email)
+}
+
+/// A research writeback may match a person by key while replacing their
+/// address. The old scalar verdict and projected statuses must be removed
+/// before open-field calculation, or the new address is never checked.
+pub(super) fn invalidate_changed_email_addresses(
+    lead: &mut Value,
+    previous_contacts: &Value,
+) -> usize {
+    let mut old = HashMap::new();
+    let mut duplicate_keys = HashSet::new();
+    for contact in previous_contacts.as_array().into_iter().flatten() {
+        let Some(key) = contact
+            .get("person_key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+        else {
+            continue;
+        };
+        if old
+            .insert(key.to_string(), contact_email(contact))
+            .is_some()
+        {
+            duplicate_keys.insert(key.to_string());
+        }
+    }
+    let Some(contacts) = lead.get_mut("contacts").and_then(Value::as_array_mut) else {
+        return 0;
+    };
+    let mut changed = Vec::new();
+    for contact in contacts.iter_mut() {
+        let Some(key) = contact
+            .get("person_key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        if duplicate_keys.contains(&key) {
+            continue;
+        }
+        let Some(Some(old_email)) = old.get(&key) else {
+            continue;
+        };
+        if contact_email(contact).as_deref() == Some(old_email.as_str()) {
+            continue;
+        }
+        if let Some(object) = contact.as_object_mut() {
+            object.remove("person_email_validation");
+            object.remove("email_validation");
+            if let Some(statuses) = object
+                .get_mut("field_status")
+                .and_then(Value::as_object_mut)
+            {
+                statuses.remove("person_email_validation");
+            }
+        }
+        changed.push(key);
+    }
+    if changed.is_empty() {
+        return 0;
+    }
+    for key in &changed {
+        if let Some(fields) = lead["person_field_status"]
+            .get_mut(key)
+            .and_then(Value::as_object_mut)
+        {
+            fields.remove("person_email_validation");
+        }
+    }
+    if lead["field_status"]
+        .get("person_email_validation")
+        .is_some()
+    {
+        lead["field_status"]["person_email_validation"] = json!({
+            "status": "action_required",
+            "value": null,
+            "sources": [],
+            "attempts": [],
+            "reason": "E-Mail-Adresse geaendert; erneute native Pruefung erforderlich",
+        });
+    }
+    changed.len()
 }
 
 /// Only a real verdict counts. A worker writing `no_match` into
@@ -314,6 +400,228 @@ fn native_email_field_status(verdict: &EmailVerdict, person_key: Option<&str>) -
     status
 }
 
+fn legacy_validation_placeholder(lead: &Value) -> bool {
+    let status = &lead["field_status"]["person_email_validation"];
+    status.get("status").and_then(Value::as_str) == Some("action_required")
+        && status
+            .get("reason")
+            .and_then(Value::as_str)
+            .is_some_and(|reason| {
+                let reason = reason.to_ascii_lowercase();
+                reason.contains("daemon") && reason.contains("experte.de")
+            })
+        && !email_receipt_entries(lead).is_empty()
+}
+
+fn email_receipt_entries(lead: &Value) -> Vec<Value> {
+    let history = lead
+        .pointer("/payload/email_validation_receipts")
+        .and_then(Value::as_object);
+    if let Some(history) = history.filter(|history| !history.is_empty()) {
+        return history.values().cloned().collect();
+    }
+    lead.pointer("/payload/email_validation_pass/checked")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The last pass still describes only that pass. This address-keyed receipt
+/// map retains older currently attached addresses across batches, so a later
+/// writeback can verify every native per-person status against its own run.
+fn merged_email_receipts(lead: &Value, verdicts: &[EmailVerdict]) -> Value {
+    let current_emails = lead
+        .get("contacts")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(contact_email)
+        .collect::<HashSet<_>>();
+    let mut receipts = BTreeMap::new();
+    for entry in email_receipt_entries(lead).into_iter().chain(
+        lead.pointer("/payload/email_validation_pass/checked")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .cloned(),
+    ) {
+        let Some(email) = entry
+            .get("email")
+            .and_then(Value::as_str)
+            .and_then(normalize_email)
+        else {
+            continue;
+        };
+        if current_emails.contains(&email)
+            && entry.get("valid").and_then(Value::as_bool).is_some()
+            && entry
+                .get("run_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.is_empty())
+        {
+            receipts.insert(
+                email.clone(),
+                json!({
+                    "email": email,
+                    "valid": entry["valid"],
+                    "run_id": entry["run_id"],
+                }),
+            );
+        }
+    }
+    for verdict in verdicts {
+        if current_emails.contains(&verdict.email) {
+            receipts.insert(
+                verdict.email.clone(),
+                json!({
+                    "email": verdict.email,
+                    "valid": verdict.valid,
+                    "run_id": verdict.run_id,
+                }),
+            );
+        }
+    }
+    json!(receipts)
+}
+
+/// Reconstructs only the field status of contacts whose saved native receipt
+/// agrees with their current stable person key, address, and scalar verdict.
+/// No scrape is repeated, no external quote is invented, and the lead's
+/// `research_status` remains unchanged. Called only for an already-checked
+/// lead that enters the existing per-record validation path again.
+fn reconcile_receipted_email_status(lead: &mut Value) -> usize {
+    if !legacy_validation_placeholder(lead) {
+        return 0;
+    }
+    let checked = email_receipt_entries(lead);
+    let Some(contacts) = lead.get("contacts").and_then(Value::as_array) else {
+        return 0;
+    };
+    let mut seen_keys = HashSet::new();
+    let mut seen_emails = HashSet::new();
+    let mut address_count = 0;
+    let mut matches = Vec::new();
+    for (index, contact) in contacts.iter().enumerate() {
+        let Some(email) = contact_email(contact) else {
+            continue;
+        };
+        address_count += 1;
+        let Some(person_key) = contact
+            .get("person_key")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|key| !key.is_empty())
+        else {
+            continue;
+        };
+        if !seen_keys.insert(person_key.to_string()) || !seen_emails.insert(email.clone()) {
+            return 0;
+        }
+        let valid = match contact
+            .get("person_email_validation")
+            .and_then(Value::as_str)
+        {
+            Some("valid") => true,
+            Some("invalid") => false,
+            _ => continue,
+        };
+        let receipts = checked
+            .iter()
+            .filter(|entry| {
+                entry
+                    .get("email")
+                    .and_then(Value::as_str)
+                    .and_then(normalize_email)
+                    .as_deref()
+                    == Some(email.as_str())
+            })
+            .collect::<Vec<_>>();
+        if receipts.len() != 1 || receipts[0].get("valid").and_then(Value::as_bool) != Some(valid) {
+            continue;
+        }
+        let Some(run_id) = receipts[0]
+            .get("run_id")
+            .and_then(Value::as_str)
+            .filter(|id| {
+                id.starts_with("scrape_run-")
+                    && id.len() <= 128
+                    && id
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
+            })
+        else {
+            continue;
+        };
+        let old_canonical = &lead["person_field_status"][person_key]["person_email_validation"];
+        let old_projected = &contact["field_status"]["person_email_validation"];
+        if [old_canonical, old_projected].into_iter().any(|status| {
+            status
+                .get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind != "action_required")
+        }) {
+            continue;
+        }
+        matches.push((
+            index,
+            person_key.to_string(),
+            email,
+            valid,
+            run_id.to_string(),
+        ));
+    }
+    if matches.is_empty() {
+        return 0;
+    }
+    let all_addresses_bound = matches.len() == address_count;
+    for (index, person_key, email, valid, run_id) in &matches {
+        let status = json!({
+            "status": "verified",
+            "value": if *valid { "valid" } else { "invalid" },
+            "sources": [{
+                "source_id": VALIDATION_SOURCE_ID,
+                "url": "https://www.experte.de/email-pruefen",
+                "run_id": run_id,
+            }],
+            "attempts": [],
+            "reason": format!("Aus gespeichertem nativen experte.de-Prueflauf {run_id} rekonstruiert; Originalzitat nicht erneut gelesen"),
+            "validated_email": email,
+            "run_id": run_id,
+            "via": "native_email_validation_receipt",
+            "person_key": person_key,
+        });
+        if !lead["contacts"][*index]
+            .get("field_status")
+            .is_some_and(Value::is_object)
+        {
+            lead["contacts"][*index]["field_status"] = json!({});
+        }
+        lead["contacts"][*index]["field_status"]["person_email_validation"] = status.clone();
+        if !lead
+            .get("person_field_status")
+            .is_some_and(Value::is_object)
+        {
+            lead["person_field_status"] = json!({});
+        }
+        if !lead["person_field_status"]
+            .get(person_key)
+            .is_some_and(Value::is_object)
+        {
+            lead["person_field_status"][person_key] = json!({});
+        }
+        lead["person_field_status"][person_key]["person_email_validation"] = status;
+    }
+    if all_addresses_bound {
+        let best = matches
+            .iter()
+            .find(|(_, _, _, valid, _)| *valid)
+            .unwrap_or(&matches[0]);
+        lead["field_status"]["person_email_validation"] =
+            lead["person_field_status"][&best.1]["person_email_validation"].clone();
+    }
+    matches.len()
+}
+
 /// A later research writeback may carry the worker's old `action_required`
 /// placeholder for step 4a. Keep a native verdict only for the same person
 /// and the same address; a changed address must be checked again.
@@ -321,16 +629,12 @@ pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) 
     let Some(previous) = previous.as_object() else {
         return 0;
     };
-    let checked = lead
-        .pointer("/payload/email_validation_pass/checked")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
+    let checked = email_receipt_entries(lead);
     let mut restored = Vec::new();
     let Some(contacts) = lead.get_mut("contacts").and_then(Value::as_array_mut) else {
         return 0;
     };
-    for contact in contacts {
+    for contact in contacts.iter_mut() {
         let Some(person_key) = contact
             .get("person_key")
             .and_then(Value::as_str)
@@ -349,8 +653,10 @@ pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) 
         else {
             continue;
         };
-        if status.get("via").and_then(Value::as_str) != Some("native_email_validation")
-            || status.get("status").and_then(Value::as_str) != Some("verified")
+        if !matches!(
+            status.get("via").and_then(Value::as_str),
+            Some("native_email_validation" | "native_email_validation_receipt")
+        ) || status.get("status").and_then(Value::as_str) != Some("verified")
             || !matches!(
                 status.get("value").and_then(Value::as_str),
                 Some("valid" | "invalid")
@@ -393,6 +699,17 @@ pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) 
     if restored.is_empty() {
         return 0;
     }
+    let unbound_valid_address = contacts.iter().any(|contact| {
+        contact
+            .get("person_email_validation")
+            .and_then(Value::as_str)
+            == Some("valid")
+            && !restored.iter().any(|(key, status)| {
+                contact.get("person_key").and_then(Value::as_str) == Some(key.as_str())
+                    && contact_email(contact).as_deref()
+                        == status.get("validated_email").and_then(Value::as_str)
+            })
+    });
     if !lead
         .get("person_field_status")
         .is_some_and(Value::is_object)
@@ -417,7 +734,17 @@ pub(super) fn restore_native_email_verdicts(lead: &mut Value, previous: &Value) 
     if !lead.get("field_status").is_some_and(Value::is_object) {
         lead["field_status"] = json!({});
     }
-    lead["field_status"]["person_email_validation"] = best.clone();
+    if best.get("value").and_then(Value::as_str) == Some("invalid") && unbound_valid_address {
+        lead["field_status"]["person_email_validation"] = json!({
+            "status": "action_required",
+            "value": null,
+            "sources": [],
+            "attempts": [],
+            "reason": "Ein weiteres gueltiges Kontakturteil hat keinen gebundenen nativen Prueflauf",
+        });
+    } else {
+        lead["field_status"]["person_email_validation"] = best.clone();
+    }
     restored.len()
 }
 
@@ -499,7 +826,7 @@ fn validate_lead_contacts(root: &Path, record_id: &str) -> anyhow::Result<usize>
         return Ok(0);
     };
     let emails = emails_needing_validation(&lead, MAX_ADDRESSES_PER_PASS);
-    if emails.is_empty() {
+    if emails.is_empty() && !legacy_validation_placeholder(&lead) {
         return Ok(0);
     }
     let mut verdicts = Vec::new();
@@ -532,7 +859,15 @@ fn validate_lead_contacts(root: &Path, record_id: &str) -> anyhow::Result<usize>
     else {
         return Ok(0);
     };
-    let changed = apply_email_verdicts(&mut lead, &verdicts);
+    let repaired = if emails.is_empty() {
+        reconcile_receipted_email_status(&mut lead)
+    } else {
+        0
+    };
+    let changed = repaired + apply_email_verdicts(&mut lead, &verdicts);
+    if emails.is_empty() && changed == 0 {
+        return Ok(0);
+    }
     if changed > 0 {
         super::person_research_gap_closure::complete_after_native_email_validation(&mut lead);
     }
@@ -542,14 +877,18 @@ fn validate_lead_contacts(root: &Path, record_id: &str) -> anyhow::Result<usize>
     if !lead.get("payload").is_some_and(Value::is_object) {
         lead["payload"] = json!({});
     }
-    lead["payload"]["email_validation_pass"] = json!({
-        "at_ms": now,
-        "checked": verdicts
-            .iter()
-            .map(|verdict| json!({"email": verdict.email, "valid": verdict.valid, "run_id": verdict.run_id}))
-            .collect::<Vec<_>>(),
-        "failed": failures,
-    });
+    let receipts = merged_email_receipts(&lead, &verdicts);
+    lead["payload"]["email_validation_receipts"] = receipts;
+    if !emails.is_empty() {
+        lead["payload"]["email_validation_pass"] = json!({
+            "at_ms": now,
+            "checked": verdicts
+                .iter()
+                .map(|verdict| json!({"email": verdict.email, "valid": verdict.valid, "run_id": verdict.run_id}))
+                .collect::<Vec<_>>(),
+            "failed": failures,
+        });
+    }
     lead["research_updated_at_ms"] = Value::from(now);
     store::upsert_rxdb_collection_record(root, LEAD_COLLECTION, record_id, now, lead)?;
     Ok(changed)
@@ -909,6 +1248,153 @@ mod tests {
             !super::super::person_research_gap_closure::complete_after_native_email_validation(
                 &mut older_lead
             )
+        );
+    }
+
+    #[test]
+    fn old_two_person_receipt_repairs_only_the_email_field() {
+        // Shape of the saved lead_x6q05l pair, with synthetic addresses.
+        let legacy = json!({
+            "contacts": [
+                {"person_key": "sellify-person-41504", "person_email": "a@biogen.com", "person_email_validation": "valid"},
+                {"person_key": "sellify-person-41503", "person_email": "b@biogen.com", "person_email_validation": "valid"}
+            ],
+            "person_field_status": null,
+            "field_status": {"person_email_validation": {
+                "status": "action_required", "person_key": "sellify-person-41503",
+                "reason": "CTOX-Daemon validiert automatisch via experte.de"
+            }},
+            "payload": {"email_validation_pass": {"checked": [
+                {"email": "a@biogen.com", "valid": true, "run_id": "scrape_run-aaa"},
+                {"email": "b@biogen.com", "valid": true, "run_id": "scrape_run-bbb"}
+            ]}},
+            "research_status": "needs_review"
+        });
+        let mut repaired = legacy.clone();
+        assert_eq!(reconcile_receipted_email_status(&mut repaired), 2);
+        assert_eq!(
+            repaired["person_field_status"]["sellify-person-41504"]["person_email_validation"]
+                ["run_id"],
+            "scrape_run-aaa"
+        );
+        assert_eq!(
+            repaired["person_field_status"]["sellify-person-41503"]["person_email_validation"]
+                ["run_id"],
+            "scrape_run-bbb"
+        );
+        assert_eq!(
+            repaired["field_status"]["person_email_validation"]["status"],
+            "verified"
+        );
+        assert_eq!(repaired["research_status"], "needs_review");
+        assert_eq!(repaired["payload"], legacy["payload"]);
+        assert_eq!(reconcile_receipted_email_status(&mut repaired), 0);
+
+        let mut changed_email = legacy.clone();
+        changed_email["contacts"][1]["person_email"] = json!("new@biogen.com");
+        assert_eq!(reconcile_receipted_email_status(&mut changed_email), 1);
+        assert_eq!(
+            changed_email["field_status"]["person_email_validation"]["status"],
+            "action_required"
+        );
+        assert!(changed_email["person_field_status"]["sellify-person-41503"].is_null());
+
+        let mut duplicate_key = legacy.clone();
+        duplicate_key["contacts"][1]["person_key"] = json!("sellify-person-41504");
+        assert_eq!(reconcile_receipted_email_status(&mut duplicate_key), 0);
+
+        let mut mismatched_verdict = legacy.clone();
+        mismatched_verdict["payload"]["email_validation_pass"]["checked"][1]["valid"] =
+            json!(false);
+        assert_eq!(reconcile_receipted_email_status(&mut mismatched_verdict), 1);
+        assert_eq!(
+            mismatched_verdict["field_status"]["person_email_validation"]["status"],
+            "action_required"
+        );
+
+        let mut unrelated_review = legacy.clone();
+        unrelated_review["field_status"]["person_email_validation"]["reason"] =
+            json!("Widerspruch in externen Quellen");
+        assert_eq!(reconcile_receipted_email_status(&mut unrelated_review), 0);
+    }
+
+    #[test]
+    fn changed_person_address_invalidates_old_verdict_before_completion() {
+        let mut lead = json!({
+            "contacts": [{"person_key": "p1", "person_email": "old@weicon.de"}],
+            "research_status": "needs_review",
+            "payload": {
+                "native_research_terminal_status": "needs_review",
+                "native_research_requested_fields": ["person_email_validation"],
+                "native_research_rejections_count": 0
+            }
+        });
+        apply_email_verdicts(&mut lead, &[verdict("old@weicon.de", true)]);
+        let previous_contacts = lead["contacts"].clone();
+        // The research merge matched p1 and retained the old scalar verdict.
+        lead["contacts"][0]["person_email"] = json!("new@weicon.de");
+        assert_eq!(
+            invalidate_changed_email_addresses(&mut lead, &previous_contacts),
+            1
+        );
+        assert!(lead["contacts"][0].get("person_email_validation").is_none());
+        assert!(lead["person_field_status"]["p1"]
+            .get("person_email_validation")
+            .is_none());
+        assert_eq!(
+            lead["field_status"]["person_email_validation"]["status"],
+            "action_required"
+        );
+        assert_eq!(emails_needing_validation(&lead, 4), vec!["new@weicon.de"]);
+        assert!(
+            !super::super::person_research_gap_closure::complete_after_native_email_validation(
+                &mut lead
+            )
+        );
+    }
+
+    #[test]
+    fn five_address_batches_keep_the_first_valid_receipt_and_lead_verdict() {
+        let mut lead = json!({"contacts": (0..5).map(|i| json!({
+            "person_key": format!("p{i}"),
+            "person_email": format!("p{i}@weicon.de")
+        })).collect::<Vec<_>>()});
+        let first = (0..4)
+            .map(|i| verdict(&format!("p{i}@weicon.de"), i == 0))
+            .collect::<Vec<_>>();
+        apply_email_verdicts(&mut lead, &first);
+        lead["payload"]["email_validation_receipts"] = merged_email_receipts(&lead, &first);
+        lead["payload"]["email_validation_pass"]["checked"] = json!(first
+            .iter()
+            .map(|v| json!({
+                "email": v.email, "valid": v.valid, "run_id": v.run_id
+            }))
+            .collect::<Vec<_>>());
+
+        let last = verdict("p4@weicon.de", false);
+        apply_email_verdicts(&mut lead, &[last.clone()]);
+        let receipts = merged_email_receipts(&lead, &[last.clone()]);
+        lead["payload"]["email_validation_receipts"] = receipts;
+        lead["payload"]["email_validation_pass"]["checked"] = json!([{
+            "email": last.email, "valid": last.valid, "run_id": last.run_id
+        }]);
+        let previous = lead["person_field_status"].clone();
+        for i in 0..5 {
+            let key = format!("p{i}");
+            lead["contacts"][i]["field_status"]["person_email_validation"] =
+                json!({"status": "action_required"});
+            lead["person_field_status"][key.as_str()]["person_email_validation"] =
+                json!({"status": "action_required"});
+        }
+        lead["field_status"]["person_email_validation"] = json!({"status": "action_required"});
+        assert_eq!(restore_native_email_verdicts(&mut lead, &previous), 5);
+        assert_eq!(
+            lead["field_status"]["person_email_validation"]["value"],
+            "valid"
+        );
+        assert_eq!(
+            lead["person_field_status"]["p0"]["person_email_validation"]["value"],
+            "valid"
         );
     }
 
