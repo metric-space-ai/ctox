@@ -2036,7 +2036,9 @@ export function commandRoundtripStagesFromMarks(marks = {}) {
   return {
     browser_insert: marks.browser_local_inserted - marks.browser_dispatch_started,
     push: marks.browser_push_confirmed - marks.browser_local_inserted,
-    push_to_native_intake: marks.native_dispatch_entered - marks.browser_push_confirmed,
+    // Flush acknowledgement and native intake may overlap. The local insert
+    // is the causal Browser predecessor for native intake.
+    local_to_native_intake: marks.native_dispatch_entered - marks.browser_local_inserted,
     native_processing: marks.native_handler_completed - marks.native_dispatch_entered,
     projection_commit: marks.native_rxdb_projection_committed - marks.native_handler_completed,
     commit_to_browser_observed: marks.browser_terminal_observed - marks.native_rxdb_projection_committed,

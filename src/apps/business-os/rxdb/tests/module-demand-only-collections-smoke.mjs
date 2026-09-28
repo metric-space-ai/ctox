@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createSyncRuntime, __ctoxSyncTestHooks } from '../../shared/sync.js';
+import { roleMayReadCollection } from '../../shared/permissions.js';
 import { createMultiTabSyncCoordinator } from '../src/multi-tab-sync-coordinator.mjs';
 
 const {
@@ -202,7 +203,7 @@ function createMockReplicationState(collection = 'desktop_file_chunks') {
   };
 }
 
-function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null } = {}) {
+function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null, mayReadCollection } = {}) {
   const browserToken = 'browser-role-token';
   const starts = [];
   const cancels = [];
@@ -210,6 +211,8 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
     mode: 'rxdb',
     raw: {
       desktop_file_chunks: { name: 'desktop_file_chunks' },
+      business_users: { name: 'business_users' },
+      ctox_crew_members: { name: 'ctox_crew_members' },
     },
     rxdb: {
       ...(coordinator ? { getMultiTabSyncCoordinator: () => coordinator } : {}),
@@ -242,6 +245,7 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
   };
   const runtime = createSyncRuntime({
     db,
+    mayReadCollection,
     config: {
       transport: 'webrtc',
       sync_room: 'ctox-business-os:test',
@@ -253,6 +257,46 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
     },
   });
   return { runtime, starts, cancels };
+}
+
+{
+  for (const collection of [
+    'business_users', 'ctox_runtime_settings', 'business_module_acl',
+    'business_module_source_files', 'business_module_commits',
+    'business_module_source_blob_chunks', 'ctox_runs',
+    'ctox_crew_learnings', 'ctox_harness_events',
+  ]) {
+    assert.equal(roleMayReadCollection('user', collection), false, `${collection} is private to the requester`);
+  }
+  assert.equal(roleMayReadCollection('user', 'ctox_crew_members'), true);
+  assert.equal(roleMayReadCollection('user', 'ctox_harness_status'), true);
+  assert.equal(roleMayReadCollection('founder', 'ctox_runs'), true);
+  assert.equal(roleMayReadCollection('founder', 'business_users'), false);
+  assert.equal(roleMayReadCollection('admin', 'business_users'), true);
+
+  const { runtime, starts } = createMockSyncRuntime({
+    mayReadCollection: (collection) => roleMayReadCollection('user', collection),
+  });
+  await assert.rejects(
+    () => runtime.startCollection('business_users'),
+    (error) => error?.code === 'COLLECTION_READ_FORBIDDEN',
+  );
+  assert.equal(runtime.diagnostics.collections.business_users?.lastError, null);
+  assert.equal(starts.length, 0, 'denied collection never reaches WebRTC');
+  const module = await runtime.startModule({ id: 'ctox', collections: ['business_users', 'ctox_crew_members'] });
+  assert.equal(module[0].value.reason, 'role-denied');
+  assert.equal(module[1].status, 'fulfilled');
+  assert.deepEqual(starts.map((entry) => entry.collection), ['ctox_crew_members']);
+  const moduleLease = await runtime.leaseModule({ id: 'ctox', collections: ['business_users'] });
+  assert.deepEqual(moduleLease.collections, []);
+  await moduleLease.release();
+  await assert.rejects(
+    () => runtime.restartCollection('business_users'),
+    (error) => error?.code === 'COLLECTION_READ_FORBIDDEN',
+  );
+  await runtime.restartCollections(['business_users']);
+  assert.deepEqual(starts.map((entry) => entry.collection), ['ctox_crew_members']);
+  await runtime.stop();
 }
 
 {

@@ -1766,6 +1766,13 @@ masked with the same allowlist as wrapped master documents. Connection-handler
 implementations must explicitly supply their field policy; there is no default
 unrestricted implementation.
 
+The Browser sync runtime mirrors native role-wide collection denials before
+starting a bridge. A User does not request the admin-only collections or the
+private cockpit projections (`ctox_runs`, `ctox_crew_learnings`,
+`ctox_harness_events`); Founder does not request admin-only collections.
+Module starts skip those collections without recording a transport failure.
+The native actor, grant and scope decision remains authoritative.
+
 ### Crew identity contracts (PR-2)
 
 The existing channel migration seeds four stable members in `crew_members` and
@@ -1979,6 +1986,11 @@ commands. It preserves all seven correlated marks and recomputes the total
 browser-clock p50, requiring it to be strictly below 300 ms. Missing, duplicate,
 non-numeric or inconsistent measurements fail the gate. The synthetic
 `command-roundtrip-budget-smoke` cases validate only this rejection logic.
+The Browser flush acknowledgement may occur after native intake. `push` is
+therefore a parallel measurement, while the additive chain uses local insert
+to native intake. The browser/native clock-offset interval is bounded by
+those causal marks and commit-to-observation; an impossible interval fails
+explicitly rather than yielding a negative corrected stage.
 For explicitly requested command timing probes, the native log additionally
 emits `command_intake_sample` with the command ID and measured authentication
 and identity-stamping milliseconds. Both phases precede the existing
