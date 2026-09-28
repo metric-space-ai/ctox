@@ -1,9 +1,9 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-peer-authority-v415';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-clarity-peer-authority-v418';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
-import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-one-being-v5';
-import { renderCrewReference } from '../../shared/crew-renderer.js?v=20260928-crew-one-being-v5';
+import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-portrait-v6';
+import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-portrait-v6';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
 
 const FLOW_WIDTH = 1760;
@@ -30,7 +30,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-peer-authority-v415';
+const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-clarity-peer-authority-v418';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -878,6 +878,7 @@ export async function mount(ctx) {
   }
   return () => {
     state.disposed = true;
+    publishCrewWorkload(state, null);
     window.clearInterval(state.liveTicker);
     window.clearTimeout(state.expressionRefresh);
     try { state.localSubscriptionCleanup?.(); } catch {}
@@ -958,6 +959,7 @@ async function hydrateFromLocal(state) {
   // swaps in the selected task's own event stream when the blob is not about it.
   state.flow = state.blobFlow;
   state.model = buildHarnessModel(state.bundle, state.flow, state.lang, state.channelAccounts);
+  publishCrewWorkload(state);
   state.dataLoaded = true;
   state.dataError = '';
   state.focusTask = state.focusTaskConsumed ? null : readFocusTask();
@@ -1854,11 +1856,16 @@ function taskCardMarkup(task, state) {
   // A row NAMES its member with the reference badge; it never draws another
   // copy of the creature (Owner 28.09.2026: "jedes Lumi darf es nur einmal
   // geben!"). The being stands once on the map and sits in the crew bar.
-  const portrait = `<span class="ctox-task-portrait" title="${escapeAttr(member ? member.name : t.noCrewMember)}">${renderCrewReference({ appearance: member ? memberIdentity(member) : null, size: 26 })}</span>`;
+  // Assigned, but the crew roster has not arrived yet: say nothing rather than
+  // claim "ohne Crew" (it flashed on every row while members loaded).
+  const memberPending = !member && Boolean(taskAssignedMemberId(task));
+  const portrait = `<span class="ctox-task-portrait" title="${escapeAttr(member ? member.name : memberPending ? '' : t.noCrewMember)}">${renderCrewReference({ appearance: member ? memberIdentity(member) : null, size: 28, mode: memberPending ? 'sleeping' : crewModeForTaskState(taskCrewStatus(task)) })}</span>`;
   // Who does it, in the member's own colour; an unassigned task says so.
   const memberName = member
     ? `<span class="ctox-task-meta-member" style="--crew-color:${escapeAttr(member.color || NEUTRAL_CREW_COLOR)}">${escapeHtml(member.name)}</span>`
-    : `<span class="ctox-task-meta-member is-unassigned">${escapeHtml(t.noCrewMemberShort)}</span>`;
+    : memberPending
+      ? `<span class="ctox-task-meta-member is-pending" aria-hidden="true">…</span>`
+      : `<span class="ctox-task-meta-member is-unassigned">${escapeHtml(t.noCrewMemberShort)}</span>`;
   const tooltip = [status, source, changed, reason].filter(Boolean).join(' · ');
   return `
     <article class="ctox-list-item ctox-task-card ${selected ? 'is-selected' : ''} ${pinned ? 'is-pinned' : ''} has-member"
@@ -2426,10 +2433,14 @@ function renderMain(state) {
   if (state.compactPanelTaskId !== panelTaskId) {
     state.compactPanelTaskId = panelTaskId;
     state.jobEditorOpen = false;
-    state.historyOpen = false;
+    // A selected task shows where it stands right under the map (steps,
+    // progress, metrics); without a selection the history stays one row.
+    state.historyOpen = Boolean(panelTaskId);
   }
   const history = timelinePanel(state, selectedTask, selectedNode, metrics);
-  const hasHistory = selectedTask ? taskSteps(selectedTask, state).length > 1 : state.model.timeline.length > 1;
+  // A selected task always gets its row under the map (progress, metrics and
+  // steps when there are any); without a selection only a real timeline does.
+  const hasHistory = selectedTask ? true : state.model.timeline.length > 1;
   const previousViewport = readFlowViewport(state);
   const viewBox = flowViewBox(selectedTask, state);
   // Without a selected task and without current data the workspace itself
@@ -2444,6 +2455,11 @@ function renderMain(state) {
           <small class="ctox-paused-note" ${state.harnessStatus?.paused ? '' : 'hidden'}>${escapeHtml(t.harnessPaused)}</small>
         </div>
         <div class="ctox-pane-actions">
+          ${shouldShowCrewHome(state) || stateInWorkspace ? '' : `<div class="ctox-flow-toolbar is-inline" aria-label="${escapeAttr(t.flowControls)}" data-flow-control>
+        <button type="button" class="ctox-pane-icon" data-zoom="-" aria-label="${escapeAttr(t.zoomOut)}" title="${escapeAttr(t.zoomOut)}" ${state.zoom <= MIN_ZOOM ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+        <button type="button" class="ctox-flow-zoom-fit" data-zoom="fit" data-zoom-label aria-label="${escapeAttr(state.lang === 'de' ? 'Einpassen' : 'Fit')}" title="${escapeAttr(state.lang === 'de' ? 'Einpassen' : 'Fit')}">${Math.round(state.zoom * 100)}%</button>
+        <button type="button" class="ctox-pane-icon" data-zoom="+" aria-label="${escapeAttr(t.zoomIn)}" title="${escapeAttr(t.zoomIn)}" ${state.zoom >= MAX_ZOOM ? 'disabled' : ''}>${actionIcon(state, 'add')}</button>
+      </div>`}
           ${selectedTask ? `<button type="button" class="ctox-button ctox-job-toggle" data-job-toggle aria-expanded="${Boolean(state.jobEditorOpen)}">${escapeHtml(t.editTask)}</button>` : ''}
           <details class="ctox-more-actions">
             <summary aria-label="${escapeAttr(state.lang === 'de' ? 'Crew verwalten' : 'Manage crew')}">···</summary>
@@ -2460,11 +2476,6 @@ function renderMain(state) {
     </header>
     <section class="ctox-job-panel" data-job-panel ${state.jobEditorOpen ? '' : 'hidden'} aria-label="${escapeAttr(t.editTask)}"></section>
     ${shouldShowCrewHome(state) ? crewHomeMarkup(state) : stateInWorkspace ? emptyWorkspaceMarkup(state) : `<div class="ctox-canvas-container ctox-flow-well">
-      <div class="ctox-flow-toolbar" aria-label="${escapeAttr(t.flowControls)}" data-flow-control>
-        <button type="button" class="ctox-pane-icon" data-zoom="-" aria-label="${escapeAttr(t.zoomOut)}" title="${escapeAttr(t.zoomOut)}" ${state.zoom <= MIN_ZOOM ? 'disabled' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg></button>
-        <button type="button" class="ctox-flow-zoom-fit" data-zoom="fit" data-zoom-label aria-label="${escapeAttr(state.lang === 'de' ? 'Einpassen' : 'Fit')}" title="${escapeAttr(state.lang === 'de' ? 'Einpassen' : 'Fit')}">${Math.round(state.zoom * 100)}%</button>
-        <button type="button" class="ctox-pane-icon" data-zoom="+" aria-label="${escapeAttr(t.zoomIn)}" title="${escapeAttr(t.zoomIn)}" ${state.zoom >= MAX_ZOOM ? 'disabled' : ''}>${actionIcon(state, 'add')}</button>
-      </div>
       <div class="ctox-flow-canvas" data-flow-canvas>
         <div class="ctox-flow-canvas-inner" data-flow-width="${viewBox.width}" data-flow-height="${viewBox.height}" style="width:${viewBox.width * state.zoom}px;height:${viewBox.height * state.zoom}px;min-height:${viewBox.height * state.zoom}px">
           ${flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskStepView, viewBox)}
@@ -2568,13 +2579,21 @@ function fitFlowToCanvas(state, main) {
   const canvas = main.querySelector('[data-flow-canvas]');
   const inner = canvas?.querySelector('.ctox-flow-canvas-inner');
   if (!canvas || !inner) return;
+  const pane = canvas.closest('.ctox-harness-main');
   const apply = () => {
     if (state.zoomMode === 'manual' || !inner.isConnected) return;
     const available = canvas.clientWidth - 8;
     const flowWidth = Number(inner.dataset.flowWidth) || HARNESS_FLOW_WIDTH;
     const flowHeight = Number(inner.dataset.flowHeight) || HARNESS_FLOW_HEIGHT;
     if (!(available > 0)) return;
-    const next = clampMetric(Math.floor((available / flowWidth) * 100) / 100, MIN_ZOOM, DEFAULT_ZOOM);
+    // The map sits at the top and leaves the task's history at least
+    // FLOW_HISTORY_RESERVE below it: in a short window it fits the height too.
+    const header = pane?.querySelector(':scope > .ctox-pane-header')?.offsetHeight || 0;
+    const jobPanel = pane?.querySelector(':scope > .ctox-job-panel:not([hidden])')?.offsetHeight || 0;
+    const heightRoom = pane ? pane.clientHeight - header - jobPanel - FLOW_HISTORY_RESERVE : Infinity;
+    const byWidth = available / flowWidth;
+    const byHeight = heightRoom > 0 ? heightRoom / flowHeight : byWidth;
+    const next = clampMetric(Math.floor(Math.min(byWidth, byHeight) * 100) / 100, MIN_ZOOM, DEFAULT_ZOOM);
     if (next !== state.zoom) {
       state.zoom = next;
       const label = main.querySelector('[data-zoom-label]');
@@ -2589,8 +2608,12 @@ function fitFlowToCanvas(state, main) {
   if (typeof ResizeObserver === 'function') {
     state.flowFitObserver = new ResizeObserver(() => apply());
     state.flowFitObserver.observe(canvas);
+    if (pane) state.flowFitObserver.observe(pane);
   }
 }
+
+// Room the task history keeps below the map before the map shrinks further.
+const FLOW_HISTORY_RESERVE = 150;
 
 // A creature whose task moved to another station walks there instead of
 // jumping: it starts at its old spot and travels along a low arc.
@@ -2726,7 +2749,7 @@ function timelinePanel(state, selectedTask, selectedNode, metrics) {
       </div>
       <div class="ctox-timeline-detail">
         <span>${escapeHtml(hasRange ? (current?.label || t.currentStep) : t.notLive)}</span>
-        <p>${escapeHtml(hasRange ? (current?.detail || selectedNode?.lines?.[0] || itemSummary(selectedTask) || t.noRecentWork) : t.timelineUnavailableDetail)}</p>
+        <p>${escapeHtml(hasRange ? (current?.detail || selectedNode?.lines?.[0] || itemSummary(selectedTask) || t.noRecentWork) : (itemSummary(selectedTask) || t.timelineUnavailableDetail))}</p>
         <small>${escapeHtml(current ? `${stepMetaLabel(current, state)} · ${current.metrics || ''}` : selectedNode ? metricsLabel(selectedNode, state.lang) : '')}</small>
       </div>
     </section>
@@ -2751,8 +2774,13 @@ function flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskSte
   // Wo steht der ausgewaehlte Task GERADE im Loop? Dieser Knoten wird markiert,
   // damit die Frage "wo steckt er" ohne Suchen beantwortet ist.
   const standortNodeId = selectedTask ? (taskCrewNodeId(selectedTask, model) || '') : '';
+  // With a task in focus the map reads as its route: the path it took, the
+  // steps it can take next from where it stands, everything else steps back
+  // (Owner 27.09.2026: the crossing lines made the map hard to read).
+  const hereId = standortNodeId || selectedNode?.id || '';
+  const nextIds = new Set(selectedTask && hereId ? model.edges.filter((edge) => edge.from === hereId).map((edge) => edge.to) : []);
   return `
-    <svg class="ctox-flow-diagram" viewBox="0 ${viewBox.y} ${viewBox.width} ${viewBox.height}" preserveAspectRatio="xMidYMin meet" role="img" aria-label="${escapeAttr(t.flowDiagram)}">
+    <svg class="ctox-flow-diagram${selectedTask ? ' has-focus' : ''}" viewBox="0 ${viewBox.y} ${viewBox.width} ${viewBox.height}" preserveAspectRatio="xMidYMin meet" role="img" aria-label="${escapeAttr(t.flowDiagram)}">
       <defs>
         <marker id="ctox-flow-arrow" markerHeight="8" markerWidth="8" orient="auto" refX="7" refY="4">
           <path d="M0,0 L8,4 L0,8 Z"></path>
@@ -2780,9 +2808,10 @@ function flowSvg(model, selectedNode, visibleTrace, selectedTask, state, taskSte
         if (!from || !to) return '';
         const strength = visibleTrace.edgeStrength.get(edgeKey(edge.from, edge.to)) || 0;
         const activeEdge = model.liveWork && edge.to === selectedNode?.id && strength > 0;
-        return `<path class="ctox-flow-edge ${strength > 0 ? 'is-observed' : ''} ${activeEdge ? 'is-active-edge' : ''}" d="${edgePath(from, to, edge.route)}" style="--edge-strength:${strength}"></path>`;
+        const nextEdge = strength === 0 && selectedTask && edge.from === hereId;
+        return `<path class="ctox-flow-edge ${strength > 0 ? 'is-observed' : ''} ${nextEdge ? 'is-next' : ''} ${activeEdge ? 'is-active-edge' : ''}" d="${edgePath(from, to, edge.route)}" style="--edge-strength:${strength}"></path>`;
       }).join('')}
-      ${communicationOnly ? '' : model.nodes.map((node) => flowNodeSvg(node, selectedNode, visibleTrace.nodeStrength.get(node.id) || 0, state.lang, standortNodeId)).join('')}
+      ${communicationOnly ? '' : model.nodes.map((node) => flowNodeSvg(node, selectedNode, visibleTrace.nodeStrength.get(node.id) || 0, state.lang, standortNodeId, nextIds)).join('')}
       ${communicationOnly ? '' : flowCrewSvg(model, selectedTask, state)}
       ${communicationOnly ? '' : '</g>'}
     </svg>
@@ -3059,7 +3088,7 @@ function outboundDetailForTask(task, state) {
   return task.channelLabel || inboundChannelLabel(task.channel || inferInboundChannel(task));
 }
 
-function flowNodeSvg(node, selectedNode, traceStrength, lang = 'de', standortNodeId = '') {
+function flowNodeSvg(node, selectedNode, traceStrength, lang = 'de', standortNodeId = '', nextIds = null) {
   const isVisibleTrace = traceStrength > 0;
   const isSelected = node.id === selectedNode?.id;
   const hasLiveRing = isSelected && node.status === 'active';
@@ -3070,7 +3099,7 @@ function flowNodeSvg(node, selectedNode, traceStrength, lang = 'de', standortNod
     ? `<path class="ctox-flow-node-diamond" d="M 0 ${-NODE_HEIGHT / 2} L ${NODE_WIDTH / 2} 0 L 0 ${NODE_HEIGHT / 2} L ${-NODE_WIDTH / 2} 0 Z"></path>`
     : `<rect class="ctox-flow-node-box" x="${-NODE_WIDTH / 2}" y="${-NODE_HEIGHT / 2}" width="${NODE_WIDTH}" height="${NODE_HEIGHT}" rx="12"></rect>`;
   return `
-    <g class="ctox-flow-node-g is-${escapeAttr(node.status)} ${isVisibleTrace ? 'is-observed is-trace' : 'is-possible'} ${isSelected ? 'is-current is-selected' : ''} ${standortNodeId && node.id === standortNodeId ? 'is-crew-hier' : ''}"
+    <g class="ctox-flow-node-g is-${escapeAttr(node.status)} ${isVisibleTrace ? 'is-observed is-trace' : 'is-possible'} ${!isVisibleTrace && nextIds?.has(node.id) ? 'is-next' : ''} ${isSelected ? 'is-current is-selected' : ''} ${standortNodeId && node.id === standortNodeId ? 'is-crew-hier' : ''}"
        data-node-id="${escapeAttr(node.id)}" data-context-record-id="${escapeAttr(node.id)}" data-context-record-type="ctox_flow_node" data-context-label="${escapeAttr(node.label)}" role="button" style="--trace-strength:${traceStrength}" tabindex="0" transform="translate(${node.x} ${node.y})">
       <title>${escapeHtml(node.label)}</title>
       ${ring}
@@ -3112,6 +3141,8 @@ function flowCrewSvg(model, selectedTask, state) {
   const beings = new Map();
   for (const task of tasks) {
     const member = taskCrewMember(task, state);
+    // Assigned, but the roster has not arrived: no false "ohne Crew" ghost.
+    if (!member && taskAssignedMemberId(task) && !(selectedTask && task.id === selectedTask.id)) continue;
     const key = member ? `member:${member.id}` : 'ghost';
     const being = beings.get(key);
     if (!being) beings.set(key, { key, anchor: task, count: 1 });
@@ -5227,8 +5258,28 @@ function applyLiveFlow(state) {
   if (flow === state.flow) return false;
   state.flow = flow;
   state.model = buildHarnessModel(state.bundle, flow, state.lang, state.channelAccounts);
+  publishCrewWorkload(state);
   reconcileSelection(state);
   return true;
+}
+
+// One count per member, the same one the map and the "Arbeitet" view use
+// (queue reconciled with the command lifecycle). The crew bar shows it while
+// this app is open, so the bar never says "Pico 4" next to a map saying "×3".
+function crewWorkloadCounts(model) {
+  const counts = {};
+  for (const task of model?.tasks || []) {
+    if (taskCrewStatus(task) !== 'running') continue;
+    const id = taskAssignedMemberId(task);
+    if (id) counts[id] = (counts[id] || 0) + 1;
+  }
+  return counts;
+}
+
+function publishCrewWorkload(state, counts = crewWorkloadCounts(state.model)) {
+  if (typeof window === 'undefined') return;
+  window.__ctoxCrewWorkload = counts ? { counts, at: Date.now() } : null;
+  try { window.dispatchEvent(new CustomEvent('ctox-crew-workload', { detail: window.__ctoxCrewWorkload })); } catch {}
 }
 
 async function refreshSelectedTaskLive(state) {
@@ -5417,6 +5468,10 @@ function memberIdentity(member) {
   return { id: String(member.id || ''), name: String(member.name || ''), color: String(member.color || NEUTRAL_CREW_COLOR), shape: String(member.shape || 'round') };
 }
 
+function taskAssignedMemberId(task) {
+  return String(task?.crewMemberId || task?.crew_member_id || task?.crewAssignedMemberId || task?.crew_assigned_member_id || '').trim();
+}
+
 function taskCrewMember(task, state) {
   if (!task) return null;
   return crewMemberById(state, task.crewMemberId || task.crew_member_id)
@@ -5502,7 +5557,7 @@ function crewStripMarkup(state) {
     return `
       <button type="button" class="ctox-crew-strip-member is-${escapeAttr(stateClass)}" data-crew-member-id="${escapeAttr(member.id)}"
         aria-label="${escapeAttr(`${member.name}: ${line}`)}" title="${escapeAttr(`${member.name} · ${line}`)}">
-        <span class="ctox-crew-strip-creature">${renderCrewReference({ appearance: memberIdentity(member), size: 24 })}</span>
+        <span class="ctox-crew-strip-creature">${renderCrewReference({ appearance: memberIdentity(member), size: 26, mode: crewModeForTaskState(memberCreatureState(member)) })}</span>
       </button>`;
   }).join('');
   return `<section class="ctox-crew-strip" aria-label="${escapeAttr(t.crewHome)}">${items}</section>`;
@@ -7239,6 +7294,7 @@ function escapeAttr(value) {
 }
 
 export const __ctoxTestHooks = {
+  crewWorkloadCounts,
   outboundEndpointForTask,
   taskCardMarkup,
   displayStatus,

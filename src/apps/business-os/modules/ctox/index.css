@@ -54,10 +54,12 @@
   grid-column: 3;
 }
 
-/* Give every rendered section a track; the canvas must remain usable even
-   when metrics, progress and timeline consume the rest of a short window. */
+/* Give every rendered section a track. The map takes exactly its fitted
+   height at the top; the task's own history (steps, progress, metrics) takes
+   the rest below it instead of an empty band above and below a centred map
+   (Owner 27./28.09.2026: "zu viele freie Flächen"). */
 .ctox-harness-main {
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(0, max-content) minmax(0, 1fr) auto;
   min-height: 0;
   overflow: hidden;
 }
@@ -75,7 +77,8 @@
 .ctox-harness-main > .ctox-pane-header { grid-row: 1; }
 .ctox-harness-main > .ctox-job-panel { grid-row: 2; }
 .ctox-harness-main > .ctox-flow-well { grid-row: 3; min-height: 0; }
-.ctox-harness-main > .ctox-history-fold { grid-row: 4; }
+.ctox-harness-main > .ctox-history-fold { grid-row: 4; align-self: start; min-height: 0; max-height: 100%; overflow: auto; }
+.ctox-harness-main > .ctox-history-fold[open] { align-self: stretch; }
 .ctox-harness-main > .ctox-harness-footer { grid-row: 5; }
 
 /* Quiet default: one header row, one optional history row. Expanded sections
@@ -91,7 +94,7 @@
 .ctox-history-fold { min-height: 0; border-top: 1px solid var(--line); }
 .ctox-history-fold > summary,
 .ctox-drawer-edit-fold > summary { padding: var(--space-2) var(--space-3); cursor: pointer; font-size: var(--fs-meta); color: var(--muted); }
-.ctox-history-content { max-height: 32vh; overflow: auto; }
+.ctox-history-content { overflow: visible; }
 .ctox-history-connection { float: right; margin-left: var(--space-3); }
 .ctox-paused-note { color: var(--muted); white-space: nowrap; font-size: var(--fs-meta); }
 .ctox-task-diagnostics { color: var(--muted); font-size: var(--fs-meta); }
@@ -271,12 +274,19 @@
   border-top: 1px solid var(--line);
 }
 
+/* The four views share the column by their content and never run past its
+   edge ("Erledigt (4…" was cut off at 1440 px): the shared tab strip's
+   min-width: max-content is lifted here, padding is tighter. */
+.ctox-harness-left .ctox-view-switch { padding-inline: 8px; }
 .ctox-harness-left .ctox-pane-tabs {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  display: flex;
+  width: 100%;
+  min-width: 0;
 }
 
 .ctox-harness-left .ctox-pane-tab {
+  flex: 1 1 auto;
+  padding-inline: 5px;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -868,8 +878,8 @@
    or drop shadow — the controls are what matter, the chrome is not. */
 .ctox-flow-toolbar {
   position: absolute;
-  bottom: 16px;
-  right: 16px;
+  top: 10px;
+  right: 12px;
   z-index: 6;
   display: inline-flex;
   align-items: center;
@@ -878,6 +888,15 @@
   border-radius: var(--control-radius);
   background: var(--surface-2);
   padding: calc(var(--space-1) * 0.75) var(--space-1);
+}
+
+/* Zoom lives in the header row, never over the map (it covered the selected
+   creature's name tag on thesen, 28.09.2026). */
+.ctox-flow-toolbar.is-inline {
+  position: static;
+  top: auto;
+  right: auto;
+  z-index: auto;
 }
 
 .ctox-flow-toolbar button {
@@ -924,7 +943,7 @@
    that would force scrolling in a normal window. */
 .ctox-flow-canvas-inner {
   flex: none;
-  margin: auto;
+  margin: 0 auto;
   contain: layout paint style;
 }
 
@@ -971,6 +990,9 @@
 .ctox-task-meta-member {
   color: color-mix(in srgb, var(--crew-color, var(--muted)) 72%, var(--text-strong, var(--text)));
   font-weight: 650;
+}
+.ctox-task-meta-member.is-pending {
+  color: var(--muted);
 }
 .ctox-task-meta-member.is-unassigned {
   color: var(--muted);
@@ -1045,6 +1067,18 @@
   /* Possible transitions stay quiet; the observed path carries the eye. */
   opacity: 0.26;
   marker-end: url("#ctox-flow-arrow");
+}
+
+.ctox-flow-diagram.has-focus .ctox-flow-edge:not(.is-observed):not(.is-next) {
+  opacity: 0.07;
+}
+
+/* The steps the focused task can take next from where it stands. */
+.ctox-flow-edge.is-next {
+  stroke: color-mix(in srgb, var(--accent) 55%, var(--ctox-flow-edge));
+  stroke-width: 1.5;
+  stroke-dasharray: 5 5;
+  opacity: 0.7;
 }
 
 .ctox-flow-edge.is-observed {
@@ -1144,12 +1178,16 @@
 .ctox-flow-node-g {
   cursor: pointer;
   outline: none;
-  opacity: 0.22;
+  opacity: 0.3;
   transition: opacity 220ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .ctox-flow-node-g.is-observed {
   opacity: calc(0.26 + var(--trace-strength, 0.7) * 0.74);
+}
+
+.ctox-flow-node-g.is-next {
+  opacity: 0.72;
 }
 
 .ctox-flow-node-g.is-current,

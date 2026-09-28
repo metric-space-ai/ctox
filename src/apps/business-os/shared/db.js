@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260928-shell-v2-crew-peer-authority-v415';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260928-shell-v2-crew-clarity-peer-authority-v418';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

@@ -18,7 +18,7 @@
  * work stays on the compositor; eye moves are rare and short.
  */
 
-import { CREW_CREATURE_CSS } from './crew-renderer.js?v=20260928-crew-one-being-v5';
+import { CREW_CREATURE_CSS } from './crew-renderer.js?v=20260928-crew-portrait-v6';
 
 const ENGINE_KEY = '__ctoxCrewMotionEngine';
 const STYLE_ID = 'ctox-crew-creature-css';
@@ -232,6 +232,39 @@ function createEngine() {
     return String(node.dataset.crewKey || node.dataset.crewSeed || '');
   }
 
+  // One body per member per screen (Owner 28.09.2026: "jedes Lumi darf es nur
+  // einmal geben!"). A member's living body belongs where it IS: on the CTOX
+  // map or at home there it outranks its seat in the crew bar, which then
+  // shows the still portrait ("away") instead of a second living body.
+  function memberOf(node) {
+    if (node.classList.contains('is-neutral')) return '';
+    try { return String(JSON.parse(node.dataset.crewIdentity || '{}').id || ''); } catch { return ''; }
+  }
+
+  function presenceRank(node) {
+    const placement = String(node.dataset.crewKey || '').split(':').pop();
+    return placement === 'map' ? 2 : 1;
+  }
+
+  function arbitratePresence() {
+    const best = new Map();
+    for (const actor of actors.values()) {
+      if (!actor.visible || !actor.member || !actor.node.isConnected) continue;
+      best.set(actor.member, Math.max(best.get(actor.member) || 0, actor.rank));
+    }
+    for (const actor of actors.values()) {
+      const away = Boolean(actor.member && actor.visible && actor.rank < (best.get(actor.member) || 0));
+      if (away === actor.away) continue;
+      actor.away = away;
+      if (away) {
+        actor.node.dataset.crewAway = 'true';
+        clearStyles(actor);
+      } else {
+        delete actor.node.dataset.crewAway;
+      }
+    }
+  }
+
   function scheduleIn(actor, now) {
     const unit = hashUnit(actor.key, actor.salt++);
     actor.nextBlinkAt = now + 2200 + unit * 3800;
@@ -270,6 +303,9 @@ function createEngine() {
       blinkAt: 0,
       // WebKit misplaces composited layers inside foreignObject: no layer hint there.
       layerHint: !node.closest('foreignObject'),
+      member: memberOf(node),
+      rank: presenceRank(node),
+      away: false,
     };
     scheduleIn(actor, now);
     if (remembered && now - remembered.at < MEMORY_TTL_MS) {
@@ -360,6 +396,7 @@ function createEngine() {
     if (!root) return;
     if (root.nodeType === 1 && root.matches?.(CREATURE_SELECTOR)) attach(root);
     root.querySelectorAll?.(CREATURE_SELECTOR).forEach((node) => refresh(node));
+    arbitratePresence();
     ensureLoop();
   }
 
@@ -438,7 +475,7 @@ function createEngine() {
         detach(actor);
         continue;
       }
-      if (!actor.visible) continue;
+      if (!actor.visible || actor.away) continue;
       animated += 1;
       if (!CALM_MODES.has(actor.mode) || actor.impulses.length || actor.fromPose) lively = true;
     }
@@ -448,7 +485,7 @@ function createEngine() {
     if (now - lastFrameAt >= interval) {
       lastFrameAt = now;
       for (const actor of actors.values()) {
-        if (!actor.visible) continue;
+        if (!actor.visible || actor.away) continue;
         write(actor, composePose(actor, now));
       }
     }
@@ -488,6 +525,7 @@ function createEngine() {
           if (actor.visible && !reduced && actor.layerHint) actor.figure.style.willChange = 'transform';
           else if (!actor.visible) actor.figure.style.willChange = '';
         }
+        arbitratePresence();
         ensureLoop();
       }, { rootMargin: '32px' });
     }
@@ -503,7 +541,11 @@ function createEngine() {
           if (node.matches(CREATURE_SELECTOR)) attach(node);
           else if (node.firstElementChild) node.querySelectorAll(CREATURE_SELECTOR).forEach(attach);
         }
+        if (record.removedNodes.length) {
+          for (const actor of actors.values()) if (!actor.node.isConnected) detach(actor);
+        }
       }
+      arbitratePresence();
       ensureLoop();
     });
     observer.observe(document.documentElement, {
@@ -523,6 +565,7 @@ function createEngine() {
     window.setInterval(pruneMemory, 60 * 1000);
     document.querySelectorAll(CREATURE_SELECTOR).forEach(attach);
     if (!intersection) for (const actor of actors.values()) actor.visible = true;
+    arbitratePresence();
     ensureLoop();
   }
 
@@ -532,6 +575,8 @@ function createEngine() {
       key: actor.key,
       mode: actor.mode,
       visible: actor.visible,
+      member: actor.member,
+      away: actor.away,
       turns: actor.turns,
       impulses: actor.impulses.map((impulse) => impulse.name),
       transform: actor.lastWritten,

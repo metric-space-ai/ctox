@@ -1,5 +1,5 @@
-import { normalizeCrewAppearance, renderCrewCreature, renderCrewReference, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260928-crew-one-being-v5';
-import { syncCrewMotion } from './crew-motion.js?v=20260928-crew-one-being-v5';
+import { normalizeCrewAppearance, renderCrewCreature, renderCrewReference, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260928-crew-portrait-v6';
+import { syncCrewMotion } from './crew-motion.js?v=20260928-crew-portrait-v6';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
   FILE_CHUNK_HASH_SCHEME,
@@ -129,6 +129,56 @@ export function crewAppPresenceFromTasks(tasks, members) {
   return presence;
 }
 
+// How much each member is doing right now (same queue source and statuses
+// as the app presence): the crew bar shows it on the member's seat.
+export function crewWorkloadFromTasks(tasks) {
+  const load = new Map();
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    const status = String(task?.status || '').trim().toLowerCase();
+    if (!CREW_APP_PRESENCE_STATUSES.has(status)) continue;
+    const memberId = String(task?.crew_member_id || '').trim();
+    if (memberId) load.set(memberId, (load.get(memberId) || 0) + 1);
+  }
+  return load;
+}
+
+function crewSlotTitle(member, load = 0) {
+  const german = chatUiIsGerman();
+  const expression = crewMemberExpression(member);
+  const stateText = expression === 'reading' ? (german ? 'liest sein Gedächtnis' : 'reading its memory')
+    : expression === 'learning' ? (german ? 'lernt aus dem Einsatz' : 'learning from the assignment')
+      : member.state === 'on_duty' ? (german ? 'im Einsatz' : 'on duty')
+        : member.state === 'resting_after_failure' ? (german ? 'erholt sich' : 'recovering')
+          : (german ? 'zu Hause' : 'at home');
+  const loadText = load > 0
+    ? ` · ${german ? `${load} ${load === 1 ? 'Aufgabe' : 'Aufgaben'} in Arbeit` : `${load} ${load === 1 ? 'task' : 'tasks'} in progress`}`
+    : '';
+  const domain = member.domain?.length ? ` · ${member.domain.join(', ')}` : '';
+  return `${member.name} · ${stateText}${loadText}${domain} · ${german ? 'auf eine App ziehen' : 'drag onto an app'}`;
+}
+
+// While the CTOX app is open it publishes the reconciled count (queue plus
+// command lifecycle); the bar prefers it so both always say the same.
+function crewLoadFor(state, memberId) {
+  const published = typeof window !== 'undefined' ? window.__ctoxCrewWorkload : null;
+  if (published?.counts) return Number(published.counts[memberId]) || 0;
+  return state.crewWorkload?.get(memberId) || 0;
+}
+
+// Refresh the seats in place when the workload changes (no bar rebuild).
+function applyCrewWorkload(state) {
+  if (typeof document === 'undefined') return;
+  const members = new Map((state.crewMembers || []).map((member) => [member.id, member]));
+  document.querySelectorAll('.ctox-chat-crew-slot[data-crew-drag]').forEach((slot) => {
+    const member = members.get(slot.dataset.crewDrag);
+    if (!member) return;
+    const load = crewLoadFor(state, member.id);
+    if (slot.dataset.crewLoad !== String(load)) slot.dataset.crewLoad = String(load);
+    const title = crewSlotTitle(member, load);
+    if (slot.getAttribute('title') !== title) slot.setAttribute('title', title);
+  });
+}
+
 function crewAppPresenceSignature(entries, nowMs = Date.now()) {
   return entries.map((entry) => `${entry.member.id}:${crewMemberExpression(entry.member, nowMs)}`).join('|');
 }
@@ -141,7 +191,7 @@ function crewAppPresenceHtml(entries) {
     ? `${names} ${entries.length === 1 ? 'arbeitet' : 'arbeiten'} hier`
     : `${names} ${entries.length === 1 ? 'is' : 'are'} working here`;
   const more = entries.length > shown.length ? `<b>+${entries.length - shown.length}</b>` : '';
-  return `<span class="ctox-crew-app-presence" data-crew-presence data-crew-presence-signature="${escapeAttr(crewAppPresenceSignature(entries))}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${shown.map((entry) => renderCrewReference({ appearance: { id: entry.member.id, name: entry.member.name, shape: entry.member.shape, color: entry.member.color }, size: 14 })).join('')}${more}</span>`;
+  return `<span class="ctox-crew-app-presence" data-crew-presence data-crew-presence-signature="${escapeAttr(crewAppPresenceSignature(entries))}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${shown.map((entry) => renderCrewReference({ appearance: { id: entry.member.id, name: entry.member.name, shape: entry.member.shape, color: entry.member.color }, size: 18, mode: 'working' })).join('')}${more}</span>`;
 }
 
 function crewAppPresenceHosts() {
@@ -207,6 +257,8 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     if (disposed) return;
     const members = state.crewMembers || [];
     applyCrewAppPresence(crewAppPresenceFromTasks(tasks, members));
+    state.crewWorkload = crewWorkloadFromTasks(tasks);
+    applyCrewWorkload(state);
     // Expressions decay (reading -> running, learning -> idle); re-draw when
     // the earliest one ends so the badge does not freeze mid-expression.
     if (expressionTimer) window.clearTimeout(expressionTimer);
@@ -248,6 +300,9 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     }
   };
   try { subscriptions.push(db?.raw?.ctox_queue_tasks?.$?.subscribe?.(scheduleReload) || null); } catch {}
+  const onPublishedWorkload = () => { if (!disposed) applyCrewWorkload(state); };
+  window.addEventListener?.('ctox-crew-workload', onPublishedWorkload);
+  readinessCleanups.push(() => window.removeEventListener?.('ctox-crew-workload', onPublishedWorkload));
   try {
     subscriptions.push(db?.raw?.ctox_crew_members?.$?.subscribe?.(() => {
       if (disposed) return;
@@ -275,17 +330,9 @@ function crewMemberCreatureHtml(member, placement = 'fab') {
   return crewCreatureHtml({ crewKey: member.id, crewIdentity: { id: member.id, name: member.name, shape: member.shape, color: member.color } }, crewMemberExpression(member), placement);
 }
 
-function crewPoolSlotHtml(member, placement = 'fab') {
-  const german = chatUiIsGerman();
-  const expression = crewMemberExpression(member);
-  const stateText = expression === 'reading' ? (german ? 'liest sein Gedächtnis' : 'reading its memory')
-    : expression === 'learning' ? (german ? 'lernt aus dem Einsatz' : 'learning from the assignment')
-      : member.state === 'on_duty' ? (german ? 'im Einsatz' : 'on duty')
-        : member.state === 'resting_after_failure' ? (german ? 'erholt sich' : 'recovering')
-          : (german ? 'zu Hause' : 'at home');
-  const domain = member.domain.length ? ` · ${member.domain.join(', ')}` : '';
+function crewPoolSlotHtml(member, placement = 'fab', load = 0) {
   const focusable = placement === 'fab' ? '' : ' role="button" tabindex="0"';
-  return `<span class="ctox-chat-crew-slot"${focusable} data-crew-drag="${escapeAttr(member.id)}" title="${escapeAttr(`${member.name} · ${stateText}${domain} · ${german ? 'auf eine App ziehen' : 'drag onto an app'}`)}" aria-label="${escapeAttr(member.name)}">${crewMemberCreatureHtml(member, placement)}</span>`;
+  return `<span class="ctox-chat-crew-slot"${focusable} data-crew-drag="${escapeAttr(member.id)}" data-crew-load="${Number(load) || 0}" title="${escapeAttr(crewSlotTitle(member, load))}" aria-label="${escapeAttr(member.name)}">${crewMemberCreatureHtml(member, placement)}</span>`;
 }
 
 const CREW_DRAG_THRESHOLD_PX = 6;
@@ -1554,8 +1601,8 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
       // The window names its member with a reference badge; the being itself
       // stays in the crew bar. Only a changed assignment redraws the badge.
       const reference = win.querySelector('.ctox-chat-title .ctox-crew-ref');
-      if (reference && crewChanged) {
-        reference.outerHTML = crewReferenceHtml(chat, 26);
+      if (reference && (crewChanged || reference.dataset?.crewRefMode !== crewCreatureMode(chat, taskState))) {
+        reference.outerHTML = crewReferenceHtml(chat, 30, taskState);
         inPlaceDomChanged = true;
       }
 
@@ -1704,7 +1751,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
         <span class="ctox-chat-fab-label">Crew</span>
         <span class="ctox-chat-fab-creatures ${(state.crewMembers || []).length ? 'is-members' : ''}" ${(state.crewMembers || []).length ? '' : 'aria-hidden="true"'}>
           ${(state.crewMembers || []).length
-            ? state.crewMembers.slice(0, 6).map((member) => crewPoolSlotHtml(member, 'fab')).join('')
+            ? state.crewMembers.slice(0, 6).map((member) => crewPoolSlotHtml(member, 'fab', crewLoadFor(state, member.id))).join('')
             : crewCreatureHtml({ id: 'ctox-crew', title: 'Crew' }, 'idle', 'fab')}
         </span>
       </button>
@@ -2637,11 +2684,12 @@ export function syncCrewProceduralMotion(root) {
   syncCrewMotion(root);
 }
 
-// Chats, chips and app icons NAME a member; they never draw another copy of
-// it (Owner 28.09.2026: "jedes Lumi darf es nur einmal geben!"). The being
-// itself lives in the crew bar (crewPoolSlotHtml) and once on the CTOX map.
-export function crewReferenceHtml(chat, size = 18) {
-  return renderCrewReference({ appearance: chat?.crewIdentity || null, size });
+// Chats, chips and app icons show the member's PORTRAIT (same face, still,
+// framed); its living body exists once per screen — crew bar seat or CTOX map
+// (Owner 28.09.2026: "jedes Lumi darf es nur einmal geben!"). The portrait's
+// eyes follow the chat's task state.
+export function crewReferenceHtml(chat, size = 18, taskState = getTaskState(chat)) {
+  return renderCrewReference({ appearance: chat?.crewIdentity || null, size, mode: crewCreatureMode(chat, taskState) });
 }
 
 // Same key the reference badge carries in data-crew-ref: member id (or name),
@@ -3020,7 +3068,7 @@ function chatWindow(chat, activeId, relation = 'center') {
     <section class="ctox-chat-window no-left-transition ${chat.maximized ? 'is-maximized' : ''} ${chat.id === activeId ? 'is-active' : ''} ${isMinimizedClass} ${taskStateClass} ${creatureMode === 'review' ? 'is-task-review' : ''} ${executionActivityClass(chat)}" data-chat-id="${escapeAttr(chat.id)}" data-chat-module="${escapeAttr(moduleName)}" data-workjet-category="${escapeAttr(category)}" style="${escapeAttr(categoryStyleText)}" data-chat-rel="${escapeAttr(relation)}" data-chat-attachment-signature="${escapeAttr(attachmentSignature(chat))}" data-chat-composer-signature="${escapeAttr(chatComposerSignature(chat))}" data-activity-turns="${escapeAttr(executionProgressForChat(chat)?.activity_turns?.total || 0)}">
       <header>
         <button class="ctox-chat-title" type="button" data-chat-title="${escapeAttr(chat.id)}" aria-label="${escapeAttr(windowTitle)}" title="${escapeAttr(windowTitle)}">
-          ${crewReferenceHtml(chat, 26)}
+          ${crewReferenceHtml(chat, 30, taskState)}
         </button>
         <div class="ctox-chat-header-actions">
           <button type="button" data-chat-maximize aria-label="${chat.maximized ? 'Arbeitsfenster wiederherstellen' : 'Arbeitsfenster maximieren'}" title="${chat.maximized ? 'Wiederherstellen' : 'Maximieren'}">
@@ -3443,7 +3491,7 @@ function busyChatRow(chat, activeId) {
 // rebuild of the chat bar — which is why the strip visibly jumped on every
 // research status refresh.
 function chatChipMarkHtml(chat, taskState) {
-  const creature = crewReferenceHtml(chat, 20);
+  const creature = crewReferenceHtml(chat, 24, taskState);
   if (taskState === 'running') {
     return `<span class="ctox-chat-chip-mark is-running" aria-hidden="true">${creature}<span class="ctox-crew-state-dot"><span class="ctox-chip-spinner"></span></span></span>`;
   }
@@ -8039,27 +8087,42 @@ ${CREW_CREATURE_BASE_CSS}
       margin-left: -8px;
       filter: saturate(0.9);
     }
+    /* Every member keeps its own seat (Owner 28.09.2026 — the crew must be
+       told apart at a glance), within the 88 px the row always had: up to
+       four members stand side by side without touching. */
+    .ctox-chat-fab-creatures.is-members {
+      gap: 1px;
+      padding-left: 0;
+    }
     .ctox-chat-fab-creatures.is-members .ctox-chat-crew-slot {
       display: inline-grid;
-      width: 28px;
-      height: 28px;
-      flex: 0 0 28px;
-      margin-left: -8px;
+      width: 21px;
+      height: 21px;
+      flex: 0 0 21px;
+      margin-left: 0;
     }
     .ctox-chat-fab-creatures.is-members .ctox-crew-creature {
       margin-left: 0;
     }
-    /* Keep five/six full-size portraits within the four-member row width,
-       leaving both date controls and the reporter reservation their space. */
+    /* Five or six members only fit by standing closer: each figure gets a cut
+       edge in the bar colour so it still reads as its own individual. */
     .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) {
-      padding-left: 16px;
+      gap: 0;
     }
     .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) .ctox-chat-crew-slot {
-      margin-left: -16px;
+      width: 20px;
+      height: 20px;
+      flex: 0 0 20px;
+      margin-left: -6px;
     }
-    /* A member at work on an app: its reference badge (initial in its colour)
-       in the corner of the window icon and on the desktop icon. Never a copy
-       of the creature: the being itself stays in the crew bar. */
+    .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) .ctox-chat-crew-slot:first-child {
+      margin-left: 0;
+    }
+    .ctox-chat-fab-creatures.is-members:has(.ctox-chat-crew-slot:nth-child(5)) .ctox-chat-crew-slot + .ctox-chat-crew-slot .ctox-crew-creature {
+      filter: drop-shadow(-1.5px 0 0 var(--elev-float, #1c1f25));
+    }
+    /* A member at work on an app: its portrait (same face, still, framed) in
+       the corner of the window icon and on the desktop icon. */
     .ctox-crew-app-presence {
       position: absolute;
       right: 1px;
@@ -8070,9 +8133,9 @@ ${CREW_CREATURE_BASE_CSS}
       pointer-events: none;
     }
     .ctox-crew-app-presence .ctox-crew-ref {
-      margin-left: -4px;
-      background: color-mix(in srgb, var(--crew-color) 26%, #101216);
-      box-shadow: inset 0 0 0 1.5px var(--crew-color), 0 1px 2px rgba(0, 0, 0, 0.5);
+      margin-left: -5px;
+      background: color-mix(in srgb, var(--crew-color) 22%, #15181d);
+      box-shadow: inset 0 0 0 1.5px var(--crew-color), 0 1px 3px rgba(0, 0, 0, 0.55);
     }
     .ctox-crew-app-presence .ctox-crew-ref:first-child {
       margin-left: 0;
@@ -8105,6 +8168,25 @@ ${CREW_CREATURE_BASE_CSS}
       touch-action: none;
       transition: transform 140ms ease;
     }
+    /* How many tasks the member is working on right now. */
+    .ctox-chat-crew-slot { position: relative; }
+    .ctox-chat-crew-slot[data-crew-load]:not([data-crew-load="0"])::after {
+      content: attr(data-crew-load);
+      position: absolute;
+      top: -5px;
+      right: -4px;
+      min-width: 12px;
+      height: 12px;
+      padding: 0 3px;
+      box-sizing: border-box;
+      border-radius: 6px;
+      background: var(--accent, #1685ee);
+      color: #fff;
+      font: 700 8.5px/12px system-ui, -apple-system, sans-serif;
+      text-align: center;
+      box-shadow: 0 0 0 1.5px var(--elev-float, #1c1f25);
+      pointer-events: none;
+    }
     .ctox-chat-crew-slot:hover {
       transform: translateY(-2px) scale(1.06);
     }
@@ -8112,8 +8194,8 @@ ${CREW_CREATURE_BASE_CSS}
       cursor: grabbing;
     }
     .ctox-chat-crew-slot .ctox-crew-creature {
-      width: 26px;
-      height: 26px;
+      width: 100%;
+      height: 100%;
     }
     /* The carried member: hanging from a hook, wriggling until it is dropped. */
     .ctox-crew-drag-ghost {
