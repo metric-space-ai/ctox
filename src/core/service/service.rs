@@ -9262,6 +9262,18 @@ fn run_completion_review(
     let email_reply_key = inbound_email_reply_message_key(job);
     let founder_reply_key = founder_email_reply_message_key(job);
     let founder_rework_key = founder_communication_rework_inbound_key(job);
+    if let Some(rework_key) = founder_rework_key {
+        if email_reply_key != Some(rework_key) {
+            return CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::Technical {
+                    policy_id: "founder-rework-reply-action".to_string(),
+                },
+                summary: format!(
+                    "Founder communication rework for {rework_key} cannot use a different or missing leased inbound email for its reviewed reply."
+                ),
+            };
+        }
+    }
     let email_reply_action = match email_reply_key {
         Some(message_key) => match channels::prepare_reviewed_founder_reply(root, message_key) {
             Ok(action) => Some(action),
@@ -19850,6 +19862,16 @@ fn hold_unsent_founder_communication_rework(
     let Some(inbound_key) = founder_communication_rework_inbound_key(job) else {
         return disposition;
     };
+    if inbound_email_reply_message_key(job) != Some(inbound_key) {
+        return CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "founder-rework-outbound-send".to_string(),
+            },
+            summary: format!(
+                "Founder communication rework for {inbound_key} cannot close against a different or missing leased inbound email."
+            ),
+        };
+    }
     match channels::founder_reply_sent_after_review_for_message(root, inbound_key) {
         Ok(true) => disposition,
         Ok(false) => CompletionReviewDisposition::Hold {
@@ -46894,6 +46916,21 @@ Those are not durable artifact requirements."
                 },
             ),
             CompletionReviewDisposition::Approved { .. }
+        ));
+        let mut wrong_inbound_job = job.clone();
+        wrong_inbound_job.leased_message_keys = vec![
+            "queue:system::founder-rework-send-gate".to_string(),
+            "email:lena@thesen-ag.com::inbox::other".to_string(),
+        ];
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(
+                &root,
+                &wrong_inbound_job,
+                CompletionReviewDisposition::Approved {
+                    review_audit_key: "review-send-gate".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Hold { .. }
         ));
         assert!(matches!(
             hold_unsent_founder_communication_rework(
