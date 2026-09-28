@@ -64,6 +64,7 @@ import { threeWayMergeDocuments } from './conflict-merge.mjs';
 import {
   compareHybridLogicalClocks,
   hybridLogicalClockStatus,
+  clearHybridLogicalClockTimeAnchor,
   isFutureHybridLogicalClock,
   setHybridLogicalClockTimeAnchorFromRoundTrip,
 } from './hybrid-logical-clock.mjs';
@@ -272,6 +273,8 @@ class SharedRoomPeer {
       getPeerId: () => this.activeRemotePeerId,
     });
     this.activeRemotePeerId = null;
+    this.clockAnchorSource = null;
+    this.clockAnchorPeerId = null;
     this.started = false;
     this.peerOpenQueue = Promise.resolve();
     // Negotiated remote protocol from the room-level handshake, retained so a
@@ -634,6 +637,11 @@ class SharedRoomPeer {
       // A closed peer invalidates the negotiated handshake; a fresh peer-open
       // will renegotiate and re-drive every collection's catch-up.
       try { this.demandTransport.abortPeerRequests(event.detail?.peerId, event.detail?.reason || 'peer-close'); } catch {}
+      if (this.clockAnchorSource && this.clockAnchorPeerId === event.detail?.peerId) {
+        clearHybridLogicalClockTimeAnchor(this.clockAnchorSource);
+        this.clockAnchorSource = null;
+        this.clockAnchorPeerId = null;
+      }
       if (this.negotiated && this.negotiated.peerId === event.detail?.peerId) {
         this.negotiated = null;
       }
@@ -931,6 +939,7 @@ class SharedRoomPeer {
     const representative = this.representativeCollection();
     if (!representative) return null;
     if (!this.isPeerOpen(peerId)) return null;
+    const connection = this.peer?.connections?.get?.(peerId);
     this.handshakeMetrics.protocolNegotiations += 1;
     const localProtocol = await this.peer.protocolPayload(peerId, [], representative.collection);
     if (!this.isPeerOpen(peerId)) return null;
@@ -975,14 +984,6 @@ class SharedRoomPeer {
       this.peer?.removeConnection?.(peerId, 'non-native-peer-role');
       return null;
     }
-    if (Number.isFinite(normalizedRemoteProtocol.nativeTimeMs)) {
-      setHybridLogicalClockTimeAnchorFromRoundTrip(
-        normalizedRemoteProtocol.nativeTimeMs,
-        clockRequestStartedAtMs,
-        clockResponseReceivedAtMs,
-        clockRequestElapsedMs,
-      );
-    }
     // Phase 3 schema-validation hardening: validate EACH collection's schema
     // hash individually under multiplex. On mismatch, surface the
     // schemaHashMismatch error for THAT collection and skip just it (do NOT
@@ -998,6 +999,21 @@ class SharedRoomPeer {
       }
     }
     await this.awaitRemoteMasterReady(peerId);
+    if (!connection || !this.isPeerOpen(peerId)
+      || this.peer?.connections?.get?.(peerId) !== connection) return null;
+    // Only the token-authorized connection may contribute a clock sample.
+    // Its object identity prevents an old close/reconnect generation from
+    // carrying an offset into a newly authenticated peer.
+    const clockAnchorSource = `${this.key}:${generationObjectId(connection)}`;
+    setHybridLogicalClockTimeAnchorFromRoundTrip(
+      normalizedRemoteProtocol.nativeTimeMs,
+      clockRequestStartedAtMs,
+      clockResponseReceivedAtMs,
+      clockRequestElapsedMs,
+      clockAnchorSource,
+    );
+    this.clockAnchorSource = clockAnchorSource;
+    this.clockAnchorPeerId = peerId;
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
     // Phase 2: the native peer cleared its per-peer active set on the prior

@@ -1,5 +1,6 @@
 import {
   compareHybridLogicalClocks,
+  clearHybridLogicalClockTimeAnchor,
   correctedHybridLogicalClockNowMs,
   ctoxIndexedDbStorageTestInternals,
   formatHybridLogicalClock,
@@ -78,5 +79,25 @@ const actualSkew = setHybridLogicalClockTimeAnchorFromRoundTrip(
 );
 assert(actualSkew.code === 'clock_skew_detected',
   'a fresh round trip must still detect real clock skew');
+
+const peerA = 'room-a:connection-a';
+const peerB = 'room-a:connection-b';
+setHybridLogicalClockTimeAnchorFromRoundTrip(
+  sampleStart + 60_100, sampleStart, sampleStart + 200, 200, peerA,
+);
+assert(hybridLogicalClockStatus().nativeClockOffsetMs === 60_000,
+  'the authenticated first peer provides its own clock offset');
+const rejectedPeerB = setHybridLogicalClockTimeAnchorFromRoundTrip(
+  sampleStart + 60_100, sampleStart, sampleStart + 20_000, 20_000, peerB,
+);
+assert(rejectedPeerB.nativeClockOffsetMs === 0 && rejectedPeerB.nativeClockSource === null,
+  'a rejected new-peer sample must not reuse the previous peer offset');
+setHybridLogicalClockTimeAnchorFromRoundTrip(
+  sampleStart + 100, sampleStart, sampleStart + 200, 200, peerB,
+);
+clearHybridLogicalClockTimeAnchor(peerA);
+assert(hybridLogicalClockStatus().nativeClockSource === peerB,
+  'closing an old peer must not erase the replacement peer anchor');
+clearHybridLogicalClockTimeAnchor(peerB);
 
 console.log('ctox-rxdb HLC conflict smoke OK');

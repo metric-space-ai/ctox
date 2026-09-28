@@ -86,6 +86,7 @@ export {
 export {
   compareHybridLogicalClocks,
   correctedHybridLogicalClockNowMs,
+  clearHybridLogicalClockTimeAnchor,
   formatHybridLogicalClock,
   hybridLogicalClockNodeId,
   hybridLogicalClockStatus,
