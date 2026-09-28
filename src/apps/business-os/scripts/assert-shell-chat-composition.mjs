@@ -54,19 +54,25 @@ try {
 
   const topAppTab = page.locator('[data-top-app-tab]');
   expect(await topAppTab.count() === 1, 'top app tab locator must be unique');
-  // Shell-V2 windows carry a single title-bar control (close); minimizing comes
-  // from the window menu, which calls `wm.minimize(id)` (app.js:2227). Asserting
-  // a `.shell-window-control--minimize` button asserted the v1 chrome and left
-  // this guard red on main. The v2 chrome rule is checked instead, and the
-  // harness minimizes the way the shell does.
+  // Shell-V2 exposes the layout menu immediately left of close. Its seven
+  // actions replace drag-edge workspace snapping and the old direct title-bar
+  // minimize/maximize controls.
   const titleBarControls = await page.evaluate(
     () => [...document.querySelectorAll('.shell-window [data-window-control]')].map((node) => node.dataset.windowControl),
   );
   expect(
-    titleBarControls.length === 1 && titleBarControls[0] === 'close',
-    `Shell-V2 windows expose exactly one title-bar control: ${JSON.stringify(titleBarControls)}`,
+    JSON.stringify(titleBarControls) === JSON.stringify(['layout', 'close']),
+    `Shell-V2 windows expose layout immediately left of close: ${JSON.stringify(titleBarControls)}`,
   );
-  await page.evaluate(() => window.shellHarness.minimize());
+  const layoutTrigger = page.locator('.shell-window [data-window-layout-trigger]');
+  await layoutTrigger.click();
+  const layoutOptions = await page.locator('.shell-window [data-window-layout-menu] [data-window-layout-control]')
+    .evaluateAll((nodes) => nodes.map((node) => node.dataset.windowLayoutControl));
+  expect(
+    JSON.stringify(layoutOptions) === JSON.stringify(['free', 'maximize', 'minimize', 'left', 'right', 'top', 'bottom']),
+    `the layout menu must expose the seven requested actions: ${JSON.stringify(layoutOptions)}`,
+  );
+  await page.locator('.shell-window [data-window-layout-menu] [data-window-layout-control="minimize"]').click();
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell-window')).display === 'none');
   await topAppTab.click();
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell-window')).display !== 'none');
@@ -75,7 +81,7 @@ try {
   observations.push({ phase: 'expanded-restored-from-top-tab', ...restoredFromTopTab });
   expect(closeRect(restoredFromTopTab.window, restoredFromTopTab.baselineWindow), 'restoring from the top tab must preserve normal window geometry');
   expect(!restoredFromTopTab.chatSide, 'restoring an app must not move chat to the side');
-  await page.evaluate(() => window.shellHarness.minimize());
+  await chooseLayout(page, 'minimize');
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell-window')).display === 'none');
   await topAppTab.focus();
   await topAppTab.press('Enter');
@@ -94,7 +100,7 @@ try {
 
   await chatToggle.click();
   await page.waitForFunction(() => document.body.hasAttribute('data-shell-chat-dock-expanded'));
-  await page.evaluate(() => window.shellHarness.maximize());
+  await chooseLayout(page, 'maximize');
   const maximized = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'expanded-maximized', ...maximized });
   // Window-neutral overlay contract (shared/shell-chat-composition.js,
@@ -106,7 +112,7 @@ try {
   expect(maximized.window.bottom >= maximized.viewport.height - 10, `maximized window must fill the full work area under the floating chat dock (no reserved bottom inset): ${JSON.stringify({ windowBottom: maximized.window.bottom, viewportHeight: maximized.viewport.height })}`);
   expect(maximized.window.right <= maximized.viewport.width, 'maximized window must use the full shell width');
 
-  await page.evaluate(() => window.shellHarness.snapBottom());
+  await chooseLayout(page, 'bottom');
   const snapped = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'expanded-bottom-snap', ...snapped });
   expect(snapped.window.bottom >= snapped.viewport.height - 10, `bottom-snapped window must reach the work-area bottom under the floating chat dock (no reserved inset): ${JSON.stringify({ windowBottom: snapped.window.bottom, viewportHeight: snapped.viewport.height })}`);
@@ -131,14 +137,12 @@ try {
     expect(chat.x >= 0 && chat.right <= 1200, `active chat must remain inside viewport: ${JSON.stringify(chat)}`);
   }
 
-  // Snapping is resolved from the dragged window's edges, not from the pointer:
-  // `resolveWindowLayout` makes a zone eligible when the window's edge lands
-  // within the mouse `enter` threshold (16px) of the work-area edge
-  // (window-layout-resolver.js). The old pointer-edge assertions belonged to an
-  // earlier model. The window is first made small enough that one edge can be
-  // near the work area at a time; at its normal size it touches top and bottom
-  // at once and every drag resolves to a corner.
-  await page.evaluate(() => window.shellHarness.restoreNormal());
+  // Workspace edges no longer trigger Shell-V2 snapping. Each edge remains a
+  // free move until the user explicitly selects its layout-menu action.
+  await chooseLayout(page, 'free');
+  const freedFromBottom = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'layout-free-after-bottom', ...freedFromBottom });
+  expect(freedFromBottom.snapZone === null, 'free layout must release the bottom snap');
   await page.evaluate(() => window.shellHarness.setSize(420, 300));
   const work = await page.evaluate(() => window.shellHarness.workArea());
   const inset = 40;
@@ -149,24 +153,36 @@ try {
   expect(freelyMoved.snapZone === null, `moving a window inside the desktop must not force a snap, got ${freelyMoved.snapZone}`);
 
   await dragWindowToLayerPoint(page, work, { left: work.left + 2, top: work.top + inset });
+  const leftEdge = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'drag-free-left-edge', ...leftEdge });
+  expect(leftEdge.snapZone === null, `dragging to the left work edge must remain free, got ${leftEdge.snapZone}`);
+  await chooseLayout(page, 'left');
   const leftSnap = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'drag-snap-left', ...leftSnap });
-  expect(leftSnap.snapZone === 'left', `a window parked on the left work edge must snap left, got ${leftSnap.snapZone}`);
+  observations.push({ phase: 'layout-snap-left', ...leftSnap });
+  expect(leftSnap.snapZone === 'left', `the left menu action must snap left, got ${leftSnap.snapZone}`);
 
-  await page.evaluate(() => window.shellHarness.restoreNormal());
+  await chooseLayout(page, 'free');
   await page.evaluate(() => window.shellHarness.setSize(420, 300));
   await dragWindowToLayerPoint(page, work, { left: work.left + work.width - 422, top: work.top + inset });
+  const rightEdge = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'drag-free-right-edge', ...rightEdge });
+  expect(rightEdge.snapZone === null, `dragging to the right work edge must remain free, got ${rightEdge.snapZone}`);
+  await chooseLayout(page, 'right');
   const rightSnap = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'drag-snap-right', ...rightSnap });
-  expect(rightSnap.snapZone === 'right', `a window parked on the right work edge must snap right, got ${rightSnap.snapZone}`);
+  observations.push({ phase: 'layout-snap-right', ...rightSnap });
+  expect(rightSnap.snapZone === 'right', `the right menu action must snap right, got ${rightSnap.snapZone}`);
 
-  await page.evaluate(() => window.shellHarness.restoreNormal());
+  await chooseLayout(page, 'free');
   await page.evaluate(() => window.shellHarness.setSize(420, 300));
   await dragWindowToLayerPoint(page, work, { left: work.left + 120, top: work.top + 2 });
+  const topEdge = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'drag-free-top-edge', ...topEdge });
+  expect(topEdge.snapZone === null, `dragging to the top work edge must remain free, got ${topEdge.snapZone}`);
+  await chooseLayout(page, 'top');
   const topSnap = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'drag-snap-top', ...topSnap });
-  expect(topSnap.snapZone === 'top', `a window parked on the top work edge must snap top, got ${topSnap.snapZone}`);
-  await page.evaluate(() => window.shellHarness.restoreNormal());
+  observations.push({ phase: 'layout-snap-top', ...topSnap });
+  expect(topSnap.snapZone === 'top', `the top menu action must snap top, got ${topSnap.snapZone}`);
+  await chooseLayout(page, 'free');
 
   const fatalConsole = consoleEvents.filter((event) => ['pageerror', 'requestfailed', 'error'].includes(event.type));
   expect(fatalConsole.length === 0, `browser console/network must stay clean: ${JSON.stringify(fatalConsole)}`);
@@ -196,6 +212,11 @@ function expect(condition, message) {
 
 function closeRect(actual, expected, tolerance = 1) {
   return ['x', 'y', 'width', 'height'].every((key) => Math.abs(actual[key] - expected[key]) <= tolerance);
+}
+
+async function chooseLayout(page, action) {
+  await page.locator('.shell-window [data-window-layout-trigger]').click();
+  await page.locator(`.shell-window [data-window-layout-menu] [data-window-layout-control="${action}"]`).click();
 }
 
 async function dragWindowHeaderTo(page, targetX, targetY) {
@@ -410,12 +431,8 @@ function harnessHtml() {
       ready:false,
       get windowClicks(){ return windowClicks; },
       get layoutEvents(){ return layoutEvents; },
-      maximize(){ if (wm.describe(handle.id)?.state !== 'maximized') wm.toggleMaximize(handle.id); },
-      minimize(){ wm.minimize(handle.id); },
       workArea(){ const vp = wm.getViewport(); return { originLeft: vp.originLeft, originTop: vp.originTop, left: vp.left, top: vp.top, width: Math.max(0, vp.w - vp.left - vp.right), height: Math.max(0, vp.h - vp.top - vp.bottom) }; },
       setSize(width, height){ const el = document.querySelector('.shell-window'); el.style.width = width + 'px'; el.style.height = height + 'px'; },
-      snapBottom(){ if (wm.describe(handle.id)?.state === 'maximized') wm.toggleMaximize(handle.id); wm.snapTo(handle.id, 'bottom'); },
-      restoreNormal(){ const el=document.querySelector('.shell-window'); if(wm.describe(handle.id)?.state==='maximized'){ wm.toggleMaximize(handle.id); } else if(el?.classList.contains('is-snapped')){ wm.toggleMaximize(handle.id); wm.toggleMaximize(handle.id); } },
       collect,
       addInactiveChatClones(){ const active=document.querySelector('.ctox-chat-window.is-active'); if(!active) return; ['left','right'].forEach((rel,index) => { const clone=active.cloneNode(true); clone.classList.remove('is-active'); clone.dataset.chatId='clone_'+rel; clone.dataset.chatRel=rel; clone.style.left=(700+index*400)+'px'; active.parentElement.appendChild(clone); }); },
       collectChatWindows(){ return [...document.querySelectorAll('.ctox-chat-window')].filter((node) => { const style=getComputedStyle(node); const rect=node.getBoundingClientRect(); return style.display!=='none' && rect.width>0 && rect.height>0; }).map((node) => ({...box(node),active:node.classList.contains('is-active')})); },
