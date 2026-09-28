@@ -2912,6 +2912,35 @@ fn founder_outbound_body_rejects_address_headers_in_body() {
 }
 
 #[test]
+fn reviewed_reply_removes_only_its_exact_leading_subject_header() -> Result<()> {
+    let subject = "Re: Import falsch gelandet";
+    let body = outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Import falsch gelandet\r\n\r\nDanke, ich prüfe den Import.",
+        subject,
+    )?;
+    assert_eq!(body, "Danke, ich prüfe den Import.");
+    ensure_founder_outbound_body_text_clean(&body)?;
+
+    let wrong_subject = outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Anderer Vorgang\n\nDanke, ich prüfe den Import.",
+        subject,
+    )?;
+    assert!(ensure_founder_outbound_body_text_clean(&wrong_subject).is_err());
+
+    let addressed = outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Import falsch gelandet\nTo: someone@example.test\n\nDanke.",
+        subject,
+    )?;
+    assert!(ensure_founder_outbound_body_text_clean(&addressed).is_err());
+    assert!(outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Import falsch gelandet\n\n",
+        subject,
+    )
+    .is_err());
+    Ok(())
+}
+
+#[test]
 fn founder_outbound_body_rejects_internal_send_status_report() {
     let error = ensure_founder_outbound_body_clean(&ChannelSendRequest {
         channel: "email".to_string(),
