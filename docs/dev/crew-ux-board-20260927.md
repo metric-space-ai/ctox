@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad (Stand 28.09. 13:20 UTC): v420 (Wesen per Maus klickbar) → Gates → main → beta.73 → welsch stage/activate → Bildabnahme welsch. thesen bleibt wegen des P0-Freezes (Importverlust) auf v418; v420 kommt erst nach Freigabe des Owners.
+Kritischer Pfad (Stand 28.09. 14:35 UTC): welsch ABGESCHLOSSEN (beta.73 = v420 live). Offen nur noch thesen: steht wegen des P0-Freezes (Importverlust) auf v418; v420 per Datei-Deploy erst nach Freigabe des Owners im Crew-Thread.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -64,16 +64,15 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 - **beta.72 (v418) gebaut, überholt** — Run `36423712944` success 13:12; nicht ausgerollt, v420 folgt als beta.73.
 - **Finalisierungsschleife thesen gestoppt (Owner, 13:05 UTC, laut Crew-Thread)** — 6 Tasks `blocked`, Sellify-Prompt im Quellcode korrigiert, wegen P0-Freeze nicht ausgerollt. Dauerhafter Fix `fail_incomplete_plan_for_attempt` in PR #222/#223 beim Owner. Kein zweiter Deckel von der Crew-UX (Kollision).
 
+- **v420 Klick-Fix (main `2848cf6af`, welsch beta.73 live 14:30 UTC, verifiziert)** — `wireCanvasDrag` nahm Pointer-Capture auch bei pointerdown auf einem Wesen → pointerup/click gingen an die Leinwand (gemessen: `gotpointercapture:ctox-flow-canvas`, `click:ctox-flow-canvas`), Wesen waren nur per Tastatur bedienbar. Fix: Wesen aus dem Pan ausgenommen. Browser-Test `assertGroupedCreatureMouseClick` (eigene Seite, echter Mausklick auf ×3-Wesen → Liste mit 3 Zeilen → Auswahl wählt g2) rot ohne Fix (TimeoutError), grün mit. Zweiter Wächter `assert-ctox-data-state`: sein „task-detail“-Klick kam nie an; Fixture hat jetzt `openLeftDrawer`/`closeDrawers`, Wächter wartet auf das geöffnete Detail (rot ohne Fix). Gates: alles grün bis auf die bekannten Altbefunde. Stempel `20260928-shell-v2-crew-click-v420` (v419 hält PR #230). beta.73 Run `36428037901` success 14:28:55 (Actions-Stau: 38 überholte Läufe abgebrochen, Liste `/Volumes/tmp/actions-cancelled-20260928T1336.txt`, Codex `01a0e83b-…`). welsch stage 14:29 → activate 14:30 (idle), active `0.1.46-beta.73`, healthy, recoveryShell false, Wartung aus. Bild welsch (echter Mausklick, eigener Tunnel 18776): vorher v417 `drawer:null`, jetzt Task-Detail „Ziehe von deinem vorherigen Ergebnis 7 · Erledigt · Lumi · Versuch 2“; Leistenplatz-Tooltip „steht gerade auf der Crew-Karte“. Ein gruppiertes ×N-Wesen gab es auf welsch gerade nicht (keine parallele Arbeit) → abgedeckt durch den Browser-Test mit echter Maus, live nicht gesehen.
+
 ## Working
 
-- **v420 Klick-Fix** — `wireCanvasDrag` nahm Pointer-Capture auch bei pointerdown auf einem Wesen → pointerup/click gingen an die Leinwand (gemessen: `gotpointercapture:ctox-flow-canvas`, `click:ctox-flow-canvas`), Wesen nur per Tastatur bedienbar. Fix: Wesen aus dem Pan ausgenommen. Browser-Test `assertGroupedCreatureMouseClick` (eigene Seite, echter Mausklick auf ×3-Wesen → Liste mit 3 Zeilen → Auswahl wählt g2) rot ohne Fix (TimeoutError), grün mit. Stempel `20260928-shell-v2-crew-click-v420` (v419 hält PR #230 `crew-dock-v419`). Fertig = Gates grün bis auf bekannte Altbefunde, main, beta.73 success, welsch aktiv + Bild.
-
-- gpu3: kein Lauf (Lock frei). Eigene Tunnel 18775 (thesen) / 18776 (welsch) laufen bis zur Bildabnahme.
+- (nichts) — gpu3 ohne Lauf (Lock frei), lokal kein Build, eigene Tunnel 18775/18776 beendet (fremder 18765 bleibt).
 
 ## To-Do
 
-- **welsch beta.73** — Trigger: beta.73-Run success. `scratchpad/welsch-stage-beta73.sh` → `welsch-activate-beta73.sh` (verlangt idle), dann Bild: Mausklick auf ×N-Wesen öffnet Liste, Auswahl, Wesen läuft.
-- **thesen v420** — Trigger: Owner hebt P0-Freeze auf (Crew-Thread). Datei-Deploy mit Drift-Prüfung gegen `11bc5164f`-Hashes, kein Upgrade aktiv.
+- **thesen v420** — Trigger: Owner hebt P0-Freeze auf (Crew-Thread). Datei-Deploy aus `git archive 2848cf6af` mit Drift-Prüfung gegen die `11bc5164f`-Hashes (v418, Backup `files-20260928T124454Z`), kein Upgrade aktiv; danach Bild mit echtem Mausklick (`scratchpad/v420-accept.mjs`), auch ×N (thesen hat parallele Arbeit). Hilfsdienste (jami mit gelöschtem Executable) kommen mit dem nächsten regulären Owner-Upgrade.
 
 ## Backlog / Owner
 

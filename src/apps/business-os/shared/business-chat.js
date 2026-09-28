@@ -374,6 +374,14 @@ function crewPoolSlotHtml(member, placement = 'fab', load = 0) {
 
 const CREW_DRAG_THRESHOLD_PX = 6;
 
+export function memberChatOpenDetail(member) {
+  return {
+    member_chat: true,
+    crew_member_id: member.id,
+    crew_identity: { id: member.id, name: member.name, shape: member.shape, color: member.color },
+  };
+}
+
 function wireCrewDrag(root, state) {
   if (root.dataset.crewDragWired === '1') return;
   root.dataset.crewDragWired = '1';
@@ -416,7 +424,17 @@ function wireCrewDrag(root, state) {
     const x = event.clientX;
     const y = event.clientY;
     cleanup();
-    if (!wasActive) return;
+    if (!wasActive) {
+      // Owner 28.09.2026: clicking Lumi opened a chat with "Crew" — the member
+      // was lost exactly when the owner addressed it. A click (no drag) on a
+      // member now opens a chat with that member; the dock toggle the same
+      // click would trigger is swallowed.
+      const slot = event.target?.closest?.('[data-crew-drag]');
+      if (!slot || slot.dataset.crewDrag !== member.id || !root.contains(slot)) return;
+      state.crewDragEndedAt = Date.now();
+      window.dispatchEvent(new CustomEvent(CHAT_OPEN_EVENT, { detail: memberChatOpenDetail(member) }));
+      return;
+    }
     state.crewDragEndedAt = Date.now();
     const crew = {
       id: member.id,
@@ -1659,7 +1677,7 @@ function renderChatRoot({ root, state, commandBus, db, getActiveModule }) {
           if (progressCard) {
             progressCard.outerHTML = expectedCard;
             cardUpdated = true;
-          } else if (typeof win.querySelector('header')?.insertAdjacentHTML === 'function') {
+          } else if (expectedCard && typeof win.querySelector('header')?.insertAdjacentHTML === 'function') {
             win.querySelector('header').insertAdjacentHTML('beforeend', expectedCard);
             cardUpdated = true;
           }
@@ -2497,9 +2515,23 @@ function resolveChatForOpenDetail(state, session, detail = {}) {
     return trackedChat;
   }
   if (detail.reuseActive === true) return ensureChat(state, session);
+  if (detail.member_chat === true) {
+    const memberChat = latestOpenMemberChatToday(state, String(detail.crew_member_id || ''));
+    if (memberChat) return memberChat;
+  }
   const chat = createChat(state.ownerUserId, state.selectedDate);
   state.chats.push(chat);
   return chat;
+}
+
+// A member is one conversation partner: clicking it again returns to today's
+// conversation with it instead of stacking empty chats.
+export function latestOpenMemberChatToday(state, memberId) {
+  if (!memberId) return null;
+  const today = getLocalDateString(Date.now());
+  return (state?.chats || [])
+    .filter((chat) => chat.open !== false && chat.crew_member_id === memberId && getLocalDateString(chat.createdAt) === today)
+    .sort((left, right) => chatActivityMs(right) - chatActivityMs(left))[0] || null;
 }
 
 function chatActivityMs(chat) {
@@ -2887,6 +2919,9 @@ function progressShowsActiveReview(progress, taskStatus = '') {
 
 function delegationProgressCardHtml(chat, { taskId = '', commandId = '', taskStatus = 'queued' } = {}) {
   const progress = executionProgressForChat(chat);
+  // Nothing was handed over yet: no ring. An empty, disabled ring in every new
+  // chat was noise the owner read as a missing member (28.09.2026).
+  if (!progress && !taskId && !commandId) return '';
   if (!progress) {
     const isPlanning = taskStatus === 'queued' || taskStatus === 'running' || taskStatus === 'blocked';
     const tooltip = isPlanning
@@ -3929,6 +3964,18 @@ function chatInspectionMarkup(chat) {
   return `<details class="ctox-chat-inspection" ${chat.inspectionOpen ? 'open' : ''}><summary>${escapeHtml(content.title)}</summary><div class="ctox-chat-inspection-body">${content.body}</div></details>`;
 }
 
+// The member the owner addressed before any work exists in this chat (member
+// seat click, drop onto a record). Router-assigned chats get their member only
+// with a task, and follow-ups stay with it through the router's thread
+// continuity — so only the first submission names the member.
+export function chatAddressedMemberId(chat) {
+  const memberId = String(chat?.crew_member_id || '').trim();
+  if (!memberId) return '';
+  const hasWork = Boolean(chat.lastTrackingId)
+    || (Array.isArray(chat.messages) && chat.messages.some((message) => message?.commandId || message?.taskId));
+  return hasWork ? '' : memberId;
+}
+
 async function submitChatMessage({
   state,
   chat,
@@ -3951,6 +3998,7 @@ async function submitChatMessage({
   const extraClientContext = meta.client_context && typeof meta.client_context === 'object' ? meta.client_context : {};
   const now = Date.now();
   const commandId = meta.command_id || meta.commandId || `cmd_${crypto.randomUUID()}`;
+  const addressedMemberId = chatAddressedMemberId(chat);
   // Consume a caller-supplied command id: it is valid for this one submission.
   if (chat.contextMeta && typeof chat.contextMeta === 'object') {
     delete chat.contextMeta.command_id;
@@ -4028,6 +4076,7 @@ async function submitChatMessage({
       record_id: meta.record_id || chat.id,
       inbound_channel: meta.inbound_channel || CHAT_CHANNEL,
       payload: {
+        ...(addressedMemberId ? { crew_member_id: addressedMemberId } : {}),
         ...extraPayload,
         title: displayTitle,
         display_title: displayTitle,
