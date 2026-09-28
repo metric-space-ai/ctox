@@ -6328,11 +6328,8 @@ mod tests {
             .await
             .is_err());
         assert_eq!(
-            handler
-                .connection_for_peer("browser-1")
-                .unwrap()
-                .generation(),
-            newest.generation()
+            handler.peers.lock().get("browser-1").unwrap().generation,
+            newest_generation
         );
         assert_eq!(
             handler
