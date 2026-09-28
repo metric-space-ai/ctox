@@ -1761,12 +1761,12 @@ mod tests {
             json!({"id": "handelsregister.de", "label": "Handelsregister", "enabled": true}),
             json!({"id": "google.com", "label": "Google", "enabled": true}),
         ];
-        // Every app test is old and failed.
+        // Every app test failed and is older than three days.
         let adapters = sources
             .iter()
             .map(|source| {
                 json!({"source_id": source["id"], "status": "test_temporary_unreachable",
-                       "updated_at_ms": now - 60 * hour})
+                       "updated_at_ms": now - 80 * hour})
             })
             .collect::<Vec<_>>();
         let mut registry = BTreeMap::new();
