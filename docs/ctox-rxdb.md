@@ -989,11 +989,14 @@ documents is `runtime/business-os-rxdb.sqlite3` as above.
     later browser offer hit the fast path in `ensure_peer_connection` and
     never receive an answer." The responder PeerConnection is created when
     the actual offer arrives in `handle_signal`.
-  - On an inbound offer, `remove_obsolete_peer_before_offer` retires an
-    existing responder generation before answering. This includes a still-open
-    DataChannel: a browser authority refresh creates a new PeerConnection and
-    its offer can arrive before the old channel-close event. Generation-guarded
-    teardown prevents a late old-channel callback from erasing the replacement.
+  - On an inbound offer, Rust parses the SDP and applies it to a newly built,
+    unregistered responder before retiring the existing generation. A rejected
+    SDP therefore leaves the old open DataChannel intact. The native peer
+    remembers a bounded set of answered SDP session origins per signaling peer
+    and ignores delayed duplicate offers. A genuinely new browser
+    PeerConnection replaces the old responder even when its DataChannel is
+    still open; generation-guarded teardown prevents a late old-channel
+    callback from erasing the replacement.
 - The browser creates the DataChannel (label `ctox-rxdb`); offer/answer/ICE
   flow over the signaling relay. Rust answers offers and adds candidates in
   `handle_signal`; per-peer builds are deduplicated via a `OnceCell` claim
