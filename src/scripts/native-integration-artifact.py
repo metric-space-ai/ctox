@@ -206,10 +206,10 @@ def main():
         'node', '--test', '--test-reporter=tap',
         'src/apps/business-os/shared/shell-generation.test.mjs',
     ])
-    for metric, expected in [('tests', 5), ('pass', 5), ('fail', 0), ('skipped', 0)]:
+    for metric, expected in [('tests', 6), ('pass', 6), ('fail', 0), ('skipped', 0)]:
         if re.findall(r'^# ' + metric + r' (\d+)$', generation_output, re.MULTILINE) != [str(expected)]:
             raise RuntimeError(f'Unexpected shell generation regression {metric} count')
-    RECORD['shell_generation_tests'] = 5
+    RECORD['shell_generation_tests'] = 6
     save()
     if not focused:
         # Preserve the four existing sync suites and their exact discovery count.
