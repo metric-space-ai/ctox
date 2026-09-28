@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad (Stand 28.09. 14:35 UTC): welsch ABGESCHLOSSEN (beta.73 = v420 live). Offen nur noch thesen: steht wegen des P0-Freezes (Importverlust) auf v418; v420 per Datei-Deploy erst nach Freigabe des Owners im Crew-Thread.
+Kritischer Pfad (Stand 28.09. 16:10 UTC): welsch ABGESCHLOSSEN (beta.74 = v422 live). Offen nur noch thesen: steht wegen des P0-Freezes (Importverlust) auf v418; v420 per Datei-Deploy erst nach Freigabe des Owners im Crew-Thread.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -66,13 +66,15 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 
 - **v420 Klick-Fix (main `2848cf6af`, welsch beta.73 live 14:30 UTC, verifiziert)** — `wireCanvasDrag` nahm Pointer-Capture auch bei pointerdown auf einem Wesen → pointerup/click gingen an die Leinwand (gemessen: `gotpointercapture:ctox-flow-canvas`, `click:ctox-flow-canvas`), Wesen waren nur per Tastatur bedienbar. Fix: Wesen aus dem Pan ausgenommen. Browser-Test `assertGroupedCreatureMouseClick` (eigene Seite, echter Mausklick auf ×3-Wesen → Liste mit 3 Zeilen → Auswahl wählt g2) rot ohne Fix (TimeoutError), grün mit. Zweiter Wächter `assert-ctox-data-state`: sein „task-detail“-Klick kam nie an; Fixture hat jetzt `openLeftDrawer`/`closeDrawers`, Wächter wartet auf das geöffnete Detail (rot ohne Fix). Gates: alles grün bis auf die bekannten Altbefunde. Stempel `20260928-shell-v2-crew-click-v420` (v419 hält PR #230). beta.73 Run `36428037901` success 14:28:55 (Actions-Stau: 38 überholte Läufe abgebrochen, Liste `/Volumes/tmp/actions-cancelled-20260928T1336.txt`, Codex `01a0e83b-…`). welsch stage 14:29 → activate 14:30 (idle), active `0.1.46-beta.73`, healthy, recoveryShell false, Wartung aus. Bild welsch (echter Mausklick, eigener Tunnel 18776): vorher v417 `drawer:null`, jetzt Task-Detail „Ziehe von deinem vorherigen Ergebnis 7 · Erledigt · Lumi · Versuch 2“; Leistenplatz-Tooltip „steht gerade auf der Crew-Karte“. Ein gruppiertes ×N-Wesen gab es auf welsch gerade nicht (keine parallele Arbeit) → abgedeckt durch den Browser-Test mit echter Maus, live nicht gesehen.
 
+- **v422 Mitglied anklicken = Gespräch mit ihm (main `303947063`, welsch beta.74 live 16:00 UTC, verifiziert)** — Rundgang welsch v420 (1440 + 430 px, je Station: höchstens ein lebender Körper je Mitglied ✔, keine Buchstaben-Abzeichen ✔) fand: Klick auf Lumi in der Crew-Leiste öffnete einen Chat mit „Crew“ (Geist-Porträt, „Gib Crew eine Aufgabe“, leerer gestrichelter Ring im Kopf). Ursache: Leistenplatz ohne eigenen Klick, der Klick fiel an den Dock-Umschalter. Fix: Klick ohne Ziehen öffnet ein Gespräch mit dem Mitglied (Porträt, „Gib Lumi eine Aufgabe“, „Aufgabe für Lumi…“), erneuter Klick führt zum heutigen offenen Gespräch zurück; die erste Aufgabe trägt `payload.crew_member_id` (nativ = Zuordnung vor dem Lease, `store.rs`), Folgenachrichten nicht (Router-Kontinuität); ohne Aufgabe kein Fortschrittsring. Tests: shared 93/93, Chat-Verhalten 148/148 mit neuem Szenario (echter Mausklick, rot ohne Fix), volle Liste bis auf die 5 Altbefunde (shell-chat-composition identisch 4 Fehler). Stempel `20260928-shell-v2-crew-member-chat-v422` (v421 hält PR #230). beta.74 Run `36446052280` success 15:57 → welsch stage/activate, healthy, recoveryShell false. Bild welsch (echter Mausklick): Kopf Lumi-Porträt, „Gib Lumi eine Aufgabe.“, Platzhalter „Aufgabe für Lumi...“, Ring 0, zweiter Klick = derselbe Chat. Keine Nachricht gesendet (kein echter Auftrag); `business_chats` auf welsch hat keine Test-Chats von heute (16 Dokumente, keins vom 28.09.).
+
 ## Working
 
 - (nichts) — gpu3 ohne Lauf (Lock frei), lokal kein Build, eigene Tunnel 18775/18776 beendet (fremder 18765 bleibt).
 
 ## To-Do
 
-- **thesen v420** — Trigger: Owner hebt P0-Freeze auf (Crew-Thread). Datei-Deploy aus `git archive 2848cf6af` mit Drift-Prüfung gegen die `11bc5164f`-Hashes (v418, Backup `files-20260928T124454Z`), kein Upgrade aktiv; danach Bild mit echtem Mausklick (`scratchpad/v420-accept.mjs`), auch ×N (thesen hat parallele Arbeit). Hilfsdienste (jami mit gelöschtem Executable) kommen mit dem nächsten regulären Owner-Upgrade.
+- **thesen v420** — Trigger: Owner hebt P0-Freeze auf (Crew-Thread). Datei-Deploy aus `git archive 303947063` (v422) mit Drift-Prüfung gegen die `11bc5164f`-Hashes (v418, Backup `files-20260928T124454Z`), kein Upgrade aktiv; danach Bild mit echtem Mausklick (`scratchpad/v420-accept.mjs`), auch ×N (thesen hat parallele Arbeit). Hilfsdienste (jami mit gelöschtem Executable) kommen mit dem nächsten regulären Owner-Upgrade.
 
 ## Backlog / Owner
 
@@ -101,6 +103,7 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 4. Remote-Build-Brief ohne Platz-/Lock-Gate: Rust-Target auf der vollen gpu3-Systemplatte, Supervisor-Stopp nach 10 min (1×, 27.09.). Regel: jeder Heavy-Brief nennt Target-Pfad, `df`-Gate je Platte, Host-Lock und Compiler-Zahl.
 5. Abnahme-Klick mit `force:true` bzw. per `dispatchEvent` beweist keine Bedienbarkeit: v418 wurde mit „Liste öffnet“ bewertet, per Maus ging es nie (Pan-Capture). Regel: Bedien-Abnahmen mit `page.mouse.click` auf Koordinaten und Gegenprobe ohne Fix (1×, 28.09.).
 6. Baseline-Gegenprobe mit `git stash` nimmt auch den neuen Test mit weg → Probe beweist nichts. Regel: nur die Fix-Datei zurücksetzen (`git diff <datei> > patch; git checkout <datei>; …; git apply patch`) (1×, 28.09.).
+7. Stempel-Tausch per `git grep -l <alter Stempel>` erfasst auch Board-/Doku-Text und schreibt dort Geschichte um (1×, 28.09., vor dem Commit bemerkt). Regel: Stempel-Tausch nur unter `src/`.
 
 ## Altbefunde (nicht von dieser Kampagne)
 

@@ -7517,7 +7517,7 @@ fn projection_outbox_retries_with_backoff_then_dead_letters() {
 
 #[test]
 fn queue_task_update_keeps_its_place_unless_priority_changes() {
-    // Tenant incident 26.09.2026: a review-feedback note recomputed sort_at, and a
+    // tenant 26.09.2026: a review-feedback note recomputed sort_at, and a
     // research task queued at 07:49 waited for hours behind later work.
     let root = std::env::temp_dir().join(format!(
         "ctox-queue-sort-keep-test-{}",
