@@ -57,6 +57,24 @@ try {
     await journal.markMasterAcknowledged('tickets', { 'ticket-1': doc });
     const pendingAfterAck = await journal.getStatus();
 
+    const partialA = { id: 'ticket-partial-a', title: 'first', _meta: { ctoxHlc: 'abc:0:tab-a' } };
+    const partialB = { id: 'ticket-partial-b', title: 'second', _meta: { ctoxHlc: 'abd:0:tab-a' } };
+    const partialId = await journal.appendBatch({
+      collection: 'tickets', schemaHash: 'schema-a', operation: 'upsert', rows: [partialA, partialB],
+    });
+    await journal.commitBatch(partialId, { [partialA.id]: partialA, [partialB.id]: partialB });
+    const publishStatus = journal.publishStatus.bind(journal);
+    let ackStatusPublishes = 0;
+    journal.publishStatus = async () => { ackStatusPublishes += 1; return publishStatus(); };
+    await journal.markMasterAcknowledged('tickets', { [partialA.id]: partialA });
+    const pendingAfterPartialAck = await journal.getStatus();
+    await journal.markMasterAcknowledged('tickets', { [partialA.id]: partialA });
+    await journal.markMasterAcknowledged('tickets', { unrelated: { id: 'unrelated' } });
+    const noOpAckStatusPublishes = ackStatusPublishes;
+    await journal.markMasterAcknowledged('tickets', { [partialB.id]: partialB });
+    const pendingAfterPartialDrain = await journal.getStatus();
+    journal.publishStatus = publishStatus;
+
     const command = {
       id: 'cmd-1',
       command_id: 'cmd-1',
@@ -103,6 +121,40 @@ try {
       mismatchCode = error?.code || '';
     }
     other.close();
+
+    // Upgrade an existing v3 WAL in place: new indexes must not discard its
+    // only copy of an unacknowledged browser write.
+    const legacyStorageName = `${databaseName}-v3`;
+    const legacyRequest = indexedDB.open(`${legacyStorageName}__recovery_v2`, 3);
+    legacyRequest.onupgradeneeded = () => {
+      const legacyDb = legacyRequest.result;
+      const batches = legacyDb.createObjectStore('batches', { keyPath: 'batchId' });
+      batches.createIndex('stateCollection', ['state', 'collection'], { unique: false });
+      legacyDb.createObjectStore('conflicts', { keyPath: 'conflictId' });
+      legacyDb.createObjectStore('meta', { keyPath: 'key' });
+    };
+    const legacyDb = await new Promise((resolveOpen, rejectOpen) => {
+      legacyRequest.onsuccess = () => resolveOpen(legacyRequest.result);
+      legacyRequest.onerror = () => rejectOpen(legacyRequest.error);
+    });
+    const legacyTx = legacyDb.transaction('batches', 'readwrite');
+    legacyTx.objectStore('batches').put({
+      batchId: 'legacy-pending', collection: 'tickets', state: 'pending',
+      documentIds: ['ticket-legacy'], ackedIds: [], committedDocs: {},
+      createdAtMs: Date.now(),
+    });
+    await new Promise((resolveDone, rejectDone) => {
+      legacyTx.oncomplete = resolveDone;
+      legacyTx.onerror = () => rejectDone(legacyTx.error);
+      legacyTx.onabort = () => rejectDone(legacyTx.error);
+    });
+    legacyDb.close();
+    const upgraded = await openRecoveryJournal({ databaseName: legacyStorageName });
+    const upgradedStore = upgraded.db.transaction('batches', 'readonly').objectStore('batches');
+    const migratedIndexes = [...upgradedStore.indexNames];
+    const migratedBatches = await upgraded.listBatches('pending', 'tickets');
+    const migratedVersion = upgraded.db.version;
+    upgraded.close();
 
     const storageName = `${databaseName}-storage`;
     const storage = await openCtoxIndexedDbStorage({ databaseName: storageName });
@@ -209,6 +261,7 @@ try {
     journal.close();
     indexedDB.deleteDatabase(`${databaseName}__recovery_v2`);
     indexedDB.deleteDatabase(`${databaseName}-other__recovery_v2`);
+    indexedDB.deleteDatabase(`${legacyStorageName}__recovery_v2`);
     indexedDB.deleteDatabase(storageName);
     indexedDB.deleteDatabase(`${storageName}__recovery_v2`);
     indexedDB.deleteDatabase(restartStorageName);
@@ -216,6 +269,12 @@ try {
     return {
       pendingBeforeReplay,
       pendingAfterAck,
+      pendingAfterPartialAck,
+      pendingAfterPartialDrain,
+      noOpAckStatusPublishes,
+      migratedIndexes,
+      migratedBatches,
+      migratedVersion,
       pendingAfterCommandAck,
       replay,
       replayed,
@@ -245,6 +304,16 @@ try {
   assert(result.replayed[0]?.[0]?.id === 'ticket-1', 'replay must preserve the complete local document');
   assert(result.primaryCommittedAtMs > 0, 'successful primary replay must be recorded durably');
   assert(result.pendingAfterAck.pendingWrites === 0, 'native acknowledgement must clear pending status');
+  assert(result.pendingAfterPartialAck.pendingWrites === 1 && result.pendingAfterPartialAck.pendingBatches === 1,
+    'a partly acknowledged batch counts only its still-unacknowledged document');
+  assert(result.noOpAckStatusPublishes === 1, 'repeat and unrelated master rows must not rewrite or republish the backlog');
+  assert(result.pendingAfterPartialDrain.pendingWrites === 0,
+    'the remaining exact master acknowledgement must drain the partial batch');
+  assert(result.migratedVersion >= 4 && result.migratedIndexes.includes('state')
+    && result.migratedIndexes.includes('documentIds'),
+  'v3 journals must gain the v4 lookup indexes');
+  assert(result.migratedBatches.length === 1 && result.migratedBatches[0].batchId === 'legacy-pending',
+    'v3 upgrade must preserve the pending write batch');
   assert(result.pendingAfterCommandAck.pendingWrites === 0, 'a completed native command must acknowledge the submitted command payload');
   assert(result.preview.pendingWrites === 1, 'encrypted export preview must report pending writes');
   assert(result.mismatchCode === 'recovery_instance_mismatch', 'instance remapping must be rejected');

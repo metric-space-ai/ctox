@@ -1420,12 +1420,18 @@ and payload hash are durable. Startup registers collection replayers without
 serially blocking shell schema registration. Each collection starts a
 collection-scoped background replay; every mutating collection method still
 awaits that initialization and therefore remains fail-closed before accepting
-a new local write. Journal v3 adds the compound `stateCollection` index, so
-registration and native acknowledgement inspect only pending batches for the
-requested collection instead of scanning the entire WAL once per registered
-collection. Batches that already carry `primaryCommittedAtMs` are not written
-to the primary store a second time; they wait only for the native round-trip
-acknowledgement. Replication-origin and demand-loading writes bypass this WAL;
+a new local write. Journal v3 added the compound `stateCollection` index for
+collection-scoped replay. Journal v4 adds `state` and multi-entry `documentIds`
+indexes; master acknowledgements inspect only batches containing a returned
+document ID and do not rewrite unchanged batches. Retention GC still runs on
+changes or at most once an hour during idle native traffic. The first-write
+recovery check reads distinct, still-unacknowledged IDs in one primary
+transaction.
+`pendingWrites` counts only unacknowledged document IDs across pending batches,
+not the number of batches or distinct primary rows. Batches that already carry
+`primaryCommittedAtMs` are not written to the primary store a second time;
+they wait only for the native round-trip acknowledgement. Replication-origin
+and demand-loading writes bypass this WAL;
 the acknowledgement moves matching document/HLC entries to `master_acked`,
 which is retained for 24 hours.
 
