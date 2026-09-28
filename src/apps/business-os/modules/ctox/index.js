@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-one-being-v411';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-one-being-v412';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-one-being-v5';
 import { renderCrewReference } from '../../shared/crew-renderer.js?v=20260928-crew-one-being-v5';
@@ -30,7 +30,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-one-being-v411';
+const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-one-being-v412';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -3084,6 +3084,11 @@ function flowCrewSvg(model, selectedTask, state) {
       if (selectedTask && task.id === selectedTask.id) being.anchor = task;
     }
   }
+  const beingsPerNode = new Map();
+  for (const { anchor } of beings.values()) {
+    const id = taskCrewNodeId(anchor, model);
+    beingsPerNode.set(id, (beingsPerNode.get(id) || 0) + 1);
+  }
   const occupied = new Map();
   return [...beings.values()].map(({ key, anchor: task, count }) => {
     const nodeId = taskCrewNodeId(task, model);
@@ -3123,9 +3128,12 @@ function flowCrewSvg(model, selectedTask, state) {
     const bubble = selected ? crewActivityBubbleSvg(liveTask, x + CREW_ON_STATION_SIZE - 2, y + 2, state, {
       name: member ? member.name : (labels[state?.lang]?.noCrewMemberShort || labels.de.noCrewMemberShort),
       status,
+      // With neighbours on the same station the tag sits above the head, so
+      // it never covers another member.
+      above: (beingsPerNode.get(taskCrewNodeId(task, model)) || 0) > 1 ? { centerX: x + CREW_ON_STATION_SIZE / 2, top: y } : null,
     }) : '';
     const countBadge = count > 1 ? `
-        <g class="ctox-flow-creature-count" transform="translate(${x + CREW_ON_STATION_SIZE - 12} ${y + CREW_ON_STATION_SIZE - 16})" aria-hidden="true">
+        <g class="ctox-flow-creature-count" transform="translate(${x + CREW_ON_STATION_SIZE - 16} ${y + CREW_ON_STATION_SIZE - 16})" aria-hidden="true">
           <rect x="0" y="0" width="${count > 9 ? 26 : 22}" height="16" rx="8"></rect>
           <text x="${count > 9 ? 13 : 11}" y="12">×${count}</text>
         </g>` : '';
@@ -3162,7 +3170,9 @@ function crewProgressForCreature(progress) {
 }
 
 const CREW_ON_STATION_SIZE = 44;
-const CREW_ON_STATION_SPREAD = [0, 34, -34, 68];
+// Neighbours on one station never touch: 52 px pitch for 44 px creatures
+// leaves room for the count badge between them.
+const CREW_ON_STATION_SPREAD = [0, 52, -52, 104, -104];
 
 // What the creature on the map is doing right now, from durable telemetry
 // only: the plan step it is on and whether its last turn was thinking, a tool
@@ -3192,13 +3202,23 @@ const CREW_TAG_STATUS = {
   en: { running: 'working', failed: 'failed', success: 'done', queued: 'waiting' },
 };
 
-function crewActivityBubbleSvg(task, x, y, state, { name = '', status = 'running' } = {}) {
+function crewActivityBubbleSvg(task, x, y, state, { name = '', status = 'running', above = null } = {}) {
   const lang = state?.lang === 'en' ? 'en' : 'de';
   const activity = status === 'running' ? crewActivityBubbleText(task, state) : '';
   const doing = activity || CREW_TAG_STATUS[lang][status] || CREW_TAG_STATUS[lang].queued;
   const text = clip([name, doing].filter(Boolean).join(' · '), 48);
   if (!text) return '';
   const width = Math.min(280, 18 + text.length * 6.3);
+  if (above) {
+    // Centred over the head, pointing down at it, kept inside the map.
+    const left = Math.max(8, Math.min(HARNESS_FLOW_WIDTH - width - 8, above.centerX - width / 2));
+    const top = above.top - 30;
+    return `
+    <g class="ctox-flow-crew-bubble is-above" transform="translate(${left} ${top})" aria-hidden="true">
+      <rect x="0" y="0" width="${width}" height="24" rx="12"></rect><path d="M ${above.centerX - left - 5} 23 L ${above.centerX - left} 29 L ${above.centerX - left + 5} 23 Z"></path><text x="10" y="16">${escapeHtml(text)}</text>
+    </g>
+  `;
+  }
   // Near the right edge the bubble opens to the creature's left instead.
   const left = x + width + 16 > HARNESS_FLOW_WIDTH;
   const originX = left ? x - CREW_ON_STATION_SIZE + 4 : x;
