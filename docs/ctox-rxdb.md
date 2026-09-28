@@ -992,7 +992,9 @@ documents is `runtime/business-os-rxdb.sqlite3` as above.
   - On an inbound offer, Rust parses the SDP, applies it to a newly built,
     unregistered responder and sends a valid answer before retiring the
     existing generation. A rejected SDP or answer-send failure therefore
-    leaves the old open DataChannel intact. The native peer
+    leaves the old open DataChannel intact. Candidate callbacks are staged
+    until the new generation is registered; a candidate that reaches a
+    terminal state before that handoff cannot replace the old peer. The native peer
     remembers a bounded set of answered SDP session origins per signaling peer
     and ignores delayed duplicate offers. A genuinely new browser
     PeerConnection replaces the old responder even when its DataChannel is
