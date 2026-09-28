@@ -3606,3 +3606,30 @@ test('crew workload and app presence count only work a worker really executes', 
   assert.equal(presence.has('tickets'), false);
   assert.equal(crewWorkloadFromTasks(tasks, crewLiveKeys({ service_running: false, active_task_ids: ['queue:system::a'] })).size, 0, 'a stopped service runs nothing');
 });
+
+// Owner 28.09.2026: clicking Lumi in the crew bar opened a chat with "Crew".
+// A member seat opens a conversation with that member; the owner's choice
+// reaches the router with the first task, follow-ups stay by continuity.
+test('a member seat opens and reuses a conversation with that member', async () => {
+  const { memberChatOpenDetail, latestOpenMemberChatToday, chatAddressedMemberId } = await import('./business-chat.js');
+  const lumi = { id: 'crew-lumi', name: 'Lumi', shape: 'triangle', color: '#e97255' };
+  const detail = memberChatOpenDetail(lumi);
+  assert.equal(detail.member_chat, true);
+  assert.equal(detail.crew_member_id, 'crew-lumi');
+  assert.equal(detail.crew_identity.name, 'Lumi');
+  assert.equal('title' in detail, false, 'reopening must not rename an existing conversation');
+  const now = Date.now();
+  const state = { chats: [
+    { id: 'old', crew_member_id: 'crew-lumi', open: true, createdAt: now - 3 * 86_400_000, messages: [] },
+    { id: 'pico', crew_member_id: 'crew-pico', open: true, createdAt: now, messages: [] },
+    { id: 'closed', crew_member_id: 'crew-lumi', open: false, createdAt: now, messages: [] },
+    { id: 'today', crew_member_id: 'crew-lumi', open: true, createdAt: now - 1000, messages: [] },
+  ] };
+  assert.equal(latestOpenMemberChatToday(state, 'crew-lumi')?.id, 'today', 'today, open, this member');
+  assert.equal(latestOpenMemberChatToday(state, 'crew-nori'), null);
+  assert.equal(latestOpenMemberChatToday(state, ''), null);
+  assert.equal(chatAddressedMemberId({ crew_member_id: 'crew-lumi', messages: [] }), 'crew-lumi', 'first task names the member');
+  assert.equal(chatAddressedMemberId({ crew_member_id: 'crew-lumi', lastTrackingId: 'cmd_1', messages: [] }), '', 'follow-ups stay by continuity');
+  assert.equal(chatAddressedMemberId({ crew_member_id: 'crew-lumi', messages: [{ role: 'user', text: 'x', commandId: 'cmd_1' }] }), '');
+  assert.equal(chatAddressedMemberId({ messages: [] }), '', 'a chat with the whole crew names nobody');
+});
