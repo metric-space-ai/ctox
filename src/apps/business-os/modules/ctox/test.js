@@ -34,6 +34,7 @@ const {
   memberCreatureState,
   crewStripMarkup,
   crewWorkloadCounts,
+  crewTasksPopoverMarkup,
   memberIdentity,
   shouldShowCrewHome,
   taskCrewMember,
@@ -1301,6 +1302,38 @@ test('The crew bar gets the same per-member count as the map and the Arbeitet vi
     { id: 'e', taskId: 'e', title: 'e', status: 'running', routeStatus: 'running' },
   ] });
   assert.deepEqual(counts, { 'crew:tavi': 2, 'crew:milo': 1 });
+});
+
+test('A leased task nobody executes shows its crew waiting, not working', () => {
+  // thesen 28.09.2026: queue rows "running", 0 active workers, up to 134 attempts.
+  const run = (id, member) => ({ id, taskId: id, title: id, status: 'running', routeStatus: 'running', crewMemberId: member, executionProgress: { phase: 'working', steps: [] } });
+  const tasks = [run('queue:system::live', 'crew:tavi'), run('queue:system::stuck', 'crew:milo')];
+  const model = { activeTask: null, activeNodeId: 'running', tasks, nodeMap: new Map([['running', { id: 'running', x: 400, y: 160 }]]) };
+  const truth = { service_running: true, active_task_ids: ['queue:system::live'] };
+  assert.deepEqual(crewWorkloadCounts(model, { harnessStatus: truth }), { 'crew:tavi': 1 });
+  assert.deepEqual(crewWorkloadCounts(model, { harnessStatus: null }), { 'crew:tavi': 1, 'crew:milo': 1 }, 'unknown truth trusts the queue');
+  const html = flowCrewSvg(model, tasks[1], { lang: 'de', crewMembers: crewFixture, harnessStatus: truth });
+  assert.match(html, /Milo · wartet/, 'the member of the stuck task waits');
+  assert.match(html, /data-task-id="queue:system::live"[\s\S]*?is-working/, 'the executing member works');
+  const row = taskCardMarkup(tasks[1], { lang: 'de', crewMembers: crewFixture, harnessStatus: truth, selectedTaskId: '', pinnedTaskIds: new Set(), model: { tasks: [] } });
+  assert.match(row, /data-crew-ref-mode="sleeping"/);
+});
+
+test('Clicking a being with ×N lists its tasks, the one it stands at first', () => {
+  const run = (id, member, at) => ({ id, taskId: id, title: `Task ${id}`, status: 'running', routeStatus: 'running', crewMemberId: member, updatedAtMs: at, executionProgress: { phase: 'working', steps: [] } });
+  const tasks = [run('t1', 'crew:tavi', 300), run('t2', 'crew:tavi', 200), run('t3', 'crew:tavi', 100)];
+  const model = { activeTask: null, activeNodeId: 'running', tasks, nodeMap: new Map([['running', { id: 'running', x: 400, y: 160, label: 'Arbeitet' }]]) };
+  const state = { lang: 'de', crewMembers: crewFixture, model, selectedTaskId: 't2' };
+  const html = flowCrewSvg(model, tasks[1], state);
+  assert.match(html, /data-task-id="t2"[^>]*\sdata-crew-tasks="t2\|t1\|t3" aria-haspopup="menu"/, 'anchor first, then the rest');
+  const pop = crewTasksPopoverMarkup(state, ['t2', 't1', 't3']);
+  assert.equal((pop.match(/data-crew-pop-task=/g) || []).length, 3);
+  assert.match(pop, /<strong>Tavi<\/strong><small>3 Aufgaben<\/small>/);
+  assert.match(pop, /class="ctox-crew-pop-task is-current" data-crew-pop-task="t2"/);
+  assert.match(pop, /Arbeitet/, 'each row names its station');
+  assert.doesNotMatch(pop, /ctox-crew-creature/, 'rows show portraits, never another body');
+  const single = flowCrewSvg({ ...model, tasks: [tasks[0]] }, tasks[0], state);
+  assert.doesNotMatch(single, /data-crew-tasks=/, 'one task needs no list');
 });
 
 test('Crew at home shows every active member with its state, only while nothing runs', () => {

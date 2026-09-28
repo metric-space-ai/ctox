@@ -294,6 +294,7 @@
 }
 
 .ctox-flow-well {
+  position: relative;
   min-height: 0;
   overflow: auto;
   border-top: 1px solid var(--line);
@@ -2473,3 +2474,47 @@
 }
 .ctox-flow-node-g.is-crew-hier .ctox-flow-node-phase,
 .ctox-flow-node-g.is-crew-hier .ctox-flow-node-title { fill: var(--accent); }
+
+/* The tasks of one member on the map (its ×N), opened by clicking the being. */
+.ctox-crew-tasks-pop {
+  position: absolute;
+  z-index: 8;
+  width: 300px;
+  max-height: 300px;
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--elev-edge, var(--line));
+  border-radius: calc(var(--control-radius) + 4px);
+  background: var(--elev-float-2, var(--surface-2));
+  box-shadow: var(--elev-float-shadow, 0 12px 32px rgb(0 0 0 / 0.45));
+}
+.ctox-crew-tasks-pop > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 8px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 4px;
+}
+.ctox-crew-tasks-pop > header small { margin-left: auto; color: var(--muted); font-size: var(--fs-meta); }
+.ctox-crew-pop-task {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px;
+  border: 0;
+  border-radius: var(--control-radius);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.ctox-crew-pop-task:hover,
+.ctox-crew-pop-task:focus-visible { background: color-mix(in srgb, var(--accent) 12%, transparent); outline: none; }
+.ctox-crew-pop-task.is-current { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.ctox-crew-pop-task span { display: grid; min-width: 0; }
+.ctox-crew-pop-task strong,
+.ctox-crew-pop-task small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctox-crew-pop-task small { color: var(--muted); font-size: var(--fs-meta); }
