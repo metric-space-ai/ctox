@@ -533,6 +533,9 @@ fn validate_lead_contacts(root: &Path, record_id: &str) -> anyhow::Result<usize>
         return Ok(0);
     };
     let changed = apply_email_verdicts(&mut lead, &verdicts);
+    if changed > 0 {
+        super::person_research_gap_closure::complete_after_native_email_validation(&mut lead);
+    }
     let now = super::person_research_command::now_ms();
     // The daemon's stderr goes nowhere on a managed tenant, so every pass
     // leaves its account on the lead itself.
@@ -844,6 +847,53 @@ mod tests {
         assert_eq!(
             restore_native_email_verdicts(&mut forged_receipt, &previous),
             0
+        );
+    }
+
+    #[test]
+    fn native_verdict_completes_only_a_receipted_final_email_gap() {
+        let mut lead = json!({
+            "contacts": [{"person_key": "p1", "person_email": "a@weicon.de"}],
+            "research_status": "needs_review",
+            "payload": {
+                "native_research_terminal_status": "needs_review",
+                "native_research_requested_fields": ["firma_name", "person_email_validation"],
+                "native_research_rejections_count": 0
+            },
+            "field_status": {
+                "firma_name": {"status": "verified", "value": "Weicon"},
+                "person_email_validation": {"status": "action_required"}
+            }
+        });
+        apply_email_verdicts(&mut lead, &[verdict("a@weicon.de", true)]);
+        assert!(
+            super::super::person_research_gap_closure::complete_after_native_email_validation(
+                &mut lead
+            )
+        );
+        assert_eq!(lead["research_status"], "completed");
+
+        let mut another_open_field = lead.clone();
+        another_open_field["research_status"] = json!("needs_review");
+        another_open_field["payload"]["native_research_terminal_status"] = json!("needs_review");
+        another_open_field["field_status"]["firma_name"] = json!({"status": "action_required"});
+        assert!(
+            !super::super::person_research_gap_closure::complete_after_native_email_validation(
+                &mut another_open_field
+            )
+        );
+
+        let mut older_lead = lead.clone();
+        older_lead["research_status"] = json!("needs_review");
+        older_lead["payload"]["native_research_terminal_status"] = json!("needs_review");
+        older_lead["payload"]
+            .as_object_mut()
+            .unwrap()
+            .remove("native_research_rejections_count");
+        assert!(
+            !super::super::person_research_gap_closure::complete_after_native_email_validation(
+                &mut older_lead
+            )
         );
     }
 

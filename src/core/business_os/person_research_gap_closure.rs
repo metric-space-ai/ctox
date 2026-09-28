@@ -1421,6 +1421,76 @@ fn research_field_is_answered(status: &Value) -> bool {
     )
 }
 
+/// The asynchronous native e-mail pass may resolve the final outstanding
+/// field after the research writeback has already set `needs_review`. Only a
+/// writeback that recorded its complete requested scope and zero rejections
+/// may be promoted; older leads without that receipt remain for review.
+pub(super) fn complete_after_native_email_validation(lead: &mut Value) -> bool {
+    if lead.get("research_status").and_then(Value::as_str) != Some("needs_review")
+        || lead
+            .pointer("/payload/native_research_terminal_status")
+            .and_then(Value::as_str)
+            != Some("needs_review")
+        || lead
+            .pointer("/payload/native_research_rejections_count")
+            .and_then(Value::as_u64)
+            != Some(0)
+    {
+        return false;
+    }
+    let Some(requested) = lead
+        .pointer("/payload/native_research_requested_fields")
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    if requested.is_empty() || requested.iter().any(|field| field.as_str().is_none()) {
+        return false;
+    }
+    let requested = requested
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    let unanswered = requested
+        .iter()
+        .any(|field| match open_persons_for_field(lead, field) {
+            Some(open) => !open.is_empty(),
+            None => !lead["field_status"]
+                .get(*field)
+                .is_some_and(research_field_is_answered),
+        });
+    let needs_review = unanswered
+        || lead["person_field_status"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .flat_map(|(_, fields)| fields.as_object().into_iter().flatten())
+            .any(|(field, status)| {
+                requested.contains(&field.as_str())
+                    && matches!(
+                        status.get("status").and_then(Value::as_str),
+                        Some("no_match" | "action_required")
+                    )
+            })
+        || lead["field_status"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .any(|(field, status)| {
+                requested.contains(&field.as_str())
+                    && matches!(
+                        status.get("status").and_then(Value::as_str),
+                        Some("no_match" | "action_required")
+                    )
+            });
+    if needs_review {
+        return false;
+    }
+    lead["research_status"] = Value::String("completed".to_string());
+    lead["payload"]["native_research_terminal_status"] = Value::String("completed".to_string());
+    true
+}
+
 fn is_filler_field_status(status: &Value) -> bool {
     let unsupported = status
         .get("status")
@@ -1776,6 +1846,8 @@ pub(super) fn handle_research_writeback(
     lead["research_status"] = Value::String(terminal_lead_status.to_string());
     lead["payload"]["native_research_terminal_status"] =
         Value::String(terminal_lead_status.to_string());
+    lead["payload"]["native_research_requested_fields"] = serde_json::json!(requested_fields);
+    lead["payload"]["native_research_rejections_count"] = Value::from(rejections.len() as u64);
     lead["payload"]["research_finished_at_ms"] = Value::Number(now.into());
     lead["research_error"] = Value::Null;
     lead["research_updated_at_ms"] = Value::Number(now.into());
