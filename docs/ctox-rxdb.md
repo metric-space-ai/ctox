@@ -660,6 +660,16 @@ fields; it is not a server revision or new transport.
 
 ### 3.2 Shell integration
 
+The native `ctoxProtocol` reply includes a wall-clock sample. The browser may
+use it as an HLC time anchor only at the room handshake that requested it: a
+round trip over 10 seconds, or a wall-clock jump during that round trip, makes
+the sample inconclusive. A fresh sample uses the midpoint of the bounded
+round trip. Later collection catch-up reuses the negotiated protocol for
+schema/checkpoint work but must not compare its old timestamp with the current
+browser clock. An inconclusive sample retains the previous anchor; it neither
+proves skew nor resolves existing conflicts. Conflict resolution still requires
+authoritative review of each local and native revision.
+
 **`shared/db.js` — `createBusinessDb({ name })`.** Imports the bundle through
 the canonical `shared/rxdb-runtime.js` loader and its single versioned URL,
 runs an IndexedDB preflight probe, then

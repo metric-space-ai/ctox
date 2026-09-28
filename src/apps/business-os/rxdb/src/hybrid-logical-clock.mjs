@@ -4,6 +4,8 @@ let nativeClockOffsetMs = 0;
 let nativeClockObservedAtMs = null;
 let clockSkewDetected = false;
 const CLOCK_SKEW_LIMIT_MS = 5 * 60 * 1000;
+const MAX_NATIVE_CLOCK_SAMPLE_RTT_MS = 10_000;
+const MAX_CLOCK_SAMPLE_WALL_DRIFT_MS = 2_000;
 
 export function setHybridLogicalClockTimeAnchor(nativeTimeMs, observedAtMs = Date.now()) {
   if (!Number.isFinite(nativeTimeMs) || !Number.isFinite(observedAtMs)) return hybridLogicalClockStatus();
@@ -11,6 +13,20 @@ export function setHybridLogicalClockTimeAnchor(nativeTimeMs, observedAtMs = Dat
   nativeClockObservedAtMs = Math.trunc(observedAtMs);
   clockSkewDetected = Math.abs(nativeClockOffsetMs) > CLOCK_SKEW_LIMIT_MS;
   return hybridLogicalClockStatus();
+}
+
+// A protocol timestamp is only a clock sample for the round trip that produced
+// it. Collection catch-up can reuse the same protocol payload minutes later.
+export function setHybridLogicalClockTimeAnchorFromRoundTrip(nativeTimeMs, startedAtMs, receivedAtMs, elapsedMs) {
+  const wallElapsedMs = receivedAtMs - startedAtMs;
+  if (!Number.isFinite(nativeTimeMs) || !Number.isFinite(startedAtMs)
+    || !Number.isFinite(receivedAtMs) || !Number.isFinite(elapsedMs)
+    || elapsedMs < 0 || elapsedMs > MAX_NATIVE_CLOCK_SAMPLE_RTT_MS
+    || wallElapsedMs < 0
+    || Math.abs(wallElapsedMs - elapsedMs) > MAX_CLOCK_SAMPLE_WALL_DRIFT_MS) {
+    return hybridLogicalClockStatus();
+  }
+  return setHybridLogicalClockTimeAnchor(nativeTimeMs, startedAtMs + elapsedMs / 2);
 }
 
 export function correctedHybridLogicalClockNowMs(nowMs = Date.now()) {

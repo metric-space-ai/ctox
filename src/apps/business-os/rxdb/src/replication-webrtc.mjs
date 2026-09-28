@@ -65,7 +65,7 @@ import {
   compareHybridLogicalClocks,
   hybridLogicalClockStatus,
   isFutureHybridLogicalClock,
-  setHybridLogicalClockTimeAnchor,
+  setHybridLogicalClockTimeAnchorFromRoundTrip,
 } from './hybrid-logical-clock.mjs';
 import { createV1_5StatusState, snapshotV1_5Status } from './v1_5_status.mjs';
 import { createBroadcastChannelBroker } from './multi-tab-broker.mjs';
@@ -934,6 +934,8 @@ class SharedRoomPeer {
     this.handshakeMetrics.protocolNegotiations += 1;
     const localProtocol = await this.peer.protocolPayload(peerId, [], representative.collection);
     if (!this.isPeerOpen(peerId)) return null;
+    const clockRequestStartedAtMs = Date.now();
+    const clockRequestStartedMonotonicMs = globalThis.performance?.now?.() ?? null;
     const remoteProtocol = await this.peer.request(
       peerId,
       'ctoxProtocol',
@@ -941,6 +943,10 @@ class SharedRoomPeer {
       SHARED_HANDSHAKE_TIMEOUT_MS,
       representative.collection,
     );
+    const clockResponseReceivedAtMs = Date.now();
+    const clockRequestElapsedMs = clockRequestStartedMonotonicMs === null
+      ? clockResponseReceivedAtMs - clockRequestStartedAtMs
+      : globalThis.performance.now() - clockRequestStartedMonotonicMs;
     const normalizedRemoteProtocol = normalizeRemoteProtocol(remoteProtocol);
     if (!this.isPeerOpen(peerId)) return null;
     // Startup is asymmetric: either side may have registered the complete
@@ -968,6 +974,14 @@ class SharedRoomPeer {
     if (normalizedRemoteProtocol?.peerSession?.role !== 'ctox_instance') {
       this.peer?.removeConnection?.(peerId, 'non-native-peer-role');
       return null;
+    }
+    if (Number.isFinite(normalizedRemoteProtocol.nativeTimeMs)) {
+      setHybridLogicalClockTimeAnchorFromRoundTrip(
+        normalizedRemoteProtocol.nativeTimeMs,
+        clockRequestStartedAtMs,
+        clockResponseReceivedAtMs,
+        clockRequestElapsedMs,
+      );
     }
     // Phase 3 schema-validation hardening: validate EACH collection's schema
     // hash individually under multiplex. On mismatch, surface the
@@ -1455,12 +1469,9 @@ class CtoxWebRtcReplicationState {
   async runPeerReady(peerId, normalizedRemoteProtocol, queryFetchCapable) {
     if (this.cancelled) return;
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
-    if (Number.isFinite(normalizedRemoteProtocol?.nativeTimeMs)) {
-      Object.assign(
-        this.demandStatus,
-        setHybridLogicalClockTimeAnchor(normalizedRemoteProtocol.nativeTimeMs, Date.now()),
-      );
-    }
+    // The shared handshake owns the time sample. This collection may catch up
+    // long after the native protocol response was produced.
+    Object.assign(this.demandStatus, hybridLogicalClockStatus());
     this.activeRemotePeerId = peerId;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
