@@ -124,6 +124,16 @@ unknown, while a valid array — including `[]` — is a known local selection.
 Startup has no initialization timestamp and performs no pin-cache or layout
 write for unknown state.
 
+The Desktop module's first paint reads its existing `desktop_layout` and
+`desktop_icons` documents from local IndexedDB without waiting for a native
+round trip or icon repair writes. Native layout reconciliation and missing-icon
+repair run after mount in the background. An unavailable or malformed native
+answer keeps the locally painted layout and never authorizes a layout seed;
+only an explicit native `null` may reach the existing insert-if-missing path.
+Unmounted desktops do not start further reconciliation writes. This makes a
+previously loaded desktop usable during a slow or offline reconnect, but does
+not by itself establish that the full tenant data set has converged.
+
 Authoritative reconciliation uses the existing collection lease and
 query-demand-loader with an opaque `requireRevision` hydration token. Query
 readiness means the negotiated peer has query-fetch capability and the actual

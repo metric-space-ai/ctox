@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { ensureDesktopLayoutWithAuthority } from './layout-authority.js?v=20260919-layout-boundary-v2';
+import { ensureDesktopLayoutWithAuthority, readLocalDesktopLayout } from './layout-authority.js?v=20260928-desktop-local-first-v1';
 
 const defaultLayout = () => ({
   wallpaper_url: '',
@@ -32,6 +32,30 @@ function collection(initial) {
   };
 }
 
+{
+  const saved = { id: 'layout', grid_cell_w: 180, taskbar_pins: ['documents'] };
+  const db = collection(saved);
+  const result = await readLocalDesktopLayout({
+    collection: db,
+    documentId: 'layout',
+    defaultLayout,
+  });
+  assert.deepEqual(result, saved);
+  assert.equal(db.calls.findOne, 1);
+  assert.deepEqual(db.calls.insert, []);
+}
+
+{
+  const db = collection();
+  const result = await readLocalDesktopLayout({
+    collection: db,
+    documentId: 'layout',
+    defaultLayout,
+  });
+  assert.deepEqual(result, defaultLayout());
+  assert.deepEqual(db.calls.insert, []);
+}
+
 await ensureDesktopLayoutWithAuthority({
   collection: null,
   documentId: 'layout',
@@ -58,19 +82,37 @@ await ensureDesktopLayoutWithAuthority({
 
 {
   const db = collection();
+  const saved = { id: 'layout', grid_cell_w: 180 };
   const result = await ensureDesktopLayoutWithAuthority({
     collection: db,
     documentId: 'layout',
     defaultLayout,
+    unknownLayout: () => saved,
     readNativeDocument: async () => {
       throw new Error('authority unavailable');
     },
     insertMissingSeed: async () => assert.fail('failed authority must not seed'),
     now: () => 42,
   });
-  assert.deepEqual(result, defaultLayout());
+  assert.deepEqual(result, saved);
   assert.equal(db.calls.insert.length, 0);
   assert.equal(db.calls.findOne, 0);
+}
+
+{
+  const db = collection();
+  const saved = { id: 'layout', grid_cell_w: 180 };
+  const result = await ensureDesktopLayoutWithAuthority({
+    collection: db,
+    documentId: 'layout',
+    defaultLayout,
+    unknownLayout: () => saved,
+    readNativeDocument: async () => null,
+    isCurrent: () => false,
+    insertMissingSeed: async () => assert.fail('unmounted desktop must not seed'),
+  });
+  assert.deepEqual(result, saved);
+  assert.deepEqual(db.calls.insert, []);
 }
 
 {
@@ -94,6 +136,7 @@ await ensureDesktopLayoutWithAuthority({
     collection: db,
     documentId: 'layout',
     defaultLayout,
+    unknownLayout: () => ({ grid_cell_w: 180 }),
     readNativeDocument: async () => null,
     insertMissingSeed: async (scopedDb, id, seed) => {
       assert.equal(scopedDb, db);
@@ -156,4 +199,16 @@ assert.match(
   desktopSource,
   /readNativeDocument: ctx\.readNativeCollectionDocument[\s\S]*readNativeCollectionDocument\('desktop_layout', LAYOUT_DOC_ID, \{ timeoutMs: 5000 \}\)/,
   'layout creation must be gated by the bounded native authority read',
+);
+const mountSource = desktopSource.slice(
+  desktopSource.indexOf('export async function mount(ctx)'),
+  desktopSource.indexOf('function wireSyncStatusWidget()'),
+);
+assert.ok(
+  mountSource.indexOf('await readLocalDesktopLayout(') < mountSource.indexOf('await renderIcons()'),
+  'first paint must use the locally saved layout',
+);
+assert.ok(
+  mountSource.indexOf('await renderIcons()') < mountSource.indexOf('const reconciliationTimer = setTimeout('),
+  'native layout reconciliation must not block the local first paint',
 );
