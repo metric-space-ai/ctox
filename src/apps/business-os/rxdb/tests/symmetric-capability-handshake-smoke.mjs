@@ -1,5 +1,7 @@
 import { replicationWebRtcTestInternals } from '../src/replication-webrtc.mjs';
 import { CtoxWebRtcNativePeer } from '../src/webrtc-native.mjs';
+import { hybridLogicalClockStatus, setHybridLogicalClockTimeAnchor } from '../src/hybrid-logical-clock.mjs';
+import { CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_RXDB_PROTOCOL } from '../src/protocol-contract.generated.mjs';
 import { webcrypto } from 'node:crypto';
 
 // Node 18 does not expose WebCrypto globally unless started with an opt-in
@@ -42,6 +44,42 @@ await assertRejects(
   handshakeError,
   'missing native authorization handshake must fail closed',
 );
+
+const observedAtMs = Date.now();
+setHybridLogicalClockTimeAnchor(observedAtMs + 60_000, observedAtMs, 'trusted-peer');
+const protocol = {
+  protocol: CTOX_RXDB_PROTOCOL,
+  capabilities: [...CTOX_REQUIRED_PROTOCOL_CAPABILITIES],
+  collection: { name: 'records', schemaVersion: 1, schemaHash: 'test-hash' },
+};
+const openConnection = () => ({
+  channel: { readyState: 'open' },
+  peer: { connectionState: 'connected' },
+});
+shared.representativeCollection = () => ({ collection: 'records' });
+shared.peer = {
+  connections: new Map([['native-1', openConnection()]]),
+  async protocolPayload() { return protocol; },
+  async request() {
+    return { ...protocol, peerSession: { role: 'ctox_instance' }, nativeTimeMs: observedAtMs - 600_000 };
+  },
+  async waitForRequest() { throw handshakeError; },
+};
+await assertRejects(
+  shared.negotiatePeer('native-1'),
+  handshakeError,
+  'a failed native authorization handshake must reject room negotiation',
+);
+assert(hybridLogicalClockStatus().nativeClockOffsetMs === 60_000,
+  'an unauthorized peer must not replace the existing clock anchor');
+
+shared.peer.waitForRequest = async () => {
+  shared.peer.connections.set('native-1', openConnection());
+};
+assert(await shared.negotiatePeer('native-1') === null,
+  'a connection replaced during authorization must not complete negotiation');
+assert(hybridLogicalClockStatus().nativeClockOffsetMs === 60_000,
+  'a replaced peer generation must not change the clock anchor');
 
 const peer = new CtoxWebRtcNativePeer({
   signalingUrl: 'wss://signaling.invalid',
