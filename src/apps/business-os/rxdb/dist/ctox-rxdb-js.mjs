@@ -4392,7 +4392,7 @@ var CtoxWebRtcNativePeer = class {
         maxFrames: MAX_PEER_SEND_QUEUE_FRAMES,
         maxBytes: MAX_PEER_SEND_QUEUE_BYTES
       });
-      this.removeConnection(connection.remotePeerId, "send-queue-budget-exceeded");
+      this.removeConnection(connection.remotePeerId, "send-queue-budget-exceeded", null, { expectedConnection: connection });
       return false;
     }
     queue[item.priority].push({
@@ -4431,15 +4431,16 @@ var CtoxWebRtcNativePeer = class {
         });
         if (item.inline) {
           await this.waitForSendBuffer(connection.channel, connection);
-          if (this.connections.get(connection.remotePeerId) !== connection || connection.channel?.readyState !== "open") {
-            this.removeConnection(connection.remotePeerId, "send-queue-channel-closed");
+          if (this.connections.get(connection.remotePeerId) !== connection) break;
+          if (connection.channel?.readyState !== "open") {
+            this.removeConnection(connection.remotePeerId, "send-queue-channel-closed", null, { expectedConnection: connection });
             break;
           }
           try {
             connection.channel.send(item.text);
             this.recordSentInlineFrame(item.payload, connection.channel);
           } catch (error) {
-            this.removeConnection(connection.remotePeerId, "send-queue-send-failed");
+            this.removeConnection(connection.remotePeerId, "send-queue-send-failed", null, { expectedConnection: connection });
             throw error;
           }
           continue;
@@ -4449,7 +4450,7 @@ var CtoxWebRtcNativePeer = class {
         } catch (error) {
           const peerClosed = isPeerClosedError(error);
           if (this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState !== "open") {
-            this.removeConnection(connection.remotePeerId, "frame-send-channel-closed");
+            this.removeConnection(connection.remotePeerId, "frame-send-channel-closed", null, { expectedConnection: connection });
           }
           this.events.emit("error", {
             code: peerClosed ? "ctox_webrtc_peer_closed" : "ctox_webrtc_frame_send_failed",
@@ -4649,6 +4650,10 @@ var CtoxWebRtcNativePeer = class {
       channel.addEventListener?.("bufferedamountlow", done, { once: true });
       timer = setTimeout(() => {
         cleanup();
+        if (connection && this.connections.get(connection.remotePeerId) !== connection) {
+          resolve();
+          return;
+        }
         this.recordTransportStatus({
           backpressureStallCount: this.transportStats.backpressureStallCount + 1,
           rejectedFrames: this.transportStats.rejectedFrames + 1
@@ -4663,7 +4668,7 @@ var CtoxWebRtcNativePeer = class {
             connection.remotePeerId,
             "send-buffer-stalled",
             error,
-            { reconnect: false }
+            { reconnect: false, expectedConnection: connection }
           );
         }
         reject(error);
@@ -4675,17 +4680,19 @@ var CtoxWebRtcNativePeer = class {
   // key; responses are still correlated by request `id`.
   request(remotePeerId, method, params = [], timeoutMs = 15e3, collection = null) {
     const id = `${this.options.clientId}|${Date.now()}|${this.requestCounter++}`;
+    const requestPeerId = String(remotePeerId || "");
+    const requestConnection = this.connections.get(requestPeerId) || null;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         const error = new Error(`Timed out waiting for WebRTC response ${method}`);
-        const peerId = String(remotePeerId || "");
+        const peerId = requestPeerId;
         const connection = this.connections.get(peerId);
-        if (connection) {
+        if (connection && connection === requestConnection) {
           this.recordConnectionEvent(connection, "request-timeout", { method });
           if (shouldRecycleConnectionAfterRequestTimeout(method)) {
             this.forceInitiatorPeers.add(peerId);
-            this.removeConnection(peerId, `request-timeout-${method}`);
+            this.removeConnection(peerId, `request-timeout-${method}`, null, { expectedConnection: connection });
           }
         }
         reject(error);
@@ -4988,7 +4995,7 @@ var CtoxWebRtcNativePeer = class {
       });
       this.events.emit("peer-state", { peerId: remotePeerId, state: "handshake-timeout" });
       this.forceInitiatorPeers.add(remotePeerId);
-      this.removeConnection(remotePeerId, "rtc-handshake-timeout");
+      this.removeConnection(remotePeerId, "rtc-handshake-timeout", null, { expectedConnection: connection });
     }, RTC_HANDSHAKE_TIMEOUT_MS);
     this.recordConnectionEvent(connection, "created", { state: peer.connectionState || "new" });
     peer.onicecandidate = (event) => {
@@ -5015,6 +5022,7 @@ var CtoxWebRtcNativePeer = class {
       });
     };
     peer.onconnectionstatechange = () => {
+      if (this.connections.get(remotePeerId) !== connection) return;
       const state = peer.connectionState;
       this.recordConnectionEvent(connection, "connection-state", { state });
       this.events.emit("peer-state", { peerId: remotePeerId, state });
@@ -5026,7 +5034,7 @@ var CtoxWebRtcNativePeer = class {
           const live = this.connections.get(remotePeerId);
           const liveState = live?.peer?.connectionState || "";
           if (live === connection && ["disconnected", "failed"].includes(liveState)) {
-            this.removeConnection(remotePeerId, "peer-disconnected-grace-expired");
+            this.removeConnection(remotePeerId, "peer-disconnected-grace-expired", null, { expectedConnection: connection });
           }
         }, ICE_DISCONNECTED_GRACE_MS));
         return;
@@ -5037,7 +5045,7 @@ var CtoxWebRtcNativePeer = class {
         this.disconnectedGraceTimers.delete(remotePeerId);
       }
       if (["closed", "failed"].includes(state)) {
-        this.removeConnection(remotePeerId, `peer-${state}`);
+        this.removeConnection(remotePeerId, `peer-${state}`, null, { expectedConnection: connection });
       } else if (state === "connected") {
         updateSelectedCandidatePair(connection).then(() => {
           this.recordConnectionEvent(connection, "selected-candidate-pair", {
@@ -5204,7 +5212,7 @@ var CtoxWebRtcNativePeer = class {
     channel.onclose = () => {
       if (!isCurrentChannel()) return;
       this.recordConnectionEvent(connection, "datachannel-close", { readyState: channel.readyState || "closed" });
-      this.removeConnection(connection.remotePeerId, "channel-close");
+      this.removeConnection(connection.remotePeerId, "channel-close", null, { expectedConnection: connection });
     };
   }
   enqueueInboundDataChannelFrame(connection, channel, payload) {
@@ -5751,13 +5759,14 @@ var CtoxWebRtcNativePeer = class {
     }
     connection.auxChannels.clear();
   }
-  removeConnection(remotePeerId, reason = "closed", pendingError = null, { reconnect = true } = {}) {
+  removeConnection(remotePeerId, reason = "closed", pendingError = null, { reconnect = true, expectedConnection = null } = {}) {
     const peerId = String(remotePeerId || "");
+    const connection = this.connections.get(peerId);
+    if (expectedConnection && connection !== expectedConnection) return;
     this.clearObservedRequestsForPeer(
       peerId,
       pendingError || createPeerClosedError(peerId, reason)
     );
-    const connection = this.connections.get(peerId);
     if (!connection) return;
     this.connections.delete(peerId);
     this.inboundRequests.cancel(connection.inboundRequestOwner);
