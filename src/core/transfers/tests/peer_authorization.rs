@@ -1,4 +1,4 @@
-use ctox_transfers::{DownloadRequest, PeerRangeSource, PeerSource, Store};
+use ctox_transfers::{DownloadRequest, PeerAccountBinding, PeerRangeSource, PeerSource, Store};
 use sha2::{Digest, Sha256};
 use std::{
     future::Future,
@@ -51,6 +51,7 @@ fn request(id: &str, body: &[u8]) -> DownloadRequest {
         id: id.into(),
         sources: vec![],
         peer_source: Some(PeerSource {
+            account_binding: None,
             instance_id: "instance".into(),
             public_key: "enrolled-key".into(),
             collection: "desktop_files".into(),
@@ -76,6 +77,55 @@ fn peer(request: DownloadRequest, body: &[u8], revoke_after_read: bool) -> Arc<S
         checks: Mutex::new(vec![]),
         reads: AtomicUsize::new(0),
     })
+}
+
+#[test]
+fn original_account_binding_survives_reopen_and_cannot_be_replaced() {
+    let temp = tempfile::tempdir().unwrap();
+    let original = PeerAccountBinding {
+        target_id: "enrolled-target".into(),
+        account_epoch: 7,
+        principal_sha256: "a".repeat(64),
+    };
+    let mut req = request("bound", b"account-bound content");
+    req.peer_source.as_mut().unwrap().account_binding = Some(original.clone());
+    store(&temp).enqueue(req.clone()).unwrap();
+    let reopened = store(&temp);
+    assert_eq!(reopened.get("bound").unwrap().request, req);
+    reopened.control("bound", "pause").unwrap();
+    reopened.control("bound", "resume").unwrap();
+    assert_eq!(reopened.get("bound").unwrap().request, req);
+    for binding in [
+        PeerAccountBinding {
+            target_id: "other-target".into(),
+            ..original.clone()
+        },
+        PeerAccountBinding {
+            account_epoch: 8,
+            ..original.clone()
+        },
+        PeerAccountBinding {
+            principal_sha256: "b".repeat(64),
+            ..original.clone()
+        },
+    ] {
+        let mut changed = req.clone();
+        changed.peer_source.as_mut().unwrap().account_binding = Some(binding);
+        assert!(reopened.enqueue(changed).is_err());
+        assert_eq!(reopened.get("bound").unwrap().request, req);
+    }
+    let mut invalid = req.clone();
+    invalid.id = "invalid".into();
+    invalid
+        .peer_source
+        .as_mut()
+        .unwrap()
+        .account_binding
+        .as_mut()
+        .unwrap()
+        .principal_sha256 = "not-a-digest".into();
+    assert!(reopened.enqueue(invalid).is_err());
+    assert!(reopened.get("invalid").is_err());
 }
 
 #[tokio::test]

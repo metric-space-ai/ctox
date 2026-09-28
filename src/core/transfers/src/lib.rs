@@ -21,7 +21,7 @@ use std::{
 use tokio::sync::watch;
 
 mod peer;
-pub use peer::{PeerRangeSource, PeerSource};
+pub use peer::{PeerAccountBinding, PeerRangeSource, PeerSource};
 
 pub const ENGINE_REVISION: &str = "aea4d55e3ce0bcd1b5dd9e4832e3888c070b9504";
 

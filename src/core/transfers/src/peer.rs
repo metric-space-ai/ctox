@@ -7,6 +7,39 @@ use std::{
 
 const RANGE_BYTES: u64 = 1024 * 1024;
 
+/// Original host enrollment/account snapshot, not a credential or permission.
+/// Native admission compares this with current authority on every attempt.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PeerAccountBinding {
+    pub target_id: String,
+    pub account_epoch: u64,
+    /// SHA-256 of the existing native principal's serialized contract, including
+    /// its authorization epoch and device. Avoids duplicating that wire schema.
+    pub principal_sha256: String,
+}
+
+impl PeerAccountBinding {
+    fn validate(&self) -> Result<()> {
+        ensure!(
+            !self.target_id.is_empty()
+                && self.target_id.len() <= 256
+                && self.target_id.trim() == self.target_id
+                && !self.target_id.chars().any(char::is_control),
+            "invalid enrolled target id"
+        );
+        ensure!(
+            self.principal_sha256.len() == 64
+                && self
+                    .principal_sha256
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "invalid enrolled principal digest"
+        );
+        Ok(())
+    }
+}
+
 /// Immutable source claims. The native resolver must independently authenticate
 /// this instance/key and apply the current file policy on its admitted session.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -16,6 +49,10 @@ pub struct PeerSource {
     pub public_key: String,
     pub collection: String,
     pub file_id: String,
+    /// Older requests decode for diagnosis, but native admission rejects an
+    /// absent binding. Never populate it from the current account on resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_binding: Option<PeerAccountBinding>,
 }
 impl PeerSource {
     pub(crate) fn validate(&self) -> Result<()> {
@@ -29,6 +66,9 @@ impl PeerSource {
                 !value.is_empty() && value.len() <= limit && !value.chars().any(char::is_control),
                 "invalid peer source identity"
             );
+        }
+        if let Some(binding) = &self.account_binding {
+            binding.validate()?;
         }
         Ok(())
     }

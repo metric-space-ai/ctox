@@ -62,7 +62,23 @@ The engine's `room.rs` uses multicast UDP discovery and HTTP with a shared room
 password, and offers path/size without a content digest. CTOX does not enable that
 listener or discovery. Existing CTOX `rxdb.file.fetch` already offers authorization,
 range requests, bounded chunks, cancellation and transport backpressure over WebRTC.
-Peer jobs will reuse that facility; signaling remains rendezvous/control.
+Peer jobs reuse that facility; signaling remains rendezvous/control.
+
+Native job creation captures the enrolled target ID, local account epoch and a
+SHA-256 fingerprint of the existing native principal contract (including device
+and authorization epoch) inside the immutable request. These are non-secret
+binding metadata, not credentials or grants. Resume never replaces that snapshot
+with a newly logged-in account. Legacy requests without a snapshot still decode
+for diagnosis, but the enrolled native adapter rejects them.
+
+The enrolled adapter checks current host enrollment/account, a fresh signed peer
+principal, and the existing remote file-fetch policy using an empty range before
+cache reuse and publication. Account state is checked again after the exchange.
+This implementation still needs the production daemon-owned session resolver and
+its service/command wiring; the per-IPC BusinessDataService cannot by itself keep
+a transfer alive after UI disconnect. The new account-binding changes and reopen
+regression are pending compilation/execution behind the shared resource gate;
+previous passing checks apply only to their recorded earlier revisions.
 
 Existing `business_os/workjet_transfer_git.rs` owns Git bundle/patch/untracked
 packing and apply. Its index extension preserves staged and unstaged changes
