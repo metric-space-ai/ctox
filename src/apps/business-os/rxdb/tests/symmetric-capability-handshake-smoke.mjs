@@ -149,6 +149,96 @@ try {
   globalThis.RTCPeerConnection = originalRtcPeerConnection;
 }
 
+const sendPeer = new CtoxWebRtcNativePeer({
+  signalingUrl: 'wss://signaling.invalid',
+  room: 'room-stale-send-buffer',
+});
+const queuedOldConnection = {
+  remotePeerId: 'native-1',
+  channel: { readyState: 'open', bufferedAmount: 0 },
+};
+const queuedNewConnection = { remotePeerId: 'native-1', channel: { readyState: 'open' } };
+sendPeer.connections.set('native-1', queuedOldConnection);
+const sendCloseEvents = [];
+sendPeer.on('peer-close', (event) => sendCloseEvents.push(event.detail));
+const originalWaitForSendBuffer = sendPeer.waitForSendBuffer.bind(sendPeer);
+let enteredSendBuffer;
+const sendBufferEntered = new Promise((resolve) => { enteredSendBuffer = resolve; });
+let releaseSendBuffer;
+sendPeer.waitForSendBuffer = () => {
+  enteredSendBuffer();
+  return new Promise((resolve) => { releaseSendBuffer = resolve; });
+};
+assert(sendPeer.enqueueSendFrame(queuedOldConnection, {
+  priority: 'normal', inline: true, text: '{}', payload: {},
+}), 'the old connection must start draining its queued frame');
+await sendBufferEntered;
+sendPeer.connections.set('native-1', queuedNewConnection);
+setHybridLogicalClockTimeAnchor(observedAtMs + 30_000, observedAtMs, 'queued-replacement');
+releaseSendBuffer();
+await new Promise((resolve) => setImmediate(resolve));
+assert(sendPeer.connections.get('native-1') === queuedNewConnection && sendCloseEvents.length === 0,
+  'a retired send queue must not remove the replacement after its buffer wait settles');
+assert(hybridLogicalClockStatus().nativeClockOffsetMs === 30_000,
+  'a retired send queue must preserve the replacement clock anchor');
+sendPeer.waitForSendBuffer = originalWaitForSendBuffer;
+
+const stalledOldConnection = {
+  remotePeerId: 'native-2',
+  channel: {
+    bufferedAmount: Number.MAX_SAFE_INTEGER,
+    bufferedAmountLowThreshold: 0,
+    addEventListener() {},
+    removeEventListener() {},
+  },
+};
+const stalledNewConnection = { remotePeerId: 'native-2' };
+sendPeer.connections.set('native-2', stalledOldConnection);
+const originalSetTimeout = globalThis.setTimeout;
+let fireStallTimeout;
+try {
+  globalThis.setTimeout = (callback) => {
+    fireStallTimeout = callback;
+    return 0;
+  };
+  const stalledWait = sendPeer.waitForSendBuffer(stalledOldConnection.channel, stalledOldConnection);
+  sendPeer.connections.set('native-2', stalledNewConnection);
+  fireStallTimeout();
+  await stalledWait;
+  assert(sendPeer.connections.get('native-2') === stalledNewConnection && sendCloseEvents.length === 0,
+    'a retired send-buffer timeout must not remove or announce the replacement');
+} finally {
+  globalThis.setTimeout = originalSetTimeout;
+}
+
+const requestPeer = new CtoxWebRtcNativePeer({
+  signalingUrl: 'wss://signaling.invalid',
+  room: 'room-stale-request-timeout',
+});
+const requestOldConnection = { remotePeerId: 'native-3' };
+const requestNewConnection = { remotePeerId: 'native-3' };
+requestPeer.connections.set('native-3', requestOldConnection);
+requestPeer.send = () => true;
+const requestCloseEvents = [];
+requestPeer.on('peer-close', (event) => requestCloseEvents.push(event.detail));
+let fireRequestTimeout;
+try {
+  globalThis.setTimeout = (callback) => {
+    fireRequestTimeout = callback;
+    return 0;
+  };
+  const oldRequest = requestPeer.request('native-3', 'ctoxProtocol', [], 1);
+  requestPeer.connections.set('native-3', requestNewConnection);
+  fireRequestTimeout();
+  await assertRejectsMessage(oldRequest, /Timed out waiting for WebRTC response ctoxProtocol/,
+    'the old request must time out');
+  assert(requestPeer.connections.get('native-3') === requestNewConnection
+    && requestCloseEvents.length === 0,
+  'a retired protocol request timeout must not recycle the replacement connection');
+} finally {
+  globalThis.setTimeout = originalSetTimeout;
+}
+
 console.log('ctox-rxdb symmetric capability handshake smoke OK');
 
 function assert(condition, message) {
@@ -160,6 +250,16 @@ async function assertRejects(promise, expected, message) {
     await promise;
   } catch (error) {
     assert(error === expected, `${message}: rejected with an unexpected error`);
+    return;
+  }
+  throw new Error(`${message}: promise resolved`);
+}
+
+async function assertRejectsMessage(promise, pattern, message) {
+  try {
+    await promise;
+  } catch (error) {
+    assert(pattern.test(String(error?.message || error)), `${message}: unexpected error`);
     return;
   }
   throw new Error(`${message}: promise resolved`);
