@@ -443,6 +443,13 @@ fn source_target_key(source: &Value) -> String {
     key.trim_matches('-').to_string()
 }
 
+fn source_wide_failure(run: &RegistryRun) -> bool {
+    !matches!(
+        registry_problem(run),
+        "beim letzten Abruf nicht erreichbar" | "letzter Abruf fehlgeschlagen"
+    )
+}
+
 fn registry_problem(run: &RegistryRun) -> &'static str {
     let text = format!("{} {}", run.status, run.detail).to_ascii_lowercase();
     if text.contains("customer is not active")
@@ -702,6 +709,15 @@ fn collect_digest(
         if let Some(run) = registry.get(&source_target_key(source)) {
             if run.at_ms > 0 {
                 if run_succeeded(&run.status) {
+                    continue;
+                }
+                // A recent success proves the source works; a later failure of
+                // one company (not found, timeout) does not break it. Only a
+                // failure of the whole source (account, access, block, page
+                // layout) outranks that success.
+                let recently_ok =
+                    run.last_ok_ms > 0 && now_ms - run.last_ok_ms <= SOURCE_TEST_FRESH_MS;
+                if recently_ok && !source_wide_failure(run) {
                     continue;
                 }
                 if now_ms - run.at_ms > SOURCE_TEST_FRESH_MS {
@@ -1760,6 +1776,7 @@ mod tests {
             json!({"id": "linkedin.com", "label": "LinkedIn", "enabled": true}),
             json!({"id": "handelsregister.de", "label": "Handelsregister", "enabled": true}),
             json!({"id": "google.com", "label": "Google", "enabled": true}),
+            json!({"id": "northdata.de", "label": "North Data", "enabled": true}),
         ];
         // Every app test failed and is older than three days.
         let adapters = sources
@@ -1797,6 +1814,16 @@ mod tests {
                 last_ok_ms: now - 9 * hour,
             },
         );
+        // One company was not reachable after a successful call: the source works.
+        registry.insert(
+            "northdata-de".to_string(),
+            RegistryRun {
+                status: "temporary_unreachable".into(),
+                at_ms: now - 2 * hour,
+                detail: "timeout for one company".into(),
+                last_ok_ms: now - 5 * hour,
+            },
+        );
         let report = build_report(
             &[],
             &sources,
@@ -1809,6 +1836,11 @@ mod tests {
         assert!(
             !report.body.contains("Bundesanzeiger"),
             "a successful run is no blocker:\n{}",
+            report.body
+        );
+        assert!(
+            !report.body.contains("North Data"),
+            "a single failed company after a recent success is no blocker:\n{}",
             report.body
         );
         assert!(report
