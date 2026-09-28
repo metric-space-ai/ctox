@@ -573,7 +573,6 @@ fn reconcile_receipted_email_status(lead: &mut Value) -> usize {
     if matches.is_empty() {
         return 0;
     }
-    let all_addresses_bound = matches.len() == address_count;
     for (index, person_key, email, valid, run_id) in &matches {
         let status = json!({
             "status": "verified",
@@ -611,13 +610,64 @@ fn reconcile_receipted_email_status(lead: &mut Value) -> usize {
         }
         lead["person_field_status"][person_key]["person_email_validation"] = status;
     }
-    if all_addresses_bound {
-        let best = matches
-            .iter()
-            .find(|(_, _, _, valid, _)| *valid)
-            .unwrap_or(&matches[0]);
+    // Count every current address, including an already-verified contact that
+    // did not need reconstruction in this pass. A scalar verdict by itself is
+    // insufficient: both statuses must still agree with its native receipt.
+    let bound = lead["contacts"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|contact| {
+            let email = contact_email(contact)?;
+            let person_key = contact.get("person_key")?.as_str()?;
+            let valid = match contact.get("person_email_validation")?.as_str()? {
+                "valid" => true,
+                "invalid" => false,
+                _ => return None,
+            };
+            let receipts = checked
+                .iter()
+                .filter(|entry| entry.get("email").and_then(Value::as_str) == Some(email.as_str()))
+                .collect::<Vec<_>>();
+            if receipts.len() != 1
+                || receipts[0].get("valid").and_then(Value::as_bool) != Some(valid)
+            {
+                return None;
+            }
+            let run_id = receipts[0].get("run_id").and_then(Value::as_str)?;
+            let canonical = lead
+                .get("person_field_status")?
+                .get(person_key)?
+                .get("person_email_validation")?;
+            let projected = contact
+                .get("field_status")?
+                .get("person_email_validation")?;
+            if [canonical, projected].into_iter().any(|status| {
+                status.get("status").and_then(Value::as_str) != Some("verified")
+                    || !matches!(
+                        status.get("via").and_then(Value::as_str),
+                        Some("native_email_validation" | "native_email_validation_receipt")
+                    )
+                    || status.get("person_key").and_then(Value::as_str) != Some(person_key)
+                    || status.get("run_id").and_then(Value::as_str) != Some(run_id)
+                    || status.get("value").and_then(Value::as_str)
+                        != Some(if valid { "valid" } else { "invalid" })
+                    || status
+                        .get("validated_email")
+                        .and_then(Value::as_str)
+                        .and_then(normalize_email)
+                        .as_deref()
+                        != Some(email.as_str())
+            }) {
+                return None;
+            }
+            Some((person_key.to_string(), valid))
+        })
+        .collect::<Vec<_>>();
+    if bound.len() == address_count {
+        let best = bound.iter().find(|(_, valid)| *valid).unwrap_or(&bound[0]);
         lead["field_status"]["person_email_validation"] =
-            lead["person_field_status"][&best.1]["person_email_validation"].clone();
+            lead["person_field_status"][&best.0]["person_email_validation"].clone();
     }
     matches.len()
 }
@@ -1289,6 +1339,35 @@ mod tests {
         assert_eq!(repaired["research_status"], "needs_review");
         assert_eq!(repaired["payload"], legacy["payload"]);
         assert_eq!(reconcile_receipted_email_status(&mut repaired), 0);
+
+        let mut one_already_bound = legacy.clone();
+        let first_status = repaired["person_field_status"]["sellify-person-41504"]
+            ["person_email_validation"]
+            .clone();
+        one_already_bound["person_field_status"] = json!({
+            "sellify-person-41504": {"person_email_validation": first_status}
+        });
+        one_already_bound["contacts"][0]["field_status"]["person_email_validation"] =
+            first_status.clone();
+        assert_eq!(reconcile_receipted_email_status(&mut one_already_bound), 1);
+        assert_eq!(
+            one_already_bound["field_status"]["person_email_validation"]["status"],
+            "verified"
+        );
+        assert_eq!(one_already_bound["research_status"], "needs_review");
+
+        let mut unbound_existing = legacy.clone();
+        let mut forged_status = first_status;
+        forged_status["run_id"] = json!("scrape_run-other");
+        unbound_existing["person_field_status"] = json!({
+            "sellify-person-41504": {"person_email_validation": forged_status}
+        });
+        unbound_existing["contacts"][0]["field_status"]["person_email_validation"] = forged_status;
+        assert_eq!(reconcile_receipted_email_status(&mut unbound_existing), 1);
+        assert_eq!(
+            unbound_existing["field_status"]["person_email_validation"]["status"],
+            "action_required"
+        );
 
         let mut changed_email = legacy.clone();
         changed_email["contacts"][1]["person_email"] = json!("new@biogen.com");
