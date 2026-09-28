@@ -40,3 +40,9 @@ Der Finalisierungsfehler erhöht `failure_attempt_count` nicht, und es gibt kein
 ## Was die Crew-UX dazu geändert hat
 
 Ab Shell v418 zeigen Crew-App, Crew-Leiste und die Präsenz an den App-Symbolen nur noch Tasks als „arbeitet“, die ein Worker gerade wirklich ausführt. Grundlage ist `ctox_harness_status.active_task_ids`. Die Schleife selbst bleibt beim Owner.
+
+## Stand 13:15 UTC (laut Crew-Thread, von der Crew-UX nicht selbst gemessen)
+
+- Die Schleife ist gestoppt. Der Owner hat alle sechs Tasks nach Sicherung ihrer Zustände um 13:05 UTC auf `blocked` gesetzt. Writebacks waren keine zu retten.
+- Der widersprüchliche Sellify-Prompt ist im Quellcode korrigiert. Wegen des laufenden THESEN-P0-Freezes (Importverlust) ist er noch nicht ausgerollt.
+- Der dauerhafte Fix liegt in [PR #222](https://github.com/metric-space-ai/ctox/pull/222) und im Integrations-PR [#223](https://github.com/metric-space-ai/ctox/pull/223): `fail_incomplete_plan_for_attempt` beendet einen deterministischen Planabschluss-Fehler, statt den Task neu einzureihen. Die Crew-UX baut keinen zweiten Deckel, sonst kollidieren beide in denselben Dateien.

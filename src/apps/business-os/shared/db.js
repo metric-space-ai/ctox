@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260928-shell-v2-warmstart-hlc-ack-journal-r5';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260928-shell-v2-warmstart-hlc-ack-journal-crew-r6';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
