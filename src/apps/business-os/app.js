@@ -88,7 +88,6 @@ const LOGGED_OUT_KEY = 'ctox.businessOs.loggedOut';
 const ACCOUNT_PREFS_KEY = 'ctox.businessOs.accountPreferences';
 const PAIRING_CONFIG_KEY = 'ctox.businessOs.pairingConfig';
 const RXDB_BOOTSTRAP_VERSION_KEY = 'ctox.businessOs.rxdbBootstrapVersion';
-const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const TASKBAR_PIN_HYDRATION_TIMEOUT_MS = 20_000;
@@ -1326,10 +1325,12 @@ async function bootstrap() {
   setStartupProgress(30, shellText('bootSession'));
   setStartupProgress(50, shellText('bootDatastore'));
   const syncConfig = await loadSyncConfig();
-  await purgeLegacySharedBusinessDb(syncConfig);
-  await purgeSupersededBusinessDbGenerations(syncConfig).catch((error) => {
-    // Never fatal: a browser that refuses the cleanup must still boot.
-    console.warn('[business-os] superseded replica cleanup failed', error);
+  await reportLegacySharedBusinessDb(syncConfig).catch((error) => {
+    console.warn('[business-os] legacy replica inspection failed', error);
+  });
+  await reportSupersededBusinessDbGenerations(syncConfig).catch((error) => {
+    // Diagnostics must not make an authenticated browser unbootable.
+    console.warn('[business-os] superseded replica inspection failed', error);
   });
   await resetBusinessDataPlaneForBuildIfNeeded(syncConfig);
   await openBusinessDataPlane(syncConfig);
@@ -1478,7 +1479,7 @@ function businessDbName(syncConfig = state.syncConfig) {
     .join('_');
 }
 
-async function purgeLegacySharedBusinessDb(syncConfig) {
+async function reportLegacySharedBusinessDb(syncConfig) {
   const instanceId = String(syncConfig?.instance_id || syncConfig?.instanceId || 'default')
     .replace(/[^a-zA-Z0-9_-]+/g, '_')
     .slice(0, 80) || 'default';
@@ -1486,29 +1487,23 @@ async function purgeLegacySharedBusinessDb(syncConfig) {
     .replace(/[^a-zA-Z0-9_-]+/g, '_')
     .slice(0, 80) || 'local';
   const legacyName = [BUSINESS_DB_NAME, originId, instanceId].join('_');
-  const marker = `ctox.business-os.user-db-migration.v1:${legacyName}`;
-  if (localStorage.getItem(marker) === 'complete') return;
-  const { resetBusinessDb } = await loadBusinessDbModule();
-  let resetCompleted = true;
-  await resetBusinessDb({ name: legacyName }).catch((error) => {
-    console.warn('[business-os] legacy shared IndexedDB cleanup failed', error);
-    if (error?.code === 'recovery_export_required') {
-      resetCompleted = false;
-      return;
-    }
-    throw error;
-  });
-  if (resetCompleted) localStorage.setItem(marker, 'complete');
+  // This old replica may still contain the only copy of unacknowledged writes.
+  // Do not infer safety from a cached recovery-status marker or an export call.
+  if (typeof indexedDB?.databases !== 'function') return;
+  const entries = await indexedDB.databases();
+  if (entries.some((entry) => entry?.name === legacyName)) {
+    console.warn('[business-os] preserved legacy shared local replica for recovery', { name: legacyName });
+  }
 }
 
-// Advancing BUSINESS_DB_STORAGE_GENERATION deliberately opens a fresh replica
-// instead of migrating the old one. What it did NOT do was remove the replica
-// it walked away from, so every superseded generation stayed in IndexedDB
-// forever. Measured on a customer instance: 2059 MB of orphaned replicas, and a
-// tab that climbed to 3.2 GB of a 4 GB heap within 30 s and was killed by the
-// renderer before its first replication could finish — every click dead, no
-// error anywhere. A generation bump has to take its predecessor with it.
-async function purgeSupersededBusinessDbGenerations(syncConfig) {
+// A generation bump opens a new replica while the old primary and its recovery
+// journal may still hold writes that the server has not acknowledged. A
+// snapshot count is not a safe deletion gate: an old tab can write after the
+// count, and its versionchange handler can close the handle for deleteDatabase.
+// Preserve both databases until an explicit, verified recovery/retirement flow
+// exists. Old generations can consume substantial storage, so report them for
+// diagnosis instead of silently discarding potentially unique customer data.
+async function reportSupersededBusinessDbGenerations(syncConfig) {
   if (typeof indexedDB?.databases !== 'function') return;
   const currentName = businessDbName(syncConfig);
   const suffix = currentName.slice(
@@ -1530,27 +1525,12 @@ async function purgeSupersededBusinessDbGenerations(syncConfig) {
       && name.startsWith(prefix)
       && name.includes(suffix)
       && !name.includes(BUSINESS_DB_STORAGE_GENERATION)
+      && !name.endsWith('__recovery_v2')
     ));
   if (!superseded.length) return;
-  const removed = [];
-  for (const name of superseded) {
-    // Also take the paired recovery journal; it is scoped to the same replica.
-    for (const target of [name, `${name}__recovery_v2`]) {
-      const ok = await new Promise((resolve) => {
-        let settled = false;
-        const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
-        const request = indexedDB.deleteDatabase(target);
-        request.onsuccess = () => finish(true);
-        request.onerror = () => finish(false);
-        request.onblocked = () => finish(false);
-        setTimeout(() => finish(false), 8000);
-      });
-      if (ok) removed.push(target);
-    }
-  }
-  console.info('[business-os] removed superseded local replica generations', {
+  console.warn('[business-os] preserved superseded local replica generations for recovery', {
     current: currentName,
-    removed,
+    preserved: superseded,
   });
 }
 
@@ -6481,21 +6461,9 @@ function startModuleSync(mod) {
 
 async function recoverFromLocalRxDbSchemaDrift(error) {
   if (!isRxDbSchemaDriftError(error)) return false;
-  const repairToken = `${businessDbName()}:${RXDB_BOOTSTRAP_VERSION}`;
-  try {
-    if (sessionStorage.getItem(RXDB_SCHEMA_REPAIR_KEY) === repairToken) return false;
-    sessionStorage.setItem(RXDB_SCHEMA_REPAIR_KEY, repairToken);
-  } catch {}
-  console.warn('[business-os] local RxDB schema repair triggered; rebuilding browser cache', error);
-  setStatus('Lokale Datenverbindung wird neu aufgebaut');
-  try { await state.sync?.stop?.(); } catch (stopError) { console.warn('[business-os] sync stop before schema repair failed', stopError); }
-  try { await state.db?.close?.(); } catch (closeError) { console.warn('[business-os] db close before schema repair failed', closeError); }
-  try {
-    const { resetBusinessDb } = await loadBusinessDbModule();
-    await resetBusinessDb({ name: businessDbName() });
-  } catch (resetError) { console.warn('[business-os] RxDB schema repair reset failed', resetError); }
-  window.setTimeout(() => window.location.reload(), 250);
-  return true;
+  console.warn('[business-os] local RxDB schema drift; preserving local replica instead of resetting it', error);
+  setStatus('Lokale Datenbank benötigt eine sichere Wiederherstellung; Daten bleiben erhalten');
+  return false;
 }
 
 function isRxDbSchemaDriftError(error) {
@@ -14689,39 +14657,6 @@ function isManagedCollectionAuthorizationError(error) {
   );
 }
 
-function isLocalRxDbStartupError(error) {
-  const msg = String(error?.message || error || '');
-  return msg.includes('IndexedDB lock')
-    || msg.includes('IndexedDB open blocked')
-    || msg.includes('RxDB database creation timed out')
-    || msg.includes('RxDB database retry timed out')
-    || msg.includes('RxDB createRxDatabase timed out')
-    || msg.includes('RxDB database reset timed out');
-}
-
-async function resetLocalRxDbBeforeStartupRetry(error) {
-  if (!isLocalRxDbStartupError(error)) return false;
-  setStatus('Lokale Datenverbindung wird neu synchronisiert');
-  try { sessionStorage.removeItem(RXDB_SCHEMA_REPAIR_KEY); } catch {}
-  try { await state.sync?.stop?.(); } catch (stopError) { console.warn('[business-os] sync stop before startup retry reset failed', stopError); }
-  try { await state.db?.close?.(); } catch (closeError) { console.warn('[business-os] db close before startup retry reset failed', closeError); }
-  if (state.workspaceBrandingSubscription) {
-    try { state.workspaceBrandingSubscription.unsubscribe(); } catch (error) {}
-    state.workspaceBrandingSubscription = null;
-  }
-  state.workspaceBranding = applyWorkspaceBranding(null);
-  state.sync = null;
-  state.db = null;
-  try {
-    const { resetBusinessDb } = await loadBusinessDbModule();
-    await resetBusinessDb({ name: businessDbName() });
-    return true;
-  } catch (resetError) {
-    console.warn('[business-os] local RxDB startup retry reset failed', resetError);
-    return false;
-  }
-}
-
 function showStartupError(error) {
   // A fatal startup failure must also stop companions whose imports or schema work is pending.
   cancelBusinessCompanions();
@@ -14787,10 +14722,7 @@ function showStartupError(error) {
         window.ctoxBusinessOsDesktop.refreshManagedLaunch();
         return;
       }
-      retryBtn.textContent = isLocalRxDbStartupError(error)
-        ? 'Lokale Datenverbindung wird neu synchronisiert...'
-        : 'Wird neu geladen...';
-      await resetLocalRxDbBeforeStartupRetry(error);
+      retryBtn.textContent = 'Wird neu geladen...';
       window.location.reload();
     };
   }
