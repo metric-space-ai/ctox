@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad (Stand 28.09. 11:10 UTC): ABGESCHLOSSEN. Shell v417 (main `bba741173` + Board) live: welsch Slot beta.71 (aktiv 10:58, healthy), thesen Datei-Deploy v417. Nächste Idee (nicht begonnen): Klick auf ein Wesen mit ×N zeigt seine N Aufgaben.
+Kritischer Pfad (Stand 28.09. 13:20 UTC): v420 (Wesen per Maus klickbar) → Gates → main → beta.73 → welsch stage/activate → Bildabnahme welsch. thesen bleibt wegen des P0-Freezes (Importverlust) auf v418; v420 kommt erst nach Freigabe des Owners.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -59,16 +59,26 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 
 - **welsch beta.71 (28.09. 10:58–11:08 UTC, verifiziert)** — Run success 10:57:50, stage/activate (idle), healthy, v417. Replikation nach dem Neustart erst nach einigen Minuten oben (Anlauf). Bild: Geist bei „Wartet auf den Start“, nächster Schritt gestrichelt, Verlauf offen, Zoom im Kopf, alle vier Mitglieder lebend in der Leiste (keine Arbeit → keine Zähler). Eigene Tunnel beendet.
 
+- **Arbeit = echter Worker + ×N-Liste (28.09. 11:30–12:45 UTC, main `11bc5164f`, v418)** — Owner „dann kümmere dich um alles vollständig“. thesen-Messung: 6 Queue-Zeilen `running/leased` mit 23–135 Versuchen bei 0 aktiven Workern (Finalisierungsschleife, Feldbefund `docs/ctox-feldbefund-20260928-thesen-finalisierungsschleife.md`, übergeben Codex `01a0e804-7d12-…`). Crew-App, Leiste und App-Präsenz zählen jetzt nur Tasks, die laut `ctox_harness_status.active_task_ids` ein Worker ausführt; sonst wartet das Mitglied (Schild, Porträtaugen) und es gibt keine Last. ×N öffnet die Aufgabenliste des Mitglieds, Auswahl wählt den Task, Escape/außen schließt. Leistenplatz auf der Karte sagt das im Tooltip. thesen Datei-Deploy v418 12:44 (Backup `files-20260928T124454Z`, 10/10 Hashes, drift-geprüft). Bild thesen: Karte „Pico ×4 / Lumi ×2 schlafend“, Schild „Pico · wartet“, Last 0. Befund: die ×N-Liste öffnete per Maus NICHT (siehe v420).
+- **Hilfsdienste beim Upgrade (main `b44025952`, 13:21 UTC)** — Nebenbefund 07:20 (jami-daemon/mcp liefen seit Wochen mit gelöschtem Executable) → `restart_release_bound_units()` startet `ctox-business-os-web`, `ctox-business-os`, `cto-jami-daemon`, `ctox-business-os-mcp` beim Upgrade neu; Test liest `install.sh` und verlangt, dass jede installierte Unit mit dem ctox-Binary darin steht. gpu3 `crew-ux-aux-test-20260928` (Lock, NVMe, -j1): 3/3 ok, CARGO_EXIT 0 13:05:34Z, Target gelöscht, frei root 21G / nvme 22G. Terminal-Callback Greppy `01a0e824-f51d-…` + Crew `01a0e824-f644-…`. main ff auf `b44025952`, rustfmt ok. welsch-Hilfsdienste 12:26Z manuell neu gestartet; thesen bekommt es mit dem nächsten regulären Upgrade des Digest-Owners.
+- **beta.72 (v418) gebaut, überholt** — Run `36423712944` success 13:12; nicht ausgerollt, v420 folgt als beta.73.
+- **Finalisierungsschleife thesen gestoppt (Owner, 13:05 UTC, laut Crew-Thread)** — 6 Tasks `blocked`, Sellify-Prompt im Quellcode korrigiert, wegen P0-Freeze nicht ausgerollt. Dauerhafter Fix `fail_incomplete_plan_for_attempt` in PR #222/#223 beim Owner. Kein zweiter Deckel von der Crew-UX (Kollision).
+
 ## Working
 
-- (nichts) — kein eigener Lauf aktiv; gpu3-Lock frei, lokal kein Build, eigene Tunnel 18775/18776 beendet.
+- **v420 Klick-Fix** — `wireCanvasDrag` nahm Pointer-Capture auch bei pointerdown auf einem Wesen → pointerup/click gingen an die Leinwand (gemessen: `gotpointercapture:ctox-flow-canvas`, `click:ctox-flow-canvas`), Wesen nur per Tastatur bedienbar. Fix: Wesen aus dem Pan ausgenommen. Browser-Test `assertGroupedCreatureMouseClick` (eigene Seite, echter Mausklick auf ×3-Wesen → Liste mit 3 Zeilen → Auswahl wählt g2) rot ohne Fix (TimeoutError), grün mit. Stempel `20260928-shell-v2-crew-click-v420` (v419 hält PR #230 `crew-dock-v419`). Fertig = Gates grün bis auf bekannte Altbefunde, main, beta.73 success, welsch aktiv + Bild.
+
+- gpu3: kein Lauf (Lock frei). Eigene Tunnel 18775 (thesen) / 18776 (welsch) laufen bis zur Bildabnahme.
 
 ## To-Do
 
-- (leer)
+- **welsch beta.73** — Trigger: beta.73-Run success. `scratchpad/welsch-stage-beta73.sh` → `welsch-activate-beta73.sh` (verlangt idle), dann Bild: Mausklick auf ×N-Wesen öffnet Liste, Auswahl, Wesen läuft.
+- **thesen v420** — Trigger: Owner hebt P0-Freeze auf (Crew-Thread). Datei-Deploy mit Drift-Prüfung gegen `11bc5164f`-Hashes, kein Upgrade aktiv.
 
 ## Backlog / Owner
 
+- **OWNER (Digest/Crew): thesen signierter Slot statt src/ („Recovery !“ im Kopf)** — Vorschlag Codex `01a0e7fd-…`; Crew-Thread 12:32/12:59: wartet auf freies Wartungsfenster, nicht während der Import-Belegsicherung. Nicht einseitig.
+- **OWNER (PR #223): generischer Retry-Deckel für Finalisierungsfehler** — Crew-Thread 13:05: „weiterhin offen“; Fix-Kandidat `fail_incomplete_plan_for_attempt` in PR #222/#223.
 - **OWNER: Seelen-Achsen → Temperament?** — Seele ist nicht in der öffentlichen Projektion (`public_fields` ohne soul); Temperament kommt vorerst aus dem Genom-Seed.
 
 ## Environment traps
@@ -79,6 +89,8 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 - Shell-Slots übersteuern `src/` auf welsch (aktiv `0.1.46-beta.54`, desired `beta.57`); sichtbar nur über Release-Tag + stage/activate + Restart.
 - Stempel-Vertrag: APP_BUILD = `app.js?v=` in index.html = `MULTI_TAB_COORDINATOR_EPOCH`, Kennzeichen `-shell-v2-`; genau EIN `-shell-v2-`-Token.
 - Unversionierte `shared/*.js`-Importe (z. B. `./crew-renderer.js`) cached der Edge bis 4 h.
+- thesen unter P0-Freeze (28.09. ab ~12:30 UTC, Importverlust 139/133 Leads): keine Deploys/Neustarts auf thesen, bis der Owner im Crew-Thread freigibt.
+- Andere Sitzungen beanspruchen Stempelnummern (PR #230 = v419): vor jedem Stempel `git log origin/<offene Crew-PRs>` auf `-shell-v2-…-vNNN` prüfen.
 - Codex-CLI: `/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex queue --thread <id> --message …` (kein `codex` im PATH).
 - welsch-SSH nur über Control Plane: `cd ~/Documents/ctox-dev && npx tsx output/run-remote-welsch.ts <skript.sh>`.
 
@@ -88,6 +100,8 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 2. Baseline-Vergleich per `git checkout <rev> -- <dir>` überschreibt UNCOMMITTETE Arbeit im selben Baum (1×, 27.09., S4 verloren und neu eingespielt; stellte außerdem gelöschte Dateien als staged wieder her). Regel: vor jedem Baseline-Vergleich committen oder `git show <rev>:<pfad>` in eine Scratch-Datei / eigener `git worktree`.
 3. Eigene Wächterliste unvollständig: `assert-business-chat-layout.mjs` (ci.yml) nicht vor dem Push gefahren → Keyframe-Assertion auf main kurz rot (1×, 27.09., mit e9e1cf800 behoben). Regel: vor Push alle Business-OS-Schritte aus ci.yml + crew-ui-acceptance.yml + business-os-shell-release.yml lokal.
 4. Remote-Build-Brief ohne Platz-/Lock-Gate: Rust-Target auf der vollen gpu3-Systemplatte, Supervisor-Stopp nach 10 min (1×, 27.09.). Regel: jeder Heavy-Brief nennt Target-Pfad, `df`-Gate je Platte, Host-Lock und Compiler-Zahl.
+5. Abnahme-Klick mit `force:true` bzw. per `dispatchEvent` beweist keine Bedienbarkeit: v418 wurde mit „Liste öffnet“ bewertet, per Maus ging es nie (Pan-Capture). Regel: Bedien-Abnahmen mit `page.mouse.click` auf Koordinaten und Gegenprobe ohne Fix (1×, 28.09.).
+6. Baseline-Gegenprobe mit `git stash` nimmt auch den neuen Test mit weg → Probe beweist nichts. Regel: nur die Fix-Datei zurücksetzen (`git diff <datei> > patch; git checkout <datei>; …; git apply patch`) (1×, 28.09.).
 
 ## Altbefunde (nicht von dieser Kampagne)
 
