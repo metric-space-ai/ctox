@@ -6156,8 +6156,11 @@ mod tests {
             .handle_signal("browser-1".to_string(), offered.clone())
             .await
             .unwrap();
-        let replacement = handler.connection_for_peer("browser-1").unwrap();
-        assert_ne!(replacement.generation(), old.generation());
+        // The answer has been sent, but this synthetic offerer has not applied
+        // it yet. Registration is observable before the DataChannel opens;
+        // connection_for_peer intentionally exposes only open channels.
+        let replacement_generation = handler.peers.lock().get("browser-1").unwrap().generation;
+        assert_ne!(replacement_generation, old.generation());
         assert!(!handler
             .peer_capability_tokens
             .lock()
@@ -6184,11 +6187,8 @@ mod tests {
             .unwrap();
         remove_peer_generation(&handler, "browser-1", old.generation());
         assert_eq!(
-            handler
-                .connection_for_peer("browser-1")
-                .unwrap()
-                .generation(),
-            replacement.generation()
+            handler.peers.lock().get("browser-1").unwrap().generation,
+            replacement_generation
         );
         assert_eq!(
             handler
@@ -6222,8 +6222,8 @@ mod tests {
             .handle_signal("browser-1".to_string(), newer_signal)
             .await
             .unwrap();
-        let newest = handler.connection_for_peer("browser-1").unwrap();
-        assert_ne!(newest.generation(), replacement.generation());
+        let newest_generation = handler.peers.lock().get("browser-1").unwrap().generation;
+        assert_ne!(newest_generation, replacement_generation);
         handler
             .peer_capability_tokens
             .lock()
@@ -6236,13 +6236,10 @@ mod tests {
             )
             .await
             .unwrap();
-        remove_peer_generation(&handler, "browser-1", replacement.generation());
+        remove_peer_generation(&handler, "browser-1", replacement_generation);
         assert_eq!(
-            handler
-                .connection_for_peer("browser-1")
-                .unwrap()
-                .generation(),
-            newest.generation()
+            handler.peers.lock().get("browser-1").unwrap().generation,
+            newest_generation
         );
         assert_eq!(
             handler
@@ -6294,11 +6291,8 @@ mod tests {
             )
             .is_err());
         assert_eq!(
-            handler
-                .connection_for_peer("browser-1")
-                .unwrap()
-                .generation(),
-            newest.generation()
+            handler.peers.lock().get("browser-1").unwrap().generation,
+            newest_generation
         );
         assert_eq!(
             handler
