@@ -352,7 +352,9 @@ fn iso_ms(value: &str) -> i64 {
 }
 
 fn run_succeeded(status: &str) -> bool {
-    matches!(status, "succeeded" | "completed_empty")
+    // An empty result means the company was not in the source: the adapter
+    // worked. A partial output worked as well.
+    matches!(status, "succeeded" | "completed_empty" | "partial_output")
 }
 
 /// Latest scrape run and latest successful run per target_key. Read-only;
@@ -443,10 +445,12 @@ fn source_target_key(source: &Value) -> String {
     key.trim_matches('-').to_string()
 }
 
+/// Only the account decides for the whole source; unreachable, blocked or a
+/// changed layout can concern the one company page that was asked for.
 fn source_wide_failure(run: &RegistryRun) -> bool {
-    !matches!(
+    matches!(
         registry_problem(run),
-        "beim letzten Abruf nicht erreichbar" | "letzter Abruf fehlgeschlagen"
+        "Konto beim Anbieter inaktiv" | "Zugang fehlt oder wurde abgelehnt"
     )
 }
 
@@ -711,10 +715,9 @@ fn collect_digest(
                 if run_succeeded(&run.status) {
                     continue;
                 }
-                // A recent success proves the source works; a later failure of
-                // one company (not found, timeout) does not break it. Only a
-                // failure of the whole source (account, access, block, page
-                // layout) outranks that success.
+                // A recent success proves the adapter works; a later failure
+                // for one company does not break it. Only an account failure
+                // (inactive, access denied) outranks that success.
                 let recently_ok =
                     run.last_ok_ms > 0 && now_ms - run.last_ok_ms <= SOURCE_TEST_FRESH_MS;
                 if recently_ok && !source_wide_failure(run) {
@@ -1811,7 +1814,7 @@ mod tests {
                 status: "portal_drift".into(),
                 at_ms: now - 6 * hour,
                 detail: String::new(),
-                last_ok_ms: now - 9 * hour,
+                last_ok_ms: now - 100 * hour,
             },
         );
         // One company was not reachable after a successful call: the source works.
