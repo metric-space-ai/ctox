@@ -183,7 +183,7 @@ pub struct ResponsesStreamEvent {
 /// The harness reads a tool call from its `response.output_item.done` item.
 /// A provider that leaves `arguments` empty there and delivers the JSON only
 /// through the argument events produces a tool call without arguments. On
-/// THESEN (26.09.2026) 241 of 349 failed research writebacks arrived that way
+/// On one tenant (26.09.2026), 241 of 349 failed research writebacks arrived that way
 /// ("execute_writeback arrived without arguments"), while small tool calls in
 /// the same turns kept their arguments.
 #[derive(Debug, Default)]

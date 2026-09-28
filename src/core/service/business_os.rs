@@ -2302,7 +2302,7 @@ fn run_business_os_web_stack_source_capture_with_trust(
     // One login and capture per provider at a time. Parallel research runs
     // each logged into D&B with the same account: several e-mail codes arrived
     // at once (no challenge identity, login_failed) and the shared browser
-    // profile was locked (THESEN 25.09.2026, every D&B run failed from 12:19).
+    // profile was locked (tenant incident 25.09.2026, every D&B run failed from 12:19).
     let _capture_lock =
         acquire_source_capture_lock(root, &source_id, std::time::Duration::from_secs(300));
     let source = build_web_stack_authenticated_source_capture(&source_id, company, country)?;
@@ -2375,7 +2375,7 @@ fn run_business_os_web_stack_source_capture_with_trust(
         "record_count": records.len(),
         // Without a capture result the login itself stopped; name its state
         // (e.g. mfa_required) and the e-mail code outcome instead of a bare
-        // "failed", so the research can see what blocks it (THESEN 25.09.2026).
+        // "failed", so the research can see what blocks it (tenant incident 25.09.2026).
         "source_status": result
             .get("status")
             .and_then(serde_json::Value::as_str)
@@ -2692,7 +2692,7 @@ if (sourceId === "dnbhoovers.com") {{
     // Branchencodes (WZ/NACE/NOGA) stehen nur auf der Firmenseite, nicht in der
     // Trefferliste. Im selben angemeldeten Lauf die Firmenseite oeffnen; ohne
     // eindeutigen Code den gefundenen Abschnitt als Rohtext mitgeben, damit die
-    // Recherche ihn selbst lesen kann (THESEN 25.09.2026: CHT ohne WZ-Code).
+    // Recherche ihn selbst lesen kann (Mandantenfall 25.09.2026: CHT ohne WZ-Code).
     try {{
       await page.goto(hit.url, {{ waitUntil: "domcontentloaded", timeout: 20000 }});
       for (let attempt = 0; attempt < 20; attempt += 1) {{
@@ -5230,7 +5230,7 @@ fn web_stack_default_auth_owner(root: &Path) -> Option<String> {
 /// separated). A pair lets the login of exactly that provider read its own
 /// one-time codes from exactly that mailbox, even though the mailbox is not
 /// owned by or shared with the login owner. Sender, recipient and the
-/// single-code rule still apply. THESEN 25.09.2026: D&B sends its codes to a
+/// single-code rule still apply. Tenant incident 25.09.2026: D&B sends its codes to a
 /// staff mailbox that predates mailbox ownership; the owner approved reading
 /// only D&B codes from it.
 const WEB_STACK_OTP_MAILBOX_GRANTS_KEY: &str = "CTOX_WEB_STACK_OTP_MAILBOX_GRANTS";
