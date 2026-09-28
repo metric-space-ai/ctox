@@ -1,6 +1,6 @@
 # CREW-UX Board (ab 2026-09-27)
 
-Kritischer Pfad (Stand 28.09. 06:16 UTC, Owner: „du hättest deine Aufgabe abschließen müssen“): Rust-Test auf gpu3 (Unit `crew-ux-rust-test-20260928`, Greppy-Lock gehalten) → grün → `crew-ux/rust-fixes` `70ae7ac90` auf main → `ctox upgrade --dev` welsch + thesen (Skripte `*-upgrade-rustfix.sh`) → Wartungs-Ack → Browser-Abnahme (Lumi Koralle) → Codex-Bericht.
+Kritischer Pfad (Stand 28.09. 07:20 UTC): ABGESCHLOSSEN. main `a5e19e88f` (Shell v410 + Rust-Fixes) läuft auf welsch (Release `branch-main-20260928T062516Z`, Slot beta.64) und thesen (Release `branch-main-20260928T062643Z`, ohne Slot); Lumi `#e97255` auf beiden verifiziert. Kein offener Arbeitsschritt; THESEN für den Outbound/Digest-Owner freigegeben.
 
 Owner-Auftrag 27.09.: "setze den plan um und sorge auch dafür, dass welsch.ctox.dev wieder funktioniert, so dass wir es hier erproben können" + "die ganze UI/UX-Implementierung der Crew … muss überall optimiert werden" + Vorgehen im Codex-Thread 01a0879f-bdaa-77e3-b877-76bc040eacf9 teilen.
 
@@ -47,14 +47,15 @@ Arbeitsklon: `~/.local/state/workjet-launchpads/ctox-crew-genome` (Basis origin/
 - **Upgrades gestartet (28.09. 06:25–06:27 UTC)** — Rust-Test gpu3 grün (38/38, exit 0, 06:23:38Z, Lock frei, Target gelöscht) → main `a5e19e88f` (ff, rustfmt ok). welsch Unit `ctox-crew-rustfix-upgrade-20260928` → Ziel `branch-main-20260928T062516Z`; thesen gleiche Unit → Ziel `branch-main-20260928T062643Z`, Start 06:26:42Z (beide Quellen enthalten `signaling_urls_config_with_override` + `#e97255`). Vorher idle: welsch busy false/0 Worker, thesen busy false/0 Worker/15 pending.
 - **Supervisor-Intervention THESEN (28.09. ~06:32 UTC)** — Outbound/Digest-Claude hält das nächste THESEN-Writerfenster (Digest-Test seit 06:09Z). Regel: KEIN zweiter THESEN-Upgrade, keine fremde Unit abbrechen, eigenen Lauf nur lesend bis terminal verfolgen, danach terminalen Status + Revision + Health + Rollback an Crew (01a0879f) und Digest-Owner übergeben; nächster THESEN-Lauf erst danach. Zustand 06:32:51Z gemeldet (Codex `01a0e6b7-9476-…`): genau meine Unit, phase building, Wartung aktiv. WELSCH läuft unabhängig.
 
+- **Rust-Fixes live auf welsch + thesen (28.09. 07:20 UTC, verifiziert)** — Beide Upgrade-Units Result=success (welsch Ende 06:59:34Z, thesen 07:02:38Z). welsch: `branch-main-20260928T062516Z`, ctox.service seit 06:57:35Z, Wartung completed 07:17:06Z (Karenz-Freigabe), Slot `0.1.46-beta.64` healthy; Headless-Chrome über eigenen Tunnel: Kopf `v0.1.46-beta.64` (kein Recovery), Lumi `#e97255` in Liste/Karte/Leiste, 33 Aufgaben, wss-Signaling. thesen: `branch-main-20260928T062643Z`, ctox.service seit 07:00:43Z, Wartung completed 07:10:53Z (Karenz, kein Klick), DB Lumi `#e97255` (07:00:43Z), reine Ansicht ohne Klick: Leiste Lumi Koralle, v410, wss. Beide: keine persistierte Signaling-Datei. Rollback: welsch previous `branch-main-20260927T075827Z` + Backup `update-20260928T062536Z`; thesen previous `branch-main-20260927T005313Z` + Backup `update-20260928T062659Z`. Terminal-Callback Codex `01a0e6e1-67fe-…`. Nebenbefund (nicht angefasst): welsch hat zwei `ctox-real`-Hilfsprozesse mit gelöschtem Executable (jami-daemon seit 27 Tagen, `business-os mcp connect` seit 21 Tagen), thesen einen (jami-daemon).
+
 ## Working
 
-- **Rust-Test gpu3 (Claude direkt per ssh, 28.09. ab 06:04:52 UTC)** — `crew-ux/rust-fixes` `70ae7ac90` (= main `6ce58e5f3` + Signaling `8a23c0e00` + Lumi `70ae7ac90`). systemd --user Unit `crew-ux-rust-test-20260928` (RuntimeMaxSec 8400, Frist 08:30Z), `flock -n /mnt/nvme1/.greppy-heavy.lock` für die ganze Dauer, cargo `-j1`, MAKEFLAGS/CMAKE -j1, Target+TMPDIR `/mnt/nvme1/crew-ux-rust-test-20260928`, ohne Debuginfo; Plattenwächter < 8 GiB → Stopp; Cleanup per trap. Vorher 06:02Z: root 21G, nvme 22G, Lock frei, 0 Compiler. Angekündigt Greppy-Thread (`01a0e69d-75f3-…`) + Crew-Thread (`01a0e69d-763d-…`). Log `run.log` + `cargo-test.log` im Workdir. Fertig heißt: `CARGO_EXIT 0` + `test result: ok` für `signaling_` und `crew::`, CLEANUP-Zeile, Lock frei.
+- (nichts) — kein eigener Lauf aktiv; gpu3-Lock frei, lokal kein Build, eigene Tunnel 18775/18776 beendet.
 
 ## To-Do
 
-- **Rust-Test Signaling + Lumi** — Trigger: Greppy-Slot freigegeben UND Admission mit Greppy abgestimmt (Thread 01a07f6a-83e8-7901-851c-36521e4916b4). gpu3 nur mit Target auf /mnt/nvme1, `df -h / /mnt/nvme1` ≥ 20 GiB je Platte, persistentem Lock `/mnt/nvme1/.greppy-heavy.lock`, genau ein Compiler. Lokal nur über `dev-heavy-run.py`. Fertig heißt: `test result: ok` für `signaling_` + `crew::` → rebase auf main → push.
-- **Binary-Upgrades** — Trigger: Rust-Fixes auf main. welsch `ctox upgrade --dev` (systemd-run, ≥ 20 GiB, Wartungs-Ack über `[data-maintenance-retry]`), thesen nur idle und angekündigt. Fertig heißt: Lumi `#e97255` in `ctox_crew_members`, Env-Datei wird nicht mehr geschrieben.
+- (leer)
 
 ## Backlog / Owner
 
