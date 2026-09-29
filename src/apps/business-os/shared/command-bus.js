@@ -48,6 +48,13 @@ const COMMAND_LIFECYCLE_TIMING_MARKS = Object.freeze({
   local_inserted: 'browser_local_inserted',
   push_confirmed: 'browser_push_confirmed',
 });
+const COMMAND_PREINSERT_PHASES = Object.freeze([
+  'capability_resolved',
+  'database_resolved',
+  'sync_ready',
+  'authority_resolved',
+  'local_write_started',
+]);
 let activeCommandWatcherCount = 0;
 const commandTimingProbes = new Map();
 // Finite exact-id retries cover normal native handlers even when a multiplexed
@@ -483,6 +490,7 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
   emitCommandLifecycle(commandId, command.command_type || command.type, 'sync_ready', submitStartedAt);
   try {
     doc.client_context.capability_token = await acquireCommandPeerAuthority(commandId, syncPlan);
+    recordCommandPreinsertMark(commandId, 'authority_resolved');
     try {
       await flushSyncBridges(syncPlan.beforeCommand, [], syncPlan.flushTimeoutMs);
     } catch (error) {
@@ -510,6 +518,7 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
     }
     assertCommandDocumentTransportBudget(doc, commandId);
     const localWriteStartedAt = Date.now();
+    recordCommandPreinsertMark(commandId, 'local_write_started', localWriteStartedAt);
     const inserted = await insertOrPatchCommandDocument(collection, commandId, doc);
     if (!inserted) {
       // Same immutable payload already exists. Track that persisted command;
@@ -655,6 +664,7 @@ function emitCommandLifecycle(commandId, commandType, phase, startedAt = 0) {
     elapsed_ms: startedAt ? Math.max(0, Date.now() - Number(startedAt)) : 0,
   };
   recordCommandTimingFromLifecycle(detail.command_id, detail.phase);
+  recordCommandPreinsertMark(detail.command_id, detail.phase);
   globalThis.dispatchEvent?.(new CustomEvent('ctox-business-command-lifecycle', { detail }));
   console.info('[command-bus]', JSON.stringify(detail));
 }
@@ -1971,6 +1981,7 @@ function rememberCommandTimingProbe(commandId, startedAtMs) {
     command_id: key,
     started_at_ms: Number(startedAtMs) || Date.now(),
     marks: {},
+    preinsert_marks: {},
   };
   commandTimingProbes.set(key, sample);
   return sample;
@@ -1995,6 +2006,15 @@ function recordCommandTimingMark(commandId, markName, atMs = Date.now()) {
   if (!Number.isFinite(stamp)) return;
   if (!Number.isFinite(sample.marks[markName])) {
     sample.marks[markName] = stamp;
+  }
+}
+
+function recordCommandPreinsertMark(commandId, phase, atMs = Date.now()) {
+  if (!COMMAND_PREINSERT_PHASES.includes(phase)) return;
+  const sample = commandTimingProbes.get(String(commandId || ''));
+  if (!sample || !Number.isFinite(atMs)) return;
+  if (!Number.isFinite(sample.preinsert_marks[phase])) {
+    sample.preinsert_marks[phase] = atMs;
   }
 }
 
@@ -2047,9 +2067,23 @@ export function commandRoundtripStagesFromMarks(marks = {}) {
 }
 
 function cloneCommandTimingSample(sample) {
+  const boundaries = [
+    sample.marks.browser_dispatch_started,
+    ...COMMAND_PREINSERT_PHASES.map(phase => sample.preinsert_marks[phase]),
+    sample.marks.browser_local_inserted,
+  ];
+  const names = [
+    'initial_capability', 'document_and_database', 'sync_readiness',
+    'fresh_peer_authority', 'dependencies_and_revalidation', 'local_persistence',
+  ];
+  const stages = boundaries.every(Number.isFinite)
+    ? Object.fromEntries(names.map((name, index) => [name, boundaries[index + 1] - boundaries[index]]))
+    : null;
   return {
     command_id: String(sample.command_id || ''),
     started_at_ms: Number(sample.started_at_ms) || 0,
     marks: { ...sample.marks },
+    preinsert_marks: { ...sample.preinsert_marks },
+    preinsert_stages_ms: stages,
   };
 }

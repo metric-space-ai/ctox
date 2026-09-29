@@ -1997,6 +1997,15 @@ therefore a parallel measurement, while the additive chain uses local insert
 to native intake. The browser/native clock-offset interval is bounded by
 those causal marks and commit-to-observation; an impossible interval fails
 explicitly rather than yielding a negative corrected stage.
+The same opt-in browser collector retains `preinsert_marks` and
+`preinsert_stages_ms` in the raw command-roundtrip-marks JSON. Five browser-clock
+boundaries split dispatch-to-insert into initial capability acquisition,
+document/database preparation, sync readiness, fresh peer authority renewal,
+dependency delivery/revalidation and local persistence. Complete spans sum to
+the original browser-insert duration; an incomplete diagnostic returns null.
+The seven primary marks and their mandatory budget report remain unchanged.
+Only the bounded timing-probe map holds these timestamps; no token, payload,
+new request, authorization cache or production configuration is added.
 For explicitly requested command timing probes, the native log additionally
 emits `command_intake_sample` with the command ID and measured authentication
 and identity-stamping milliseconds. Both phases precede the existing
