@@ -2,7 +2,7 @@ import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessConfirm, showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { createCtoxLauncher } from './ctoxLauncher.js';
 import { addMissingDesktopIcons, arrangeDesktopIcons, desktopIconWriteAvailability, dispatchDesktopChatOpen, replaceDesktopIcons, runDesktopActionOnce } from './desktopMenuActions.js';
-import { ensureDesktopLayoutWithAuthority, isDatabaseClosingError, readLocalDesktopLayout } from './layout-authority.js?v=20260928-desktop-local-first-v1';
+import { ensureDesktopLayoutWithAuthority, isDatabaseClosingError, readLocalDesktopIcons, readLocalDesktopLayout } from './layout-authority.js?v=20260929-desktop-icon-cancel-v1';
 import { makeIconDraggable } from './iconDrag.js?v=20260816-browser-sync-guards-v141';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js?v=20260816-browser-sync-guards-v141';
 import {
@@ -506,21 +506,10 @@ export async function mount(ctx) {
 
   async function renderIcons() {
     if (disposed) return;
-    let docs = [];
-    let usingFallbackDocs = false;
-    try {
-      if (iconsCollection) {
-        docs = await iconsCollection.find().exec();
-      } else {
-        docs = fallbackIconDocs(launcher);
-        usingFallbackDocs = true;
-      }
-    } catch (error) {
-      if (!isDatabaseClosingError(error)) throw error;
-      console.info('[desktop] icon read skipped during database restart; rendering default launcher icons');
-      docs = fallbackIconDocs(launcher);
-      usingFallbackDocs = true;
-    }
+    const { docs, usingFallbackDocs } = await readLocalDesktopIcons({
+      collection: iconsCollection,
+      fallbackIcons: () => fallbackIconDocs(launcher),
+    });
     if (disposed) return;
     if (!usingFallbackDocs) {
       syncIconPositionCacheFromDocs(docs);
