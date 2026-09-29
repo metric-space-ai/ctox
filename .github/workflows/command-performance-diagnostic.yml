@@ -1,12 +1,10 @@
 name: Historical command performance diagnostic
 
-# One bounded historical comparison, not a new full-host build or release proof.
+# The single PR-triggered comparison is complete (run36641125674). Keep its
+# reproducible recipe, but never repeat it on ordinary PR synchronization.
+# Manual use requires a new explicit diagnostic decision and live artifacts.
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - '.github/workflows/command-performance-diagnostic.yml'
-      - 'src/scripts/command-performance-diagnostic*'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -14,7 +12,6 @@ permissions:
 
 jobs:
   compare:
-    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-22.04
     timeout-minutes: 15
     env:
