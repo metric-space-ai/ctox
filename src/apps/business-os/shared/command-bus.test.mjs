@@ -166,7 +166,13 @@ test('repeated lease replacement cannot reset the command deadline or bypass pee
     await assert.rejects(bus.submit({
       id: 'cmd-lease-deadline', command_type: 'business_os.chat.task',
       sync_queue_tasks: false, sync_ready_timeout_ms: 80,
-    }), /no authenticated WebRTC peer after 80 ms/);
+    }), (error) => {
+      assert.equal(error.code, 'native_unavailable');
+      const match = error.message.match(/no authenticated WebRTC peer after (\d+) ms/);
+      assert.ok(match, error.message);
+      assert.ok(Number(match[1]) >= 1 && Number(match[1]) <= 80, error.message);
+      return true;
+    });
     assert.equal(inserts, 0);
     assert.equal(registry.leaseCount('business_commands'), 0);
   } finally { clearInterval(replacement); registry.revokeAllLeases(); }
