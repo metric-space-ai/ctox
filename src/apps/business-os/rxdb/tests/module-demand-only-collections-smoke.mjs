@@ -300,6 +300,26 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
 }
 
 {
+  let role = 'admin';
+  let restrictedChecks = 0;
+  const { runtime, starts } = createMockSyncRuntime({
+    mayReadCollection(collection) {
+      if (collection === 'business_users' && ++restrictedChecks === 2) role = 'founder';
+      return roleMayReadCollection(role, collection);
+    },
+  });
+  const lease = await runtime.leaseModule({
+    id: 'ctox',
+    collections: ['ctox_crew_members', 'business_users'],
+  });
+  assert.deepEqual(lease.collections, ['ctox_crew_members'],
+    'role resolution during an asynchronous module lease skips newly forbidden collections');
+  assert.deepEqual(starts.map((entry) => entry.collection), ['ctox_crew_members']);
+  await lease.release();
+  await runtime.stop();
+}
+
+{
   const { runtime } = createMockSyncRuntime({ emitProtocolCallback: false });
   const lease = await runtime.leaseCollection('desktop_file_chunks', 'peer-state-protocol-backfill-smoke');
   const diagnostics = runtime.diagnostics.collections.desktop_file_chunks;

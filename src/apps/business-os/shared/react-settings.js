@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20260928-shell-v2-crew-role-sync-v425';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20260929-shell-v2-role-lease-v426';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
