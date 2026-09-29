@@ -5165,7 +5165,9 @@ function refreshConfirmedHarnessStatus(state, invalidate = false) {
           }
         }
       } catch (error) {
-        if (!state.disposed) console.warn('[ctox] harness status read failed', error);
+        if (!state.disposed && !isVolatileLocalRxDbError(error)) {
+          console.warn('[ctox] harness status read failed', error);
+        }
       }
     } while (!state.disposed && request !== state.harnessStatusRequest);
   })().finally(() => {
