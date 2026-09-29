@@ -1778,6 +1778,56 @@ test('disposed crew presence releases observers and ignores queued callbacks and
   }
 });
 
+test('crew presence retains its snapshot across cancelled reads and recovers on readiness', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const previousWarn = console.warn;
+  const warnings = [];
+  const reloads = [];
+  const task = { id: 'task-1', status: 'running', module: 'tickets', crew_member_id: 'member-1' };
+  let rows = [task];
+  let failure = null;
+  const state = { crewMembers: [{ id: 'member-1', name: 'Lumi' }] };
+  globalThis.window = { setTimeout: (callback) => callback, clearTimeout() {} };
+  globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+  console.warn = (...args) => warnings.push(args);
+  let dispose;
+  try {
+    dispose = __businessChatTestInternals.wireCrewAppPresence({
+      state,
+      db: { raw: { ctox_queue_tasks: { find: () => ({ exec: async () => {
+        if (failure) throw failure;
+        return rows;
+      } }) } } },
+      syncFacade: { subscribeCollectionReadiness: (_name, callback) => { reloads.push(callback); } },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(state.crewWorkload.get('member-1'), 1);
+    for (const error of [
+      Object.assign(new Error('retired peer'), { code: 'QUERY_CANCELLED' }),
+      new Error('QUERY_CANCELLED: peer-peer-close'),
+    ]) {
+      failure = error;
+      await reloads[0]();
+      assert.equal(state.crewWorkload.get('member-1'), 1, 'cancelled reads cannot claim an empty queue');
+      assert.equal(warnings.length, 0, 'normal peer retirement is not a browser warning');
+    }
+    failure = new Error('queue store unavailable');
+    await reloads[0]();
+    assert.equal(warnings.length, 1, 'unexpected read failures remain visible');
+    assert.equal(state.crewWorkload.get('member-1'), 1);
+    failure = null;
+    rows = [];
+    await reloads[0]();
+    assert.equal(state.crewWorkload.size, 0, 'a successful empty snapshot clears presence');
+  } finally {
+    dispose?.();
+    console.warn = previousWarn;
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
 test('chat opening reads storage only to resolve a missing current tracking identity', () => {
   const { chatOpenNeedsHydration } = __businessChatTestInternals;
   const state = { chats: [{

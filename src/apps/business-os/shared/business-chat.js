@@ -266,8 +266,12 @@ async function loadCrewAppTasks(db) {
     }).exec();
     return (Array.isArray(docs) ? docs : []).map((doc) => doc?.toJSON?.() || doc).filter(Boolean);
   } catch (error) {
-    console.warn?.('[business-chat] crew app presence load failed', error);
-    return [];
+    const cancelled = error?.code === 'QUERY_CANCELLED'
+      || /^QUERY_CANCELLED\b/.test(String(error?.message || error || ''));
+    if (!cancelled) console.warn?.('[business-chat] crew app presence load failed', error);
+    // A retired query is not evidence of an empty queue. Retain the last
+    // presence snapshot until the existing readiness callback can read again.
+    return null;
   }
 }
 
@@ -303,7 +307,7 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
   const reload = () => {
     if (disposed) return Promise.resolve();
     return Promise.all([loadCrewAppTasks(db), loadCrewHarnessStatus(db)]).then(([next, harness]) => {
-      if (disposed) return;
+      if (disposed || next === null) return;
       tasks = next;
       liveKeys = crewLiveKeys(harness);
       apply();

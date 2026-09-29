@@ -278,6 +278,12 @@ way only for harness status and triggers its existing authoritative row read;
 it does not render the changed-document payload as a fully loaded collection.
 The shell's scoped collection facade preserves this subscription option.
 
+Crew app presence keeps its last valid queue snapshot when a read fails.
+An expected `QUERY_CANCELLED` from peer retirement does not emit a warning;
+other read failures retain their diagnostic. The existing collection-readiness
+callback retries the read, and only a successful empty response clears the
+presence and workload. Cancellation is never evidence that the queue is empty.
+
 The Rust side is a byte-correct port of RxDB 16.20.0 (upstream pin
 `c69c94bb…`, see `src/core/rxdb/PORTING.md` and `vendor/rxdb.version`),
 reduced to the CTOX-as-WebRTC-peer scope. The
