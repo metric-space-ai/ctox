@@ -35,7 +35,7 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_TERM_COLOR: never
       # Reviewed Threads, Crew shell, native research and finalization; full verification required.
-      REVIEWED_SOURCE_REVISION: '08433a584445f889703653863674221b396afe86'
+      REVIEWED_SOURCE_REVISION: 'a79ba42efa00e60c7849a2fcf2c3f84a69cd2e44'
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
         with:
