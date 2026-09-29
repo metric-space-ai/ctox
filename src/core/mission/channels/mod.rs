@@ -436,6 +436,7 @@ enum TerminalPolicyGrantKind {
     AppSecPipelineStageCompleted,
     MeetingScheduled,
     MeetingPassiveMention,
+    ReviewedFounderReplySent,
     HistoricalAutoSubmittedInbound,
     SystemProbeInbound,
     RoutingBackfillNonWork,
@@ -468,6 +469,10 @@ impl TerminalPolicyGrant {
         Self(TerminalPolicyGrantKind::MeetingPassiveMention)
     }
 
+    fn reviewed_founder_reply_sent() -> Self {
+        Self(TerminalPolicyGrantKind::ReviewedFounderReplySent)
+    }
+
     fn historical_auto_submitted_inbound() -> Self {
         Self(TerminalPolicyGrantKind::HistoricalAutoSubmittedInbound)
     }
@@ -496,6 +501,9 @@ impl TerminalPolicyGrant {
             }
             TerminalPolicyGrantKind::MeetingPassiveMention => {
                 "policy:meeting-passive-inbound-terminal-no-send"
+            }
+            TerminalPolicyGrantKind::ReviewedFounderReplySent => {
+                "policy:exact-reviewed-founder-reply-sent"
             }
             TerminalPolicyGrantKind::HistoricalAutoSubmittedInbound => {
                 "policy:auto-submitted-inbound-terminal-no-send"
@@ -2427,6 +2435,50 @@ pub fn founder_reply_sent_after_review_for_message(
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
     founder_reply_sent_after_review(&conn, inbound_message_key)
+}
+
+/// Close a stalled founder inbound only when its own reviewed reply has a
+/// durable accepted-send receipt. The proof check, terminal transition and
+/// queue projection commit together, including recovery from a failed route.
+pub(crate) fn handle_inbound_after_reviewed_founder_reply(
+    root: &Path,
+    inbound_message_key: &str,
+) -> Result<usize> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    attach_queue_projection_store(root, &conn)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    anyhow::ensure!(
+        founder_reply_sent_after_review(&tx, inbound_message_key)?,
+        "no exact reviewed founder reply was sent for {inbound_message_key}"
+    );
+    let message_keys = [inbound_message_key.to_string()];
+    guard_founder_handled_ack(root, &tx, &message_keys, "handled")?;
+    if current_queue_route_status(&tx, inbound_message_key)? == "handled" {
+        tx.commit()?;
+        return Ok(0);
+    }
+    let updated = ack_messages_in_transaction(
+        &tx,
+        &message_keys,
+        "handled",
+        None,
+        Some("exact_reviewed_founder_reply_sent"),
+        Some(TerminalPolicyGrant::reviewed_founder_reply_sent()),
+    )?;
+    if updated > 0 {
+        tx.execute(
+            "UPDATE communication_routing_state
+             SET failure_class=NULL, retry_not_before=NULL, hold_reason=NULL,
+                 wait_entity_type=NULL, wait_entity_id=NULL, lease_expires_at=NULL
+             WHERE message_key=?1",
+            [inbound_message_key],
+        )?;
+    }
+    let tasks = load_queue_projection_tasks(&tx, &message_keys)?;
+    refresh_queue_projection_tasks(root, &tx, &tasks)?;
+    tx.commit()?;
+    Ok(updated)
 }
 
 /// Whether any inbound communication message is still pending or leased

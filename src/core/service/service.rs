@@ -18728,12 +18728,8 @@ fn repair_stalled_founder_communications(
             continue;
         }
         if channels::founder_reply_sent_after_review_for_message(root, &message.message_key)? {
-            repaired += channels::ack_leased_messages(
-                root,
-                std::slice::from_ref(&message.message_key),
-                "handled",
-            )
-            .unwrap_or(0);
+            repaired +=
+                channels::handle_inbound_after_reviewed_founder_reply(root, &message.message_key)?;
             repaired += close_open_founder_communication_self_work_for_inbound(
                 root,
                 &message.message_key,
@@ -43010,6 +43006,124 @@ Use shell tools to create or update these files."
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
         assert!(tasks.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn confirmed_founder_reply_recovers_failed_inbound_without_another_send() {
+        let root = temp_root("ctox-reviewed-founder-failed-route");
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &settings)
+            .expect("failed to persist owner setting");
+        let inbound_key = "email:lena@thesen-ag.com::inbox::reviewed-recovery";
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:lena@thesen-ag.com', '<reviewed-recovery@example.com>',
+                'reviewed-recovery', 'inbound', 'inbox', 'Michael Welsch',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]',
+                'Import falsch gelandet', 'Bitte prüfen', 'Bitte prüfen',
+                '', '', 'normal', 'received', 0, 0,
+                '2026-09-28T16:56:12Z', '2026-09-28T16:56:12Z', '{}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert founder inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error,
+                failure_class, failure_attempt_count, hold_reason, retry_not_before, updated_at
+            ) VALUES (?1, 'failed', NULL, NULL, NULL, 'old header failures',
+                'technical', 5, 'technical:reviewed-communication-send',
+                '2026-09-29T02:00:00Z', '2026-09-29T01:41:22Z')"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert failed route");
+
+        let without_proof =
+            channels::handle_inbound_after_reviewed_founder_reply(&root, inbound_key)
+                .expect_err("a failed route must not be handled without its own reviewed send");
+        assert!(without_proof
+            .to_string()
+            .contains("no exact reviewed founder reply"));
+        conn.execute(
+            r#"INSERT INTO communication_founder_reply_reviews (
+                approval_key, inbound_message_key, action_digest, action_json,
+                body_sha256, reviewer, review_summary, approved_at, sent_at, send_result_json
+            ) VALUES (
+                'approval-reviewed-recovery', ?1, 'digest-reviewed-recovery', '{}',
+                'body-reviewed-recovery', 'external-review', 'PASS: reviewed and sent',
+                '2026-09-29T01:40:00Z', '2026-09-29T01:41:00Z',
+                '{"status":"confirmed","synthetic":false}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert exact reviewed send proof");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        assert_eq!(
+            repair_stalled_founder_communications(&root, &state, &settings)
+                .expect("confirmed reply should repair failed inbound"),
+            1
+        );
+        let (status, attempts, failure_class, last_error, hold_reason, retry_not_before): (
+            String,
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = conn
+            .query_row(
+                "SELECT route_status, failure_attempt_count, failure_class, last_error,
+                        hold_reason, retry_not_before
+                 FROM communication_routing_state WHERE message_key=?1",
+                [inbound_key],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("failed to reload repaired route");
+        assert_eq!(status, "handled");
+        assert_eq!(attempts, 5, "prior attempts remain available for audit");
+        assert_eq!(
+            (failure_class, last_error, hold_reason, retry_not_before),
+            (None, None, None, None)
+        );
+        let terminal_proof: String = conn
+            .query_row(
+                "SELECT json_extract(request_json, '$.metadata.terminal_policy_proof')
+                 FROM ctox_core_transition_proofs
+                 WHERE entity_type='QueueItem' AND entity_id=?1
+                   AND to_state='Completed' AND accepted=1",
+                [inbound_key],
+                |row| row.get(0),
+            )
+            .expect("failed to load accepted terminal proof");
+        assert_eq!(terminal_proof, "policy:exact-reviewed-founder-reply-sent");
+        assert_eq!(
+            channels::handle_inbound_after_reviewed_founder_reply(&root, inbound_key)
+                .expect("repeated repair should be idempotent"),
+            0
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
