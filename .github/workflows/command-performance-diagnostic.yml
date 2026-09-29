@@ -1,0 +1,94 @@
+name: Historical command performance diagnostic
+
+# One bounded historical comparison, not a new full-host build or release proof.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/command-performance-diagnostic.yml'
+      - 'src/scripts/command-performance-diagnostic*'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  compare:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    env:
+      CARGO_BUILD_JOBS: '2'
+      RUST_TEST_THREADS: '2'
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          path: driver
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: 20e0b8ee7febad2be4218b3bff0da9ece9bb6f36
+          path: baseline
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: c061134a8f2b163fc871b61fc66df2819138aa8d
+          path: current
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.13.1'
+      - name: Configure disposable storage
+        run: |
+          printf 'TMPDIR=%s\nPLAYWRIGHT_BROWSERS_PATH=%s/command-chromium\nnpm_config_cache=%s/command-npm\nPLAYWRIGHT_MODULE_PATH=%s/driver/src/apps/business-os/node_modules/playwright\n' "$RUNNER_TEMP" "$RUNNER_TEMP" "$RUNNER_TEMP" "$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          test "$(df --output=avail -BG "$RUNNER_TEMP" | tail -1 | tr -dc '0-9')" -ge 20
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 36564350911
+          artifact-ids: 11032437879
+          merge-multiple: true
+          path: baseline-binary
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 36564350911
+          artifact-ids: 11032582713
+          merge-multiple: true
+          path: baseline-proof
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 36606718403
+          artifact-ids: 11053771516
+          merge-multiple: true
+          path: current-binary
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: 36606718403
+          artifact-ids: 11053578940
+          merge-multiple: true
+          path: current-proof
+      - name: Install one shared pinned browser runtime
+        working-directory: driver
+        run: |
+          npm --prefix src/apps/business-os ci
+          npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+          python3 src/scripts/command-performance-diagnostic.test.py
+      - name: Compare exact source and binary pairs in alternating order
+        run: |
+          chmod +x baseline-binary/ctox current-binary/ctox
+          python3 driver/src/scripts/command-performance-diagnostic.py \
+            --baseline-root "$GITHUB_WORKSPACE/baseline" \
+            --baseline-binary "$GITHUB_WORKSPACE/baseline-binary/ctox" \
+            --baseline-proof "$GITHUB_WORKSPACE/baseline-proof" \
+            --current-root "$GITHUB_WORKSPACE/current" \
+            --current-binary "$GITHUB_WORKSPACE/current-binary/ctox" \
+            --current-proof "$GITHUB_WORKSPACE/current-proof" \
+            --output "$RUNNER_TEMP/command-comparison"
+      - name: Preserve actual positive and negative evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: command-same-runner-diagnostic
+          path: ${{ runner.temp }}/command-comparison/
+          if-no-files-found: warn
