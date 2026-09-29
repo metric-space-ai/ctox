@@ -68,7 +68,7 @@ function startNativeSymbolProfile(child, {
     event: 'cpu-clock:u', scope: 'existing-native-process-threads',
     inheritsChildTasks: false, capturesStacks: false, capturesUserMemory: false,
     acceptanceTiming: false, available: false, state: 'scheduled',
-    attempts: [], maxRecordAttempts: 2,
+    attempts: [], maxRecordAttempts: 3,
   };
   let timer, durationTimer, killTimer, recorder, finished = false, stopping = false;
   let interruptRequested = false;
@@ -187,7 +187,7 @@ function startNativeSymbolProfile(child, {
         });
         if (recordError || (code !== 0 && !controlledInterrupt)) {
           // Linux perf 6.8 can abort initial metadata synthesis when a thread
-          // in its task map exits. Recover once only with independently bound
+          // in its task map exits. Recover at most twice, each time with fresh
           // before/after ownership evidence and the original recording budget.
           const missing = /^couldn't open \/proc\/(\d+)\/status\s*$/.exec(stderrTail.trim().split('\n').at(-1));
           const tid = missing ? Number(missing[1]) : null;
@@ -195,7 +195,7 @@ function startNativeSymbolProfile(child, {
             && Number.isSafeInteger(thread.startedTicks) && thread.startedTicks >= 0);
           const permissionFailure = stderr.split('\n').some(line => /Permission denied|Operation not permitted/i.test(line)
             && !line.startsWith("perf_event__synthesize_bpf_events: can't get next program: Operation not permitted"));
-          if (attempt.number === 1 && !recordError && code === 255 && signal === null
+          if (attempt.number < metadata.maxRecordAttempts && !recordError && code === 255 && signal === null
             && !stderrTruncated && !permissionFailure
             && !stopping && !interruptRequested && known && tid !== child.pid
             && performance.now() - recordingStarted <= 5000 && performance.now() < recordingDeadline) {
@@ -207,11 +207,12 @@ function startNativeSymbolProfile(child, {
                 let bytes = 0;
                 try { bytes = fs.statSync(dataPath).size; }
                 catch (error) { if (error.code !== 'ENOENT') throw error; }
-                if (bytes < maxBytes) {
-                  retainedBytes = bytes;
+                if (retainedBytes + bytes < maxBytes) {
+                  retainedBytes += bytes;
                   attempt.recovery = { reason: 'owned-thread-exited-during-perf-start',
-                    tid, threadStartedTicks: known.startedTicks, processStartedTicks: startTicks, retainedBytes: bytes };
-                  dataPath = outputPrefix + '.retry-1.perf.data';
+                    tid, threadStartedTicks: known.startedTicks, processStartedTicks: startTicks,
+                    attemptBytes: bytes, retainedBytes };
+                  dataPath = outputPrefix + `.retry-${attempt.number}.perf.data`;
                   recorder = null;
                   metadata.state = 'recovering'; write();
                   timer = setTimeout(attach, 0);

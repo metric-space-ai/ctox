@@ -480,20 +480,20 @@ at most 30 seconds. PID start identity is checked before attachment; child
 task inheritance and stack/memory capture are disabled. The profiler receives
 SIGINT at the limit (SIGKILL after three more seconds if needed); it never
 signals the native host. Host cleanup waits for bounded profiler finalization.
-The report subprocess has a five-second/two-MiB output bound. Permission errors,
+The report subprocess has a 20-second/two-MiB output bound. Permission errors,
 missing tools, zero samples and oversized recordings are explicit unavailable
 results, not successful profiles. See
 [perf-record(1)](https://man7.org/linux/man-pages/man1/perf-record.1.html).
 
 Linux perf 6.8 may exit255 during initial task metadata synthesis if an owned
-thread disappears. The fixture allows one recovery only when that exact
+thread disappears. The fixture allows at most two recoveries only when each exact
 non-leader TID was observed under the same native PID before attachment,
 its task stat now returns ENOENT, the native start identity remains unchanged,
 and the terminal diagnostic names that TID within the first five seconds.
-Unknown ownership, permission errors, PID/TID reuse, a stop request or a second
-failure remain unavailable. Both attempts retain diagnostics and separate data
-files; the second attempt consumes the original monotonic30-second deadline
-and the remaining cumulative32-MiB recording budget. A failed attempt is never
+Unknown ownership, permission errors, PID/TID reuse, a stop request or a third
+failure remain unavailable. All three attempts retain diagnostics and separate data
+files; retries consume the original monotonic30-second deadline and
+the remaining cumulative32-MiB recording budget. A failed attempt is never
 reported as a sample; recovery still requires a successful nonempty perf report.
 This addresses the owned-thread exit observed in FullHost36332356644 and does
 not rerun or alter its unprofiled product measurements.

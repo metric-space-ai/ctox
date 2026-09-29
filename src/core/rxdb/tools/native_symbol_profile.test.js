@@ -520,21 +520,67 @@ test('thread recovery rejects missing ownership, live or reused tasks, identity 
   }
 });
 
-test('a second vanished thread is terminal and preserves both failed attempts', async t => {
+test('two distinct vanished owned threads recover within one time and byte budget', async t => {
+  const outputPrefix = temporary(t);
+  const partials = ['partial', 'attempt-two'];
+  let spawned = 0, reports = 0, profile;
+  profile = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 5000 }, {
+    platform: 'linux', readStart: () => 10,
+    readThreads: () => [{ tid: spawned === 0 ? 4343 : spawned === 1 ? 4545 : 4646, startedTicks: 11 + spawned }],
+    readThreadStart() { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); },
+    spawnRecord(executable, args) {
+      spawned++;
+      const output = args.at(-1);
+      const recorder = fakeRecorder(output, { exitSignal: 'SIGINT' });
+      if (spawned <= 2) setImmediate(() => {
+        fs.writeFileSync(output, partials[spawned - 1]);
+        recorder.stderr.write(`couldn't open /proc/${spawned === 1 ? 4343 : 4545}/status\n`);
+        recorder.exitCode = 255; recorder.emit('close', 255, null);
+      });
+      else {
+        assert.equal(output, outputPrefix + '.retry-2.perf.data');
+        assert.equal(args[args.indexOf('--max-size') + 1], `${32 * 1024 * 1024 - 18}B`);
+        setTimeout(() => { void profile.stop('fixture-finalizer'); }, 20);
+      }
+      return recorder;
+    },
+    async runReport(executable, args) {
+      reports++;
+      assert.equal(args.at(-1), outputPrefix + '.retry-2.perf.data');
+      return { stdout: '# Samples: 13 of event cpu-clock:u\nctox::work\n' };
+    },
+  });
+  const result = await profile.completion;
+  assert.equal(result.available, true); assert.equal(result.reason, 'sampled');
+  assert.equal(spawned, 3); assert.equal(reports, 1);
+  assert.equal(result.maxRecordAttempts, 3);
+  assert.equal(result.recordingDeadlineAtMs, result.startedAtMs + 5000);
+  assert.ok(result.attempts[1].recordingBudgetMs < result.attempts[0].recordingBudgetMs);
+  assert.ok(result.attempts[2].recordingBudgetMs < result.attempts[1].recordingBudgetMs);
+  assert.deepEqual(result.attempts.slice(0, 2).map(attempt => attempt.recovery?.tid), [4343, 4545]);
+  assert.deepEqual(result.attempts.slice(0, 2).map(attempt => attempt.recovery?.retainedBytes), [7, 18]);
+  assert.equal(result.retainedBytes, 18);
+  assert.equal(result.reportedSamples, '13');
+  assert.equal(result.dataFile, 'native.retry-2.perf.data');
+  assert.equal(fs.readFileSync(outputPrefix + '.perf.data', 'utf8'), partials[0]);
+  assert.equal(fs.readFileSync(outputPrefix + '.retry-1.perf.data', 'utf8'), partials[1]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(outputPrefix + '.json', 'utf8')), result);
+});
+
+test('a third vanished thread is terminal and preserves all failed attempts', async t => {
   const outputPrefix = temporary(t);
   let spawned = 0;
-  // Filesystem latency can exceed 100 ms before the retry callback runs; this
-  // test checks the two-attempt limit, not exhaustion of the recording budget.
-  const { completion } = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 2000 }, {
+  const tids = [4343, 4545, 4646];
+  const { completion } = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 5000 }, {
     platform: 'linux', readStart: () => 10,
-    readThreads: () => [{ tid: 4343, startedTicks: 11 }],
+    readThreads: () => [{ tid: tids[spawned], startedTicks: 11 + spawned }],
     readThreadStart() { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); },
     spawnRecord(executable, args) {
       spawned++;
       const recorder = fakeRecorder(args.at(-1));
       setImmediate(() => {
         fs.writeFileSync(args.at(-1), 'partial-' + spawned);
-        recorder.stderr.write("couldn't open /proc/4343/status\n");
+        recorder.stderr.write(`couldn't open /proc/${tids[spawned - 1]}/status\n`);
         recorder.exitCode = 255; recorder.emit('close', 255, null);
       });
       return recorder;
@@ -543,10 +589,14 @@ test('a second vanished thread is terminal and preserves both failed attempts', 
   });
   const result = await completion;
   assert.equal(result.reason, 'perf-record-failed');
-  assert.equal(result.available, false); assert.equal(spawned, 2);
-  assert.deepEqual(result.attempts.map(attempt => attempt.code), [255, 255]);
+  assert.equal(result.available, false); assert.equal(spawned, 3);
+  assert.equal(result.maxRecordAttempts, 3);
+  assert.deepEqual(result.attempts.map(attempt => attempt.code), [255, 255, 255]);
+  assert.deepEqual(result.attempts.map(attempt => attempt.dataFile),
+    ['native.perf.data', 'native.retry-1.perf.data', 'native.retry-2.perf.data']);
   assert.equal(fs.readFileSync(outputPrefix + '.perf.data', 'utf8'), 'partial-1');
   assert.equal(fs.readFileSync(outputPrefix + '.retry-1.perf.data', 'utf8'), 'partial-2');
+  assert.equal(fs.readFileSync(outputPrefix + '.retry-2.perf.data', 'utf8'), 'partial-3');
 });
 
 test('a requested stop cannot trigger thread-exit recovery', async t => {
