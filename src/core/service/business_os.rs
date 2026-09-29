@@ -900,6 +900,51 @@ fn handle_business_os_rxdb(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 Ok(())
             }
         }
+        Some("supported-historical-versions") => {
+            print_json(&crate::business_os::supported_historical_rxdb_versions()?)
+        }
+        Some("materialize-historical-fixture") => {
+            require_rxdb_confirm_flag(
+                args,
+                "--confirm-synthetic-fixture",
+                "ctox business-os rxdb materialize-historical-fixture --confirm-synthetic-fixture",
+            )?;
+            print_json(
+                &crate::business_os::materialize_supported_historical_rxdb_fixture(root)?,
+            )
+        }
+        Some("inventory") => print_json(&crate::business_os::native_rxdb_store_inventory(root)?),
+        Some("backup-immutable") => {
+            let output = flag_value(args, "--output").map(Path::new);
+            print_json(&crate::business_os::backup_native_rxdb_immutable_store(
+                root, output,
+            )?)
+        }
+        Some("run-populated-store-cutover") => {
+            require_rxdb_confirm_flag(
+                args,
+                "--confirm-synthetic-fixture",
+                "ctox business-os rxdb run-populated-store-cutover --confirm-synthetic-fixture",
+            )?;
+            print_json(&crate::business_os::run_production_native_rxdb_cutover(root)?)
+        }
+        Some("restore-immutable-backup") => {
+            require_rxdb_confirm_flag(
+                args,
+                "--confirm-restore",
+                "ctox business-os rxdb restore-immutable-backup --confirm-restore --from <backup>",
+            )?;
+            let from = flag_value(args, "--from").context(
+                "usage: ctox business-os rxdb restore-immutable-backup --confirm-restore --from <backup>",
+            )?;
+            print_json(&crate::business_os::restore_native_rxdb_immutable_backup(
+                root,
+                Path::new(from),
+            )?)
+        }
+        Some("cutover-receipt") => {
+            print_json(&crate::business_os::native_rxdb_cutover_receipt(root)?)
+        }
         Some("repair-optional-drift") => {
             let collection = flag_value(args, "--collection")
                 .or_else(|| {
@@ -923,6 +968,14 @@ fn handle_business_os_rxdb(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
         Some(other) => anyhow::bail!("unknown business-os rxdb command `{other}`"),
     }
+}
+
+fn require_rxdb_confirm_flag(args: &[String], flag: &str, usage: &str) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        args.iter().any(|arg| arg == flag),
+        "refusing populated-store recovery command without {flag}\nusage: {usage}"
+    );
+    Ok(())
 }
 
 fn enrich_rxdb_peer_status_with_production_readiness(
@@ -4277,7 +4330,7 @@ fn business_os_usage() -> String {
 }
 
 fn business_os_usage_base() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os customer-apps audit\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb status [--json]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os turn status\n  ctox business-os turn set [--url turns:host:5349] [--secret <coturn use-auth-secret>]\n  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app refresh-catalog\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack source-capture --source-id <dnbhoovers.com|leadfeeder.com|xing.com> --company <name> [--country <DE|AT|CH>] [--session-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
+    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os customer-apps audit\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb status [--json]\n  ctox business-os rxdb supported-historical-versions\n  ctox business-os rxdb materialize-historical-fixture --confirm-synthetic-fixture\n  ctox business-os rxdb inventory\n  ctox business-os rxdb backup-immutable [--output <path>]\n  ctox business-os rxdb cutover-receipt\n  ctox business-os rxdb run-populated-store-cutover --confirm-synthetic-fixture\n  ctox business-os rxdb restore-immutable-backup --confirm-restore --from <backup>\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os turn status\n  ctox business-os turn set [--url turns:host:5349] [--secret <coturn use-auth-secret>]\n  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app refresh-catalog\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack source-capture --source-id <dnbhoovers.com|leadfeeder.com|xing.com> --company <name> [--country <DE|AT|CH>] [--session-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
 }
 
 fn exists_label(exists: bool) -> &'static str {
@@ -7624,6 +7677,47 @@ mod tests {
     #[test]
     fn business_os_usage_documents_terminal_app_create_retry() {
         assert!(business_os_usage().contains("ctox business-os commands retry <command-id>"));
+    }
+
+    #[test]
+    fn business_os_usage_documents_populated_store_recovery() {
+        let usage = business_os_usage();
+        assert!(usage.contains(
+            "ctox business-os rxdb materialize-historical-fixture --confirm-synthetic-fixture"
+        ));
+        assert!(usage.contains(
+            "ctox business-os rxdb run-populated-store-cutover --confirm-synthetic-fixture"
+        ));
+        assert!(usage.contains(
+            "ctox business-os rxdb restore-immutable-backup --confirm-restore --from <backup>"
+        ));
+    }
+
+    #[test]
+    fn populated_store_recovery_cli_requires_confirm_flags() {
+        let root = tempfile::tempdir().expect("temp root");
+        let err = handle_business_os_rxdb(
+            root.path(),
+            &["materialize-historical-fixture".to_string()],
+        )
+        .expect_err("materialize must require confirm");
+        assert!(
+            err.to_string().contains("--confirm-synthetic-fixture"),
+            "unexpected materialize error: {err:#}"
+        );
+        let restore_err = handle_business_os_rxdb(
+            root.path(),
+            &[
+                "restore-immutable-backup".to_string(),
+                "--from".to_string(),
+                "missing.sqlite3".to_string(),
+            ],
+        )
+        .expect_err("restore must require confirm");
+        assert!(
+            restore_err.to_string().contains("--confirm-restore"),
+            "unexpected restore error: {restore_err:#}"
+        );
     }
 
     #[test]
