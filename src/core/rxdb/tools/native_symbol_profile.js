@@ -6,6 +6,7 @@ const { spawn, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const { parseProcStat } = require('./native_cpu_profile.js');
 const execFileAsync = promisify(execFile);
+const REPORT_TIMEOUT_MS = 20000;
 
 function boundedDiagnostic(value, tail = false) {
   const bytes = Buffer.from(String(value ?? ''), 'utf8');
@@ -147,7 +148,7 @@ function startNativeSymbolProfile(child, {
       stdout = ''; stdoutTruncated = false;
       const args = ['record', '--verbose', '--event', 'cpu-clock:u', '--freq', '49',
         '--no-inherit', '--pid', String(child.pid), '--mmap-pages', '128',
-        '--no-buildid-cache', '--max-size', retainedBytes ? String(maxBytes - retainedBytes) : '32M', '--output', dataPath];
+        '--no-buildid-cache', '--max-size', retainedBytes ? `${maxBytes - retainedBytes}B` : '32M', '--output', dataPath];
       metadata.recordArgs = args;
       attempt.recordArgs = args;
       metadata.perfExecutable = perfExecutable;
@@ -229,7 +230,7 @@ function startNativeSymbolProfile(child, {
         if (size === 0 || size + retainedBytes > maxBytes) {
           finish('profile-size-out-of-bounds', { bytes: size, retainedBytes }); return;
         }
-        metadata.reportTimeoutMs = 5000;
+        metadata.reportTimeoutMs = REPORT_TIMEOUT_MS;
         try { write(); }
         catch (error) {
           finish('profile-metadata-write-failed', { error: diagnosticError(error), failurePhase: 'before-report' }); return;
