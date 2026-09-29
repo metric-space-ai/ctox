@@ -147,8 +147,10 @@ assert.ok(
   'Desktop icons must not render persisted targets outside the current launcher scope'
 );
 assert.ok(
-  desktopSource.includes('icon read skipped during database restart'),
-  'Desktop initial icon rendering must tolerate transient IndexedDB connection shutdown'
+  desktopSource.includes('await readLocalDesktopIcons({')
+    && desktopLayoutAuthoritySource.includes('isDatabaseClosingError(error)')
+    && desktopLayoutAuthoritySource.includes('QUERY_CANCELLED:'),
+  'Desktop initial icon rendering must tolerate IndexedDB shutdown and replication-cancel reads'
 );
 assert.ok(
   desktopSource.includes('ensureDesktopLayoutWithAuthority({')
@@ -163,7 +165,7 @@ assert.ok(
 assert.ok(
   readFileSync(new URL('./layout-authority.js', import.meta.url), 'utf8')
     .includes('return /IDBDatabase.*closing|database connection is closing/i.test(message);')
-    && /import \{[^}]*isDatabaseClosingError[^}]*\} from '\.\/layout-authority\.js\?v=20260928-desktop-local-first-v1'/.test(desktopSource),
+    && /import \{[^}]*isDatabaseClosingError[^}]*\} from '\.\/layout-authority\.js\?v=20260929-desktop-icon-cancel-v1'/.test(desktopSource),
   'Desktop transient IndexedDB shutdown detection must not depend on DOMException prototype shape'
 );
 assert.ok(

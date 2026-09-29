@@ -16,6 +16,22 @@ export function isDatabaseClosingError(error) {
   return /IDBDatabase.*closing|database connection is closing/i.test(message);
 }
 
+// A replication handoff cancels its outstanding demand reads. Desktop icons
+// may paint local launcher defaults until the replacement read arrives; this
+// read-only fallback must never publish an icon or layout document.
+export async function readLocalDesktopIcons({ collection, fallbackIcons }) {
+  const fallback = () => ({ docs: fallbackIcons(), usingFallbackDocs: true });
+  if (!collection) return fallback();
+  try {
+    return { docs: await collection.find().exec(), usingFallbackDocs: false };
+  } catch (error) {
+    const message = String(error?.message || error || '');
+    if (!isDatabaseClosingError(error)
+        && !/^QUERY_CANCELLED:\s*replication-cancel$/i.test(message)) throw error;
+    return fallback();
+  }
+}
+
 // The first paint may use an already replicated local layout. Reading it never
 // seeds or patches the collection; native authority is reconciled separately.
 export async function readLocalDesktopLayout({
