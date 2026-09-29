@@ -338,6 +338,8 @@ def main():
     run('browser-runtime', ['npm', '--prefix', 'src/apps/business-os', 'exec',
                             'playwright', 'install', '--with-deps', 'chromium'])
     run('business-os-js-tests', ['npm', '--prefix', 'src/apps/business-os', 'test'])
+    run('desktop-icon-cancellation', ['node', '--test',
+                                      'src/apps/business-os/modules/desktop/tests/desktop.test.mjs'])
     run('business-os-module-bundles', ['npm', '--prefix', 'src/apps/business-os', 'run', 'test:module-bundles'])
     run('shell-contract', ['node', 'src/apps/business-os/scripts/assert-shell-v2-contract.mjs'])
     startup = run('shell-startup-cache', ['node', '--test',
