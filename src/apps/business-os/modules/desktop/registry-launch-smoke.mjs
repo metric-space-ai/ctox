@@ -153,6 +153,11 @@ assert.ok(
   'Desktop initial icon rendering must tolerate IndexedDB shutdown and replication-cancel reads'
 );
 assert.ok(
+  desktopSource.includes('withDesktopIconReconciliationRead(collection, async (existing) => {')
+    && desktopLayoutAuthoritySource.includes('if (isReplicationCancelledIconRead(error)) return false;'),
+  'Desktop background icon reconciliation must skip a cancelled read before any seed writes'
+);
+assert.ok(
   desktopSource.includes('ensureDesktopLayoutWithAuthority({')
     && desktopLayoutAuthoritySource.includes('authority = await readNativeDocument();')
     && desktopLayoutAuthoritySource.includes('return defaultLayout();'),

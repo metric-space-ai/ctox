@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { ensureDesktopLayoutWithAuthority, readLocalDesktopIcons, readLocalDesktopLayout } from './layout-authority.js?v=20260929-desktop-icon-cancel-v1';
+import { ensureDesktopLayoutWithAuthority, readLocalDesktopIcons, readLocalDesktopLayout, withDesktopIconReconciliationRead } from './layout-authority.js?v=20260929-desktop-icon-cancel-v1';
 
 const defaultLayout = () => ({
   wallpaper_url: '',
@@ -37,6 +37,24 @@ const defaultLayout = () => ({
     }),
     /UNAUTHORIZED/,
     'an authorization failure must not be disguised as a transient icon read',
+  );
+
+  let reconciliations = 0;
+  assert.equal(
+    await withDesktopIconReconciliationRead(cancelledCollection, async () => {
+      reconciliations += 1;
+    }),
+    false,
+    'background reconciliation must skip seeding after its initial read is cancelled',
+  );
+  assert.equal(reconciliations, 0);
+  await assert.rejects(
+    withDesktopIconReconciliationRead(
+      { find: () => ({ exec: async () => launcherIcons }) },
+      async () => { throw new Error('QUERY_CANCELLED: replication-cancel'); },
+    ),
+    /QUERY_CANCELLED: replication-cancel/,
+    'a cancellation-shaped error after the read must still surface as a write failure',
   );
 }
 
