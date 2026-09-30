@@ -633,6 +633,29 @@ pub(super) fn ensure_founder_outbound_body_clean(request: &ChannelSendRequest) -
     ensure_founder_outbound_body_text_clean(&request.body)
 }
 
+// The subject and recipients come from the reviewed thread action. Some
+// workers nevertheless prefix their reply with its exact Subject header.
+// Remove only that redundant first line before the exact-body review digest;
+// mismatched or additional headers still fail the normal body-clean gate.
+pub(super) fn reviewed_reply_body_only(body: &str, subject: &str) -> Result<String> {
+    let trimmed = body.trim();
+    let Some((first_line, rest)) = body.trim_start().split_once('\n') else {
+        return Ok(trimmed.to_string());
+    };
+    let Some((name, value)) = first_line.trim().split_once(':') else {
+        return Ok(trimmed.to_string());
+    };
+    if !name.eq_ignore_ascii_case("subject") || value.trim() != subject.trim() {
+        return Ok(trimmed.to_string());
+    }
+    let reply = rest.trim();
+    anyhow::ensure!(
+        !reply.is_empty(),
+        "reviewed founder reply is empty after its redundant Subject header"
+    );
+    Ok(reply.to_string())
+}
+
 pub(crate) fn ensure_founder_outbound_body_text_clean(body: &str) -> Result<()> {
     let lowered = body.to_ascii_lowercase();
     let first_lines = body
@@ -767,10 +790,7 @@ fn send_email_message_with_html(
                 .and_then(Value::as_str)
                 .unwrap_or("accepted"),
             "delivery_confirmed": existing
-                .get("adapter_result")
-                .or_else(|| existing.get("adapterResult"))
-                .and_then(|value| value.get("delivery"))
-                .and_then(|value| value.get("confirmed"))
+                .get("delivery_confirmed")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             "adapter_result": existing
@@ -981,6 +1001,16 @@ pub(super) fn existing_durable_outbound_send_result(
     Ok(Some(json!({
         "status": status,
         "folder_hint": folder_hint,
+        "delivery_confirmed": metadata
+            .get("sentCopyConfirmation")
+            .is_some()
+            || metadata
+                .get("adapterResult")
+                .or_else(|| metadata.get("adapter_result"))
+                .and_then(|value| value.get("delivery"))
+                .and_then(|value| value.get("confirmed"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
         "adapter_result": metadata
             .get("adapterResult")
             .or_else(|| metadata.get("adapter_result"))
@@ -1246,7 +1276,10 @@ pub(crate) fn record_founder_reply_review_approval(
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
     let action = prepare_reviewed_founder_reply(root, inbound_message_key)?;
-    let (action_digest, action_json, body_sha256) = founder_reply_review_digest(&action, body);
+    let reviewed_body = reviewed_reply_body_only(body, &action.subject)?;
+    ensure_founder_outbound_body_text_clean(&reviewed_body)?;
+    let (action_digest, action_json, body_sha256) =
+        founder_reply_review_digest(&action, &reviewed_body);
     let approval_key = format!("founder-review:{inbound_message_key}:{action_digest}");
     conn.execute(
         r#"
@@ -2013,7 +2046,7 @@ pub fn send_reviewed_founder_reply(
             channel: "email".to_string(),
             account_key: inbound.account_key.clone(),
             thread_key: action.thread_key.clone(),
-            body: body.trim().to_string(),
+            body: reviewed_reply_body_only(body, &action.subject)?,
             subject: action.subject.clone(),
             to: action.to.clone(),
             cc: action.cc.clone(),

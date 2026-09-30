@@ -7,6 +7,7 @@
 import assert from 'node:assert/strict';
 import {
   createCommandBus,
+  getBusinessOsCapabilityToken,
   resetBusinessOsCapabilityTokenCacheForTests,
 } from '../../shared/command-bus.js';
 
@@ -27,6 +28,7 @@ function reactiveCollection() {
   return {
     documents,
     async insert(document) {
+      if (documents.has(document.id)) throw new Error('document already exists');
       documents.set(document.id, { ...document });
       emit(document.id);
     },
@@ -205,6 +207,65 @@ function makeSync(state) {
   assert.equal(receipt.transient, false);
   assert.equal(receipt.pushConfirmed, true);
   assert.equal(pushedId, receipt.command_id);
+}
+
+// Reusing an ID tracks the original durable command. A renewed token must not
+// replace its stored authority or create a distinct explicit wire submission.
+for (const terminal of [false, true]) {
+  resetBusinessOsCapabilityTokenCacheForTests();
+  globalThis.CTOX_BUSINESS_OS_SESSION.capability_token = 'original-authority';
+  const collection = reactiveCollection();
+  const pushed = [];
+  const state = connectedState(async (documents) => {
+    pushed.push(...structuredClone(documents));
+    return true;
+  });
+  const bus = createCommandBus({ db: makeDb(collection), sync: makeSync(state) });
+  const command = { id: 'cmd-submit-existing-id', module: 'ctox', command_type: 'business_os.test' };
+  await bus.submit(command);
+  if (terminal) collection.update(command.id, { status: 'completed', terminal_status: 'completed' });
+  const original = structuredClone(collection.documents.get(command.id));
+  globalThis.CTOX_BUSINESS_OS_SESSION.capability_token = 'renewed-authority';
+  await getBusinessOsCapabilityToken({ refresh: true });
+  const reused = await bus.submit(command);
+  assert.deepEqual(collection.documents.get(command.id), original, 'existing document stays immutable');
+  assert.equal(pushed.length, 1, 'existing ID returns tracking without another explicit push');
+  assert.equal(pushed[0].client_context.capability_token, 'original-authority');
+  assert.equal(reused.tracking.command_id, command.id);
+  assert.equal(reused.retryable, false);
+  if (terminal) {
+    const tracked = await reused.resumeTracking({ until: 'terminal', timeoutMs: 1000 });
+    assert.equal(tracked.status, 'completed');
+  }
+  await assert.rejects(bus.submit({ ...command, payload: { changed: true } }),
+    (error) => error.code === 'idempotency_conflict' && error.retryable === false);
+  assert.equal(pushed.length, 1, 'different payload cannot push over the existing ID');
+  assert.deepEqual(collection.documents.get(command.id), original);
+}
+
+// A permanent transport denial is not pending delivery. Preserve the exact
+// immutable local intent and tracking receipt, but reject submission without
+// instructing a caller to issue a new command or hiding the native refusal.
+for (const rejectionKind of ['authorization', 'schema']) {
+  const collection = reactiveCollection();
+  let pushes = 0;
+  const refusal = Object.assign(new Error('Terminal masterWrite rejection'), {
+    code: 'ctox_replication_push_rejected', terminal: true, rejectionKind,
+  });
+  const state = connectedState(async () => { pushes += 1; throw refusal; });
+  const bus = createCommandBus({ db: makeDb(collection), sync: makeSync(state) });
+  const id = 'cmd-terminal-' + rejectionKind;
+  await assert.rejects(
+    bus.submit({ id, module: 'ctox', command_type: 'business_os.test' }),
+    (error) => error === refusal
+      && error.command_id === id
+      && error.receipt?.tracking.command_id === id
+      && error.receipt?.retryable === false
+      && error.receipt?.pushConfirmed === false,
+    'terminal denial must reach the caller with the retained command identity',
+  );
+  assert.equal(pushes, 1, 'no new wire submission after terminal denial');
+  assert.equal(collection.documents.has(id), true, 'retain the original immutable local intent');
 }
 
 console.log('ctox-rxdb command submit atomicity smoke OK');

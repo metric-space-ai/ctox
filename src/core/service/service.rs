@@ -1085,6 +1085,75 @@ fn result_from_worker_attempt(attempt: &lcm::WorkerAttemptRecord) -> Result<Stri
     }
 }
 
+fn incomplete_plan_terminal_disposition(
+    attempt_id: &str,
+    incomplete: &lcm::IncompleteTaskExecutionPlan,
+) -> CompletionReviewDisposition {
+    CompletionReviewDisposition::TerminalQueueFailure {
+        summary: format!(
+            "{incomplete}; attempt_id={attempt_id}. Finalization stopped without replaying research or writebacks. Reconcile the saved result and plan before explicitly retrying."
+        ),
+    }
+}
+
+fn apply_incomplete_queue_plan_failure(
+    root: &Path,
+    job: &QueuedPrompt,
+    attempt_id: &str,
+    lease_worker_id: Option<&str>,
+    incomplete: &lcm::IncompleteTaskExecutionPlan,
+) -> Result<CompletionReviewDisposition> {
+    let disposition = incomplete_plan_terminal_disposition(attempt_id, incomplete);
+    let CompletionReviewDisposition::TerminalQueueFailure { summary } = &disposition else {
+        unreachable!()
+    };
+    channels::fail_incomplete_plan_for_attempt(
+        root,
+        attempt_id,
+        &job.leased_message_keys,
+        lease_worker_id,
+        incomplete,
+        summary,
+    )?;
+    Ok(disposition)
+}
+
+fn queue_supports_plan_failure(root: &Path, job: &QueuedPrompt) -> Result<bool> {
+    if job.source_label != "queue" || job.leased_message_keys.len() != 1 {
+        return Ok(false);
+    }
+    let conn = Connection::open(crate::paths::core_db(root))?;
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM business_command_task_links l
+         JOIN business_command_aggregates a ON a.command_id=l.command_id
+         WHERE l.task_id=?1 AND a.command_type='business_os.chat.task')",
+        [&job.leased_message_keys[0]],
+        |row| row.get(0),
+    )?)
+}
+
+fn accepted_queue_plan_failure(
+    root: &Path,
+    job: &QueuedPrompt,
+    disposition: &CompletionReviewDisposition,
+) -> Result<Option<lcm::IncompleteTaskExecutionPlan>> {
+    if !matches!(
+        disposition,
+        CompletionReviewDisposition::Approved { .. } | CompletionReviewDisposition::None
+    ) || !queue_supports_plan_failure(root, job)?
+    {
+        return Ok(None);
+    }
+    let work_key = worker_attempt_work_key(job);
+    Ok(
+        lcm::run_task_execution_progress(&crate::paths::core_db(root), &work_key)?
+            .as_ref()
+            .and_then(|progress| {
+                lcm::IncompleteTaskExecutionPlan::from_progress(&work_key, progress)
+            }),
+    )
+}
+
 fn apply_business_command_writebacks_for_attempt<F>(
     root: &Path,
     db_path: &Path,
@@ -5144,6 +5213,7 @@ struct PromptWorkerActivity {
     leases_released: bool,
     lease_heartbeat_stop: Arc<std::sync::atomic::AtomicBool>,
     lease_heartbeat: Option<thread::JoinHandle<()>>,
+    lease_worker_id: Option<String>,
 }
 
 struct PreparedCrewAttempt {
@@ -5407,6 +5477,7 @@ impl PromptWorkerActivity {
         // row so recovery sweeps and audit surfaces can tell which worker
         // instance owned the lease when heartbeats stop. Lossy on purpose: a
         // failed attach must never strand an otherwise valid lease.
+        let mut lease_worker_id = None;
         if !job.leased_message_keys.is_empty() {
             let worker_id = queue_lease_worker_id(job);
             if let Err(err) = channels::record_queue_lease_worker(
@@ -5423,6 +5494,8 @@ impl PromptWorkerActivity {
                         clip_text(&err.to_string(), 180)
                     ),
                 );
+            } else {
+                lease_worker_id = Some(worker_id);
             }
         }
         Self {
@@ -5435,6 +5508,7 @@ impl PromptWorkerActivity {
             leases_released: false,
             lease_heartbeat_stop,
             lease_heartbeat,
+            lease_worker_id,
         }
     }
 
@@ -6996,35 +7070,53 @@ fn start_prompt_worker(
             } else {
                 CompletionReviewDisposition::None
             };
-            let mut review_disposition = match typed_result {
-                Ok(Some(task_id)) => {
-                    if let Err(error) = record_typed_business_command_review(
-                        &root,
-                        &task_id,
-                        &review_disposition,
-                        app_validation_before_review,
-                        &command_turn_id,
-                        conversation_thread_key.as_deref(),
-                    ) {
-                        push_event(
-                            &state,
-                            format!(
-                                "Typed Business OS review persistence failed for {}: {error:#}",
-                                job.source_label
-                            ),
-                        );
-                        CompletionReviewDisposition::Hold {
-                            reason: review::HoldReason::MissingReviewEvidence,
-                            summary: format!(
-                                "Command review evidence could not be persisted: {error}"
-                            ),
-                        }
-                    } else {
-                        review_disposition
-                    }
-                }
-                _ => review_disposition,
+            let mut incomplete_plan_failure = if result.is_ok() {
+                accepted_queue_plan_failure(&root, &job, &review_disposition)?
+            } else {
+                None
             };
+            let mut review_disposition = if let Some(incomplete) = incomplete_plan_failure.as_ref()
+            {
+                apply_incomplete_queue_plan_failure(
+                    &root,
+                    &job,
+                    &attempt_id,
+                    worker_activity.lease_worker_id.as_deref(),
+                    incomplete,
+                )?
+            } else {
+                match typed_result {
+                    Ok(Some(task_id)) => {
+                        if let Err(error) = record_typed_business_command_review(
+                            &root,
+                            &task_id,
+                            &review_disposition,
+                            app_validation_before_review,
+                            &command_turn_id,
+                            conversation_thread_key.as_deref(),
+                        ) {
+                            push_event(
+                                &state,
+                                format!(
+                                    "Typed Business OS review persistence failed for {}: {error:#}",
+                                    job.source_label
+                                ),
+                            );
+                            CompletionReviewDisposition::Hold {
+                                reason: review::HoldReason::MissingReviewEvidence,
+                                summary: format!(
+                                    "Command review evidence could not be persisted: {error}"
+                                ),
+                            }
+                        } else {
+                            review_disposition
+                        }
+                    }
+                    _ => review_disposition,
+                }
+            };
+            review_disposition =
+                hold_unsent_founder_communication_rework(&root, &job, review_disposition);
             let review_reason = match &review_disposition {
                 CompletionReviewDisposition::Hold { summary, .. }
                 | CompletionReviewDisposition::NoSend { summary }
@@ -7594,14 +7686,16 @@ fn start_prompt_worker(
                                 | CompletionReviewDisposition::None
                                 | CompletionReviewDisposition::NoSend { .. }
                         );
-                        let accepted_success = completion_review_accepted
+                        let mut accepted_success = completion_review_accepted
                             && outcome_witness_error.is_none()
                             && founder_send_error.is_none()
                             && !app_validation_rework
                             && !app_validation_terminal_failure;
-                        if lcm::run_task_execution_progress(&db_path, &attempt_work_key)?.is_some()
+                        if incomplete_plan_failure.is_none()
+                            && lcm::run_task_execution_progress(&db_path, &attempt_work_key)?
+                                .is_some()
                         {
-                            lcm::run_set_task_execution_review_status(
+                            let plan_review = lcm::run_set_task_execution_review_status(
                                 &db_path,
                                 &attempt_work_key,
                                 if accepted_success {
@@ -7609,7 +7703,32 @@ fn start_prompt_worker(
                                 } else {
                                     "failed"
                                 },
-                            )?;
+                            );
+                            if let Err(error) = plan_review {
+                                // A concurrent revision can invalidate the preflight.
+                                // Storage errors still recover the saved attempt.
+                                let incomplete = error
+                                    .downcast_ref::<lcm::IncompleteTaskExecutionPlan>()
+                                    .cloned();
+                                let Some(incomplete) = incomplete else {
+                                    return Err(error);
+                                };
+                                if terminal_no_send || !queue_supports_plan_failure(&root, &job)? {
+                                    return Err(error);
+                                }
+                                review_disposition = apply_incomplete_queue_plan_failure(
+                                    &root,
+                                    &job,
+                                    &attempt_id,
+                                    worker_activity.lease_worker_id.as_deref(),
+                                    &incomplete,
+                                )?;
+                                incomplete_plan_failure = Some(incomplete);
+                                accepted_success = false;
+                                should_handle_messages = false;
+                                app_validation_terminal_success = false;
+                                outcome_recovery_prompt = None;
+                            }
                             if let Some(task_id) = job.leased_message_keys.first() {
                                 crate::business_os::store::refresh_business_command_queue_task_projection(
                                     &root,
@@ -7654,6 +7773,10 @@ fn start_prompt_worker(
                                 outcome_witness_error
                                     .clone()
                                     .or_else(|| founder_send_error.clone())
+                                    .or_else(|| match &review_disposition {
+                                        CompletionReviewDisposition::TerminalQueueFailure { summary } => Some(summary.clone()),
+                                        _ => None,
+                                    })
                                     .unwrap_or_else(|| {
                                         format!(
                                             "completion review did not accept terminal success ({})",
@@ -7662,13 +7785,23 @@ fn start_prompt_worker(
                                     }),
                             );
                         }
-                        if founder_send_error.is_none() && !terminal_no_send {
+                        if should_handle_messages
+                            && founder_send_error.is_none()
+                            && !terminal_no_send
+                        {
                             if let Some(message_key) = founder_reply_key.as_deref() {
-                                let _ = close_open_founder_communication_self_work_for_inbound(
+                                if channels::founder_reply_sent_after_review_for_message(
                                     &root,
                                     message_key,
-                                    "Founder communication completed after reviewed outbound send.",
-                                );
+                                )
+                                .unwrap_or(false)
+                                {
+                                    let _ = close_open_founder_communication_self_work_for_inbound(
+                                        &root,
+                                        message_key,
+                                        "Founder communication completed after reviewed outbound send.",
+                                    );
+                                }
                             }
                         }
                         if should_handle_messages
@@ -7851,13 +7984,24 @@ fn start_prompt_worker(
                                     }
                                 };
                                 (
-                                    channels::ack_leased_messages_for_attempt(
-                                        &root,
-                                        &attempt_id,
-                                        &job.leased_message_keys,
-                                        retry_status,
-                                        Some(failure_reason),
-                                    ),
+                                    if let Some(incomplete) = incomplete_plan_failure.as_ref() {
+                                        channels::fail_incomplete_plan_for_attempt(
+                                            &root,
+                                            &attempt_id,
+                                            &job.leased_message_keys,
+                                            worker_activity.lease_worker_id.as_deref(),
+                                            incomplete,
+                                            failure_reason,
+                                        )
+                                    } else {
+                                        channels::ack_leased_messages_for_attempt(
+                                            &root,
+                                            &attempt_id,
+                                            &job.leased_message_keys,
+                                            retry_status,
+                                            Some(failure_reason),
+                                        )
+                                    },
                                     format!("queue lease(s) ({retry_status})"),
                                 )
                             } else {
@@ -8043,7 +8187,7 @@ fn start_prompt_worker(
                                     push_event_locked(
                                         &mut shared,
                                         format!(
-                                            "Review exhausted the finite queue retry budget for {}; queue item is terminal failed: {}",
+                                            "Completion review rejected terminal success for {}; queue failure: {}",
                                             job.source_label,
                                             clip_text(summary, 180)
                                         ),
@@ -8816,7 +8960,7 @@ fn start_prompt_worker(
                         }
                     }
                 }
-                if is_person_research_gap_closure_job(&job)
+                if (is_person_research_gap_closure_job(&job) || incomplete_plan_failure.is_some())
                     && matches!(
                         &review_disposition,
                         CompletionReviewDisposition::TerminalQueueFailure { .. }
@@ -9117,8 +9261,18 @@ fn run_completion_review(
     conversation_id: i64,
     _mission_state: Option<&lcm::MissionStateRecord>,
 ) -> CompletionReviewDisposition {
-    match command_writeback_failure(root, job) {
-        Ok(Some(summary)) => {
+    let writeback_probe = match command_writeback_probe(root, job) {
+        Ok(probe) => probe,
+        Err(error) => {
+            return CompletionReviewDisposition::TerminalQueueFailure {
+                summary: format!(
+                    "Business command writeback evidence could not be verified: {error}"
+                ),
+            };
+        }
+    };
+    match command_writeback_failure_from_probe(&writeback_probe) {
+        Some(summary) => {
             // A research turn that ended right before its writeback ("JSON ist
             // valide. Jetzt der Writeback.", CHT and Cilag on thesen,
             // 23.09.2026, after 1-2 h of finished research) is not a failed
@@ -9139,14 +9293,7 @@ fn run_completion_review(
             }
             return CompletionReviewDisposition::TerminalQueueFailure { summary };
         }
-        Ok(None) => {}
-        Err(error) => {
-            return CompletionReviewDisposition::TerminalQueueFailure {
-                summary: format!(
-                    "Business command writeback evidence could not be verified: {error}"
-                ),
-            }
-        }
+        None => {}
     }
     let owner_visible = derive_owner_visible_for_review(&job.source_label);
     let db_path = crate::paths::core_db(&root);
@@ -9156,8 +9303,45 @@ fn run_completion_review(
         .to_string();
     let email_reply_key = inbound_email_reply_message_key(job);
     let founder_reply_key = founder_email_reply_message_key(job);
-    let email_reply_action = email_reply_key
-        .and_then(|message_key| channels::prepare_reviewed_founder_reply(root, message_key).ok());
+    let founder_rework_key = founder_communication_rework_inbound_key(job);
+    if let Some(rework_key) = founder_rework_key {
+        if email_reply_key != Some(rework_key) {
+            return CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::Technical {
+                    policy_id: "founder-rework-reply-action".to_string(),
+                },
+                summary: format!(
+                    "Founder communication rework for {rework_key} cannot use a different or missing leased inbound email for its reviewed reply."
+                ),
+            };
+        }
+    }
+    let email_reply_action = match email_reply_key {
+        Some(message_key) => match channels::prepare_reviewed_founder_reply(root, message_key) {
+            Ok(action) => Some(action),
+            Err(error) if founder_rework_key.is_some() => {
+                return CompletionReviewDisposition::Hold {
+                    reason: review::HoldReason::Technical {
+                        policy_id: "founder-rework-reply-action".to_string(),
+                    },
+                    summary: format!(
+                        "Founder communication rework cannot prepare its reviewed reply for {message_key}: {error}"
+                    ),
+                };
+            }
+            Err(_) => None,
+        },
+        None => None,
+    };
+    if founder_rework_key.is_some() && email_reply_action.is_none() {
+        return CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "founder-rework-reply-action".to_string(),
+            },
+            summary: "Founder communication rework cannot complete because its inbound email is not leased for a reviewed reply; the email remains open for recovery."
+                .to_string(),
+        };
+    }
     // Workers echo the thread subject as the first body line ("Subject: Re:
     // Import falsch gelandet"); the header check rejected an otherwise fine
     // reply five times in a row and a rework slice repeated it (thesen
@@ -9204,8 +9388,13 @@ fn run_completion_review(
         })
         .unwrap_or_default();
     let required_deliverables = founder_required_deliverables;
-    let deterministic_evidence =
-        collect_review_evidence_summaries(root, job, conversation_id, &artifact_attachments);
+    let deterministic_evidence = collect_review_evidence_summaries(
+        root,
+        job,
+        conversation_id,
+        &artifact_attachments,
+        &writeback_probe,
+    );
     let founder_commitments = if email_reply_action.is_some() || proactive_founder_action.is_some()
     {
         detect_founder_mail_commitments(reply_text)
@@ -11729,8 +11918,9 @@ fn collect_review_evidence_summaries(
     job: &QueuedPrompt,
     conversation_id: i64,
     artifact_attachments: &[String],
+    writeback_probe: &CommandWritebackProbe,
 ) -> Vec<String> {
-    let mut evidence = Vec::new();
+    let mut evidence = command_writeback_review_evidence(writeback_probe);
     if is_systematic_research_job(job) {
         match systematic_research_validation_receipt_path(job) {
             Some(path) => match std::fs::read_to_string(&path)
@@ -18538,12 +18728,8 @@ fn repair_stalled_founder_communications(
             continue;
         }
         if channels::founder_reply_sent_after_review_for_message(root, &message.message_key)? {
-            repaired += channels::ack_leased_messages(
-                root,
-                std::slice::from_ref(&message.message_key),
-                "handled",
-            )
-            .unwrap_or(0);
+            repaired +=
+                channels::handle_inbound_after_reviewed_founder_reply(root, &message.message_key)?;
             repaired += close_open_founder_communication_self_work_for_inbound(
                 root,
                 &message.message_key,
@@ -19686,6 +19872,72 @@ fn founder_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
         return None;
     }
     inbound_email_reply_message_key(job)
+}
+
+fn founder_communication_rework_inbound_key(job: &QueuedPrompt) -> Option<&str> {
+    let kind = job
+        .queue_task_metadata
+        .get("ticket_self_work_kind")
+        .and_then(Value::as_str)
+        .or_else(|| job.queue_task_metadata.get("kind").and_then(Value::as_str));
+    if kind != Some(FOUNDER_COMMUNICATION_REWORK_KIND) {
+        return None;
+    }
+    job.queue_task_metadata
+        .get("inbound_message_key")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            job.queue_task_metadata
+                .get("parent_message_key")
+                .and_then(Value::as_str)
+        })
+        .filter(|key| key.starts_with("email:"))
+        .or_else(|| founder_email_reply_message_key(job))
+}
+
+fn hold_unsent_founder_communication_rework(
+    root: &Path,
+    job: &QueuedPrompt,
+    disposition: CompletionReviewDisposition,
+) -> CompletionReviewDisposition {
+    if !matches!(
+        disposition,
+        CompletionReviewDisposition::Approved { .. } | CompletionReviewDisposition::NoSend { .. }
+    ) {
+        return disposition;
+    }
+    let Some(inbound_key) = founder_communication_rework_inbound_key(job) else {
+        return disposition;
+    };
+    if inbound_email_reply_message_key(job) != Some(inbound_key) {
+        return CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "founder-rework-outbound-send".to_string(),
+            },
+            summary: format!(
+                "Founder communication rework for {inbound_key} cannot close against a different or missing leased inbound email."
+            ),
+        };
+    }
+    match channels::founder_reply_sent_after_review_for_message(root, inbound_key) {
+        Ok(true) => disposition,
+        Ok(false) => CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "founder-rework-outbound-send".to_string(),
+            },
+            summary: format!(
+                "Founder communication rework for {inbound_key} cannot close before a reviewed outbound email is accepted."
+            ),
+        },
+        Err(error) => CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "founder-rework-outbound-send".to_string(),
+            },
+            summary: format!(
+                "Founder communication rework for {inbound_key} cannot verify its reviewed outbound email: {error}"
+            ),
+        },
+    }
 }
 
 fn inbound_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
@@ -21723,7 +21975,10 @@ fn founder_rework_queue_attempt_count(root: &Path, work_id: &str) -> Result<usiz
     let conn = channels::open_channel_db(&db_path)?;
     let count: i64 = conn.query_row(
         r#"
-        SELECT COUNT(*)
+        -- Re-leasing the same queue row is another execution attempt, not a
+        -- new message. Keep the existing minimum of one per admitted row so
+        -- legacy/unleased review-rework rows still spend their reserved budget.
+        SELECT COALESCE(SUM(MAX(1, COALESCE(r.attempt, 0))), 0)
         FROM communication_messages m
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
         WHERE m.channel = 'queue'
@@ -24765,7 +25020,13 @@ mod tests {
             r#"{"status":"pass","checked_at":"2026-07-18T00:00:00Z","manifests":[{"manifest_sha256":"abc"}]}"#,
         )
         .unwrap();
-        let evidence = collect_review_evidence_summaries(&root, &job, 1, &[]);
+        let evidence = collect_review_evidence_summaries(
+            &root,
+            &job,
+            1,
+            &[],
+            &CommandWritebackProbe::NotRequired,
+        );
         assert!(evidence.iter().any(
             |line| line.contains("Systematic research validator receipt")
                 && line.contains("status=pass")
@@ -34916,6 +35177,376 @@ Business OS command:
         Ok(())
     }
 
+    fn incomplete_plan_queue_fixture(
+        name: &str,
+    ) -> anyhow::Result<(PathBuf, QueuedPrompt, String)> {
+        let root = temp_root(name);
+        let accepted = crate::business_os::store::record_command(
+            &root,
+            crate::business_os::store::BusinessCommand {
+                origin: crate::business_os::store::CommandOrigin::TrustedLocal,
+                id: Some(name.into()),
+                module: "ctox".into(),
+                command_type: "business_os.chat.task".into(),
+                record_id: Some("ctox".into()),
+                payload: json!({"title":"Reconcile saved research","prompt":"Inspect saved research"}),
+                client_context: json!({"source":"test"}),
+            },
+        )?;
+        let task = channels::load_queue_task(&root, &accepted.task_id.unwrap())?.unwrap();
+        channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)?;
+        for phase in ["leased", "running"] {
+            channels::transition_business_command_for_task(
+                &root,
+                &task.message_key,
+                phase,
+                None,
+                None,
+                None,
+                "fixture worker",
+            )?;
+        }
+        channels::record_queue_lease_worker(
+            &root,
+            &[task.message_key.clone()],
+            CHANNEL_ROUTER_LEASE_OWNER,
+            "fixture-worker",
+        )?;
+        let job = QueuedPrompt {
+            queue_task_metadata: task.metadata.clone(),
+            prompt: task.prompt.clone(),
+            goal: task.title.clone(),
+            preview: task.title.clone(),
+            source_label: "queue".into(),
+            suggested_skill: None,
+            leased_message_keys: vec![task.message_key.clone()],
+            leased_ticket_event_keys: vec![],
+            thread_key: Some(task.thread_key.clone()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let attempt_id = format!("attempt-{name}");
+        let work_key = worker_attempt_work_key(&job);
+        let engine = LcmEngine::open(&crate::paths::core_db(&root), LcmConfig::default())?;
+        engine.continuity_init_documents(7410)?;
+        engine.begin_worker_attempt_finalization(lcm::WorkerAttemptFinalizationInput {
+            attempt_id: &attempt_id,
+            work_key: &work_key,
+            conversation_id: 7410,
+            source_label: "queue",
+            agent_outcome: lcm::AgentOutcome::Success,
+            reply_text: "Saved partial research result",
+            error_text: None,
+        })?;
+        engine.ensure_worker_attempt_assistant_message(&attempt_id)?;
+        engine.record_task_execution_plan(lcm::TaskExecutionPlanUpdate {
+            work_key: &work_key,
+            task_id: &task.message_key,
+            command_id: name,
+            attempt_id: &attempt_id,
+            explanation: Some("partial writeback is not full completion"),
+            steps: &[
+                lcm::TaskExecutionPlanStepInput {
+                    label: "Save research chunk".into(),
+                    status: "completed".into(),
+                },
+                lcm::TaskExecutionPlanStepInput {
+                    label: "Verify remaining fields".into(),
+                    status: "in_progress".into(),
+                },
+            ],
+        })?;
+        channels::persist_business_command_worker_result(
+            &root,
+            &task.message_key,
+            "Saved partial research result",
+        )?;
+        Ok((root, job, attempt_id))
+    }
+
+    #[test]
+    fn incomplete_plan_failure_survives_prior_hold_and_crash_without_replay() -> anyhow::Result<()>
+    {
+        let (root, job, attempt_id) = incomplete_plan_queue_fixture("plan-stop-held")?;
+        assert!(
+            job.workspace_root.is_none(),
+            "workspace-less command must be covered"
+        );
+        let work_key = worker_attempt_work_key(&job);
+        let incomplete =
+            accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)?.unwrap();
+        let hold = review::HoldReason::Technical {
+            policy_id: "fixture-store-recovery".into(),
+        };
+        channels::hold_leased_messages_for_attempt(
+            &root,
+            &attempt_id,
+            &job.leased_message_keys,
+            &hold,
+            "temporary failure",
+        )?;
+        let db_path = crate::paths::core_db(&root);
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let prior_marker = lcm::run_worker_attempt(&db_path, &attempt_id)?
+            .unwrap()
+            .queue_effects_applied_at;
+        assert!(prior_marker.is_some());
+        // Advance only the fixture cooldown, then recover the same stored attempt.
+        conn.execute("UPDATE communication_routing_state SET retry_not_before='2000-01-01T00:00:00Z' WHERE message_key=?1", [&job.leased_message_keys[0]])?;
+        channels::lease_queue_task(
+            &root,
+            &job.leased_message_keys[0],
+            CHANNEL_ROUTER_LEASE_OWNER,
+        )?;
+        channels::record_queue_lease_worker(
+            &root,
+            &job.leased_message_keys,
+            CHANNEL_ROUTER_LEASE_OWNER,
+            "fixture-worker",
+        )?;
+        let recovered = lcm::run_recoverable_worker_attempt(&db_path, &work_key)?.unwrap();
+        assert_eq!(recovered.attempt_id, attempt_id);
+        assert_eq!(
+            result_from_worker_attempt(&recovered)?,
+            "Saved partial research result"
+        );
+        // Queue re-leasing does not advance the command aggregate. Mirror the
+        // canonical context-loading transitions before restoring its result.
+        for phase in ["leased", "running"] {
+            assert!(channels::transition_business_command_for_task(
+                &root,
+                &job.leased_message_keys[0],
+                phase,
+                None,
+                None,
+                None,
+                "fixture recovery of saved partial result",
+            )?);
+        }
+        channels::persist_business_command_worker_result(
+            &root,
+            &job.leased_message_keys[0],
+            &recovered.reply_text,
+        )?;
+        let disposition = apply_incomplete_queue_plan_failure(
+            &root,
+            &job,
+            &attempt_id,
+            Some("fixture-worker"),
+            &incomplete,
+        )?;
+        let CompletionReviewDisposition::TerminalQueueFailure { summary } = disposition else {
+            unreachable!()
+        };
+        assert!(
+            summary.contains(&attempt_id)
+                && summary.contains("1/2")
+                && summary.contains("revision=")
+        );
+        assert_eq!(
+            route_status_for(&root, &job.leased_message_keys[0]),
+            "failed"
+        );
+        let terminal_version: i64 = conn.query_row("SELECT projection_version FROM business_command_aggregates WHERE command_id='plan-stop-held'", [], |r| r.get(0))?;
+        // Crash boundary: terminal queue/command committed, attempt still recoverable.
+        let recovered = lcm::run_recoverable_worker_attempt(&db_path, &work_key)?.unwrap();
+        assert_eq!(recovered.attempt_id, attempt_id);
+        assert_eq!(recovered.queue_effects_applied_at, prior_marker);
+        assert_eq!(
+            channels::fail_incomplete_plan_for_attempt(
+                &root,
+                &attempt_id,
+                &job.leased_message_keys,
+                Some("fixture-worker"),
+                &incomplete,
+                &summary
+            )?,
+            0
+        );
+        assert_eq!(conn.query_row("SELECT projection_version FROM business_command_aggregates WHERE command_id='plan-stop-held'", [], |r| r.get::<_, i64>(0))?, terminal_version);
+        assert!(channels::lease_queue_task(
+            &root,
+            &job.leased_message_keys[0],
+            CHANNEL_ROUTER_LEASE_OWNER
+        )
+        .is_err());
+        lcm::run_record_worker_attempt_artifact_check(&db_path, &attempt_id, false, &summary)?;
+        lcm::run_terminalize_worker_attempt(
+            &db_path,
+            &attempt_id,
+            lcm::WorkerAttemptTerminalStatus::Failed,
+            false,
+            true,
+            Some(&summary),
+        )?;
+        assert!(lcm::run_recoverable_worker_attempt(&db_path, &work_key)?.is_none());
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM worker_attempt_finalizations",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM messages WHERE conversation_id=7410 AND role='assistant'",
+                [],
+                |r| r.get::<_, i64>(0)
+            )?,
+            1
+        );
+        let progress = lcm::run_task_execution_progress(&db_path, &work_key)?.unwrap();
+        assert_eq!(progress["completed_steps"], 1);
+        assert_eq!(progress["steps"][1]["status"], "in_progress");
+        assert_eq!(progress["review"]["status"], "failed");
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_plan_failure_preserves_cancellation_and_new_lease_owner() -> anyhow::Result<()> {
+        for name in [
+            "plan-stop-cancel",
+            "plan-stop-new-owner",
+            "plan-stop-new-revision",
+        ] {
+            let cancel = name == "plan-stop-cancel";
+            let (root, job, attempt_id) = incomplete_plan_queue_fixture(name)?;
+            let incomplete =
+                accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)?
+                    .unwrap();
+            if cancel {
+                channels::transition_business_command_for_task(
+                    &root,
+                    &job.leased_message_keys[0],
+                    "cancelled",
+                    None,
+                    None,
+                    None,
+                    "operator cancellation",
+                )?;
+            } else if name == "plan-stop-new-owner" {
+                channels::record_queue_lease_worker(
+                    &root,
+                    &job.leased_message_keys,
+                    CHANNEL_ROUTER_LEASE_OWNER,
+                    "new-worker",
+                )?;
+            } else {
+                LcmEngine::open(&crate::paths::core_db(&root), LcmConfig::default())?
+                    .record_task_execution_plan(lcm::TaskExecutionPlanUpdate {
+                        work_key: &worker_attempt_work_key(&job),
+                        task_id: &job.leased_message_keys[0],
+                        command_id: name,
+                        attempt_id: &attempt_id,
+                        explanation: Some("new authoritative plan"),
+                        steps: &[lcm::TaskExecutionPlanStepInput {
+                            label: "Reconciled new plan".into(),
+                            status: "in_progress".into(),
+                        }],
+                    })?;
+            }
+            let before = route_status_for(&root, &job.leased_message_keys[0]);
+            let db_path = crate::paths::core_db(&root);
+            let conn = rusqlite::Connection::open(&db_path)?;
+            let snapshot =
+                || -> anyhow::Result<(Option<serde_json::Value>, String)> {
+                    Ok((lcm::run_task_execution_progress(&db_path, &worker_attempt_work_key(&job))?,
+                    conn.query_row(
+                        "SELECT json_object('phase',a.execution_phase,'terminal',a.terminal_status,
+                            'version',a.projection_version,'review',r.review_status,
+                            'validation',r.validation_status,'evidence',r.review_evidence_json)
+                         FROM business_command_aggregates a JOIN business_command_results r
+                         ON r.command_id=a.command_id AND r.attempt=MAX(a.attempt,1)
+                         WHERE a.command_id=?1", [name], |row| row.get(0))?))
+                };
+            let evidence_before = snapshot()?;
+            // Same production boundary as preflight and late typed rejection.
+            let result = apply_incomplete_queue_plan_failure(
+                &root,
+                &job,
+                &attempt_id,
+                Some("fixture-worker"),
+                &incomplete,
+            );
+            if cancel {
+                assert!(matches!(
+                    result?,
+                    CompletionReviewDisposition::TerminalQueueFailure { .. }
+                ));
+                assert_eq!(before, "cancelled");
+                assert!(channels::lease_queue_task(
+                    &root,
+                    &job.leased_message_keys[0],
+                    CHANNEL_ROUTER_LEASE_OWNER
+                )
+                .is_err());
+            } else {
+                assert!(result.is_err());
+            }
+            assert_eq!(
+                snapshot()?,
+                evidence_before,
+                "stale finalizer changed authoritative evidence"
+            );
+            assert_eq!(route_status_for(&root, &job.leased_message_keys[0]), before);
+            assert!(
+                lcm::run_worker_attempt(&crate::paths::core_db(&root), &attempt_id)?
+                    .unwrap()
+                    .queue_effects_applied_at
+                    .is_none()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn incomplete_plan_preflight_preserves_rework_and_store_failures() -> anyhow::Result<()> {
+        let (root, job, _) = incomplete_plan_queue_fixture("plan-stop-store")?;
+        let hold = CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::MissingReviewEvidence,
+            summary: "review still needed".into(),
+        };
+        assert!(accepted_queue_plan_failure(&root, &job, &hold)?.is_none());
+        assert!(accepted_queue_plan_failure(
+            &root,
+            &job,
+            &CompletionReviewDisposition::NoSend {
+                summary: "operator no-send".into()
+            }
+        )?
+        .is_none());
+        let conn = rusqlite::Connection::open(crate::paths::core_db(&root))?;
+        let saved_steps: String = conn.query_row(
+            "SELECT steps_json FROM task_execution_plan_revisions",
+            [],
+            |r| r.get(0),
+        )?;
+        conn.execute(
+            "UPDATE task_execution_plan_revisions SET steps_json='{'",
+            [],
+        )?;
+        let error = accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)
+            .unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<lcm::IncompleteTaskExecutionPlan>()
+                .is_none(),
+            "a store error must not terminalize work"
+        );
+        conn.execute(
+            "UPDATE task_execution_plan_revisions SET steps_json=?1",
+            [saved_steps],
+        )?;
+        assert_eq!(
+            route_status_for(&root, &job.leased_message_keys[0]),
+            "leased"
+        );
+        Ok(())
+    }
+
     #[test]
     fn crew_unavailable_service_attempt_finishes_without_releasing_for_retry() -> anyhow::Result<()>
     {
@@ -41348,6 +41979,136 @@ Use shell tools to create or update these files."
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn founder_rework_repeated_leases_of_one_task_exhaust_the_review_budget() {
+        let root = temp_root("ctox-founder-rework-repeated-lease-budget");
+        let inbound_key = "email:cto1@metric-space.ai::INBOX::repeated-lease";
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: FOUNDER_COMMUNICATION_REWORK_KIND.to_string(),
+                title: "Founder communication rework: truthful reply".to_string(),
+                body_text: "Reply only after gathering real evidence.".to_string(),
+                state: "queued".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "email-review:founder:repeated-lease",
+                    "parent_message_key": inbound_key,
+                    "inbound_message_key": inbound_key,
+                }),
+            },
+            false,
+        )
+        .expect("seed founder rework");
+        let create_task = |work_id: &str, thread: &str| {
+            channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: "Founder communication rework: truthful reply".to_string(),
+                    prompt: "Gather evidence; do not invent a UI change.".to_string(),
+                    thread_key: thread.to_string(),
+                    workspace_root: None,
+                    priority: "urgent".to_string(),
+                    suggested_skill: Some("follow-up-orchestrator".to_string()),
+                    parent_message_key: Some(inbound_key.to_string()),
+                    extra_metadata: Some(serde_json::json!({
+                        "ticket_self_work_id": work_id,
+                        "ticket_self_work_kind": FOUNDER_COMMUNICATION_REWORK_KIND,
+                        "parent_message_key": inbound_key,
+                        "inbound_message_key": inbound_key,
+                    })),
+                },
+            )
+            .expect("seed queue task")
+        };
+        let task = create_task(&item.work_id, "email-review:founder:repeated-lease");
+        let unrelated = create_task("different-work-id", "email-review:founder:other");
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root)).unwrap();
+        conn.execute(
+            "UPDATE communication_routing_state SET route_status='review_rework', attempt=1 WHERE message_key=?1",
+            params![task.message_key],
+        ).unwrap();
+        conn.execute(
+            "UPDATE communication_routing_state SET attempt=99 WHERE message_key=?1",
+            params![unrelated.message_key],
+        )
+        .unwrap();
+        assert_eq!(
+            founder_rework_queue_attempt_count(&root, &item.work_id).unwrap(),
+            1
+        );
+        assert!(founder_rework_review_loop_block_note(
+            &root,
+            &item.work_id,
+            "Rejected ungrounded reply"
+        )
+        .unwrap()
+        .is_none());
+        conn.execute(
+            "UPDATE communication_routing_state SET attempt=?2 WHERE message_key=?1",
+            params![
+                task.message_key,
+                FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD as i64
+            ],
+        )
+        .unwrap();
+        assert!(
+            founder_rework_review_loop_block_note(&root, &item.work_id, "Rejected again")
+                .unwrap()
+                .is_some()
+        );
+        // Production lease admission increments this durable attempt column.
+        // Twenty-one leases of one row must not still count as one message.
+        conn.execute(
+            "UPDATE communication_routing_state SET attempt=21 WHERE message_key=?1",
+            params![task.message_key],
+        )
+        .unwrap();
+        assert_eq!(
+            founder_rework_queue_attempt_count(&root, &item.work_id).unwrap(),
+            21
+        );
+        for _ in 0..2 {
+            assert!(requeue_review_rejected_self_work(
+                &root,
+                &item.work_id,
+                "Rejected invented UI change"
+            )
+            .unwrap()
+            .is_none());
+        }
+        assert_eq!(
+            channels::load_queue_task(&root, &task.message_key)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "failed"
+        );
+        assert_eq!(
+            tickets::load_ticket_self_work_item(&root, &item.work_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "failed"
+        );
+        assert_eq!(
+            channels::load_queue_task(&root, &unrelated.message_key)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "pending"
+        );
+        let notes: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_self_work_notes WHERE work_id=?1",
+                params![item.work_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(notes, 1, "terminal loop disposition must remain idempotent");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// Bug #4 helper: routed inbound that lives on a deterministic
     /// raw thread-key. Tests in this module use the raw thread-key;
     /// the production code derives the isolated key via
@@ -42378,6 +43139,124 @@ Use shell tools to create or update these files."
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
         assert!(tasks.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn confirmed_founder_reply_recovers_failed_inbound_without_another_send() {
+        let root = temp_root("ctox-reviewed-founder-failed-route");
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &settings)
+            .expect("failed to persist owner setting");
+        let inbound_key = "email:lena@thesen-ag.com::inbox::reviewed-recovery";
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:lena@thesen-ag.com', '<reviewed-recovery@example.com>',
+                'reviewed-recovery', 'inbound', 'inbox', 'Michael Welsch',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]',
+                'Import falsch gelandet', 'Bitte prüfen', 'Bitte prüfen',
+                '', '', 'normal', 'received', 0, 0,
+                '2026-09-28T16:56:12Z', '2026-09-28T16:56:12Z', '{}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert founder inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error,
+                failure_class, failure_attempt_count, hold_reason, retry_not_before, updated_at
+            ) VALUES (?1, 'failed', NULL, NULL, NULL, 'old header failures',
+                'technical', 5, 'technical:reviewed-communication-send',
+                '2026-09-29T02:00:00Z', '2026-09-29T01:41:22Z')"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert failed route");
+
+        let without_proof =
+            channels::handle_inbound_after_reviewed_founder_reply(&root, inbound_key)
+                .expect_err("a failed route must not be handled without its own reviewed send");
+        assert!(without_proof
+            .to_string()
+            .contains("no exact reviewed founder reply"));
+        conn.execute(
+            r#"INSERT INTO communication_founder_reply_reviews (
+                approval_key, inbound_message_key, action_digest, action_json,
+                body_sha256, reviewer, review_summary, approved_at, sent_at, send_result_json
+            ) VALUES (
+                'approval-reviewed-recovery', ?1, 'digest-reviewed-recovery', '{}',
+                'body-reviewed-recovery', 'external-review', 'PASS: reviewed and sent',
+                '2026-09-29T01:40:00Z', '2026-09-29T01:41:00Z',
+                '{"status":"confirmed","synthetic":false}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert exact reviewed send proof");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        assert_eq!(
+            repair_stalled_founder_communications(&root, &state, &settings)
+                .expect("confirmed reply should repair failed inbound"),
+            1
+        );
+        let (status, attempts, failure_class, last_error, hold_reason, retry_not_before): (
+            String,
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = conn
+            .query_row(
+                "SELECT route_status, failure_attempt_count, failure_class, last_error,
+                        hold_reason, retry_not_before
+                 FROM communication_routing_state WHERE message_key=?1",
+                [inbound_key],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("failed to reload repaired route");
+        assert_eq!(status, "handled");
+        assert_eq!(attempts, 5, "prior attempts remain available for audit");
+        assert_eq!(
+            (failure_class, last_error, hold_reason, retry_not_before),
+            (None, None, None, None)
+        );
+        let terminal_proof: String = conn
+            .query_row(
+                "SELECT json_extract(request_json, '$.metadata.terminal_policy_proof')
+                 FROM ctox_core_transition_proofs
+                 WHERE entity_type='QueueItem' AND entity_id=?1
+                   AND to_state='Completed' AND accepted=1",
+                [inbound_key],
+                |row| row.get(0),
+            )
+            .expect("failed to load accepted terminal proof");
+        assert_eq!(terminal_proof, "policy:exact-reviewed-founder-reply-sent");
+        assert_eq!(
+            channels::handle_inbound_after_reviewed_founder_reply(&root, inbound_key)
+                .expect("repeated repair should be idempotent"),
+            0
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -46259,6 +47138,109 @@ Those are not durable artifact requirements."
             outbound_email: None,
             outbound_anchor: None,
         }
+    }
+
+    #[test]
+    fn founder_rework_cannot_close_before_a_reviewed_email_was_sent() {
+        let root = temp_root("ctox-founder-rework-send-gate");
+        let inbound_key = "email:lena@thesen-ag.com::inbox::rework-send-gate";
+        let mut job = self_work_job();
+        job.source_label = "email:admin".to_string();
+        job.queue_task_metadata = serde_json::json!({
+            "ticket_self_work_kind": FOUNDER_COMMUNICATION_REWORK_KIND,
+            "inbound_message_key": inbound_key,
+        });
+        job.leased_message_keys = vec![
+            "queue:system::founder-rework-send-gate".to_string(),
+            inbound_key.to_string(),
+        ];
+
+        let approved = CompletionReviewDisposition::Approved {
+            review_audit_key: "review-send-gate".to_string(),
+        };
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(&root, &job, approved),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(
+                &root,
+                &job,
+                CompletionReviewDisposition::NoSend {
+                    summary: "review chose no send".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("open communication store");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:lena@thesen-ag.com', 'thread-send-gate',
+                'remote-send-gate', 'inbound', 'inbox', 'Michael',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]',
+                'Import falsch gelandet', 'body', 'body', '', '',
+                'normal', 'received', 0, 0,
+                '2026-09-28T16:56:12Z', '2026-09-28T16:56:12Z', '{}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("insert inbound mail");
+        conn.execute(
+            r#"INSERT INTO communication_founder_reply_reviews (
+                approval_key, inbound_message_key, action_digest, action_json, body_sha256,
+                reviewer, review_summary, approved_at, sent_at, send_result_json
+            ) VALUES (
+                'review-send-gate', ?1, 'digest-send-gate', '{}', 'body-send-gate',
+                'external-review', 'approved', '2026-09-28T19:10:00Z',
+                '2026-09-28T19:10:01Z', '{"status":"accepted"}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("insert reviewed accepted send");
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(
+                &root,
+                &job,
+                CompletionReviewDisposition::Approved {
+                    review_audit_key: "review-send-gate".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Approved { .. }
+        ));
+        let mut wrong_inbound_job = job.clone();
+        wrong_inbound_job.leased_message_keys = vec![
+            "queue:system::founder-rework-send-gate".to_string(),
+            "email:lena@thesen-ag.com::inbox::other".to_string(),
+        ];
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(
+                &root,
+                &wrong_inbound_job,
+                CompletionReviewDisposition::Approved {
+                    review_audit_key: "review-send-gate".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(
+                &root,
+                &self_work_job(),
+                CompletionReviewDisposition::Approved {
+                    review_audit_key: "ordinary-work".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Approved { .. }
+        ));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

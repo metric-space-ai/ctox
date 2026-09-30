@@ -92,6 +92,13 @@ test('scope matching keeps card badges and category counters aligned', () => {
   assert.equal(hooks.itemMatchesScope({ kind: 'local', status: 'local' }, 'local'), true);
 });
 
+test('reduced motion keeps the cards view on the actionable DOM grid', () => {
+  assert.equal(hooks.shouldUseShelf(true, false, false), true, 'ordinary cards use the shelf');
+  assert.equal(hooks.shouldUseShelf(true, false, true), false, 'reduced-motion cards use DOM cards');
+  assert.equal(hooks.shouldUseShelf(true, true, false), false, 'shelf failure uses DOM cards');
+  assert.equal(hooks.shouldUseShelf(false, false, false), false, 'list view never uses the shelf');
+});
+
 test('JSON export serializes the visible catalog or installed list', () => {
   const payload = hooks.buildAppStoreExport({
     items: [{
@@ -680,7 +687,8 @@ test('center column carries the canonical grammar and the shelf contract', () =>
   // scroll rides the pane well, never the window.
   assert.match(js, /import\('\.\.\/\.\.\/vendor\/store-shelf\/store-shelf\.mjs'\)/);
   assert.match(js, /shelfUnavailable/);
-  assert.match(js, /matchMedia\?\.\('\(prefers-reduced-motion: reduce\)'\)/);
+  assert.match(js, /const REDUCED_MOTION_QUERY = '\(prefers-reduced-motion: reduce\)'/);
+  assert.match(js, /const shelfMode = shouldUseShelf\(cardsMode, state\.shelfUnavailable, prefersReducedMotion\(\)\)/);
   assert.match(html, /data-shelf-canvas/);
   assert.match(html, /data-shelf-track/);
   // Detail panel keeps real store actions (shared builder with the cards).

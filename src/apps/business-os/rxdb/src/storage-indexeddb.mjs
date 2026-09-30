@@ -232,11 +232,22 @@ export class CtoxIndexedDbCollection {
     const batches = await this.recoveryJournal?.listBatches?.('pending', this.name) || [];
     const ids = [...new Set(batches
       .filter((batch) => batch.collection === this.name)
-      .flatMap((batch) => batch.documentIds || []))];
+      .flatMap((batch) => {
+        const acked = new Set(batch.ackedIds || []);
+        return (batch.documentIds || []).filter((id) => !acked.has(id));
+      }))];
     if (!ids.length) return;
     const documents = {};
-    for (const id of ids) {
-      const record = await this.getStoredRecord(id);
+    // One read-only transaction replaces one transaction per historical ID on
+    // the collection's first write. All requests are queued before awaiting.
+    const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
+    const done = idbTransactionDone(tx);
+    const store = tx.objectStore(DOCUMENT_STORE);
+    const records = await Promise.all(ids.map((id) => idbRequest(store.get([this.name, id]))));
+    await done;
+    for (let index = 0; index < ids.length; index += 1) {
+      const id = ids[index];
+      const record = records[index];
       if (record?.replicationOriginRole && record.doc) documents[id] = record.doc;
     }
     if (Object.keys(documents).length) {

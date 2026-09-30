@@ -24,6 +24,7 @@ use crate::service;
 
 const INSTALL_MANIFEST_FILE_NAME: &str = "install_manifest.json";
 const UPDATE_STATE_FILE_NAME: &str = "update_state.json";
+const WATCHDOG_RELEASE_SWITCH_LOCK_FILE_NAME: &str = "watchdog-release-switch.lock";
 const MAINTENANCE_STORE_FILE_NAME: &str = "ctox-maintenance.sqlite3";
 const MAINTENANCE_STATE_ID: &str = "business-os-upgrade";
 const MAINTENANCE_SCHEMA_VERSION: u32 = 1;
@@ -2064,6 +2065,17 @@ fn apply_update(
         "CTOX wechselt auf das neue Release",
     )?;
     progress_step("switching current symlink and restarting service if required");
+    let _watchdog_switch_guard = match acquire_watchdog_release_switch_guard(&install_root) {
+        Ok(guard) => guard,
+        Err(err) => {
+            persist_update_phase(
+                &layout.update_state_path(),
+                "failed",
+                Some(err.to_string().as_str()),
+            )?;
+            return Err(err);
+        }
+    };
     if let Err(err) = stop_background_for_release_switch(&layout.active_root) {
         let error_message = err.to_string();
         persist_update_phase(
@@ -2082,9 +2094,11 @@ fn apply_update(
         )?;
         return Err(err);
     }
-    sync_managed_launch_binaries(&install_root, &current_link, &layout.state_root)?;
-    write_managed_wrapper(&install_root, &layout.state_root)?;
-    if let Err(err) = refresh_service_unit(&current_link, &layout.state_root, Some(&install_root)) {
+    if let Err(err) = (|| {
+        sync_managed_launch_binaries(&install_root, &current_link, &layout.state_root)?;
+        write_managed_wrapper(&install_root, &layout.state_root)?;
+        refresh_service_unit(&current_link, &layout.state_root, Some(&install_root))
+    })() {
         rollback_to_previous_release(
             &install_root,
             &current_link,
@@ -2203,6 +2217,7 @@ fn rollback_update(root: &Path) -> Result<RollbackResult> {
     let should_restart = service::service_status_snapshot(&layout.active_root)
         .map(|status| status.running || status.autostart_enabled || has_runnable_queue_work)
         .unwrap_or(false);
+    let _watchdog_switch_guard = acquire_watchdog_release_switch_guard(&install_root)?;
     stop_background_for_release_switch(&layout.active_root)?;
     if let Some(backup_path) = update_state.and_then(|entry| entry.state_backup_path) {
         restore_state_backup(&backup_path, &layout.state_root)?;
@@ -4063,14 +4078,26 @@ fn sync_managed_launch_binaries(
         state_root,
         &current_binary,
     )?;
+    // First installs exposed this copy directly and their release-local
+    // wrappers still refer to it. Never leave a failed candidate's binary at
+    // that legacy path: publish the active release only after `current` moves,
+    // and republish the previous release on every rollback path.
+    let global_wrapper = wrapper_path()?;
+    sync_global_real_binary(&current_binary, &global_wrapper)?;
     let current_desktop_host = current_root.join("bin/ctox-desktop-host");
     if current_desktop_host.is_file() {
         copy_launch_binary(&current_desktop_host, &bin_dir.join("ctox-desktop-host"))?;
     }
-    if let Ok(wrapper) = wrapper_path() {
-        ensure_global_command_shim(&wrapper);
-    }
+    ensure_global_command_shim(&global_wrapper);
     Ok(())
+}
+
+fn sync_global_real_binary(current_binary: &Path, global_wrapper: &Path) -> Result<()> {
+    let global_real = global_wrapper.with_file_name("ctox-real");
+    if let Some(parent) = global_real.parent() {
+        ensure_dir(parent)?;
+    }
+    copy_launch_binary(current_binary, &global_real)
 }
 
 fn select_launch_binary(current_root: &Path) -> Result<Option<PathBuf>> {
@@ -4111,17 +4138,32 @@ fn write_launch_wrapper(
         install_root.display(),
         launcher_binary.display()
     );
-    let mut file = fs::File::create(destination)
-        .with_context(|| format!("failed to write {}", destination.display()))?;
+    let temporary_destination = destination.with_extension("new");
+    let mut file = fs::File::create(&temporary_destination)
+        .with_context(|| format!("failed to write {}", temporary_destination.display()))?;
     file.write_all(script.as_bytes())
-        .with_context(|| format!("failed to populate {}", destination.display()))?;
+        .with_context(|| format!("failed to populate {}", temporary_destination.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut permissions = file.metadata()?.permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(destination, permissions)?;
+        fs::set_permissions(&temporary_destination, permissions)?;
     }
+    file.sync_all()
+        .with_context(|| format!("failed to sync {}", temporary_destination.display()))?;
+    drop(file);
+    #[cfg(windows)]
+    if destination.exists() {
+        fs::remove_file(destination)?;
+    }
+    fs::rename(&temporary_destination, destination).with_context(|| {
+        format!(
+            "failed to publish launcher {} as {}",
+            temporary_destination.display(),
+            destination.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -4213,7 +4255,7 @@ fn refresh_service_unit(
     }
     fs::write(&marker, "").with_context(|| format!("failed to update {}", marker.display()))?;
 
-    install_ctox_watchdog_units(&service_dir)?;
+    install_ctox_watchdog_units(&service_dir, install_root.unwrap_or(state_root))?;
 
     let _ = Command::new("systemctl")
         .args(["--user", "daemon-reload"])
@@ -4462,7 +4504,87 @@ fn run_launchctl_required_with_retry<const N: usize>(
 /// the service and never re-started it). The watchdog closes that loop with
 /// a minutely guard: `is-active --quiet || start`. ConditionPathExists ensures
 /// the timer stays dormant if the user uninstalled ctox.service entirely.
-fn install_ctox_watchdog_units(service_dir: &Path) -> Result<()> {
+fn systemd_quoted_argument(path: &Path) -> Result<String> {
+    let value = path
+        .to_str()
+        .context("watchdog lock path is not valid UTF-8")?;
+    if value.chars().any(|ch| matches!(ch, '\n' | '\r' | '\0')) {
+        anyhow::bail!("watchdog lock path contains a control character");
+    }
+    // systemd expands percent specifiers and dollar variables even in quoted
+    // ExecStart arguments. Keep the lock path one literal argument.
+    Ok(format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('%', "%%")
+            .replace('$', "$$")
+    ))
+}
+
+fn acquire_watchdog_release_switch_guard(install_root: &Path) -> Result<Option<fs::File>> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+
+        let Some(home_dir) = home_dir() else {
+            return Ok(None);
+        };
+        let service_dir = env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_dir.join(".config"))
+            .join("systemd/user");
+        if !service_dir.join("ctox.service").is_file() {
+            return Ok(None);
+        }
+        if !Path::new("/usr/bin/flock").is_file() {
+            anyhow::bail!("/usr/bin/flock is required for a guarded CTOX release switch");
+        }
+        ensure_dir(install_root)?;
+        // Upgrade the installed unit before stopping ctox.service. Draining
+        // an already-running old watchdog service closes the transition race.
+        install_ctox_watchdog_units(&service_dir, install_root)?;
+        for args in [
+            &["--user", "daemon-reload"][..],
+            &["--user", "stop", "ctox-watchdog.service"][..],
+        ] {
+            let output = Command::new("systemctl")
+                .args(args)
+                .output()
+                .context("failed to run systemctl before CTOX release switch")?;
+            if !output.status.success() {
+                anyhow::bail!(
+                    "systemctl {} failed before CTOX release switch: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+        }
+        let lock_path = install_root.join(WATCHDOG_RELEASE_SWITCH_LOCK_FILE_NAME);
+        let lock = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&lock_path)
+            .with_context(|| format!("failed to open {}", lock_path.display()))?;
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err(std::io::Error::last_os_error()).with_context(|| {
+                format!(
+                    "watchdog still owns {}; CTOX release switch was not started",
+                    lock_path.display()
+                )
+            });
+        }
+        Ok(Some(lock))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = install_root;
+        Ok(None)
+    }
+}
+
+fn install_ctox_watchdog_units(service_dir: &Path, lock_root: &Path) -> Result<()> {
     let watchdog_service = service_dir.join("ctox-watchdog.service");
     let watchdog_timer = service_dir.join("ctox-watchdog.timer");
 
@@ -4470,13 +4592,15 @@ fn install_ctox_watchdog_units(service_dir: &Path) -> Result<()> {
     // start it. We use `bash -c` because systemd ExecStart does not natively
     // chain `||`. We do not use `RemainAfterExit` since this is one-shot per
     // tick; the timer keeps re-firing.
-    let watchdog_service_contents = "[Unit]\n\
+    let lock_path = lock_root.join(WATCHDOG_RELEASE_SWITCH_LOCK_FILE_NAME);
+    let lock_arg = systemd_quoted_argument(&lock_path)?;
+    let watchdog_service_contents = format!("[Unit]\n\
 Description=CTOX Background Service Watchdog\n\
 ConditionPathExists=%h/.config/systemd/user/ctox.service\n\
 \n\
 [Service]\n\
 Type=oneshot\n\
-ExecStart=/bin/bash -c 'systemctl --user is-active --quiet ctox.service || systemctl --user start ctox.service'\n";
+ExecStart=/usr/bin/flock -n -E 0 {lock_arg} /bin/bash -c 'systemctl --user is-active --quiet ctox.service || systemctl --user start ctox.service'\n");
 
     let watchdog_timer_contents = "[Unit]\n\
 Description=CTOX Background Service Watchdog Timer\n\
@@ -4743,6 +4867,83 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
     use tempfile::tempdir;
+
+    #[test]
+    fn watchdog_unit_skips_ticks_during_release_switch() {
+        let root = tempdir().expect("temporary watchdog directory");
+        let service_dir = root.path().join("units");
+        let state_root = root.path().join("state with % and $ spaces");
+        fs::create_dir_all(&service_dir).expect("unit directory");
+        install_ctox_watchdog_units(&service_dir, &state_root).expect("watchdog units");
+        let unit = fs::read_to_string(service_dir.join("ctox-watchdog.service"))
+            .expect("watchdog service");
+        assert!(unit.contains("ExecStart=/usr/bin/flock -n -E 0 "));
+        assert!(unit.contains("state with %% and $$ spaces/watchdog-release-switch.lock"));
+        assert!(unit.contains("systemctl --user start ctox.service"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn watchdog_tick_cannot_start_while_release_switch_holds_lock() {
+        use std::os::fd::AsRawFd;
+
+        let root = tempdir().expect("temporary watchdog directory");
+        let lock_path = root.path().join(WATCHDOG_RELEASE_SWITCH_LOCK_FILE_NAME);
+        let lock = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&lock_path)
+            .expect("release switch lock");
+        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+        let blocked = Command::new("/usr/bin/flock")
+            .args(["-n", "-E", "42"])
+            .arg(&lock_path)
+            .args(["/bin/sh", "-c", "exit 99"])
+            .status()
+            .expect("watchdog probe");
+        assert_eq!(blocked.code(), Some(42));
+        drop(lock);
+        let released = Command::new("/usr/bin/flock")
+            .args(["-n", "-E", "42"])
+            .arg(&lock_path)
+            .args(["/bin/sh", "-c", "exit 99"])
+            .status()
+            .expect("watchdog probe after release");
+        assert_eq!(released.code(), Some(99));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_global_real_binary_tracks_activation_and_rollback() {
+        let root = tempdir().expect("temporary managed install");
+        let releases = root.path().join("releases");
+        let old = releases.join("old");
+        let next = releases.join("next");
+        fs::create_dir_all(old.join("bin")).expect("old release");
+        fs::create_dir_all(next.join("bin")).expect("next release");
+        fs::write(old.join("bin/ctox-real"), b"old release binary").expect("old binary");
+        fs::write(next.join("bin/ctox-real"), b"next release binary").expect("next binary");
+        let current = root.path().join("current");
+        switch_current_release(&current, &old).expect("activate old release");
+        let global_wrapper = root.path().join("global-bin/ctox");
+
+        for (release, expected) in [
+            (&old, &b"old release binary"[..]),
+            (&next, &b"next release binary"[..]),
+            (&old, &b"old release binary"[..]),
+        ] {
+            switch_current_release(&current, release).expect("switch active release");
+            let active_binary = select_launch_binary(&current)
+                .expect("inspect active release")
+                .expect("active binary");
+            sync_global_real_binary(&active_binary, &global_wrapper)
+                .expect("publish active legacy binary");
+            assert_eq!(
+                fs::read(global_wrapper.with_file_name("ctox-real")).expect("global binary"),
+                expected
+            );
+        }
+    }
 
     fn maintenance_test_layout(root: &Path) -> InstallLayout {
         InstallLayout {

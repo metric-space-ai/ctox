@@ -1,6 +1,6 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260928-shell-v2-crew-member-chat-v422';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20260930-shell-v2-lifecycle-paint-v428';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-truth-v7';
 import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-truth-v7';
@@ -30,7 +30,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20260928-shell-v2-crew-member-chat-v422';
+const CTOX_STYLE_BUILD = '20260930-shell-v2-lifecycle-paint-v428';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -795,6 +795,10 @@ export async function mount(ctx) {
     dataLoaded: false,
     dataError: '',
     focusTask: launchFocusTask || readFocusTask(),
+    requestedSourceFocus: ctx.args?.return_thread_id && launchFocusTask
+      ? { recordId: launchFocusTask.taskId || launchFocusTask.commandId,
+        returnThreadId: String(ctx.args.return_thread_id) }
+      : null,
     detailDrawer: null,
     taskSearch: '',
     taskViewMode: 'cards',
@@ -1143,6 +1147,38 @@ function render(state) {
   // telemetry, so arm or disarm the clock to match what is actually running.
   syncLiveTicker(state);
   updateHarnessHealthAlerts(state);
+  reportRequestedCtoxFocus(state);
+}
+
+function reportRequestedCtoxFocus(state) {
+  const request = state.requestedSourceFocus;
+  if (!request || mainIsBusy(state)) return;
+  const focused = state.focusTaskConsumed
+    && isFocusedTask(getSelectedTask(state), state.focusTask);
+  const ready = state.dataLoaded
+    && [...TASK_SOURCE_COLLECTIONS, 'ctox_crew_members', 'ctox_harness_status'].every((name) =>
+      state.ctx.sync?.collectionReadiness?.(name)?.ready === true);
+  if (!focused && (!ready || request.reportedUnavailable)) return;
+  const header = state.ctx.host.querySelector('[data-ctox-main] > .ctox-pane-header');
+  let notice = header?.querySelector('[data-ctox-source-focus-status]');
+  if (focused) notice?.remove();
+  else if (header) {
+    if (!notice) {
+      notice = document.createElement('div');
+      notice.dataset.ctoxSourceFocusStatus = '';
+      notice.className = 'ctox-callout';
+      notice.setAttribute('role', 'status');
+      header.append(notice);
+    }
+    notice.textContent = 'Verknüpfter CTOX-Auftrag ist hier nicht verfügbar. Die Aufgabenübersicht bleibt geöffnet.';
+  }
+  if (focused) state.requestedSourceFocus = null;
+  else request.reportedUnavailable = true;
+  state.ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
+    bubbles: true,
+    detail: { module: 'ctox', status: focused ? 'record_focused' : 'unavailable',
+      recordId: request.recordId, returnThreadId: request.returnThreadId },
+  }));
 }
 
 // Arms the 1s clock only while a real anchor exists, and disarms it the moment
@@ -5129,7 +5165,9 @@ function refreshConfirmedHarnessStatus(state, invalidate = false) {
           }
         }
       } catch (error) {
-        if (!state.disposed) console.warn('[ctox] harness status read failed', error);
+        if (!state.disposed && !isVolatileLocalRxDbError(error)) {
+          console.warn('[ctox] harness status read failed', error);
+        }
       }
     } while (!state.disposed && request !== state.harnessStatusRequest);
   })().finally(() => {
@@ -6479,13 +6517,25 @@ function wireShellMessages(state) {
     centerSelectedNode(state);
     syncDetailDrawer(state);
   };
+  const launchHandler = (event) => {
+    const args = event?.detail?.args || {};
+    const focusTask = normalizeFocusTask(args);
+    if (!focusTask) return;
+    state.requestedSourceFocus = args.return_thread_id
+      ? { recordId: focusTask.taskId || focusTask.commandId,
+        returnThreadId: String(args.return_thread_id) }
+      : null;
+    focusHandler({ detail: args });
+  };
   window.addEventListener('message', messageHandler);
   window.addEventListener('ctox-business-os-preferences', preferenceHandler);
   window.addEventListener('ctox-business-os-focus-task', focusHandler);
+  state.ctx.host.addEventListener('ctox-business-os-app-launch', launchHandler);
   return () => {
     window.removeEventListener('message', messageHandler);
     window.removeEventListener('ctox-business-os-preferences', preferenceHandler);
     window.removeEventListener('ctox-business-os-focus-task', focusHandler);
+    state.ctx.host.removeEventListener('ctox-business-os-app-launch', launchHandler);
   };
 }
 

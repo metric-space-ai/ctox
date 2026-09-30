@@ -31,7 +31,15 @@ const DEMAND_ONLY_SYNC_COLLECTIONS = new Set([
   'document_blob_chunks',
   'spreadsheet_blob_chunks',
 ]);
+const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 
+function prefersReducedMotion() {
+  return globalThis.matchMedia?.(REDUCED_MOTION_QUERY)?.matches === true;
+}
+
+function shouldUseShelf(cardsMode, shelfUnavailable, reducedMotion) {
+  return cardsMode && !shelfUnavailable && !reducedMotion;
+}
 
 const state = {
   ctx: null,
@@ -48,10 +56,11 @@ const state = {
   operations: {},
   unsubscribe: null,
   // Two renderings, one toggle: 'cards' is the shard view (the WebGL retail
-  // shelf, or DOM shard cards when the shelf is unavailable), 'list' is the
-  // dense one-row-per-app list. The shelf is a continuously animated WebGL
-  // surface, so the platform reduced-motion preference starts on the list.
-  viewMode: globalThis.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+  // shelf, or DOM shard cards when the shelf is unavailable or motion is
+  // reduced), 'list' is the dense one-row-per-app list. The shelf is a
+  // continuously animated WebGL surface, so reduced motion starts on the list;
+  // switching to cards under that preference still uses the DOM card grid.
+  viewMode: prefersReducedMotion()
     ? 'list'
     : 'cards',
   drawerOpen: false,
@@ -819,11 +828,10 @@ function render({ resetScroll = false } = {}) {
   syncGrammarSurfaces(items, searched);
   syncCategoryOptions();
 
-  // 'cards' renders as the WebGL retail shelf; when that surface is
-  // unavailable the same view falls back to DOM shard cards, so the toggle
-  // never loses a rendering.
+  // 'cards' renders as the WebGL retail shelf only when motion is allowed;
+  // reduced motion and shelf failure both use actionable DOM shard cards.
   const cardsMode = state.viewMode !== 'list';
-  const shelfMode = cardsMode && !state.shelfUnavailable;
+  const shelfMode = shouldUseShelf(cardsMode, state.shelfUnavailable, prefersReducedMotion());
   // Data re-renders never move the operator: preserve the well's scroll
   // offset across the list rebuild (intentional resets — search/view/band/
   // filter/scope — pass resetScroll because the content set changed). The
@@ -2554,6 +2562,7 @@ export const __appStoreTestHooks = {
   releaseProjectionBadgeHtml,
   releaseWizardModel,
   sanitizeId,
+  shouldUseShelf,
   statusForCard,
   statusLabel,
   updateStateFor,

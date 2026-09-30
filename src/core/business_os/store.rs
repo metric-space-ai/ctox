@@ -11627,7 +11627,7 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
 /// that RxDB schema indexes and [`ensure_rxdb_string_field_lookup_index`]
 /// create. The former `CAST(json_extract(data, ?1) AS TEXT) = ?2` could use no
 /// index: each Sellify lookup parsed every row, e.g. 92,875 campaign rows
-/// (118 MB) per campaign import on THESEN (26.09.2026). The caller must have
+/// (118 MB) per campaign import on tenant (26.09.2026). The caller must have
 /// validated `field` as `[A-Za-z0-9_]+`.
 fn rxdb_string_field_lookup_sql(table: &str, field: &str) -> String {
     format!(
@@ -11844,7 +11844,7 @@ pub(super) fn find_rxdb_collection_records_by_string_field(
 /// A Sellify campaign search needs only names and member counts. Loading every
 /// matching membership row (up to 50,000 full documents) and grouping in Rust
 /// took 8 s for "Welle" and silently undercounted once the cap was reached
-/// (THESEN 26.09.2026). Grouping in SQL over the `("deleted", name, "id")`
+/// (tenant 26.09.2026). Grouping in SQL over the `("deleted", name, "id")`
 /// expression index reads the name from the index and touches a row only for
 /// its `is_deleted` flag.
 pub(super) fn group_rxdb_collection_string_field_contains(
@@ -12117,6 +12117,10 @@ pub(super) fn upsert_rxdb_collection_record_cached(
     }
 }
 
+#[path = "store_control_projection_cache.rs"]
+mod control_projection_cache;
+pub(super) use control_projection_cache::with_control_projection_writers;
+
 pub(super) struct RxdbProjectionWriterCache {
     root: PathBuf,
     writers: HashMap<String, Option<RxdbCollectionWriter>>,
@@ -12343,6 +12347,8 @@ struct RxdbCollectionWriter {
     columns: HashSet<String>,
     demand_file_storage: bool,
     last_replication_lwt: i64,
+    database_key: BusinessOsStoreDbKey,
+    schema_version: i64,
 }
 
 impl RxdbCollectionWriter {
@@ -12363,12 +12369,18 @@ impl RxdbCollectionWriter {
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             *counts.entry(key).or_insert(0) += 1;
         }
+        let database_key = business_os_store_db_key(&path);
         let conn = Connection::open(&path)?;
         conn.busy_timeout(Duration::from_secs(10))?;
+        // Capture table metadata and its generation in one read snapshot.
+        // No write transaction is held while this writer is idle.
+        let metadata_tx = conn.unchecked_transaction()?;
+        let schema_version: i64 =
+            metadata_tx.query_row("PRAGMA schema_version", [], |row| row.get(0))?;
         // A writer is opened once per collection, or retried after failed delivery.
         // Read the schema here: a table created in WAL need not change the file
         // stamp used by the general read cache during its 60-second lifetime.
-        let tables = rxdb_table_names_uncached(&conn)?;
+        let tables = rxdb_table_names_uncached(&metadata_tx)?;
         let expected = format!(
             "ctox_business_os__{collection}__v{}",
             rxdb_schema_version(collection)
@@ -12377,12 +12389,13 @@ impl RxdbCollectionWriter {
         else {
             return Ok(None);
         };
-        let columns = rxdb_table_columns_for_path(&conn, &path, &table)?;
-        let last_replication_lwt = conn.query_row(
+        let columns = rxdb_table_columns_for_path(&metadata_tx, &path, &table)?;
+        let last_replication_lwt = metadata_tx.query_row(
             &format!("SELECT COALESCE(MAX(lastWriteTime), 0) FROM {table}"),
             [],
             |row| row.get::<_, f64>(0),
         )? as i64;
+        metadata_tx.commit()?;
         Ok(Some(Self {
             conn,
             database_path: path,
@@ -12392,6 +12405,8 @@ impl RxdbCollectionWriter {
                 root, collection,
             ),
             last_replication_lwt,
+            database_key,
+            schema_version,
         }))
     }
 
@@ -17455,6 +17470,24 @@ pub(super) fn webrtc_capability_allows_workspace_permission(
     .unwrap_or(false)
 }
 
+// Unix cache keys bind the connection to a file identity. The portable key
+// contains only a path, so preserve fresh opens there rather than retain a
+// grant writer across a database replacement that cannot be fenced.
+fn with_capability_store_connection<T>(
+    root: &Path,
+    f: impl FnOnce(&Connection) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    #[cfg(unix)]
+    {
+        with_store_connection(root, f)
+    }
+    #[cfg(not(unix))]
+    {
+        let conn = open_store(root)?;
+        f(&conn)
+    }
+}
+
 /// Preserve the pre-hardening ordinary-data behavior by materializing it as
 /// explicit, auditable collection grants. The sync hooks themselves remain
 /// fail-closed and consult only native policy plus these exact grants.
@@ -17467,23 +17500,31 @@ pub(super) fn ensure_legacy_collection_grants(
     // contention during capability issuance.
     let server_owned_collections =
         super::external_sql_sync::server_owned_projection_collections(root)?;
-    let mut conn = open_store(root)?;
-    let tx = conn.transaction()?;
-    let now = now_ms() as i64;
-    for collection in collections {
-        let collection = collection.trim();
-        if collection.is_empty()
-            || policy::ADMIN_ONLY_COLLECTIONS.contains(&collection)
-            || collection == "ctox_queue_tasks"
-            || policy::is_cockpit_projection(collection)
-        {
-            continue;
-        }
-        let server_owned_write = super::threads::is_threads_owned_collection(collection)
-            || server_owned_collections.contains(collection);
-        if server_owned_write {
-            tx.execute(
-                "UPDATE business_permission_grants
+    ensure_legacy_collection_grants_with_ownership(root, collections, &server_owned_collections)
+}
+
+fn ensure_legacy_collection_grants_with_ownership(
+    root: &Path,
+    collections: &[String],
+    server_owned_collections: &HashSet<String>,
+) -> anyhow::Result<()> {
+    with_capability_store_connection(root, |conn| {
+        let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+        let now = now_ms() as i64;
+        for collection in collections {
+            let collection = collection.trim();
+            if collection.is_empty()
+                || policy::ADMIN_ONLY_COLLECTIONS.contains(&collection)
+                || collection == "ctox_queue_tasks"
+                || policy::is_cockpit_projection(collection)
+            {
+                continue;
+            }
+            let server_owned_write = super::threads::is_threads_owned_collection(collection)
+                || server_owned_collections.contains(collection);
+            if server_owned_write {
+                tx.prepare_cached(
+                    "UPDATE business_permission_grants
                  SET active=0,
                      reason='Server-owned collection is read-only for browser sync',
                      updated_at_ms=?1
@@ -17492,37 +17533,48 @@ pub(super) fn ensure_legacy_collection_grants(
                    AND scope_type='collection'
                    AND scope_id=?3
                    AND created_by='business-os-policy-migration'",
-                params![now, BusinessOsPermission::DataWrite.as_str(), collection],
-            )?;
-        }
-        for role in ["founder", "user"] {
-            for permission in [
-                BusinessOsPermission::DataRead,
-                BusinessOsPermission::DataWrite,
-            ] {
-                if permission == BusinessOsPermission::DataWrite && server_owned_write {
-                    continue;
-                }
-                let grant_id = format!(
-                    "migration.sync.{}.{}.{}",
-                    role,
-                    permission.as_str().replace('.', "_"),
+                )?
+                .execute(params![
+                    now,
+                    BusinessOsPermission::DataWrite.as_str(),
                     collection
-                );
-                tx.execute(
-                    "INSERT OR IGNORE INTO business_permission_grants
+                ])?;
+            }
+            for role in ["founder", "user"] {
+                for permission in [
+                    BusinessOsPermission::DataRead,
+                    BusinessOsPermission::DataWrite,
+                ] {
+                    if permission == BusinessOsPermission::DataWrite && server_owned_write {
+                        continue;
+                    }
+                    let grant_id = format!(
+                        "migration.sync.{}.{}.{}",
+                        role,
+                        permission.as_str().replace('.', "_"),
+                        collection
+                    );
+                    tx.prepare_cached(
+                        "INSERT OR IGNORE INTO business_permission_grants
                         (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
                          active, reason, created_by, created_at_ms, updated_at_ms)
                      VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
                              'Migrated legacy sync access to exact collection grant',
                              'business-os-policy-migration', ?5, ?5)",
-                    params![grant_id, role, permission.as_str(), collection, now],
-                )?;
+                    )?
+                    .execute(params![
+                        grant_id,
+                        role,
+                        permission.as_str(),
+                        collection,
+                        now
+                    ])?;
+                }
             }
         }
-    }
-    tx.commit()?;
-    Ok(())
+        tx.commit()?;
+        Ok(())
+    })
 }
 
 /// First-party catalog apps (Mail, Documents, Auth-Handoff) run as installed
@@ -17537,6 +17589,14 @@ pub(super) fn ensure_legacy_collection_grants(
 pub(super) fn ensure_first_party_catalog_collection_grants(
     root: &Path,
     installed_app_root: &Path,
+) -> anyhow::Result<usize> {
+    ensure_first_party_catalog_collection_grants_with_ownership(root, installed_app_root, None)
+}
+
+fn ensure_first_party_catalog_collection_grants_with_ownership(
+    root: &Path,
+    installed_app_root: &Path,
+    ownership: Option<&HashSet<String>>,
 ) -> anyhow::Result<usize> {
     let modules_dir = installed_app_root.join("installed-modules");
     let Ok(entries) = fs::read_dir(&modules_dir) else {
@@ -17580,41 +17640,56 @@ pub(super) fn ensure_first_party_catalog_collection_grants(
     if declared.is_empty() {
         return Ok(0);
     }
-    let server_owned_collections =
-        super::external_sql_sync::server_owned_projection_collections(root)?;
-    let mut conn = open_store(root)?;
-    let tx = conn.transaction()?;
-    let now = now_ms() as i64;
-    let mut inserted = 0usize;
-    for (module_id, collection) in &declared {
-        let server_owned_write = super::threads::is_threads_owned_collection(collection)
-            || server_owned_collections.contains(collection.as_str());
-        for role in ["admin", "chef"] {
-            for permission in [
-                BusinessOsPermission::DataRead,
-                BusinessOsPermission::DataWrite,
-            ] {
-                if permission == BusinessOsPermission::DataWrite && server_owned_write {
-                    continue;
-                }
-                let grant_id = format!(
-                    "catalog.first_party.{module_id}.{role}.{}.{collection}",
-                    permission.as_str().replace('.', "_")
-                );
-                inserted += tx.execute(
-                    "INSERT OR IGNORE INTO business_permission_grants
+    let current_ownership;
+    let server_owned_collections = match ownership {
+        Some(ownership) => ownership,
+        None => {
+            current_ownership =
+                super::external_sql_sync::server_owned_projection_collections(root)?;
+            &current_ownership
+        }
+    };
+    with_capability_store_connection(root, |conn| {
+        let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+        let now = now_ms() as i64;
+        let mut inserted = 0usize;
+        for (module_id, collection) in &declared {
+            let server_owned_write = super::threads::is_threads_owned_collection(collection)
+                || server_owned_collections.contains(collection.as_str());
+            for role in ["admin", "chef"] {
+                for permission in [
+                    BusinessOsPermission::DataRead,
+                    BusinessOsPermission::DataWrite,
+                ] {
+                    if permission == BusinessOsPermission::DataWrite && server_owned_write {
+                        continue;
+                    }
+                    let grant_id = format!(
+                        "catalog.first_party.{module_id}.{role}.{}.{collection}",
+                        permission.as_str().replace('.', "_")
+                    );
+                    inserted += tx
+                        .prepare_cached(
+                            "INSERT OR IGNORE INTO business_permission_grants
                         (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
                          active, reason, created_by, created_at_ms, updated_at_ms)
                      VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
                              'First-party catalog app data access for administrators',
                              'business-os-first-party-catalog', ?5, ?5)",
-                    params![grant_id, role, permission.as_str(), collection, now],
-                )?;
+                        )?
+                        .execute(params![
+                            grant_id,
+                            role,
+                            permission.as_str(),
+                            collection,
+                            now
+                        ])?;
+                }
             }
         }
-    }
-    tx.commit()?;
-    Ok(inserted)
+        tx.commit()?;
+        Ok(inserted)
+    })
 }
 
 fn business_os_collection_names_for_legacy_grants() -> Vec<String> {
@@ -17624,6 +17699,7 @@ fn business_os_collection_names_for_legacy_grants() -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn ensure_default_sync_collection_grants(root: &Path) -> anyhow::Result<()> {
     ensure_legacy_collection_grants(root, &business_os_collection_names_for_legacy_grants())
 }
@@ -17714,16 +17790,35 @@ fn issue_business_os_capability_token_until_with_identity(
     // deterministic baseline grants before reading capability_epoch; otherwise
     // native peer startup can insert grants moments later and invalidate the
     // freshly issued token before its first collection fetch.
-    ensure_default_sync_collection_grants(root)?;
-    let conn = open_store(root)?;
-    seed_configured_business_users(&conn)?;
-    let user = active_business_user(&conn, user_id.trim())?
-        .ok_or_else(|| anyhow::anyhow!("no active Business OS user {user_id:?}"))?;
-    let actor_epoch: i64 = conn.query_row(
-        "SELECT capability_epoch FROM business_users WHERE user_id = ?1 AND active = 1",
-        params![user.id.as_str()],
-        |row| row.get(0),
+    // The same ordering applies to first-party catalog grants added when a
+    // newly installed app causes the native peer to reconfigure.
+    // One fresh ownership snapshot per issuance, never a cached authorization
+    // decision. Both grant materializers must finish before reading the epoch.
+    let ownership = super::external_sql_sync::server_owned_projection_collections(root)?;
+    ensure_legacy_collection_grants_with_ownership(
+        root,
+        &business_os_collection_names_for_legacy_grants(),
+        &ownership,
     )?;
+    ensure_first_party_catalog_collection_grants_with_ownership(
+        root,
+        &resolve_business_os_installed_app_root(root),
+        Some(&ownership),
+    )?;
+    // Reuse the existing identity-fenced connection, never its authorization
+    // results. Materializers commit before this fresh actor/epoch read, and no
+    // connection borrow or transaction survives into signing.
+    let (user, actor_epoch) = with_capability_store_connection(root, |conn| {
+        seed_configured_business_users(conn)?;
+        let user = active_business_user(conn, user_id.trim())?
+            .ok_or_else(|| anyhow::anyhow!("no active Business OS user {user_id:?}"))?;
+        let actor_epoch: i64 = conn.query_row(
+            "SELECT capability_epoch FROM business_users WHERE user_id = ?1 AND active = 1",
+            params![user.id.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok((user, actor_epoch))
+    })?;
     let secret = capability_signing_secret(root)?;
     let token = super::capability::issue_capability_token_with_epoch_and_identity(
         &secret,
@@ -17766,10 +17861,10 @@ pub fn issue_business_os_capability_token_for_session(
         display_name
     };
     let role = normalize_business_role(&user.role);
-    let conn = open_store(root)?;
-    seed_configured_business_users(&conn)?;
-    conn.execute(
-        "INSERT INTO business_users
+    with_capability_store_connection(root, |conn| {
+        seed_configured_business_users(conn)?;
+        conn.execute(
+            "INSERT INTO business_users
             (user_id, display_name, role, active, created_at_ms, updated_at_ms)
          VALUES (?1, ?2, ?3, 1, ?4, ?4)
          ON CONFLICT(user_id) DO UPDATE SET
@@ -17777,9 +17872,10 @@ pub fn issue_business_os_capability_token_for_session(
             role = excluded.role,
             active = 1,
             updated_at_ms = excluded.updated_at_ms",
-        params![user_id, display_name, role.as_str(), now_ms],
-    )?;
-    drop(conn);
+            params![user_id, display_name, role.as_str(), now_ms],
+        )?;
+        Ok(())
+    })?;
     issue_business_os_capability_token(root, user_id, now_ms)
 }
 
@@ -18622,13 +18718,65 @@ pub(super) fn terminal_person_research_projection_candidates(
     Ok(candidates)
 }
 
+/// Public identity comes only from the accepted native context, after peer
+/// authentication stamped owner_user_id. Never promote a replica's actor or
+/// copy its credentials into a lifecycle projection. Core intent/hash remains
+/// unchanged: this is presentation enrichment, not an authorization receipt.
+fn command_projection_with_native_identity(
+    conn: &Connection,
+    document: &Value,
+) -> anyhow::Result<Value> {
+    let command_id = document
+        .get("command_id")
+        .or_else(|| document.get("id"))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .context("business command projection is missing command_id")?;
+    let native_context: Option<String> = conn
+        .query_row(
+            "SELECT client_context_json FROM business_commands WHERE command_id = ?1",
+            params![command_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let native_context: Value = native_context
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or(Value::Null);
+    let owner_id = native_context
+        .get("owner_user_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty());
+    let verified_owner = owner_id.filter(|owner| {
+        native_context.pointer("/actor/id").and_then(Value::as_str) == Some(*owner)
+    });
+    let mut projected = document.clone();
+    let context = projected
+        .as_object_mut()
+        .context("business command projection must be an object")?
+        .entry("client_context")
+        .or_insert_with(|| serde_json::json!({}));
+    if !context.is_object() {
+        *context = serde_json::json!({});
+    }
+    let context = context.as_object_mut().expect("context normalized");
+    for key in ["actor", "owner_user_id", "user_id", "claimed_actor"] {
+        context.remove(key);
+    }
+    if let Some(owner_id) = verified_owner {
+        context.insert("actor".into(), serde_json::json!({"id": owner_id}));
+        context.insert("owner_user_id".into(), Value::String(owner_id.to_string()));
+    }
+    redact_document_client_context_secrets(&mut projected);
+    Ok(projected)
+}
+
 /// Persist the native-enriched v2 command document as the canonical Business OS
 /// projection. The caller has already completed the canonical intake/side
 /// effect and will mirror the same document into RxDB afterwards.
 pub(crate) fn persist_business_command_lifecycle_projection(
     root: &Path,
     document: &Value,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
         .or_else(|| document.get("id"))
@@ -18637,6 +18785,7 @@ pub(crate) fn persist_business_command_lifecycle_projection(
         .filter(|value| !value.is_empty())
         .context("business command lifecycle projection is missing command_id")?;
     let conn = open_store(root)?;
+    let document = command_projection_with_native_identity(&conn, document)?;
     let exists = conn
         .query_row(
             "SELECT 1 FROM business_commands WHERE command_id = ?1",
@@ -18659,7 +18808,7 @@ pub(crate) fn persist_business_command_lifecycle_projection(
     // Aufnahme getan haette. Der Waechter bleibt fuer Dokumente ohne
     // Kennzeichnung bestehen, damit keine leeren Projektionen entstehen.
     if !exists {
-        seed_canonical_business_command_row(&conn, command_id, document)?;
+        seed_canonical_business_command_row(&conn, command_id, &document)?;
     }
     let updated_at_ms = document
         .get("updated_at_ms")
@@ -18671,7 +18820,8 @@ pub(crate) fn persist_business_command_lifecycle_projection(
         command_id,
         updated_at_ms,
         document.clone(),
-    )
+    )?;
+    Ok(document)
 }
 
 /// Legt die kanonische `business_commands`-Zeile aus einem Lebenszyklus-
@@ -18743,7 +18893,10 @@ pub(crate) fn deliver_business_command_outbox(root: &Path, limit: usize) -> anyh
     let mut delivered = 0_u64;
     let mut failed = 0_u64;
     for event in events {
-        let projection = channels::business_command_projection(root, &event.command_id);
+        let projection =
+            channels::business_command_projection(root, &event.command_id).and_then(|projection| {
+                command_projection_with_native_identity(&open_store(root)?, &projection)
+            });
         let delivery = projection.and_then(|projection| match event.destination.as_str() {
             "business-os" => {
                 let command_id = event.command_id.as_str();
@@ -18780,7 +18933,6 @@ pub(crate) fn deliver_business_command_outbox(root: &Path, limit: usize) -> anyh
                         record_id = excluded.record_id,
                         status = excluded.status,
                         payload_json = excluded.payload_json,
-                        client_context_json = excluded.client_context_json,
                         observed_at_ms = excluded.observed_at_ms",
                     params![
                         command_id,
@@ -28581,6 +28733,49 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn capability_issuance_reuses_connection_but_reads_current_actor() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "operator1", "user")?;
+        let now = now_ms() as i64;
+        let (first, _) = issue_business_os_capability_token(root.path(), "operator1", now)?;
+        assert_eq!(
+            verify_capability_role(root.path(), &first).as_deref(),
+            Some("user")
+        );
+
+        // A separate connection must be able to commit immediately after each
+        // issuance. Retaining a transaction or actor snapshot would make this
+        // write fail or let the following token retain the old authority.
+        let conn = open_store(root.path())?;
+        conn.busy_timeout(Duration::ZERO)?;
+        conn.execute(
+            "UPDATE business_users SET role = 'founder' WHERE user_id = 'operator1'",
+            [],
+        )?;
+        let (second, _) = issue_business_os_capability_token(root.path(), "operator1", now)?;
+        assert!(verify_capability_actor(root.path(), &first).is_none());
+        assert_eq!(
+            verify_capability_role(root.path(), &second).as_deref(),
+            Some("founder")
+        );
+        with_store_connection(root.path(), |cached| {
+            assert!(
+                cached.is_autocommit(),
+                "issuance must not retain a transaction"
+            );
+            Ok(())
+        })?;
+
+        conn.execute(
+            "UPDATE business_users SET active = 0 WHERE user_id = 'operator1'",
+            [],
+        )?;
+        assert!(issue_business_os_capability_token(root.path(), "operator1", now).is_err());
+        assert!(verify_capability_actor(root.path(), &second).is_none());
+        Ok(())
+    }
+
+    #[test]
     fn capability_token_survives_idempotent_sync_grant_materialization() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         seed_business_user(root.path(), "operator1", "user")?;
@@ -28599,6 +28794,89 @@ pub(super) mod tests {
             "business_module_catalog",
             BusinessOsPermission::DataRead
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn capability_token_survives_catalog_grants_after_install() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "catalog-operator", "chef")?;
+        let installed = root.path().join("runtime/business-os");
+        fs::create_dir_all(&installed)?;
+        let now = now_ms() as i64;
+        let (old_token, _) =
+            issue_business_os_capability_token(root.path(), "catalog-operator", now)?;
+        assert!(verify_capability_actor(root.path(), &old_token).is_some());
+
+        let module = installed.join("installed-modules/catalog-epoch-test");
+        fs::create_dir_all(&module)?;
+        fs::write(
+            module.join("module.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "id": "catalog-epoch-test",
+                "source": "catalog",
+                "collections": ["catalog_epoch_records"]
+            }))?,
+        )?;
+        let (fresh_token, _) =
+            issue_business_os_capability_token(root.path(), "catalog-operator", now)?;
+        assert_eq!(
+            ensure_first_party_catalog_collection_grants(root.path(), &installed)?,
+            0,
+            "peer bring-up must not revoke a freshly issued post-install token"
+        );
+        assert!(verify_capability_actor(root.path(), &old_token).is_none());
+        assert!(verify_capability_actor(root.path(), &fresh_token).is_some());
+        assert!(capability_allows_collection_permission(
+            root.path(),
+            &fresh_token,
+            "catalog_epoch_records",
+            BusinessOsPermission::DataRead
+        ));
+        // Chef has baseline read access. Assert the installed grants' exact
+        // scope instead of mistaking baseline policy for an extra catalog grant.
+        let conn = open_store(root.path())?;
+        let mut statement = conn.prepare(
+            "SELECT subject_id, permission, scope_id
+             FROM business_permission_grants
+             WHERE grant_id LIKE 'catalog.first_party.catalog-epoch-test.%'
+               AND subject_type='role' AND scope_type='collection' AND active=1
+             ORDER BY subject_id, permission",
+        )?;
+        let grants = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(
+            grants,
+            vec![
+                (
+                    "admin".into(),
+                    "data.read".into(),
+                    "catalog_epoch_records".into()
+                ),
+                (
+                    "admin".into(),
+                    "data.write".into(),
+                    "catalog_epoch_records".into()
+                ),
+                (
+                    "chef".into(),
+                    "data.read".into(),
+                    "catalog_epoch_records".into()
+                ),
+                (
+                    "chef".into(),
+                    "data.write".into(),
+                    "catalog_epoch_records".into()
+                ),
+            ]
+        );
         Ok(())
     }
 
@@ -28937,6 +29215,7 @@ pub(super) mod tests {
     fn capability_token_redacted_in_projection_but_retained_natively() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         seed_business_user(root.path(), "chef1", "chef")?;
+        drop(super::super::store_projections::tests::create_repair_rxdb_tables(root.path())?);
         let now = now_ms() as i64;
         let (chef_token, _) = issue_business_os_capability_token(root.path(), "chef1", now)?;
 
@@ -29004,6 +29283,70 @@ pub(super) mod tests {
             "non-secret actor context must survive redaction"
         );
         drop(conn);
+
+        let canonical_before = channels::business_command_projection(root.path(), cid)?;
+        let mut forged_projection = canonical_before.clone();
+        forged_projection["client_context"] = serde_json::json!({
+            "actor": {"id": "attacker", "role": "admin"},
+            "owner_user_id": "attacker",
+            "capability_token": "must-not-be-published"
+        });
+        let repaired =
+            persist_business_command_lifecycle_projection(root.path(), &forged_projection)?;
+        assert_eq!(
+            repaired
+                .pointer("/client_context/actor/id")
+                .and_then(Value::as_str),
+            Some("chef1")
+        );
+        assert!(repaired.pointer("/client_context/actor/role").is_none());
+        assert!(repaired
+            .pointer("/client_context/capability_token")
+            .is_none());
+
+        // The outbox must not replace the accepted native credential with the
+        // reduced public context, or erase verified identity on either replica.
+        let delivery = deliver_business_command_outbox(root.path(), 100)?;
+        assert_eq!(delivery["failed"], 0);
+        assert!(delivery["delivered"].as_u64().unwrap_or(0) > 0);
+        let conn = open_store(root.path())?;
+        let after_delivery = load_business_command(&conn, cid)?;
+        assert_eq!(
+            after_delivery.client_context["capability_token"],
+            chef_token
+        );
+        let local = outbound_load_required(&conn, "business_commands", cid, "command")?;
+        drop(conn);
+        let replicated = load_rxdb_collection_record(root.path(), "business_commands", cid)?
+            .context("terminal RxDB command projection")?;
+        for doc in [local, replicated] {
+            assert_eq!(
+                doc.pointer("/client_context/actor/id")
+                    .and_then(Value::as_str),
+                Some("chef1")
+            );
+            assert!(doc.pointer("/client_context/capability_token").is_none());
+            assert!(!serde_json::to_string(&doc)?.contains(&chef_token));
+            assert_eq!(doc["terminal_status"], "completed");
+        }
+        let canonical_after = channels::business_command_projection(root.path(), cid)?;
+        assert_eq!(
+            canonical_after["payload_hash"],
+            canonical_before["payload_hash"]
+        );
+        assert_eq!(
+            canonical_after["client_context"],
+            canonical_before["client_context"]
+        );
+
+        // No native admission evidence: claimed actor/owner must not acquire
+        // authority merely because the lifecycle projection seeds a missing row.
+        forged_projection["id"] = Value::String("unadmitted-projection".into());
+        forged_projection["command_id"] = Value::String("unadmitted-projection".into());
+        let unknown =
+            persist_business_command_lifecycle_projection(root.path(), &forged_projection)?;
+        assert!(unknown.pointer("/client_context/actor").is_none());
+        assert!(unknown.pointer("/client_context/owner_user_id").is_none());
 
         // The retained token is still a valid, replayable-by-native credential —
         // proving redaction ran AFTER verification, not before it.
