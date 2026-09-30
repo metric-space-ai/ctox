@@ -86,10 +86,41 @@ after daemon boot does not require a cached-map refresh or restart. Other accoun
 records are not enumerated on this path. The original job account is checked
 before lookup and around options/credential resolution. `providers()` remains
 available for explicit enumeration; neither API accepts renderer credentials.
-This consumer is not an enrollment API: the authenticated native provisioning
-writer, atomic account-switch/revocation persistence, live options factory and
-production bootstrap call still need wiring. Its authored restart, revocation,
-foreign-credential, real-signature and missing/corrupt-key tests have not run.
+Authenticated native provisioning now uses
+`NativeTransferAccountHost::provision_from_session(scope, session, connection)`.
+It requires an already admitted, ready native connection and proves the pinned
+source again before requesting `ctox.transfer.account.v1`. The source derives
+the current enrolled principal from its verified capability/device store,
+renews only that assertion without changing users/roles/pairings, and returns
+its own room, signaling endpoints, browser-role commitment and current ICE.
+The source never returns its native-role token or room password. Recipient
+provisioning loads the original scoped P-256 key and compares its identity to
+the source-confirmed principal; missing keys never get prepared on this path.
+The only writer consuming the reply is private to the host, not an IPC JSON API.
+
+Authority, renewed capability and bound routing are encrypted and committed
+atomically. An IMMEDIATE SQLite transaction compares both the original account
+and original routing record across processes. Concurrent refreshes cannot
+regress the tuple; a late enrollment cannot undo a disconnect or account switch.
+`revoke(expected)` atomically persists the inactive authority and deletes that
+exact credential/routing pair. Explicit account replacement requires a greater
+local account epoch and an already prepared, source-enrolled matching key.
+
+The options factory still owns isolated query-only persistence and admission.
+The host replaces its remote room/ICE/signaling fields from the confirmed
+source descriptor. Its reconnect callback re-reads live native authority,
+uses only the browser role and creates a fresh signaling time window. Account
+changes, room rotation, descriptor expiry or the original ICE snapshot deadline
+remove the route instead of falling back to local daemon configuration.
+`routing(target_id)` exposes native service deadlines: renew via the admitted
+session after `refresh_after_ms` and recreate the session before
+`expires_at_ms`. Descriptor lifetime is at most 30 minutes and never exceeds a
+known TURN credential expiry. Cold restart with expired routing requires the
+existing authenticated native bootstrap to establish a fresh session first;
+expired TURN material is not silently reused. Production factory/boot and that
+recovery integration remain the Transfer owner’s responsibility. Newly authored
+source/tuple/expiry/revocation regressions still require execution; formatting
+alone is not acceptance.
 
 This source authority, signer and concrete adapter do not by themselves prove
 the production account enrollment, transfer service boot/recovery wiring,

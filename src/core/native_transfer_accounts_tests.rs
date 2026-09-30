@@ -204,3 +204,203 @@ async fn corrupt_public_record_does_not_fall_back_to_credentials_or_an_old_accou
     assert!(host.providers().await.is_err());
     assert!(host.credentials(&account, &"n".repeat(43)).is_err());
 }
+
+fn provision_reply(account: &NativeTransferAccount) -> NativeTransferProvisionReply {
+    let now = chrono::Utc::now().timestamp_millis();
+    let token = "source-browser-role-token".to_owned();
+    NativeTransferProvisionReply {
+        version: 1, source_public_identity: account.public_identity.clone(),
+        source_instance_id: account.instance_id.clone(), principal: account.principal.clone(),
+        capability_token: "source-renewed-native-capability".into(), capability_expires_at_ms: now + 60_000,
+        routing: NativeTransferRouting {
+            room: format!("ctox-business-os:{}:source-room", account.instance_id),
+            signaling_urls: vec!["wss://signaling.ctox.dev/signal?role=ctox_instance&token=foreign&native_peer_id=foreign".into()],
+            browser_token_hash: format!("{:x}", Sha256::digest(token.as_bytes())), browser_token: token,
+            native_token_hash: "a".repeat(64), auth_version: "ctox-role-bound-v1".into(),
+            ice_servers: Vec::new(), refreshed_at_ms: now, refresh_after_ms: now + 120_000,
+            expires_at_ms: now + 240_000,
+        },
+    }
+}
+
+#[tokio::test]
+async fn authenticated_tuple_reopens_and_stale_refresh_cannot_undo_disconnect() {
+    let root = tempfile::tempdir().unwrap();
+    let account = account(root.path());
+    let host = host(root.path());
+    host.commit_authenticated(&account.key_scope(), None, None, provision_reply(&account))
+        .unwrap();
+    let before = serde_json::to_string(&account).unwrap();
+    let route = host
+        .read_record(ROUTING_SCOPE, &account.credential_name().unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        host.read_routing(&account).unwrap().room,
+        format!("ctox-business-os:{}:source-room", account.instance_id)
+    );
+    assert_eq!(
+        host.credentials(&account, &"n".repeat(43))
+            .unwrap()
+            .capability_token,
+        "source-renewed-native-capability"
+    );
+    host.revoke(account.clone()).await.unwrap();
+    assert!(host.read_account(&account.target_id).unwrap().is_none());
+    assert!(!crate::secrets::secret_exists(
+        root.path(),
+        CREDENTIAL_SCOPE,
+        &account.credential_name().unwrap()
+    )
+    .unwrap());
+    assert!(!crate::secrets::secret_exists(
+        root.path(),
+        ROUTING_SCOPE,
+        &account.credential_name().unwrap()
+    )
+    .unwrap());
+    assert!(host
+        .commit_authenticated(
+            &account.key_scope(),
+            Some(&before),
+            Some(&route),
+            provision_reply(&account)
+        )
+        .is_err());
+    assert!(host.read_account(&account.target_id).unwrap().is_none());
+}
+
+#[test]
+fn route_cas_prevents_older_refresh_overwriting_new_credentials() {
+    let root = tempfile::tempdir().unwrap();
+    let account = account(root.path());
+    let host = host(root.path());
+    host.commit_authenticated(&account.key_scope(), None, None, provision_reply(&account))
+        .unwrap();
+    let before = serde_json::to_string(&account).unwrap();
+    let route = host
+        .read_record(ROUTING_SCOPE, &account.credential_name().unwrap())
+        .unwrap()
+        .unwrap();
+    let mut newer = provision_reply(&account);
+    newer.routing.room.push_str("-rotated");
+    newer.capability_token = "newer-source-credential".into();
+    host.commit_authenticated(&account.key_scope(), Some(&before), Some(&route), newer)
+        .unwrap();
+    assert!(host
+        .commit_authenticated(
+            &account.key_scope(),
+            Some(&before),
+            Some(&route),
+            provision_reply(&account)
+        )
+        .is_err());
+    assert_eq!(
+        host.credentials(&account, &"n".repeat(43))
+            .unwrap()
+            .capability_token,
+        "newer-source-credential"
+    );
+}
+
+#[test]
+fn foreign_source_missing_key_and_changed_principal_never_persist_authority() {
+    let root = tempfile::tempdir().unwrap();
+    let account = account(root.path());
+    let host = host(root.path());
+    let mut wrong = provision_reply(&account);
+    wrong.source_instance_id = "another-instance".into();
+    assert!(host
+        .commit_authenticated(&account.key_scope(), None, None, wrong)
+        .is_err());
+    let mut scope = account.key_scope();
+    scope.account_epoch += 1;
+    assert!(host
+        .commit_authenticated(&scope, None, None, provision_reply(&account))
+        .is_err());
+    assert!(host.read_account(&account.target_id).unwrap().is_none());
+    host.commit_authenticated(&account.key_scope(), None, None, provision_reply(&account))
+        .unwrap();
+    let before = serde_json::to_string(&account).unwrap();
+    let route = host
+        .read_record(ROUTING_SCOPE, &account.credential_name().unwrap())
+        .unwrap()
+        .unwrap();
+    let mut wrong = provision_reply(&account);
+    wrong.principal.user_id = "another-user".into();
+    assert!(host
+        .commit_authenticated(&account.key_scope(), Some(&before), Some(&route), wrong)
+        .is_err());
+    assert!(host.read_account(&account.target_id).unwrap().as_ref() == Some(&account));
+}
+
+#[test]
+fn signaling_refresh_preserves_browser_role_and_rejects_expiry_and_bad_commitments() {
+    let root = tempfile::tempdir().unwrap();
+    let account = account(root.path());
+    let mut routing = provision_reply(&account).routing;
+    let now = routing.refreshed_at_ms;
+    let first = url::Url::parse(
+        &routing
+            .signaling_at(&account.instance_id, "recipient-1", now)
+            .unwrap()[0],
+    )
+    .unwrap();
+    let later = url::Url::parse(
+        &routing
+            .signaling_at(&account.instance_id, "recipient-1", now + 2000)
+            .unwrap()[0],
+    )
+    .unwrap();
+    let query: std::collections::BTreeMap<_, _> = first.query_pairs().collect();
+    let second: std::collections::BTreeMap<_, _> = later.query_pairs().collect();
+    assert_eq!(first.path(), "/v2");
+    assert_eq!(query["role"], "browser");
+    assert_eq!(query["token"], "source-browser-role-token");
+    assert!(!query.contains_key("native_peer_id"));
+    assert_ne!(query["token_iat"], second["token_iat"]);
+    assert!(routing
+        .signaling_at(&account.instance_id, "recipient-1", routing.expires_at_ms)
+        .is_err());
+    routing.native_token_hash = routing.browser_token_hash.clone();
+    assert!(routing
+        .signaling_at(&account.instance_id, "recipient-1", now)
+        .is_err());
+}
+
+#[tokio::test]
+async fn explicit_newer_account_erases_old_tuple_and_rejects_stale_disconnect() {
+    let root = tempfile::tempdir().unwrap();
+    let original = account(root.path());
+    let host = host(root.path());
+    host.commit_authenticated(
+        &original.key_scope(),
+        None,
+        None,
+        provision_reply(&original),
+    )
+    .unwrap();
+    let before = serde_json::to_string(&original).unwrap();
+    let old_name = original.credential_name().unwrap();
+    let route = host.read_record(ROUTING_SCOPE, &old_name).unwrap().unwrap();
+    let mut next = original.clone();
+    next.account_epoch += 1;
+    next.principal.user_id = "explicit-next-user".into();
+    next.principal.device = Some(
+        NativeDeviceProofKey::prepare(root.path(), &next.key_scope())
+            .unwrap()
+            .device_identity(),
+    );
+    host.commit_authenticated(
+        &next.key_scope(),
+        Some(&before),
+        Some(&route),
+        provision_reply(&next),
+    )
+    .unwrap();
+    assert!(host.revoke(original.clone()).await.is_err());
+    assert!(host.read_account(&next.target_id).unwrap().as_ref() == Some(&next));
+    assert!(!crate::secrets::secret_exists(root.path(), CREDENTIAL_SCOPE, &old_name).unwrap());
+    assert!(!crate::secrets::secret_exists(root.path(), ROUTING_SCOPE, &old_name).unwrap());
+    assert!(host.credentials(&original, &"n".repeat(43)).is_err());
+}

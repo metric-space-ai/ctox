@@ -33,7 +33,7 @@ struct IssuedGrant {
 fn denied() -> String {
     "native transfer grant unavailable or unauthorized".into()
 }
-fn principal(root: &Path, token: &str) -> Result<NativeBusinessDataPrincipal, String> {
+pub(super) fn principal(root: &Path, token: &str) -> Result<NativeBusinessDataPrincipal, String> {
     let claims = store::verified_webrtc_capability_claims(root, token).ok_or_else(denied)?;
     // Transfer authority is always a revocable enrolled daemon/device edge.
     // Ordinary bearer-only sessions remain valid for other surfaces but cannot

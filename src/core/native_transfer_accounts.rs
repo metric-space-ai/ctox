@@ -16,9 +16,19 @@ use sha2::{Digest, Sha256};
 use std::{collections::BTreeMap, io, path::PathBuf, sync::Arc};
 
 use crate::native_data_device::{NativeDeviceKeyScope, NativeDeviceProofKey};
+use crate::native_transfer_routing::{
+    NativeTransferProvisionReply, NativeTransferProvisionRequest, NativeTransferRouting,
+    NATIVE_TRANSFER_PROVISION_METHOD,
+};
+use ctox_sync::native::NativeSyncSession;
+use rxdb::plugins::replication_webrtc::{
+    send_message_and_await_answer, WebRTCConnectionHandler, WebRTCMessage,
+};
+use std::{sync::atomic::Ordering, time::Duration};
 
 const AUTHORITY_SCOPE: &str = "ctox-native-business-data-accounts";
 const CREDENTIAL_SCOPE: &str = "ctox-native-business-data-account-credentials";
+const ROUTING_SCOPE: &str = "ctox-native-business-data-account-routing";
 const MAX_RECORD_BYTES: usize = 64 * 1024;
 
 /// Non-secret state written by authenticated native enrollment. A renderer may
@@ -102,6 +112,13 @@ struct StoredCredentials {
 }
 
 /// The service owner derives current query-only options from native config.
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct StoredRouting {
+    account: NativeTransferAccount,
+    routing: NativeTransferRouting,
+}
+
 /// A cached renderer token or an already-installed credential provider is invalid.
 pub(crate) type NativeTransferOptionsProvider = Arc<
     dyn Fn(NativeTransferAccount) -> BoxFuture<'static, io::Result<NativeSyncOptions>>
@@ -138,8 +155,273 @@ fn authority_name(target_id: &str) -> String {
 }
 
 impl NativeTransferAccountHost {
+    fn read_record(&self, scope: &str, name: &str) -> Result<Option<String>> {
+        if !crate::secrets::secret_exists(&self.root, scope, name)? {
+            return Ok(None);
+        }
+        let value = crate::secrets::read_secret_value(&self.root, scope, name)
+            .map_err(|_| unavailable())?;
+        ensure!(
+            value.len() <= MAX_RECORD_BYTES,
+            "native account record unavailable"
+        );
+        Ok(Some(value))
+    }
+
+    fn read_routing(&self, account: &NativeTransferAccount) -> Result<NativeTransferRouting> {
+        let value = self
+            .read_record(ROUTING_SCOPE, &account.credential_name()?)?
+            .ok_or_else(unavailable)?;
+        let stored: StoredRouting = serde_json::from_str(&value).map_err(|_| unavailable())?;
+        ensure!(stored.account == *account, "native routing account changed");
+        stored
+            .routing
+            .validate(&account.instance_id, chrono::Utc::now().timestamp_millis())?;
+        Ok(stored.routing)
+    }
+
+    /// Native service refresh deadline and current ICE snapshot. Callers must
+    /// renew through the live source and recreate the session before expiry;
+    /// an expired snapshot never falls back to local daemon configuration.
+    pub(crate) async fn routing(&self, target_id: &str) -> io::Result<NativeTransferRouting> {
+        let account = self.account(target_id).await?.ok_or_else(host_error)?;
+        let host = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let routing = host.read_routing(&account)?;
+            ensure!(
+                host.read_account(&account.target_id)?.as_ref() == Some(&account),
+                "native account changed"
+            );
+            Ok::<_, anyhow::Error>(routing)
+        })
+        .await
+        .map_err(|_| host_error())?
+        .map_err(|_| host_error())
+    }
+
     pub(crate) fn new(root: PathBuf, options: NativeTransferOptionsProvider) -> Arc<Self> {
         Arc::new(Self { root, options })
+    }
+
+    /// Initial enrollment and renewal both require an actual ready native
+    /// session plus a fresh source proof. No bearer/principal/route is accepted
+    /// as renderer input. Explicit pairing must already have prepared the key.
+    pub(crate) async fn provision_from_session(
+        &self,
+        scope: NativeDeviceKeyScope,
+        session: &NativeSyncSession,
+        connection: &WebRTCRsConnection,
+    ) -> Result<NativeTransferAccount> {
+        let host = self.clone();
+        let target = scope.target_id.clone();
+        let (previous, previous_route) = tokio::task::spawn_blocking(move || {
+            let previous = host.read_record(AUTHORITY_SCOPE, &authority_name(&target))?;
+            let previous_route = previous
+                .as_ref()
+                .map(|value| {
+                    let account: NativeTransferAccount = serde_json::from_str(value)?;
+                    account.validate()?;
+                    ensure!(account.target_id == target, "native account target changed");
+                    host.read_record(ROUTING_SCOPE, &account.credential_name()?)
+                })
+                .transpose()?
+                .flatten();
+            Ok::<_, anyhow::Error>((previous, previous_route))
+        })
+        .await??;
+        let pool = session.pool();
+        let current = || {
+            !pool.canceled.load(Ordering::SeqCst)
+                && pool.connection_handler.is_peer_current(connection)
+                && pool.is_peer_ready_for_control(connection)
+        };
+        ensure!(current(), "native enrollment connection retired");
+        session
+            .peer_identity_proof(
+                connection.clone(),
+                &scope.source_public_identity,
+                &scope.source_instance_id,
+            )
+            .await?;
+        ensure!(current(), "native enrollment connection retired");
+        let response = tokio::select! {
+            biased;
+            _ = pool.cancelled() => anyhow::bail!("native enrollment session stopped"),
+            response = tokio::time::timeout(Duration::from_secs(10), send_message_and_await_answer(
+                pool.connection_handler.clone(), connection.clone(), WebRTCMessage {
+                    id: format!("native-account-{}", uuid::Uuid::new_v4()),
+                    method: NATIVE_TRANSFER_PROVISION_METHOD.into(), collection: None,
+                    params: vec![serde_json::to_value(NativeTransferProvisionRequest {
+                        source_public_identity: scope.source_public_identity.clone(),
+                        source_instance_id: scope.source_instance_id.clone(),
+                    })?],
+                })) => response.map_err(|_| unavailable())??,
+        };
+        ensure!(
+            current()
+                && response.error.is_none()
+                && serde_json::to_vec(&response.result)?.len() <= MAX_RECORD_BYTES,
+            "native enrollment rejected or retired"
+        );
+        let reply: NativeTransferProvisionReply =
+            serde_json::from_value(response.result).map_err(|_| unavailable())?;
+        let host = self.clone();
+        // Keep cancellation and exact-connection currency inside the blocking
+        // commit too. Account and route CAS guard concurrent writers/processes.
+        let pool = pool.clone();
+        let connection = connection.clone();
+        tokio::task::spawn_blocking(move || {
+            ensure!(
+                !pool.canceled.load(Ordering::SeqCst)
+                    && pool.connection_handler.is_peer_current(&connection)
+                    && pool.is_peer_ready_for_control(&connection),
+                "native enrollment connection retired"
+            );
+            host.commit_authenticated(
+                &scope,
+                previous.as_deref(),
+                previous_route.as_deref(),
+                reply,
+            )
+        })
+        .await?
+    }
+
+    fn commit_authenticated(
+        &self,
+        scope: &NativeDeviceKeyScope,
+        previous: Option<&str>,
+        previous_route: Option<&str>,
+        reply: NativeTransferProvisionReply,
+    ) -> Result<NativeTransferAccount> {
+        let now = chrono::Utc::now().timestamp_millis();
+        ensure!(
+            reply.version == 1
+                && reply.source_public_identity == scope.source_public_identity
+                && reply.source_instance_id == scope.source_instance_id
+                && reply.capability_expires_at_ms > now
+                && !reply.capability_token.is_empty()
+                && reply.capability_token.len() <= 16 * 1024
+                && reply.capability_token.trim() == reply.capability_token
+                && !reply.capability_token.chars().any(char::is_control),
+            "native enrollment rejected"
+        );
+        reply.routing.validate(&scope.source_instance_id, now)?;
+        let key = NativeDeviceProofKey::load(&self.root, scope)?;
+        ensure!(
+            reply.principal.device.as_ref() == Some(&key.device_identity()),
+            "native enrollment signer mismatch"
+        );
+        let account = NativeTransferAccount {
+            version: 1,
+            target_id: scope.target_id.clone(),
+            public_identity: scope.source_public_identity.clone(),
+            instance_id: scope.source_instance_id.clone(),
+            account_epoch: scope.account_epoch,
+            principal: reply.principal,
+            active: true,
+        };
+        account.validate()?;
+        let old = previous
+            .map(serde_json::from_str::<NativeTransferAccount>)
+            .transpose()?;
+        if let Some(old) = &old {
+            old.validate()?;
+            ensure!(
+                old.target_id == account.target_id
+                    && (old == &account || account.account_epoch > old.account_epoch),
+                "explicit newer account enrollment required"
+            );
+        }
+        let name = account.credential_name()?;
+        let authority = serde_json::to_string(&account)?;
+        let credentials = serde_json::to_string(&StoredCredentials {
+            version: 1,
+            account: account.clone(),
+            capability_token: reply.capability_token,
+        })?;
+        let route = serde_json::to_string(&StoredRouting {
+            account: account.clone(),
+            routing: reply.routing,
+        })?;
+        let authority_id = authority_name(&account.target_id);
+        let old_name = old
+            .as_ref()
+            .map(NativeTransferAccount::credential_name)
+            .transpose()?;
+        let route_guard = old_name.as_deref().unwrap_or(&name);
+        let deletes = old_name
+            .as_deref()
+            .filter(|old| *old != name)
+            .map(|old| vec![(CREDENTIAL_SCOPE, old), (ROUTING_SCOPE, old)])
+            .unwrap_or_default();
+        ensure!(
+            crate::secrets::compare_and_write_secret_records(
+                &self.root,
+                &[
+                    (AUTHORITY_SCOPE, &authority_id, previous),
+                    (ROUTING_SCOPE, route_guard, previous_route)
+                ],
+                &[
+                    crate::secrets::SecretRecordWrite {
+                        scope: AUTHORITY_SCOPE,
+                        name: &authority_id,
+                        value: &authority,
+                        description: None,
+                        metadata: serde_json::json!({"version":1})
+                    },
+                    crate::secrets::SecretRecordWrite {
+                        scope: CREDENTIAL_SCOPE,
+                        name: &name,
+                        value: &credentials,
+                        description: None,
+                        metadata: serde_json::json!({"version":1})
+                    },
+                    crate::secrets::SecretRecordWrite {
+                        scope: ROUTING_SCOPE,
+                        name: &name,
+                        value: &route,
+                        description: None,
+                        metadata: serde_json::json!({"version":1})
+                    },
+                ],
+                &deletes
+            )?,
+            "native account changed during enrollment"
+        );
+        Ok(account)
+    }
+
+    /// Native explicit disconnect persists a tombstone and erases that exact
+    /// credential/routing tuple in one transaction. A stale disconnect cannot
+    /// remove a newly enrolled account with a later epoch.
+    pub(crate) async fn revoke(&self, expected: NativeTransferAccount) -> Result<()> {
+        let host = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let name = expected.credential_name()?;
+            let previous = serde_json::to_string(&expected)?;
+            let authority_id = authority_name(&expected.target_id);
+            let mut inactive = expected;
+            inactive.active = false;
+            let tombstone = serde_json::to_string(&inactive)?;
+            ensure!(
+                crate::secrets::compare_and_write_secret_records(
+                    &host.root,
+                    &[(AUTHORITY_SCOPE, &authority_id, Some(&previous))],
+                    &[crate::secrets::SecretRecordWrite {
+                        scope: AUTHORITY_SCOPE,
+                        name: &authority_id,
+                        value: &tombstone,
+                        description: None,
+                        metadata: serde_json::json!({"version":1})
+                    }],
+                    &[(CREDENTIAL_SCOPE, &name), (ROUTING_SCOPE, &name)]
+                )?,
+                "native account changed during disconnect"
+            );
+            Ok(())
+        })
+        .await?
     }
 
     fn read_account(&self, target_id: &str) -> Result<Option<NativeTransferAccount>> {
@@ -370,11 +652,56 @@ impl BusinessDataSessionHost for NativeTransferAccountHost {
     {
         Box::pin(async move {
             let account = self.account(target_id).await?.ok_or_else(host_error)?;
-            let options = (self.options)(account.clone()).await?;
+            let routing = self.routing(target_id).await?;
+            let mut options = (self.options)(account.clone()).await?;
+            options.ice_servers = routing.ice();
+            options.room = routing.room;
+            let host = self.clone();
+            let enrolled = account.clone();
+            let peer_id = options.peer_session_id.clone();
+            let enrolled_room = options.room.clone();
+            let ice_expires = routing.expires_at_ms;
+            options.signaling_urls = Arc::new(move || {
+                // Re-read the encrypted source descriptor on each reconnect.
+                // Revocation/rotation/expiry yields no route, never local config.
+                if host
+                    .read_account(&enrolled.target_id)
+                    .ok()
+                    .flatten()
+                    .as_ref()
+                    != Some(&enrolled)
+                {
+                    return Vec::new();
+                }
+                let now = chrono::Utc::now().timestamp_millis();
+                if now >= ice_expires {
+                    return Vec::new();
+                }
+                let urls = host
+                    .read_routing(&enrolled)
+                    .and_then(|routing| {
+                        ensure!(routing.room == enrolled_room, "native routing room changed");
+                        routing.signaling_at(&enrolled.instance_id, &peer_id, now)
+                    })
+                    .unwrap_or_default();
+                if host
+                    .read_account(&enrolled.target_id)
+                    .ok()
+                    .flatten()
+                    .as_ref()
+                    != Some(&enrolled)
+                {
+                    return Vec::new();
+                }
+                urls
+            });
             let query_only = options.local_session_provider.is_none()
                 && options.collections.is_empty()
                 && options.database.collections.lock().is_empty();
-            if !query_only || self.account(target_id).await?.as_ref() != Some(&account) {
+            if !query_only
+                || chrono::Utc::now().timestamp_millis() >= ice_expires
+                || self.account(target_id).await?.as_ref() != Some(&account)
+            {
                 return Err(host_error());
             }
             Ok(options)

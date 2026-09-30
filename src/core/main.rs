@@ -33,6 +33,7 @@ mod knowledge;
 mod mission;
 mod native_data_device;
 mod native_transfer_accounts;
+mod native_transfer_routing;
 mod paths;
 mod persistence;
 mod report;
