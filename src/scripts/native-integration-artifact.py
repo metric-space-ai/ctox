@@ -27,7 +27,7 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'queue_task_update_keeps_its_place_unless_priority_changes',
            'mission::channels::tests::business_command',
            'mission::channels::tests::business_control',
-           'incomplete_plan',
+           'incomplete_plan', 'business_command_instruction_limit_',
            'command_writeback_tests',
            'direct_plan_v2',
            'cockpit_bring_up_materializes_no_legacy_grants',
@@ -306,6 +306,15 @@ def main():
         if any(count != 1 for count in mail_counts.values()):
             raise RuntimeError(f'Required mail regressions absent or ambiguous: {mail_counts}')
         RECORD['required_mail_tests'] = mail_counts
+        instruction_tests = {
+            'business_command_instruction_limit_preserves_the_complete_unicode_boundary',
+            'business_command_instruction_limit_precedes_attachment_and_queue_writes',
+        }
+        instruction_counts = {test: sum(name.rsplit('::', 1)[-1] == test for name in names)
+                              for test in instruction_tests}
+        if any(count != 1 for count in instruction_counts.values()):
+            raise RuntimeError(f'Required instruction regressions absent or ambiguous: {instruction_counts}')
+        RECORD['required_instruction_tests'] = instruction_counts
     RECORD.update(discovered_tests=names, group_counts=counts,
                   required_runtime_tests=runtime_counts)
     save()
