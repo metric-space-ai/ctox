@@ -32,6 +32,20 @@ pub(crate) struct NativeTransferRouting {
     pub expires_at_ms: i64,
 }
 
+/// Retained signaling material can locate the originally pinned source after
+/// short-lived routing expires. It carries no ICE credentials or payload lease.
+/// Admission still requires fresh source proof plus the original device key.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct NativeTransferRendezvous {
+    pub room: String,
+    instance_id: String,
+    signaling_urls: Vec<String>,
+    browser_token: String,
+    browser_token_hash: String,
+    native_token_hash: String,
+    auth_version: String,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct NativeTransferIceServer {
@@ -161,6 +175,29 @@ impl NativeTransferRouting {
             .collect()
     }
 
+    /// Recover only the stable locator from a previously valid source snapshot.
+    /// Validate its original lifetime without moving either expiry timestamp.
+    pub(crate) fn retained_rendezvous(
+        &self,
+        instance_id: &str,
+        now_ms: i64,
+    ) -> Result<NativeTransferRendezvous> {
+        self.validate(instance_id, self.refreshed_at_ms)?;
+        ensure!(
+            self.refreshed_at_ms <= now_ms.saturating_add(60_000),
+            "native routing timestamp is in the future"
+        );
+        Ok(NativeTransferRendezvous {
+            room: self.room.clone(),
+            instance_id: instance_id.into(),
+            signaling_urls: self.signaling_urls.clone(),
+            browser_token: self.browser_token.clone(),
+            browser_token_hash: self.browser_token_hash.clone(),
+            native_token_hash: self.native_token_hash.clone(),
+            auth_version: self.auth_version.clone(),
+        })
+    }
+
     /// Recompute the freshness window for every transport reconnect. Only the
     /// browser/replica role is allowed, even for a native background consumer.
     pub(crate) fn signaling_at(
@@ -170,6 +207,13 @@ impl NativeTransferRouting {
         now_ms: i64,
     ) -> Result<Vec<String>> {
         self.validate(instance_id, now_ms)?;
+        self.retained_rendezvous(instance_id, now_ms)?
+            .signaling_at(peer_id, now_ms)
+    }
+}
+
+impl NativeTransferRendezvous {
+    pub(crate) fn signaling_at(&self, peer_id: &str, now_ms: i64) -> Result<Vec<String>> {
         ensure!(clean(peer_id, 256), "native peer session invalid");
         let issued = now_ms / 1000;
         self.signaling_urls
@@ -216,7 +260,7 @@ impl NativeTransferRouting {
                     }
                     query.append_pair("client", peer_id);
                     query.append_pair("role", "browser");
-                    query.append_pair("instance_id", instance_id);
+                    query.append_pair("instance_id", &self.instance_id);
                     query.append_pair("protocol", "ctox-rxdb-protocol-v1");
                     query.append_pair("token", &self.browser_token);
                     query.append_pair("token_iat", &issued.to_string());

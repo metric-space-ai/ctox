@@ -38,8 +38,8 @@ an isolated temporary query database under the installation's runtime directory,
 not the daemon's database. Transport and database cleanup precede job insertion.
 The daemon owns all payload downloads and revalidates the persisted original
 account/grant before reading or publishing. Use `status`, `pause`, `resume` and
-`cancel` on that job ID. Native enrollment and a valid source route must already
-exist; an expired cold route still requires authenticated recovery.
+`cancel` on that job ID. Native enrollment must already exist. An expired source route triggers the
+bounded authenticated recovery described below before grant admission.
 
 `ctox.transfer.grant.v1` is an authenticated auxiliary method on the supervised
 native RxDB/WebRTC peer. It is not an HTTP endpoint or a collection projection.
@@ -174,11 +174,31 @@ expired transports are retired before reuse; only a current native descriptor
 can open a replacement. Authorization and range futures are bounded by the old
 transport deadline and cannot return successful results across expiry.
 Descriptor lifetime is at most 30 minutes and never exceeds a
-known TURN credential expiry. Cold restart with expired routing requires the
-existing authenticated native bootstrap to establish a fresh session first;
-expired TURN material is not silently reused. The production factory/boot is
-wired, including live renewal/session recreation; cold recovery integration
-remains the Transfer owner’s responsibility. Newly authored
+known TURN credential expiry.
+
+After a cold restart, the account host can extract retained signaling material
+from an originally valid, encrypted source descriptor. This does not move its
+expiry or make it valid for payload use. A distinct rendezvous value contains
+no ICE credentials or payload deadline. The control-only recovery session uses
+explicitly empty recipient ICE configuration; it can use the source's currently
+advertised candidates, but never expired TURN credentials or local defaults.
+Every reconnect rechecks the original account and unchanged rendezvous. Fresh
+source proof and the original P-256 device credentials remain mandatory.
+
+The worker resolver and new-job admission use that session only to request
+source-confirmed routing through `provision_from_session`. They recheck the
+original account, close the bootstrap transport, and open a new session using
+the fresh descriptor before checking a persisted grant or issuing a new one.
+Each resolution allows at most one bootstrap and one payload-session attempt.
+Cancellation retains startup ownership and existing cleanup bounds. An expired
+or revoked original file grant still fails; routing recovery does not issue a
+replacement grant for a queued job or change its principal.
+
+Recovery requires the source to be reachable through retained rendezvous and
+currently advertised candidates. A rotated/deleted rendezvous, revoked device,
+unavailable source, or a network requiring recipient-side TURN before that
+source can be reached fails closed. Relay-only network coverage and real
+restart/resume acceptance remain unverified. Newly authored recovery and
 source/tuple/expiry/revocation regressions still require execution; formatting
 alone is not acceptance.
 

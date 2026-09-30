@@ -131,27 +131,59 @@ async fn prepare(
         .await?
         .context("target has no enrolled native account")?;
     let mut request = download.request(&account)?;
-    let (mut options, deadline) = host
-        .native_options_with_deadline(&download.target_id)
+    let mut prepared = None;
+    for attempt in 0..2 {
+        let (mut options, deadline) =
+            if let Some(options) = host.recovery_options(&download.target_id).await? {
+                ensure!(
+                    attempt == 0,
+                    "native routing recovery did not produce a current route"
+                );
+                (options, None)
+            } else {
+                let (options, deadline) = host
+                    .native_options_with_deadline(&download.target_id)
+                    .await?;
+                (options, Some(deadline))
+            };
+        ensure!(
+            options.local_session_provider.is_none(),
+            "native options already contain credentials"
+        );
+        same_account(&host, &account).await?;
+        options.local_session_provider = Some(host.provider_for_account(account.clone()));
+        options.bringup_timeout = options.bringup_timeout.min(Duration::from_secs(20));
+        session_slot.starting = Some(tokio::spawn(async move {
+            Ok(Arc::new(
+                NativeSyncSession::start_data_client(options).await?,
+            ))
+        }));
+        session_slot.finish_start().await?;
+        let session = session_slot
+            .session
+            .clone()
+            .context("native admission session missing")?;
+        let connection = ready_connection(&host, &account, &session).await?;
+        if let Some(deadline) = deadline {
+            prepared = Some((session, connection, deadline));
+            break;
+        }
+        host.provision_from_session(
+            crate::native_data_device::NativeDeviceKeyScope {
+                target_id: account.target_id.clone(),
+                source_instance_id: account.instance_id.clone(),
+                source_public_identity: account.public_identity.clone(),
+                account_epoch: account.account_epoch,
+            },
+            &session,
+            &connection,
+        )
         .await?;
-    ensure!(
-        options.local_session_provider.is_none(),
-        "native options already contain credentials"
-    );
-    same_account(&host, &account).await?;
-    options.local_session_provider = Some(host.provider_for_account(account.clone()));
-    options.bringup_timeout = options.bringup_timeout.min(Duration::from_secs(20));
-    session_slot.starting = Some(tokio::spawn(async move {
-        Ok(Arc::new(
-            NativeSyncSession::start_data_client(options).await?,
-        ))
-    }));
-    session_slot.finish_start().await?;
-    let session = session_slot
-        .session
-        .clone()
-        .context("native admission session missing")?;
-    let connection = ready_connection(&host, &account, &session).await?;
+        same_account(&host, &account).await?;
+        session_slot.close().await?;
+    }
+    let (session, connection, deadline) =
+        prepared.context("native routing recovery did not produce a current route")?;
     let proof = session
         .peer_identity_proof(
             connection.clone(),

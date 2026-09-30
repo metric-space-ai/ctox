@@ -141,6 +141,11 @@ impl QueryDatabase {
     }
 }
 
+#[cfg(test)]
+pub(crate) async fn test_query_options(root: &Path) -> Result<NativeSyncOptions> {
+    QueryDatabase::new(root).options().await
+}
+
 struct ManagedNativePeer {
     peer: Arc<dyn PeerRangeSource>,
     database: Arc<QueryDatabase>,

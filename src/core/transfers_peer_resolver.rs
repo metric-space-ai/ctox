@@ -30,6 +30,7 @@ struct ActiveSession {
     session: Option<Arc<NativeSyncSession>>,
     source: Option<Arc<NativePeerRangeSource>>,
     deadline: Option<crate::native_transfer_accounts::NativeTransferSessionDeadline>,
+    bootstrap: bool,
 }
 
 impl Drop for ActiveSession {
@@ -190,6 +191,21 @@ impl NativeTransferPeerResolver {
         active: &mut Option<ActiveSession>,
         request: &DownloadRequest,
     ) -> Result<Arc<NativePeerRangeSource>> {
+        // At most one control-only bootstrap followed by one payload session.
+        for attempt in 0..2 {
+            if let Some(source) = self.resolve_once(active, request, attempt == 0).await? {
+                return Ok(source);
+            }
+        }
+        anyhow::bail!("native routing recovery did not produce a current route")
+    }
+
+    async fn resolve_once(
+        &self,
+        active: &mut Option<ActiveSession>,
+        request: &DownloadRequest,
+        allow_bootstrap: bool,
+    ) -> Result<Option<Arc<NativePeerRangeSource>>> {
         current_account(self.host.as_ref(), request).await?;
         if let Some(previous) = active.as_ref() {
             if previous.request == *request && self.renew_if_due(previous).await? {
@@ -219,13 +235,25 @@ impl NativeTransferPeerResolver {
                 .and_then(|source| source.account_binding.as_ref())
                 .context("original native account binding required")?;
             let provider = (self.providers)(binding.target_id.clone()).await?;
-            let (mut options, deadline) = if let Some(host) = &self.account_host {
-                let (options, deadline) = host
-                    .native_options_with_deadline(&binding.target_id)
-                    .await?;
-                (options, Some(deadline))
+            let (mut options, deadline, bootstrap) = if let Some(host) = &self.account_host {
+                if let Some(options) = host.recovery_options(&binding.target_id).await? {
+                    ensure!(
+                        allow_bootstrap,
+                        "native routing recovery did not produce a current route"
+                    );
+                    (options, None, true)
+                } else {
+                    let (options, deadline) = host
+                        .native_options_with_deadline(&binding.target_id)
+                        .await?;
+                    (options, Some(deadline), false)
+                }
             } else {
-                (self.host.native_options(&binding.target_id).await?, None)
+                (
+                    self.host.native_options(&binding.target_id).await?,
+                    None,
+                    false,
+                )
             };
             ensure!(
                 options.local_session_provider.is_none(),
@@ -251,12 +279,18 @@ impl NativeTransferPeerResolver {
                 session: None,
                 source: None,
                 deadline,
+                bootstrap,
             });
         }
-        let active = active.as_mut().context("native transfer session missing")?;
+        let slot = active;
+        let active = slot.as_mut().context("native transfer session missing")?;
         active.finish_start().await?;
         if let Some(source) = &active.source {
-            return Ok(source.clone());
+            ensure!(
+                !active.bootstrap,
+                "bootstrap cannot expose a payload source"
+            );
+            return Ok(Some(source.clone()));
         }
         let session = active
             .session
@@ -282,6 +316,34 @@ impl NativeTransferPeerResolver {
         })
         .await
         .context("native transfer source readiness timed out")??;
+        if active.bootstrap {
+            let original = request
+                .peer_source
+                .as_ref()
+                .context("peer source required")?;
+            let binding = original
+                .account_binding
+                .as_ref()
+                .context("account binding required")?;
+            self.account_host
+                .as_ref()
+                .context("native recovery host required")?
+                .provision_from_session(
+                    crate::native_data_device::NativeDeviceKeyScope {
+                        target_id: binding.target_id.clone(),
+                        source_instance_id: original.instance_id.clone(),
+                        source_public_identity: original.public_key.clone(),
+                        account_epoch: binding.account_epoch,
+                    },
+                    session,
+                    &connection,
+                )
+                .await?;
+            current_account(self.host.as_ref(), request).await?;
+            active.close().await?;
+            *slot = None;
+            return Ok(None);
+        }
         let admission = Arc::new(crate::transfers_grant::NativeTransferGrantAdmission::new(
             session.clone(),
         ));
@@ -296,7 +358,7 @@ impl NativeTransferPeerResolver {
             .await?,
         );
         active.source = Some(source.clone());
-        Ok(source)
+        Ok(Some(source))
     }
 }
 
@@ -529,6 +591,7 @@ mod tests {
             session: None,
             source: None,
             deadline: None,
+            bootstrap: false,
         };
         assert!(
             tokio::time::timeout(Duration::from_millis(10), active.finish_start())

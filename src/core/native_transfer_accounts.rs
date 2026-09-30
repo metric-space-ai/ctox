@@ -174,7 +174,10 @@ impl NativeTransferAccountHost {
         Ok(Some(value))
     }
 
-    fn read_routing(&self, account: &NativeTransferAccount) -> Result<NativeTransferRouting> {
+    fn read_retained_routing(
+        &self,
+        account: &NativeTransferAccount,
+    ) -> Result<NativeTransferRouting> {
         let value = self
             .read_record(ROUTING_SCOPE, &account.credential_name()?)?
             .ok_or_else(unavailable)?;
@@ -182,8 +185,14 @@ impl NativeTransferAccountHost {
         ensure!(stored.account == *account, "native routing account changed");
         stored
             .routing
-            .validate(&account.instance_id, chrono::Utc::now().timestamp_millis())?;
+            .retained_rendezvous(&account.instance_id, chrono::Utc::now().timestamp_millis())?;
         Ok(stored.routing)
+    }
+
+    fn read_routing(&self, account: &NativeTransferAccount) -> Result<NativeTransferRouting> {
+        let routing = self.read_retained_routing(account)?;
+        routing.validate(&account.instance_id, chrono::Utc::now().timestamp_millis())?;
+        Ok(routing)
     }
 
     /// Native service refresh deadline and current ICE snapshot. Callers must
@@ -342,6 +351,73 @@ impl NativeTransferAccountHost {
                 Ok(target)
             })
         })
+    }
+
+    /// An expired source descriptor may locate that same source for control-only
+    /// recovery. Never reuse its ICE credentials, grant payload access, or change
+    /// the saved account. The caller must provision, close this session and open
+    /// a fresh routed session before authorizing a file or issuing a new grant.
+    pub(crate) async fn recovery_options(
+        &self,
+        target_id: &str,
+    ) -> io::Result<Option<NativeSyncOptions>> {
+        let account = self.account(target_id).await?.ok_or_else(host_error)?;
+        let host = self.clone();
+        let expected = account.clone();
+        let routing = tokio::task::spawn_blocking(move || {
+            let routing = host.read_retained_routing(&expected)?;
+            ensure!(
+                host.read_account(&expected.target_id)?.as_ref() == Some(&expected),
+                "native account changed"
+            );
+            Ok::<_, anyhow::Error>(routing)
+        })
+        .await
+        .map_err(|_| host_error())?
+        .map_err(|_| host_error())?;
+        let now = chrono::Utc::now().timestamp_millis();
+        if routing.expires_at_ms > now {
+            return Ok(None);
+        }
+        let rendezvous = routing
+            .retained_rendezvous(&account.instance_id, now)
+            .map_err(|_| host_error())?;
+        let mut options = (self.options)(account.clone()).await?;
+        options.room = rendezvous.room.clone();
+        // Explicit empty ICE configuration, not Vec::new() (native defaults).
+        // The source still advertises its current candidates, including relay
+        // candidates. We never recycle an expired local TURN allocation.
+        options.ice_servers = vec![Default::default()];
+        let host = self.clone();
+        let enrolled = account.clone();
+        let peer_id = options.peer_session_id.clone();
+        options.signaling_urls = Arc::new(move || {
+            let resolve = || -> Result<Vec<String>> {
+                ensure!(
+                    host.read_account(&enrolled.target_id)?.as_ref() == Some(&enrolled),
+                    "native account changed"
+                );
+                let now = chrono::Utc::now().timestamp_millis();
+                let current = host
+                    .read_retained_routing(&enrolled)?
+                    .retained_rendezvous(&enrolled.instance_id, now)?;
+                ensure!(current == rendezvous, "native rendezvous changed");
+                let urls = current.signaling_at(&peer_id, now)?;
+                ensure!(
+                    host.read_account(&enrolled.target_id)?.as_ref() == Some(&enrolled),
+                    "native account changed"
+                );
+                Ok(urls)
+            };
+            resolve().unwrap_or_default()
+        });
+        let query_only = options.local_session_provider.is_none()
+            && options.collections.is_empty()
+            && options.database.collections.lock().is_empty();
+        if !query_only || self.account(target_id).await?.as_ref() != Some(&account) {
+            return Err(host_error());
+        }
+        Ok(Some(options))
     }
 
     /// Return the deadlines from the exact descriptor used for these options.

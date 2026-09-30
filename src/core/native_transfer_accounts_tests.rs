@@ -448,3 +448,149 @@ async fn explicit_newer_account_erases_old_tuple_and_rejects_stale_disconnect() 
     assert!(!crate::secrets::secret_exists(root.path(), ROUTING_SCOPE, &old_name).unwrap());
     assert!(host.credentials(&original, &"n".repeat(43)).is_err());
 }
+
+fn save_route_snapshot(
+    root: &std::path::Path,
+    account: &NativeTransferAccount,
+    routing: NativeTransferRouting,
+) {
+    crate::secrets::write_secret_record(
+        root,
+        ROUTING_SCOPE,
+        &account.credential_name().unwrap(),
+        &serde_json::to_string(&StoredRouting {
+            account: account.clone(),
+            routing,
+        })
+        .unwrap(),
+        None,
+        serde_json::json!({"version":1}),
+    )
+    .unwrap();
+}
+
+fn expired_snapshot(account: &NativeTransferAccount) -> NativeTransferRouting {
+    let mut routing = provision_reply(account).routing;
+    let now = chrono::Utc::now().timestamp_millis();
+    routing.refreshed_at_ms = now - 120_000;
+    routing.refresh_after_ms = now - 90_000;
+    routing.expires_at_ms = now - 60_000;
+    routing.ice_servers = vec![crate::native_transfer_routing::NativeTransferIceServer {
+        urls: vec!["turn:127.0.0.1:3478".into()],
+        username: format!("{}:recipient", (now - 30_000) / 1000),
+        credential: "expired-turn-secret".into(),
+    }];
+    routing
+}
+
+#[tokio::test]
+async fn expired_routing_bootstraps_without_ice_or_mutating_authority_and_stops_on_disconnect() {
+    let root = tempfile::tempdir().unwrap();
+    let account = account(root.path());
+    let options_root = root.path().to_owned();
+    let host = NativeTransferAccountHost::new(
+        root.path().to_owned(),
+        Arc::new(move |_| {
+            let root = options_root.clone();
+            Box::pin(async move {
+                crate::transfers_native::test_query_options(&root)
+                    .await
+                    .map_err(|_| host_error())
+            })
+        }),
+    );
+    host.commit_authenticated(&account.key_scope(), None, None, provision_reply(&account))
+        .unwrap();
+    assert!(host
+        .recovery_options(&account.target_id)
+        .await
+        .unwrap()
+        .is_none());
+    save_route_snapshot(root.path(), &account, expired_snapshot(&account));
+    let before = host
+        .read_record(ROUTING_SCOPE, &account.credential_name().unwrap())
+        .unwrap();
+    assert!(host
+        .native_options_with_deadline(&account.target_id)
+        .await
+        .is_err());
+    let options = host
+        .recovery_options(&account.target_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(options.local_session_provider.is_none());
+    assert!(options.collections.is_empty());
+    assert_eq!(options.ice_servers.len(), 1);
+    assert!(options.ice_servers[0].urls.is_empty());
+    assert!(options.ice_servers[0].username.is_empty());
+    assert!(options.ice_servers[0].credential.is_empty());
+    let urls = (options.signaling_urls)();
+    assert_eq!(urls.len(), 1);
+    let url = url::Url::parse(&urls[0]).unwrap();
+    let query = url
+        .query_pairs()
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(query.get("role").map(|v| v.as_ref()), Some("browser"));
+    assert_eq!(
+        query.get("instance_id").map(|v| v.as_ref()),
+        Some(account.instance_id.as_str())
+    );
+    assert!(!urls[0].contains("expired-turn-secret"));
+    assert_eq!(
+        host.read_record(ROUTING_SCOPE, &account.credential_name().unwrap())
+            .unwrap(),
+        before
+    );
+    assert_eq!(
+        host.account(&account.target_id).await.unwrap(),
+        Some(account.clone())
+    );
+    assert!(
+        host.native_options_with_deadline(&account.target_id)
+            .await
+            .is_err(),
+        "bootstrap cannot extend payload expiry"
+    );
+    let mut changed = expired_snapshot(&account);
+    changed.room.push_str("-rotated");
+    save_route_snapshot(root.path(), &account, changed);
+    assert!(
+        (options.signaling_urls)().is_empty(),
+        "in-flight bootstrap cannot switch rendezvous"
+    );
+    save_route_snapshot(root.path(), &account, expired_snapshot(&account));
+    host.revoke(account.clone()).await.unwrap();
+    assert!((options.signaling_urls)().is_empty());
+    assert!(host.recovery_options(&account.target_id).await.is_err());
+    options.database.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn invalid_retained_routing_cannot_be_laundered_into_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let account = account(root.path());
+    save_authority(root.path(), &account);
+    let host = host(root.path());
+    let valid = expired_snapshot(&account);
+    assert!(valid
+        .retained_rendezvous(&account.instance_id, chrono::Utc::now().timestamp_millis())
+        .is_ok());
+    assert!(valid
+        .validate(&account.instance_id, chrono::Utc::now().timestamp_millis())
+        .is_err());
+    for mutation in 0..4 {
+        let mut route = valid.clone();
+        match mutation {
+            0 => route.browser_token_hash = "b".repeat(64),
+            1 => route.room = "ctox-business-os:foreign:room".into(),
+            2 => route.refresh_after_ms = route.expires_at_ms,
+            _ => route.ice_servers[0].username = "1:expired-before-snapshot".into(),
+        }
+        assert!(route
+            .retained_rendezvous(&account.instance_id, chrono::Utc::now().timestamp_millis())
+            .is_err());
+        save_route_snapshot(root.path(), &account, route);
+        assert!(host.recovery_options(&account.target_id).await.is_err());
+    }
+}
