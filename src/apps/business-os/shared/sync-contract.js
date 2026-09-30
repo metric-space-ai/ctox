@@ -39,6 +39,21 @@ export function collectionReadinessFromDiagnostics(collection, entry, { syncMode
   });
 }
 
+// Cache readiness and current authoritative freshness have different lifetimes.
+// Older runtimes without a current-pull confirmation remain unconfirmed.
+export function collectionFreshnessFromDiagnostics(collection, entry, { syncMode } = {}) {
+  const local = syncMode !== undefined && syncMode !== null && syncMode !== '' && syncMode !== SYNC_TRANSPORT;
+  const state = local ? 'live'
+    : normalizeCollectionReadinessState(entry?.frameTransport?.collectionFreshnessState) || 'catching-up';
+  return Object.freeze({
+    collection,
+    state,
+    ready: state === 'live',
+    syncing: state === 'catching-up' || state === 'never-synced',
+    updatedAt: entry?.updatedAt || null,
+  });
+}
+
 export function collectionTopic(syncRoom, collection) {
   if (!syncRoom) throw new Error('Business OS sync requires sync_room');
   if (!collection) throw new Error('Business OS sync requires collection name');

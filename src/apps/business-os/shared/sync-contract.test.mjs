@@ -6,6 +6,7 @@ import {
   batchSizeFor,
   COLLECTION_READINESS_STATES,
   collectionReadinessFromDiagnostics,
+  collectionFreshnessFromDiagnostics,
   normalizeCollectionReadinessState,
 } from './sync-contract.js';
 
@@ -89,6 +90,20 @@ test('collection readiness follows the canonical diagnostics derivation table', 
     assert.deepEqual(snapshot, { collection: 'research_runs', ...expected }, name);
     assert.equal(Object.isFrozen(snapshot), true, `${name}: snapshot must be frozen`);
   }
+});
+
+test('current pull freshness is distinct from historical live cache readiness', () => {
+  for (const freshness of ['catching-up', 'offline-pending']) {
+    const snapshot = collectionFreshnessFromDiagnostics('outbound_leads', {
+      initialReplicationState: 'complete',
+      frameTransport: { collectionReadinessState: 'live', collectionFreshnessState: freshness },
+    }, { syncMode: 'webrtc' });
+    assert.equal(snapshot.ready, false);
+    assert.equal(snapshot.state, freshness);
+  }
+  assert.equal(collectionFreshnessFromDiagnostics('outbound_leads', {
+    frameTransport: { collectionReadinessState: 'live', collectionFreshnessState: 'live' },
+  }, { syncMode: 'webrtc' }).ready, true);
 });
 
 test('sync runtime version-binds its nested sync contract import', async () => {

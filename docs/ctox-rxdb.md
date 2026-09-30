@@ -134,6 +134,16 @@ Unmounted desktops do not start further reconciliation writes. This makes a
 previously loaded desktop usable during a slow or offline reconnect, but does
 not by itself establish that the full tenant data set has converged.
 
+Historical first-pull readiness survives valid checkpoint reuse so cached UI
+can still paint immediately. It does not certify the current connection's
+freshness. Pull transport diagnostics expose `collectionFreshnessState` and
+`lastSuccessfulPullAtMs`: only a fully drained pull after local storage work
+in the current peer generation confirms `live`. A disconnect, pending pull,
+or failed drain leaves displayed cache unconfirmed without resetting its
+checkpoint or journal. The active app shows an inline warning until its
+replicated collections regain that confirmation; document age is not a
+freshness test, since an authoritative collection can legitimately be idle.
+
 Authoritative reconciliation uses the existing collection lease and
 query-demand-loader with an opaque `requireRevision` hydration token. Query
 readiness means the negotiated peer has query-fetch capability and the actual

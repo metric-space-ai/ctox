@@ -318,6 +318,13 @@ body[data-maintenance-active="true"] .app-shell {
   font-weight: 700;
 }
 
+.collection-freshness-warning {
+  color: var(--warning, #e8b84a);
+  font-size: var(--fs-meta);
+  max-width: min(48vw, 480px);
+  white-space: normal;
+}
+
 body[data-maintenance-status="failed"] .ctox-maintenance-banner,
 body[data-maintenance-status="stale"] .ctox-maintenance-banner {
   border-bottom-color: color-mix(in srgb, var(--danger) 70%, var(--line));

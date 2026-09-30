@@ -1182,6 +1182,11 @@ class CtoxWebRtcReplicationState {
     // after the remote/local validity keys and permission digest match during
     // handshake; until then an old marker must not make this collection live.
     this.firstPullCompletedAtMs = 0;
+    // Historical checkpoint reuse does not prove this connection is current.
+    // Only a drained pull after local writes/checkpoint reads in this generation does.
+    this.pullFresh = false;
+    this.pullFreshnessGeneration = 0;
+    this.lastSuccessfulPullAtMs = 0;
     this.localCheckpointValidityKey = '';
     // SYNC-12: a non-secret digest of THIS browser's own effective read-permission
     // identity (role + capability_epoch), stamped alongside retained checkpoints.
@@ -1487,6 +1492,8 @@ class CtoxWebRtcReplicationState {
     // long after the native protocol response was produced.
     Object.assign(this.demandStatus, hybridLogicalClockStatus());
     this.activeRemotePeerId = peerId;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
     // Seed retained checkpoints only when the native storage generation and
@@ -1576,10 +1583,12 @@ class CtoxWebRtcReplicationState {
       return this.pullInProgressPromise;
     }
     this.pullInProgress = true;
+    this.pullFresh = false;
     this.pullAgainAfterCurrent = false;
     this.publishTransportStatus();
     this.pullInProgressPromise = (async () => {
       do {
+        this.pullFresh = false;
         this.pullAgainAfterCurrent = false;
         const peerIds = this.openPeerIds();
         const results = await Promise.allSettled(peerIds.map((peerId) => this.pullFromPeer(peerId)));
@@ -1642,6 +1651,7 @@ class CtoxWebRtcReplicationState {
   }
 
   async pullFromPeer(peerId) {
+    const freshnessGeneration = this.pullFreshnessGeneration;
     const batchSize = Number(this.pull?.batchSize || 10);
     let activePeerId = peerId;
     let checkpoint = this.pullCheckpointsByPeer.get(activePeerId) || null;
@@ -1675,7 +1685,11 @@ class CtoxWebRtcReplicationState {
       // drained completely, including the valid "synced but empty" case. Stamp
       // the marker before persisting so readiness survives a reload.
       if (!documents.length) this.markFirstPullCompleted();
-      await this.persistCheckpointsForPeer(activePeerId);
+      const checkpointPersisted = await this.persistCheckpointsForPeer(activePeerId);
+      if (!documents.length && checkpointPersisted && freshnessGeneration === this.pullFreshnessGeneration && !this.cancelled) {
+        this.pullFresh = true;
+        this.lastSuccessfulPullAtMs = Date.now();
+      }
       // Drain until an EMPTY answer, not until a partial batch: the master
       // legitimately returns fewer documents than asked for (the
       // desktop_file_chunks response limiter caps answers at 96 KiB with a
@@ -2437,6 +2451,13 @@ class CtoxWebRtcReplicationState {
     return 'never-synced';
   }
 
+  collectionFreshnessState() {
+    if (!this.pull) return null;
+    if (!this.hasOpenReadinessPeer()) return 'offline-pending';
+    if (this.pullInProgress || !this.pullFresh) return 'catching-up';
+    return 'live';
+  }
+
   hasOpenReadinessPeer() {
     if ((this.shared?.openSharedPeerIds?.() || []).length > 0) return true;
     const negotiatedPeerId = this.shared?.negotiated?.peerId || '';
@@ -2463,6 +2484,8 @@ class CtoxWebRtcReplicationState {
     if (!peerId) return;
     const peerStates = new Map(this.peerStates$.getValue() || new Map());
     if (!peerStates.has(peerId)) return;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     // Retain the checkpoints (validity-keyed) BEFORE dropping the peer.
     // Discarding them outright meant EVERY reconnect re-synced the whole
     // collection from a null checkpoint — across ~80 collections that
@@ -2540,10 +2563,10 @@ class CtoxWebRtcReplicationState {
 
   async persistCheckpointsForPeer(peerId) {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
-    if (!validityKey) return;
+    if (!validityKey) return false;
     const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     const localValidityKey = localCheckpointValidityKey(localCheckpoint);
-    if (!localValidityKey) return;
+    if (!localValidityKey) return false;
     this.localCheckpointValidityKey = localValidityKey;
     const retained = {
       validityKey,
@@ -2560,6 +2583,7 @@ class CtoxWebRtcReplicationState {
     };
     this.retainedCheckpoints = retained;
     writePersistentCheckpoints(this.checkpointStorageKey, retained);
+    return true;
   }
 
   remoteProtocolForPeer(peerId) {
@@ -2725,6 +2749,8 @@ class CtoxWebRtcReplicationState {
       topic: this.topic,
       activePeerCount: Math.max(localPeerCount, sharedPeerCount, connectionPeerCount),
       collectionReadinessState: this.collectionReadinessState(),
+      collectionFreshnessState: this.collectionFreshnessState(),
+      lastSuccessfulPullAtMs: this.lastSuccessfulPullAtMs || null,
       firstPullCompletedAtMs: this.firstPullCompletedAtMs || null,
       pullInProgress: this.pullInProgress,
       pushInProgress: this.pushInProgress,

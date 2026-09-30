@@ -10825,6 +10825,9 @@ var CtoxWebRtcReplicationState = class {
     this.checkpointStorageKey = persistentCheckpointStorageKey(topic, collection.name);
     this.retainedCheckpoints = readPersistentCheckpoints(this.checkpointStorageKey);
     this.firstPullCompletedAtMs = 0;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration = 0;
+    this.lastSuccessfulPullAtMs = 0;
     this.localCheckpointValidityKey = "";
     this.readPermissionDigest = "";
     this.activeRemotePeerId = null;
@@ -11065,6 +11068,8 @@ var CtoxWebRtcReplicationState = class {
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
     Object.assign(this.demandStatus, hybridLogicalClockStatus());
     this.activeRemotePeerId = peerId;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
     const validityKey = checkpointValidityKeyFromProtocol(normalizedRemoteProtocol);
@@ -11133,10 +11138,12 @@ var CtoxWebRtcReplicationState = class {
       return this.pullInProgressPromise;
     }
     this.pullInProgress = true;
+    this.pullFresh = false;
     this.pullAgainAfterCurrent = false;
     this.publishTransportStatus();
     this.pullInProgressPromise = (async () => {
       do {
+        this.pullFresh = false;
         this.pullAgainAfterCurrent = false;
         const peerIds = this.openPeerIds();
         const results = await Promise.allSettled(peerIds.map((peerId) => this.pullFromPeer(peerId)));
@@ -11190,6 +11197,7 @@ var CtoxWebRtcReplicationState = class {
     this.localPushTimer.unref?.();
   }
   async pullFromPeer(peerId) {
+    const freshnessGeneration = this.pullFreshnessGeneration;
     const batchSize = Number(this.pull?.batchSize || 10);
     let activePeerId = peerId;
     let checkpoint = this.pullCheckpointsByPeer.get(activePeerId) || null;
@@ -11218,7 +11226,11 @@ var CtoxWebRtcReplicationState = class {
       checkpoint = result?.checkpoint || checkpoint;
       this.pullCheckpointsByPeer.set(activePeerId, checkpoint);
       if (!documents.length) this.markFirstPullCompleted();
-      await this.persistCheckpointsForPeer(activePeerId);
+      const checkpointPersisted = await this.persistCheckpointsForPeer(activePeerId);
+      if (!documents.length && checkpointPersisted && freshnessGeneration === this.pullFreshnessGeneration && !this.cancelled) {
+        this.pullFresh = true;
+        this.lastSuccessfulPullAtMs = Date.now();
+      }
       if (!documents.length) break;
     }
   }
@@ -11879,6 +11891,12 @@ var CtoxWebRtcReplicationState = class {
     if (!this.hasOpenReadinessPeer()) return "offline-pending";
     return "never-synced";
   }
+  collectionFreshnessState() {
+    if (!this.pull) return null;
+    if (!this.hasOpenReadinessPeer()) return "offline-pending";
+    if (this.pullInProgress || !this.pullFresh) return "catching-up";
+    return "live";
+  }
   hasOpenReadinessPeer() {
     if ((this.shared?.openSharedPeerIds?.() || []).length > 0) return true;
     const negotiatedPeerId = this.shared?.negotiated?.peerId || "";
@@ -11899,6 +11917,8 @@ var CtoxWebRtcReplicationState = class {
     if (!peerId) return;
     const peerStates = new Map(this.peerStates$.getValue() || /* @__PURE__ */ new Map());
     if (!peerStates.has(peerId)) return;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
     const retainedPull = this.pullCheckpointsByPeer.get(peerId) || null;
     const retainedPush = this.pushCheckpointsByPeer.get(peerId) || null;
@@ -11977,10 +11997,10 @@ var CtoxWebRtcReplicationState = class {
   }
   async persistCheckpointsForPeer(peerId) {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
-    if (!validityKey) return;
+    if (!validityKey) return false;
     const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     const localValidityKey = localCheckpointValidityKey(localCheckpoint);
-    if (!localValidityKey) return;
+    if (!localValidityKey) return false;
     this.localCheckpointValidityKey = localValidityKey;
     const retained = {
       validityKey,
@@ -11997,6 +12017,7 @@ var CtoxWebRtcReplicationState = class {
     };
     this.retainedCheckpoints = retained;
     writePersistentCheckpoints(this.checkpointStorageKey, retained);
+    return true;
   }
   remoteProtocolForPeer(peerId) {
     const localProtocol = (this.peerStates$.getValue() || /* @__PURE__ */ new Map()).get(peerId)?.remoteProtocol || null;
@@ -12141,6 +12162,8 @@ var CtoxWebRtcReplicationState = class {
       topic: this.topic,
       activePeerCount: Math.max(localPeerCount, sharedPeerCount, connectionPeerCount),
       collectionReadinessState: this.collectionReadinessState(),
+      collectionFreshnessState: this.collectionFreshnessState(),
+      lastSuccessfulPullAtMs: this.lastSuccessfulPullAtMs || null,
       firstPullCompletedAtMs: this.firstPullCompletedAtMs || null,
       pullInProgress: this.pullInProgress,
       pushInProgress: this.pushInProgress,
