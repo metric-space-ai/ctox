@@ -1,5 +1,17 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Native command intake reader
+
+Each native command-consumer task owns one bounded read-only SQLite connection
+for its source-stamp and pending-command scans. Blocking tasks capture that
+reader from the consumer's task-local scope; different peers do not share it.
+On Unix, canonical path/device/inode fence reuse, limited to 64 reads or 30
+seconds. Other platforms keep fresh connections. Every query rediscovers the
+current table and reads current rows; there is no cached command, authorization
+or schema result. Attached domain-receipt databases are detached after every
+query. Errors, absence, replacement and retained transactions discard the
+connection. The existing notifier/lost-wakeup check and retry budget remain.
+
 ### Workjet computer schema upgrade (v0 to v1)
 
 Two deployed `workjet_computers` schemas used version 0. Adding binding, epoch,
