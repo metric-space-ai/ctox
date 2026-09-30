@@ -546,6 +546,20 @@ mod tests {
         .unwrap();
         let actor = principal(root.path(), &token).unwrap();
         let conn = store::open_store(root.path()).unwrap();
+        // Real permission mutations revoke the capability through SQL epoch
+        // triggers. Fault-inject the retained epoch only in this isolated
+        // fixture to prove live file policy remains an independent fence.
+        let restore_fixture_epoch = || {
+            conn.execute(
+                "UPDATE business_users SET capability_epoch=?1 WHERE user_id=?2",
+                rusqlite::params![
+                    i64::try_from(actor.authorization_epoch).unwrap(),
+                    actor.user_id
+                ],
+            )
+            .unwrap();
+            assert_eq!(principal(root.path(), &token).unwrap(), actor);
+        };
         // Remove migration grants only in this isolated fixture. The recipient
         // now has precisely one explicit file-read grant and no elevated role.
         conn.execute(
@@ -554,6 +568,7 @@ mod tests {
             [BusinessOsPermission::DataRead.as_str()],
         )
         .unwrap();
+        restore_fixture_epoch();
         assert!(call(
             root.path(),
             &token,
@@ -569,6 +584,11 @@ mod tests {
             rusqlite::params![actor.user_id, BusinessOsPermission::DataRead.as_str(), now],
         )
         .unwrap();
+        assert!(
+            principal(root.path(), &token).is_err(),
+            "grant insertion must invalidate the old capability"
+        );
+        restore_fixture_epoch();
         let grant = issue(root.path(), &token, &scope);
         assert_eq!(
             check(root.path(), &token, &scope, &grant.grant_id).unwrap(),
@@ -579,8 +599,13 @@ mod tests {
             [],
         )
         .unwrap();
-        // This is a policy-only invalidation, not an expired/replaced token,
-        // account epoch change or revoked device masking the source check.
+        assert!(
+            principal(root.path(), &token).is_err(),
+            "policy revocation must invalidate the old capability"
+        );
+        restore_fixture_epoch();
+        // Even with the original actor restored, current policy must deny the
+        // grant. An epoch change or revoked device cannot mask this check.
         assert_eq!(principal(root.path(), &token).unwrap(), actor);
         assert!(check(root.path(), &token, &scope, &grant.grant_id).is_err());
         assert!(call(root.path(), &token, TransferGrantRequest::Issue { scope }).is_err());
