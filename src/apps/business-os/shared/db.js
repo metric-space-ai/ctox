@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260930-shell-v2-eager-replica-v432';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261001-shell-v2-checkpoint-head-v433';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

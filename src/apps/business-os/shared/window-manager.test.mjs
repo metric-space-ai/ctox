@@ -211,6 +211,9 @@ test('uses the rendered launcher glyph, never the 128px source canvas, for shell
   assert.equal(shellV2RenderedIconSizeFromAnchor({ width: 56, height: 56 }), 56);
   assert.equal(shellV2RenderedIconSizeFromAnchor({ width: 128, height: 120 }), null);
   assert.equal(shellV2RenderedIconSizeFromAnchor({ width: 0, height: 0 }), null);
+  // 30.09.2026: a 631 px square anchor turned the window icon into an overlay.
+  assert.equal(shellV2RenderedIconSizeFromAnchor({ width: 631, height: 631 }), null);
+  assert.equal(shellV2RenderedIconSizeFromAnchor({ width: 12, height: 12 }), null);
 });
 
 test('samples local accents from the nearest painted frame edge and its icon joint', () => {

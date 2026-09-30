@@ -227,6 +227,7 @@ export const replicationWebRtcTestInternals = Object.freeze({
   // Local checkpoint reuse across ordinary pulls/writes, never across eviction.
   localCheckpointValidityKey,
   localCheckpointStillCovers,
+  remoteCheckpointStillCovers,
   // Eager replicas are never evicted by the demand sidecar.
   demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
@@ -1601,7 +1602,7 @@ class CtoxWebRtcReplicationState {
     const retained = this.retainedCheckpoints;
     if (retained && validityKey) {
       if (
-        retained.validityKey === validityKey
+        remoteCheckpointStillCovers(retained, validityKey, normalizedRemoteProtocol)
         && localCheckpointStillCovers(retained.localValidityKey, localValidityKey)
         && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)
       ) {
@@ -2904,6 +2905,29 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   }
   if (!epoch || !sessionId || !schemaHashValue) return '';
   return `${epoch}|${sessionId}|${schemaHashValue}`;
+}
+
+// The native epoch hashes the collection HEAD (latest lwt/id). Requiring it to
+// be byte-identical discarded the retained pull checkpoint after every server
+// write, so a busy collection re-pulled completely on each reload (customer
+// tenant, 30.09.2026: leads ~53 MB per reload while remark checks wrote).
+// Same storage generation, collection and schema with a head that has not
+// moved behind the retained pull position means the incremental pull from that
+// position delivers exactly the missing changes. A head older than the retained
+// position (restore/rewrite) or any other key shape keeps exact equality.
+function remoteCheckpointStillCovers(retained, currentKey, remoteProtocol) {
+  const retainedKey = retained?.validityKey;
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const before = String(retainedKey).split('|');
+  const now = String(currentKey).split('|');
+  if (before.length !== 4 || now.length !== 4) return false;
+  if (before[0] !== now[0] || before[1] !== now[1] || before[2] !== now[2]) return false;
+  const retainedLwt = Number(retained?.pull?.lwt);
+  const remoteHeadLwt = Number(remoteProtocol?.checkpoint?.latestLwt);
+  return Number.isFinite(retainedLwt)
+    && Number.isFinite(remoteHeadLwt)
+    && remoteHeadLwt >= retainedLwt;
 }
 
 function localCheckpointValidityKey(checkpoint) {
