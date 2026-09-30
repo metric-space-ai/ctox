@@ -17482,6 +17482,14 @@ pub(super) fn ensure_legacy_collection_grants(
     // contention during capability issuance.
     let server_owned_collections =
         super::external_sql_sync::server_owned_projection_collections(root)?;
+    ensure_legacy_collection_grants_with_ownership(root, collections, &server_owned_collections)
+}
+
+fn ensure_legacy_collection_grants_with_ownership(
+    root: &Path,
+    collections: &[String],
+    server_owned_collections: &HashSet<String>,
+) -> anyhow::Result<()> {
     let mut conn = open_store(root)?;
     let tx = conn.transaction()?;
     let now = now_ms() as i64;
@@ -17497,7 +17505,7 @@ pub(super) fn ensure_legacy_collection_grants(
         let server_owned_write = super::threads::is_threads_owned_collection(collection)
             || server_owned_collections.contains(collection);
         if server_owned_write {
-            tx.execute(
+            tx.prepare_cached(
                 "UPDATE business_permission_grants
                  SET active=0,
                      reason='Server-owned collection is read-only for browser sync',
@@ -17507,8 +17515,12 @@ pub(super) fn ensure_legacy_collection_grants(
                    AND scope_type='collection'
                    AND scope_id=?3
                    AND created_by='business-os-policy-migration'",
-                params![now, BusinessOsPermission::DataWrite.as_str(), collection],
-            )?;
+            )?
+            .execute(params![
+                now,
+                BusinessOsPermission::DataWrite.as_str(),
+                collection
+            ])?;
         }
         for role in ["founder", "user"] {
             for permission in [
@@ -17524,15 +17536,21 @@ pub(super) fn ensure_legacy_collection_grants(
                     permission.as_str().replace('.', "_"),
                     collection
                 );
-                tx.execute(
+                tx.prepare_cached(
                     "INSERT OR IGNORE INTO business_permission_grants
                         (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
                          active, reason, created_by, created_at_ms, updated_at_ms)
                      VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
                              'Migrated legacy sync access to exact collection grant',
                              'business-os-policy-migration', ?5, ?5)",
-                    params![grant_id, role, permission.as_str(), collection, now],
-                )?;
+                )?
+                .execute(params![
+                    grant_id,
+                    role,
+                    permission.as_str(),
+                    collection,
+                    now
+                ])?;
             }
         }
     }
@@ -17552,6 +17570,14 @@ pub(super) fn ensure_legacy_collection_grants(
 pub(super) fn ensure_first_party_catalog_collection_grants(
     root: &Path,
     installed_app_root: &Path,
+) -> anyhow::Result<usize> {
+    ensure_first_party_catalog_collection_grants_with_ownership(root, installed_app_root, None)
+}
+
+fn ensure_first_party_catalog_collection_grants_with_ownership(
+    root: &Path,
+    installed_app_root: &Path,
+    ownership: Option<&HashSet<String>>,
 ) -> anyhow::Result<usize> {
     let modules_dir = installed_app_root.join("installed-modules");
     let Ok(entries) = fs::read_dir(&modules_dir) else {
@@ -17595,8 +17621,15 @@ pub(super) fn ensure_first_party_catalog_collection_grants(
     if declared.is_empty() {
         return Ok(0);
     }
-    let server_owned_collections =
-        super::external_sql_sync::server_owned_projection_collections(root)?;
+    let current_ownership;
+    let server_owned_collections = match ownership {
+        Some(ownership) => ownership,
+        None => {
+            current_ownership =
+                super::external_sql_sync::server_owned_projection_collections(root)?;
+            &current_ownership
+        }
+    };
     let mut conn = open_store(root)?;
     let tx = conn.transaction()?;
     let now = now_ms() as i64;
@@ -17616,15 +17649,22 @@ pub(super) fn ensure_first_party_catalog_collection_grants(
                     "catalog.first_party.{module_id}.{role}.{}.{collection}",
                     permission.as_str().replace('.', "_")
                 );
-                inserted += tx.execute(
-                    "INSERT OR IGNORE INTO business_permission_grants
+                inserted += tx
+                    .prepare_cached(
+                        "INSERT OR IGNORE INTO business_permission_grants
                         (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
                          active, reason, created_by, created_at_ms, updated_at_ms)
                      VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
                              'First-party catalog app data access for administrators',
                              'business-os-first-party-catalog', ?5, ?5)",
-                    params![grant_id, role, permission.as_str(), collection, now],
-                )?;
+                    )?
+                    .execute(params![
+                        grant_id,
+                        role,
+                        permission.as_str(),
+                        collection,
+                        now
+                    ])?;
             }
         }
     }
@@ -17639,6 +17679,7 @@ fn business_os_collection_names_for_legacy_grants() -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn ensure_default_sync_collection_grants(root: &Path) -> anyhow::Result<()> {
     ensure_legacy_collection_grants(root, &business_os_collection_names_for_legacy_grants())
 }
@@ -17731,10 +17772,18 @@ fn issue_business_os_capability_token_until_with_identity(
     // freshly issued token before its first collection fetch.
     // The same ordering applies to first-party catalog grants added when a
     // newly installed app causes the native peer to reconfigure.
-    ensure_default_sync_collection_grants(root)?;
-    ensure_first_party_catalog_collection_grants(
+    // One fresh ownership snapshot per issuance, never a cached authorization
+    // decision. Both grant materializers must finish before reading the epoch.
+    let ownership = super::external_sql_sync::server_owned_projection_collections(root)?;
+    ensure_legacy_collection_grants_with_ownership(
+        root,
+        &business_os_collection_names_for_legacy_grants(),
+        &ownership,
+    )?;
+    ensure_first_party_catalog_collection_grants_with_ownership(
         root,
         &resolve_business_os_installed_app_root(root),
+        Some(&ownership),
     )?;
     let conn = open_store(root)?;
     seed_configured_business_users(&conn)?;

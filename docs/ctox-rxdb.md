@@ -106,6 +106,18 @@ Two implementations, one contract:
 | Daemon | `rxdb-rs` (crate `ctox-rxdb`, lib name `rxdb`) | `src/core/rxdb/` + `src/core/business_os/rxdb_peer.rs` |
 
 ---
+## Capability issuance
+
+Capability issuance reconciles baseline and installed catalog grants before
+reading the actor's current role and capability epoch. Both materializers use
+one freshly loaded server-owned collection snapshot for that request and reuse
+prepared SQL statements within their transactions. The ownership snapshot and
+authorization decision are never cached between token issuances. New installed
+collections, grant changes and role changes remain part of the fresh issuance
+and WebRTC admission checks. The Full Host gate exercises revocation,
+idempotent reconciliation, newly installed catalog grants and server-owned
+write exclusions before measuring the unchanged command latency budget.
+
 ## Shell artifact boundary
 
 The native instance selects and verifies its signed Business OS release.
