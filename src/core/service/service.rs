@@ -7119,8 +7119,7 @@ fn start_prompt_worker(
             };
             review_disposition =
                 hold_unsent_founder_communication_rework(&root, &job, review_disposition);
-            review_disposition =
-                stop_founder_rework_hold_loop(&root, &job, review_disposition);
+            review_disposition = stop_founder_rework_hold_loop(&root, &job, review_disposition);
             let review_reason = match &review_disposition {
                 CompletionReviewDisposition::Hold { summary, .. }
                 | CompletionReviewDisposition::NoSend { summary }
@@ -42146,8 +42145,10 @@ Use shell tools to create or update these files."
             .expect("failed to reload self-work")
             .expect("missing self-work");
         assert_eq!(reloaded.state, "failed");
-        assert!(founder_rework_loop_terminal_already_active(&root, &item.work_id)
-            .expect("terminal check"));
+        assert!(
+            founder_rework_loop_terminal_already_active(&root, &item.work_id)
+                .expect("terminal check")
+        );
         // A job that is not a founder rework is never touched.
         let mut other = self_work_job();
         other.ticket_self_work_id = Some(item.work_id.clone());
