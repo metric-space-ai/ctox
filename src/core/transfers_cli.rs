@@ -39,7 +39,35 @@ pub(crate) fn start_daemon_with_account_host(
     DaemonWorker::start_with_peer(store(root)?, std::sync::Arc::new(resolver))
 }
 
+fn run_worker_window(root: &Path, seconds: &str) -> Result<()> {
+    let seconds: u64 = seconds.parse()?;
+    if !(1..=3600).contains(&seconds) {
+        bail!("transfer run requires 1 to 3600 seconds");
+    }
+    let worker = start_daemon(root)?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
+    while std::time::Instant::now() < deadline {
+        if worker.is_finished() {
+            worker.shutdown()?;
+            bail!("transfer worker stopped before the requested window ended");
+        }
+        std::thread::sleep(
+            std::time::Duration::from_millis(100)
+                .min(deadline.saturating_duration_since(std::time::Instant::now())),
+        );
+    }
+    worker.shutdown()?;
+    println!(
+        "{}",
+        serde_json::json!({"state":"stopped", "runSeconds":seconds})
+    );
+    Ok(())
+}
+
 pub fn handle(root: &Path, args: &[String]) -> Result<()> {
+    if args.first().map(String::as_str) == Some("run") && args.len() == 2 {
+        return run_worker_window(root, &args[1]);
+    }
     if args.first().map(String::as_str) == Some("source-identity") && args.len() == 1 {
         println!(
             "{}",
@@ -78,7 +106,7 @@ pub fn handle(root: &Path, args: &[String]) -> Result<()> {
         Some(action @ ("pause" | "resume" | "cancel")) if args.len() == 2 => {
             store.control(&args[1], action)?
         }
-        _ => bail!("usage: ctox transfer source-identity | publish FILE | pair TARGET SOURCE_PUBLIC_IDENTITY INVITE_FILE | download ID SHA256 SIZE URL [MIRROR...] | peer-download ID TARGET SHA256 SIZE FILE_ID | status ID | pause ID | resume ID | cancel ID"),
+        _ => bail!("usage: ctox transfer run SECONDS | source-identity | publish FILE | pair TARGET SOURCE_PUBLIC_IDENTITY INVITE_FILE | download ID SHA256 SIZE URL [MIRROR...] | peer-download ID TARGET SHA256 SIZE FILE_ID | status ID | pause ID | resume ID | cancel ID"),
     };
     println!("{}", serde_json::to_string_pretty(&transfer)?);
     Ok(())
@@ -89,6 +117,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn invalid_worker_window_does_not_open_state() {
+        let root = tempfile::tempdir().unwrap();
+        for seconds in ["0", "3601", "-1", "invalid"] {
+            assert!(run_worker_window(root.path(), seconds).is_err());
+        }
+        assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+    }
+
+    #[test]
     fn store_obeys_isolated_state_root() {
         const CHILD_ROOT: &str = "CTOX_TEST_TRANSFER_STATE_ROOT_CHILD";
         // Set the process-wide runtime override only in a dedicated child,
@@ -96,6 +133,9 @@ mod tests {
         if let Some(root) = std::env::var_os(CHILD_ROOT) {
             let root = std::path::PathBuf::from(root);
             let state = std::path::PathBuf::from(std::env::var_os("CTOX_STATE_ROOT").unwrap());
+            // The bounded foreground command starts no unrelated service and
+            // must finish draining its worker before returning.
+            run_worker_window(&root, "1").unwrap();
             let opened = store(&root).unwrap();
             opened
                 .enqueue(DownloadRequest {

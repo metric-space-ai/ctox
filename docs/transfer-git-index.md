@@ -56,6 +56,13 @@ selection and `CTOX_STATE_ROOT` state-directory override for isolated instances.
 The core transfer metadata, downloaded objects and native query/admission
 databases all follow that same state directory. Use the same selections for
 every command and daemon restart; an installed launcher may override them.
+For an isolated acceptance run, A can host its source peer with
+`ctox business-os peer start`; B can run the ordinary transfer worker with
+`ctox transfer run 300`. The latter owns only the transfer worker, drains it
+when the requested 1–3600 second window ends, and returns worker/shutdown
+errors. Its `stopped` output is not a job-completion receipt: inspect each job
+with `transfer status`. Keep both commands under the existing bounded process
+supervisor; restarting B uses the same root, state, jobs and account.
 
 On A, quiesce the source and run
 `ctox workjet-transfer pack --source SOURCE --artifacts ARTIFACTS`.

@@ -595,7 +595,7 @@ fn sync_directory(path: &Path) -> Result<()> {
 /// The daemon owns this guard. UI lifetime has no bearing on the worker or its durable jobs.
 pub struct DaemonWorker {
     stop: Arc<AtomicBool>,
-    thread: Option<std::thread::JoinHandle<()>>,
+    thread: Option<std::thread::JoinHandle<Result<()>>>,
 }
 impl DaemonWorker {
     pub fn start(store: Store) -> Result<Self> {
@@ -615,38 +615,62 @@ impl DaemonWorker {
             .name("ctox-transfers".into())
             .spawn(move || {
                 runtime.block_on(async {
-                    while !stopped.load(Ordering::Acquire) {
+                    let outcome = loop {
+                        if stopped.load(Ordering::Acquire) {
+                            break Ok(());
+                        }
                         match worker.run_next(&stopped).await {
                             Ok(true) => continue,
                             Ok(false) => {}
-                            Err(_) => {
-                                eprintln!("ctox transfer worker storage failure; restart required");
-                                break;
-                            }
+                            Err(error) => break Err(error),
                         }
                         tokio::time::sleep(Duration::from_millis(250)).await;
-                    }
-                    if let Some(peer) = &worker.peer {
-                        if !matches!(
-                            tokio::time::timeout(Duration::from_secs(30), peer.shutdown()).await,
-                            Ok(Ok(()))
-                        ) {
-                            eprintln!("ctox transfer peer cleanup failed or timed out");
+                    };
+                    let cleanup = if let Some(peer) = &worker.peer {
+                        match tokio::time::timeout(Duration::from_secs(30), peer.shutdown()).await {
+                            Ok(result) => result,
+                            Err(error) => Err(error.into()),
                         }
+                    } else {
+                        Ok(())
+                    };
+                    if cleanup.is_err() {
+                        eprintln!("ctox transfer peer cleanup failed or timed out");
                     }
-                });
+                    outcome.and(cleanup)
+                })
             })?;
         Ok(Self {
             stop,
             thread: Some(thread),
         })
     }
+
+    pub fn is_finished(&self) -> bool {
+        self.thread
+            .as_ref()
+            .map_or(true, |thread| thread.is_finished())
+    }
+
+    /// Stop admission, drain the owned worker/peer, and surface terminal errors.
+    pub fn shutdown(mut self) -> Result<()> {
+        self.stop_and_join()
+    }
+
+    fn stop_and_join(&mut self) -> Result<()> {
+        self.stop.store(true, Ordering::Release);
+        if let Some(thread) = self.thread.take() {
+            thread
+                .join()
+                .map_err(|_| anyhow::anyhow!("transfer worker panicked"))??;
+        }
+        Ok(())
+    }
 }
 impl Drop for DaemonWorker {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Release);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        if self.stop_and_join().is_err() {
+            eprintln!("ctox transfer worker storage or cleanup failure; restart required");
         }
     }
 }
