@@ -21,6 +21,7 @@ TARGET = 'x86_64-unknown-linux-gnu'
 FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'knowledge::data::tests::',
            'business_os::rxdb_peer_knowledge_rows::tests::',
+           'business_os::rxdb_peer_intake_reader::tests::',
            'startup_clamp_waits_for_a_concurrent_writer_instead_of_failing',
            'knowledge_tables_sync_tombstones_legacy_chunks_and_strips_base_rows',
            'queue_task_update_keeps_its_place_unless_priority_changes',
@@ -98,6 +99,10 @@ REQUIRED_MAIL_TESTS = {
     'ews_empty_folder_limits_and_explicit_empty_body',
 }
 REQUIRED_RUNTIME_TESTS = {
+    'intake_reader_sees_new_schema_and_releases_an_unfinished_transaction',
+    'intake_reader_scope_survives_blocking_tasks_and_keeps_peers_separate',
+    'intake_reader_reuses_connection_but_reads_external_changes_and_replacement',
+    'intake_reader_detaches_receipts_and_discards_errors_and_expired_connections',
     'authenticated_automation_stdin_is_bounded_and_command_specific',
     'authenticated_automation_ipc_preserves_source_and_auth_gate',
     'authenticated_automation_ipc_does_not_bypass_command_session_validation',
