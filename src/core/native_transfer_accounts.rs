@@ -209,50 +209,52 @@ impl NativeTransferAccountHost {
         Ok(accounts
             .into_iter()
             .map(|account| {
-                let target_id = account.target_id;
-                let host = self.clone();
-                let id = target_id.clone();
-                let provider: NativeSessionTargetProvider = Arc::new(move |connection| {
-                    let host = host.clone();
-                    let id = id.clone();
-                    Box::pin(async move {
-                        let account = host
-                            .account(&id)
-                            .await
-                            .map_err(|_| credential_error())?
-                            .ok_or_else(credential_error)?;
-                        let public_identity = account.public_identity.clone();
-                        let instance_id = account.instance_id.clone();
-                        // NativeSyncSession independently proves these pins before
-                        // invoking the credential callback below.
-                        let credentials: LocalSessionProvider<WebRTCRsConnection> =
-                            Arc::new(move |current, nonce| {
-                                let host = host.clone();
-                                let account = account.clone();
-                                let same_connection = current == connection;
-                                Box::pin(async move {
-                                    if !same_connection {
-                                        return Err(credential_error());
-                                    }
-                                    let nonce = nonce.ok_or_else(credential_error)?;
-                                    tokio::task::spawn_blocking(move || {
-                                        host.credentials(&account, &nonce)
-                                    })
-                                    .await
-                                    .map_err(|_| credential_error())?
-                                    .map_err(|_| credential_error())
-                                })
-                            });
-                        Ok(NativeSessionTarget {
-                            public_identity,
-                            instance_id,
-                            credentials,
-                        })
-                    })
-                });
-                (target_id, provider)
+                let id = account.target_id;
+                let provider = self.provider(id.clone());
+                (id, provider)
             })
             .collect())
+    }
+
+    /// Construct a live callback for one target without enumerating other
+    /// accounts or loading credentials. The callback denies missing authority.
+    pub(crate) fn provider(self: &Arc<Self>, target_id: String) -> NativeSessionTargetProvider {
+        let host = self.clone();
+        Arc::new(move |connection| {
+            let host = host.clone();
+            let id = target_id.clone();
+            Box::pin(async move {
+                let account = host
+                    .account(&id)
+                    .await
+                    .map_err(|_| credential_error())?
+                    .ok_or_else(credential_error)?;
+                let public_identity = account.public_identity.clone();
+                let instance_id = account.instance_id.clone();
+                // NativeSyncSession proves these pins before invoking credentials.
+                let credentials: LocalSessionProvider<WebRTCRsConnection> =
+                    Arc::new(move |current, nonce| {
+                        let host = host.clone();
+                        let account = account.clone();
+                        let same_connection = current == connection;
+                        Box::pin(async move {
+                            if !same_connection {
+                                return Err(credential_error());
+                            }
+                            let nonce = nonce.ok_or_else(credential_error)?;
+                            tokio::task::spawn_blocking(move || host.credentials(&account, &nonce))
+                                .await
+                                .map_err(|_| credential_error())?
+                                .map_err(|_| credential_error())
+                        })
+                    });
+                Ok(NativeSessionTarget {
+                    public_identity,
+                    instance_id,
+                    credentials,
+                })
+            })
+        })
     }
 
     fn credentials(

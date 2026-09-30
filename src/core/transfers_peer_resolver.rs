@@ -8,12 +8,18 @@ use tokio::{sync::Mutex, task::JoinHandle};
 const START_TIMEOUT: Duration = Duration::from_secs(20);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(5);
 
+pub(crate) type NativeTransferProviderLookup = Arc<
+    dyn Fn(String) -> futures_util::future::BoxFuture<'static, Result<NativeSessionTargetProvider>>
+        + Send
+        + Sync,
+>;
+
 /// Credential providers are installed by the native account host, keyed by its
 /// saved target IDs. They must remain live lookups, never copied UI tokens.
 /// This resolver does not enroll targets, issue grants, or refresh job bindings.
 pub(crate) struct NativeTransferPeerResolver {
     host: Arc<dyn BusinessDataSessionHost>,
-    providers: BTreeMap<String, NativeSessionTargetProvider>,
+    providers: NativeTransferProviderLookup,
     active: Mutex<Option<ActiveSession>>,
 }
 
@@ -65,6 +71,23 @@ impl NativeTransferPeerResolver {
         host: Arc<dyn BusinessDataSessionHost>,
         providers: BTreeMap<String, NativeSessionTargetProvider>,
     ) -> Self {
+        Self::with_provider_lookup(
+            host,
+            Arc::new(move |target_id| {
+                let provider = providers.get(&target_id).cloned();
+                Box::pin(async move {
+                    provider.context("native target credential provider unavailable")
+                })
+            }),
+        )
+    }
+
+    /// Resolve the current provider when opening each session. Enrollment after
+    /// daemon boot must not require rebuilding a cached target-ID map.
+    pub(crate) fn with_provider_lookup(
+        host: Arc<dyn BusinessDataSessionHost>,
+        providers: NativeTransferProviderLookup,
+    ) -> Self {
         Self {
             host,
             providers,
@@ -99,11 +122,7 @@ impl NativeTransferPeerResolver {
                 .as_ref()
                 .and_then(|source| source.account_binding.as_ref())
                 .context("original native account binding required")?;
-            let provider = self
-                .providers
-                .get(&binding.target_id)
-                .context("native target credential provider unavailable")?
-                .clone();
+            let provider = (self.providers)(binding.target_id.clone()).await?;
             let mut options = self.host.native_options(&binding.target_id).await?;
             ensure!(
                 options.local_session_provider.is_none(),

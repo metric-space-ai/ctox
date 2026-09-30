@@ -79,9 +79,13 @@ to its concrete connection, loads the original enrolled signer and checks accoun
 state before and after key-store work. Missing, corrupt, inactive, switched or
 foreign records fail closed; reconnect never creates a key.
 
-The service owner constructs this host with a native query-only options factory,
-awaits `providers()`, and passes that host and map to
-`start_daemon_with_native_accounts`. Neither API accepts renderer credentials.
+The service owner constructs this host with a native query-only options factory
+and passes it to `start_daemon_with_account_host`. Provider callbacks are resolved
+for the individual target when each session opens, so authenticated enrollment
+after daemon boot does not require a cached-map refresh or restart. Other account
+records are not enumerated on this path. The original job account is checked
+before lookup and around options/credential resolution. `providers()` remains
+available for explicit enumeration; neither API accepts renderer credentials.
 This consumer is not an enrollment API: the authenticated native provisioning
 writer, atomic account-switch/revocation persistence, live options factory and
 production bootstrap call still need wiring. Its authored restart, revocation,

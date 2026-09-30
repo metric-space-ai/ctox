@@ -12,6 +12,7 @@ struct Host {
     saved: Mutex<Option<SavedBusinessDataTarget>>,
     principal: Mutex<Option<NativeBusinessDataPrincipal>>,
     reads_before_switch: AtomicUsize,
+    options_requests: AtomicUsize,
 }
 
 // Spell out the async-trait ABI so the daemon needs no additional dependency
@@ -65,7 +66,12 @@ impl BusinessDataSessionHost for Host {
         'b: 'f,
         Self: 'f,
     {
-        Box::pin(async { panic!("account checks must not start a transport") })
+        Box::pin(async move {
+            self.options_requests.fetch_add(1, Ordering::SeqCst);
+            Err(std::io::Error::other(
+                "fixture transport options unavailable",
+            ))
+        })
     }
 }
 
@@ -87,6 +93,7 @@ fn fixture() -> (Host, DownloadRequest) {
         })),
         principal: Mutex::new(Some(principal.clone())),
         reads_before_switch: AtomicUsize::new(0),
+        options_requests: AtomicUsize::new(0),
     };
     let request = DownloadRequest {
         id: "bound-job".into(),
@@ -203,6 +210,57 @@ async fn resolver_rejects_missing_credentials_and_revoked_account_before_transpo
     let error = resolver.authorize(&request).await.unwrap_err();
     assert!(error.to_string().contains("account is unavailable"));
     resolver.shutdown().await.unwrap();
+    resolver.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn late_provider_becomes_visible_without_rebinding_or_daemon_restart() {
+    let (host, request) = fixture();
+    let host = Arc::new(host);
+    let available: Arc<Mutex<Option<ctox_sync::native::NativeSessionTargetProvider>>> =
+        Arc::new(Mutex::new(None));
+    let lookups = Arc::new(AtomicUsize::new(0));
+    let registry = available.clone();
+    let calls = lookups.clone();
+    let resolver = NativeTransferPeerResolver::with_provider_lookup(
+        host.clone(),
+        Arc::new(move |id| {
+            assert_eq!(id, "target");
+            calls.fetch_add(1, Ordering::SeqCst);
+            let provider = registry.lock().unwrap().clone();
+            Box::pin(
+                async move { provider.context("native target credential provider unavailable") },
+            )
+        }),
+    );
+    assert!(resolver
+        .authorize(&request)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("credential provider unavailable"));
+    assert_eq!(host.options_requests.load(Ordering::SeqCst), 0);
+    *available.lock().unwrap() = Some(Arc::new(|_| {
+        Box::pin(async {
+            panic!("failed options must prevent transport and credential resolution")
+        })
+    }));
+    assert!(resolver
+        .authorize(&request)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("fixture transport options unavailable"));
+    assert_eq!(host.options_requests.load(Ordering::SeqCst), 1);
+    assert_eq!(lookups.load(Ordering::SeqCst), 2);
+    *host.principal.lock().unwrap() = None;
+    assert!(resolver.authorize(&request).await.is_err());
+    assert_eq!(
+        lookups.load(Ordering::SeqCst),
+        2,
+        "revocation must precede provider lookup"
+    );
+    assert_eq!(host.options_requests.load(Ordering::SeqCst), 1);
     resolver.shutdown().await.unwrap();
 }
 
