@@ -10947,6 +10947,7 @@ var CtoxWebRtcReplicationState = class {
     this.checkpointStorageKey = persistentCheckpointStorageKey(topic, collection.name);
     this.retainedCheckpoints = readPersistentCheckpoints(this.checkpointStorageKey);
     this.firstPullCompletedAtMs = 0;
+    this.publishLocalReplicaCoverage();
     this.pullFresh = false;
     this.pullFreshnessGeneration = 0;
     this.lastSuccessfulPullAtMs = 0;
@@ -11216,6 +11217,7 @@ var CtoxWebRtcReplicationState = class {
     if (retained && validityKey) {
       if (retained.validityKey === validityKey && localCheckpointStillCovers(retained.localValidityKey, localValidityKey) && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)) {
         this.firstPullCompletedAtMs = retainedFirstPullCompletedAtMs(retained);
+        this.publishLocalReplicaCoverage();
         if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
           this.pullCheckpointsByPeer.set(peerId, retained.pull);
         }
@@ -11224,6 +11226,7 @@ var CtoxWebRtcReplicationState = class {
         }
       } else {
         this.firstPullCompletedAtMs = 0;
+        this.publishLocalReplicaCoverage();
         this.retainedCheckpoints = null;
         clearPersistentCheckpoints(this.checkpointStorageKey);
       }
@@ -12010,7 +12013,17 @@ var CtoxWebRtcReplicationState = class {
   markFirstPullCompleted() {
     if (this.firstPullCompletedAtMs > 0) return;
     this.firstPullCompletedAtMs = Date.now();
+    this.publishLocalReplicaCoverage();
     this.publishTransportStatus();
+  }
+  // An eagerly pulled collection whose pull has drained (or resumed from a
+  // valid retained checkpoint) holds the whole authorized collection locally.
+  // Its queries must read that replica instead of a query-demand round trip:
+  // on the customer tenant (30.09.2026) every Outbound reload asked the native
+  // peer for 200 leads (~20 MB) in one window, hit QUERY_COLLECTOR_TIMEOUT,
+  // and the app stayed at "Noch keine Kampagne" with a complete local store.
+  publishLocalReplicaCoverage() {
+    this.collection?.setLocalReplicaComplete?.(Boolean(this.pull) && this.firstPullCompletedAtMs > 0);
   }
   collectionReadinessState() {
     if (this.firstPullCompletedAtMs > 0) return "live";
@@ -13386,6 +13399,7 @@ var CtoxRxCollection = class {
     this.storageCollection = storageCollection;
     this.demandLoader = null;
     this.demandLoaderListeners = /* @__PURE__ */ new Set();
+    this.localReplicaComplete = false;
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
       deltaLiveQueryApplies: 0,
@@ -13400,6 +13414,12 @@ var CtoxRxCollection = class {
     if (isControlPlaneStatusCollection(this.name)) {
       for (const listener of this.demandLoaderListeners) listener();
     }
+  }
+  // Set by the replication state of an eagerly pulled collection once its
+  // pull drained. Control-plane ledgers stay behind their authorized demand
+  // windows regardless (permission boundary, see exec()).
+  setLocalReplicaComplete(complete) {
+    this.localReplicaComplete = Boolean(complete) && !isControlPlaneStatusCollection(this.name);
   }
   subscribeDemandLoaderChange(listener) {
     this.demandLoaderListeners.add(listener);
@@ -13867,7 +13887,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     const demandLoader = this.collection.demandLoader;
-    if (demandLoader) {
+    if (demandLoader && !this.collection.localReplicaComplete) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : {};
       demandOptions.signal = this.signal;
       docs = await demandLoader.resolveQuery(this.query, demandOptions);

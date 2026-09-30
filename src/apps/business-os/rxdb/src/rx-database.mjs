@@ -208,6 +208,7 @@ class CtoxRxCollection {
     this.storageCollection = storageCollection;
     this.demandLoader = null;
     this.demandLoaderListeners = new Set();
+    this.localReplicaComplete = false;
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
       deltaLiveQueryApplies: 0,
@@ -223,6 +224,13 @@ class CtoxRxCollection {
     if (isControlPlaneStatusCollection(this.name)) {
       for (const listener of this.demandLoaderListeners) listener();
     }
+  }
+
+  // Set by the replication state of an eagerly pulled collection once its
+  // pull drained. Control-plane ledgers stay behind their authorized demand
+  // windows regardless (permission boundary, see exec()).
+  setLocalReplicaComplete(complete) {
+    this.localReplicaComplete = Boolean(complete) && !isControlPlaneStatusCollection(this.name);
   }
 
   subscribeDemandLoaderChange(listener) {
@@ -748,7 +756,7 @@ class CtoxRxQuery {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     const demandLoader = this.collection.demandLoader;
-    if (demandLoader) {
+    if (demandLoader && !this.collection.localReplicaComplete) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit))
         ? { window: { offset: Number(this.query.skip || 0), limit: 1 } }
         : {};
