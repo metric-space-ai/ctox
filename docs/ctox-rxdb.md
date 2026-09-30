@@ -1,5 +1,16 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Native query cache shutdown
+
+Closing a native collection drains its query cache and marks those queries
+uncached. Queries own their collection and materialized document results, so
+retaining the cache after close would keep the whole database and its SQLite
+connections alive through a reference cycle. A query prepared before shutdown
+cannot repopulate the closed cache. Caller-owned query/document handles remain
+alive until their owners drop them; closing never deletes persisted documents.
+This fixes shutdown retention, without claiming it explains every service RSS
+increase during a continuously running peer.
+
 ### Workjet computer schema upgrade (v0 to v1)
 
 Two deployed `workjet_computers` schemas used version 0. Adding binding, epoch,
