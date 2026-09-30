@@ -1,5 +1,8 @@
 //! Native-owned binding between durable transfer jobs and an authenticated Sync
 //! connection. A route or persisted request cannot instantiate this binding.
+#[cfg(test)]
+#[path = "transfers_peer_tests.rs"]
+mod tests;
 use anyhow::{ensure, Context, Result};
 use ctox_sync::{
     business_data_contract::NativeBusinessDataPrincipal,
@@ -84,41 +87,41 @@ struct EnrolledPeerJobAdmission {
     grant_admission: Arc<dyn NativePeerJobAdmission>,
 }
 
-impl EnrolledPeerJobAdmission {
-    async fn current(&self, request: &DownloadRequest) -> Result<NativeBusinessDataPrincipal> {
-        let source = request
-            .peer_source
-            .as_ref()
-            .context("peer source required")?;
-        let binding = source
-            .account_binding
-            .as_ref()
-            .context("original account binding required")?;
-        binding.validate()?;
-        let expected = SavedBusinessDataTarget {
-            public_identity: source.public_key.clone(),
-            instance_id: source.instance_id.clone(),
-            account_epoch: binding.account_epoch,
-        };
-        ensure!(
-            self.host.saved_target(&binding.target_id).await?.as_ref() == Some(&expected),
-            "transfer enrollment or account epoch changed"
-        );
-        let principal = self
-            .host
-            .current_principal(&binding.target_id)
-            .await?
-            .context("transfer account is unavailable")?;
-        ensure!(
-            principal_digest(&principal)? == binding.principal_sha256,
-            "transfer principal changed"
-        );
-        ensure!(
-            self.host.saved_target(&binding.target_id).await?.as_ref() == Some(&expected),
-            "transfer account changed while resolving principal"
-        );
-        Ok(principal)
-    }
+async fn current_account(
+    host: &dyn BusinessDataSessionHost,
+    request: &DownloadRequest,
+) -> Result<NativeBusinessDataPrincipal> {
+    let source = request
+        .peer_source
+        .as_ref()
+        .context("peer source required")?;
+    let binding = source
+        .account_binding
+        .as_ref()
+        .context("original account binding required")?;
+    binding.validate()?;
+    let expected = SavedBusinessDataTarget {
+        public_identity: source.public_key.clone(),
+        instance_id: source.instance_id.clone(),
+        account_epoch: binding.account_epoch,
+    };
+    ensure!(
+        host.saved_target(&binding.target_id).await?.as_ref() == Some(&expected),
+        "transfer enrollment or account epoch changed"
+    );
+    let principal = host
+        .current_principal(&binding.target_id)
+        .await?
+        .context("transfer account is unavailable")?;
+    ensure!(
+        principal_digest(&principal)? == binding.principal_sha256,
+        "transfer principal changed"
+    );
+    ensure!(
+        host.saved_target(&binding.target_id).await?.as_ref() == Some(&expected),
+        "transfer account changed while resolving principal"
+    );
+    Ok(principal)
 }
 
 impl NativePeerJobAdmission for EnrolledPeerJobAdmission {
@@ -128,7 +131,7 @@ impl NativePeerJobAdmission for EnrolledPeerJobAdmission {
         connection: &'a WebRTCRsConnection,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            let principal = self.current(request).await?;
+            let principal = current_account(self.host.as_ref(), request).await?;
             self.grant_admission.authorize(request, connection).await?;
             let source = request
                 .peer_source
@@ -167,7 +170,7 @@ impl NativePeerJobAdmission for EnrolledPeerJobAdmission {
                 "invalid file permission probe"
             );
             ensure!(
-                self.current(request).await? == principal,
+                current_account(self.host.as_ref(), request).await? == principal,
                 "account changed during peer authorization"
             );
             self.grant_admission.authorize(request, connection).await?;
