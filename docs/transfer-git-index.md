@@ -64,6 +64,14 @@ errors. Its `stopped` output is not a job-completion receipt: inspect each job
 with `transfer status`. Keep both commands under the existing bounded process
 supervisor; restarting B uses the same root, state, jobs and account.
 
+Before the first enrollment, obtain A's public identity with
+`ctox transfer source-identity` over the trusted operator channel. On A,
+`ctox business-os mobile-invite create --ttl-seconds 300 --display-name transfer-acceptance`
+creates a one-time native invitation. Keep that JSON in a mode-0600 temporary
+file and deliver it through the authorized operator channel, then run on B:
+`ctox transfer pair TARGET SOURCE_PUBLIC_IDENTITY INVITE_FILE`. Reuse that saved
+target for resume; creating a replacement invitation is not job recovery.
+
 On A, quiesce the source and run
 `ctox workjet-transfer pack --source SOURCE --artifacts ARTIFACTS`.
 Publish each of `bundle.gitbundle`, `tracked.patch`, `index.patch`,
