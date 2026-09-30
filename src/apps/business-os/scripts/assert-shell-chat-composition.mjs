@@ -184,6 +184,28 @@ try {
   expect(topSnap.snapZone === 'top', `the top menu action must snap top, got ${topSnap.snapZone}`);
   await chooseLayout(page, 'free');
 
+  // Reopening must use the last explicit menu selection, including returning
+  // to free geometry. The harness supplies the real manager persistence port.
+  for (const action of ['maximize', 'left', 'right', 'top', 'bottom']) {
+    await chooseLayout(page, action);
+    const beforeReopen = await page.evaluate(() => window.shellHarness.collect());
+    await reloadHarness(page, url);
+    const reopened = await page.evaluate(() => window.shellHarness.collect());
+    observations.push({ phase: `reopened-${action}`, ...reopened });
+    expect(closeRect(reopened.window, beforeReopen.window), `${action} geometry must survive reopening`);
+    expect(reopened.snapZone === beforeReopen.snapZone, `${action} snap selection must survive reopening`);
+    expect(reopened.windowState === beforeReopen.windowState, `${action} window state must survive reopening`);
+    await chooseLayout(page, 'free');
+    const freeBeforeReopen = await page.evaluate(() => window.shellHarness.collect());
+    const savedFree = await page.evaluate(() => JSON.parse(localStorage.getItem('composition-window-layout')));
+    expect(savedFree?.state === 'normal' && !savedFree?.snapZone, `free after ${action} must persist the cleared layout`);
+    await reloadHarness(page, url);
+    const freeReopened = await page.evaluate(() => window.shellHarness.collect());
+    observations.push({ phase: `reopened-free-after-${action}`, ...freeReopened });
+    expect(freeReopened.snapZone === null && freeReopened.windowState === 'normal', `free after ${action} must stay free on reopen`);
+    expect(closeRect(freeReopened.window, freeBeforeReopen.window), `free geometry after ${action} must survive reopening`);
+  }
+
   const fatalConsole = consoleEvents.filter((event) => ['pageerror', 'requestfailed', 'error'].includes(event.type));
   expect(fatalConsole.length === 0, `browser console/network must stay clean: ${JSON.stringify(fatalConsole)}`);
 
@@ -217,6 +239,11 @@ function closeRect(actual, expected, tolerance = 1) {
 async function chooseLayout(page, action) {
   await page.locator('.shell-window [data-window-layout-trigger]').click();
   await page.locator(`.shell-window [data-window-layout-menu] [data-window-layout-control="${action}"]`).click();
+}
+
+async function reloadHarness(page, url) {
+  await page.goto(url, { waitUntil: 'load' });
+  await page.waitForFunction(() => window.shellHarness?.ready === true, null, { timeout: 5000 });
 }
 
 async function dragWindowHeaderTo(page, targetX, targetY) {
@@ -388,6 +415,10 @@ function harnessHtml() {
       rootEl:document.documentElement,
       snapPreviewEl:document.querySelector('[data-snap-preview]'),
       eventBus,
+      persistence:{
+        load:() => JSON.parse(localStorage.getItem('composition-window-layout') || 'null'),
+        save:(_ownerId, snapshot) => localStorage.setItem('composition-window-layout', JSON.stringify(snapshot)),
+      },
     });
     wm.setInsets({ top:0, right:0, bottom:0, left:0 });
     const controller = createShellChatCompositionController({ windowManager:wm });
@@ -452,6 +483,7 @@ function harnessHtml() {
         chatSide:document.body.hasAttribute('data-shell-chat-dock-side'),
         chatCompact:document.body.hasAttribute('data-shell-chat-dock-compact'),
         snapZone:document.querySelector('.shell-window')?.dataset.snapZone || null,
+        windowState:wm.describe(handle.id)?.state,
         overlap:{
           windowChat:intersection(windowRect, chatRect),
           windowDock:intersection(windowRect, dockRect),
