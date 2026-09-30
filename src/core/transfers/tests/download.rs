@@ -24,6 +24,18 @@ impl Source {
         Self::with_cut(body, delay, None)
     }
     fn with_cut(body: Vec<u8>, delay: Duration, cut_after: Option<usize>) -> Self {
+        Self::with_capabilities(body, delay, cut_after, true)
+    }
+    fn without_ranges(body: Vec<u8>, delay: Duration) -> Self {
+        Self::with_capabilities(body, delay, None, false)
+    }
+    fn with_capabilities(
+        body: Vec<u8>,
+        delay: Duration,
+        cut_after: Option<usize>,
+        accept_ranges: bool,
+    ) -> Self {
+        let range_capability = if accept_ranges { "bytes" } else { "none" };
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/artifact", listener.local_addr().unwrap());
         listener.set_nonblocking(true).unwrap();
@@ -60,7 +72,7 @@ impl Source {
                 }
                 let text = String::from_utf8_lossy(&request);
                 if text.starts_with("HEAD ") {
-                    let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n", body.len());
+                    let _ = write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nAccept-Ranges: {range_capability}\r\nConnection: close\r\n\r\n", body.len());
                     continue;
                 }
                 if body.is_empty() {
@@ -71,11 +83,14 @@ impl Source {
                     continue;
                 }
                 get_count.fetch_add(1, Ordering::SeqCst);
-                let range = text.lines().find_map(|l| {
-                    l.to_lowercase()
-                        .strip_prefix("range: bytes=")
-                        .map(str::to_owned)
-                });
+                let range = text
+                    .lines()
+                    .find_map(|l| {
+                        l.to_lowercase()
+                            .strip_prefix("range: bytes=")
+                            .map(str::to_owned)
+                    })
+                    .filter(|_| accept_ranges);
                 let (start, end, status) = match range {
                     Some(r) => {
                         let (s, e) = r.trim().split_once('-').unwrap();
@@ -91,7 +106,7 @@ impl Source {
                     continue;
                 }
                 seen_ranges.lock().unwrap().push((start, end));
-                let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n", end-start+1, body.len());
+                let _ = write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nAccept-Ranges: {range_capability}\r\nConnection: close\r\n\r\n", end-start+1, body.len());
                 let delivered_end = cut_after.map(|n| (start + n - 1).min(end)).unwrap_or(end);
                 for bytes in body[start..=delivered_end].chunks(4096) {
                     if stopped.load(Ordering::Acquire) || stream.write_all(bytes).is_err() {
@@ -314,7 +329,10 @@ async fn empty_content_has_a_verified_durable_receipt() {
 async fn unreachable_wrong_and_truncated_mirrors_fall_through_without_mixing_bytes() {
     let temp = tempfile::tempdir().unwrap();
     let body = vec![0x63; 180_000];
-    let wrong = Source::new(vec![0x64; body.len()], Duration::ZERO);
+    // The first reachable mirror cannot seed parallel assembly. This fixture
+    // measures independent fallback attempts; separate tests cover combined
+    // range failure and cancellation before fallback.
+    let wrong = Source::without_ranges(vec![0x64; body.len()], Duration::ZERO);
     let truncated = Source::with_cut(vec![0x65; body.len()], Duration::ZERO, Some(1024));
     let good = Source::new(body.clone(), Duration::ZERO);
     let store = open(&temp);
@@ -357,19 +375,7 @@ async fn unreachable_wrong_and_truncated_mirrors_fall_through_without_mixing_byt
         std::fs::read(partial_dir.join("payload")).unwrap(),
         vec![0x65; 1024]
     );
-    // The combined attempt may already have requested a bounded range from
-    // this mirror before its failing sibling cancels the assembly. Count the
-    // independent full-object fallback, not scheduling-dependent total GETs.
-    let ranges = truncated.ranges.lock().unwrap();
-    assert_eq!(truncated.gets.load(Ordering::SeqCst), ranges.len());
-    assert_eq!(
-        ranges
-            .iter()
-            .filter(|&&(start, end)| start == 0 && end == body.len() - 1)
-            .count(),
-        1,
-        "expected exactly one full-object fallback; observed {ranges:?}"
-    );
+    assert_eq!(truncated.gets.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
