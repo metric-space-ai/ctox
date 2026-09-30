@@ -103,6 +103,7 @@ REQUIRED_RUNTIME_TESTS = {
     'intake_reader_scope_survives_blocking_tasks_and_keeps_peers_separate',
     'intake_reader_reuses_connection_but_reads_external_changes_and_replacement',
     'intake_reader_detaches_receipts_and_discards_errors_and_expired_connections',
+    'intake_reader_rejects_main_only_replacement_until_the_old_wal_is_removed',
     'authenticated_automation_stdin_is_bounded_and_command_specific',
     'authenticated_automation_ipc_preserves_source_and_auth_gate',
     'authenticated_automation_ipc_does_not_bypass_command_session_validation',
