@@ -49,6 +49,7 @@ mod rxdb_peer_intake_state;
 mod rxdb_peer_knowledge_rows;
 mod rxdb_peer_projections;
 mod rxdb_peer_tombstones;
+mod rxdb_peer_transfer_grants;
 mod rxdb_peer_workjet_devices;
 pub mod server;
 mod session;

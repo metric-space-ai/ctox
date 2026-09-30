@@ -2969,6 +2969,24 @@ async fn run_native_peer(
                     }),
                 )?;
                 let workjet_device_root = root.clone();
+                let transfer_grant_root = root.clone();
+                pool.register_auxiliary_request_handler(
+                    crate::transfers_grant::TRANSFER_GRANT_METHOD,
+                    Arc::new(move |_peer_identity, capability_token, params| {
+                        let root = transfer_grant_root.clone();
+                        Box::pin(async move {
+                            tokio::task::spawn_blocking(move || {
+                                super::rxdb_peer_transfer_grants::handle_transfer_grant_request(
+                                    &root,
+                                    &capability_token,
+                                    params,
+                                )
+                            })
+                            .await
+                            .map_err(|_| "native transfer grant task failed".to_string())?
+                        })
+                    }),
+                )?;
                 let business_data_root = root.clone();
                 let identity_transport = pool.connection_handler.clone();
                 pool.register_identity_request_handler(
