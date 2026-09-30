@@ -17470,6 +17470,24 @@ pub(super) fn webrtc_capability_allows_workspace_permission(
     .unwrap_or(false)
 }
 
+// Unix cache keys bind the connection to a file identity. The portable key
+// contains only a path, so preserve fresh opens there rather than retain a
+// grant writer across a database replacement that cannot be fenced.
+fn with_capability_store_connection<T>(
+    root: &Path,
+    f: impl FnOnce(&Connection) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    #[cfg(unix)]
+    {
+        with_store_connection(root, f)
+    }
+    #[cfg(not(unix))]
+    {
+        let conn = open_store(root)?;
+        f(&conn)
+    }
+}
+
 /// Preserve the pre-hardening ordinary-data behavior by materializing it as
 /// explicit, auditable collection grants. The sync hooks themselves remain
 /// fail-closed and consult only native policy plus these exact grants.
@@ -17490,7 +17508,7 @@ fn ensure_legacy_collection_grants_with_ownership(
     collections: &[String],
     server_owned_collections: &HashSet<String>,
 ) -> anyhow::Result<()> {
-    with_store_connection(root, |conn| {
+    with_capability_store_connection(root, |conn| {
         let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
         let now = now_ms() as i64;
         for collection in collections {
@@ -17631,7 +17649,7 @@ fn ensure_first_party_catalog_collection_grants_with_ownership(
             &current_ownership
         }
     };
-    with_store_connection(root, |conn| {
+    with_capability_store_connection(root, |conn| {
         let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
         let now = now_ms() as i64;
         let mut inserted = 0usize;
@@ -17790,7 +17808,7 @@ fn issue_business_os_capability_token_until_with_identity(
     // Reuse the existing identity-fenced connection, never its authorization
     // results. Materializers commit before this fresh actor/epoch read, and no
     // connection borrow or transaction survives into signing.
-    let (user, actor_epoch) = with_store_connection(root, |conn| {
+    let (user, actor_epoch) = with_capability_store_connection(root, |conn| {
         seed_configured_business_users(conn)?;
         let user = active_business_user(conn, user_id.trim())?
             .ok_or_else(|| anyhow::anyhow!("no active Business OS user {user_id:?}"))?;
@@ -17843,7 +17861,7 @@ pub fn issue_business_os_capability_token_for_session(
         display_name
     };
     let role = normalize_business_role(&user.role);
-    with_store_connection(root, |conn| {
+    with_capability_store_connection(root, |conn| {
         seed_configured_business_users(conn)?;
         conn.execute(
             "INSERT INTO business_users
