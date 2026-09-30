@@ -69,6 +69,7 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'founder_rework_cannot_close_before_a_reviewed_email_was_sent',
            'repeated_founder_rework_review_rejections_block_the_loop',
            'founder_rework_repeated_leases_of_one_task_exhaust_the_review_budget',
+           'founder_rework_review_holds_stop_the_loop_after_the_hold_budget',
            'confirmed_founder_reply_recovers_failed_inbound_without_another_send',
            'registered_exchange_account_builds_isolated_client_options',
            'instance_failure_does_not_skip_registered_accounts',
@@ -82,6 +83,7 @@ REQUIRED_MAIL_TESTS = {
     'founder_rework_cannot_close_before_a_reviewed_email_was_sent',
     'repeated_founder_rework_review_rejections_block_the_loop',
     'founder_rework_repeated_leases_of_one_task_exhaust_the_review_budget',
+    'founder_rework_review_holds_stop_the_loop_after_the_hold_budget',
     'confirmed_founder_reply_recovers_failed_inbound_without_another_send',
     'exchange_account_roundtrip_preserves_other_accounts_and_hides_password',
     'stdin_contract_is_bounded_and_does_not_echo_invalid_secret_values',
@@ -241,10 +243,14 @@ def main():
             'node', '--test', '--test-concurrency=1',
             *['src/apps/business-os/shared/' + name for name in sync_tests],
         ])
-        for metric, expected in [('tests', 26), ('pass', 26), ('fail', 0), ('skipped', 0)]:
+        freshness_case = 'current pull freshness is distinct from historical live cache readiness'
+        if len(re.findall(r'^ok \d+ - ' + re.escape(freshness_case) + r'$', sync_output, re.MULTILINE)) != 1:
+            raise RuntimeError('Required current-pull freshness regression did not pass exactly once')
+        for metric, expected in [('tests', 27), ('pass', 27), ('fail', 0), ('skipped', 0)]:
             if re.findall(r'^# ' + metric + r' (\d+)$', sync_output, re.MULTILINE) != [str(expected)]:
                 raise RuntimeError(f'Unexpected shell native-read regression {metric} count')
-        RECORD['shell_native_read_tests'] = 26
+        RECORD['shell_native_read_tests'] = 27
+        RECORD['required_shell_freshness_test'] = freshness_case
         save()
     compiled = run('test-compile', ['cargo', 'test', '--locked', '--release',
                    '--bin', 'ctox', '--target', TARGET, '--jobs', '2',
