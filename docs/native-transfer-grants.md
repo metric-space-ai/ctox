@@ -50,6 +50,25 @@ existing nonce-bound P-256 admission path. The signer itself grants no account,
 collection or file authority; the native target provider must prove the current
 source connection before invoking it.
 
+`NativeTransferPeerResolver` owns at most one session across durable worker jobs.
+Native account bootstrap supplies the existing `BusinessDataSessionHost` and
+live `NativeSessionTargetProvider` callbacks keyed by saved target ID through
+`start_daemon_with_native_accounts`. The default daemon entry point remains
+HTTP-only until that production bootstrap is connected. Missing credentials,
+changed source pins, account epochs or principals fail closed; neither reconnect
+nor retry issues a new grant or changes the persisted binding.
+
+The resolver uses query-only `NativeSyncSession::start_data_client`, checks the
+original account around provider resolution and credential release, waits for
+one ready connection, then installs the concrete source grant admission. A
+cancelled authorization waiter retains ownership of the bounded startup task.
+Switching jobs closes the previous session; errors retire it. Daemon shutdown
+awaits provider cleanup before its Tokio runtime exits, under a thirty-second
+bound. Native startup has a twenty-second bound and session close five seconds;
+the native transport's existing cancellation/drop cleanup remains its backstop.
+These lifecycle and authority regressions require local verification before
+production wiring or acceptance is claimed.
+
 This source authority, signer and concrete adapter do not by themselves create the
 production saved-target/credential host, transfer service boot/recovery wiring,
 or two-host acceptance. Those integrations must consume the existing native

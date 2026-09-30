@@ -189,3 +189,63 @@ async fn account_switch_during_snapshot_rejects_admission_and_enqueue() {
         36
     );
 }
+
+#[tokio::test]
+async fn resolver_rejects_missing_credentials_and_revoked_account_before_transport() {
+    let (host, request) = fixture();
+    let host = Arc::new(host);
+    let resolver = NativeTransferPeerResolver::new(host.clone(), Default::default());
+    let error = resolver.authorize(&request).await.unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("credential provider unavailable"));
+    *host.principal.lock().unwrap() = None;
+    let error = resolver.authorize(&request).await.unwrap_err();
+    assert!(error.to_string().contains("account is unavailable"));
+    resolver.shutdown().await.unwrap();
+    resolver.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn credential_release_rechecks_account_after_provider_await() {
+    let (host, request) = fixture();
+    let host = Arc::new(host);
+    let changed_host = host.clone();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let called = calls.clone();
+    let provider = resolver::fenced_credentials(
+        host,
+        request,
+        Arc::new(move |_: (), _| {
+            let host = changed_host.clone();
+            let called = called.clone();
+            Box::pin(async move {
+                called.fetch_add(1, Ordering::SeqCst);
+                tokio::task::yield_now().await;
+                *host.principal.lock().unwrap() = None;
+                Ok(
+                    rxdb::plugins::replication_webrtc::local_session::LocalSessionCredentials {
+                        capability_token: "test-only-unreleased-value".into(),
+                        device_proof: None,
+                    },
+                )
+            })
+        }),
+    );
+    assert!(provider((), None).await.is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(provider((), None).await.is_err());
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "logout must prevent another provider call"
+    );
+}
+
+#[test]
+fn credential_target_must_match_original_source_pins() {
+    let (_, request) = fixture();
+    resolver::validate_target(&request, "source-key", "source").unwrap();
+    assert!(resolver::validate_target(&request, "other-key", "source").is_err());
+    assert!(resolver::validate_target(&request, "source-key", "other-source").is_err());
+}

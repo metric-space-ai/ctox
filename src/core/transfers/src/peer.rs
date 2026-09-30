@@ -104,6 +104,12 @@ pub trait PeerRangeSource: Send + Sync {
         offset: u64,
         length: u64,
     ) -> Pin<Box<dyn Future<Output = Result<Vec<u8>>> + Send + 'a>>;
+
+    /// Drain owned transports while the daemon runtime still exists. Stateless
+    /// providers have nothing to close; authorization has no permissive default.
+    fn shutdown(&self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
 }
 
 impl Worker {

@@ -626,6 +626,14 @@ impl DaemonWorker {
                         }
                         tokio::time::sleep(Duration::from_millis(250)).await;
                     }
+                    if let Some(peer) = &worker.peer {
+                        if !matches!(
+                            tokio::time::timeout(Duration::from_secs(30), peer.shutdown()).await,
+                            Ok(Ok(()))
+                        ) {
+                            eprintln!("ctox transfer peer cleanup failed or timed out");
+                        }
+                    }
                 });
             })?;
         Ok(Self {

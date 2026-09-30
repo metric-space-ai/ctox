@@ -11,6 +11,21 @@ pub fn start_daemon(root: &Path) -> Result<DaemonWorker> {
     DaemonWorker::start(store(root)?)
 }
 
+/// Called by native account bootstrap once its saved-target credential providers
+/// are available. UI lifetime does not own this worker or its transport sessions.
+pub(crate) fn start_daemon_with_native_accounts(
+    root: &Path,
+    host: std::sync::Arc<dyn ctox_sync::business_data_session::BusinessDataSessionHost>,
+    providers: std::collections::BTreeMap<String, ctox_sync::native::NativeSessionTargetProvider>,
+) -> Result<DaemonWorker> {
+    DaemonWorker::start_with_peer(
+        store(root)?,
+        std::sync::Arc::new(crate::transfers_peer::NativeTransferPeerResolver::new(
+            host, providers,
+        )),
+    )
+}
+
 pub fn handle(root: &Path, args: &[String]) -> Result<()> {
     let store = store(root)?;
     let transfer = match args.first().map(String::as_str) {

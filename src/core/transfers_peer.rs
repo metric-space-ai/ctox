@@ -1,5 +1,8 @@
 //! Native-owned binding between durable transfer jobs and an authenticated Sync
 //! connection. A route or persisted request cannot instantiate this binding.
+#[path = "transfers_peer_resolver.rs"]
+mod resolver;
+pub(crate) use resolver::NativeTransferPeerResolver;
 #[cfg(test)]
 #[path = "transfers_peer_tests.rs"]
 mod tests;
