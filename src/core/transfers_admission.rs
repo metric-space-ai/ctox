@@ -9,6 +9,10 @@ use ctox_sync::native::NativeSyncSession;
 use ctox_transfers::{PeerAccountBinding, PeerSource, Store, Transfer};
 use rxdb::plugins::replication_webrtc::WebRTCRsConnection;
 
+#[path = "transfers_pairing.rs"]
+mod pairing;
+pub(crate) use pairing::pair;
+
 pub(crate) struct PeerDownload {
     pub id: String,
     pub target_id: String,

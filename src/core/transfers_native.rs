@@ -191,7 +191,7 @@ fn account_host(
 
 #[path = "transfers_admission.rs"]
 mod admission;
-pub(crate) use admission::{enqueue_peer, PeerDownload};
+pub(crate) use admission::{enqueue_peer, pair, PeerDownload};
 
 #[cfg(test)]
 mod tests {

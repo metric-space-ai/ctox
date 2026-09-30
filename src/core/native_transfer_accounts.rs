@@ -209,6 +209,98 @@ impl NativeTransferAccountHost {
         Arc::new(Self { root, options })
     }
 
+    pub(crate) async fn require_new_target(&self, target_id: &str) -> Result<()> {
+        let host = self.clone();
+        let target_id = target_id.to_owned();
+        tokio::task::spawn_blocking(move || {
+            ensure!(
+                host.read_record(AUTHORITY_SCOPE, &authority_name(&target_id))?
+                    .is_none(),
+                "native target already exists; pairing cannot replace or recover an account"
+            );
+            Ok(())
+        })
+        .await?
+    }
+
+    /// Explicit first enrollment only. Invite credentials remain native and are
+    /// released only after NativeSyncSession proves the supplied source pin.
+    pub(crate) async fn pairing_provider(
+        self: &Arc<Self>,
+        scope: NativeDeviceKeyScope,
+        invite_secret: String,
+    ) -> Result<NativeSessionTargetProvider> {
+        ensure!(
+            scope.account_epoch == 1,
+            "initial native account epoch required"
+        );
+        ensure!(
+            invite_secret.len() == 43
+                && invite_secret
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'),
+            "native one-time pairing invite required"
+        );
+        self.require_new_target(&scope.target_id).await?;
+        let root = self.root.clone();
+        let key_scope = scope.clone();
+        tokio::task::spawn_blocking(move || {
+            NativeDeviceProofKey::prepare(&root, &key_scope).map(|_| ())
+        })
+        .await??;
+        self.require_new_target(&scope.target_id).await?;
+        let host = self.clone();
+        Ok(Arc::new(move |connection| {
+            let host = host.clone();
+            let scope = scope.clone();
+            let token = invite_secret.clone();
+            Box::pin(async move {
+                let stale = || rxdb::rx_error::new_rx_error("RC_WEBRTC_PEER", None);
+                host.require_new_target(&scope.target_id)
+                    .await
+                    .map_err(|_| stale())?;
+                let identity = scope.source_public_identity.clone();
+                let instance = scope.source_instance_id.clone();
+                let credentials: LocalSessionProvider<WebRTCRsConnection> =
+                    Arc::new(move |current, nonce| {
+                        let host = host.clone();
+                        let scope = scope.clone();
+                        let token = token.clone();
+                        let same_connection = current == connection;
+                        Box::pin(async move {
+                            let stale = || rxdb::rx_error::new_rx_error("RC_WEBRTC_PEER", None);
+                            if !same_connection {
+                                return Err(stale());
+                            }
+                            host.require_new_target(&scope.target_id)
+                                .await
+                                .map_err(|_| stale())?;
+                            let root = host.root.clone();
+                            let key_scope = scope.clone();
+                            let proof = tokio::task::spawn_blocking(move || {
+                                NativeDeviceProofKey::load(&root, &key_scope)?.sign_nonce(&nonce)
+                            })
+                            .await
+                            .map_err(|_| stale())?
+                            .map_err(|_| stale())?;
+                            host.require_new_target(&scope.target_id)
+                                .await
+                                .map_err(|_| stale())?;
+                            Ok(LocalSessionCredentials {
+                                capability_token: token,
+                                device_proof: Some(proof),
+                            })
+                        })
+                    });
+                Ok(NativeSessionTarget {
+                    public_identity: identity,
+                    instance_id: instance,
+                    credentials,
+                })
+            })
+        }))
+    }
+
     /// Admission of a new job captures its account before connecting. Do not
     /// release a different account's credentials if enrollment changes meanwhile.
     pub(crate) fn provider_for_account(
