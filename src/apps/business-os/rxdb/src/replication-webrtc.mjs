@@ -227,6 +227,8 @@ export const replicationWebRtcTestInternals = Object.freeze({
   // Local checkpoint reuse across ordinary pulls/writes, never across eviction.
   localCheckpointValidityKey,
   localCheckpointStillCovers,
+  // Eager replicas are never evicted by the demand sidecar.
+  demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
   // real state machines without opening a network connection.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -2413,16 +2415,7 @@ class CtoxWebRtcReplicationState {
       ? createIndexedDbMetaBackend({ databaseName: dbName })
       : createMemoryMetaBackend();
     this.demandStatus.queryDemandLoadingEnabled = queryDemandEnabled || fileDemandEnabled;
-    const primaryDelete = async (collection, id) => {
-      if (collection !== this.collection.name) return;
-      const stored = await this.collection.storageCollection.getStoredRecord?.(id);
-      if (!stored || Number(stored.pushable || 0) !== 0) {
-        throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
-      }
-      if (typeof this.collection.storageCollection.hardDeleteByIds === 'function') {
-        await this.collection.storageCollection.hardDeleteByIds([id]);
-      }
-    };
+    const primaryDelete = demandSidecarPrimaryDelete(this);
     this.demandSidecar = new QueryMetaStorage(backend, {
       databaseName: dbName,
       schedulerKey: this.collection.storageCollection?.databaseName || this.topic,
@@ -3344,6 +3337,28 @@ function shouldPersistFetchedFileChunks(collectionName = '') {
   // so materializing generic file_id/sequence/bytes_base64 rows would corrupt
   // their browser cache. The consumer verifies and uses the returned stream.
   return String(collectionName || '') === 'desktop_file_chunks';
+}
+
+// The demand sidecar's LRU budget governs rows that query demand loading
+// materialized, not the replica of an eagerly pulled collection. Deleting an
+// eager row cannot be repaired by the incremental pull (the row is older than
+// the checkpoint), so every such eviction had to invalidate the retained
+// checkpoint: on the customer tenant (30.09.2026) Outbound queries touched
+// more than the 6 MiB budget of leads, the sidecar evicted thousands of rows,
+// and each reload re-pulled ~20 MB while the app briefly saw an emptied store.
+// For eager collections only the sidecar bookkeeping is dropped.
+function demandSidecarPrimaryDelete(state) {
+  return async (collection, id) => {
+    if (collection !== state.collection.name) return;
+    if (state.pull) return;
+    const stored = await state.collection.storageCollection.getStoredRecord?.(id);
+    if (!stored || Number(stored.pushable || 0) !== 0) {
+      throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
+    }
+    if (typeof state.collection.storageCollection.hardDeleteByIds === 'function') {
+      await state.collection.storageCollection.hardDeleteByIds([id]);
+    }
+  };
 }
 
 function shouldAttachQueryDemandLoader(collectionName = '') {

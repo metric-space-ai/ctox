@@ -10113,6 +10113,8 @@ var replicationWebRtcTestInternals = Object.freeze({
   // Local checkpoint reuse across ordinary pulls/writes, never across eviction.
   localCheckpointValidityKey,
   localCheckpointStillCovers,
+  // Eager replicas are never evicted by the demand sidecar.
+  demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
   // real state machines without opening a network connection.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -11914,16 +11916,7 @@ var CtoxWebRtcReplicationState = class {
     });
     const backend = indexedDbAvailable ? createIndexedDbMetaBackend({ databaseName: dbName }) : createMemoryMetaBackend();
     this.demandStatus.queryDemandLoadingEnabled = queryDemandEnabled || fileDemandEnabled;
-    const primaryDelete = async (collection, id) => {
-      if (collection !== this.collection.name) return;
-      const stored = await this.collection.storageCollection.getStoredRecord?.(id);
-      if (!stored || Number(stored.pushable || 0) !== 0) {
-        throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
-      }
-      if (typeof this.collection.storageCollection.hardDeleteByIds === "function") {
-        await this.collection.storageCollection.hardDeleteByIds([id]);
-      }
-    };
+    const primaryDelete = demandSidecarPrimaryDelete(this);
     this.demandSidecar = new QueryMetaStorage(backend, {
       databaseName: dbName,
       schedulerKey: this.collection.storageCollection?.databaseName || this.topic,
@@ -12690,6 +12683,19 @@ function primaryValue(doc = {}, primaryPath = "id") {
 }
 function shouldPersistFetchedFileChunks(collectionName = "") {
   return String(collectionName || "") === "desktop_file_chunks";
+}
+function demandSidecarPrimaryDelete(state) {
+  return async (collection, id) => {
+    if (collection !== state.collection.name) return;
+    if (state.pull) return;
+    const stored = await state.collection.storageCollection.getStoredRecord?.(id);
+    if (!stored || Number(stored.pushable || 0) !== 0) {
+      throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
+    }
+    if (typeof state.collection.storageCollection.hardDeleteByIds === "function") {
+      await state.collection.storageCollection.hardDeleteByIds([id]);
+    }
+  };
 }
 function shouldAttachQueryDemandLoader(collectionName = "") {
   const name = String(collectionName || "");
