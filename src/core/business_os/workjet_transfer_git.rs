@@ -124,9 +124,23 @@ pub fn pack_git_working_copy(
     let index_patch_path = artifacts_dir.join(INDEX_PATCH_NAME);
     let untracked_path = artifacts_dir.join(UNTRACKED_NAME);
     let manifest_path = artifacts_dir.join(MANIFEST_NAME);
-    if bundle_path.exists() {
-        fs::remove_file(&bundle_path)
-            .with_context(|| format!("{GIT_PACK_FAILED}: replace {}", bundle_path.display()))?;
+    // Unlink old artifact entries rather than truncating their targets: even an
+    // external artifact directory can contain links into the source worktree.
+    for artifact in [
+        &bundle_path,
+        &patch_path,
+        &index_patch_path,
+        &untracked_path,
+        &manifest_path,
+    ] {
+        match fs::remove_file(artifact) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("{GIT_PACK_FAILED}: replace {}", artifact.display()))
+            }
+        }
     }
 
     let mut bundle_args = vec![
@@ -161,8 +175,7 @@ pub fn pack_git_working_copy(
         "{GIT_PACK_FAILED}: {}",
         command_error("git diff", &patch_output)
     );
-    fs::write(&patch_path, patch_output.stdout)
-        .with_context(|| format!("{GIT_PACK_FAILED}: write {}", patch_path.display()))?;
+    write_pack_artifact(&patch_path, &patch_output.stdout)?;
     // A tree identity binds staging independently from the working files. An
     // unresolved index cannot produce a tree and is rejected before publication.
     let index_tree = git_text(source_dir, &["write-tree"])?;
@@ -217,7 +230,7 @@ pub fn pack_git_working_copy(
         index_patch.status.success(),
         "{GIT_PACK_FAILED}: index diff failed"
     );
-    fs::write(&index_patch_path, index_patch.stdout)?;
+    write_pack_artifact(&index_patch_path, &index_patch.stdout)?;
     write_untracked_tar(source_dir, &untracked_paths, &untracked_path)?;
 
     let patch_sha256 = sha256_file(&patch_path)?;
@@ -240,8 +253,7 @@ pub fn pack_git_working_copy(
         manifest_sha256: String::new(),
     };
     manifest.manifest_sha256 = sha256_bytes(&canonical_manifest_bytes(&manifest)?);
-    fs::write(&manifest_path, canonical_manifest_bytes(&manifest)?)
-        .with_context(|| format!("{GIT_PACK_FAILED}: write {}", manifest_path.display()))?;
+    write_pack_artifact(&manifest_path, &canonical_manifest_bytes(&manifest)?)?;
     // A successful pack is an artifact-publication boundary: callers may now
     // record it durably or hand it to another peer. Flush every artifact before
     // confirming the pack, then persist the directory entries and parent link.
@@ -261,6 +273,15 @@ pub fn pack_git_working_copy(
         sync_materialized_directory(parent)?;
     }
     Ok(manifest)
+}
+
+fn write_pack_artifact(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    File::options()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(bytes))
+        .with_context(|| format!("{GIT_PACK_FAILED}: create artifact {}", path.display()))
 }
 
 /// Resolve the existing ancestor before appending missing components, so a
@@ -762,7 +783,10 @@ fn write_untracked_tar(root: &Path, paths: &[String], output: &Path) -> anyhow::
     let mut sorted = paths.to_vec();
     sorted.sort();
     sorted.dedup();
-    let mut out = File::create(output)
+    let mut out = File::options()
+        .write(true)
+        .create_new(true)
+        .open(output)
         .with_context(|| format!("failed to create untracked archive {}", output.display()))?;
     for relative in sorted {
         validate_relative_path(&relative)?;
@@ -1449,6 +1473,63 @@ mod tests {
             repo.path(),
             &["worktree", "remove", linked.to_str().unwrap()],
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pack_replaces_artifact_links_without_truncating_source() {
+        use std::os::unix::fs::{symlink, MetadataExt};
+        for symbolic in [false, true] {
+            let repo = dirty_repository();
+            let scratch = tempfile::tempdir().unwrap();
+            let victim = repo.path().join("source-sentinel");
+            fs::write(&victim, b"irreplaceable source bytes").unwrap();
+            let before = git_output(
+                repo.path(),
+                &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            )
+            .unwrap()
+            .stdout;
+            let names = [
+                BUNDLE_NAME,
+                PATCH_NAME,
+                INDEX_PATCH_NAME,
+                UNTRACKED_NAME,
+                MANIFEST_NAME,
+            ];
+            for name in names {
+                let path = scratch.path().join(name);
+                if symbolic {
+                    symlink(&victim, path).unwrap();
+                } else {
+                    fs::hard_link(&victim, path).unwrap();
+                }
+            }
+            let packed = pack_git_working_copy(repo.path(), scratch.path()).unwrap();
+            assert_eq!(fs::read(&victim).unwrap(), b"irreplaceable source bytes");
+            assert_eq!(
+                git_output(
+                    repo.path(),
+                    &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+                )
+                .unwrap()
+                .stdout,
+                before
+            );
+            let source = fs::metadata(&victim).unwrap();
+            for name in names {
+                let artifact = fs::symlink_metadata(scratch.path().join(name)).unwrap();
+                assert!(artifact.file_type().is_file());
+                assert!(artifact.dev() != source.dev() || artifact.ino() != source.ino());
+            }
+            // Repacking a previous complete output remains supported.
+            assert_eq!(
+                pack_git_working_copy(repo.path(), scratch.path())
+                    .unwrap()
+                    .manifest_sha256,
+                packed.manifest_sha256
+            );
+        }
     }
 
     #[cfg(unix)]

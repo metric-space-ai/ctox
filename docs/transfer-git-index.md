@@ -28,6 +28,9 @@ the worktree root. The artifact directory must be outside both that worktree
 and its private/shared Git metadata; symlink aliases are resolved before any
 output directory is created, and Unix ancestor identities also guard against
 case aliases. Packing into the source is rejected before replacing artifacts.
+Existing artifact entries are unlinked before replacement, so symbolic or hard
+links cannot cause truncation of source files. The owner must hold exclusive
+use of the artifact directory while packing as well as quiescing the source.
 
 Old manifests without `git.index` remain readable with their original behavior:
 the combined patch is staged at the destination. They cannot prove preservation
