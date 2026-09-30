@@ -24389,6 +24389,9 @@ fn create_ctox_queue_task(
     command: &BusinessCommand,
     native_authorization: Option<&Value>,
 ) -> anyhow::Result<Option<channels::QueueTaskView>> {
+    if !is_cv_print_parse_command(command) {
+        command_instruction(command)?;
+    }
     let attachments = materialize_business_chat_attachments(root, command_id, command)?;
     let prompt_enrichment = business_command_prompt_enrichment(root, command_id, command)?;
     let title = command_title(command);
@@ -24397,7 +24400,7 @@ fn create_ctox_queue_task(
         command,
         &attachments,
         prompt_enrichment.as_deref(),
-    );
+    )?;
     let priority = command
         .payload
         .get("priority")
@@ -24574,6 +24577,9 @@ pub(crate) fn rebuild_business_command_queue_prompt_for_task(
             .unwrap_or_else(|| serde_json::json!({})),
         origin: CommandOrigin::TrustedLocal,
     };
+    if !is_cv_print_parse_command(&command) {
+        command_instruction(&command)?;
+    }
     let attachments = materialize_business_chat_attachments(root, command_id, &command)?;
     let prompt_enrichment = business_command_prompt_enrichment(root, command_id, &command)?;
     Ok(Some(command_prompt(
@@ -24581,7 +24587,7 @@ pub(crate) fn rebuild_business_command_queue_prompt_for_task(
         &command,
         &attachments,
         prompt_enrichment.as_deref(),
-    )))
+    )?))
 }
 fn command_queue_thread_key(command_id: &str, command: &BusinessCommand) -> String {
     if is_business_os_app_module_command(command) {
@@ -24662,16 +24668,7 @@ fn command_title(command: &BusinessCommand) -> String {
         })
 }
 
-fn command_prompt(
-    command_id: &str,
-    command: &BusinessCommand,
-    attachments: &[MaterializedBusinessChatAttachment],
-    prompt_enrichment: Option<&str>,
-) -> String {
-    if is_cv_print_parse_command(command) {
-        return cv_print_command_prompt(command_id, command, prompt_enrichment);
-    }
-
+fn command_instruction(command: &BusinessCommand) -> anyhow::Result<&str> {
     let instruction = command
         .payload
         .get("instruction")
@@ -24680,18 +24677,38 @@ fn command_prompt(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("Execute this Business OS automation through CTOX.");
-    let instruction =
-        truncate_text_preserve(instruction, BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS);
+    let character_count = instruction.chars().count();
+    anyhow::ensure!(
+        character_count <= BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS,
+        "business_command_instruction_too_large: selected instruction has {character_count} characters, maximum {BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS}; split the request into bounded commands instead of executing a shortened instruction"
+    );
+    Ok(instruction)
+}
+
+fn command_prompt(
+    command_id: &str,
+    command: &BusinessCommand,
+    attachments: &[MaterializedBusinessChatAttachment],
+    prompt_enrichment: Option<&str>,
+) -> anyhow::Result<String> {
+    if is_cv_print_parse_command(command) {
+        return Ok(cv_print_command_prompt(
+            command_id,
+            command,
+            prompt_enrichment,
+        ));
+    }
+    let instruction = command_instruction(command)?;
     let required_skill_names = required_skill_names(command);
     if is_business_os_app_module_command(command) {
-        return business_os_app_command_prompt(
+        return Ok(business_os_app_command_prompt(
             command_id,
             command,
             attachments,
             prompt_enrichment,
-            &instruction,
+            instruction,
             &required_skill_names,
-        );
+        ));
     }
     let mut payload_preview_value = command.payload.clone();
     if let Some(payload) = payload_preview_value.as_object_mut() {
@@ -24727,7 +24744,10 @@ fn command_prompt(
         command.command_type,
         command.record_id.as_deref().unwrap_or("")
     );
-    truncate_text_preserve(&prompt, BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS)
+    Ok(truncate_text_preserve(
+        &prompt,
+        BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS,
+    ))
 }
 
 fn sanitize_command_prompt_preview(value: Value) -> Value {
@@ -31408,7 +31428,7 @@ pub(super) mod tests {
             }),
         };
 
-        let prompt = command_prompt("cmd_app_bench", &command, &[], None);
+        let prompt = command_prompt("cmd_app_bench", &command, &[], None).unwrap();
         assert!(prompt.contains("Business OS task resources:"));
         assert!(prompt.contains("- required_skills: business-os-app-module-development"));
         assert!(prompt.contains("Business OS app task metadata:"));
@@ -31493,7 +31513,7 @@ pub(super) mod tests {
             }),
         };
 
-        let prompt = command_prompt("cmd_app_create", &command, &[], None);
+        let prompt = command_prompt("cmd_app_create", &command, &[], None).unwrap();
         assert!(prompt.contains("Business OS task resources:"));
         assert!(prompt.contains("- required_skills: business-os-app-module-development"));
         assert!(prompt.contains("Business OS app task metadata:"));
@@ -37928,7 +37948,7 @@ pub(super) mod tests {
             }),
         };
 
-        let prompt = command_prompt("cmd_context_redaction", &command, &[], None);
+        let prompt = command_prompt("cmd_context_redaction", &command, &[], None).unwrap();
         assert!(prompt.contains("Client context JSON"));
         assert!(prompt.contains("business-os-context-menu"));
         assert!(prompt.contains("\"safe\": \"kept\""));
@@ -37958,11 +37978,79 @@ pub(super) mod tests {
             client_context: serde_json::json!({"source": "web-research"}),
         };
 
-        let prompt = command_prompt("cmd_research_prompt_once", &command, &[], None);
+        let prompt = command_prompt("cmd_research_prompt_once", &command, &[], None).unwrap();
         assert_eq!(prompt.matches(instruction).count(), 1);
         assert!(prompt.contains("\"research_run_id\": \"run-1\""));
         assert!(!prompt.contains("\"instruction\""));
         assert!(!prompt.contains("\"prompt\""));
+    }
+
+    #[test]
+    fn business_command_instruction_limit_preserves_the_complete_unicode_boundary(
+    ) -> anyhow::Result<()> {
+        let suffix = "END-OF-INSTRUCTION";
+        let instruction = format!(
+            "{}{}",
+            "é".repeat(BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS - suffix.chars().count()),
+            suffix
+        );
+        let mut command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_instruction_boundary".to_owned()),
+            module: "research".to_owned(),
+            command_type: "business_os.chat.task".to_owned(),
+            record_id: None,
+            payload: serde_json::json!({"instruction": instruction}),
+            client_context: serde_json::json!({}),
+        };
+        let prompt = command_prompt("cmd_instruction_boundary", &command, &[], None)?;
+        assert!(prompt.starts_with(&instruction));
+        assert_eq!(prompt.matches(suffix).count(), 1);
+        command.payload = serde_json::json!({"prompt": instruction});
+        assert!(
+            command_prompt("cmd_instruction_boundary", &command, &[], None)?
+                .starts_with(&instruction)
+        );
+        command.payload["prompt"] = Value::String(format!("{instruction}Z"));
+        let error = command_prompt("cmd_instruction_boundary", &command, &[], None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("business_command_instruction_too_large"));
+        assert!(error.contains("8001"));
+        assert!(!error.contains(suffix));
+        Ok(())
+    }
+
+    #[test]
+    fn business_command_instruction_limit_precedes_attachment_and_queue_writes(
+    ) -> anyhow::Result<()> {
+        for field in ["instruction", "prompt"] {
+            let temp = tempdir()?;
+            let mut payload = serde_json::json!({
+                "attachment_refs": [{"kind": "desktop_file", "file_id": "missing_sensitive_file"}]
+            });
+            payload[field] =
+                Value::String("s".repeat(BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS + 1));
+            let command = BusinessCommand {
+                origin: CommandOrigin::TrustedLocal,
+                id: Some("cmd_instruction_rejected".to_owned()),
+                module: "research".to_owned(),
+                command_type: "business_os.chat.task".to_owned(),
+                record_id: None,
+                payload,
+                client_context: serde_json::json!({}),
+            };
+            let error =
+                create_ctox_queue_task(temp.path(), "cmd_instruction_rejected", &command, None)
+                    .unwrap_err()
+                    .to_string();
+            assert!(error.contains("business_command_instruction_too_large"));
+            assert!(
+                fs::read_dir(temp.path())?.next().is_none(),
+                "no attachment materialization, workspace or queue store before rejection"
+            );
+        }
+        Ok(())
     }
 
     #[test]
