@@ -49,6 +49,11 @@ pub fn handle(root: &Path, args: &[String]) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&paired)?);
         return Ok(());
     }
+    if args.first().map(String::as_str) == Some("publish") && args.len() == 2 {
+        let published = crate::business_os::publish_native_file(root, Path::new(&args[1]))?;
+        println!("{}", serde_json::to_string_pretty(&published)?);
+        return Ok(());
+    }
     let store = store(root)?;
     let transfer = match args.first().map(String::as_str) {
         Some("download") if args.len() >= 5 => store.enqueue(DownloadRequest {
@@ -70,7 +75,7 @@ pub fn handle(root: &Path, args: &[String]) -> Result<()> {
         Some(action @ ("pause" | "resume" | "cancel")) if args.len() == 2 => {
             store.control(&args[1], action)?
         }
-        _ => bail!("usage: ctox transfer source-identity | pair TARGET SOURCE_PUBLIC_IDENTITY INVITE_FILE | download ID SHA256 SIZE URL [MIRROR...] | peer-download ID TARGET SHA256 SIZE FILE_ID | status ID | pause ID | resume ID | cancel ID"),
+        _ => bail!("usage: ctox transfer source-identity | publish FILE | pair TARGET SOURCE_PUBLIC_IDENTITY INVITE_FILE | download ID SHA256 SIZE URL [MIRROR...] | peer-download ID TARGET SHA256 SIZE FILE_ID | status ID | pause ID | resume ID | cancel ID"),
     };
     println!("{}", serde_json::to_string_pretty(&transfer)?);
     Ok(())

@@ -22,6 +22,22 @@ pairing over an existing target. Failed enrollment may retain its prepared key
 for a retry with that same scope; reconnect cannot rotate it. Pairing is not a
 way to recover an old job under a newly issued account.
 
+On the source, explicitly publish each selected regular file with:
+
+```
+ctox transfer publish FILE
+```
+
+This local-operator action reuses the native desktop-file writer and its path
+boundary, eagerly materializes and verifies chunks even above the normal lazy
+file threshold, then compares the stored hash and size to an independent byte
+hash. It returns `fileId`, `sha256`, `size`, `sourceInstanceId` and
+`sourcePublicIdentity`. Keep the source artifact quiescent during publication;
+a changed file fails verification. Directory publication is rejected. Repeated
+publication uses the same canonical native file ID. Published content follows
+the existing desktop-file read policy; this command grants no recipient access.
+Payload remains exclusively on the native WebRTC file service.
+
 The local operator command is:
 
 ```

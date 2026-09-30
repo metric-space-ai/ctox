@@ -41,3 +41,26 @@ Missing or malformed members of an advertised index proof fail closed.
 Content reconstruction does not authorize execution or takeover. Existing
 Workjet/Crew ownership, fence generation, peer admission and durable checkpoint
 rules still apply. Local pack/apply tests do not establish two-host acceptance.
+
+## Native transfer workflow
+
+On A, quiesce the source and run
+`ctox workjet-transfer pack --source SOURCE --artifacts ARTIFACTS`.
+Publish each of `bundle.gitbundle`, `tracked.patch`, `index.patch`,
+`untracked.tar` and `manifest.json` with `ctox transfer publish FILE`.
+Keep their returned file IDs, byte hashes and sizes associated with those
+exact filenames; zero-byte patches are valid artifacts.
+
+On B, use an independently pinned native enrollment of A and enqueue each
+artifact with `ctox transfer peer-download ID TARGET SHA256 SIZE FILE_ID`.
+The daemon owns the downloads; pause/resume uses the same job IDs and original
+source grants. Wait until each `ctox transfer status ID` reports `state` as
+`completed`. Its `receipt.artifact` names the verified local file. Copy that
+file under the corresponding artifact filename in a new directory; keep the
+daemon-owned object in place. After all five artifacts are present, run
+`ctox workjet-transfer apply --artifacts ARTIFACTS --target DESTINATION`.
+Apply still validates the manifest, patches, index proof and materialized tree
+before publishing a destination. Do not apply partial downloads, replace the
+original grant with another account, or treat content reconstruction as a
+Workjet/Crew execution takeover. Real two-host execution of this workflow is
+still required for acceptance.

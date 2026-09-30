@@ -2243,13 +2243,18 @@ where
     }
     runtime.block_on(async move {
         let database = open_database(database_path).await?;
-        register_collections_tolerant(&database, collection_creators()).await?;
-        let output = operation(None, Arc::clone(&database)).await?;
+        let output = async {
+            register_collections_tolerant(&database, collection_creators()).await?;
+            operation(None, Arc::clone(&database)).await
+        }
+        .await;
+        // Registration or publication failure still owns this temporary handle.
+        // Drain it before returning the error and dropping the local runtime.
         database
             .close()
             .await
             .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
-        Ok(output)
+        output
     })
 }
 
