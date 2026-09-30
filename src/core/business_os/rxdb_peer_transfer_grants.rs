@@ -521,6 +521,79 @@ mod tests {
         .is_err());
     }
     #[test]
+    fn revoked_file_read_policy_denies_a_grant_with_unchanged_account_and_device() {
+        let (root, enrolled, scope) = fixture();
+        let enrolled_actor = principal(root.path(), &enrolled).unwrap();
+        let device = enrolled_actor.device.as_ref().unwrap();
+        let binding = super::super::mobile_invites::device_binding(
+            Some(&device.pairing_id),
+            Some(&device.device_id),
+            Some(&device.proof_key_thumbprint),
+        )
+        .unwrap()
+        .unwrap();
+        let now = chrono::Utc::now().timestamp_millis();
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user_with_binding(
+            root.path(),
+            &enrolled_actor.user_id,
+            "Restricted enrolled recipient",
+            "user",
+            now,
+            Some(&binding),
+        )
+        .unwrap();
+        let actor = principal(root.path(), &token).unwrap();
+        let conn = store::open_store(root.path()).unwrap();
+        // Remove migration grants only in this isolated fixture. The recipient
+        // now has precisely one explicit file-read grant and no elevated role.
+        conn.execute(
+            "UPDATE business_permission_grants SET active=0
+             WHERE permission=?1 AND scope_type='collection' AND scope_id='desktop_files'",
+            [BusinessOsPermission::DataRead.as_str()],
+        )
+        .unwrap();
+        assert!(call(
+            root.path(),
+            &token,
+            TransferGrantRequest::Issue {
+                scope: scope.clone()
+            }
+        )
+        .is_err());
+        conn.execute(
+            "INSERT INTO business_permission_grants
+             (grant_id,subject_type,subject_id,permission,scope_type,scope_id,active,created_at_ms,updated_at_ms)
+             VALUES('fixture.file-read','user',?1,?2,'collection','desktop_files',1,?3,?3)",
+            rusqlite::params![actor.user_id, BusinessOsPermission::DataRead.as_str(), now],
+        )
+        .unwrap();
+        let grant = issue(root.path(), &token, &scope);
+        assert_eq!(
+            check(root.path(), &token, &scope, &grant.grant_id).unwrap(),
+            json!({"authorized":true})
+        );
+        conn.execute(
+            "UPDATE business_permission_grants SET active=0 WHERE grant_id='fixture.file-read'",
+            [],
+        )
+        .unwrap();
+        // This is a policy-only invalidation, not an expired/replaced token,
+        // account epoch change or revoked device masking the source check.
+        assert_eq!(principal(root.path(), &token).unwrap(), actor);
+        assert!(check(root.path(), &token, &scope, &grant.grant_id).is_err());
+        assert!(call(root.path(), &token, TransferGrantRequest::Issue { scope }).is_err());
+        // The original recipient can still explicitly revoke its denied grant.
+        call(
+            root.path(),
+            &token,
+            TransferGrantRequest::Revoke {
+                grant_id: grant.grant_id.clone(),
+            },
+        )
+        .unwrap();
+        assert!(load(root.path(), &grant.grant_id).unwrap().revoked);
+    }
+    #[test]
     fn caller_identity_injection_unsupported_source_and_bad_content_are_denied() {
         let (root, token, scope) = fixture();
         let mut forged = serde_json::to_value(TransferGrantRequest::Issue {
