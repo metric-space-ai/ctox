@@ -46,6 +46,43 @@ fn save_authority(root: &std::path::Path, account: &NativeTransferAccount) {
     .unwrap();
 }
 
+#[tokio::test]
+async fn initial_pairing_cannot_replace_an_account_or_its_disconnect_tombstone() {
+    let root = tempfile::tempdir().unwrap();
+    let mut original = account(root.path());
+    let host = host(root.path());
+    host.require_new_target(&original.target_id).await.unwrap();
+    save_authority(root.path(), &original);
+    assert!(host
+        .pairing_provider(original.key_scope(), "n".repeat(43))
+        .await
+        .is_err());
+    original.active = false;
+    save_authority(root.path(), &original);
+    assert!(host.account(&original.target_id).await.unwrap().is_none());
+    assert!(host.require_new_target(&original.target_id).await.is_err());
+    assert!(host
+        .pairing_provider(original.key_scope(), "n".repeat(43))
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn malformed_pairing_secret_cannot_generate_a_native_key() {
+    let root = tempfile::tempdir().unwrap();
+    let scope = NativeDeviceKeyScope {
+        target_id: "new-target".into(),
+        source_instance_id: "source".into(),
+        source_public_identity: format!("ed25519:{}", "a".repeat(64)),
+        account_epoch: 1,
+    };
+    assert!(host(root.path())
+        .pairing_provider(scope.clone(), "renderer.bearer.token".into())
+        .await
+        .is_err());
+    assert!(NativeDeviceProofKey::load(root.path(), &scope).is_err());
+}
+
 fn save_credentials(
     root: &std::path::Path,
     expected: &NativeTransferAccount,

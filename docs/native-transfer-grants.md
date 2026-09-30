@@ -1,5 +1,27 @@
 # Source authority for native transfers
 
+For first enrollment, obtain the source's public identity with
+`ctox transfer source-identity` on that source and a fresh source-generated
+native mobile invite JSON file. On the recipient run:
+
+```
+ctox transfer pair TARGET SOURCE_PUBLIC_IDENTITY INVITE_FILE
+```
+
+The source key is an explicit independently trusted pin; it is never learned
+from the signaling peer or invite file. Pairing accepts the native one-time
+invite secret, not a renderer bearer. The existing native core proves the
+pinned source before the new scoped P-256 key signs its nonce or the invite
+secret is released. Source admission binds the key thumbprint to the device;
+`provision_from_session` then obtains the current principal and routing and
+atomically persists them. The input is kept out of command-line arguments and
+output. Initial invites use native ICE bootstrap defaults because the invite
+schema supplies no ICE descriptor; source-confirmed routing governs subsequent
+transfer sessions. Both active accounts and disconnect tombstones prevent
+pairing over an existing target. Failed enrollment may retain its prepared key
+for a retry with that same scope; reconnect cannot rotate it. Pairing is not a
+way to recover an old job under a newly issued account.
+
 The local operator command is:
 
 ```

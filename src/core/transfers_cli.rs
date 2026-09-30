@@ -37,6 +37,18 @@ pub(crate) fn start_daemon_with_account_host(
 }
 
 pub fn handle(root: &Path, args: &[String]) -> Result<()> {
+    if args.first().map(String::as_str) == Some("source-identity") && args.len() == 1 {
+        println!(
+            "{}",
+            serde_json::json!({"sourcePublicIdentity": crate::sync_host::signing_identity(root)?.public_identity()})
+        );
+        return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("pair") && args.len() == 4 {
+        let paired = crate::transfers_native::pair(root, &args[1], &args[2], Path::new(&args[3]))?;
+        println!("{}", serde_json::to_string_pretty(&paired)?);
+        return Ok(());
+    }
     let store = store(root)?;
     let transfer = match args.first().map(String::as_str) {
         Some("download") if args.len() >= 5 => store.enqueue(DownloadRequest {
@@ -58,7 +70,7 @@ pub fn handle(root: &Path, args: &[String]) -> Result<()> {
         Some(action @ ("pause" | "resume" | "cancel")) if args.len() == 2 => {
             store.control(&args[1], action)?
         }
-        _ => bail!("usage: ctox transfer download ID SHA256 SIZE URL [MIRROR...] | peer-download ID TARGET SHA256 SIZE FILE_ID | status ID | pause ID | resume ID | cancel ID"),
+        _ => bail!("usage: ctox transfer source-identity | pair TARGET SOURCE_PUBLIC_IDENTITY INVITE_FILE | download ID SHA256 SIZE URL [MIRROR...] | peer-download ID TARGET SHA256 SIZE FILE_ID | status ID | pause ID | resume ID | cancel ID"),
     };
     println!("{}", serde_json::to_string_pretty(&transfer)?);
     Ok(())
