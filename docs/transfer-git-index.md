@@ -23,7 +23,11 @@ Index-only changes count as dirty even if working bytes match HEAD.
 Unresolved merges and intent-to-add entries are rejected; the latter has no
 ordinary Git tree representation. This does not claim support for arbitrary
 index flags, submodules, every ref, or an independently running source writer.
-The existing owner must quiesce the source before packing.
+The existing owner must quiesce the source before packing. `--source` must name
+the worktree root. The artifact directory must be outside both that worktree
+and its private/shared Git metadata; symlink aliases are resolved before any
+output directory is created, and Unix ancestor identities also guard against
+case aliases. Packing into the source is rejected before replacing artifacts.
 
 Old manifests without `git.index` remain readable with their original behavior:
 the combined patch is staged at the destination. They cannot prove preservation
