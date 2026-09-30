@@ -850,6 +850,7 @@ export class CtoxIndexedDbCollection {
       removed += 1;
     }
     await idbTransactionDone(tx);
+    if (removed) bumpLocalEvictionGeneration(this.db.name, this.name);
     return removed;
   }
 
@@ -1108,6 +1109,7 @@ export class CtoxIndexedDbCollection {
         latestLwt: null,
         latestIdHash: null,
         epoch: `browser:${this.name}:empty`,
+        evictionGeneration: readLocalEvictionGeneration(this.db.name, this.name),
       };
     }
     const latestIdHash = await sha256Hex(record.id);
@@ -1119,6 +1121,7 @@ export class CtoxIndexedDbCollection {
       latestLwt: record.lwt,
       latestIdHash,
       epoch: `browser:${this.name}:${record.lwt}:${latestIdHash.slice(0, 16)}`,
+      evictionGeneration: readLocalEvictionGeneration(this.db.name, this.name),
     };
   }
 
@@ -2137,3 +2140,29 @@ export const ctoxIndexedDbStorageTestInternals = {
   shouldAcceptDocumentWrite,
   storedRecordForWrite,
 };
+
+// Rows removed from the local store (demand-cache eviction, quota recovery)
+// make a retained pull checkpoint unsafe even when the newest local row is
+// unchanged. The counter is part of the local checkpoint validity key, so a
+// checkpoint survives ordinary pulls and writes but never an eviction.
+function localEvictionGenerationKey(databaseName, collectionName) {
+  return `ctox.rxdb.evictions.v1.${encodeURIComponent(String(databaseName || ''))}.${encodeURIComponent(String(collectionName || ''))}`;
+}
+
+function readLocalEvictionGeneration(databaseName, collectionName) {
+  try {
+    const value = Number(globalThis.localStorage?.getItem?.(localEvictionGenerationKey(databaseName, collectionName)) || 0);
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function bumpLocalEvictionGeneration(databaseName, collectionName) {
+  try {
+    const key = localEvictionGenerationKey(databaseName, collectionName);
+    globalThis.localStorage?.setItem?.(key, String(readLocalEvictionGeneration(databaseName, collectionName) + 1));
+  } catch {
+    // Without storage the checkpoints cannot be persisted either.
+  }
+}

@@ -224,6 +224,9 @@ export const replicationWebRtcTestInternals = Object.freeze({
   decodeCapabilityTokenClaims,
   readPermissionDigestFromCapabilityToken,
   readPermissionDigestMatches,
+  // Local checkpoint reuse across ordinary pulls/writes, never across eviction.
+  localCheckpointValidityKey,
+  localCheckpointStillCovers,
   // Lazy accessors (classes are declared below): let smoke tests drive the
   // real state machines without opening a network connection.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -1589,8 +1592,7 @@ class CtoxWebRtcReplicationState {
     if (retained && validityKey) {
       if (
         retained.validityKey === validityKey
-        && retained.localValidityKey
-        && retained.localValidityKey === localValidityKey
+        && localCheckpointStillCovers(retained.localValidityKey, localValidityKey)
         && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)
       ) {
         this.firstPullCompletedAtMs = retainedFirstPullCompletedAtMs(retained);
@@ -2874,7 +2876,48 @@ function localCheckpointValidityKey(checkpoint) {
     ? checkpoint.schemaHash.trim()
     : '';
   if (!epoch) return '';
-  return `${epoch}|${schemaHashValue}`;
+  const evictionGeneration = Number(checkpoint.evictionGeneration || 0);
+  return evictionGeneration > 0
+    ? `${epoch}|${schemaHashValue}|ev${evictionGeneration}`
+    : `${epoch}|${schemaHashValue}`;
+}
+
+// The local key guards against reusing a pull checkpoint after the browser
+// store LOST rows. Requiring the newest local row to be byte-identical also
+// rejected every checkpoint after one ordinary pull or local write since it was
+// stored, so on a busy tenant each page load re-pulled whole eager collections
+// (customer tenant, 30.09.2026: 21 MB of leads and ~35 MB per reload, 60-75 s). A
+// browser-store key stays valid while schema and eviction generation are
+// unchanged and the newest local row is not older than when it was retained.
+// Any other key shape keeps exact equality.
+function localCheckpointStillCovers(retainedKey, currentKey) {
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const retained = parseBrowserLocalCheckpointKey(retainedKey);
+  const current = parseBrowserLocalCheckpointKey(currentKey);
+  if (!retained || !current) return false;
+  return retained.collection === current.collection
+    && retained.schemaHash === current.schemaHash
+    && retained.evictionGeneration === current.evictionGeneration
+    && Number.isFinite(retained.latestLwt)
+    && Number.isFinite(current.latestLwt)
+    && current.latestLwt >= retained.latestLwt;
+}
+
+function parseBrowserLocalCheckpointKey(key) {
+  const [epoch = '', schemaHash = '', evictionPart = ''] = String(key).split('|');
+  const match = /^browser:(.+):(\d+(?:\.\d+)?):([0-9a-f]+)$/.exec(epoch);
+  if (!match) return null;
+  const evictionGeneration = evictionPart
+    ? Number(/^ev(\d+)$/.exec(evictionPart)?.[1] ?? NaN)
+    : 0;
+  if (!Number.isFinite(evictionGeneration)) return null;
+  return {
+    collection: match[1],
+    latestLwt: Number(match[2]),
+    schemaHash,
+    evictionGeneration,
+  };
 }
 
 function persistentCheckpointStorageKey(topic, collection) {

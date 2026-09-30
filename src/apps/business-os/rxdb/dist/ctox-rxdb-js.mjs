@@ -3015,6 +3015,7 @@ var CtoxIndexedDbCollection = class {
       removed += 1;
     }
     await idbTransactionDone(tx);
+    if (removed) bumpLocalEvictionGeneration(this.db.name, this.name);
     return removed;
   }
   async findDocumentsById(ids, { withDeleted = false } = {}) {
@@ -3257,7 +3258,8 @@ var CtoxIndexedDbCollection = class {
         schemaHash: schemaHash2,
         latestLwt: null,
         latestIdHash: null,
-        epoch: `browser:${this.name}:empty`
+        epoch: `browser:${this.name}:empty`,
+        evictionGeneration: readLocalEvictionGeneration(this.db.name, this.name)
       };
     }
     const latestIdHash = await sha256Hex(record.id);
@@ -3268,7 +3270,8 @@ var CtoxIndexedDbCollection = class {
       schemaHash: schemaHash2,
       latestLwt: record.lwt,
       latestIdHash,
-      epoch: `browser:${this.name}:${record.lwt}:${latestIdHash.slice(0, 16)}`
+      epoch: `browser:${this.name}:${record.lwt}:${latestIdHash.slice(0, 16)}`,
+      evictionGeneration: readLocalEvictionGeneration(this.db.name, this.name)
     };
   }
   schemaIndexes() {
@@ -4090,6 +4093,24 @@ var ctoxIndexedDbStorageTestInternals = {
   shouldAcceptDocumentWrite,
   storedRecordForWrite
 };
+function localEvictionGenerationKey(databaseName, collectionName) {
+  return `ctox.rxdb.evictions.v1.${encodeURIComponent(String(databaseName || ""))}.${encodeURIComponent(String(collectionName || ""))}`;
+}
+function readLocalEvictionGeneration(databaseName, collectionName) {
+  try {
+    const value = Number(globalThis.localStorage?.getItem?.(localEvictionGenerationKey(databaseName, collectionName)) || 0);
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+  } catch {
+    return 0;
+  }
+}
+function bumpLocalEvictionGeneration(databaseName, collectionName) {
+  try {
+    const key = localEvictionGenerationKey(databaseName, collectionName);
+    globalThis.localStorage?.setItem?.(key, String(readLocalEvictionGeneration(databaseName, collectionName) + 1));
+  } catch {
+  }
+}
 
 // src/apps/business-os/rxdb/src/inbound-request-queue.mjs
 var InboundRequestQueue = class {
@@ -10056,6 +10077,9 @@ var replicationWebRtcTestInternals = Object.freeze({
   decodeCapabilityTokenClaims,
   readPermissionDigestFromCapabilityToken,
   readPermissionDigestMatches,
+  // Local checkpoint reuse across ordinary pulls/writes, never across eviction.
+  localCheckpointValidityKey,
+  localCheckpointStillCovers,
   // Lazy accessors (classes are declared below): let smoke tests drive the
   // real state machines without opening a network connection.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -11150,7 +11174,7 @@ var CtoxWebRtcReplicationState = class {
     if (this.cancelled) return;
     const retained = this.retainedCheckpoints;
     if (retained && validityKey) {
-      if (retained.validityKey === validityKey && retained.localValidityKey && retained.localValidityKey === localValidityKey && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)) {
+      if (retained.validityKey === validityKey && localCheckpointStillCovers(retained.localValidityKey, localValidityKey) && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)) {
         this.firstPullCompletedAtMs = retainedFirstPullCompletedAtMs(retained);
         if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
           this.pullCheckpointsByPeer.set(peerId, retained.pull);
@@ -12261,7 +12285,29 @@ function localCheckpointValidityKey(checkpoint) {
   const epoch = typeof checkpoint.epoch === "string" ? checkpoint.epoch.trim() : "";
   const schemaHashValue = typeof checkpoint.schemaHash === "string" ? checkpoint.schemaHash.trim() : "";
   if (!epoch) return "";
-  return `${epoch}|${schemaHashValue}`;
+  const evictionGeneration = Number(checkpoint.evictionGeneration || 0);
+  return evictionGeneration > 0 ? `${epoch}|${schemaHashValue}|ev${evictionGeneration}` : `${epoch}|${schemaHashValue}`;
+}
+function localCheckpointStillCovers(retainedKey, currentKey) {
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const retained = parseBrowserLocalCheckpointKey(retainedKey);
+  const current = parseBrowserLocalCheckpointKey(currentKey);
+  if (!retained || !current) return false;
+  return retained.collection === current.collection && retained.schemaHash === current.schemaHash && retained.evictionGeneration === current.evictionGeneration && Number.isFinite(retained.latestLwt) && Number.isFinite(current.latestLwt) && current.latestLwt >= retained.latestLwt;
+}
+function parseBrowserLocalCheckpointKey(key) {
+  const [epoch = "", schemaHash2 = "", evictionPart = ""] = String(key).split("|");
+  const match = /^browser:(.+):(\d+(?:\.\d+)?):([0-9a-f]+)$/.exec(epoch);
+  if (!match) return null;
+  const evictionGeneration = evictionPart ? Number(/^ev(\d+)$/.exec(evictionPart)?.[1] ?? NaN) : 0;
+  if (!Number.isFinite(evictionGeneration)) return null;
+  return {
+    collection: match[1],
+    latestLwt: Number(match[2]),
+    schemaHash: schemaHash2,
+    evictionGeneration
+  };
 }
 function persistentCheckpointStorageKey(topic, collection) {
   return `ctox.rxdb.checkpoints.v1.${encodeURIComponent(String(topic || ""))}.${encodeURIComponent(String(collection || ""))}`;
