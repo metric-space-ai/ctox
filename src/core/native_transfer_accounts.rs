@@ -212,7 +212,7 @@ impl NativeTransferAccountHost {
     /// Admission of a new job captures its account before connecting. Do not
     /// release a different account's credentials if enrollment changes meanwhile.
     pub(crate) fn provider_for_account(
-        &self,
+        self: &Arc<Self>,
         expected: NativeTransferAccount,
     ) -> NativeSessionTargetProvider {
         let host = self.clone();

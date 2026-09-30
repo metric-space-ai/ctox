@@ -7,7 +7,7 @@ use crate::{
 };
 use ctox_sync::native::NativeSyncSession;
 use ctox_transfers::{PeerAccountBinding, PeerSource, Store, Transfer};
-use rxdb::plugins::replication_webrtc::{WebRTCConnectionHandler, WebRTCRsConnection};
+use rxdb::plugins::replication_webrtc::WebRTCRsConnection;
 
 pub(crate) struct PeerDownload {
     pub id: String,
