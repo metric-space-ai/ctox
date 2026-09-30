@@ -2,7 +2,7 @@ import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessConfirm, showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { createCtoxLauncher } from './ctoxLauncher.js';
 import { addMissingDesktopIcons, arrangeDesktopIcons, desktopIconWriteAvailability, dispatchDesktopChatOpen, replaceDesktopIcons, runDesktopActionOnce } from './desktopMenuActions.js';
-import { ensureDesktopLayoutWithAuthority, isDatabaseClosingError, readLocalDesktopLayout } from './layout-authority.js?v=20260928-desktop-local-first-v1';
+import { ensureDesktopLayoutWithAuthority, isDatabaseClosingError, readLocalDesktopIcons, readLocalDesktopLayout, withDesktopIconReconciliationRead } from './layout-authority.js?v=20260929-desktop-icon-cancel-v1';
 import { makeIconDraggable } from './iconDrag.js?v=20260816-browser-sync-guards-v141';
 import { getSvgIcon as getFallbackSvgIcon } from '../../shared/icons.js?v=20260816-browser-sync-guards-v141';
 import {
@@ -506,21 +506,10 @@ export async function mount(ctx) {
 
   async function renderIcons() {
     if (disposed) return;
-    let docs = [];
-    let usingFallbackDocs = false;
-    try {
-      if (iconsCollection) {
-        docs = await iconsCollection.find().exec();
-      } else {
-        docs = fallbackIconDocs(launcher);
-        usingFallbackDocs = true;
-      }
-    } catch (error) {
-      if (!isDatabaseClosingError(error)) throw error;
-      console.info('[desktop] icon read skipped during database restart; rendering default launcher icons');
-      docs = fallbackIconDocs(launcher);
-      usingFallbackDocs = true;
-    }
+    const { docs, usingFallbackDocs } = await readLocalDesktopIcons({
+      collection: iconsCollection,
+      fallbackIcons: () => fallbackIconDocs(launcher),
+    });
     if (disposed) return;
     if (!usingFallbackDocs) {
       syncIconPositionCacheFromDocs(docs);
@@ -1374,28 +1363,29 @@ export async function mount(ctx) {
   async function ensureIcons(collection, launcherRef, { force = false } = {}) {
     if (disposed || !collection) return;
     try {
-      const existing = await collection.find().exec();
-      if (disposed) return;
-      const grid = currentGrid();
-      const entries = launcherRef.entries();
-      const existingById = new Map(existing.map((doc) => [doc.id, doc]));
-      const shouldUnhideDefaults = force;
-      const seeds = entries.map((entry, index) => ({
-        ...iconSeedForEntry(entry, index, grid, launcherRef),
-        hidden: shouldUnhideDefaults ? false : undefined,
-      }));
-      await Promise.all(seeds.map(async (seed) => {
+      await withDesktopIconReconciliationRead(collection, async (existing) => {
         if (disposed) return;
-        const existingDoc = existingById.get(seed.id);
-        if (existingDoc && !force) {
-          const patch = normalizeIconPatch(existingDoc, seed, grid, shouldUnhideDefaults);
-          clearUnpersistedIconFields(existingDoc, patch);
-          if (Object.keys(patch).length) await existingDoc.incrementalPatch(patch);
-          return;
-        }
-        await insertMissingSeed(collection, seed.id, { ...seed, hidden: false });
-      }));
-      if (!disposed) await normalizeIconLayoutIfNeeded(collection, launcherRef);
+        const grid = currentGrid();
+        const entries = launcherRef.entries();
+        const existingById = new Map(existing.map((doc) => [doc.id, doc]));
+        const shouldUnhideDefaults = force;
+        const seeds = entries.map((entry, index) => ({
+          ...iconSeedForEntry(entry, index, grid, launcherRef),
+          hidden: shouldUnhideDefaults ? false : undefined,
+        }));
+        await Promise.all(seeds.map(async (seed) => {
+          if (disposed) return;
+          const existingDoc = existingById.get(seed.id);
+          if (existingDoc && !force) {
+            const patch = normalizeIconPatch(existingDoc, seed, grid, shouldUnhideDefaults);
+            clearUnpersistedIconFields(existingDoc, patch);
+            if (Object.keys(patch).length) await existingDoc.incrementalPatch(patch);
+            return;
+          }
+          await insertMissingSeed(collection, seed.id, { ...seed, hidden: false });
+        }));
+        if (!disposed) await normalizeIconLayoutIfNeeded(collection, launcherRef);
+      });
     } catch (error) {
       if (!isDatabaseClosingError(error)) throw error;
       console.info('[desktop] icon seed skipped during database restart; using transient launcher icons');

@@ -224,6 +224,9 @@ export const replicationWebRtcTestInternals = Object.freeze({
   decodeCapabilityTokenClaims,
   readPermissionDigestFromCapabilityToken,
   readPermissionDigestMatches,
+  // Local checkpoint reuse across ordinary pulls/writes, never across eviction.
+  localCheckpointValidityKey,
+  localCheckpointStillCovers,
   // Lazy accessors (classes are declared below): let smoke tests drive the
   // real state machines without opening a network connection.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -280,6 +283,11 @@ class SharedRoomPeer {
     // Negotiated remote protocol from the room-level handshake, retained so a
     // collection that registers AFTER the handshake can immediately catch up.
     this.negotiated = null; // { peerId, remoteProtocol, queryFetchCapable }
+    // Change-detection metadata only, scoped to the actual connection object.
+    // Never expose or persist a bearer token; native verification owns admission.
+    this.peerAuthorities = new WeakMap();
+    this.authorityRefreshPromise = null;
+    this.authorityRefreshScopeKey = null;
     // Phase 3 schema-validation hardening: collections whose per-collection
     // schema hash mismatched the remote at handshake time. They stay quiesced
     // (no pull/push) until reconciled instead of disabling validation for the
@@ -583,7 +591,7 @@ class SharedRoomPeer {
       iceServersRefreshUrl: this.iceServersRefreshUrl,
       refreshIceServers: this.refreshIceServers,
       expectedNativePeerId: this.expectedNativePeerId || '',
-      protocolPayload: async ({ collection, params } = {}) => this.buildProtocolPayload(collection, params),
+      protocolPayload: async ({ peerId, collection, params } = {}) => this.buildProtocolPayload(collection, params, peerId),
       requestHandlers: {
         masterChangesSince: async ({ params, peerId, collection }) =>
           this.routeMasterChangesSince(collection, params, peerId),
@@ -769,8 +777,68 @@ class SharedRoomPeer {
     }
   }
 
-  async buildProtocolPayload(collection, params = []) {
-    return this.buildProtocolPayloadUncached(collection, params);
+  async buildProtocolPayload(collection, params = [], peerId = '') {
+    const connection = this.peer?.connections?.get?.(peerId);
+    const payload = await this.buildProtocolPayloadUncached(collection, params);
+    const authority = await peerAuthorityDescriptor(payload?.peerSession?.capabilityToken);
+    if (this.authorityRefreshScopeKey && authority?.scopeKey !== this.authorityRefreshScopeKey) {
+      throw peerAuthorityError('auth_required', 'Peer authority changed account or device scope.');
+    }
+    if (connection && this.peer?.connections?.get?.(peerId) === connection && authority
+        && !this.peerAuthorities.has(connection)) {
+      this.peerAuthorities.set(connection, authority);
+    }
+    return payload;
+  }
+
+  async ensurePeerAuthority(capabilityToken) {
+    const desired = await peerAuthorityDescriptor(capabilityToken);
+    if (!desired || desired.expiresAtMs <= Date.now()) {
+      throw peerAuthorityError('auth_required', 'A current capability is required for peer renewal.');
+    }
+    if (this.authorityRefreshPromise) {
+      if (desired.scopeKey !== this.authorityRefreshScopeKey) {
+        throw peerAuthorityError('auth_required', 'Concurrent peer renewal changed account or device scope.');
+      }
+      await this.authorityRefreshPromise;
+      return true; // The caller reacquires authority after the shared handshake.
+    }
+    const peerId = this.negotiated?.peerId;
+    const connection = this.peer?.connections?.get?.(peerId);
+    if (!connection || !this.isPeerOpen(peerId)) {
+      throw peerAuthorityError('native_unavailable', 'Peer authority has no current connection.');
+    }
+    const captured = this.peerAuthorities.get(connection);
+    if (!captured) {
+      throw peerAuthorityError('native_unavailable', 'Peer authority has no handshake binding.');
+    }
+    if (captured.scopeKey !== desired.scopeKey) {
+      throw peerAuthorityError('auth_required', 'A changed account or device requires its own database scope.');
+    }
+    if (captured.permissionKey === desired.permissionKey && captured.expiresAtMs > Date.now()) return false;
+    // Inbound ctoxProtocol alone cannot renew a bound device: only the normal
+    // fresh-connection handshake supplies the native challenge and proof check.
+    this.authorityRefreshScopeKey = captured.scopeKey;
+    const refresh = (async () => {
+      this.peer.removeConnection(peerId, 'capability-authority-changed');
+      const negotiated = await this.ensureNegotiatedPeer();
+      const replacement = this.peer?.connections?.get?.(negotiated?.peerId);
+      const renewed = replacement && this.peerAuthorities.get(replacement);
+      if (!replacement || replacement === connection || !this.isPeerOpen(negotiated?.peerId)
+          || !renewed || renewed.scopeKey !== captured.scopeKey) {
+        throw peerAuthorityError('native_unavailable', 'Peer renewal did not establish a fresh scoped handshake.');
+      }
+      return true;
+    })();
+    this.authorityRefreshPromise = refresh;
+    try {
+      return await refresh;
+    } finally {
+      if (this.authorityRefreshPromise === refresh) {
+        this.authorityRefreshPromise = null;
+        this.authorityRefreshScopeKey = null;
+      }
+    }
   }
 
   async buildProtocolPayloadUncached(collection, params = []) {
@@ -1355,7 +1423,7 @@ class CtoxWebRtcReplicationState {
     // The frame's `collection` field is the collection NAME. Passing the
     // RxCollection object made the native peer drop every such frame, so each
     // `ctox.outbound.sellify_lookup.v1` ran into its caller's timeout while the
-    // same request with the name answered in under a second (tenant incident 26.09.2026).
+    // same request with the name answered in under a second (tenant 26.09.2026).
     return this.peer.request(negotiated.peerId, String(method || ''), [params], timeoutMs, this.collection?.name || null);
   }
 
@@ -1452,13 +1520,27 @@ class CtoxWebRtcReplicationState {
     this.error$.next(error);
   }
 
+  async ensurePeerAuthority(capabilityToken) {
+    if (this.cancelled || !this.shared) {
+      throw peerAuthorityError('native_unavailable', 'The command bridge has no live shared peer.');
+    }
+    const shared = this.shared;
+    const changed = await shared.ensurePeerAuthority(capabilityToken);
+    if (this.cancelled || this.shared !== shared) {
+      throw peerAuthorityError('native_unavailable', 'The command bridge changed during peer renewal.');
+    }
+    return changed;
+  }
+
   async buildProtocolPayload(deviceProofNonce = null) {
     const checkpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     // #12c: attach the browser's CTOX capability token so the native (master)
     // peer can bind this peer to its role for per-collection read authz. Best
     // effort — a missing/failed token simply omits the field (native treats it
     // as least privilege). Never let token resolution break the handshake.
-    const capabilityToken = await resolveCapabilityToken(this.ctox);
+    // Catalog/grant changes can revoke an unexpired token between connections.
+    // Refresh only at the protocol boundary, never on permission-digest reads.
+    const capabilityToken = await resolveCapabilityToken(this.ctox, { refresh: true });
     const deviceProof = await resolveDeviceProof(this.ctox, deviceProofNonce);
     return buildProtocolPayload({
       collectionName: this.collection.name,
@@ -1517,8 +1599,7 @@ class CtoxWebRtcReplicationState {
     if (retained && validityKey) {
       if (
         retained.validityKey === validityKey
-        && retained.localValidityKey
-        && retained.localValidityKey === localValidityKey
+        && localCheckpointStillCovers(retained.localValidityKey, localValidityKey)
         && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)
       ) {
         this.firstPullCompletedAtMs = retainedFirstPullCompletedAtMs(retained);
@@ -2825,7 +2906,59 @@ function localCheckpointValidityKey(checkpoint) {
     ? checkpoint.schemaHash.trim()
     : '';
   if (!epoch) return '';
-  return `${epoch}|${schemaHashValue}`;
+  const evictionGeneration = Number(checkpoint.evictionGeneration || 0);
+  const storeGeneration = checkpoint.localStoreGeneration;
+  if (storeGeneration !== undefined) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(storeGeneration)) return '';
+    return `${epoch}|${schemaHashValue}|ev${evictionGeneration}|store${storeGeneration}`;
+  }
+  return evictionGeneration > 0
+    ? `${epoch}|${schemaHashValue}|ev${evictionGeneration}`
+    : `${epoch}|${schemaHashValue}`;
+}
+
+// The local key guards against reusing a pull checkpoint after the browser
+// store LOST rows. Requiring the newest local row to be byte-identical also
+// rejected every checkpoint after one ordinary pull or local write since it was
+// stored, so on a busy tenant each page load re-pulled whole eager collections
+// (customer tenant, 30.09.2026: 21 MB of leads and ~35 MB per reload, 60-75 s). A
+// browser-store key stays valid while schema and eviction generation are
+// unchanged and the newest local row is not older than when it was retained.
+// Any other key shape keeps exact equality.
+function localCheckpointStillCovers(retainedKey, currentKey) {
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const retained = parseBrowserLocalCheckpointKey(retainedKey);
+  const current = parseBrowserLocalCheckpointKey(currentKey);
+  if (!retained || !current) return false;
+  return retained.collection === current.collection
+    && retained.schemaHash === current.schemaHash
+    && retained.evictionGeneration === current.evictionGeneration
+    && retained.storeGeneration === current.storeGeneration
+    && Number.isFinite(retained.latestLwt)
+    && Number.isFinite(current.latestLwt)
+    && current.latestLwt >= retained.latestLwt;
+}
+
+function parseBrowserLocalCheckpointKey(key) {
+  const parts = String(key).split('|');
+  if (parts.length > 4) return null;
+  const [epoch = '', schemaHash = '', evictionPart = '', storePart = ''] = parts;
+  const storeGeneration = storePart ? /^store([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(storePart)?.[1] : '';
+  if (storePart && !storeGeneration) return null;
+  const match = /^browser:(.+):(\d+(?:\.\d+)?):([0-9a-f]+)$/.exec(epoch);
+  if (!match) return null;
+  const evictionGeneration = evictionPart
+    ? Number(/^ev(\d+)$/.exec(evictionPart)?.[1] ?? NaN)
+    : 0;
+  if (!Number.isFinite(evictionGeneration)) return null;
+  return {
+    collection: match[1],
+    latestLwt: Number(match[2]),
+    schemaHash,
+    evictionGeneration,
+    storeGeneration,
+  };
 }
 
 function persistentCheckpointStorageKey(topic, collection) {
@@ -3044,10 +3177,10 @@ function isStalePendingBusinessCommandConflict(row = {}) {
   return localStatus === 'pending_sync' && masterStatus && masterStatus !== 'pending_sync';
 }
 
-async function resolveCapabilityToken(ctox = {}) {
+async function resolveCapabilityToken(ctox = {}, options = {}) {
   if (typeof ctox?.capabilityTokenProvider === 'function') {
     try {
-      const token = await ctox.capabilityTokenProvider();
+      const token = await ctox.capabilityTokenProvider(options);
       return typeof token === 'string' && token.trim() ? token.trim() : null;
     } catch {
       return null;
@@ -3087,6 +3220,36 @@ export async function resolveDeviceProof(ctox = {}, nonce = null) {
     // the native validator because their proof is absent.
     return null;
   }
+}
+
+// Connection-scoped change detection only. Decoded claims never grant access.
+async function peerAuthorityDescriptor(token) {
+  if (typeof token !== 'string' || !token.trim()) return null;
+  try {
+    const payload = JSON.parse(base64UrlDecodeToString(token.split('.')[0]));
+    if (typeof payload.uid === 'string' && payload.uid && typeof payload.role === 'string'
+        && payload.role && Number.isFinite(payload.epoch) && Number.isFinite(payload.exp)) {
+      const scopeKey = JSON.stringify([
+        payload.uid, payload.device_pairing_id || '', payload.device_id || '', payload.cnf?.jkt || '',
+      ]);
+      return {
+        scopeKey,
+        permissionKey: JSON.stringify([scopeKey, payload.role, payload.epoch]),
+        expiresAtMs: payload.exp,
+      };
+    }
+  } catch {}
+  // Opaque host credentials have no locally inspectable account identity.
+  // Keep identical credentials usable; rotating them requires the host to
+  // establish its scope. No decoded claims here confer native authority.
+  const key = 'opaque:' + await sha256Hex(token);
+  return { scopeKey: key, permissionKey: key, expiresAtMs: Infinity };
+}
+
+function peerAuthorityError(code, message) {
+  return Object.assign(new Error(message), {
+    code, retryable: code === 'native_unavailable', transient: code === 'native_unavailable',
+  });
 }
 
 // SYNC-12: decode the permission-relevant claims from a capability token WITHOUT

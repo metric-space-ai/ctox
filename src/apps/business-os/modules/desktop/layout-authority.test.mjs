@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { ensureDesktopLayoutWithAuthority, readLocalDesktopLayout } from './layout-authority.js?v=20260928-desktop-local-first-v1';
+import { ensureDesktopLayoutWithAuthority, readLocalDesktopIcons, readLocalDesktopLayout, withDesktopIconReconciliationRead } from './layout-authority.js?v=20260929-desktop-icon-cancel-v1';
 
 const defaultLayout = () => ({
   wallpaper_url: '',
@@ -11,6 +11,52 @@ const defaultLayout = () => ({
   grid_cell_h: 104,
   grid_offset: 24,
 });
+
+{
+  const launcherIcons = [{ id: 'ctox' }];
+  let reads = 0;
+  const cancelledCollection = {
+    find() {
+      reads += 1;
+      return { exec: async () => { throw new Error('QUERY_CANCELLED: replication-cancel'); } };
+    },
+  };
+  assert.deepEqual(
+    await readLocalDesktopIcons({
+      collection: cancelledCollection,
+      fallbackIcons: () => launcherIcons,
+    }),
+    { docs: launcherIcons, usingFallbackDocs: true },
+    'a cancelled icon read paints local launcher defaults without a data write',
+  );
+  assert.equal(reads, 1);
+  await assert.rejects(
+    readLocalDesktopIcons({
+      collection: { find: () => ({ exec: async () => { throw new Error('UNAUTHORIZED'); } }) },
+      fallbackIcons: () => launcherIcons,
+    }),
+    /UNAUTHORIZED/,
+    'an authorization failure must not be disguised as a transient icon read',
+  );
+
+  let reconciliations = 0;
+  assert.equal(
+    await withDesktopIconReconciliationRead(cancelledCollection, async () => {
+      reconciliations += 1;
+    }),
+    false,
+    'background reconciliation must skip seeding after its initial read is cancelled',
+  );
+  assert.equal(reconciliations, 0);
+  await assert.rejects(
+    withDesktopIconReconciliationRead(
+      { find: () => ({ exec: async () => launcherIcons }) },
+      async () => { throw new Error('QUERY_CANCELLED: replication-cancel'); },
+    ),
+    /QUERY_CANCELLED: replication-cancel/,
+    'a cancellation-shaped error after the read must still surface as a write failure',
+  );
+}
 
 function collection(initial) {
   let document = initial;

@@ -19,14 +19,45 @@ EVIDENCE.mkdir(parents=True, exist_ok=True)
 DEADLINE = time.monotonic() + 7200
 TARGET = 'x86_64-unknown-linux-gnu'
 FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
+           'knowledge::data::tests::',
+           'business_os::rxdb_peer_knowledge_rows::tests::',
+           'business_os::rxdb_peer_intake_reader::tests::',
+           'startup_clamp_waits_for_a_concurrent_writer_instead_of_failing',
+           'knowledge_tables_sync_tombstones_legacy_chunks_and_strips_base_rows',
+           'queue_task_update_keeps_its_place_unless_priority_changes',
+           'mission::channels::tests::business_command',
+           'mission::channels::tests::business_control',
+           'incomplete_plan', 'business_command_instruction_limit_',
+           'command_writeback_tests',
+           'direct_plan_v2',
+           'cockpit_bring_up_materializes_no_legacy_grants',
+           'native_peer_consumes_pending_knowledge_command',
+           'native_peer_consumes_pending_module_governance_commands',
+           'native_peer_marks_invalid_ticket_commands_failed',
+           'business_command_intake_failure_retains_first_and_last_durable_errors',
+           'business_command_intake_failure_keeps_unchanged_error_without_duplicate_text',
+           'native_peer_sync_config_change_detects_room_rotation',
+           'sync_business_record_projections_materializes_procedural_knowledge',
            'business_chat', 'repair_queue_projections',
            'mcp_app_authority', 'app_source_', 'gateway_managed_',
            'replicated_queue_command_persists_and_revalidates_native_authorization',
            'capability_epoch_revokes_tokens_after_role_or_grant_change',
            'person_research_binding_runtime_leads_preserve_identity_and_scope',
            'person_research_record_binding_accepts_nested_lead_data',
+           'ensure_account_waits_for_a_concurrent_writer_instead_of_failing',
+           'person_field_status_keeps_each_person_separate_and_projects_onto_contacts',
+           'a_person_status_needs_its_own_key_and_a_quote_naming_the_value',
+           'a_malformed_person_status_is_dropped_without_losing_the_others',
+           'a_lead_level_person_status_goes_only_to_its_bound_person',
+           'projection_merges_canonical_and_alias_but_never_follows_a_foreign_or_ambiguous_key',
+           'person_field_status_is_accepted_in_result_and_hoisted_from_the_top_level',
+           'a_two_person_writeback_is_stored_per_person_and_judged_per_person',
+           'one_contact_with_the_same_id_twice_still_owns_its_alias',
+           'last_run_carries_failure_mode_and_detail',
            'authenticated_automation_', 'outbound_runtime_library_',
            'outbound_scrape_test_',
+           'outbound_adapter_reconciliation_projects_typed_result_without_secrets',
+           'outbound_adapter_reconciliation_rejects_invalid_batch_before_any_write',
            'research_control_revalidation_uses_native_actor_and_original_permission',
            'web_stack_auth_owner_resolution_',
            'web_stack_auth_assist_reuses_active_task_across_request_ids',
@@ -34,6 +65,11 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'outbound_custom_research_adapter_queues_universal_scraping_generation',
            'communication::email_accounts::tests::',
            'communication::email_account_cli::tests::',
+           'echoed_subject_tests',
+           'founder_rework_cannot_close_before_a_reviewed_email_was_sent',
+           'repeated_founder_rework_review_rejections_block_the_loop',
+           'founder_rework_repeated_leases_of_one_task_exhaust_the_review_budget',
+           'confirmed_founder_reply_recovers_failed_inbound_without_another_send',
            'registered_exchange_account_builds_isolated_client_options',
            'instance_failure_does_not_skip_registered_accounts',
            'sync_keeps_account_assignment_when_connection_fails',
@@ -41,6 +77,12 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'app_access_grant_refreshes_catalog_governance_projection',
            'communication::email_native::tests::ews_']
 REQUIRED_MAIL_TESTS = {
+    'echoed_thread_subject_is_dropped_from_the_body',
+    'other_headers_and_foreign_subjects_stay_for_the_review',
+    'founder_rework_cannot_close_before_a_reviewed_email_was_sent',
+    'repeated_founder_rework_review_rejections_block_the_loop',
+    'founder_rework_repeated_leases_of_one_task_exhaust_the_review_budget',
+    'confirmed_founder_reply_recovers_failed_inbound_without_another_send',
     'exchange_account_roundtrip_preserves_other_accounts_and_hides_password',
     'stdin_contract_is_bounded_and_does_not_echo_invalid_secret_values',
     'cli_rejects_secret_arguments_and_unknown_accounts',
@@ -61,6 +103,11 @@ REQUIRED_MAIL_TESTS = {
     'ews_empty_folder_limits_and_explicit_empty_body',
 }
 REQUIRED_RUNTIME_TESTS = {
+    'intake_reader_sees_new_schema_and_releases_an_unfinished_transaction',
+    'intake_reader_scope_survives_blocking_tasks_and_keeps_peers_separate',
+    'intake_reader_reuses_connection_but_reads_external_changes_and_replacement',
+    'intake_reader_detaches_receipts_and_discards_errors_and_expired_connections',
+    'intake_reader_rejects_main_only_replacement_until_the_old_wal_is_removed',
     'authenticated_automation_stdin_is_bounded_and_command_specific',
     'authenticated_automation_ipc_preserves_source_and_auth_gate',
     'authenticated_automation_ipc_does_not_bypass_command_session_validation',
@@ -172,9 +219,18 @@ def main():
     run('customer-identity', ['node',
         'src/apps/business-os/rxdb/tests/customer-identifier-inventory-smoke.mjs'])
     run('content-guard', ['node', 'src/apps/business-os/scripts/audit-business-os-content.mjs'])
+    generation_output = run('shell-generation', [
+        'node', '--test', '--test-reporter=tap',
+        'src/apps/business-os/shared/shell-generation.test.mjs',
+    ])
+    for metric, expected in [('tests', 6), ('pass', 6), ('fail', 0), ('skipped', 0)]:
+        if re.findall(r'^# ' + metric + r' (\d+)$', generation_output, re.MULTILINE) != [str(expected)]:
+            raise RuntimeError(f'Unexpected shell generation regression {metric} count')
+    RECORD['shell_generation_tests'] = 6
+    save()
     if not focused:
-        # These four main sync suites remain unchanged by Desktop recovery and
-        # define 26 tests. The five PR185 native-read tests are not on this tree.
+        # Preserve the four existing sync suites and their exact discovery count.
+        # Additional native source groups are discovered below, without zero-match passes.
         sync_tests = [
             'sync-collection-registry.test.mjs',
             'sync-contract.test.mjs',
@@ -250,6 +306,15 @@ def main():
         if any(count != 1 for count in mail_counts.values()):
             raise RuntimeError(f'Required mail regressions absent or ambiguous: {mail_counts}')
         RECORD['required_mail_tests'] = mail_counts
+        instruction_tests = {
+            'business_command_instruction_limit_preserves_the_complete_unicode_boundary',
+            'business_command_instruction_limit_precedes_attachment_and_queue_writes',
+        }
+        instruction_counts = {test: sum(name.rsplit('::', 1)[-1] == test for name in names)
+                              for test in instruction_tests}
+        if any(count != 1 for count in instruction_counts.values()):
+            raise RuntimeError(f'Required instruction regressions absent or ambiguous: {instruction_counts}')
+        RECORD['required_instruction_tests'] = instruction_counts
     RECORD.update(discovered_tests=names, group_counts=counts,
                   required_runtime_tests=runtime_counts)
     save()
@@ -265,6 +330,24 @@ def main():
                                    '--format-version', '1']))
     target_dir = Path(metadata['target_directory'])
     RECORD['cargo_target_directory'] = str(target_dir)
+    # This nested harness crate's unit tests are not executed by the root bin tests.
+    # Reuse the full lane's release target directory and retain an exact discovery gate.
+    harness_case = 'sse::responses::tests::restores_function_call_arguments_streamed_only_as_deltas'
+    harness_command = ['cargo', 'test', '--locked', '--release', '--manifest-path',
+                       'src/core/harness/Cargo.toml', '-p', 'ctox-api', '--lib',
+                       '--target', TARGET, '--target-dir', str(target_dir), '--jobs', '2',
+                       harness_case, '--', '--exact']
+    harness_listing = run('harness-arguments-list', harness_command + ['--list'])
+    harness_names = re.findall(r'^(.+): test$', harness_listing, re.MULTILINE)
+    if harness_names != [harness_case]:
+        raise RuntimeError(f'Required harness argument regression absent or ambiguous: {harness_names}')
+    RECORD['required_harness_tests'] = harness_names
+    save()
+    harness_output = run('harness-arguments-test', harness_command + ['--test-threads=2'])
+    harness_summaries = re.findall(
+        r'test result: ok\. (\d+) passed; 0 failed; 0 ignored;', harness_output)
+    if harness_summaries != ['1']:
+        raise RuntimeError('Harness argument regression did not execute and pass exactly once')
     # Business OS directory requirements, on the same reviewed product source.
     run('cargo-check', ['cargo', 'check', '--locked', '--jobs', '2'])
     run('rxdb-native-tests', ['cargo', 'test', '--locked', '--manifest-path',
@@ -274,13 +357,15 @@ def main():
     run('browser-runtime', ['npm', '--prefix', 'src/apps/business-os', 'exec',
                             'playwright', 'install', '--with-deps', 'chromium'])
     run('business-os-js-tests', ['npm', '--prefix', 'src/apps/business-os', 'test'])
+    run('desktop-icon-cancellation', ['node', '--test',
+                                      'src/apps/business-os/modules/desktop/tests/desktop.test.mjs'])
     run('business-os-module-bundles', ['npm', '--prefix', 'src/apps/business-os', 'run', 'test:module-bundles'])
     run('shell-contract', ['node', 'src/apps/business-os/scripts/assert-shell-v2-contract.mjs'])
     startup = run('shell-startup-cache', ['node', '--test',
                   'src/apps/business-os/scripts/test-shell-window-cache-startup.mjs'])
-    if not re.search(r'^# tests 2$', startup, re.MULTILINE) or not re.search(
-            r'^# pass 2$', startup, re.MULTILINE):
-        raise RuntimeError('Shell startup cache regressions did not both pass')
+    if not re.search(r'^# tests 3$', startup, re.MULTILINE) or not re.search(
+            r'^# pass 3$', startup, re.MULTILINE):
+        raise RuntimeError('All three Shell startup cache regressions must pass')
     geometry_dir = EVIDENCE / 'shell-geometry'
     run('shell-geometry', ['node', 'src/apps/business-os/scripts/shell-v2-geometry-lab.mjs',
                           '--apps', 'mail', '--widths', '1180,720',

@@ -266,8 +266,12 @@ async function loadCrewAppTasks(db) {
     }).exec();
     return (Array.isArray(docs) ? docs : []).map((doc) => doc?.toJSON?.() || doc).filter(Boolean);
   } catch (error) {
-    console.warn?.('[business-chat] crew app presence load failed', error);
-    return [];
+    const cancelled = error?.code === 'QUERY_CANCELLED'
+      || /^QUERY_CANCELLED\b/.test(String(error?.message || error || ''));
+    if (!cancelled) console.warn?.('[business-chat] crew app presence load failed', error);
+    // A retired query is not evidence of an empty queue. Retain the last
+    // presence snapshot until the existing readiness callback can read again.
+    return null;
   }
 }
 
@@ -303,7 +307,7 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
   const reload = () => {
     if (disposed) return Promise.resolve();
     return Promise.all([loadCrewAppTasks(db), loadCrewHarnessStatus(db)]).then(([next, harness]) => {
-      if (disposed) return;
+      if (disposed || next === null) return;
       tasks = next;
       liveKeys = crewLiveKeys(harness);
       apply();
@@ -732,10 +736,11 @@ export function initBusinessChat({
         sync: syncFacade,
         getActiveModule,
         meta: detail,
-        onPending: () => {
-          persistChatState({ state, db, remote: false }).catch(() => {});
+        onPending: async () => {
           renderChatRoot({ root, state, commandBus, db, getActiveModule });
           detail.onPresented?.({ command_id: chat.lastTrackingId });
+          await waitForPendingChatPaint();
+          persistChatState({ state, db, remote: false }).catch(() => {});
         },
       });
       if (!submission) {
@@ -3976,6 +3981,34 @@ export function chatAddressedMemberId(chat) {
   return hasWork ? '' : memberId;
 }
 
+function waitForPendingChatPaint() {
+  // First paint belongs to presentation. Synchronous localStorage writes and
+  // native submission start after it; the command is still unconfirmed here.
+  // Hidden/throttled documents cannot indefinitely prevent durable submission.
+  const timerApi = typeof window !== 'undefined' ? window : globalThis;
+  if (typeof timerApi.requestAnimationFrame !== 'function') return Promise.resolve();
+  return new Promise(resolve => {
+    let frame = null;
+    let afterPaint = null;
+    let fallback = null;
+    const finish = () => {
+      if (frame !== null) timerApi.cancelAnimationFrame?.(frame);
+      if (afterPaint !== null) timerApi.clearTimeout(afterPaint);
+      if (fallback !== null) timerApi.clearTimeout(fallback);
+      resolve();
+    };
+    fallback = timerApi.setTimeout(finish, 100);
+    frame = timerApi.requestAnimationFrame(() => {
+      frame = timerApi.requestAnimationFrame(() => {
+        frame = null;
+        // A task after the frame callbacks lets the browser paint before
+        // persistence/dispatch resumes, instead of blocking that frame.
+        afterPaint = timerApi.setTimeout(finish, 0);
+      });
+    });
+  });
+}
+
 async function submitChatMessage({
   state,
   chat,
@@ -4054,7 +4087,7 @@ async function submitChatMessage({
   touchChats(state, [chat]);
   if (typeof onPending === 'function') {
     try {
-      onPending();
+      await onPending();
     } catch (error) {
       console.warn('[business-chat] pending render failed', error);
     }
@@ -5548,7 +5581,7 @@ function installChatStyles() {
        Leiste ueber die volle Breite laeuft, endet sie unter ihm — deshalb haelt
        sie an ihrem rechten Ende genau seinen Platz frei, statt die Leiste
        vorzeitig abzuschneiden. */
-    body:not([data-shell-chat-dock-side]) .ctox-chat-dock:not(.is-collapsed) {
+    body:not([data-shell-chat-dock-side]) .ctox-chat-dock.has-visible-chats:not(.is-collapsed) {
       padding-right: var(--ctox-chat-reporter-slot, 58px);
     }
     .ctox-chat-dock.has-visible-chats {
@@ -9318,6 +9351,7 @@ export const __businessChatTestInternals = Object.freeze({
   stageChatAttachments,
   stageWindowChats,
   submitChatMessage,
+  waitForPendingChatPaint,
   waitForSubmittedTaskId,
   windowTaskStateMatches,
   syncTrackedMessages,

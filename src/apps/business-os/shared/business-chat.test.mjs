@@ -496,6 +496,66 @@ test('business chat task submission returns the real queue id after rendering pe
   }
 });
 
+test('business chat paints pending feedback before command dispatch and clears its paint handles', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const previousLocation = globalThis.location;
+  const frames = new Map();
+  let nextFrame = 0;
+  globalThis.window = {
+    requestAnimationFrame(callback) { frames.set(++nextFrame, callback); return nextFrame; },
+    cancelAnimationFrame(handle) { frames.delete(handle); },
+    setTimeout, clearTimeout,
+  };
+  globalThis.document = { documentElement: { lang: 'de' } };
+  globalThis.location = { href: 'https://customer.example.test/#desktop' };
+  let dispatched = false;
+  const chat = { id: 'chat-paint', title: 'CTOX', messages: [], contextMeta: {} };
+  try {
+    const submission = __businessChatTestInternals.submitChatMessage({
+      state: { ownerUserId: 'user-1', chats: [] }, chat,
+      text: 'Pending paint', db: null, sync: null,
+      meta: { command_id: 'cmd-paint' },
+      onPending: () => __businessChatTestInternals.waitForPendingChatPaint(),
+      commandBus: { async dispatch(command) {
+        dispatched = true;
+        return { status: 'queued', command_id: command.id, task_id: 'queue-paint' };
+      } },
+    });
+    assert.equal(dispatched, false);
+    assert.equal(chat.messages[0].text, 'Pending paint');
+    for (let index = 0; index < 2; index++) {
+      const [handle, callback] = frames.entries().next().value;
+      frames.delete(handle);
+      callback();
+      assert.equal(dispatched, false);
+    }
+    assert.equal((await submission).task_id, 'queue-paint');
+    assert.equal(dispatched, true);
+    assert.equal(frames.size, 0);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+    globalThis.location = previousLocation;
+  }
+});
+
+test('business chat does not strand submissions when animation frames are suspended', async () => {
+  const previousWindow = globalThis.window;
+  const frames = new Map();
+  globalThis.window = {
+    requestAnimationFrame(callback) { frames.set(1, callback); return 1; },
+    cancelAnimationFrame(handle) { frames.delete(handle); },
+    setTimeout, clearTimeout,
+  };
+  try {
+    await __businessChatTestInternals.waitForPendingChatPaint();
+    assert.equal(frames.size, 0);
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
+
 test('business chat reports an unconfirmed connection timeout without claiming rejection or acceptance', async () => {
   const previousDocument = globalThis.document;
   const previousLocation = globalThis.location;
@@ -1773,6 +1833,56 @@ test('disposed crew presence releases observers and ignores queued callbacks and
     assert.equal(timers.size, 0, 'a late completion must not rearm timers');
   } finally {
     finishRead?.([]);
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
+test('crew presence retains its snapshot across cancelled reads and recovers on readiness', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const previousWarn = console.warn;
+  const warnings = [];
+  const reloads = [];
+  const task = { id: 'task-1', status: 'running', module: 'tickets', crew_member_id: 'member-1' };
+  let rows = [task];
+  let failure = null;
+  const state = { crewMembers: [{ id: 'member-1', name: 'Lumi' }] };
+  globalThis.window = { setTimeout: (callback) => callback, clearTimeout() {} };
+  globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+  console.warn = (...args) => warnings.push(args);
+  let dispose;
+  try {
+    dispose = __businessChatTestInternals.wireCrewAppPresence({
+      state,
+      db: { raw: { ctox_queue_tasks: { find: () => ({ exec: async () => {
+        if (failure) throw failure;
+        return rows;
+      } }) } } },
+      syncFacade: { subscribeCollectionReadiness: (_name, callback) => { reloads.push(callback); } },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(state.crewWorkload.get('member-1'), 1);
+    for (const error of [
+      Object.assign(new Error('retired peer'), { code: 'QUERY_CANCELLED' }),
+      new Error('QUERY_CANCELLED: peer-peer-close'),
+    ]) {
+      failure = error;
+      await reloads[0]();
+      assert.equal(state.crewWorkload.get('member-1'), 1, 'cancelled reads cannot claim an empty queue');
+      assert.equal(warnings.length, 0, 'normal peer retirement is not a browser warning');
+    }
+    failure = new Error('queue store unavailable');
+    await reloads[0]();
+    assert.equal(warnings.length, 1, 'unexpected read failures remain visible');
+    assert.equal(state.crewWorkload.get('member-1'), 1);
+    failure = null;
+    rows = [];
+    await reloads[0]();
+    assert.equal(state.crewWorkload.size, 0, 'a successful empty snapshot clears presence');
+  } finally {
+    dispose?.();
+    console.warn = previousWarn;
     globalThis.window = previousWindow;
     globalThis.document = previousDocument;
   }

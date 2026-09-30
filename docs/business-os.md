@@ -1,5 +1,22 @@
 # CTOX Business OS
 
+## Queue instruction boundary
+
+Native queue admission preserves the complete selected `payload.instruction`
+or fallback `payload.prompt` up to 8,000 Unicode characters after trimming.
+An instruction above that boundary returns
+`business_command_instruction_too_large` before attachment materialization,
+workspace creation or queue admission. The error includes only the size and
+limit, never the instruction content. Queue retry-prompt reconstruction uses
+the same boundary; it does not rebuild a shortened executable instruction.
+The dedicated CV-print parsing prompt keeps its separate existing contract.
+
+Callers must split larger requests into bounded commands or put structured
+data in suitably bounded payload chunks. The JSON/context preview remains a
+bounded preview; this instruction guard does not claim that every oversized
+data payload is fully present in a worker prompt. Existing queued tasks and
+production records are not rewritten by this change.
+
 This document describes the architecture, data-flow, and operational commands of **Business OS**, the browser-based client surface for CTOX.
 
 The Business OS is built as a native CTOX surface, served directly from the active CTOX daemon instance, rather than a separate external SaaS stack.

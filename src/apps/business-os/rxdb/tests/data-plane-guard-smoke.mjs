@@ -66,12 +66,10 @@ for (const file of readdirSync(jsSrcDir).filter((name) => name.endsWith('.mjs'))
 const RUST_RULES = [
   { name: 'rust-http-client', pattern: new RegExp('\\b(?:reqwest|tiny_http|hyper)\\b') },
   // TcpListener is allowed only inside signaling_client.rs tests (the chaos
-  // tests run local WebSocket servers). Ratchet raised 2 -> 7 for the
-  // SYNC-31 signaling-failover chaos tests (initial-connect failover +
-  // supervisor rotation each bind local listeners); recorded in
-  // docs/ctox-rxdb.md §8. Still test-only: the production client never
-  // listens.
-  { name: 'rust-tcp-listener', pattern: new RegExp('TcpListener'), allow: { 'signaling_client.rs': 7 } },
+  // tests run local WebSocket servers). Those tests now share one test-only
+  // listener helper, tightening the ratchet from 7 to 4. Still test-only:
+  // the production client never listens; see docs/ctox-rxdb.md §8.
+  { name: 'rust-tcp-listener', pattern: new RegExp('TcpListener'), allow: { 'signaling_client.rs': 4 } },
   // Runtime config flows through the SQLite runtime store (AGENTS.md rule),
   // not process env. One legacy escape hatch exists (UDP bind addr).
   { name: 'rust-env-read', pattern: new RegExp('std::env::var'), allow: { 'connection_handler_rs.rs': 1 } },

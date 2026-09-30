@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260930-shell-current-pull-freshness-v424';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260930-shell-checkpoint-freshness-v430';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
