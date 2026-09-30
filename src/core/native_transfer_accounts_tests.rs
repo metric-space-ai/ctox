@@ -235,6 +235,13 @@ async fn authenticated_tuple_reopens_and_stale_refresh_cannot_undo_disconnect() 
         .read_record(ROUTING_SCOPE, &account.credential_name().unwrap())
         .unwrap()
         .unwrap();
+    let ice = host.routing(&account.target_id).await.unwrap().ice();
+    // NativeSyncOptions treats [] as unspecified, enabling default public STUN.
+    // An authenticated source with no ICE servers must explicitly disable it.
+    assert_eq!(ice.len(), 1);
+    assert!(ice[0].urls.is_empty());
+    assert!(ice[0].username.is_empty());
+    assert!(ice[0].credential.is_empty());
     assert_eq!(
         host.read_routing(&account).unwrap().room,
         format!("ctox-business-os:{}:source-room", account.instance_id)

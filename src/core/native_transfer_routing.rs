@@ -145,6 +145,11 @@ impl NativeTransferRouting {
     }
 
     pub(crate) fn ice(&self) -> Vec<RTCIceServer> {
+        // An empty Vec means "use defaults" to the native transport. Preserve
+        // the source's explicit no-STUN/TURN configuration instead.
+        if self.ice_servers.is_empty() {
+            return vec![RTCIceServer::default()];
+        }
         self.ice_servers
             .iter()
             .map(|server| RTCIceServer {

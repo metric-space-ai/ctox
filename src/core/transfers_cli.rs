@@ -8,7 +8,7 @@ fn store(root: &Path) -> Result<Store> {
 }
 
 pub fn start_daemon(root: &Path) -> Result<DaemonWorker> {
-    DaemonWorker::start(store(root)?)
+    DaemonWorker::start_with_peer(store(root)?, crate::transfers_native::daemon_peer(root))
 }
 
 /// Called by native account bootstrap once its saved-target credential providers

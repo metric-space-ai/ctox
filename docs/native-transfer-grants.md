@@ -51,10 +51,11 @@ collection or file authority; the native target provider must prove the current
 source connection before invoking it.
 
 `NativeTransferPeerResolver` owns at most one session across durable worker jobs.
-Native account bootstrap supplies the existing `BusinessDataSessionHost` and
-live `NativeSessionTargetProvider` callbacks keyed by saved target ID through
-`start_daemon_with_native_accounts`. The default daemon entry point remains
-HTTP-only until that production bootstrap is connected. Missing credentials,
+The default daemon entry point now constructs `NativeTransferAccountHost` with
+live credential callbacks keyed by saved target ID. Its query-only database is
+opened lazily inside the lease-owning worker runtime, with no collections and
+explicit deny hooks for collection reads/writes. HTTP-only operation opens no
+native database or session. Missing credentials,
 changed source pins, account epochs or principals fail closed; neither reconnect
 nor retry issues a new grant or changes the persisted binding.
 
@@ -66,8 +67,10 @@ Switching jobs closes the previous session; errors retire it. Daemon shutdown
 awaits provider cleanup before its Tokio runtime exits, under a thirty-second
 bound. Native startup has a twenty-second bound and session close five seconds;
 the native transport's existing cancellation/drop cleanup remains its backstop.
-These lifecycle and authority regressions require local verification before
-production wiring or acceptance is claimed.
+The daemon closes its owned database after transport shutdown. Cancelled waits
+retain the database startup handle so shutdown can retrieve and close it; a
+closed owner cannot reopen. These regressions require local verification before
+runtime acceptance is claimed.
 
 The native account-store consumer is now `NativeTransferAccountHost`. It reads
 versioned native enrollment records from the existing encrypted secret store;
@@ -79,8 +82,8 @@ to its concrete connection, loads the original enrolled signer and checks accoun
 state before and after key-store work. Missing, corrupt, inactive, switched or
 foreign records fail closed; reconnect never creates a key.
 
-The service owner constructs this host with a native query-only options factory
-and passes it to `start_daemon_with_account_host`. Provider callbacks are resolved
+`transfers_native::daemon_peer` constructs the service host and options factory;
+`start_daemon_with_account_host` also accepts an externally owned host. Provider callbacks are resolved
 for the individual target when each session opens, so authenticated enrollment
 after daemon boot does not require a cached-map refresh or restart. Other account
 records are not enumerated on this path. The original job account is checked
@@ -112,13 +115,15 @@ source descriptor. Its reconnect callback re-reads live native authority,
 uses only the browser role and creates a fresh signaling time window. Account
 changes, room rotation, descriptor expiry or the original ICE snapshot deadline
 remove the route instead of falling back to local daemon configuration.
+An explicit no-ICE source configuration suppresses default public STUN servers.
 `routing(target_id)` exposes native service deadlines: renew via the admitted
 session after `refresh_after_ms` and recreate the session before
 `expires_at_ms`. Descriptor lifetime is at most 30 minutes and never exceeds a
 known TURN credential expiry. Cold restart with expired routing requires the
 existing authenticated native bootstrap to establish a fresh session first;
-expired TURN material is not silently reused. Production factory/boot and that
-recovery integration remain the Transfer owner’s responsibility. Newly authored
+expired TURN material is not silently reused. The production factory/boot is
+wired; live renewal, session recreation and cold recovery integration remain
+the Transfer owner’s responsibility. Newly authored
 source/tuple/expiry/revocation regressions still require execution; formatting
 alone is not acceptance.
 
