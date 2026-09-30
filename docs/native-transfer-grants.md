@@ -118,12 +118,19 @@ remove the route instead of falling back to local daemon configuration.
 An explicit no-ICE source configuration suppresses default public STUN servers.
 `routing(target_id)` exposes native service deadlines: renew via the admitted
 session after `refresh_after_ms` and recreate the session before
-`expires_at_ms`. Descriptor lifetime is at most 30 minutes and never exceeds a
+`expires_at_ms`. The account-host resolver captures deadlines from the same
+descriptor used to construct its options. Before further operations, a due
+refresh uses the admitted session and the original job's target/pins/account
+epoch, rechecks its principal, then closes and replaces the transport. Idle
+expired transports are retired before reuse; only a current native descriptor
+can open a replacement. Authorization and range futures are bounded by the old
+transport deadline and cannot return successful results across expiry.
+Descriptor lifetime is at most 30 minutes and never exceeds a
 known TURN credential expiry. Cold restart with expired routing requires the
 existing authenticated native bootstrap to establish a fresh session first;
 expired TURN material is not silently reused. The production factory/boot is
-wired; live renewal, session recreation and cold recovery integration remain
-the Transfer owner’s responsibility. Newly authored
+wired, including live renewal/session recreation; cold recovery integration
+remains the Transfer owner’s responsibility. Newly authored
 source/tuple/expiry/revocation regressions still require execution; formatting
 alone is not acceptance.
 

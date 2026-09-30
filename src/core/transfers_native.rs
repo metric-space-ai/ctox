@@ -178,16 +178,7 @@ pub(crate) fn daemon_peer(root: &Path) -> Arc<dyn PeerRangeSource> {
             Box::pin(async move { database.options().await.map_err(std::io::Error::other) })
         }),
     );
-    let provider_host = host.clone();
-    let peer = Arc::new(
-        crate::transfers_peer::NativeTransferPeerResolver::with_provider_lookup(
-            host,
-            Arc::new(move |target_id| {
-                let host = provider_host.clone();
-                Box::pin(async move { Ok(host.provider(target_id)) })
-            }),
-        ),
-    );
+    let peer = Arc::new(crate::transfers_peer::NativeTransferPeerResolver::with_account_host(host));
     Arc::new(ManagedNativePeer { peer, database })
 }
 

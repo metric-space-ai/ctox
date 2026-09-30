@@ -32,14 +32,7 @@ pub(crate) fn start_daemon_with_account_host(
     root: &Path,
     host: std::sync::Arc<crate::native_transfer_accounts::NativeTransferAccountHost>,
 ) -> Result<DaemonWorker> {
-    let provider_host = host.clone();
-    let resolver = crate::transfers_peer::NativeTransferPeerResolver::with_provider_lookup(
-        host,
-        std::sync::Arc::new(move |target_id| {
-            let host = provider_host.clone();
-            Box::pin(async move { Ok(host.provider(target_id)) })
-        }),
-    );
+    let resolver = crate::transfers_peer::NativeTransferPeerResolver::with_account_host(host);
     DaemonWorker::start_with_peer(store(root)?, std::sync::Arc::new(resolver))
 }
 

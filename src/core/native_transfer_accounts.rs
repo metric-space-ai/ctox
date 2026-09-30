@@ -126,6 +126,12 @@ pub(crate) type NativeTransferOptionsProvider = Arc<
         + Sync,
 >;
 
+#[derive(Clone, Copy)]
+pub(crate) struct NativeTransferSessionDeadline {
+    pub refresh_after_ms: i64,
+    pub expires_at_ms: i64,
+}
+
 #[derive(Clone)]
 pub(crate) struct NativeTransferAccountHost {
     root: PathBuf,
@@ -201,6 +207,72 @@ impl NativeTransferAccountHost {
 
     pub(crate) fn new(root: PathBuf, options: NativeTransferOptionsProvider) -> Arc<Self> {
         Arc::new(Self { root, options })
+    }
+
+    /// Return the deadlines from the exact descriptor used for these options.
+    /// A separate routing read could race another native refresh.
+    pub(crate) async fn native_options_with_deadline(
+        &self,
+        target_id: &str,
+    ) -> io::Result<(NativeSyncOptions, NativeTransferSessionDeadline)> {
+        let account = self.account(target_id).await?.ok_or_else(host_error)?;
+        let routing = self.routing(target_id).await?;
+        let mut options = (self.options)(account.clone()).await?;
+        let deadline = NativeTransferSessionDeadline {
+            refresh_after_ms: routing.refresh_after_ms,
+            expires_at_ms: routing.expires_at_ms,
+        };
+        options.ice_servers = routing.ice();
+        options.room = routing.room;
+        let host = self.clone();
+        let enrolled = account.clone();
+        let peer_id = options.peer_session_id.clone();
+        let enrolled_room = options.room.clone();
+        let ice_expires = routing.expires_at_ms;
+        options.signaling_urls = Arc::new(move || {
+            // Re-read the encrypted source descriptor on each reconnect.
+            // Revocation/rotation/expiry yields no route, never local config.
+            if host
+                .read_account(&enrolled.target_id)
+                .ok()
+                .flatten()
+                .as_ref()
+                != Some(&enrolled)
+            {
+                return Vec::new();
+            }
+            let now = chrono::Utc::now().timestamp_millis();
+            if now >= ice_expires {
+                return Vec::new();
+            }
+            let urls = host
+                .read_routing(&enrolled)
+                .and_then(|routing| {
+                    ensure!(routing.room == enrolled_room, "native routing room changed");
+                    routing.signaling_at(&enrolled.instance_id, &peer_id, now)
+                })
+                .unwrap_or_default();
+            if host
+                .read_account(&enrolled.target_id)
+                .ok()
+                .flatten()
+                .as_ref()
+                != Some(&enrolled)
+            {
+                return Vec::new();
+            }
+            urls
+        });
+        let query_only = options.local_session_provider.is_none()
+            && options.collections.is_empty()
+            && options.database.collections.lock().is_empty();
+        if !query_only
+            || chrono::Utc::now().timestamp_millis() >= ice_expires
+            || self.account(target_id).await?.as_ref() != Some(&account)
+        {
+            return Err(host_error());
+        }
+        Ok((options, deadline))
     }
 
     /// Initial enrollment and renewal both require an actual ready native
@@ -651,60 +723,9 @@ impl BusinessDataSessionHost for NativeTransferAccountHost {
         Self: 'f,
     {
         Box::pin(async move {
-            let account = self.account(target_id).await?.ok_or_else(host_error)?;
-            let routing = self.routing(target_id).await?;
-            let mut options = (self.options)(account.clone()).await?;
-            options.ice_servers = routing.ice();
-            options.room = routing.room;
-            let host = self.clone();
-            let enrolled = account.clone();
-            let peer_id = options.peer_session_id.clone();
-            let enrolled_room = options.room.clone();
-            let ice_expires = routing.expires_at_ms;
-            options.signaling_urls = Arc::new(move || {
-                // Re-read the encrypted source descriptor on each reconnect.
-                // Revocation/rotation/expiry yields no route, never local config.
-                if host
-                    .read_account(&enrolled.target_id)
-                    .ok()
-                    .flatten()
-                    .as_ref()
-                    != Some(&enrolled)
-                {
-                    return Vec::new();
-                }
-                let now = chrono::Utc::now().timestamp_millis();
-                if now >= ice_expires {
-                    return Vec::new();
-                }
-                let urls = host
-                    .read_routing(&enrolled)
-                    .and_then(|routing| {
-                        ensure!(routing.room == enrolled_room, "native routing room changed");
-                        routing.signaling_at(&enrolled.instance_id, &peer_id, now)
-                    })
-                    .unwrap_or_default();
-                if host
-                    .read_account(&enrolled.target_id)
-                    .ok()
-                    .flatten()
-                    .as_ref()
-                    != Some(&enrolled)
-                {
-                    return Vec::new();
-                }
-                urls
-            });
-            let query_only = options.local_session_provider.is_none()
-                && options.collections.is_empty()
-                && options.database.collections.lock().is_empty();
-            if !query_only
-                || chrono::Utc::now().timestamp_millis() >= ice_expires
-                || self.account(target_id).await?.as_ref() != Some(&account)
-            {
-                return Err(host_error());
-            }
-            Ok(options)
+            self.native_options_with_deadline(target_id)
+                .await
+                .map(|(options, _)| options)
         })
     }
 }

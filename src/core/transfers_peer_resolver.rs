@@ -19,6 +19,7 @@ pub(crate) type NativeTransferProviderLookup = Arc<
 /// This resolver does not enroll targets, issue grants, or refresh job bindings.
 pub(crate) struct NativeTransferPeerResolver {
     host: Arc<dyn BusinessDataSessionHost>,
+    account_host: Option<Arc<crate::native_transfer_accounts::NativeTransferAccountHost>>,
     providers: NativeTransferProviderLookup,
     active: Mutex<Option<ActiveSession>>,
 }
@@ -28,6 +29,7 @@ struct ActiveSession {
     starting: Option<JoinHandle<Result<Arc<NativeSyncSession>>>>,
     session: Option<Arc<NativeSyncSession>>,
     source: Option<Arc<NativePeerRangeSource>>,
+    deadline: Option<crate::native_transfer_accounts::NativeTransferSessionDeadline>,
 }
 
 impl Drop for ActiveSession {
@@ -90,9 +92,81 @@ impl NativeTransferPeerResolver {
     ) -> Self {
         Self {
             host,
+            account_host: None,
             providers,
             active: Mutex::new(None),
         }
+    }
+
+    pub(crate) fn with_account_host(
+        host: Arc<crate::native_transfer_accounts::NativeTransferAccountHost>,
+    ) -> Self {
+        let provider_host = host.clone();
+        let mut resolver = Self::with_provider_lookup(
+            host.clone(),
+            Arc::new(move |target_id| {
+                let host = provider_host.clone();
+                Box::pin(async move { Ok(host.provider(target_id)) })
+            }),
+        );
+        resolver.account_host = Some(host);
+        resolver
+    }
+
+    async fn renew_if_due(&self, active: &ActiveSession) -> Result<bool> {
+        let Some(deadline) = active.deadline else {
+            return Ok(false);
+        };
+        let now = chrono::Utc::now().timestamp_millis();
+        if now >= deadline.expires_at_ms {
+            // Another admitted client may have refreshed storage while this
+            // worker was idle. Retire this transport, then load the live route.
+            return Ok(true);
+        }
+        if now < deadline.refresh_after_ms {
+            return Ok(false);
+        }
+        // Pending startup has no admitted channel for renewal yet. It remains
+        // bounded, and the deadline is checked again before returning data.
+        let (Some(session), Some(source)) = (&active.session, &active.source) else {
+            return Ok(false);
+        };
+        if !source
+            .pool
+            .connection_handler
+            .is_peer_current(&source.connection)
+            || !source.pool.is_peer_ready_for_control(&source.connection)
+        {
+            return Ok(false);
+        }
+        let host = self
+            .account_host
+            .as_ref()
+            .context("native renewal host missing")?;
+        let original = active
+            .request
+            .peer_source
+            .as_ref()
+            .context("original peer source required")?;
+        let binding = original
+            .account_binding
+            .as_ref()
+            .context("original native account binding required")?;
+        host.provision_from_session(
+            crate::native_data_device::NativeDeviceKeyScope {
+                target_id: binding.target_id.clone(),
+                source_instance_id: original.instance_id.clone(),
+                source_public_identity: original.public_key.clone(),
+                account_epoch: binding.account_epoch,
+            },
+            session,
+            &source.connection,
+        )
+        .await?;
+        current_account(self.host.as_ref(), &active.request).await?;
+        // Rebuild immediately with the new source-confirmed ICE/credentials;
+        // never stretch the old transport's deadline after refreshing storage.
+        Ok(true)
     }
 
     async fn resolve(
@@ -101,6 +175,12 @@ impl NativeTransferPeerResolver {
         request: &DownloadRequest,
     ) -> Result<Arc<NativePeerRangeSource>> {
         current_account(self.host.as_ref(), request).await?;
+        if let Some(previous) = active.as_ref() {
+            if previous.request == *request && self.renew_if_due(previous).await? {
+                active.as_mut().unwrap().close().await?;
+                *active = None;
+            }
+        }
         let reusable = active.as_ref().is_some_and(|active| {
             active.request == *request
                 && (active.starting.is_some() || active.session.is_some())
@@ -123,7 +203,14 @@ impl NativeTransferPeerResolver {
                 .and_then(|source| source.account_binding.as_ref())
                 .context("original native account binding required")?;
             let provider = (self.providers)(binding.target_id.clone()).await?;
-            let mut options = self.host.native_options(&binding.target_id).await?;
+            let (mut options, deadline) = if let Some(host) = &self.account_host {
+                let (options, deadline) = host
+                    .native_options_with_deadline(&binding.target_id)
+                    .await?;
+                (options, Some(deadline))
+            } else {
+                (self.host.native_options(&binding.target_id).await?, None)
+            };
             ensure!(
                 options.local_session_provider.is_none(),
                 "native transfer options already contain a credential provider"
@@ -149,6 +236,7 @@ impl NativeTransferPeerResolver {
                 starting: Some(starting),
                 session: None,
                 source: None,
+                deadline,
             });
         }
         let active = active.as_mut().context("native transfer session missing")?;
@@ -275,6 +363,29 @@ fn stale_account() -> rxdb::rx_error::RxError {
     )
 }
 
+/// An operation cannot return bytes or authorization from an expired transport,
+/// even when its network future crosses the deadline or the wall clock moves.
+async fn before_deadline<T>(
+    deadline: Option<crate::native_transfer_accounts::NativeTransferSessionDeadline>,
+    operation: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    let Some(deadline) = deadline else {
+        return operation.await;
+    };
+    let remaining = deadline
+        .expires_at_ms
+        .saturating_sub(chrono::Utc::now().timestamp_millis());
+    ensure!(remaining > 0, "native transfer route expired");
+    let result = tokio::time::timeout(Duration::from_millis(remaining as u64), operation)
+        .await
+        .context("native transfer route expired during operation")??;
+    ensure!(
+        chrono::Utc::now().timestamp_millis() < deadline.expires_at_ms,
+        "native transfer route expired during operation"
+    );
+    Ok(result)
+}
+
 impl PeerRangeSource for NativeTransferPeerResolver {
     fn authorize<'a>(
         &'a self,
@@ -283,10 +394,12 @@ impl PeerRangeSource for NativeTransferPeerResolver {
         Box::pin(async move {
             let mut active = self.active.lock().await;
             let result = async {
-                self.resolve(&mut active, request)
-                    .await?
-                    .authorize(request)
-                    .await
+                let source = self.resolve(&mut active, request).await?;
+                before_deadline(
+                    active.as_ref().and_then(|active| active.deadline),
+                    source.authorize(request),
+                )
+                .await
             }
             .await;
             if result.is_err() {
@@ -308,10 +421,12 @@ impl PeerRangeSource for NativeTransferPeerResolver {
         Box::pin(async move {
             let mut active = self.active.lock().await;
             let result = async {
-                self.resolve(&mut active, request)
-                    .await?
-                    .read_range(request, offset, length)
-                    .await
+                let source = self.resolve(&mut active, request).await?;
+                before_deadline(
+                    active.as_ref().and_then(|active| active.deadline),
+                    source.read_range(request, offset, length),
+                )
+                .await
             }
             .await;
             if result.is_err() {
@@ -341,6 +456,45 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn expired_route_does_not_poll_payload_or_authorization() {
+        let polled = std::sync::atomic::AtomicBool::new(false);
+        let deadline = crate::native_transfer_accounts::NativeTransferSessionDeadline {
+            refresh_after_ms: 0,
+            expires_at_ms: chrono::Utc::now().timestamp_millis(),
+        };
+        assert!(before_deadline(Some(deadline), async {
+            polled.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(vec![1_u8])
+        })
+        .await
+        .is_err());
+        assert!(!polled.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn route_deadline_cancels_an_in_flight_range() {
+        struct PendingRange(Arc<std::sync::atomic::AtomicBool>);
+        impl Drop for PendingRange {
+            fn drop(&mut self) {
+                self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let pending = PendingRange(dropped.clone());
+        let deadline = crate::native_transfer_accounts::NativeTransferSessionDeadline {
+            refresh_after_ms: 0,
+            expires_at_ms: chrono::Utc::now().timestamp_millis() + 20,
+        };
+        assert!(before_deadline(Some(deadline), async move {
+            let _pending = pending;
+            std::future::pending::<Result<Vec<u8>>>().await
+        })
+        .await
+        .is_err());
+        assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[tokio::test]
     async fn cancelled_wait_keeps_startup_owned_until_shutdown() {
         let (release, finish) = tokio::sync::oneshot::channel();
         let (completed, completion) = tokio::sync::oneshot::channel();
@@ -360,6 +514,7 @@ mod tests {
             starting: Some(starting),
             session: None,
             source: None,
+            deadline: None,
         };
         assert!(
             tokio::time::timeout(Duration::from_millis(10), active.finish_start())
