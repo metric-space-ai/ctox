@@ -4,7 +4,7 @@ use anyhow::{ensure, Context, Result};
 use ctox_sync::native::NativeSyncSession;
 use ctox_transfers::DownloadRequest;
 use rxdb::plugins::replication_webrtc::{
-    send_message_and_await_answer, WebRTCMessage, WebRTCRsConnection,
+    send_message_and_await_answer, WebRTCConnectionHandler, WebRTCMessage, WebRTCRsConnection,
 };
 use serde::{Deserialize, Serialize};
 use std::{

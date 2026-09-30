@@ -1,6 +1,7 @@
 //! Daemon-owned, single-session resolver for persisted native transfer jobs.
 use super::*;
 use ctox_sync::native::NativeSessionTargetProvider;
+use rxdb::plugins::replication_webrtc::WebRTCConnectionHandler;
 use std::{collections::BTreeMap, time::Duration};
 use tokio::{sync::Mutex, task::JoinHandle};
 
