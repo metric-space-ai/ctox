@@ -1386,12 +1386,12 @@ class CtoxWebRtcReplicationState {
     const periodicPullMs = this.periodicPullIntervalMs();
     if (periodicPullMs > 0) {
       // Master-change frames are a low-latency hint, not the sole correctness
-      // mechanism for the command control plane. A frame can be missed while
+      // mechanism for active data. A frame can be missed while
       // the browser reports its active-collection set or while an initial pull
-      // is in flight. The retained checkpoint makes this catch-up cheap and
-      // prevents an accepted native command from remaining `pending_sync`.
+      // is in flight. Keep the existing 1s command cadence and revalidate other
+      // active collections every minute from their retained checkpoint.
       this.periodicPullTimer = setInterval(() => {
-        this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+        this.pullFromRemotePeers({ revalidate: true }).catch((error) => this.error$.next(error));
       }, periodicPullMs);
     }
     const periodicPushMs = this.periodicPushIntervalMs();
@@ -1576,19 +1576,19 @@ class CtoxWebRtcReplicationState {
 
   // ----- pull / push (collection-tagged over the shared peer) -------------
 
-  async pullFromRemotePeers() {
+  async pullFromRemotePeers({ revalidate = false } = {}) {
     if (!this.pull || this.cancelled) return;
+    if (!revalidate) this.pullFresh = false;
     if (this.pullInProgressPromise) {
       this.pullAgainAfterCurrent = true;
+      this.publishTransportStatus();
       return this.pullInProgressPromise;
     }
     this.pullInProgress = true;
-    this.pullFresh = false;
     this.pullAgainAfterCurrent = false;
     this.publishTransportStatus();
     this.pullInProgressPromise = (async () => {
       do {
-        this.pullFresh = false;
         this.pullAgainAfterCurrent = false;
         const peerIds = this.openPeerIds();
         const results = await Promise.allSettled(peerIds.map((peerId) => this.pullFromPeer(peerId)));
@@ -1599,6 +1599,7 @@ class CtoxWebRtcReplicationState {
         // master-change event or a page reload. Same shape as the bug the retry
         // timer below was added for, one level up.
         if (!peerIds.length || results.some((result) => result.status === 'rejected')) {
+          this.pullFresh = false;
           this.schedulePullRetry();
         }
       } while (this.pullAgainAfterCurrent && !this.cancelled);
@@ -1672,6 +1673,8 @@ class CtoxWebRtcReplicationState {
       }
       const documents = result.documents;
       if (documents.length) {
+        this.pullFresh = false;
+        this.publishTransportStatus();
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId),
         });
@@ -2454,7 +2457,7 @@ class CtoxWebRtcReplicationState {
   collectionFreshnessState() {
     if (!this.pull) return null;
     if (!this.hasOpenReadinessPeer()) return 'offline-pending';
-    if (this.pullInProgress || !this.pullFresh) return 'catching-up';
+    if (!this.pullFresh) return 'catching-up';
     return 'live';
   }
 
@@ -2653,7 +2656,7 @@ class CtoxWebRtcReplicationState {
 
   periodicPullIntervalMs() {
     if (!this.pull) return 0;
-    return ['business_commands', 'ctox_queue_tasks'].includes(this.collection.name) ? 1000 : 0;
+    return ['business_commands', 'ctox_queue_tasks'].includes(this.collection.name) ? 1000 : 60_000;
   }
 
   periodicPushIntervalMs() {
@@ -2750,6 +2753,7 @@ class CtoxWebRtcReplicationState {
       activePeerCount: Math.max(localPeerCount, sharedPeerCount, connectionPeerCount),
       collectionReadinessState: this.collectionReadinessState(),
       collectionFreshnessState: this.collectionFreshnessState(),
+      pullEnabled: Boolean(this.pull),
       lastSuccessfulPullAtMs: this.lastSuccessfulPullAtMs || null,
       firstPullCompletedAtMs: this.firstPullCompletedAtMs || null,
       pullInProgress: this.pullInProgress,

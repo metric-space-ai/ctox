@@ -241,6 +241,14 @@ body[data-maintenance-active="true"] .app-shell {
   grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
 }
 
+.app-shell:has(> .collection-freshness-warning:not([hidden])) {
+  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
+}
+
+body[data-maintenance-active="true"] .app-shell:has(> .collection-freshness-warning:not([hidden])) {
+  grid-template-rows: var(--shell-topbar-height) auto auto minmax(0, 1fr);
+}
+
 .ctox-maintenance-banner {
   position: relative;
   z-index: 8;
@@ -319,10 +327,17 @@ body[data-maintenance-active="true"] .app-shell {
 }
 
 .collection-freshness-warning {
-  color: var(--warning, #e8b84a);
+  display: block;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--warning-soft);
+  color: var(--warning);
   font-size: var(--fs-meta);
-  max-width: min(48vw, 480px);
   white-space: normal;
+}
+
+.collection-freshness-warning[hidden] {
+  display: none;
 }
 
 body[data-maintenance-status="failed"] .ctox-maintenance-banner,

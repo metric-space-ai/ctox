@@ -5,7 +5,7 @@ export function renderCollectionFreshnessWarning(warning, { collections = [], di
   if (!warning) return;
   const pending = collections.map((collection) => collectionFreshnessFromDiagnostics(
     collection, diagnostics?.collections?.[collection], { syncMode: diagnostics?.mode },
-  )).filter((entry) => !entry.ready);
+  )).filter((entry) => entry.requiresPullConfirmation && !entry.ready);
   warning.hidden = pending.length === 0;
   if (!pending.length) {
     warning.textContent = '';

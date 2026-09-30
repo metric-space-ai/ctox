@@ -102,8 +102,17 @@ test('current pull freshness is distinct from historical live cache readiness', 
     assert.equal(snapshot.state, freshness);
   }
   assert.equal(collectionFreshnessFromDiagnostics('outbound_leads', {
-    frameTransport: { collectionReadinessState: 'live', collectionFreshnessState: 'live' },
-  }, { syncMode: 'webrtc' }).ready, true);
+    frameTransport: { collectionReadinessState: 'live', collectionFreshnessState: 'live', lastSuccessfulPullAtMs: 1000 },
+  }, { syncMode: 'webrtc', nowMs: 1001 }).ready, true);
+  assert.equal(collectionFreshnessFromDiagnostics('outbound_leads', {
+    frameTransport: { collectionFreshnessState: 'live', lastSuccessfulPullAtMs: 1000 },
+  }, { syncMode: 'webrtc', nowMs: 121001 }).ready, false, 'suspended or stalled confirmation expires');
+  assert.equal(collectionFreshnessFromDiagnostics('outbound_leads', {
+    initialReplicationState: 'complete', frameTransport: { collectionReadinessState: 'live' },
+  }, { syncMode: 'webrtc' }).ready, false, 'old runtime history alone is unconfirmed');
+  assert.equal(collectionFreshnessFromDiagnostics('query_only', {
+    frameTransport: { pullEnabled: false },
+  }, { syncMode: 'webrtc' }).requiresPullConfirmation, false, 'query-only data retains its demand-query contract');
 });
 
 test('sync runtime version-binds its nested sync contract import', async () => {

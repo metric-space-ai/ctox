@@ -80,7 +80,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await state.cancel();
 }
 
-// --- 0a. critical command collections have checkpoint catch-up timers -----
+// --- 0a. leased pull collections recover missed hints with bounded timers --
 {
   const commands = await makeState('business_commands');
   let masterChanges = 0;
@@ -95,8 +95,12 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   assert(!commands.periodicPullTimer, 'cancel must clear the command catch-up timer');
 
   const ordinary = await makeState('ordinary_collection');
-  assert(!ordinary.periodicPullTimer, 'ordinary collections stay event-driven');
+  assert(commands.periodicPullIntervalMs() === 1000, 'command catch-up retains its one-second cadence');
+  assert(ordinary.periodicPullTimer, 'ordinary collections also recover a missed master-change hint');
+  assert(ordinary.periodicPullIntervalMs() === 60_000, 'ordinary collection catch-up is bounded to once per minute');
   await ordinary.cancel();
+  assert(!ordinary.periodicPullTimer, 'cancel clears the ordinary collection timer too');
+  assert(ordinary.periodicPullIntervalMs.call({ pull: null }) === 0, 'query-only collections have no periodic pull');
 }
 
 // --- 0. remote-origin-only changes must not trigger local push scans -------

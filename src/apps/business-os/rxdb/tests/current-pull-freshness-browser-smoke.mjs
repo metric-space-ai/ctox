@@ -11,16 +11,18 @@ const assets = new Map([
   ['/bundle.mjs', readFileSync(resolve(appRoot, 'rxdb/dist/ctox-rxdb-js.mjs'))],
   ['/collection-freshness.js', readFileSync(resolve(appRoot, 'shared/collection-freshness.js'))],
   ['/sync-contract.js', readFileSync(resolve(appRoot, 'shared/sync-contract.js'))],
+  ['/app.css', readFileSync(resolve(appRoot, 'app.css'))],
+  ['/shared/base.css', readFileSync(resolve(appRoot, 'shared/base.css'))],
 ]);
 const server = http.createServer((request, response) => {
   const pathname = new URL(request.url, 'http://localhost').pathname;
   if (pathname === '/') {
     response.setHeader('content-type', 'text/html');
-    response.end('<!doctype html><span data-warning role="status" hidden></span>');
+    response.end('<!doctype html><meta name="viewport" content="width=device-width"><link rel="stylesheet" href="/shared/base.css"><link rel="stylesheet" href="/app.css"><style>:root{--shell-topbar-height:48px}</style><div class="app-shell"><header class="topbar">Fixture</header><span class="collection-freshness-warning" data-warning role="status" hidden></span><main class="workspace-frame"></main></div>');
     return;
   }
   const asset = assets.get(pathname);
-  response.writeHead(asset ? 200 : 404, { 'content-type': 'text/javascript' });
+  response.writeHead(asset ? 200 : 404, { 'content-type': pathname.endsWith('.css') ? 'text/css' : 'text/javascript' });
   response.end(asset || '');
 });
 await new Promise((ready) => server.listen(0, '127.0.0.1', ready));
@@ -47,6 +49,7 @@ try {
     state.schemaHashValue = 'fixture-schema';
     const protocol = { storageGeneration: 'native-generation', checkpoint: { epoch: 'native-epoch' }, peerSession: { sessionId: 'fixture-native', role: 'ctox_instance' }, collection: { name, schemaHash: 'fixture-schema' } };
     let open = true;
+    check(state.periodicPullIntervalMs() === 60_000, 'active data collections revalidate even if no master-change hint arrives');
     let responses = [{ documents: [], checkpoint: { id: historical.id, lwt: 1000 } }];
     let holdResponse = null;
     state.remoteProtocolForPeer = () => protocol;
@@ -69,13 +72,33 @@ try {
       const historicalCompletion = state.firstPullCompletedAtMs;
       let releaseResponse;
       holdResponse = new Promise((resolve) => { releaseResponse = resolve; });
+      // An ordinary empty poll does not flash a warning every second for
+      // the command control plane; only evidence of a gap invalidates it.
+      responses = [{ documents: [], checkpoint: { id: historical.id, lwt: 1000 } }];
+      const quiet = state.pullFromRemotePeers({ revalidate: true });
+      check(warning.hidden, 'quiet revalidation preserves current confirmation');
+      releaseResponse(); holdResponse = null; await quiet;
+      holdResponse = new Promise((resolve) => { releaseResponse = resolve; });
+      let releaseWrite;
+      let enteredWrite;
+      const writeEntered = new Promise((resolve) => { enteredWrite = resolve; });
+      const writeGate = new Promise((resolve) => { releaseWrite = resolve; });
+      const originalBulkWrite = records.bulkWrite.bind(records);
+      records.bulkWrite = async (...args) => {
+        enteredWrite();
+        await writeGate;
+        return originalBulkWrite(...args);
+      };
       const newer = { ...historical, campaign: 'current-campaign', _rev: '2-native', _meta: { ctoxHlc: formatHybridLogicalClock({ physicalMs: Date.now() + 1000, logical: 0, nodeId: 'fixture-native' }) } };
       responses = [{ documents: [newer], checkpoint: { id: newer.id, lwt: Date.now() + 1000 } }, { documents: [], checkpoint: { id: newer.id, lwt: Date.now() + 1000 } }];
-      const refreshing = state.pullFromRemotePeers();
+      const refreshing = state.pullFromRemotePeers({ revalidate: true });
+      releaseResponse(); holdResponse = null;
+      await writeEntered;
       check(!warning.hidden && warning.textContent.includes('noch nicht bestätigt'), 'cached data is visibly unconfirmed while pull is held');
       check((await records.getStoredRecord(historical.id)).doc.campaign === 'cached-campaign', 'old cache stays available during catch-up');
-      releaseResponse(); holdResponse = null;
+      releaseWrite();
       await refreshing;
+      records.bulkWrite = originalBulkWrite;
       check((await records.getStoredRecord(historical.id)).doc.campaign === 'current-campaign', 'the native update was committed to real IndexedDB');
       check(warning.hidden, 'only the drained current pull clears the warning');
       check(state.firstPullCompletedAtMs === historicalCompletion, 'history marker is preserved');
@@ -102,6 +125,17 @@ try {
   });
   assert.deepEqual(result, { cachePreserved: true, catchupVisible: true, currentPullConfirmed: true, offlineVisible: true, lateGenerationRejected: true });
   console.log('current pull freshness browser smoke OK');
+  for (const width of [390, 720, 1180]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.evaluate(() => {
+      const warning = document.querySelector('[data-warning]');
+      warning.hidden = false;
+      warning.textContent = 'Daten werden abgeglichen: angezeigter Stand noch nicht bestätigt';
+    });
+    const box = await page.locator('[data-warning]').boundingBox();
+    assert.ok(box && box.height > 0, `warning visible at width${width}`);
+    assert.ok(box.x >= 0 && box.x + box.width <= width + 1, `warning fits width${width}`);
+  }
 } finally {
   await browser?.close();
   await new Promise((resolve) => server.close(resolve));

@@ -10989,7 +10989,7 @@ var CtoxWebRtcReplicationState = class {
     const periodicPullMs = this.periodicPullIntervalMs();
     if (periodicPullMs > 0) {
       this.periodicPullTimer = setInterval(() => {
-        this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+        this.pullFromRemotePeers({ revalidate: true }).catch((error) => this.error$.next(error));
       }, periodicPullMs);
     }
     const periodicPushMs = this.periodicPushIntervalMs();
@@ -11131,24 +11131,25 @@ var CtoxWebRtcReplicationState = class {
     }
   }
   // ----- pull / push (collection-tagged over the shared peer) -------------
-  async pullFromRemotePeers() {
+  async pullFromRemotePeers({ revalidate = false } = {}) {
     if (!this.pull || this.cancelled) return;
+    if (!revalidate) this.pullFresh = false;
     if (this.pullInProgressPromise) {
       this.pullAgainAfterCurrent = true;
+      this.publishTransportStatus();
       return this.pullInProgressPromise;
     }
     this.pullInProgress = true;
-    this.pullFresh = false;
     this.pullAgainAfterCurrent = false;
     this.publishTransportStatus();
     this.pullInProgressPromise = (async () => {
       do {
-        this.pullFresh = false;
         this.pullAgainAfterCurrent = false;
         const peerIds = this.openPeerIds();
         const results = await Promise.allSettled(peerIds.map((peerId) => this.pullFromPeer(peerId)));
         this.reportPeerResults(results, peerIds);
         if (!peerIds.length || results.some((result) => result.status === "rejected")) {
+          this.pullFresh = false;
           this.schedulePullRetry();
         }
       } while (this.pullAgainAfterCurrent && !this.cancelled);
@@ -11216,6 +11217,8 @@ var CtoxWebRtcReplicationState = class {
       }
       const documents = result.documents;
       if (documents.length) {
+        this.pullFresh = false;
+        this.publishTransportStatus();
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId)
         });
@@ -11894,7 +11897,7 @@ var CtoxWebRtcReplicationState = class {
   collectionFreshnessState() {
     if (!this.pull) return null;
     if (!this.hasOpenReadinessPeer()) return "offline-pending";
-    if (this.pullInProgress || !this.pullFresh) return "catching-up";
+    if (!this.pullFresh) return "catching-up";
     return "live";
   }
   hasOpenReadinessPeer() {
@@ -12075,7 +12078,7 @@ var CtoxWebRtcReplicationState = class {
   }
   periodicPullIntervalMs() {
     if (!this.pull) return 0;
-    return ["business_commands", "ctox_queue_tasks"].includes(this.collection.name) ? 1e3 : 0;
+    return ["business_commands", "ctox_queue_tasks"].includes(this.collection.name) ? 1e3 : 6e4;
   }
   periodicPushIntervalMs() {
     if (!this.push) return 0;
@@ -12163,6 +12166,7 @@ var CtoxWebRtcReplicationState = class {
       activePeerCount: Math.max(localPeerCount, sharedPeerCount, connectionPeerCount),
       collectionReadinessState: this.collectionReadinessState(),
       collectionFreshnessState: this.collectionFreshnessState(),
+      pullEnabled: Boolean(this.pull),
       lastSuccessfulPullAtMs: this.lastSuccessfulPullAtMs || null,
       firstPullCompletedAtMs: this.firstPullCompletedAtMs || null,
       pullInProgress: this.pullInProgress,

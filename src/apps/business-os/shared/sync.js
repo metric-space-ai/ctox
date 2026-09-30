@@ -2746,6 +2746,7 @@ function sanitizeReplicationTransportStatus(status) {
     lastBufferedAmount: numberField('lastBufferedAmount'),
     collectionReadinessState: normalizeCollectionReadinessState(status.collectionReadinessState),
     collectionFreshnessState: normalizeCollectionReadinessState(status.collectionFreshnessState),
+    pullEnabled: typeof status.pullEnabled === 'boolean' ? status.pullEnabled : null,
     lastSuccessfulPullAtMs: numberField('lastSuccessfulPullAtMs'),
     firstPullCompletedAtMs: numberField('firstPullCompletedAtMs'),
     pullInProgress: status.pullInProgress === true,

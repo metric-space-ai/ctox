@@ -143,6 +143,13 @@ or failed drain leaves displayed cache unconfirmed without resetting its
 checkpoint or journal. The active app shows an inline warning until its
 replicated collections regain that confirmation; document age is not a
 freshness test, since an authoritative collection can legitimately be idle.
+Active replicated collections revalidate from their retained checkpoint at
+least every minute (the command control plane keeps its existing one-second
+interval). Missing change hints cannot strand a quiet collection indefinitely.
+An empty revalidation preserves the confirmed UI state; returned changes or
+failure invalidate it. Confirmation older than two minutes is unconfirmed,
+including after browser suspension. Query-only collections use their existing
+strict demand-read contract and are excluded from this pull warning.
 
 Authoritative reconciliation uses the existing collection lease and
 query-demand-loader with an opaque `requireRevision` hydration token. Query
