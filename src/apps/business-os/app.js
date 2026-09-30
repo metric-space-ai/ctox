@@ -4666,6 +4666,7 @@ function desktopAppDescriptorForModule(mod) {
   const selectedIcon = operatorIconFor(mod.id) || grokShellIconFor(mod.id);
   return {
     id: mod.id,
+    module: mod,
     title: moduleDisplayTitle(mod),
     glyph: taskbarMarkForModule(mod),
     category: workjetCategoryForModule(mod),
@@ -5446,7 +5447,7 @@ function renderModuleTab(target, options = {}) {
     ? shellText('pinned')
     : (button.dataset.running ? shellText('running') : '');
   const svgHtml = getRegisteredSvgIcon(target.id, 16, 1.8);
-  const lifecycle = target.kind === 'module'
+  const lifecycle = target.module
     ? appLifecycleBadge(target.module, {
       session: state.session,
       governance: state.governance,
@@ -5496,7 +5497,7 @@ function renderModuleTab(target, options = {}) {
   button.querySelector('[data-app-lifecycle-badge]')?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    if (target.kind === 'module') openAppLifecycleDrawer(target.module);
+    if (target.module) openAppLifecycleDrawer(target.module);
   });
   button.addEventListener('click', () => openLaunchTarget(target));
   return button;
@@ -5579,6 +5580,7 @@ function listLaunchTargets(kind = '') {
       glyph: app.glyph,
       category: workjetCategoryForTarget({ kind: 'app', app }),
       app,
+      module: app.module || null,
     }));
   const targetsById = new Map();
   for (const target of moduleTargets) {
@@ -15041,7 +15043,7 @@ function filterStartMenu(panel, query) {
 }
 
 function renderStartMenuLifecycleBadge(target) {
-  if (target?.kind !== 'module' || !target.module) return '';
+  if (!target?.module) return '';
   const lifecycle = appLifecycleBadge(target.module, {
     session: state.session,
     governance: state.governance,
@@ -15103,7 +15105,7 @@ function buildStartMenuItem(target) {
   el.querySelector('[data-module-lifecycle]')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (target.kind === 'module') openAppLifecycleDrawer(target.module);
+    if (target.module) openAppLifecycleDrawer(target.module);
   });
 
   el.querySelector('.start-menu-item-pin-btn').addEventListener('click', (e) => {
