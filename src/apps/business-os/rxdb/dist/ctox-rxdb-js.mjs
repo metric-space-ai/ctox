@@ -13900,7 +13900,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     const demandLoader = this.collection.demandLoader;
-    if (demandLoader && !this.collection.localReplicaComplete) {
+    if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision)) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : {};
       demandOptions.signal = this.signal;
       docs = await demandLoader.resolveQuery(this.query, demandOptions);
