@@ -23,7 +23,7 @@ use tokio::sync::watch;
 mod peer;
 pub use peer::{PeerAccountBinding, PeerRangeSource, PeerSource};
 
-pub const ENGINE_REVISION: &str = "aea4d55e3ce0bcd1b5dd9e4832e3888c070b9504";
+pub const ENGINE_REVISION: &str = "8364bcd7902dbd853a0f746c3dc937bbaadec561";
 
 /// Local authorized callers supply immutable content identity, never arbitrary engine options.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

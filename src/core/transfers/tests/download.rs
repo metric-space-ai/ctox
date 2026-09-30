@@ -357,7 +357,19 @@ async fn unreachable_wrong_and_truncated_mirrors_fall_through_without_mixing_byt
         std::fs::read(partial_dir.join("payload")).unwrap(),
         vec![0x65; 1024]
     );
-    assert_eq!(truncated.gets.load(Ordering::SeqCst), 1);
+    // The combined attempt may already have requested a bounded range from
+    // this mirror before its failing sibling cancels the assembly. Count the
+    // independent full-object fallback, not scheduling-dependent total GETs.
+    let ranges = truncated.ranges.lock().unwrap();
+    assert_eq!(truncated.gets.load(Ordering::SeqCst), ranges.len());
+    assert_eq!(
+        ranges
+            .iter()
+            .filter(|&&(start, end)| start == 0 && end == body.len() - 1)
+            .count(),
+        1,
+        "expected exactly one full-object fallback; observed {ranges:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
