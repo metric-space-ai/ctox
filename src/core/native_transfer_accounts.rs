@@ -272,6 +272,7 @@ impl NativeTransferAccountHost {
                             if !same_connection {
                                 return Err(stale());
                             }
+                            let nonce = nonce.ok_or_else(stale)?;
                             host.require_new_target(&scope.target_id)
                                 .await
                                 .map_err(|_| stale())?;
