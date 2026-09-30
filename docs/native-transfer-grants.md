@@ -91,6 +91,13 @@ retain the database startup handle so shutdown can retrieve and close it; a
 closed owner cannot reopen. These regressions require local verification before
 runtime acceptance is claimed.
 
+Native session startup likewise retains its task across waiter deadlines. The
+native routine owns its bring-up timeout and drains failed startup resources;
+an outer timeout must not cancel that drain. A shutdown wait that expires while
+startup is still running returns a cleanup error, leaving host storage open.
+The CLI retains its startup task when its 60-second admission deadline expires
+and allows a bounded cleanup wait before closing its isolated database.
+
 The native account-store consumer is now `NativeTransferAccountHost`. It reads
 versioned native enrollment records from the existing encrypted secret store;
 public pins/principal and bearer credentials occupy separate scopes, so restoring

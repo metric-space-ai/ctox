@@ -17,6 +17,47 @@ pub(crate) struct PeerDownload {
     pub file_id: String,
 }
 
+#[derive(Default)]
+struct AdmissionSession {
+    starting: Option<JoinHandle<Result<Arc<NativeSyncSession>>>>,
+    session: Option<Arc<NativeSyncSession>>,
+}
+
+impl AdmissionSession {
+    async fn finish_start(&mut self) -> Result<()> {
+        if let Some(starting) = &mut self.starting {
+            let result = starting.await;
+            self.starting = None;
+            self.session = Some(result.context("native admission startup task failed")??);
+        }
+        Ok(())
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        // Native startup owns its timeout and error cleanup. Cancellation of
+        // prepare must retain that task until it has returned a drained result.
+        tokio::time::timeout(Duration::from_secs(25), self.finish_start())
+            .await
+            .context("native admission startup cleanup is still pending")?
+            .ok(); // A terminal startup error has already drained resources.
+        if let Some(session) = &self.session {
+            tokio::time::timeout(Duration::from_secs(5), session.shutdown())
+                .await
+                .context("native transfer admission cleanup timed out")?;
+        }
+        self.session = None;
+        Ok(())
+    }
+}
+
+impl Drop for AdmissionSession {
+    fn drop(&mut self) {
+        if let Some(starting) = &self.starting {
+            starting.abort();
+        }
+    }
+}
+
 impl PeerDownload {
     fn request(&self, account: &NativeTransferAccount) -> Result<DownloadRequest> {
         ensure!(account.target_id == self.target_id, "native target changed");
@@ -79,7 +120,7 @@ async fn ready_connection(
 async fn prepare(
     host: Arc<NativeTransferAccountHost>,
     download: PeerDownload,
-    session_slot: &mut Option<Arc<NativeSyncSession>>,
+    session_slot: &mut AdmissionSession,
 ) -> Result<DownloadRequest> {
     let account = host
         .account(&download.target_id)
@@ -96,15 +137,16 @@ async fn prepare(
     same_account(&host, &account).await?;
     options.local_session_provider = Some(host.provider_for_account(account.clone()));
     options.bringup_timeout = options.bringup_timeout.min(Duration::from_secs(20));
-    let session = Arc::new(
-        tokio::time::timeout(
-            Duration::from_secs(20),
-            NativeSyncSession::start_data_client(options),
-        )
-        .await
-        .context("native transfer admission startup timed out")??,
-    );
-    *session_slot = Some(session.clone());
+    session_slot.starting = Some(tokio::spawn(async move {
+        Ok(Arc::new(
+            NativeSyncSession::start_data_client(options).await?,
+        ))
+    }));
+    session_slot.finish_start().await?;
+    let session = session_slot
+        .session
+        .clone()
+        .context("native admission session missing")?;
     let connection = ready_connection(&host, &account, &session).await?;
     let proof = session
         .peer_identity_proof(
@@ -167,7 +209,7 @@ pub(crate) fn enqueue_peer(root: &Path, store: &Store, download: PeerDownload) -
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        let mut session = None;
+        let mut session = AdmissionSession::default();
         let result = tokio::time::timeout(
             Duration::from_secs(60),
             prepare(host.clone(), download, &mut session),
@@ -175,16 +217,9 @@ pub(crate) fn enqueue_peer(root: &Path, store: &Store, download: PeerDownload) -
         .await
         .context("native transfer admission deadline")
         .and_then(|result| result);
-        let transport_closed = if let Some(session) = &session {
-            tokio::time::timeout(Duration::from_secs(5), session.shutdown())
-                .await
-                .context("native transfer admission cleanup timed out")
-        } else {
-            Ok(())
-        };
         // As in the daemon, transport shutdown must finish before host storage
         // closes. Failed admission still closes storage when transport drains.
-        transport_closed?;
+        session.close().await?;
         database.close().await?;
         let request = result?;
         current_account(host.as_ref(), &request).await?;
@@ -196,6 +231,30 @@ pub(crate) fn enqueue_peer(root: &Path, store: &Store, download: PeerDownload) -
 mod tests {
     use super::*;
     use ctox_sync::business_data_contract::NativeBusinessDataPrincipal;
+
+    #[tokio::test]
+    async fn cancelled_admission_keeps_native_startup_until_cleanup() {
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let (done, completed) = tokio::sync::oneshot::channel();
+        let mut session = AdmissionSession {
+            starting: Some(tokio::spawn(async move {
+                receive.await.unwrap();
+                done.send(()).unwrap();
+                anyhow::bail!("simulated drained startup failure")
+            })),
+            session: None,
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1), session.finish_start())
+                .await
+                .is_err()
+        );
+        assert!(session.starting.is_some());
+        send.send(()).unwrap();
+        session.close().await.unwrap();
+        completed.await.unwrap();
+        assert!(session.starting.is_none());
+    }
 
     fn account() -> NativeTransferAccount {
         NativeTransferAccount {

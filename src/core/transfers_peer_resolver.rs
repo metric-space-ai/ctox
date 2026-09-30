@@ -42,10 +42,16 @@ impl Drop for ActiveSession {
 
 impl ActiveSession {
     async fn finish_start(&mut self) -> Result<()> {
+        self.finish_start_with_timeout(START_TIMEOUT).await
+    }
+
+    async fn finish_start_with_timeout(&mut self, timeout: Duration) -> Result<()> {
         if let Some(starting) = &mut self.starting {
             // Keep the handle in the slot across await: pause/cancel of the
             // worker's authorization future must not detach native startup.
-            let result = starting.await;
+            let result = tokio::time::timeout(timeout, starting)
+                .await
+                .context("native transfer startup cleanup is still pending")?;
             self.starting = None;
             self.session = Some(result.context("native transfer startup task failed")??);
         }
@@ -54,9 +60,19 @@ impl ActiveSession {
     }
 
     async fn close(&mut self) -> Result<()> {
+        self.close_with_timeout(START_TIMEOUT).await
+    }
+
+    async fn close_with_timeout(&mut self, timeout: Duration) -> Result<()> {
         // Startup has its own deadline. Even when authorization is cancelled,
         // shutdown retrieves the resulting session and drains it explicitly.
-        let _ = self.finish_start().await;
+        if let Err(error) = self.finish_start_with_timeout(timeout).await {
+            // Terminal bring-up errors have already drained native resources.
+            // A timed-out waiter still owns a running startup/cleanup task.
+            if self.starting.is_some() {
+                return Err(error);
+            }
+        }
         if let Some(session) = &self.session {
             tokio::time::timeout(CLOSE_TIMEOUT, session.shutdown())
                 .await
@@ -223,12 +239,10 @@ impl NativeTransferPeerResolver {
             ));
             options.bringup_timeout = options.bringup_timeout.min(START_TIMEOUT);
             let starting = tokio::spawn(async move {
-                let session = tokio::time::timeout(
-                    START_TIMEOUT,
-                    NativeSyncSession::start_data_client(options),
-                )
-                .await
-                .context("native transfer startup timed out")??;
+                // Native bring-up enforces options.bringup_timeout and drains
+                // resources on failure. Do not cancel that cleanup with a
+                // second timer around the whole native future.
+                let session = NativeSyncSession::start_data_client(options).await?;
                 Ok(Arc::new(session))
             });
             *active = Some(ActiveSession {
@@ -525,6 +539,13 @@ mod tests {
             active.starting.is_some(),
             "cancelled waiter must retain startup ownership"
         );
+        // A shutdown wait expiring cannot report successful cleanup and allow
+        // the caller to close the host database beneath native startup.
+        assert!(active
+            .close_with_timeout(Duration::from_millis(1))
+            .await
+            .is_err());
+        assert!(active.starting.is_some());
         release.send(()).unwrap();
         active.close().await.unwrap();
         completion.await.unwrap();
