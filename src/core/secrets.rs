@@ -307,6 +307,40 @@ pub fn write_secret_record(
     put_secret(root, scope, name, value, description, metadata)
 }
 
+/// Atomically create an encrypted record without ever replacing its existing
+/// value. SQLite's unique tuple and single INSERT arbitrate across processes;
+/// callers must read the stored winner rather than return their candidate.
+pub(crate) fn create_secret_record_if_absent(
+    root: &Path,
+    scope: &str,
+    name: &str,
+    value: &str,
+    metadata: Value,
+) -> Result<bool> {
+    let conn = open_secret_db(root)?;
+    ensure_secret_schema(&conn)?;
+    let (key_bytes, _) = ensure_secret_master_key(root)?;
+    let encrypted = encrypt_secret_value(&key_bytes, value.as_bytes())?;
+    let now = now_iso_string();
+    let secret_id = format!("secret:{}:{}", scope, stable_digest(name));
+    Ok(conn.execute(
+        "INSERT INTO ctox_secret_records
+         (secret_id, scope, secret_name, description, metadata_json,
+          nonce_b64, ciphertext_b64, created_at, updated_at)
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?7)
+         ON CONFLICT(scope, secret_name) DO NOTHING",
+        params![
+            secret_id,
+            scope,
+            name,
+            serde_json::to_string(&metadata)?,
+            encrypted.nonce_b64,
+            encrypted.ciphertext_b64,
+            now
+        ],
+    )? == 1)
+}
+
 pub fn delete_secret_record(root: &Path, scope: &str, name: &str) -> Result<()> {
     delete_secret(root, scope, name)
 }

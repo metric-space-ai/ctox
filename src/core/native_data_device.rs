@@ -93,18 +93,28 @@ impl NativeDeviceProofKey {
             scope: scope.clone(),
             pkcs8: URL_SAFE_NO_PAD.encode(bytes.as_ref()),
         };
-        // Validate exactly the representation that will be restored before its
-        // single encrypted durable write. There is no plaintext key sidecar.
-        let key = Self::restore(&stored, scope)?;
-        crate::secrets::write_secret_record(
+        Self::persist_candidate(root, scope, &stored)
+    }
+
+    fn persist_candidate(
+        root: &Path,
+        scope: &NativeDeviceKeyScope,
+        stored: &StoredKey,
+    ) -> Result<Self> {
+        // The process-local preparation guard is only an optimization. This
+        // atomic create arbitrates independent daemons preparing the same
+        // scope; neither can replace the already persisted recipient identity.
+        Self::restore(stored, scope)?;
+        crate::secrets::create_secret_record_if_absent(
             root,
             SECRET_SCOPE,
-            &name,
-            &serde_json::to_string(&stored)?,
-            None,
+            &scope.record_name()?,
+            &serde_json::to_string(stored)?,
             json!({"version":1}),
         )?;
-        Ok(key)
+        // Always return the stored winner, including when another process won
+        // after our initial absence check. Corrupt existing state stays closed.
+        Self::load(root, scope)
     }
 
     pub(crate) fn load(root: &Path, scope: &NativeDeviceKeyScope) -> Result<Self> {
@@ -260,6 +270,86 @@ mod tests {
         }
     }
     #[test]
+    fn competing_prepared_candidates_return_one_durable_identity() {
+        let root = tempfile::tempdir().unwrap();
+        let scope = scope();
+        // Initialize the shared SecretStore first: the race under test is the
+        // recipient record, not an unrelated master-key bootstrap migration.
+        crate::secrets::write_secret_record(
+            root.path(),
+            "fixture",
+            "ready",
+            "ready",
+            None,
+            json!({}),
+        )
+        .unwrap();
+        let mut candidates = Vec::new();
+        for _ in 0..2 {
+            assert!(!crate::secrets::secret_exists(
+                root.path(),
+                SECRET_SCOPE,
+                &scope.record_name().unwrap()
+            )
+            .unwrap());
+            let bytes = EcdsaKeyPair::generate_pkcs8(
+                &ECDSA_P256_SHA256_FIXED_SIGNING,
+                &SystemRandom::new(),
+            )
+            .unwrap();
+            candidates.push(StoredKey {
+                version: 1,
+                scope: scope.clone(),
+                pkcs8: URL_SAFE_NO_PAD.encode(bytes.as_ref()),
+            });
+        }
+        assert_ne!(
+            NativeDeviceProofKey::restore(&candidates[0], &scope)
+                .unwrap()
+                .device_identity(),
+            NativeDeviceProofKey::restore(&candidates[1], &scope)
+                .unwrap()
+                .device_identity()
+        );
+        // Both contenders have already observed absence and generated different
+        // identities before either INSERT. Independent SQLite connections, not
+        // the process-local preparation mutex, decide and preserve the winner.
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let identities = std::thread::scope(|threads| {
+            let handles = candidates
+                .into_iter()
+                .map(|candidate| {
+                    let barrier = barrier.clone();
+                    let scope = &scope;
+                    let root = root.path();
+                    threads.spawn(move || {
+                        barrier.wait();
+                        NativeDeviceProofKey::persist_candidate(root, scope, &candidate)
+                            .unwrap()
+                            .device_identity()
+                    })
+                })
+                .collect::<Vec<_>>();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(identities[0], identities[1]);
+        assert_eq!(
+            NativeDeviceProofKey::load(root.path(), &scope)
+                .unwrap()
+                .device_identity(),
+            identities[0]
+        );
+        assert_eq!(
+            crate::secrets::list_secret_records(root.path(), Some(SECRET_SCOPE))
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    #[test]
     fn corrupt_saved_key_is_not_replaced_by_explicit_prepare() {
         let root = tempfile::tempdir().unwrap();
         let scope = scope();
@@ -276,6 +366,17 @@ mod tests {
         .unwrap();
         assert!(NativeDeviceProofKey::load(root.path(), &scope).is_err());
         assert!(NativeDeviceProofKey::prepare(root.path(), &scope).is_err());
+        let bytes =
+            EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &SystemRandom::new())
+                .unwrap();
+        let stale = StoredKey {
+            version: 1,
+            scope: scope.clone(),
+            pkcs8: URL_SAFE_NO_PAD.encode(bytes.as_ref()),
+        };
+        // A contender that observed absence earlier also cannot overwrite a
+        // corrupt record that appeared before its atomic creation attempt.
+        assert!(NativeDeviceProofKey::persist_candidate(root.path(), &scope, &stale).is_err());
         assert_eq!(
             crate::secrets::read_secret_value(root.path(), SECRET_SCOPE, &name).unwrap(),
             "corrupt"

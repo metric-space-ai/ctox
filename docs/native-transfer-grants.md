@@ -42,7 +42,9 @@ account/principal around awaits and probes current file policy before reads.
 encrypted secret store. Explicit preparation scopes the key to the saved target,
 source identity/instance and local account epoch. Reconnect loads the original
 key; missing, corrupt or differently scoped records fail instead of generating
-or replacing identity. Only public JWK/device binding and nonce proof leave the
+or replacing identity. First creation uses a single SQLite create-if-absent
+statement and always reloads the stored winner, so independent processes cannot
+replace each other's recipient key. Only public JWK/device binding and nonce proof leave the
 key owner. The source-store tests restore this signer before exercising the
 existing nonce-bound P-256 admission path. The signer itself grants no account,
 collection or file authority; the native target provider must prove the current
