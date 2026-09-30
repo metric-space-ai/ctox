@@ -185,7 +185,6 @@ mod tests {
     use super::*;
     use base64::Engine;
     use ctox_sync::authority::auth::SigningIdentity;
-    use ring::signature::KeyPair as _;
     struct BoundRecipient {
         token: String,
         protocol: Value,
@@ -193,27 +192,28 @@ mod tests {
         pairing_id: String,
     }
     fn bound_recipient(root: &Path, label: &str) -> BoundRecipient {
-        let rng = SystemRandom::new();
-        let pkcs8 = ring::signature::EcdsaKeyPair::generate_pkcs8(
-            &ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
-            &rng,
-        )
-        .unwrap();
-        let key = ring::signature::EcdsaKeyPair::from_pkcs8(
-            &ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
-            pkcs8.as_ref(),
-            &rng,
-        )
-        .unwrap();
-        let public = key.public_key().as_ref();
-        let encoder = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        let jwk = json!({"kty":"EC","crv":"P-256","x":encoder.encode(&public[1..33]),"y":encoder.encode(&public[33..65])});
+        use crate::native_data_device::{NativeDeviceKeyScope, NativeDeviceProofKey};
+        let key_scope = NativeDeviceKeyScope {
+            target_id: format!("source-{label}"),
+            source_instance_id: store::sync_connection_config(root).unwrap().instance_id,
+            source_public_identity: crate::sync_host::signing_identity(root)
+                .unwrap()
+                .public_identity(),
+            account_epoch: 1,
+        };
+        NativeDeviceProofKey::prepare(root, &key_scope).unwrap();
+        // Restore the production native key, as the daemon must after restart.
+        // No ephemeral test-only signer or copied Electron key is used here.
+        let key = NativeDeviceProofKey::load(root, &key_scope).unwrap();
+        let jwk = key.public_jwk();
+        let device = key.device_identity();
         let (_, thumbprint) =
             super::super::rxdb_peer::p256_public_key_and_thumbprint(&jwk).unwrap();
-        let pairing_id = format!("pairing-{label}");
+        assert_eq!(thumbprint, device.proof_key_thumbprint);
+        let pairing_id = device.pairing_id.clone();
         let binding = super::super::mobile_invites::device_binding(
             Some(&pairing_id),
-            Some(&format!("device-{label}")),
+            Some(&device.device_id),
             Some(&thumbprint),
         )
         .unwrap()
@@ -233,8 +233,8 @@ mod tests {
         )
         .unwrap();
         let nonce = "n".repeat(43);
-        let signature = key.sign(&rng, nonce.as_bytes()).unwrap();
-        let protocol = json!({"peerSession":{"sessionId":format!("native-test-{label}"),"capabilityToken":token,"deviceProof":{"version":"ctox-device-proof-v1","nonce":nonce,"publicJwk":jwk,"signature":encoder.encode(signature.as_ref())}}});
+        let proof = key.sign_nonce(&nonce).unwrap();
+        let protocol = json!({"peerSession":{"sessionId":format!("native-test-{label}"),"capabilityToken":token,"deviceProof":{"version":"ctox-device-proof-v1","nonce":nonce,"publicJwk":jwk,"signature":proof.signature}}});
         assert_eq!(
             super::super::rxdb_peer::validate_device_bound_peer_session(
                 root,
