@@ -709,7 +709,7 @@ const DEVICE_PROOF_VERSION: &str = "ctox-device-proof-v1";
 #[path = "rxdb_peer_admission_tests.rs"]
 mod peer_admission_tests;
 
-fn validate_device_bound_peer_session(
+pub(super) fn validate_device_bound_peer_session(
     root: &Path,
     protocol: &Value,
     expected_nonce: Option<&str>,
@@ -832,7 +832,7 @@ fn validate_and_bind_mobile_device_proof(
     Accept
 }
 
-fn p256_public_key_and_thumbprint(jwk: &Value) -> Option<(Vec<u8>, String)> {
+pub(super) fn p256_public_key_and_thumbprint(jwk: &Value) -> Option<(Vec<u8>, String)> {
     if jwk.get("kty").and_then(Value::as_str) != Some("EC")
         || jwk.get("crv").and_then(Value::as_str) != Some("P-256")
     {
@@ -2970,20 +2970,43 @@ async fn run_native_peer(
                 )?;
                 let workjet_device_root = root.clone();
                 let transfer_grant_root = root.clone();
+                let transfer_grant_transport = pool.connection_handler.clone();
                 pool.register_auxiliary_request_handler(
                     crate::transfers_grant::TRANSFER_GRANT_METHOD,
-                    Arc::new(move |_peer_identity, capability_token, params| {
+                    Arc::new(move |peer_identity, capability_token, params| {
                         let root = transfer_grant_root.clone();
+                        let transport = transfer_grant_transport.clone();
                         Box::pin(async move {
-                            tokio::task::spawn_blocking(move || {
+                            use rxdb::plugins::replication_webrtc::WebRTCConnectionHandler as _;
+                            let connection = transport
+                                .connection_for_peer(&peer_identity)
+                                .ok_or_else(|| "native transfer recipient retired".to_string())?;
+                            // The auxiliary dispatcher admits only authenticated
+                            // peers. This captured token was installed after the
+                            // existing nonce-bound P-256 session validator passed.
+                            // A current store binding alone cannot replace it.
+                            let current = || {
+                                transport.is_peer_current(&connection)
+                                    && transport.peer_capability_token(&connection).as_deref()
+                                        == Some(capability_token.as_str())
+                            };
+                            if !current() {
+                                return Err("native transfer recipient retired".into());
+                            }
+                            let authenticated_token = capability_token.clone();
+                            let answer = tokio::task::spawn_blocking(move || {
                                 super::rxdb_peer_transfer_grants::handle_transfer_grant_request(
                                     &root,
-                                    &capability_token,
+                                    &authenticated_token,
                                     params,
                                 )
                             })
                             .await
-                            .map_err(|_| "native transfer grant task failed".to_string())?
+                            .map_err(|_| "native transfer grant task failed".to_string())?;
+                            if !current() {
+                                return Err("native transfer recipient retired".into());
+                            }
+                            answer
                         })
                     }),
                 )?;

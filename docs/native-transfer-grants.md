@@ -10,7 +10,7 @@ Issue/check carry an immutable scope: transfer ID, enrolled source instance ID
 and public key, collection, file ID, expected SHA-256 and size. Only
 `desktop_files` with available, live `sha256-bytes-v1` metadata is supported;
 other blob collections fail closed until their generation authority is wired.
-The source compares its own provisioned identity and native instance with the
+A current enrolled device/proof-key binding is mandatory for issue, check and revocation; ordinary bearer-only sessions are denied. The auxiliary dispatcher admits only sessions accepted by the existing native nonce-bound P-256 validator. Registration additionally resolves the current recipient connection and requires its captured authenticated token to match before and after blocking work. The source compares its own provisioned identity and native instance with the
 scope, verifies the current capability actor/device/authorization epoch and
 applies the same native collection read policy used by file demand fetches.
 It compares content hash/size with the authoritative file metadata and captures

@@ -35,16 +35,18 @@ fn denied() -> String {
 }
 fn principal(root: &Path, token: &str) -> Result<NativeBusinessDataPrincipal, String> {
     let claims = store::verified_webrtc_capability_claims(root, token).ok_or_else(denied)?;
+    // Transfer authority is always a revocable enrolled daemon/device edge.
+    // Ordinary bearer-only sessions remain valid for other surfaces but cannot
+    // issue, check or revoke a native background transfer grant.
+    let device = claims.device_binding.ok_or_else(denied)?;
     Ok(NativeBusinessDataPrincipal {
         user_id: claims.user_id,
         authorization_epoch: u64::try_from(claims.actor_epoch).map_err(|_| denied())?,
-        device: claims
-            .device_binding
-            .map(|device| NativeBusinessDataDeviceIdentity {
-                pairing_id: device.device_pairing_id,
-                device_id: device.device_id,
-                proof_key_thumbprint: device.proof_key_thumbprint,
-            }),
+        device: Some(NativeBusinessDataDeviceIdentity {
+            pairing_id: device.device_pairing_id,
+            device_id: device.device_id,
+            proof_key_thumbprint: device.proof_key_thumbprint,
+        }),
     })
 }
 fn current_content(root: &Path, token: &str, scope: &TransferGrantScope) -> Result<String, String> {
@@ -183,20 +185,171 @@ mod tests {
     use super::*;
     use base64::Engine;
     use ctox_sync::authority::auth::SigningIdentity;
+    use ring::signature::KeyPair as _;
+    struct BoundRecipient {
+        token: String,
+        protocol: Value,
+        nonce: String,
+        pairing_id: String,
+    }
+    fn bound_recipient(root: &Path, label: &str) -> BoundRecipient {
+        let rng = SystemRandom::new();
+        let pkcs8 = ring::signature::EcdsaKeyPair::generate_pkcs8(
+            &ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+            &rng,
+        )
+        .unwrap();
+        let key = ring::signature::EcdsaKeyPair::from_pkcs8(
+            &ring::signature::ECDSA_P256_SHA256_FIXED_SIGNING,
+            pkcs8.as_ref(),
+            &rng,
+        )
+        .unwrap();
+        let public = key.public_key().as_ref();
+        let encoder = &base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let jwk = json!({"kty":"EC","crv":"P-256","x":encoder.encode(&public[1..33]),"y":encoder.encode(&public[33..65])});
+        let (_, thumbprint) =
+            super::super::rxdb_peer::p256_public_key_and_thumbprint(&jwk).unwrap();
+        let pairing_id = format!("pairing-{label}");
+        let binding = super::super::mobile_invites::device_binding(
+            Some(&pairing_id),
+            Some(&format!("device-{label}")),
+            Some(&thumbprint),
+        )
+        .unwrap()
+        .unwrap();
+        let created =
+            super::super::mobile_invites::create(root, 300, Some(label), Some(&binding)).unwrap();
+        let user = created["invite"]["session"]["user"]["id"].as_str().unwrap();
+        // Give this isolated enrolled test device an existing native role; no
+        // caller-injected role or authority fields enter the transfer request.
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user_with_binding(
+            root,
+            user,
+            label,
+            "chef",
+            chrono::Utc::now().timestamp_millis(),
+            Some(&binding),
+        )
+        .unwrap();
+        let nonce = "n".repeat(43);
+        let signature = key.sign(&rng, nonce.as_bytes()).unwrap();
+        let protocol = json!({"peerSession":{"sessionId":format!("native-test-{label}"),"capabilityToken":token,"deviceProof":{"version":"ctox-device-proof-v1","nonce":nonce,"publicJwk":jwk,"signature":encoder.encode(signature.as_ref())}}});
+        assert_eq!(
+            super::super::rxdb_peer::validate_device_bound_peer_session(
+                root,
+                &protocol,
+                Some(&nonce)
+            ),
+            rxdb::plugins::replication_webrtc::WebRTCPeerSessionValidation::Accept
+        );
+        BoundRecipient {
+            token,
+            protocol,
+            nonce,
+            pairing_id,
+        }
+    }
+    #[test]
+    fn missing_recipient_binding_cannot_issue_check_or_revoke() {
+        let (root, bound, scope) = fixture();
+        let grant = issue(root.path(), &bound, &scope);
+        let (unbound, _) = store::issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            "unbound",
+            "Unbound",
+            "chef",
+            chrono::Utc::now().timestamp_millis(),
+        )
+        .unwrap();
+        assert!(call(
+            root.path(),
+            &unbound,
+            TransferGrantRequest::Issue {
+                scope: scope.clone()
+            }
+        )
+        .is_err());
+        assert!(check(root.path(), &unbound, &scope, &grant.grant_id).is_err());
+        assert!(call(
+            root.path(),
+            &unbound,
+            TransferGrantRequest::Revoke {
+                grant_id: grant.grant_id
+            }
+        )
+        .is_err());
+    }
+    #[test]
+    fn recipient_uses_real_nonce_proof_and_changed_or_revoked_proof_is_denied() {
+        use super::super::rxdb_peer::validate_device_bound_peer_session as validate;
+        use rxdb::plugins::replication_webrtc::WebRTCPeerSessionValidation::{Accept, Reject};
+        let (root, _, scope) = fixture();
+        let recipient = bound_recipient(root.path(), "proof-recipient");
+        assert_eq!(
+            validate(root.path(), &recipient.protocol, Some(&recipient.nonce)),
+            Accept
+        );
+        let grant = issue(root.path(), &recipient.token, &scope);
+        let mut missing = recipient.protocol.clone();
+        missing["peerSession"]
+            .as_object_mut()
+            .unwrap()
+            .remove("deviceProof");
+        assert_eq!(
+            validate(root.path(), &missing, Some(&recipient.nonce)),
+            Reject
+        );
+        assert_eq!(
+            validate(root.path(), &recipient.protocol, Some(&"x".repeat(43))),
+            Reject
+        );
+        let mut changed = recipient.protocol.clone();
+        changed["peerSession"]["deviceProof"]["signature"] =
+            json!(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode([0u8; 64]));
+        assert_eq!(
+            validate(root.path(), &changed, Some(&recipient.nonce)),
+            Reject
+        );
+        let other = bound_recipient(root.path(), "different-key");
+        changed["peerSession"]["deviceProof"] =
+            other.protocol["peerSession"]["deviceProof"].clone();
+        assert_eq!(
+            validate(root.path(), &changed, Some(&recipient.nonce)),
+            Reject
+        );
+        super::super::mobile_invites::revoke_by_device_pairing_id(
+            root.path(),
+            &recipient.pairing_id,
+        )
+        .unwrap();
+        assert_eq!(
+            validate(root.path(), &recipient.protocol, Some(&recipient.nonce)),
+            Reject
+        );
+        assert!(check(root.path(), &recipient.token, &scope, &grant.grant_id).is_err());
+        assert!(call(
+            root.path(),
+            &recipient.token,
+            TransferGrantRequest::Issue { scope }
+        )
+        .is_err());
+        assert!(call(
+            root.path(),
+            &recipient.token,
+            TransferGrantRequest::Revoke {
+                grant_id: grant.grant_id
+            }
+        )
+        .is_err());
+    }
     fn fixture() -> (tempfile::TempDir, String, TransferGrantScope) {
         let root = tempfile::tempdir().unwrap();
         let key_bytes = SigningIdentity::generate_pkcs8().unwrap();
         let key = SigningIdentity::from_pkcs8(&key_bytes).unwrap();
         secrets::write_secret_record(root.path(), "ctox-sync-host", "identity-pkcs8",
             &json!({"identity":key.public_identity(),"pkcs8":base64::engine::general_purpose::STANDARD.encode(key_bytes)}).to_string(),None,json!({})).unwrap();
-        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
-            root.path(),
-            "operator",
-            "Operator",
-            "chef",
-            chrono::Utc::now().timestamp_millis(),
-        )
-        .unwrap();
+        let token = bound_recipient(root.path(), "operator").token;
         let config = store::sync_connection_config(root.path()).unwrap();
         let scope = TransferGrantScope {
             transfer_id: "download_1".into(),
@@ -313,14 +466,23 @@ mod tests {
         let (root, token, scope) = fixture();
         let reply = issue(root.path(), &token, &scope);
         let mut grant = load(root.path(), &reply.grant_id).unwrap();
-        store::open_store(root.path()).unwrap().execute(
-            "UPDATE business_users SET capability_epoch=capability_epoch+1 WHERE user_id='operator'", [],
-        ).unwrap();
+        let original_user = grant.principal.user_id.clone();
+        store::open_store(root.path())
+            .unwrap()
+            .execute(
+                "UPDATE business_users SET capability_epoch=capability_epoch+1 WHERE user_id=?1",
+                [&original_user],
+            )
+            .unwrap();
         save(root.path(), &reply.grant_id, &grant).unwrap();
         assert!(check(root.path(), &token, &scope, &reply.grant_id).is_err());
-        store::open_store(root.path()).unwrap().execute(
-            "UPDATE business_users SET capability_epoch=capability_epoch-1 WHERE user_id='operator'", [],
-        ).unwrap();
+        store::open_store(root.path())
+            .unwrap()
+            .execute(
+                "UPDATE business_users SET capability_epoch=capability_epoch-1 WHERE user_id=?1",
+                [&original_user],
+            )
+            .unwrap();
         grant.principal = principal(root.path(), &token).unwrap();
         grant.expires_at_ms = chrono::Utc::now().timestamp_millis() - 1;
         save(root.path(), &reply.grant_id, &grant).unwrap();
@@ -330,14 +492,7 @@ mod tests {
     fn current_actor_and_policy_are_required_for_issue_check_and_revoke() {
         let (root, token, scope) = fixture();
         let reply = issue(root.path(), &token, &scope);
-        let (other, _) = store::issue_business_os_capability_token_for_managed_user(
-            root.path(),
-            "other",
-            "Other",
-            "chef",
-            chrono::Utc::now().timestamp_millis(),
-        )
-        .unwrap();
+        let other = bound_recipient(root.path(), "other").token;
         assert!(check(root.path(), &other, &scope, &reply.grant_id).is_err());
         assert!(call(
             root.path(),
@@ -350,8 +505,8 @@ mod tests {
         store::open_store(root.path())
             .unwrap()
             .execute(
-                "UPDATE business_users SET active=0 WHERE user_id='operator'",
-                [],
+                "UPDATE business_users SET active=0 WHERE user_id=?1",
+                [principal(root.path(), &token).unwrap().user_id],
             )
             .unwrap();
         assert!(check(root.path(), &token, &scope, &reply.grant_id).is_err());
