@@ -374,6 +374,15 @@ Workspace branding (`business_workspace_branding`) is treated as Business OS
 collection data under the same boundary: update through the Business OS command
 path, replicate through CTOX Sync Engine/WebRTC, never through HTTP.
 
+Native lead research projections require an explicit `business_os.chat.task`
+from `outbound-lead-generation` with a supported `business_command` writeback
+contract targeting `outbound.lead.research_writeback` in
+`outbound_lead_generation_leads`, and the lead's ID in `record_ids`.
+A chat task's `record_id` alone does not establish research intent: CRM-note
+reviews and unrelated tasks must preserve the lead's status, command/task IDs,
+research error, timestamp and revision. The same scope applies when a lease
+promotes a queued lead to running; its existing command ownership still applies.
+
 HTTP is **delivery and bootstrap only**: static shell assets, launch context,
 packed `ctox_config`, `/.well-known/ctox-business-os.json` status. In managed
 mode that well-known file must keep `httpDataProxy:false` and

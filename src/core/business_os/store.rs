@@ -1599,17 +1599,18 @@ fn mark_outbound_lead_running_attached(
     task_id: &str,
     now: i64,
 ) -> anyhow::Result<()> {
-    if command.get("module").and_then(Value::as_str) != Some("outbound-lead-generation")
-        || command.get("command_type").and_then(Value::as_str) != Some("business_os.chat.task")
-    {
-        return Ok(());
-    }
-    let Some(record_id) = command
-        .get("record_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && !value.starts_with("campaign:"))
-    else {
+    let Some(record_id) = outbound_research_projection_record_id(
+        command
+            .get("module")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        command
+            .get("command_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        command.get("record_id").and_then(Value::as_str),
+        command.get("payload").unwrap_or(&Value::Null),
+    ) else {
         return Ok(());
     };
     let Some(table) = attached_rxdb_collection_table(conn, "outbound_lead_generation_leads")?
@@ -6762,6 +6763,36 @@ fn record_command_inner(
     })
 }
 
+/// Only an explicit, record-bound research writeback owns a lead's research state.
+/// A record_id also scopes CRM-note reviews and other chat tasks; it is not
+/// evidence that those tasks started research.
+fn outbound_research_projection_record_id<'a>(
+    module: &str,
+    command_type: &str,
+    record_id: Option<&'a str>,
+    payload: &Value,
+) -> Option<&'a str> {
+    if module != "outbound-lead-generation" || command_type != "business_os.chat.task" {
+        return None;
+    }
+    let record_id = record_id.map(str::trim).filter(|id| !id.is_empty())?;
+    let contract = payload.get("writeback_contract")?;
+    if !super::mcp_channel::supports_command_writeback(contract) {
+        return None;
+    }
+    contract
+        .get("record_ids")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|id| id.trim() == record_id)
+        .then_some(record_id)
+}
+
+#[cfg(test)]
+#[path = "store_outbound_research_projection_tests.rs"]
+mod outbound_research_projection_tests;
+
 /// A lead whose research has been accepted says "Wartet", and it says so
 /// because the daemon wrote it, not because a browser tab got around to it.
 ///
@@ -6777,15 +6808,14 @@ fn project_outbound_lead_queued(
     command_id: &str,
     task_id: Option<&str>,
 ) -> anyhow::Result<()> {
-    if command.module != "outbound-lead-generation"
-        || command.command_type != "business_os.chat.task"
-    {
+    let Some(record_id) = outbound_research_projection_record_id(
+        &command.module,
+        &command.command_type,
+        command.record_id.as_deref(),
+        &command.payload,
+    ) else {
         return Ok(());
-    }
-    let record_id = command.record_id.as_deref().unwrap_or_default().trim();
-    if record_id.is_empty() {
-        return Ok(());
-    }
+    };
     let Some(mut lead) =
         load_rxdb_collection_record(root, "outbound_lead_generation_leads", record_id)?
     else {
