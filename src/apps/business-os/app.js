@@ -1613,13 +1613,10 @@ async function openBusinessDataPlane(syncConfig) {
       session: () => state.session,
       config: syncConfig,
     });
-    // Register the mutation plane before restored app windows enqueue their
-    // module collections. This gives foreground actions a ready shared-room
-    // registration instead of placing their one-row command behind the whole
-    // restored workspace bootstrap.
-    await state.sync.startCollection('business_commands').catch((error) => {
-      console.warn('[business-os] command transport warmup deferred', error);
-    });
+    // Request command transport early, but do not put its WebRTC registration
+    // on the cached workspace's first-paint path. A foreground command
+    // re-acquires this bridge through prepareCommandSync before insertion.
+    startCommandTransportWarmup(state.sync);
     // Reconcile only after transport registration. An unresolved native read
     // must not become an empty layout or a fresh local write during startup.
     // A replaced peer generation is a transport boundary, not authoritative
@@ -1663,6 +1660,14 @@ async function openBusinessDataPlane(syncConfig) {
     rejectDataPlaneReady(error);
     throw error;
   }
+}
+
+function startCommandTransportWarmup(sync) {
+  void Promise.resolve()
+    .then(() => sync.startCollection('business_commands'))
+    .catch((error) => {
+      console.warn('[business-os] command transport warmup deferred', error);
+    });
 }
 
 async function openBusinessDbAndRegisterCoreCollections(dbName) {
@@ -10926,12 +10931,14 @@ function isLocalBusinessOsSurface() {
 async function loadModules(options = {}) {
   const normalized = typeof options === 'number' ? { timeoutMs: options } : (options || {});
   const allowShellSeed = normalized.allowShellSeed !== false && allowsPackagedModuleCatalogSeed();
+  const startup = {};
   const catalog = await loadModuleCatalog(normalized.timeoutMs, {
     allowShellSeed,
+    startup,
   });
   const merged = await ensurePackagedModuleList(
     normalizeModuleList(catalog.modules),
-    { allowShellSeed }
+    { allowShellSeed, useEmbeddedMetadata: startup.usedProjectedCatalog === true }
   );
   // Remember the catalog-provided allowlist so desktop-app gating (listDesktopApps)
   // stays in sync with the tab list. Only overwrite when the synced catalog actually
@@ -11154,7 +11161,14 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
     && moduleCatalogProjectionRevisionMs(injectedCatalog) >= moduleCatalogProjectionRevisionMs(cachedCatalog)
     ? injectedCatalog
     : cachedCatalog;
-  const shellCatalog = options.allowShellSeed === false ? null : await loadPackagedModuleCatalog();
+  if (projectedCatalog && options.startup) options.startup.usedProjectedCatalog = true;
+  // A warm local/native projection must render without waiting for static
+  // manifest and per-module asset fetches. Those are code metadata, not the
+  // authority for which apps this actor may see; the current build embeds the
+  // same packaged system catalog for the first paint.
+  const shellCatalog = options.allowShellSeed === false
+    ? null
+    : projectedCatalog ? loadEmbeddedPackagedModuleCatalog() : await loadPackagedModuleCatalog();
 
   if (projectedCatalog) {
     state.sync?.startCollection?.('business_module_catalog').catch((error) => {
@@ -11239,7 +11253,9 @@ function normalizeModuleList(modules) {
 }
 
 async function ensurePackagedModuleList(modules, options = {}) {
-  const shellCatalog = await loadPackagedModuleCatalog();
+  const shellCatalog = options.useEmbeddedMetadata
+    ? loadEmbeddedPackagedModuleCatalog()
+    : await loadPackagedModuleCatalog();
   const canonicalSystemIds = new Set(
     normalizeModuleList(shellCatalog?.modules).map((mod) => String(mod?.id || '').trim()),
   );
@@ -12914,6 +12930,18 @@ function getOfflineFallbackCatalog() {
     templates: [],
     governance: null,
     source: 'business-os-shell-embedded-catalog',
+  };
+}
+
+function loadEmbeddedPackagedModuleCatalog() {
+  const catalog = getOfflineFallbackCatalog();
+  const explicitlyAllowedIds = resolveModuleAllowlist();
+  return {
+    ...catalog,
+    modules: catalog.modules.filter((mod) => {
+      const id = String(mod?.id || '').trim();
+      return isSystemModule(mod) || explicitlyAllowedIds.has(id);
+    }),
   };
 }
 

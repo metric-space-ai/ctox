@@ -621,6 +621,23 @@ already exist always render regardless of readiness.
 Explicit non-goal: readiness is a **render hint, never a mount blocker**. The OS
 stays snappy; a module must not wait for sync to appear.
 
+On a warm browser open, the shell reads the locally persisted
+`business_module_catalog` projection before rendering. If that projection (or
+the server-injected snapshot) exists, packaged *code metadata* for the first
+paint comes from the generated catalog embedded in the same shell build; the
+shell does not wait for the registry manifest or per-module asset-revision
+requests. The embedded system-app ids are checked against `system-apps.json`,
+and the current instance allowlist still filters packaged apps. The native
+projection remains authoritative for runtime modules and later changes;
+WebRTC catalog catch-up starts in the background. A fresh profile without a
+persisted projection still follows the cold-start catalog path and cannot
+claim offline data it never received.
+The shell also requests `business_commands` transport warmup without awaiting
+its WebRTC registration before the cached workspace paints. Foreground command
+submission still calls the command bus's scoped sync preparation before it
+inserts a command, so this changes first-paint latency rather than write
+authorization or persistence semantics.
+
 A stricter authority-readiness barrier is separate from the render hint. It
 requires query-fetch capability plus a successfully installed demand loader for
 the current connection generation. `requireRevision` reads use this barrier and
