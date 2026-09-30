@@ -622,7 +622,10 @@ impl DaemonWorker {
                         match worker.run_next(&stopped).await {
                             Ok(true) => continue,
                             Ok(false) => {}
-                            Err(error) => break Err(error),
+                            Err(error) => {
+                                eprintln!("ctox transfer worker storage failure; restart required");
+                                break Err(error);
+                            }
                         }
                         tokio::time::sleep(Duration::from_millis(250)).await;
                     };
