@@ -17,6 +17,7 @@ use chrono::{DateTime, Datelike, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -331,6 +332,151 @@ fn source_problem(source: &Value, adapter: Option<&Value>) -> Option<&'static st
     None
 }
 
+/// The real state of a research source: the last provider call recorded in
+/// the scrape registry (research runs and tests alike), keyed by target_key.
+/// The app's own adapter test is only a fallback when a source has no run —
+/// the 28.09.2026 digest listed ten sources as "gestört (geprüft 25.09.)" from
+/// stale app tests although all of them had succeeded the evening before.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct RegistryRun {
+    pub(crate) status: String,
+    pub(crate) at_ms: i64,
+    pub(crate) detail: String,
+    pub(crate) last_ok_ms: i64,
+}
+
+fn iso_ms(value: &str) -> i64 {
+    DateTime::parse_from_rfc3339(value.trim())
+        .map(|stamp| stamp.timestamp_millis())
+        .unwrap_or(0)
+}
+
+fn run_succeeded(status: &str) -> bool {
+    // An empty result means the company was not in the source: the adapter
+    // worked. A partial output worked as well.
+    matches!(status, "succeeded" | "completed_empty" | "partial_output")
+}
+
+/// Latest scrape run and latest successful run per target_key. Read-only;
+/// an unreadable registry yields an empty map (the adapter fallback applies).
+pub(crate) fn load_registry_runs(root: &Path) -> BTreeMap<String, RegistryRun> {
+    let mut out = BTreeMap::new();
+    let Ok(conn) = rusqlite::Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) else {
+        return out;
+    };
+    let Ok(mut last) = conn.prepare(
+        "SELECT t.target_key, r.status, r.started_at, r.result_json
+         FROM scrape_target t JOIN scrape_run r ON r.target_id = t.target_id
+         WHERE r.started_at = (SELECT MAX(started_at) FROM scrape_run WHERE target_id = t.target_id)",
+    ) else {
+        return out;
+    };
+    let rows = last.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+        ))
+    });
+    if let Ok(rows) = rows {
+        for (key, status, started, result) in rows.flatten() {
+            let result = serde_json::from_str::<Value>(&result).unwrap_or(Value::Null);
+            let detail = [result.get("detail"), result.get("failure_mode")]
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join(" · ");
+            out.insert(
+                key,
+                RegistryRun {
+                    status,
+                    at_ms: iso_ms(&started),
+                    detail: detail.chars().take(300).collect(),
+                    last_ok_ms: 0,
+                },
+            );
+        }
+    }
+    if let Ok(mut ok) = conn.prepare(
+        "SELECT t.target_key, MAX(r.started_at)
+         FROM scrape_target t JOIN scrape_run r ON r.target_id = t.target_id
+         WHERE r.status IN ('succeeded', 'completed_empty')
+         GROUP BY t.target_key",
+    ) {
+        if let Ok(rows) = ok.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            ))
+        }) {
+            for (key, started) in rows.flatten() {
+                if let Some(run) = out.get_mut(&key) {
+                    run.last_ok_ms = iso_ms(&started);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Registry target key of an Outbound source: its declared target_key, else
+/// the source id with every non-alphanumeric run turned into '-'
+/// (bundesanzeiger.de -> bundesanzeiger-de), as the app resolves it.
+fn source_target_key(source: &Value) -> String {
+    let declared = text(source, "target_key").trim();
+    if !declared.is_empty() {
+        return declared.to_string();
+    }
+    let mut key = String::new();
+    for ch in text(source, "id").chars() {
+        if ch.is_ascii_alphanumeric() {
+            key.push(ch.to_ascii_lowercase());
+        } else if !key.ends_with('-') {
+            key.push('-');
+        }
+    }
+    key.trim_matches('-').to_string()
+}
+
+/// Only the account decides for the whole source; unreachable, blocked or a
+/// changed layout can concern the one company page that was asked for.
+fn source_wide_failure(run: &RegistryRun) -> bool {
+    matches!(
+        registry_problem(run),
+        "Konto beim Anbieter inaktiv" | "Zugang fehlt oder wurde abgelehnt"
+    )
+}
+
+fn registry_problem(run: &RegistryRun) -> &'static str {
+    let text = format!("{} {}", run.status, run.detail).to_ascii_lowercase();
+    if text.contains("customer is not active")
+        || text.contains("account is not active")
+        || text.contains("provider_account_inactive")
+    {
+        "Konto beim Anbieter inaktiv"
+    } else if text.contains("authorization")
+        || text.contains("auth_required")
+        || text.contains("credential")
+    {
+        "Zugang fehlt oder wurde abgelehnt"
+    } else if text.contains("portal_drift") {
+        "Seitenaufbau geändert, Abruf muss angepasst werden"
+    } else if text.contains("blocked") {
+        "Zugriff blockiert"
+    } else if text.contains("temporary_unreachable") || text.contains("unreachable") {
+        "beim letzten Abruf nicht erreichbar"
+    } else {
+        "letzter Abruf fehlgeschlagen"
+    }
+}
+
 fn local_label(tz: Tz, ms: i64, with_time: bool) -> String {
     let Some(stamp) = tz.timestamp_millis_opt(ms).single() else {
         return String::new();
@@ -352,6 +498,7 @@ fn plural(count: usize, one: &str, many: &str) -> String {
 /// named once as "not re-checked" instead of being counted as blockers.
 const SOURCE_TEST_FRESH_MS: i64 = 3 * 24 * 60 * 60 * 1000;
 const REVIEW_LIST_LIMIT: usize = 8;
+const CAMPAIGN_LIST_LIMIT: usize = 14;
 
 #[derive(Debug, Clone)]
 struct ResearchedRow {
@@ -369,8 +516,22 @@ struct AttentionRow {
     detail: String,
 }
 
+/// Current state of one campaign (not limited to the report window): what
+/// the owner expects to see first — every imported campaign and how far it is.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct CampaignRow {
+    name: String,
+    leads: usize,
+    researched: usize,
+    completed: usize,
+    review: usize,
+    running: usize,
+    open: usize,
+}
+
 #[derive(Debug, Clone, Default)]
 struct DigestData {
+    campaigns: Vec<CampaignRow>,
     period: String,
     date_label: String,
     researched: Vec<ResearchedRow>,
@@ -393,6 +554,7 @@ fn collect_digest(
     leads: &[Value],
     sources: &[Value],
     adapters: &[Value],
+    registry: &BTreeMap<String, RegistryRun>,
     since_ms: i64,
     now_ms: i64,
     tz: Tz,
@@ -426,8 +588,44 @@ fn collect_digest(
     let mut failed = Vec::new();
     let mut stuck = Vec::new();
     let mut sellify_failed = Vec::new();
+    let mut campaigns: BTreeMap<String, CampaignRow> = BTreeMap::new();
     for lead in &leads {
         let status = text(lead, "research_status");
+        let mut names = vec![text(lead, "campaign").trim().to_string()];
+        if let Some(more) = lead
+            .pointer("/payload/weitere_kampagnen")
+            .and_then(Value::as_array)
+        {
+            names.extend(
+                more.iter()
+                    .filter_map(Value::as_str)
+                    .map(|name| name.trim().to_string()),
+            );
+        }
+        names.retain(|name| !name.is_empty());
+        names.sort();
+        names.dedup();
+        for name in names {
+            let row = campaigns
+                .entry(name.clone())
+                .or_insert_with(|| CampaignRow {
+                    name,
+                    ..CampaignRow::default()
+                });
+            row.leads += 1;
+            match status {
+                "completed" => {
+                    row.researched += 1;
+                    row.completed += 1;
+                }
+                "needs_review" | "partially_completed" => {
+                    row.researched += 1;
+                    row.review += 1;
+                }
+                "running" | "queued" | "requested" => row.running += 1,
+                _ => row.open += 1,
+            }
+        }
         let (verified, open, fields) = field_counts(lead);
         match status {
             "completed" => data.total_completed += 1,
@@ -505,16 +703,56 @@ fn collect_digest(
         if source_id.is_empty() || source_id == "sellify" {
             continue;
         }
+        let label = match text(source, "label") {
+            "" => source_id.to_string(),
+            label => label.to_string(),
+        };
+        // The registry is the truth about a source: its last real provider
+        // call. A success means the source works, whatever an old app test
+        // said.
+        if let Some(run) = registry.get(&source_target_key(source)) {
+            if run.at_ms > 0 {
+                if run_succeeded(&run.status) {
+                    continue;
+                }
+                // A recent success proves the adapter works; a later failure
+                // for one company does not break it. Only an account failure
+                // (inactive, access denied) outranks that success.
+                let recently_ok =
+                    run.last_ok_ms > 0 && now_ms - run.last_ok_ms <= SOURCE_TEST_FRESH_MS;
+                if recently_ok && !source_wide_failure(run) {
+                    continue;
+                }
+                if now_ms - run.at_ms > SOURCE_TEST_FRESH_MS {
+                    data.stale_sources.push(label);
+                    continue;
+                }
+                let last_ok = if run.last_ok_ms > 0 {
+                    format!(
+                        ", zuletzt erfolgreich {}",
+                        local_label(tz, run.last_ok_ms, true)
+                    )
+                } else {
+                    ", noch kein erfolgreicher Abruf".to_string()
+                };
+                source_rows.push(AttentionRow {
+                    kind: "Quelle gestört",
+                    subject: label,
+                    detail: format!(
+                        "{} (letzter Abruf {}{last_ok})",
+                        registry_problem(run),
+                        local_label(tz, run.at_ms, true)
+                    ),
+                });
+                continue;
+            }
+        }
         let adapter = adapters
             .iter()
             .filter(|adapter| text(adapter, "source_id") == source_id)
             .max_by_key(|adapter| millis(adapter, "updated_at_ms"));
         let Some(problem) = source_problem(source, adapter) else {
             continue;
-        };
-        let label = match text(source, "label") {
-            "" => source_id.to_string(),
-            label => label.to_string(),
         };
         let checked = adapter
             .map(|adapter| millis(adapter, "updated_at_ms"))
@@ -526,7 +764,7 @@ fn collect_digest(
         source_rows.push(AttentionRow {
             kind: "Quelle gestört",
             subject: label,
-            detail: format!("{problem} (geprüft {})", local_label(tz, checked, false)),
+            detail: format!("{problem} (App-Test {})", local_label(tz, checked, false)),
         });
     }
     source_rows.sort_by(|a, b| a.subject.cmp(&b.subject));
@@ -535,6 +773,14 @@ fn collect_digest(
     data.attention.extend(stuck);
     data.attention.extend(sellify_failed);
     data.attention.extend(source_rows);
+    let mut campaign_rows = campaigns.into_values().collect::<Vec<_>>();
+    // Sellify campaigns first (the owner's research programme), then the rest.
+    campaign_rows.sort_by(|a, b| {
+        (!a.name.starts_with("Sellify:"))
+            .cmp(&!b.name.starts_with("Sellify:"))
+            .then(a.name.cmp(&b.name))
+    });
+    data.campaigns = campaign_rows;
     data.researched
         .sort_by(|a, b| b.verified.cmp(&a.verified).then(a.name.cmp(&b.name)));
     data.review
@@ -582,8 +828,24 @@ fn render_text(data: &DigestData) -> String {
         format!("An Sellify übergeben: {}", data.sellify_done.len()),
         format!("Blocker: {}", data.attention.len()),
         String::new(),
-        "ABGESCHLOSSENE RECHERCHEN".to_string(),
     ];
+    if !data.campaigns.is_empty() {
+        out.push("KAMPAGNEN (aktueller Stand)".to_string());
+        for row in data.campaigns.iter().take(CAMPAIGN_LIST_LIMIT) {
+            out.push(format!(
+                "- {}: {} Leads, {} recherchiert ({} freigegeben, {} warten auf Prüfung), {} in Arbeit, {} nicht begonnen",
+                row.name, row.leads, row.researched, row.completed, row.review, row.running, row.open
+            ));
+        }
+        if data.campaigns.len() > CAMPAIGN_LIST_LIMIT {
+            out.push(format!(
+                "- … und {} weitere",
+                data.campaigns.len() - CAMPAIGN_LIST_LIMIT
+            ));
+        }
+        out.push(String::new());
+    }
+    out.push("ABGESCHLOSSENE RECHERCHEN (im Zeitraum)".to_string());
     if data.researched.is_empty() {
         out.push("Keine Recherche in diesem Zeitraum abgeschlossen.".to_string());
     }
@@ -634,7 +896,7 @@ fn render_text(data: &DigestData) -> String {
     if data.review_leads > 0 {
         out.push(String::new());
         out.push(format!(
-            "PRÜFBEDARF: {} warten auf Prüfung, {} offen",
+            "RECHERCHIERT, WARTET AUF PRÜFUNG: {} warten auf Prüfung und Freigabe, {} offen",
             plural(data.review_leads, "Lead", "Leads"),
             plural(data.review_fields, "Feld", "Felder")
         ));
@@ -651,12 +913,13 @@ fn render_text(data: &DigestData) -> String {
     out.push(String::new());
     out.push("GESAMTSTAND".to_string());
     out.push(format!(
-        "{} gesamt: {} abgeschlossen, {} mit Prüfbedarf, {} nicht begonnen, {} in Arbeit, {} an Sellify übergeben.",
+        "{} gesamt: {} recherchiert ({} freigegeben, {} warten auf Prüfung), {} in Arbeit, {} nicht begonnen, {} an Sellify übergeben.",
         plural(data.total, "Lead", "Leads"),
+        data.total_completed + data.review_leads,
         data.total_completed,
         data.review_leads,
-        data.total_new,
         data.running,
+        data.total_new,
         data.total_sellify
     ));
     out.push(String::new());
@@ -775,12 +1038,52 @@ fn render_html(data: &DigestData) -> String {
         ),
     ];
 
+    if !data.campaigns.is_empty() {
+        rows.push(html_section_title(
+            "Kampagnen",
+            "aktueller Stand aller Kampagnen",
+        ));
+        let mut table_rows = data
+            .campaigns
+            .iter()
+            .take(CAMPAIGN_LIST_LIMIT)
+            .map(|row| {
+                vec![
+                    format!("<strong>{}</strong>", esc(&row.name)),
+                    row.leads.to_string(),
+                    format!(r#"<span style="color:{OK};">{}</span>"#, row.researched),
+                    row.completed.to_string(),
+                    row.review.to_string(),
+                    row.running.to_string(),
+                    if row.open > 0 {
+                        format!(r#"<span style="color:{DANGER};">{}</span>"#, row.open)
+                    } else {
+                        "0".to_string()
+                    },
+                ]
+            })
+            .collect::<Vec<_>>();
+        table_rows.extend(more_row(data.campaigns.len(), CAMPAIGN_LIST_LIMIT, 7));
+        rows.push(html_table(
+            &[
+                ("Kampagne", "left"),
+                ("Leads", "right"),
+                ("recherchiert", "right"),
+                ("freigegeben", "right"),
+                ("wartet auf Prüfung", "right"),
+                ("in Arbeit", "right"),
+                ("nicht begonnen", "right"),
+            ],
+            &table_rows,
+        ));
+    }
+
     rows.push(html_section_title(
         "Abgeschlossene Recherchen",
         if data.researched.is_empty() {
             ""
         } else {
-            "seit dem letzten Update"
+            "im Berichtszeitraum"
         },
     ));
     if data.researched.is_empty() {
@@ -867,7 +1170,7 @@ fn render_html(data: &DigestData) -> String {
 
     if data.review_leads > 0 {
         rows.push(html_section_title(
-            "Prüfbedarf",
+            "Recherchiert, wartet auf Prüfung",
             &format!(
                 "{} warten auf Prüfung und Freigabe, {} offen",
                 plural(data.review_leads, "Lead", "Leads"),
@@ -893,18 +1196,23 @@ fn render_html(data: &DigestData) -> String {
     rows.push(html_table(
         &[
             ("Leads", "right"),
-            ("abgeschlossen", "right"),
-            ("Prüfbedarf", "right"),
-            ("nicht begonnen", "right"),
+            ("recherchiert", "right"),
+            ("davon freigegeben", "right"),
+            ("wartet auf Prüfung", "right"),
             ("in Arbeit", "right"),
+            ("nicht begonnen", "right"),
             ("an Sellify", "right"),
         ],
         &[vec![
             format!("<strong>{}</strong>", data.total),
+            format!(
+                "<strong>{}</strong>",
+                data.total_completed + data.review_leads
+            ),
             data.total_completed.to_string(),
             data.review_leads.to_string(),
-            data.total_new.to_string(),
             data.running.to_string(),
+            data.total_new.to_string(),
             data.total_sellify.to_string(),
         ]],
     ));
@@ -922,11 +1230,12 @@ pub(crate) fn build_report(
     leads: &[Value],
     sources: &[Value],
     adapters: &[Value],
+    registry: &BTreeMap<String, RegistryRun>,
     since_ms: i64,
     now_ms: i64,
     tz: Tz,
 ) -> DigestReport {
-    let data = collect_digest(leads, sources, adapters, since_ms, now_ms, tz);
+    let data = collect_digest(leads, sources, adapters, registry, since_ms, now_ms, tz);
     DigestReport {
         subject: digest_subject(&data),
         body: render_text(&data),
@@ -1027,6 +1336,27 @@ fn publish_status(root: &Path, state: &DigestState, extra: Value) {
     }
 }
 
+fn mark_as_correction(report: &mut DigestReport, replaced_ms: i64, tz: Tz) {
+    let note = format!(
+        "Korrigierte Fassung: ersetzt das Outbound-Update vom {}, das fehlerhafte Angaben enthielt.",
+        local_label(tz, replaced_ms, true)
+    );
+    report.subject = format!("Korrigierte Fassung · {}", report.subject);
+    report.body = format!("{note}\n\n{}", report.body);
+    let banner = format!(
+        r#"<tr><td style="padding:12px 20px;background:#fff4e5;border-bottom:1px solid #f0c78a;font:600 14px/1.4 Arial,sans-serif;color:#7a4a00;">{}</td></tr>"#,
+        esc(&note)
+    );
+    let insert_at = report
+        .html
+        .find("max-width:640px;")
+        .and_then(|start| report.html[start..].find('>').map(|end| start + end + 1));
+    match insert_at {
+        Some(at) => report.html.insert_str(at, &banner),
+        None => report.html = format!("<p>{}</p>{}", esc(&note), report.html),
+    }
+}
+
 fn build_current_report(
     root: &Path,
     config: &DigestConfig,
@@ -1036,10 +1366,12 @@ fn build_current_report(
     let leads = store::load_rxdb_collection_records(root, LEAD_COLLECTION)?;
     let sources = store::load_rxdb_collection_records(root, SOURCE_COLLECTION)?;
     let adapters = store::load_rxdb_collection_records(root, ADAPTER_COLLECTION)?;
+    let registry = load_registry_runs(root);
     Ok(build_report(
         &leads,
         &sources,
         &adapters,
+        &registry,
         since_ms,
         now_ms,
         config.timezone,
@@ -1144,6 +1476,14 @@ pub fn tick(root: &Path) -> Option<String> {
     Some(event)
 }
 
+/// A manual update may cover a chosen period ("seit Samstag", owner request
+/// 28.09.2026: the whole weekend). Only a start in the past and at most 31
+/// days back is accepted; the scheduled update keeps "since the last mail".
+fn explicit_since_ms(payload: &Value, now_ms: i64) -> Option<i64> {
+    let since = payload.get("since_ms").and_then(Value::as_i64)?;
+    (since > 0 && since < now_ms && now_ms - since <= 31 * 24 * 60 * 60 * 1000).then_some(since)
+}
+
 /// `outbound.update_digest.send_now`: sends the current update immediately to
 /// the configured (or explicitly given) recipients. It does not move the
 /// schedule's "since" marker, so the next scheduled update still covers the
@@ -1160,13 +1500,12 @@ pub(super) fn send_now(root: &Path, payload: &Value) -> Result<Value> {
         )?,
     };
     let dry_run = payload.get("dry_run").and_then(Value::as_bool) == Some(true);
-    let recipients = {
-        let explicit = parse_recipients(payload.get("recipients"));
-        if explicit.is_empty() {
-            config.recipients.clone()
-        } else {
-            explicit
-        }
+    let explicit = parse_recipients(payload.get("recipients"));
+    let to_distribution = explicit.is_empty();
+    let recipients = if to_distribution {
+        config.recipients.clone()
+    } else {
+        explicit
     };
     anyhow::ensure!(
         dry_run || !recipients.is_empty(),
@@ -1174,12 +1513,19 @@ pub(super) fn send_now(root: &Path, payload: &Value) -> Result<Value> {
     );
     let now_ms = now_millis();
     let mut state = load_state(root);
-    let since_ms = if state.last_sent_at_ms > 0 {
+    let since_ms = explicit_since_ms(payload, now_ms).unwrap_or(if state.last_sent_at_ms > 0 {
         state.last_sent_at_ms
     } else {
         now_ms - FIRST_REPORT_WINDOW_MS
-    };
-    let report = build_current_report(root, &config, since_ms, now_ms)?;
+    });
+    let mut report = build_current_report(root, &config, since_ms, now_ms)?;
+    // An update to the whole distribution whose window reaches back before the
+    // last update replaces that update; the preview shows the same marking.
+    let replaces_last =
+        to_distribution && state.last_sent_at_ms > 0 && since_ms < state.last_sent_at_ms;
+    if replaces_last {
+        mark_as_correction(&mut report, state.last_sent_at_ms, config.timezone);
+    }
     // "Vorschau": the exact text the next update would carry, nothing is sent.
     if dry_run {
         return Ok(json!({
@@ -1197,7 +1543,14 @@ pub(super) fn send_now(root: &Path, payload: &Value) -> Result<Value> {
     let result = send_report(root, &config, &report, &slot_key, &recipients);
     state.last_attempt_at_ms = now_ms;
     match &result {
-        Ok(_) => state.last_error.clear(),
+        Ok(_) => {
+            state.last_error.clear();
+            // A manual update to the whole distribution is an update: the next
+            // scheduled one reports from here instead of repeating this window.
+            if to_distribution {
+                state.last_sent_at_ms = now_ms;
+            }
+        }
         Err(error) => state.last_error = error.to_string().chars().take(400).collect(),
     }
     let _ = save_state(root, &state);
@@ -1368,6 +1721,7 @@ mod tests {
             &leads,
             &sources,
             &adapters,
+            &BTreeMap::new(),
             since,
             now,
             chrono_tz::Europe::Berlin,
@@ -1391,7 +1745,7 @@ mod tests {
             "- Recherche fehlgeschlagen: Kaputt GmbH – Quelle northdata.de nicht erreichbar"
         ));
         assert!(report.body.contains(
-            "- Quelle gestört: XING – bei der letzten Prüfung nicht erreichbar (geprüft 22.09.)"
+            "- Quelle gestört: XING – bei der letzten Prüfung nicht erreichbar (App-Test 22.09.)"
         ));
         assert!(report
             .body
@@ -1412,6 +1766,203 @@ mod tests {
             .expect("report html passes the outbound body gate");
     }
 
+    // 28.09.2026: ten sources were mailed as "gestört (geprüft 25.09.)" from
+    // stale app tests although the registry showed successful runs the
+    // evening before. The registry's last run decides; the app test is only
+    // the fallback for a source without any run.
+    #[test]
+    fn registry_runs_decide_source_state_over_stale_app_tests() {
+        let now = utc("2026-09-28T05:00:00Z").timestamp_millis();
+        let hour = 3_600_000;
+        let sources = vec![
+            json!({"id": "bundesanzeiger.de", "label": "Bundesanzeiger", "enabled": true}),
+            json!({"id": "linkedin.com", "label": "LinkedIn", "enabled": true}),
+            json!({"id": "handelsregister.de", "label": "Handelsregister", "enabled": true}),
+            json!({"id": "google.com", "label": "Google", "enabled": true}),
+            json!({"id": "northdata.de", "label": "North Data", "enabled": true}),
+        ];
+        // Every app test failed and is older than three days.
+        let adapters = sources
+            .iter()
+            .map(|source| {
+                json!({"source_id": source["id"], "status": "test_temporary_unreachable",
+                       "updated_at_ms": now - 80 * hour})
+            })
+            .collect::<Vec<_>>();
+        let mut registry = BTreeMap::new();
+        registry.insert(
+            "bundesanzeiger-de".to_string(),
+            RegistryRun {
+                status: "succeeded".into(),
+                at_ms: now - 6 * hour,
+                detail: String::new(),
+                last_ok_ms: now - 6 * hour,
+            },
+        );
+        registry.insert(
+            "linkedin-com".to_string(),
+            RegistryRun {
+                status: "temporary_unreachable".into(),
+                at_ms: now - 6 * hour,
+                detail: "Bright Data antwortete mit HTTP 400: Customer is not active".into(),
+                last_ok_ms: now - 40 * hour,
+            },
+        );
+        registry.insert(
+            "handelsregister-de".to_string(),
+            RegistryRun {
+                status: "portal_drift".into(),
+                at_ms: now - 6 * hour,
+                detail: String::new(),
+                last_ok_ms: now - 100 * hour,
+            },
+        );
+        // One company was not reachable after a successful call: the source works.
+        registry.insert(
+            "northdata-de".to_string(),
+            RegistryRun {
+                status: "temporary_unreachable".into(),
+                at_ms: now - 2 * hour,
+                detail: "timeout for one company".into(),
+                last_ok_ms: now - 5 * hour,
+            },
+        );
+        let report = build_report(
+            &[],
+            &sources,
+            &adapters,
+            &registry,
+            now - 24 * hour,
+            now,
+            chrono_tz::Europe::Berlin,
+        );
+        assert!(
+            !report.body.contains("Bundesanzeiger"),
+            "a successful run is no blocker:\n{}",
+            report.body
+        );
+        assert!(
+            !report.body.contains("North Data"),
+            "a single failed company after a recent success is no blocker:\n{}",
+            report.body
+        );
+        assert!(report
+            .body
+            .contains("- Quelle gestört: LinkedIn – Konto beim Anbieter inaktiv (letzter Abruf"));
+        assert!(report
+            .body
+            .contains("- Quelle gestört: Handelsregister – Seitenaufbau geändert"));
+        assert!(report.body.contains("zuletzt erfolgreich"));
+        // Google has no registry run: the (old) app test only makes it stale.
+        assert!(report
+            .body
+            .contains("seit über drei Tagen nicht neu geprüft (letzter Stand fehlerhaft): Google"));
+        assert_eq!(report.stats["blockers"], 2);
+    }
+
+    #[test]
+    fn campaigns_show_their_current_state_and_totals_count_researched() {
+        let now = utc("2026-09-28T05:00:00Z").timestamp_millis();
+        let old = now - 72 * 3_600_000;
+        let lead = |id: &str, campaign: &str, status: &str, more: Value| {
+            json!({"id": id, "name": id, "campaign": campaign, "research_status": status,
+                   "payload": {"research_finished_at_ms": old, "weitere_kampagnen": more}})
+        };
+        let leads = vec![
+            lead("a", "Sellify: Chemie", "needs_review", json!([])),
+            lead(
+                "b",
+                "Sellify: Chemie",
+                "completed",
+                json!(["Sellify: Maschinenbau"]),
+            ),
+            lead("c", "Sellify: Maschinenbau", "running", json!([])),
+            lead("d", "Eigene Liste", "new", json!([])),
+        ];
+        let report = build_report(
+            &leads,
+            &[],
+            &[],
+            &BTreeMap::new(),
+            now - 3_600_000,
+            now,
+            chrono_tz::Europe::Berlin,
+        );
+        let chemie = report
+            .body
+            .find(
+                "- Sellify: Chemie: 2 Leads, 2 recherchiert (1 freigegeben, 1 warten auf Prüfung)",
+            )
+            .expect("chemie row");
+        let masch = report.body.find("- Sellify: Maschinenbau: 2 Leads, 1 recherchiert (1 freigegeben, 0 warten auf Prüfung), 1 in Arbeit").expect("maschinenbau row");
+        let eigen = report
+            .body
+            .find("- Eigene Liste: 1 Leads, 0 recherchiert")
+            .expect("own list row");
+        assert!(
+            chemie < masch && masch < eigen,
+            "Sellify campaigns first:\n{}",
+            report.body
+        );
+        assert!(report.body.contains("4 Leads gesamt: 2 recherchiert (1 freigegeben, 1 warten auf Prüfung), 1 in Arbeit, 1 nicht begonnen"));
+        assert!(report.html.contains(">Kampagnen<"));
+        assert!(report.html.contains("davon freigegeben"));
+        assert!(!report.html.contains("Prüfbedarf"));
+    }
+
+    #[test]
+    fn a_manual_update_may_cover_a_chosen_period_within_31_days() {
+        let now = 1_790_600_000_000_i64;
+        let day = 24 * 3_600_000;
+        assert_eq!(
+            explicit_since_ms(&json!({"since_ms": now - 2 * day}), now),
+            Some(now - 2 * day)
+        );
+        assert_eq!(explicit_since_ms(&json!({"since_ms": now + 1}), now), None);
+        assert_eq!(
+            explicit_since_ms(&json!({"since_ms": now - 40 * day}), now),
+            None
+        );
+        assert_eq!(explicit_since_ms(&json!({}), now), None);
+    }
+
+    #[test]
+    fn source_target_key_matches_the_registry_slug() {
+        assert_eq!(
+            source_target_key(&json!({"id": "bundesanzeiger.de"})),
+            "bundesanzeiger-de"
+        );
+        assert_eq!(
+            source_target_key(&json!({"id": "x", "target_key": "custom-key"})),
+            "custom-key"
+        );
+    }
+
+    #[test]
+    fn a_correction_names_the_replaced_update_in_subject_text_and_html() {
+        let mut report = build_report(
+            &[],
+            &[],
+            &[],
+            &BTreeMap::new(),
+            0,
+            1_790_000_000_000,
+            chrono_tz::Europe::Berlin,
+        );
+        let subject = report.subject.clone();
+        mark_as_correction(&mut report, 1_790_571_665_000, chrono_tz::Europe::Berlin);
+        assert_eq!(report.subject, format!("Korrigierte Fassung · {subject}"));
+        assert!(report
+            .body
+            .starts_with("Korrigierte Fassung: ersetzt das Outbound-Update vom "));
+        let banner = report
+            .html
+            .find("Korrigierte Fassung: ersetzt")
+            .expect("banner");
+        let card = report.html.find("max-width:640px;").expect("card");
+        assert!(banner > card, "banner sits inside the card");
+    }
+
     #[test]
     fn html_escapes_record_text() {
         let now = utc("2026-09-23T05:00:00Z").timestamp_millis();
@@ -1423,6 +1974,7 @@ mod tests {
             &leads,
             &[],
             &[],
+            &BTreeMap::new(),
             now - 3_600_000,
             now,
             chrono_tz::Europe::Berlin,

@@ -50,6 +50,14 @@ test('index, app and generation-bound imports declare one shell generation', asy
   }
 });
 
+test('shell startup and retry preserve local replicas until server acknowledgment is verified', async () => {
+  const appSource = await readFile(new URL('../app.js', import.meta.url), 'utf8');
+  assert.match(appSource, /await reportLegacySharedBusinessDb\(syncConfig\)/);
+  assert.match(appSource, /await reportSupersededBusinessDbGenerations\(syncConfig\)/);
+  assert.doesNotMatch(appSource, /\bresetBusinessDb\s*\(|\bindexedDB\.deleteDatabase\s*\(/);
+  assert.doesNotMatch(appSource, /resetLocalRxDbBeforeStartupRetry|purgeSupersededBusinessDbGenerations/);
+});
+
 test('only the explicit server mismatch contract triggers recovery', () => {
   assert.equal(isShellGenerationMismatchResponse(response(200)), false);
   assert.equal(isShellGenerationMismatchResponse(response(409)), false);

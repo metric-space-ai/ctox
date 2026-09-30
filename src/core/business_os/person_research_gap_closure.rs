@@ -59,7 +59,7 @@ fn hoist_top_level_field_entries(mut payload: Value) -> Value {
     let Some(object) = payload.as_object_mut() else {
         return payload;
     };
-    // A carrier key next to the envelope ("unknown field `item`", production
+    // A carrier key next to the envelope ("unknown field `item`", tenant
     // 26.09.2026) wraps the payload members themselves: merge them up.
     for carrier in ["item", "items", "entry", "entries"] {
         if let Some(Value::Object(inner)) = object.get(carrier).cloned() {
@@ -70,7 +70,7 @@ fn hoist_top_level_field_entries(mut payload: Value) -> Value {
         }
     }
     // A bare field value at the top level ("unknown field `firma_telefon`",
-    // production 26.09.2026) is a value without its status entry. It belongs into
+    // tenant 26.09.2026) is a value without its status entry. It belongs into
     // `result.fields`; the field then counts as open instead of the whole
     // writeback being rejected.
     let bare_values: Vec<String> = object
@@ -4982,7 +4982,7 @@ mod tests {
 
     #[test]
     fn bare_field_values_and_item_carriers_do_not_reject_the_writeback() {
-        // production 26.09.2026: "unknown field `firma_telefon`" and "unknown field
+        // tenant 26.09.2026: "unknown field `firma_telefon`" and "unknown field
         // `item`" rejected whole research writebacks.
         let request: ResearchWritebackRequest =
             serde_json::from_value(hoist_top_level_field_entries(serde_json::json!({

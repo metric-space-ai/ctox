@@ -170,6 +170,8 @@ const STRATEGIC_DIRECTION_KIND: &str = "strategic-direction-pass";
 const FOUNDER_COMMUNICATION_REWORK_KIND: &str = "founder-communication-rework";
 const RUNTIME_API_RETRY_KIND: &str = "runtime-api-retry";
 const FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD: usize = 2;
+/// Review holds (not rejections) of the same founder rework before it stops.
+const FOUNDER_REWORK_HOLD_BLOCK_THRESHOLD: usize = 4;
 const REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
 #[cfg(test)]
 const BUSINESS_OS_APP_VALIDATION_CLEANUP_RETRY_DELAYS_MS: &[u64] = &[20, 100, 250];
@@ -7115,6 +7117,9 @@ fn start_prompt_worker(
                     _ => review_disposition,
                 }
             };
+            review_disposition =
+                hold_unsent_founder_communication_rework(&root, &job, review_disposition);
+            review_disposition = stop_founder_rework_hold_loop(&root, &job, review_disposition);
             let review_reason = match &review_disposition {
                 CompletionReviewDisposition::Hold { summary, .. }
                 | CompletionReviewDisposition::NoSend { summary }
@@ -7783,13 +7788,23 @@ fn start_prompt_worker(
                                     }),
                             );
                         }
-                        if founder_send_error.is_none() && !terminal_no_send {
+                        if should_handle_messages
+                            && founder_send_error.is_none()
+                            && !terminal_no_send
+                        {
                             if let Some(message_key) = founder_reply_key.as_deref() {
-                                let _ = close_open_founder_communication_self_work_for_inbound(
+                                if channels::founder_reply_sent_after_review_for_message(
                                     &root,
                                     message_key,
-                                    "Founder communication completed after reviewed outbound send.",
-                                );
+                                )
+                                .unwrap_or(false)
+                                {
+                                    let _ = close_open_founder_communication_self_work_for_inbound(
+                                        &root,
+                                        message_key,
+                                        "Founder communication completed after reviewed outbound send.",
+                                    );
+                                }
                             }
                         }
                         if should_handle_messages
@@ -9199,6 +9214,48 @@ fn start_prompt_worker(
 /// Failures inside the review path (session start errors, gateway timeouts) are
 /// fail-closed for review-required work. A missing reviewer verdict is not a
 /// worker success proof.
+/// Drops a leading `Subject:`/`Betreff:` line that only repeats the thread
+/// subject (with or without Re:/AW: prefixes). Any other header-like line stays
+/// and is still rejected by the founder body check.
+fn strip_echoed_subject_line(reply: &str, thread_subject: &str) -> String {
+    fn bare_subject(value: &str) -> String {
+        let mut rest = value.trim().to_lowercase();
+        loop {
+            let trimmed = rest.trim_start();
+            let stripped = ["re:", "aw:", "fwd:", "wg:"]
+                .iter()
+                .find_map(|prefix| trimmed.strip_prefix(prefix));
+            match stripped {
+                Some(next) => rest = next.to_string(),
+                None => return trimmed.trim().to_string(),
+            }
+        }
+    }
+    let expected = bare_subject(thread_subject);
+    if expected.is_empty() {
+        return reply.to_string();
+    }
+    let mut consumed = 0usize;
+    for line in reply.split_inclusive('\n') {
+        consumed += line.len();
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lowered = trimmed.to_lowercase();
+        let value = lowered
+            .strip_prefix("subject:")
+            .or_else(|| lowered.strip_prefix("betreff:"));
+        return match value {
+            Some(value) if bare_subject(value) == expected => reply[consumed..]
+                .trim_start_matches(['\n', '\r'])
+                .to_string(),
+            _ => reply.to_string(),
+        };
+    }
+    reply.to_string()
+}
+
 fn run_completion_review(
     root: &Path,
     state: &Arc<Mutex<SharedState>>,
@@ -9249,8 +9306,54 @@ fn run_completion_review(
         .to_string();
     let email_reply_key = inbound_email_reply_message_key(job);
     let founder_reply_key = founder_email_reply_message_key(job);
-    let email_reply_action = email_reply_key
-        .and_then(|message_key| channels::prepare_reviewed_founder_reply(root, message_key).ok());
+    let founder_rework_key = founder_communication_rework_inbound_key(job);
+    if let Some(rework_key) = founder_rework_key {
+        if email_reply_key != Some(rework_key) {
+            return CompletionReviewDisposition::Hold {
+                reason: review::HoldReason::Technical {
+                    policy_id: "founder-rework-reply-action".to_string(),
+                },
+                summary: format!(
+                    "Founder communication rework for {rework_key} cannot use a different or missing leased inbound email for its reviewed reply."
+                ),
+            };
+        }
+    }
+    let email_reply_action = match email_reply_key {
+        Some(message_key) => match channels::prepare_reviewed_founder_reply(root, message_key) {
+            Ok(action) => Some(action),
+            Err(error) if founder_rework_key.is_some() => {
+                return CompletionReviewDisposition::Hold {
+                    reason: review::HoldReason::Technical {
+                        policy_id: "founder-rework-reply-action".to_string(),
+                    },
+                    summary: format!(
+                        "Founder communication rework cannot prepare its reviewed reply for {message_key}: {error}"
+                    ),
+                };
+            }
+            Err(_) => None,
+        },
+        None => None,
+    };
+    if founder_rework_key.is_some() && email_reply_action.is_none() {
+        return CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "founder-rework-reply-action".to_string(),
+            },
+            summary: "Founder communication rework cannot complete because its inbound email is not leased for a reviewed reply; the email remains open for recovery."
+                .to_string(),
+        };
+    }
+    // Workers echo the thread subject as the first body line ("Subject: Re:
+    // Import falsch gelandet"); the header check rejected an otherwise fine
+    // reply five times in a row and a rework slice repeated it (thesen
+    // 28.09.2026). The subject comes from the thread, so drop exactly that
+    // echoed line here: review, approval digest and send all use this body.
+    let normalized_reply = email_reply_action
+        .as_ref()
+        .map(|action| strip_echoed_subject_line(reply_text, &action.subject));
+    let reply_text = normalized_reply.as_deref().unwrap_or(reply_text);
     let proactive_founder_action = if email_reply_key.is_none() {
         job.outbound_email.clone()
     } else {
@@ -16768,6 +16871,18 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         }
         let leased_message_key = message.message_key.clone();
         if is_founder_or_owner_inbound_message(&settings, &message) {
+            // An exhausted rework budget must end in the in-thread escalation,
+            // not in another deferral or a fresh drafting turn. The sweep only
+            // reaches failed/review_rework rows; a pending founder mail was
+            // re-leased every router pass instead (68 leases, 21 rework turns
+            // on a customer tenant, 30.09.2026).
+            if founder_communication_review_budget_exhausted(root, &message)? {
+                router_did_work = true;
+                if escalate_exhausted_founder_communication(root, state, &message)? == 0 {
+                    deferred_for_founder_rework.push(leased_message_key);
+                }
+                continue;
+            }
             if open_founder_communication_rework_for_inbound(root, &leased_message_key)? {
                 deferred_for_founder_rework.push(leased_message_key);
                 continue;
@@ -18628,12 +18743,8 @@ fn repair_stalled_founder_communications(
             continue;
         }
         if channels::founder_reply_sent_after_review_for_message(root, &message.message_key)? {
-            repaired += channels::ack_leased_messages(
-                root,
-                std::slice::from_ref(&message.message_key),
-                "handled",
-            )
-            .unwrap_or(0);
+            repaired +=
+                channels::handle_inbound_after_reviewed_founder_reply(root, &message.message_key)?;
             repaired += close_open_founder_communication_self_work_for_inbound(
                 root,
                 &message.message_key,
@@ -19776,6 +19887,113 @@ fn founder_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
         return None;
     }
     inbound_email_reply_message_key(job)
+}
+
+fn founder_communication_rework_inbound_key(job: &QueuedPrompt) -> Option<&str> {
+    let kind = job
+        .queue_task_metadata
+        .get("ticket_self_work_kind")
+        .and_then(Value::as_str)
+        .or_else(|| job.queue_task_metadata.get("kind").and_then(Value::as_str));
+    if kind != Some(FOUNDER_COMMUNICATION_REWORK_KIND) {
+        return None;
+    }
+    job.queue_task_metadata
+        .get("inbound_message_key")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            job.queue_task_metadata
+                .get("parent_message_key")
+                .and_then(Value::as_str)
+        })
+        .filter(|key| key.starts_with("email:"))
+        .or_else(|| founder_email_reply_message_key(job))
+}
+
+fn hold_unsent_founder_communication_rework(
+    root: &Path,
+    job: &QueuedPrompt,
+    disposition: CompletionReviewDisposition,
+) -> CompletionReviewDisposition {
+    if !matches!(
+        disposition,
+        CompletionReviewDisposition::Approved { .. } | CompletionReviewDisposition::NoSend { .. }
+    ) {
+        return disposition;
+    }
+    let Some(inbound_key) = founder_communication_rework_inbound_key(job) else {
+        return disposition;
+    };
+    if inbound_email_reply_message_key(job) != Some(inbound_key) {
+        return CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "founder-rework-outbound-send".to_string(),
+            },
+            summary: format!(
+                "Founder communication rework for {inbound_key} cannot close against a different or missing leased inbound email."
+            ),
+        };
+    }
+    match channels::founder_reply_sent_after_review_for_message(root, inbound_key) {
+        Ok(true) => disposition,
+        Ok(false) => CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "founder-rework-outbound-send".to_string(),
+            },
+            summary: format!(
+                "Founder communication rework for {inbound_key} cannot close before a reviewed outbound email is accepted."
+            ),
+        },
+        Err(error) => CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "founder-rework-outbound-send".to_string(),
+            },
+            summary: format!(
+                "Founder communication rework for {inbound_key} cannot verify its reviewed outbound email: {error}"
+            ),
+        },
+    }
+}
+
+/// A review verdict that only holds a founder rework (e.g. "Requested work is
+/// blocked or unverified") never reached the rejection circuit-breaker, so the
+/// rework re-ran after every hold backoff: 21 drafting turns for one founder
+/// mail on a customer tenant (30.09.2026). Apply the same terminal stop to review holds,
+/// with a slightly higher threshold because holds also follow transient gaps.
+fn stop_founder_rework_hold_loop(
+    root: &Path,
+    job: &QueuedPrompt,
+    disposition: CompletionReviewDisposition,
+) -> CompletionReviewDisposition {
+    let CompletionReviewDisposition::Hold { reason, summary } = &disposition else {
+        return disposition;
+    };
+    if matches!(reason, review::HoldReason::MissingReviewEvidence) {
+        return disposition;
+    }
+    if founder_communication_rework_inbound_key(job).is_none() {
+        return disposition;
+    }
+    let Some(work_id) = job.ticket_self_work_id.as_deref() else {
+        return disposition;
+    };
+    let note = match founder_rework_loop_block_note_with_threshold(
+        root,
+        work_id,
+        summary,
+        FOUNDER_REWORK_HOLD_BLOCK_THRESHOLD,
+    ) {
+        Ok(Some(note)) => note,
+        Ok(None) | Err(_) => return disposition,
+    };
+    if let Err(error) = fail_founder_rework_queue_tasks_for_work(root, work_id, &note) {
+        eprintln!("[ctox service] founder rework hold loop stop failed for {work_id}: {error:#}");
+        return disposition;
+    }
+    if !founder_rework_loop_terminal_already_active(root, work_id).unwrap_or(false) {
+        fail_ticket_self_work_item(root, work_id, &note);
+    }
+    CompletionReviewDisposition::TerminalQueueFailure { summary: note }
 }
 
 fn inbound_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
@@ -21769,6 +21987,20 @@ fn founder_rework_review_loop_block_note(
     work_id: &str,
     summary: &str,
 ) -> Result<Option<String>> {
+    founder_rework_loop_block_note_with_threshold(
+        root,
+        work_id,
+        summary,
+        FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD,
+    )
+}
+
+fn founder_rework_loop_block_note_with_threshold(
+    root: &Path,
+    work_id: &str,
+    summary: &str,
+    threshold: usize,
+) -> Result<Option<String>> {
     let Some(item) = tickets::load_ticket_self_work_item(root, work_id)? else {
         return Ok(None);
     };
@@ -21776,7 +22008,7 @@ fn founder_rework_review_loop_block_note(
         return Ok(None);
     }
     let active_attempts = founder_rework_queue_attempt_count(root, work_id)?;
-    if active_attempts < FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD {
+    if active_attempts < threshold {
         return Ok(None);
     }
     Ok(Some(format!(
@@ -21813,7 +22045,10 @@ fn founder_rework_queue_attempt_count(root: &Path, work_id: &str) -> Result<usiz
     let conn = channels::open_channel_db(&db_path)?;
     let count: i64 = conn.query_row(
         r#"
-        SELECT COUNT(*)
+        -- Re-leasing the same queue row is another execution attempt, not a
+        -- new message. Keep the existing minimum of one per admitted row so
+        -- legacy/unleased review-rework rows still spend their reserved budget.
+        SELECT COALESCE(SUM(MAX(1, COALESCE(r.attempt, 0))), 0)
         FROM communication_messages m
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
         WHERE m.channel = 'queue'
@@ -41814,6 +42049,246 @@ Use shell tools to create or update these files."
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn founder_rework_review_holds_stop_the_loop_after_the_hold_budget() {
+        // Customer tenant 30.09.2026: "Requested work is blocked or unverified" held the
+        // founder rework 21 times; the rejection circuit-breaker never ran.
+        let root = temp_root("ctox-founder-rework-hold-loop");
+        let inbound_key = "email:lena@thesen-ag.com::inbox::hold-loop";
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: FOUNDER_COMMUNICATION_REWORK_KIND.to_string(),
+                title: "Founder communication rework: WG: Import falsch gelandet".to_string(),
+                body_text: "Answer the founder.".to_string(),
+                state: "queued".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "email-review:founder:hold-loop",
+                    "parent_message_key": inbound_key,
+                    "inbound_message_key": inbound_key,
+                    "dedupe_key": format!("founder-communication-rework:{inbound_key}"),
+                }),
+            },
+            false,
+        )
+        .expect("failed to seed founder rework");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Founder communication rework: WG: Import falsch gelandet".to_string(),
+                prompt: "Answer the founder.".to_string(),
+                thread_key: "email-review:founder:hold-loop".to_string(),
+                workspace_root: None,
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: Some(inbound_key.to_string()),
+                extra_metadata: Some(serde_json::json!({
+                    "ticket_self_work_id": item.work_id.clone(),
+                    "ticket_self_work_kind": FOUNDER_COMMUNICATION_REWORK_KIND,
+                    "parent_message_key": inbound_key,
+                    "inbound_message_key": inbound_key,
+                })),
+            },
+        )
+        .expect("failed to create rework task");
+        let mut job = self_work_job();
+        job.ticket_self_work_id = Some(item.work_id.clone());
+        job.queue_task_metadata = serde_json::json!({
+            "ticket_self_work_kind": FOUNDER_COMMUNICATION_REWORK_KIND,
+            "inbound_message_key": inbound_key,
+        });
+        job.leased_message_keys = vec![task.message_key.clone()];
+        let hold = || CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "requested-work-blocked".to_string(),
+            },
+            summary: "Requested work is blocked or unverified.".to_string(),
+        };
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        let set_attempt = |attempt: i64| {
+            conn.execute(
+                "UPDATE communication_routing_state SET route_status='leased', attempt=?2 WHERE message_key=?1",
+                params![task.message_key, attempt],
+            )
+            .expect("failed to set attempt");
+        };
+
+        // Below the hold budget a review hold stays a hold (normal backoff retry).
+        set_attempt((FOUNDER_REWORK_HOLD_BLOCK_THRESHOLD - 1) as i64);
+        assert!(matches!(
+            stop_founder_rework_hold_loop(&root, &job, hold()),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+        // Missing review evidence is infrastructure, never a loop verdict.
+        set_attempt(FOUNDER_REWORK_HOLD_BLOCK_THRESHOLD as i64 + 5);
+        assert!(matches!(
+            stop_founder_rework_hold_loop(
+                &root,
+                &job,
+                CompletionReviewDisposition::Hold {
+                    reason: review::HoldReason::MissingReviewEvidence,
+                    summary: "evidence not persisted".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+        // At the budget the loop ends terminally and the self-work is failed
+        // with the note the founder escalation sweep recognizes.
+        let stopped = stop_founder_rework_hold_loop(&root, &job, hold());
+        assert!(matches!(
+            stopped,
+            CompletionReviewDisposition::TerminalQueueFailure { .. }
+        ));
+        let reloaded = tickets::load_ticket_self_work_item(&root, &item.work_id)
+            .expect("failed to reload self-work")
+            .expect("missing self-work");
+        assert_eq!(reloaded.state, "failed");
+        assert!(
+            founder_rework_loop_terminal_already_active(&root, &item.work_id)
+                .expect("terminal check")
+        );
+        // A job that is not a founder rework is never touched.
+        let mut other = self_work_job();
+        other.ticket_self_work_id = Some(item.work_id.clone());
+        assert!(matches!(
+            stop_founder_rework_hold_loop(&root, &other, hold()),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn founder_rework_repeated_leases_of_one_task_exhaust_the_review_budget() {
+        let root = temp_root("ctox-founder-rework-repeated-lease-budget");
+        let inbound_key = "email:cto1@metric-space.ai::INBOX::repeated-lease";
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: FOUNDER_COMMUNICATION_REWORK_KIND.to_string(),
+                title: "Founder communication rework: truthful reply".to_string(),
+                body_text: "Reply only after gathering real evidence.".to_string(),
+                state: "queued".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "email-review:founder:repeated-lease",
+                    "parent_message_key": inbound_key,
+                    "inbound_message_key": inbound_key,
+                }),
+            },
+            false,
+        )
+        .expect("seed founder rework");
+        let create_task = |work_id: &str, thread: &str| {
+            channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: "Founder communication rework: truthful reply".to_string(),
+                    prompt: "Gather evidence; do not invent a UI change.".to_string(),
+                    thread_key: thread.to_string(),
+                    workspace_root: None,
+                    priority: "urgent".to_string(),
+                    suggested_skill: Some("follow-up-orchestrator".to_string()),
+                    parent_message_key: Some(inbound_key.to_string()),
+                    extra_metadata: Some(serde_json::json!({
+                        "ticket_self_work_id": work_id,
+                        "ticket_self_work_kind": FOUNDER_COMMUNICATION_REWORK_KIND,
+                        "parent_message_key": inbound_key,
+                        "inbound_message_key": inbound_key,
+                    })),
+                },
+            )
+            .expect("seed queue task")
+        };
+        let task = create_task(&item.work_id, "email-review:founder:repeated-lease");
+        let unrelated = create_task("different-work-id", "email-review:founder:other");
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root)).unwrap();
+        conn.execute(
+            "UPDATE communication_routing_state SET route_status='review_rework', attempt=1 WHERE message_key=?1",
+            params![task.message_key],
+        ).unwrap();
+        conn.execute(
+            "UPDATE communication_routing_state SET attempt=99 WHERE message_key=?1",
+            params![unrelated.message_key],
+        )
+        .unwrap();
+        assert_eq!(
+            founder_rework_queue_attempt_count(&root, &item.work_id).unwrap(),
+            1
+        );
+        assert!(founder_rework_review_loop_block_note(
+            &root,
+            &item.work_id,
+            "Rejected ungrounded reply"
+        )
+        .unwrap()
+        .is_none());
+        conn.execute(
+            "UPDATE communication_routing_state SET attempt=?2 WHERE message_key=?1",
+            params![
+                task.message_key,
+                FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD as i64
+            ],
+        )
+        .unwrap();
+        assert!(
+            founder_rework_review_loop_block_note(&root, &item.work_id, "Rejected again")
+                .unwrap()
+                .is_some()
+        );
+        // Production lease admission increments this durable attempt column.
+        // Twenty-one leases of one row must not still count as one message.
+        conn.execute(
+            "UPDATE communication_routing_state SET attempt=21 WHERE message_key=?1",
+            params![task.message_key],
+        )
+        .unwrap();
+        assert_eq!(
+            founder_rework_queue_attempt_count(&root, &item.work_id).unwrap(),
+            21
+        );
+        for _ in 0..2 {
+            assert!(requeue_review_rejected_self_work(
+                &root,
+                &item.work_id,
+                "Rejected invented UI change"
+            )
+            .unwrap()
+            .is_none());
+        }
+        assert_eq!(
+            channels::load_queue_task(&root, &task.message_key)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "failed"
+        );
+        assert_eq!(
+            tickets::load_ticket_self_work_item(&root, &item.work_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "failed"
+        );
+        assert_eq!(
+            channels::load_queue_task(&root, &unrelated.message_key)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "pending"
+        );
+        let notes: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_self_work_notes WHERE work_id=?1",
+                params![item.work_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(notes, 1, "terminal loop disposition must remain idempotent");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     /// Bug #4 helper: routed inbound that lives on a deterministic
     /// raw thread-key. Tests in this module use the raw thread-key;
     /// the production code derives the isolated key via
@@ -42844,6 +43319,124 @@ Use shell tools to create or update these files."
             channels::list_queue_tasks(&root, &["pending".to_string(), "leased".to_string()], 10)
                 .expect("failed to list queue tasks");
         assert!(tasks.is_empty());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn confirmed_founder_reply_recovers_failed_inbound_without_another_send() {
+        let root = temp_root("ctox-reviewed-founder-failed-route");
+        let mut settings = BTreeMap::new();
+        settings.insert(
+            "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+            "michael.welsch@metric-space.ai".to_string(),
+        );
+        runtime_env::save_runtime_env_map(&root, &settings)
+            .expect("failed to persist owner setting");
+        let inbound_key = "email:lena@thesen-ag.com::inbox::reviewed-recovery";
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:lena@thesen-ag.com', '<reviewed-recovery@example.com>',
+                'reviewed-recovery', 'inbound', 'inbox', 'Michael Welsch',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]',
+                'Import falsch gelandet', 'Bitte prüfen', 'Bitte prüfen',
+                '', '', 'normal', 'received', 0, 0,
+                '2026-09-28T16:56:12Z', '2026-09-28T16:56:12Z', '{}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert founder inbound");
+        conn.execute(
+            r#"INSERT INTO communication_routing_state (
+                message_key, route_status, lease_owner, leased_at, acked_at, last_error,
+                failure_class, failure_attempt_count, hold_reason, retry_not_before, updated_at
+            ) VALUES (?1, 'failed', NULL, NULL, NULL, 'old header failures',
+                'technical', 5, 'technical:reviewed-communication-send',
+                '2026-09-29T02:00:00Z', '2026-09-29T01:41:22Z')"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert failed route");
+
+        let without_proof =
+            channels::handle_inbound_after_reviewed_founder_reply(&root, inbound_key)
+                .expect_err("a failed route must not be handled without its own reviewed send");
+        assert!(without_proof
+            .to_string()
+            .contains("no exact reviewed founder reply"));
+        conn.execute(
+            r#"INSERT INTO communication_founder_reply_reviews (
+                approval_key, inbound_message_key, action_digest, action_json,
+                body_sha256, reviewer, review_summary, approved_at, sent_at, send_result_json
+            ) VALUES (
+                'approval-reviewed-recovery', ?1, 'digest-reviewed-recovery', '{}',
+                'body-reviewed-recovery', 'external-review', 'PASS: reviewed and sent',
+                '2026-09-29T01:40:00Z', '2026-09-29T01:41:00Z',
+                '{"status":"confirmed","synthetic":false}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("failed to insert exact reviewed send proof");
+
+        let state = Arc::new(Mutex::new(SharedState::default()));
+        assert_eq!(
+            repair_stalled_founder_communications(&root, &state, &settings)
+                .expect("confirmed reply should repair failed inbound"),
+            1
+        );
+        let (status, attempts, failure_class, last_error, hold_reason, retry_not_before): (
+            String,
+            i64,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = conn
+            .query_row(
+                "SELECT route_status, failure_attempt_count, failure_class, last_error,
+                        hold_reason, retry_not_before
+                 FROM communication_routing_state WHERE message_key=?1",
+                [inbound_key],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("failed to reload repaired route");
+        assert_eq!(status, "handled");
+        assert_eq!(attempts, 5, "prior attempts remain available for audit");
+        assert_eq!(
+            (failure_class, last_error, hold_reason, retry_not_before),
+            (None, None, None, None)
+        );
+        let terminal_proof: String = conn
+            .query_row(
+                "SELECT json_extract(request_json, '$.metadata.terminal_policy_proof')
+                 FROM ctox_core_transition_proofs
+                 WHERE entity_type='QueueItem' AND entity_id=?1
+                   AND to_state='Completed' AND accepted=1",
+                [inbound_key],
+                |row| row.get(0),
+            )
+            .expect("failed to load accepted terminal proof");
+        assert_eq!(terminal_proof, "policy:exact-reviewed-founder-reply-sent");
+        assert_eq!(
+            channels::handle_inbound_after_reviewed_founder_reply(&root, inbound_key)
+                .expect("repeated repair should be idempotent"),
+            0
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -46728,6 +47321,109 @@ Those are not durable artifact requirements."
     }
 
     #[test]
+    fn founder_rework_cannot_close_before_a_reviewed_email_was_sent() {
+        let root = temp_root("ctox-founder-rework-send-gate");
+        let inbound_key = "email:lena@thesen-ag.com::inbox::rework-send-gate";
+        let mut job = self_work_job();
+        job.source_label = "email:admin".to_string();
+        job.queue_task_metadata = serde_json::json!({
+            "ticket_self_work_kind": FOUNDER_COMMUNICATION_REWORK_KIND,
+            "inbound_message_key": inbound_key,
+        });
+        job.leased_message_keys = vec![
+            "queue:system::founder-rework-send-gate".to_string(),
+            inbound_key.to_string(),
+        ];
+
+        let approved = CompletionReviewDisposition::Approved {
+            review_audit_key: "review-send-gate".to_string(),
+        };
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(&root, &job, approved),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(
+                &root,
+                &job,
+                CompletionReviewDisposition::NoSend {
+                    summary: "review chose no send".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("open communication store");
+        conn.execute(
+            r#"INSERT INTO communication_messages (
+                message_key, channel, account_key, thread_key, remote_id, direction, folder_hint,
+                sender_display, sender_address, recipient_addresses_json, cc_addresses_json,
+                bcc_addresses_json, subject, preview, body_text, body_html, raw_payload_ref,
+                trust_level, status, seen, has_attachments, external_created_at, observed_at,
+                metadata_json
+            ) VALUES (
+                ?1, 'email', 'email:lena@thesen-ag.com', 'thread-send-gate',
+                'remote-send-gate', 'inbound', 'inbox', 'Michael',
+                'michael.welsch@metric-space.ai', '[]', '[]', '[]',
+                'Import falsch gelandet', 'body', 'body', '', '',
+                'normal', 'received', 0, 0,
+                '2026-09-28T16:56:12Z', '2026-09-28T16:56:12Z', '{}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("insert inbound mail");
+        conn.execute(
+            r#"INSERT INTO communication_founder_reply_reviews (
+                approval_key, inbound_message_key, action_digest, action_json, body_sha256,
+                reviewer, review_summary, approved_at, sent_at, send_result_json
+            ) VALUES (
+                'review-send-gate', ?1, 'digest-send-gate', '{}', 'body-send-gate',
+                'external-review', 'approved', '2026-09-28T19:10:00Z',
+                '2026-09-28T19:10:01Z', '{"status":"accepted"}'
+            )"#,
+            rusqlite::params![inbound_key],
+        )
+        .expect("insert reviewed accepted send");
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(
+                &root,
+                &job,
+                CompletionReviewDisposition::Approved {
+                    review_audit_key: "review-send-gate".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Approved { .. }
+        ));
+        let mut wrong_inbound_job = job.clone();
+        wrong_inbound_job.leased_message_keys = vec![
+            "queue:system::founder-rework-send-gate".to_string(),
+            "email:lena@thesen-ag.com::inbox::other".to_string(),
+        ];
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(
+                &root,
+                &wrong_inbound_job,
+                CompletionReviewDisposition::Approved {
+                    review_audit_key: "review-send-gate".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+        assert!(matches!(
+            hold_unsent_founder_communication_rework(
+                &root,
+                &self_work_job(),
+                CompletionReviewDisposition::Approved {
+                    review_audit_key: "ordinary-work".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Approved { .. }
+        ));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn dispatcher_routes_all_rewrite_findings_to_rewrite_only() {
         let findings = vec![rewrite_finding("f1"), rewrite_finding("f2")];
         assert_eq!(
@@ -47052,5 +47748,46 @@ Those are not durable artifact requirements."
             "no founder rework should have been enqueued"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+}
+
+#[cfg(test)]
+mod echoed_subject_tests {
+    use super::strip_echoed_subject_line;
+
+    #[test]
+    fn echoed_thread_subject_is_dropped_from_the_body() {
+        let reply = "Subject: Re: Import falsch gelandet\n\nHallo Michael,\n\ndanke.";
+        assert_eq!(
+            strip_echoed_subject_line(reply, "Import falsch gelandet"),
+            "Hallo Michael,\n\ndanke."
+        );
+        assert_eq!(
+            strip_echoed_subject_line(
+                "Betreff: AW: Import falsch gelandet\nHallo",
+                "Re: Import falsch gelandet"
+            ),
+            "Hallo"
+        );
+    }
+
+    #[test]
+    fn other_headers_and_foreign_subjects_stay_for_the_review() {
+        let to_line = "To: michael@example.com\nHallo";
+        assert_eq!(strip_echoed_subject_line(to_line, "Import"), to_line);
+        let other = "Subject: Ganz anderes Thema\nHallo";
+        assert_eq!(
+            strip_echoed_subject_line(other, "Import falsch gelandet"),
+            other
+        );
+        assert_eq!(
+            strip_echoed_subject_line("\r\n\r\nSubject: Re: Import\r\n\r\nHallo", "Import"),
+            "Hallo"
+        );
+        let plain = "Hallo Michael,\nSubject: Import falsch gelandet";
+        assert_eq!(
+            strip_echoed_subject_line(plain, "Import falsch gelandet"),
+            plain
+        );
     }
 }

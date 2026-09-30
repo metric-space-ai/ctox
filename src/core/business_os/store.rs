@@ -11627,7 +11627,7 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
 /// that RxDB schema indexes and [`ensure_rxdb_string_field_lookup_index`]
 /// create. The former `CAST(json_extract(data, ?1) AS TEXT) = ?2` could use no
 /// index: each Sellify lookup parsed every row, e.g. 92,875 campaign rows
-/// (118 MB) per campaign import in production (26.09.2026). The caller must have
+/// (118 MB) per campaign import on tenant (26.09.2026). The caller must have
 /// validated `field` as `[A-Za-z0-9_]+`.
 fn rxdb_string_field_lookup_sql(table: &str, field: &str) -> String {
     format!(
@@ -11844,7 +11844,7 @@ pub(super) fn find_rxdb_collection_records_by_string_field(
 /// A Sellify campaign search needs only names and member counts. Loading every
 /// matching membership row (up to 50,000 full documents) and grouping in Rust
 /// took 8 s for "Welle" and silently undercounted once the cap was reached
-/// (production 26.09.2026). Grouping in SQL over the `("deleted", name, "id")`
+/// (tenant 26.09.2026). Grouping in SQL over the `("deleted", name, "id")`
 /// expression index reads the name from the index and touches a row only for
 /// its `is_deleted` flag.
 pub(super) fn group_rxdb_collection_string_field_contains(
@@ -17470,6 +17470,24 @@ pub(super) fn webrtc_capability_allows_workspace_permission(
     .unwrap_or(false)
 }
 
+// Unix cache keys bind the connection to a file identity. The portable key
+// contains only a path, so preserve fresh opens there rather than retain a
+// grant writer across a database replacement that cannot be fenced.
+fn with_capability_store_connection<T>(
+    root: &Path,
+    f: impl FnOnce(&Connection) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    #[cfg(unix)]
+    {
+        with_store_connection(root, f)
+    }
+    #[cfg(not(unix))]
+    {
+        let conn = open_store(root)?;
+        f(&conn)
+    }
+}
+
 /// Preserve the pre-hardening ordinary-data behavior by materializing it as
 /// explicit, auditable collection grants. The sync hooks themselves remain
 /// fail-closed and consult only native policy plus these exact grants.
@@ -17482,23 +17500,31 @@ pub(super) fn ensure_legacy_collection_grants(
     // contention during capability issuance.
     let server_owned_collections =
         super::external_sql_sync::server_owned_projection_collections(root)?;
-    let mut conn = open_store(root)?;
-    let tx = conn.transaction()?;
-    let now = now_ms() as i64;
-    for collection in collections {
-        let collection = collection.trim();
-        if collection.is_empty()
-            || policy::ADMIN_ONLY_COLLECTIONS.contains(&collection)
-            || collection == "ctox_queue_tasks"
-            || policy::is_cockpit_projection(collection)
-        {
-            continue;
-        }
-        let server_owned_write = super::threads::is_threads_owned_collection(collection)
-            || server_owned_collections.contains(collection);
-        if server_owned_write {
-            tx.execute(
-                "UPDATE business_permission_grants
+    ensure_legacy_collection_grants_with_ownership(root, collections, &server_owned_collections)
+}
+
+fn ensure_legacy_collection_grants_with_ownership(
+    root: &Path,
+    collections: &[String],
+    server_owned_collections: &HashSet<String>,
+) -> anyhow::Result<()> {
+    with_capability_store_connection(root, |conn| {
+        let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+        let now = now_ms() as i64;
+        for collection in collections {
+            let collection = collection.trim();
+            if collection.is_empty()
+                || policy::ADMIN_ONLY_COLLECTIONS.contains(&collection)
+                || collection == "ctox_queue_tasks"
+                || policy::is_cockpit_projection(collection)
+            {
+                continue;
+            }
+            let server_owned_write = super::threads::is_threads_owned_collection(collection)
+                || server_owned_collections.contains(collection);
+            if server_owned_write {
+                tx.prepare_cached(
+                    "UPDATE business_permission_grants
                  SET active=0,
                      reason='Server-owned collection is read-only for browser sync',
                      updated_at_ms=?1
@@ -17507,37 +17533,48 @@ pub(super) fn ensure_legacy_collection_grants(
                    AND scope_type='collection'
                    AND scope_id=?3
                    AND created_by='business-os-policy-migration'",
-                params![now, BusinessOsPermission::DataWrite.as_str(), collection],
-            )?;
-        }
-        for role in ["founder", "user"] {
-            for permission in [
-                BusinessOsPermission::DataRead,
-                BusinessOsPermission::DataWrite,
-            ] {
-                if permission == BusinessOsPermission::DataWrite && server_owned_write {
-                    continue;
-                }
-                let grant_id = format!(
-                    "migration.sync.{}.{}.{}",
-                    role,
-                    permission.as_str().replace('.', "_"),
+                )?
+                .execute(params![
+                    now,
+                    BusinessOsPermission::DataWrite.as_str(),
                     collection
-                );
-                tx.execute(
-                    "INSERT OR IGNORE INTO business_permission_grants
+                ])?;
+            }
+            for role in ["founder", "user"] {
+                for permission in [
+                    BusinessOsPermission::DataRead,
+                    BusinessOsPermission::DataWrite,
+                ] {
+                    if permission == BusinessOsPermission::DataWrite && server_owned_write {
+                        continue;
+                    }
+                    let grant_id = format!(
+                        "migration.sync.{}.{}.{}",
+                        role,
+                        permission.as_str().replace('.', "_"),
+                        collection
+                    );
+                    tx.prepare_cached(
+                        "INSERT OR IGNORE INTO business_permission_grants
                         (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
                          active, reason, created_by, created_at_ms, updated_at_ms)
                      VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
                              'Migrated legacy sync access to exact collection grant',
                              'business-os-policy-migration', ?5, ?5)",
-                    params![grant_id, role, permission.as_str(), collection, now],
-                )?;
+                    )?
+                    .execute(params![
+                        grant_id,
+                        role,
+                        permission.as_str(),
+                        collection,
+                        now
+                    ])?;
+                }
             }
         }
-    }
-    tx.commit()?;
-    Ok(())
+        tx.commit()?;
+        Ok(())
+    })
 }
 
 /// First-party catalog apps (Mail, Documents, Auth-Handoff) run as installed
@@ -17552,6 +17589,14 @@ pub(super) fn ensure_legacy_collection_grants(
 pub(super) fn ensure_first_party_catalog_collection_grants(
     root: &Path,
     installed_app_root: &Path,
+) -> anyhow::Result<usize> {
+    ensure_first_party_catalog_collection_grants_with_ownership(root, installed_app_root, None)
+}
+
+fn ensure_first_party_catalog_collection_grants_with_ownership(
+    root: &Path,
+    installed_app_root: &Path,
+    ownership: Option<&HashSet<String>>,
 ) -> anyhow::Result<usize> {
     let modules_dir = installed_app_root.join("installed-modules");
     let Ok(entries) = fs::read_dir(&modules_dir) else {
@@ -17595,41 +17640,56 @@ pub(super) fn ensure_first_party_catalog_collection_grants(
     if declared.is_empty() {
         return Ok(0);
     }
-    let server_owned_collections =
-        super::external_sql_sync::server_owned_projection_collections(root)?;
-    let mut conn = open_store(root)?;
-    let tx = conn.transaction()?;
-    let now = now_ms() as i64;
-    let mut inserted = 0usize;
-    for (module_id, collection) in &declared {
-        let server_owned_write = super::threads::is_threads_owned_collection(collection)
-            || server_owned_collections.contains(collection.as_str());
-        for role in ["admin", "chef"] {
-            for permission in [
-                BusinessOsPermission::DataRead,
-                BusinessOsPermission::DataWrite,
-            ] {
-                if permission == BusinessOsPermission::DataWrite && server_owned_write {
-                    continue;
-                }
-                let grant_id = format!(
-                    "catalog.first_party.{module_id}.{role}.{}.{collection}",
-                    permission.as_str().replace('.', "_")
-                );
-                inserted += tx.execute(
-                    "INSERT OR IGNORE INTO business_permission_grants
+    let current_ownership;
+    let server_owned_collections = match ownership {
+        Some(ownership) => ownership,
+        None => {
+            current_ownership =
+                super::external_sql_sync::server_owned_projection_collections(root)?;
+            &current_ownership
+        }
+    };
+    with_capability_store_connection(root, |conn| {
+        let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+        let now = now_ms() as i64;
+        let mut inserted = 0usize;
+        for (module_id, collection) in &declared {
+            let server_owned_write = super::threads::is_threads_owned_collection(collection)
+                || server_owned_collections.contains(collection.as_str());
+            for role in ["admin", "chef"] {
+                for permission in [
+                    BusinessOsPermission::DataRead,
+                    BusinessOsPermission::DataWrite,
+                ] {
+                    if permission == BusinessOsPermission::DataWrite && server_owned_write {
+                        continue;
+                    }
+                    let grant_id = format!(
+                        "catalog.first_party.{module_id}.{role}.{}.{collection}",
+                        permission.as_str().replace('.', "_")
+                    );
+                    inserted += tx
+                        .prepare_cached(
+                            "INSERT OR IGNORE INTO business_permission_grants
                         (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
                          active, reason, created_by, created_at_ms, updated_at_ms)
                      VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
                              'First-party catalog app data access for administrators',
                              'business-os-first-party-catalog', ?5, ?5)",
-                    params![grant_id, role, permission.as_str(), collection, now],
-                )?;
+                        )?
+                        .execute(params![
+                            grant_id,
+                            role,
+                            permission.as_str(),
+                            collection,
+                            now
+                        ])?;
+                }
             }
         }
-    }
-    tx.commit()?;
-    Ok(inserted)
+        tx.commit()?;
+        Ok(inserted)
+    })
 }
 
 fn business_os_collection_names_for_legacy_grants() -> Vec<String> {
@@ -17639,6 +17699,7 @@ fn business_os_collection_names_for_legacy_grants() -> Vec<String> {
         .collect()
 }
 
+#[cfg(test)]
 fn ensure_default_sync_collection_grants(root: &Path) -> anyhow::Result<()> {
     ensure_legacy_collection_grants(root, &business_os_collection_names_for_legacy_grants())
 }
@@ -17731,20 +17792,33 @@ fn issue_business_os_capability_token_until_with_identity(
     // freshly issued token before its first collection fetch.
     // The same ordering applies to first-party catalog grants added when a
     // newly installed app causes the native peer to reconfigure.
-    ensure_default_sync_collection_grants(root)?;
-    ensure_first_party_catalog_collection_grants(
+    // One fresh ownership snapshot per issuance, never a cached authorization
+    // decision. Both grant materializers must finish before reading the epoch.
+    let ownership = super::external_sql_sync::server_owned_projection_collections(root)?;
+    ensure_legacy_collection_grants_with_ownership(
+        root,
+        &business_os_collection_names_for_legacy_grants(),
+        &ownership,
+    )?;
+    ensure_first_party_catalog_collection_grants_with_ownership(
         root,
         &resolve_business_os_installed_app_root(root),
+        Some(&ownership),
     )?;
-    let conn = open_store(root)?;
-    seed_configured_business_users(&conn)?;
-    let user = active_business_user(&conn, user_id.trim())?
-        .ok_or_else(|| anyhow::anyhow!("no active Business OS user {user_id:?}"))?;
-    let actor_epoch: i64 = conn.query_row(
-        "SELECT capability_epoch FROM business_users WHERE user_id = ?1 AND active = 1",
-        params![user.id.as_str()],
-        |row| row.get(0),
-    )?;
+    // Reuse the existing identity-fenced connection, never its authorization
+    // results. Materializers commit before this fresh actor/epoch read, and no
+    // connection borrow or transaction survives into signing.
+    let (user, actor_epoch) = with_capability_store_connection(root, |conn| {
+        seed_configured_business_users(conn)?;
+        let user = active_business_user(conn, user_id.trim())?
+            .ok_or_else(|| anyhow::anyhow!("no active Business OS user {user_id:?}"))?;
+        let actor_epoch: i64 = conn.query_row(
+            "SELECT capability_epoch FROM business_users WHERE user_id = ?1 AND active = 1",
+            params![user.id.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok((user, actor_epoch))
+    })?;
     let secret = capability_signing_secret(root)?;
     let token = super::capability::issue_capability_token_with_epoch_and_identity(
         &secret,
@@ -17787,10 +17861,10 @@ pub fn issue_business_os_capability_token_for_session(
         display_name
     };
     let role = normalize_business_role(&user.role);
-    let conn = open_store(root)?;
-    seed_configured_business_users(&conn)?;
-    conn.execute(
-        "INSERT INTO business_users
+    with_capability_store_connection(root, |conn| {
+        seed_configured_business_users(conn)?;
+        conn.execute(
+            "INSERT INTO business_users
             (user_id, display_name, role, active, created_at_ms, updated_at_ms)
          VALUES (?1, ?2, ?3, 1, ?4, ?4)
          ON CONFLICT(user_id) DO UPDATE SET
@@ -17798,9 +17872,10 @@ pub fn issue_business_os_capability_token_for_session(
             role = excluded.role,
             active = 1,
             updated_at_ms = excluded.updated_at_ms",
-        params![user_id, display_name, role.as_str(), now_ms],
-    )?;
-    drop(conn);
+            params![user_id, display_name, role.as_str(), now_ms],
+        )?;
+        Ok(())
+    })?;
     issue_business_os_capability_token(root, user_id, now_ms)
 }
 
@@ -24314,6 +24389,9 @@ fn create_ctox_queue_task(
     command: &BusinessCommand,
     native_authorization: Option<&Value>,
 ) -> anyhow::Result<Option<channels::QueueTaskView>> {
+    if !is_cv_print_parse_command(command) {
+        command_instruction(command)?;
+    }
     let attachments = materialize_business_chat_attachments(root, command_id, command)?;
     let prompt_enrichment = business_command_prompt_enrichment(root, command_id, command)?;
     let title = command_title(command);
@@ -24322,7 +24400,7 @@ fn create_ctox_queue_task(
         command,
         &attachments,
         prompt_enrichment.as_deref(),
-    );
+    )?;
     let priority = command
         .payload
         .get("priority")
@@ -24499,6 +24577,9 @@ pub(crate) fn rebuild_business_command_queue_prompt_for_task(
             .unwrap_or_else(|| serde_json::json!({})),
         origin: CommandOrigin::TrustedLocal,
     };
+    if !is_cv_print_parse_command(&command) {
+        command_instruction(&command)?;
+    }
     let attachments = materialize_business_chat_attachments(root, command_id, &command)?;
     let prompt_enrichment = business_command_prompt_enrichment(root, command_id, &command)?;
     Ok(Some(command_prompt(
@@ -24506,7 +24587,7 @@ pub(crate) fn rebuild_business_command_queue_prompt_for_task(
         &command,
         &attachments,
         prompt_enrichment.as_deref(),
-    )))
+    )?))
 }
 fn command_queue_thread_key(command_id: &str, command: &BusinessCommand) -> String {
     if is_business_os_app_module_command(command) {
@@ -24587,16 +24668,7 @@ fn command_title(command: &BusinessCommand) -> String {
         })
 }
 
-fn command_prompt(
-    command_id: &str,
-    command: &BusinessCommand,
-    attachments: &[MaterializedBusinessChatAttachment],
-    prompt_enrichment: Option<&str>,
-) -> String {
-    if is_cv_print_parse_command(command) {
-        return cv_print_command_prompt(command_id, command, prompt_enrichment);
-    }
-
+fn command_instruction(command: &BusinessCommand) -> anyhow::Result<&str> {
     let instruction = command
         .payload
         .get("instruction")
@@ -24605,18 +24677,38 @@ fn command_prompt(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("Execute this Business OS automation through CTOX.");
-    let instruction =
-        truncate_text_preserve(instruction, BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS);
+    let character_count = instruction.chars().count();
+    anyhow::ensure!(
+        character_count <= BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS,
+        "business_command_instruction_too_large: selected instruction has {character_count} characters, maximum {BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS}; split the request into bounded commands instead of executing a shortened instruction"
+    );
+    Ok(instruction)
+}
+
+fn command_prompt(
+    command_id: &str,
+    command: &BusinessCommand,
+    attachments: &[MaterializedBusinessChatAttachment],
+    prompt_enrichment: Option<&str>,
+) -> anyhow::Result<String> {
+    if is_cv_print_parse_command(command) {
+        return Ok(cv_print_command_prompt(
+            command_id,
+            command,
+            prompt_enrichment,
+        ));
+    }
+    let instruction = command_instruction(command)?;
     let required_skill_names = required_skill_names(command);
     if is_business_os_app_module_command(command) {
-        return business_os_app_command_prompt(
+        return Ok(business_os_app_command_prompt(
             command_id,
             command,
             attachments,
             prompt_enrichment,
-            &instruction,
+            instruction,
             &required_skill_names,
-        );
+        ));
     }
     let mut payload_preview_value = command.payload.clone();
     if let Some(payload) = payload_preview_value.as_object_mut() {
@@ -24652,7 +24744,10 @@ fn command_prompt(
         command.command_type,
         command.record_id.as_deref().unwrap_or("")
     );
-    truncate_text_preserve(&prompt, BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS)
+    Ok(truncate_text_preserve(
+        &prompt,
+        BUSINESS_OS_QUEUE_PROMPT_MAX_CHARS,
+    ))
 }
 
 fn sanitize_command_prompt_preview(value: Value) -> Value {
@@ -25988,10 +26083,26 @@ struct SignalingUrlsConfig {
 }
 
 fn signaling_urls_config(root: &Path) -> SignalingUrlsConfig {
-    if let Ok(raw) = std::env::var("CTOX_BUSINESS_OS_SIGNALING_URLS") {
-        let urls = parse_signaling_urls(&raw);
+    signaling_urls_config_with_override(
+        root,
+        std::env::var("CTOX_BUSINESS_OS_SIGNALING_URLS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+// The environment override applies to this process only. It used to be
+// written into runtime/business-os-signaling-urls.json, so a single test or
+// release-check process started with a loopback signaling URL against a real
+// state root permanently redirected that instance's browsers and native peer
+// (welsch, 26.09.2026). The persisted file stays the durable configuration.
+fn signaling_urls_config_with_override(
+    root: &Path,
+    override_urls: Option<&str>,
+) -> SignalingUrlsConfig {
+    if let Some(raw) = override_urls {
+        let urls = parse_signaling_urls(raw);
         if !urls.is_empty() {
-            persist_signaling_urls(root, &urls);
             return SignalingUrlsConfig {
                 urls,
                 source: "environment",
@@ -26020,20 +26131,6 @@ fn parse_signaling_urls(raw: &str) -> Vec<String> {
 
 fn persisted_signaling_urls_path(root: &Path) -> PathBuf {
     root.join("runtime").join(BUSINESS_OS_SIGNALING_URLS_FILE)
-}
-
-fn persist_signaling_urls(root: &Path, urls: &[String]) {
-    let path = persisted_signaling_urls_path(root);
-    let Some(parent) = path.parent() else {
-        return;
-    };
-    if fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    let Ok(content) = serde_json::to_vec_pretty(urls) else {
-        return;
-    };
-    let _ = fs::write(path, content);
 }
 
 fn read_persisted_signaling_urls(root: &Path) -> Option<Vec<String>> {
@@ -26065,6 +26162,48 @@ fn room_secret_id(value: &str) -> String {
 pub(super) mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn signaling_env_override_is_process_local_and_never_persisted() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        let config = signaling_urls_config_with_override(root, Some(" ws://127.0.0.1:18894 , "));
+        assert_eq!(config.urls, vec!["ws://127.0.0.1:18894".to_string()]);
+        assert_eq!(config.source, "environment");
+        assert!(
+            !persisted_signaling_urls_path(root).exists(),
+            "an environment override must not rewrite the instance's durable signaling config"
+        );
+        // Without the override the instance keeps its default.
+        let config = signaling_urls_config_with_override(root, None);
+        assert_eq!(config.urls, vec![DEFAULT_SIGNALING_URL.to_string()]);
+        assert_eq!(config.source, "default");
+    }
+
+    #[test]
+    fn signaling_persisted_config_stays_durable_below_an_override() {
+        let dir = tempdir().expect("tempdir");
+        let root = dir.path();
+        let path = persisted_signaling_urls_path(root);
+        std::fs::create_dir_all(path.parent().expect("runtime dir")).expect("runtime dir");
+        std::fs::write(&path, r#"["wss://signaling.example.test/v2"]"#).expect("write config");
+        let config = signaling_urls_config_with_override(root, None);
+        assert_eq!(
+            config.urls,
+            vec!["wss://signaling.example.test/v2".to_string()]
+        );
+        assert_eq!(config.source, "runtime");
+        let config = signaling_urls_config_with_override(root, Some("ws://127.0.0.1:1"));
+        assert_eq!(config.source, "environment");
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read config"),
+            r#"["wss://signaling.example.test/v2"]"#,
+            "the override leaves the durable file untouched"
+        );
+        // An empty override does not shadow the durable config.
+        let config = signaling_urls_config_with_override(root, Some(" , "));
+        assert_eq!(config.source, "runtime");
+    }
 
     #[test]
     fn desktop_file_dependency_accepts_content_generation_id() {
@@ -28610,6 +28749,49 @@ pub(super) mod tests {
             verify_capability_actor(root.path(), &grant_token).is_none(),
             "grant changes must invalidate an already-issued capability"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn capability_issuance_reuses_connection_but_reads_current_actor() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "operator1", "user")?;
+        let now = now_ms() as i64;
+        let (first, _) = issue_business_os_capability_token(root.path(), "operator1", now)?;
+        assert_eq!(
+            verify_capability_role(root.path(), &first).as_deref(),
+            Some("user")
+        );
+
+        // A separate connection must be able to commit immediately after each
+        // issuance. Retaining a transaction or actor snapshot would make this
+        // write fail or let the following token retain the old authority.
+        let conn = open_store(root.path())?;
+        conn.busy_timeout(Duration::ZERO)?;
+        conn.execute(
+            "UPDATE business_users SET role = 'founder' WHERE user_id = 'operator1'",
+            [],
+        )?;
+        let (second, _) = issue_business_os_capability_token(root.path(), "operator1", now)?;
+        assert!(verify_capability_actor(root.path(), &first).is_none());
+        assert_eq!(
+            verify_capability_role(root.path(), &second).as_deref(),
+            Some("founder")
+        );
+        with_store_connection(root.path(), |cached| {
+            assert!(
+                cached.is_autocommit(),
+                "issuance must not retain a transaction"
+            );
+            Ok(())
+        })?;
+
+        conn.execute(
+            "UPDATE business_users SET active = 0 WHERE user_id = 'operator1'",
+            [],
+        )?;
+        assert!(issue_business_os_capability_token(root.path(), "operator1", now).is_err());
+        assert!(verify_capability_actor(root.path(), &second).is_none());
         Ok(())
     }
 
@@ -31246,7 +31428,7 @@ pub(super) mod tests {
             }),
         };
 
-        let prompt = command_prompt("cmd_app_bench", &command, &[], None);
+        let prompt = command_prompt("cmd_app_bench", &command, &[], None).unwrap();
         assert!(prompt.contains("Business OS task resources:"));
         assert!(prompt.contains("- required_skills: business-os-app-module-development"));
         assert!(prompt.contains("Business OS app task metadata:"));
@@ -31331,7 +31513,7 @@ pub(super) mod tests {
             }),
         };
 
-        let prompt = command_prompt("cmd_app_create", &command, &[], None);
+        let prompt = command_prompt("cmd_app_create", &command, &[], None).unwrap();
         assert!(prompt.contains("Business OS task resources:"));
         assert!(prompt.contains("- required_skills: business-os-app-module-development"));
         assert!(prompt.contains("Business OS app task metadata:"));
@@ -37766,7 +37948,7 @@ pub(super) mod tests {
             }),
         };
 
-        let prompt = command_prompt("cmd_context_redaction", &command, &[], None);
+        let prompt = command_prompt("cmd_context_redaction", &command, &[], None).unwrap();
         assert!(prompt.contains("Client context JSON"));
         assert!(prompt.contains("business-os-context-menu"));
         assert!(prompt.contains("\"safe\": \"kept\""));
@@ -37796,11 +37978,79 @@ pub(super) mod tests {
             client_context: serde_json::json!({"source": "web-research"}),
         };
 
-        let prompt = command_prompt("cmd_research_prompt_once", &command, &[], None);
+        let prompt = command_prompt("cmd_research_prompt_once", &command, &[], None).unwrap();
         assert_eq!(prompt.matches(instruction).count(), 1);
         assert!(prompt.contains("\"research_run_id\": \"run-1\""));
         assert!(!prompt.contains("\"instruction\""));
         assert!(!prompt.contains("\"prompt\""));
+    }
+
+    #[test]
+    fn business_command_instruction_limit_preserves_the_complete_unicode_boundary(
+    ) -> anyhow::Result<()> {
+        let suffix = "END-OF-INSTRUCTION";
+        let instruction = format!(
+            "{}{}",
+            "é".repeat(BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS - suffix.chars().count()),
+            suffix
+        );
+        let mut command = BusinessCommand {
+            origin: CommandOrigin::TrustedLocal,
+            id: Some("cmd_instruction_boundary".to_owned()),
+            module: "research".to_owned(),
+            command_type: "business_os.chat.task".to_owned(),
+            record_id: None,
+            payload: serde_json::json!({"instruction": instruction}),
+            client_context: serde_json::json!({}),
+        };
+        let prompt = command_prompt("cmd_instruction_boundary", &command, &[], None)?;
+        assert!(prompt.starts_with(&instruction));
+        assert_eq!(prompt.matches(suffix).count(), 1);
+        command.payload = serde_json::json!({"prompt": instruction});
+        assert!(
+            command_prompt("cmd_instruction_boundary", &command, &[], None)?
+                .starts_with(&instruction)
+        );
+        command.payload["prompt"] = Value::String(format!("{instruction}Z"));
+        let error = command_prompt("cmd_instruction_boundary", &command, &[], None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("business_command_instruction_too_large"));
+        assert!(error.contains("8001"));
+        assert!(!error.contains(suffix));
+        Ok(())
+    }
+
+    #[test]
+    fn business_command_instruction_limit_precedes_attachment_and_queue_writes(
+    ) -> anyhow::Result<()> {
+        for field in ["instruction", "prompt"] {
+            let temp = tempdir()?;
+            let mut payload = serde_json::json!({
+                "attachment_refs": [{"kind": "desktop_file", "file_id": "missing_sensitive_file"}]
+            });
+            payload[field] =
+                Value::String("s".repeat(BUSINESS_OS_QUEUE_PROMPT_INSTRUCTION_MAX_CHARS + 1));
+            let command = BusinessCommand {
+                origin: CommandOrigin::TrustedLocal,
+                id: Some("cmd_instruction_rejected".to_owned()),
+                module: "research".to_owned(),
+                command_type: "business_os.chat.task".to_owned(),
+                record_id: None,
+                payload,
+                client_context: serde_json::json!({}),
+            };
+            let error =
+                create_ctox_queue_task(temp.path(), "cmd_instruction_rejected", &command, None)
+                    .unwrap_err()
+                    .to_string();
+            assert!(error.contains("business_command_instruction_too_large"));
+            assert!(
+                fs::read_dir(temp.path())?.next().is_none(),
+                "no attachment materialization, workspace or queue store before rejection"
+            );
+        }
+        Ok(())
     }
 
     #[test]

@@ -90,6 +90,37 @@ assert(
   onlyRetainedRecord().firstPullCompletedAtMs === completedAt,
   'later checkpoint persists must preserve the original first-pull marker',
 );
+assert(first.getTransportStatus().collectionFreshnessState === 'live', 'completed current pull confirms freshness');
+const successfulPullAt = first.getTransportStatus().lastSuccessfulPullAtMs;
+assert(successfulPullAt > 0, 'a successful current pull exposes its completion time');
+let releaseRefresh;
+const refreshGate = new Promise((resolve) => { releaseRefresh = resolve; });
+first.shared.peer.request = async () => {
+  await refreshGate;
+  return { documents: [], checkpoint: { id: 'current-native-head', lwt: completedAt + 2 } };
+};
+const refreshing = first.pullFromRemotePeers();
+await waitFor(() => first.pullInProgress);
+assert(first.getTransportStatus().collectionReadinessState === 'live', 'historical cache readiness survives refresh');
+assert(first.getTransportStatus().collectionFreshnessState === 'catching-up', 'historical readiness cannot confirm an unfinished current pull');
+releaseRefresh();
+await refreshing;
+assert(first.getTransportStatus().collectionFreshnessState === 'live', 'the persisted empty response reconfirms current freshness');
+const originalCheckpointStatus = first.collection.storageCollection.replicationCheckpointStatus;
+first.collection.storageCollection.replicationCheckpointStatus = async () => { throw new Error('checkpoint storage unavailable'); };
+await first.pullFromRemotePeers();
+assert(first.getTransportStatus().collectionFreshnessState !== 'live', 'a storage failure after an empty response must not confirm freshness');
+assert(first.firstPullCompletedAtMs === completedAt, 'failed refresh preserves the historical completion marker');
+first.collection.storageCollection.replicationCheckpointStatus = originalCheckpointStatus;
+// Peer removal invalidates the current confirmation without deleting the
+// checkpoint or the saved first-pull marker. The next connection must drain.
+
+first.shared.isPeerOpen = () => false;
+first.shared.openSharedPeerIds = () => [];
+assert(first.getTransportStatus().collectionFreshnessState === 'offline-pending', 'disconnected cached data must be visibly unconfirmed');
+first.removePeer('peer-1');
+assert(first.pullFresh === false, 'peer removal retires its freshness confirmation');
+assert(first.firstPullCompletedAtMs === completedAt, 'peer removal keeps historical cache readiness intact');
 readinessSubscription.unsubscribe?.();
 await first.cancel();
 
@@ -107,6 +138,7 @@ reloaded.pullFromRemotePeers = async () => {
 reloaded.pushToRemotePeers = async () => {};
 await reloaded.runPeerReady('peer-reload', protocol, false);
 assert(readinessAtReloadPull === 'live', 'same validity key must restore live before the reload pull starts');
+assert(reloaded.getTransportStatus().collectionFreshnessState !== 'live', 'a retained marker never substitutes for a pull in the new connection');
 assert(
   reloaded.firstPullCompletedAtMs === completedAt,
   'reload must preserve the original first-pull timestamp',

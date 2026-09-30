@@ -573,6 +573,15 @@ Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually
 fails terminally instead of creating unbounded review/rework cascades.
 
+Founder communication rework spends its existing two-attempt review-rejection
+budget from the durable routing `attempt` count, scoped to the same self-work
+item. Re-leasing one queue row therefore cannot bypass the budget by keeping
+the message count at one. Legacy or not-yet-leased rows still reserve at least
+one attempt each. Exhaustion fails the matching rework rows and item once;
+unrelated work and the original email are not sent or mutated by this counter.
+The separate reviewed-send evidence gate still prevents an unsent rework from
+closing successfully.
+
 Transient model/API failures also keep the original durable identity. A typed
 Business OS command moves from `running` to `retry_wait` before its linked queue
 lease returns to `pending`; the same cooldown is persisted in queue metadata and

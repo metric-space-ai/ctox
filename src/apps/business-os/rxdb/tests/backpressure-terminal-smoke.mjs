@@ -4,7 +4,9 @@ const originalSetTimeout = globalThis.setTimeout;
 const originalClearTimeout = globalThis.clearTimeout;
 let removal = null;
 const errors = [];
+const connection = { remotePeerId: 'native-peer-1' };
 const fakePeer = {
+  connections: new Map([['native-peer-1', connection]]),
   transportStats: {
     backpressureWaitCount: 0,
     backpressureStallCount: 0,
@@ -33,7 +35,7 @@ try {
     await CtoxWebRtcNativePeer.prototype.waitForSendBuffer.call(
       fakePeer,
       channel,
-      { remotePeerId: 'native-peer-1' },
+      connection,
     );
   } catch (error) {
     caught = error;

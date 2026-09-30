@@ -97,6 +97,7 @@ const FAIR_SEND_SCHEDULE: [SendPriority; 7] = [
 const MAX_SERIALIZED_FRAME_BYTES: usize = 16384;
 const DEFAULT_UDP_BIND_ADDR: &str = "0.0.0.0:0";
 const UDP_BIND_ADDR_ENV: &str = "CTOX_WEBRTC_UDP_BIND_ADDR";
+const ACCEPTED_OFFER_HISTORY_CAP: usize = 512;
 
 /// Phase 2: transport-control wire method by which a browser tells the native
 /// peer which collections are currently foreground/subscribed. Params shape:
@@ -393,6 +394,12 @@ struct PeerEntry {
     data_channel_open: bool,
     auxiliary_data_channels: HashMap<String, Arc<dyn DataChannel>>,
     tasks: Vec<tokio::task::JoinHandle<()>>,
+}
+
+#[derive(Default)]
+struct PendingOfferPeer {
+    terminal: bool,
+    data_channels: Vec<(String, Arc<dyn DataChannel>)>,
 }
 
 /// Phase 1: per-peer SCTP send-buffer backpressure signal, driven by the data
@@ -982,6 +989,12 @@ pub struct WebRTCRsConnectionHandler {
     transport_status: Arc<Mutex<WebRtcFrameTransportStatus>>,
     frame_counter: AtomicU64,
     peer_generation_counter: AtomicU64,
+    /// Session origins already answered for a signaling peer. A delayed offer
+    /// from an older browser PeerConnection must not retire its replacement.
+    accepted_offers: Mutex<VecDeque<(PeerId, u64)>>,
+    /// Candidate responders are invisible to normal peer routing until their
+    /// answer has been sent. Early callbacks stage here instead of being lost.
+    pending_offers: Mutex<HashMap<(PeerId, u64), PendingOfferPeer>>,
     /// Phase 1: per-peer send-buffer backpressure (see `PeerBackpressure`).
     backpressure: Arc<Mutex<HashMap<WebRTCRsPeer, Arc<PeerBackpressure>>>>,
     /// #12c per-collection sync read-authz. When `collection_authz` is set,
@@ -1159,6 +1172,8 @@ impl WebRTCRsConnectionHandler {
             transport_status: Arc::new(Mutex::new(WebRtcFrameTransportStatus::default())),
             frame_counter: AtomicU64::new(0),
             peer_generation_counter: AtomicU64::new(0),
+            accepted_offers: Mutex::new(VecDeque::new()),
+            pending_offers: Mutex::new(HashMap::new()),
             backpressure: Arc::new(Mutex::new(HashMap::new())),
             collection_authz: Arc::new(Mutex::new(None)),
             collection_eager_pull: Arc::new(Mutex::new(None)),
@@ -1732,20 +1747,34 @@ impl WebRTCRsConnectionHandler {
             generation,
         )
         .await?;
-        {
+        let registered = {
             let _lifecycle = self.peer_lifecycle.lock();
-            self.peers.lock().insert(
-                remote_peer_id.clone(),
-                PeerEntry {
-                    generation,
-                    local_peer_id,
-                    peer_connection: Arc::clone(&pc),
-                    data_channel: None,
-                    data_channel_open: false,
-                    auxiliary_data_channels: HashMap::new(),
-                    tasks: Vec::new(),
-                },
-            );
+            if self.closed.load(Ordering::Acquire) {
+                false
+            } else {
+                self.peers.lock().insert(
+                    remote_peer_id.clone(),
+                    PeerEntry {
+                        generation,
+                        local_peer_id,
+                        peer_connection: Arc::clone(&pc),
+                        data_channel: None,
+                        data_channel_open: false,
+                        auxiliary_data_channels: HashMap::new(),
+                        tasks: Vec::new(),
+                    },
+                );
+                true
+            }
+        };
+        if !registered {
+            let _ = pc.close().await;
+            return Err(new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(
+                    serde_json::json!({ "message": "connection handler closed during peer build" }),
+                ),
+            ));
         }
 
         if initiator {
@@ -1781,12 +1810,6 @@ impl WebRTCRsConnectionHandler {
 
     async fn handle_signal(self: &Arc<Self>, remote_peer_id: PeerId, data: Value) -> RxResult<()> {
         let is_offer = data.get("type").and_then(Value::as_str) == Some("offer");
-        if is_offer {
-            self.remove_obsolete_peer_before_offer(&remote_peer_id);
-        }
-        let pc = self
-            .ensure_peer_connection(remote_peer_id.clone(), false)
-            .await?;
         if data.get("sdp").is_some() {
             let description: RTCSessionDescription =
                 serde_json::from_value(data.clone()).map_err(|e| {
@@ -1798,29 +1821,15 @@ impl WebRTCRsConnectionHandler {
                         })),
                     )
                 })?;
+            if is_offer {
+                return self.handle_inbound_offer(remote_peer_id, description).await;
+            }
+            let pc = self.ensure_peer_connection(remote_peer_id, false).await?;
             pc.set_remote_description(description)
                 .await
                 .map_err(|e| webrtc_error("set remote description", e))?;
-            if is_offer {
-                let answer = pc
-                    .create_answer(None)
-                    .await
-                    .map_err(|e| webrtc_error("create answer", e))?;
-                pc.set_local_description(answer)
-                    .await
-                    .map_err(|e| webrtc_error("set local answer", e))?;
-                if let (Some(signaling), Some(local_description)) =
-                    (self.signaling.as_ref(), pc.local_description().await)
-                {
-                    signaling
-                        .send_signal(
-                            remote_peer_id,
-                            serde_json::to_value(local_description).unwrap_or(Value::Null),
-                        )
-                        .await?;
-                }
-            }
         } else if data.get("candidate").is_some() {
+            let pc = self.ensure_peer_connection(remote_peer_id, false).await?;
             let candidate = decode_simple_peer_ice_candidate(&data).map_err(|e| {
                 new_rx_error(
                     "RC_WEBRTC_SIGNAL",
@@ -1837,7 +1846,189 @@ impl WebRTCRsConnectionHandler {
         Ok(())
     }
 
-    fn remove_obsolete_peer_before_offer(self: &Arc<Self>, remote_peer_id: &str) {
+    async fn handle_inbound_offer(
+        self: &Arc<Self>,
+        remote_peer_id: PeerId,
+        description: RTCSessionDescription,
+    ) -> RxResult<()> {
+        // Parsing alone does not prove that a peer can apply the SDP. Prepare
+        // and answer on a new, unregistered responder first: a malformed or
+        // semantically invalid offer must leave the open old channel intact.
+        let parsed = description
+            .unmarshal()
+            .map_err(|e| webrtc_error("parse remote offer", e))?;
+        let offer_session_id = parsed.origin.session_id;
+        if self
+            .accepted_offers
+            .lock()
+            .iter()
+            .any(|(peer, session_id)| peer == &remote_peer_id && *session_id == offer_session_id)
+        {
+            tracing::debug!(
+                target: "ctox_rxdb::webrtc_rs",
+                peer = %remote_peer_id,
+                "ignoring replayed inbound offer from an answered session"
+            );
+            return Ok(());
+        }
+        let signaling = self.signaling.as_ref().cloned().ok_or_else(|| {
+            new_rx_error(
+                "RC_WEBRTC_SIGNAL",
+                Some(serde_json::json!({ "message": "missing signaling client" })),
+            )
+        })?;
+        let generation = self
+            .peer_generation_counter
+            .fetch_add(1, Ordering::SeqCst)
+            .saturating_add(1);
+        let pending_key = (remote_peer_id.clone(), generation);
+        self.pending_offers
+            .lock()
+            .insert(pending_key.clone(), PendingOfferPeer::default());
+        let pc = match build_peer_connection(
+            Arc::clone(self),
+            Arc::clone(&signaling),
+            remote_peer_id.clone(),
+            generation,
+        )
+        .await
+        {
+            Ok(pc) => pc,
+            Err(error) => {
+                self.pending_offers.lock().remove(&pending_key);
+                return Err(error);
+            }
+        };
+        if let Err(error) = pc.set_remote_description(description).await {
+            self.pending_offers.lock().remove(&pending_key);
+            let _ = pc.close().await;
+            return Err(webrtc_error("set remote offer", error));
+        }
+        let answer = match pc.create_answer(None).await {
+            Ok(answer) => answer,
+            Err(error) => {
+                self.pending_offers.lock().remove(&pending_key);
+                let _ = pc.close().await;
+                return Err(webrtc_error("create answer", error));
+            }
+        };
+
+        if let Err(error) = pc.set_local_description(answer).await {
+            self.pending_offers.lock().remove(&pending_key);
+            let _ = pc.close().await;
+            return Err(webrtc_error("set local answer", error));
+        }
+        let Some(local_description) = pc.local_description().await else {
+            self.pending_offers.lock().remove(&pending_key);
+            let _ = pc.close().await;
+            return Err(new_rx_error(
+                "RC_WEBRTC_SIGNAL",
+                Some(serde_json::json!({ "message": "answer has no local description" })),
+            ));
+        };
+        if let Err(error) = signaling
+            .send_signal(
+                remote_peer_id.clone(),
+                serde_json::to_value(local_description).unwrap_or(Value::Null),
+            )
+            .await
+        {
+            self.pending_offers.lock().remove(&pending_key);
+            let _ = pc.close().await;
+            return Err(error);
+        }
+        if let Err(error) = self.commit_prepared_offer(
+            remote_peer_id.clone(),
+            generation,
+            Arc::clone(&pc),
+            signaling.own_peer_id(),
+            offer_session_id,
+        ) {
+            let _ = pc.close().await;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn commit_prepared_offer(
+        self: &Arc<Self>,
+        remote_peer_id: PeerId,
+        generation: u64,
+        pc: Arc<dyn PeerConnection>,
+        local_peer_id: Option<PeerId>,
+        offer_session_id: u64,
+    ) -> RxResult<()> {
+        let pending_key = (remote_peer_id.clone(), generation);
+        // This lock is the candidate callback/commit boundary. Any channel
+        // callback that arrived before it is staged; terminal candidates do
+        // not replace the old peer. Callbacks arriving after it see the newly
+        // registered generation. No await occurs inside the boundary.
+        let mut pending = self.pending_offers.lock();
+        if self.closed.load(Ordering::Acquire)
+            || !pending
+                .get(&pending_key)
+                .is_some_and(|entry| !entry.terminal)
+        {
+            pending.remove(&pending_key);
+            return Err(new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(
+                    serde_json::json!({ "message": "offer responder unavailable before registration" }),
+                ),
+            ));
+        }
+        self.retire_obsolete_peer_after_answer(&remote_peer_id);
+        {
+            let _lifecycle = self.peer_lifecycle.lock();
+            self.peers.lock().insert(
+                remote_peer_id.clone(),
+                PeerEntry {
+                    generation,
+                    local_peer_id,
+                    peer_connection: Arc::clone(&pc),
+                    data_channel: None,
+                    data_channel_open: false,
+                    auxiliary_data_channels: HashMap::new(),
+                    tasks: Vec::new(),
+                },
+            );
+        }
+        let staged_channels = pending
+            .remove(&pending_key)
+            .map(|entry| entry.data_channels)
+            .unwrap_or_default();
+        let mut accepted = self.accepted_offers.lock();
+        accepted.push_back((remote_peer_id.clone(), offer_session_id));
+        if accepted.len() > ACCEPTED_OFFER_HISTORY_CAP {
+            accepted.pop_front();
+        }
+        drop(accepted);
+        drop(pending);
+        for (label, channel) in staged_channels {
+            if matches!(
+                label.as_str(),
+                "ctox-browser-live-v1" | "ctox.workjet.device.v1"
+            ) {
+                install_auxiliary_data_channel(
+                    Arc::clone(self),
+                    remote_peer_id.clone(),
+                    generation,
+                    label,
+                    channel,
+                );
+            } else {
+                install_data_channel(
+                    Arc::clone(self),
+                    remote_peer_id.clone(),
+                    generation,
+                    channel,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn retire_obsolete_peer_after_answer(self: &Arc<Self>, remote_peer_id: &str) {
         let current_local_peer_id = self.signaling.as_ref().and_then(|s| s.own_peer_id());
         let removal = {
             let peers = self.peers.lock();
@@ -1856,7 +2047,7 @@ impl WebRTCRsConnectionHandler {
             tracing::warn!(
                 target: "ctox_rxdb::webrtc_rs",
                 peer = %remote_peer_id,
-                "replacing obsolete WebRTC responder before answering renewed offer"
+                "retiring obsolete WebRTC responder after sending renewed answer"
             );
             remove_peer_inner(self, remote_peer_id, removal, None);
         }
@@ -1983,7 +2174,16 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     }
 
     async fn close(&self) -> Result<(), RxError> {
-        self.closed.store(true, Ordering::SeqCst);
+        // Commit takes pending_offers before peer_lifecycle. Use the same
+        // order here so close either observes and retires the committed peer,
+        // or makes a later candidate commit fail without touching old state.
+        let peers = {
+            let mut pending = self.pending_offers.lock();
+            let _lifecycle = self.peer_lifecycle.lock();
+            self.closed.store(true, Ordering::SeqCst);
+            pending.clear();
+            std::mem::take(&mut *self.peers.lock())
+        };
         self.presence_sweep_armed.store(false, Ordering::SeqCst);
         let presence_task = self.presence_sweep_task.lock().take();
         if let Some(task) = presence_task {
@@ -1996,7 +2196,6 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         for task in tasks {
             task.abort();
         }
-        let peers = std::mem::take(&mut *self.peers.lock());
         for (peer, mut entry) in peers {
             for task in entry.tasks.drain(..) {
                 task.abort();
@@ -2011,6 +2210,7 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         if let Some(signaling) = &self.signaling {
             signaling.close().await;
         }
+        self.accepted_offers.lock().clear();
         self.send_queues.lock().clear();
         self.backpressure.lock().clear();
         self.pending_frame_acks.lock().clear();
@@ -3364,7 +3564,20 @@ impl PeerConnectionEventHandler for RsPeerConnectionEvents {
         // for observability but do not remove the peer.
         match state {
             RTCPeerConnectionState::Failed | RTCPeerConnectionState::Closed => {
-                remove_peer_generation(&self.handler, &self.remote_peer_id, self.generation);
+                let staged = {
+                    let mut pending = self.handler.pending_offers.lock();
+                    if let Some(entry) =
+                        pending.get_mut(&(self.remote_peer_id.clone(), self.generation))
+                    {
+                        entry.terminal = true;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if !staged {
+                    remove_peer_generation(&self.handler, &self.remote_peer_id, self.generation);
+                }
             }
             RTCPeerConnectionState::Disconnected => {
                 tracing::debug!(
@@ -3378,6 +3591,20 @@ impl PeerConnectionEventHandler for RsPeerConnectionEvents {
 
     async fn on_data_channel(&self, data_channel: Arc<dyn DataChannel>) {
         let label = data_channel.label().await.unwrap_or_default();
+        let staged = {
+            let mut pending = self.handler.pending_offers.lock();
+            if let Some(entry) = pending.get_mut(&(self.remote_peer_id.clone(), self.generation)) {
+                entry
+                    .data_channels
+                    .push((label.clone(), Arc::clone(&data_channel)));
+                true
+            } else {
+                false
+            }
+        };
+        if staged {
+            return;
+        }
         if matches!(
             label.as_str(),
             "ctox-browser-live-v1" | "ctox.workjet.device.v1"
@@ -5829,11 +6056,384 @@ mod tests {
             .lock()
             .insert(peer.peer_id().to_owned(), "old-token".into());
 
-        handler.remove_obsolete_peer_before_offer(peer.peer_id());
+        handler.retire_obsolete_peer_after_answer(peer.peer_id());
 
         assert!(handler.connection_for_peer(peer.peer_id()).is_none());
-        assert!(!handler.peer_capability_tokens.lock().contains_key(peer.peer_id()));
+        assert!(!handler
+            .peer_capability_tokens
+            .lock()
+            .contains_key(peer.peer_id()));
         handler.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn inbound_offer_validates_before_replacing_and_replays_preserve_the_answered_peer() {
+        use futures::SinkExt;
+        use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+        let listener = super::super::signaling_client::bind_test_signaling_listener().await;
+        let addr = listener.local_addr().unwrap();
+        let (frames_tx, mut frames_rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut socket = accept_async(stream).await.unwrap();
+            socket
+                .send(Message::Text(
+                    r#"{"type":"init","yourPeerId":"native-1"}"#.to_string().into(),
+                ))
+                .await
+                .unwrap();
+            while let Some(Ok(message)) = socket.next().await {
+                let Message::Text(text) = message else {
+                    continue;
+                };
+                if let Ok(frame) = serde_json::from_str::<Value>(&text) {
+                    if frame.get("type").and_then(Value::as_str) == Some("join") {
+                        socket
+                            .send(Message::Text(
+                                r#"{"type":"joined","otherPeerIds":[],"peers":[]}"#
+                                    .to_string()
+                                    .into(),
+                            ))
+                            .await
+                            .unwrap();
+                    }
+                    let _ = frames_tx.send(frame);
+                }
+            }
+        });
+        let signaling = SignalingClient::connect(format!("ws://{addr}"))
+            .await
+            .unwrap();
+        let mut config = WebRTCRsConfig::new(Arc::clone(&signaling), "offer-test");
+        config.ice_servers.clear();
+        config.udp_bind_addr = "127.0.0.1:0".to_string();
+        let handler = WebRTCRsConnectionHandler::prepare_with_signaling(config)
+            .await
+            .unwrap();
+        signaling.join("offer-test".to_string()).await.unwrap();
+        let old = install_test_connection(&handler, "browser-1", 2).await;
+        handler.peer_generation_counter.store(2, Ordering::SeqCst);
+        handler
+            .peer_capability_tokens
+            .lock()
+            .insert("browser-1".to_string(), "old-token".to_string());
+
+        let malformed = serde_json::json!({"type": "offer", "sdp": "not SDP"});
+        assert!(handler
+            .handle_signal("browser-1".to_string(), malformed)
+            .await
+            .is_err());
+        assert_eq!(
+            handler
+                .connection_for_peer("browser-1")
+                .unwrap()
+                .generation(),
+            old.generation()
+        );
+        assert_eq!(
+            handler
+                .peer_capability_tokens
+                .lock()
+                .get("browser-1")
+                .map(String::as_str),
+            Some("old-token")
+        );
+
+        let offerer = build_peer_connection(
+            Arc::clone(&handler),
+            Arc::clone(&signaling),
+            "offer-source".to_string(),
+            100,
+        )
+        .await
+        .unwrap();
+        offerer.create_data_channel("rxdb", None).await.unwrap();
+        let offer = offerer.create_offer(None).await.unwrap();
+        offerer.set_local_description(offer).await.unwrap();
+        let offered = serde_json::to_value(offerer.local_description().await.unwrap()).unwrap();
+        handler
+            .handle_signal("browser-1".to_string(), offered.clone())
+            .await
+            .unwrap();
+        // The answer has been sent, but this synthetic offerer has not applied
+        // it yet. Registration is observable before the DataChannel opens;
+        // connection_for_peer intentionally exposes only open channels.
+        let replacement_generation = handler.peers.lock().get("browser-1").unwrap().generation;
+        assert_ne!(replacement_generation, old.generation());
+        assert!(!handler
+            .peer_capability_tokens
+            .lock()
+            .contains_key("browser-1"));
+        let answer = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let frame = frames_rx.recv().await.unwrap();
+                if frame.pointer("/data/type").and_then(Value::as_str) == Some("answer") {
+                    break frame;
+                }
+            }
+        })
+        .await
+        .expect("fresh offer must receive an answer");
+        assert_eq!(answer["receiverPeerId"], "browser-1");
+
+        handler
+            .peer_capability_tokens
+            .lock()
+            .insert("browser-1".to_string(), "replacement-token".to_string());
+        handler
+            .handle_signal("browser-1".to_string(), offered)
+            .await
+            .unwrap();
+        remove_peer_generation(&handler, "browser-1", old.generation());
+        assert_eq!(
+            handler.peers.lock().get("browser-1").unwrap().generation,
+            replacement_generation
+        );
+        assert_eq!(
+            handler
+                .peer_capability_tokens
+                .lock()
+                .get("browser-1")
+                .map(String::as_str),
+            Some("replacement-token")
+        );
+
+        let newer_offerer = build_peer_connection(
+            Arc::clone(&handler),
+            Arc::clone(&signaling),
+            "newer-offer-source".to_string(),
+            101,
+        )
+        .await
+        .unwrap();
+        newer_offerer
+            .create_data_channel("rxdb", None)
+            .await
+            .unwrap();
+        let newer_offer = newer_offerer.create_offer(None).await.unwrap();
+        newer_offerer
+            .set_local_description(newer_offer)
+            .await
+            .unwrap();
+        let newer_signal =
+            serde_json::to_value(newer_offerer.local_description().await.unwrap()).unwrap();
+        handler
+            .handle_signal("browser-1".to_string(), newer_signal)
+            .await
+            .unwrap();
+        let newest_generation = handler.peers.lock().get("browser-1").unwrap().generation;
+        assert_ne!(newest_generation, replacement_generation);
+        handler
+            .peer_capability_tokens
+            .lock()
+            .insert("browser-1".to_string(), "newest-token".to_string());
+        // A delayed offer from two generations ago must not retire newest.
+        handler
+            .handle_signal(
+                "browser-1".to_string(),
+                serde_json::to_value(offerer.local_description().await.unwrap()).unwrap(),
+            )
+            .await
+            .unwrap();
+        remove_peer_generation(&handler, "browser-1", replacement_generation);
+        assert_eq!(
+            handler.peers.lock().get("browser-1").unwrap().generation,
+            newest_generation
+        );
+        assert_eq!(
+            handler
+                .peer_capability_tokens
+                .lock()
+                .get("browser-1")
+                .map(String::as_str),
+            Some("newest-token")
+        );
+        let pending_generation = handler
+            .peer_generation_counter
+            .fetch_add(1, Ordering::SeqCst)
+            .saturating_add(1);
+        let pending_key = ("browser-1".to_string(), pending_generation);
+        handler
+            .pending_offers
+            .lock()
+            .insert(pending_key.clone(), PendingOfferPeer::default());
+        let pending_pc = build_peer_connection(
+            Arc::clone(&handler),
+            Arc::clone(&signaling),
+            "browser-1".to_string(),
+            pending_generation,
+        )
+        .await
+        .unwrap();
+        let pending_events = RsPeerConnectionEvents {
+            handler: Arc::clone(&handler),
+            signaling: Arc::clone(&signaling),
+            remote_peer_id: "browser-1".to_string(),
+            generation: pending_generation,
+        };
+        let early_channel = pending_pc.create_data_channel("rxdb", None).await.unwrap();
+        pending_events.on_data_channel(early_channel).await;
+        assert!(!handler.pending_offers.lock()[&pending_key]
+            .data_channels
+            .is_empty());
+        pending_events
+            .on_connection_state_change(RTCPeerConnectionState::Failed)
+            .await;
+        assert!(handler.pending_offers.lock()[&pending_key].terminal);
+        assert!(handler
+            .commit_prepared_offer(
+                "browser-1".to_string(),
+                pending_generation,
+                Arc::clone(&pending_pc),
+                signaling.own_peer_id(),
+                42,
+            )
+            .is_err());
+        assert_eq!(
+            handler.peers.lock().get("browser-1").unwrap().generation,
+            newest_generation
+        );
+        assert_eq!(
+            handler
+                .peer_capability_tokens
+                .lock()
+                .get("browser-1")
+                .map(String::as_str),
+            Some("newest-token")
+        );
+        let _ = pending_pc.close().await;
+        let failed_offerer = build_peer_connection(
+            Arc::clone(&handler),
+            Arc::clone(&signaling),
+            "failed-offer-source".to_string(),
+            102,
+        )
+        .await
+        .unwrap();
+        failed_offerer
+            .create_data_channel("rxdb", None)
+            .await
+            .unwrap();
+        let failed_offer = failed_offerer.create_offer(None).await.unwrap();
+        failed_offerer
+            .set_local_description(failed_offer)
+            .await
+            .unwrap();
+        let failed_signal =
+            serde_json::to_value(failed_offerer.local_description().await.unwrap()).unwrap();
+        signaling.close().await;
+        assert!(handler
+            .handle_signal("browser-1".to_string(), failed_signal)
+            .await
+            .is_err());
+        assert_eq!(
+            handler.peers.lock().get("browser-1").unwrap().generation,
+            newest_generation
+        );
+        assert_eq!(
+            handler
+                .peer_capability_tokens
+                .lock()
+                .get("browser-1")
+                .map(String::as_str),
+            Some("newest-token")
+        );
+        let _ = failed_offerer.close().await;
+        let _ = newer_offerer.close().await;
+        let _ = offerer.close().await;
+        handler.close().await.unwrap();
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn early_offer_data_channel_is_installed_when_candidate_commits() {
+        struct Events;
+        #[async_trait]
+        impl PeerConnectionEventHandler for Events {}
+
+        let handler = WebRTCRsConnectionHandler::new();
+        let old = install_test_connection(&handler, "early-channel", 2).await;
+        let pc: Arc<dyn PeerConnection> = Arc::new(
+            PeerConnectionBuilder::new()
+                .with_handler(Arc::new(Events))
+                .with_udp_addrs(advertisable_udp_bind_addrs("127.0.0.1:0"))
+                .build()
+                .await
+                .unwrap(),
+        );
+        let channel = pc.create_data_channel("rxdb", None).await.unwrap();
+        let generation = 3;
+        handler.pending_offers.lock().insert(
+            ("early-channel".to_string(), generation),
+            PendingOfferPeer {
+                terminal: false,
+                data_channels: vec![("rxdb".to_string(), channel)],
+            },
+        );
+        handler
+            .commit_prepared_offer("early-channel".to_string(), generation, pc, None, 43)
+            .unwrap();
+        let peers = handler.peers.lock();
+        let replacement = peers.get("early-channel").unwrap();
+        assert_ne!(replacement.generation, old.generation());
+        assert!(replacement.data_channel.is_some());
+        drop(peers);
+        handler.close().await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn close_and_offer_commit_share_one_lifecycle_boundary() {
+        struct Events;
+        #[async_trait]
+        impl PeerConnectionEventHandler for Events {}
+
+        let handler = WebRTCRsConnectionHandler::new();
+        let old = install_test_connection(&handler, "closing-peer", 2).await;
+        let pc: Arc<dyn PeerConnection> = Arc::new(
+            PeerConnectionBuilder::new()
+                .with_handler(Arc::new(Events))
+                .with_udp_addrs(advertisable_udp_bind_addrs("127.0.0.1:0"))
+                .build()
+                .await
+                .unwrap(),
+        );
+        // Missing provisional state cannot count as a healthy candidate.
+        assert!(handler
+            .commit_prepared_offer("closing-peer".to_string(), 3, Arc::clone(&pc), None, 44)
+            .is_err());
+        assert_eq!(
+            handler
+                .connection_for_peer("closing-peer")
+                .unwrap()
+                .generation(),
+            old.generation()
+        );
+        handler
+            .pending_offers
+            .lock()
+            .insert(("closing-peer".to_string(), 3), PendingOfferPeer::default());
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let close_handler = Arc::clone(&handler);
+        let close_barrier = Arc::clone(&barrier);
+        let closing = tokio::spawn(async move {
+            close_barrier.wait().await;
+            close_handler.close().await.unwrap();
+        });
+        let commit_handler = Arc::clone(&handler);
+        let commit_barrier = Arc::clone(&barrier);
+        let commit_pc = Arc::clone(&pc);
+        let committing = tokio::spawn(async move {
+            commit_barrier.wait().await;
+            commit_handler.commit_prepared_offer("closing-peer".to_string(), 3, commit_pc, None, 45)
+        });
+        barrier.wait().await;
+        closing.await.unwrap();
+        let _commit_result = committing.await.unwrap();
+        assert!(handler.closed.load(Ordering::Acquire));
+        assert!(handler.peers.lock().is_empty());
+        assert!(handler.pending_offers.lock().is_empty());
+        let _ = pc.close().await;
     }
 
     #[test]

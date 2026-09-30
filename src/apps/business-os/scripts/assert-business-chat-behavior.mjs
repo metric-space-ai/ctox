@@ -117,6 +117,42 @@ try {
     });
   }
 
+  // Owner 28.09.2026: clicking Lumi in the crew bar opened a chat with
+  // "Crew". A mouse click on a member seat opens a conversation with that
+  // member, clicking it again returns to it, and the first task names the
+  // member for the router; follow-ups stay by thread continuity.
+  await scenario(page, 'member-seat-click-opens-conversation-with-member', { count: 0, crewMembers: 4 }, async () => {
+    const seat = () => page.locator('.ctox-chat-crew-slot[data-crew-drag="member_1"]').first();
+    await seat().waitFor();
+    const clickSeat = async () => {
+      const box = await seat().boundingBox();
+      await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    };
+    await clickSeat();
+    const active = page.locator('.ctox-chat-window.is-active');
+    await active.waitFor();
+    expect(await active.locator('.ctox-chat-title .ctox-crew-ref').getAttribute('data-crew-ref') === 'member_1', 'the window shows the clicked member, not the whole crew');
+    expect(await active.locator('textarea[name="message"]').getAttribute('placeholder') === 'Aufgabe für Nia...', 'the composer addresses the member');
+    expect(await active.locator('.ctox-chat-delegation-card').count() === 0, 'no empty progress ring before any task exists');
+    await clickSeat();
+    await page.evaluate(() => window.chatHarness.waitForPaint());
+    expect(await page.locator('.ctox-chat-window').count() === 1, 'clicking the member again returns to its conversation');
+    await active.locator('textarea[name="message"]').fill('Bitte die offenen Rechnungen prüfen.');
+    await active.locator('[data-chat-send]').click();
+    const first = await page.evaluate(async () => {
+      await window.chatHarness.waitFor(() => window.chatHarness.lastCommand);
+      return window.chatHarness.lastCommand;
+    });
+    expect(first.payload.crew_member_id === 'member_1', `the first task names the addressed member: ${JSON.stringify(first.payload.crew_member_id)}`);
+    await active.locator('textarea[name="message"]').fill('Und bitte kurz zusammenfassen.');
+    await active.locator('[data-chat-send]').click();
+    const followUp = await page.evaluate(async (firstId) => {
+      await window.chatHarness.waitFor(() => window.chatHarness.lastCommand && window.chatHarness.lastCommand.id !== firstId);
+      return window.chatHarness.lastCommand;
+    }, first.id);
+    expect(!('crew_member_id' in followUp.payload), 'a follow-up stays with the member through continuity, not a new assignment');
+  });
+
   await scenario(page, 'future-date-no-phantom-chat', { count: 0 }, async (m) => {
     const after = await page.evaluate(async () => {
       document.querySelector('[data-chat-date-next]').click();
@@ -324,8 +360,11 @@ try {
     expect(m.windowCount === 3, `the stage must render all three expanded crew windows, got ${m.windowCount}`);
     expect(m.renderedWindowIds.join(',') === 'chat_0,chat_1,chat_2', `the rendered crew should preserve its order, got ${m.renderedWindowIds.join(',')}`);
     expect(m.stageClasses.includes('is-side-by-side'), `three crew windows should arrange side by side, got ${m.stageClasses}`);
-    expect(m.windowCreatureCount === 3, `each work window needs its own creature, got ${m.windowCreatureCount}`);
-    expect(m.dockCreatureCount === 3, `the dock must show the same three crew members, got ${m.dockCreatureCount}`);
+    // Owner 28.09.2026: "jedes Lumi darf es nur einmal geben!" Windows and
+    // chips NAME their member with a reference badge; the creature itself
+    // lives only in the crew bar (and once on the CTOX map).
+    expect(m.windowReferenceCount === 3 && m.windowCreatureCount === 0, `each work window names its member with a badge and draws no creature copy, got ${m.windowReferenceCount} badges / ${m.windowCreatureCount} creatures`);
+    expect(m.dockReferenceCount === 3 && m.dockCreatureCount === 0, `each chip names its member with a badge and draws no creature copy, got ${m.dockReferenceCount} badges / ${m.dockCreatureCount} creatures`);
     expect(m.dockLabel === 'Crew', `crew navigation label must remain visible, got ${m.dockLabel}`);
   });
 
@@ -355,11 +394,12 @@ try {
     results.push({ scenario: 'crew-presence-after-load', metrics: after });
     await page.screenshot({ path: path.join(outputDir, 'crew-presence.png'), clip: { x: 280, y: 100, width: 900, height: 400 } });
     const byHost = Object.fromEntries((after.appPresence || []).map((entry) => [entry.host, entry]));
-    expect(byHost['window:module:documents']?.creatures === 2, `documents window icon must carry both working members, got ${JSON.stringify(byHost['window:module:documents'])}`);
-    expect(byHost['desktop:documents']?.creatures === 2, `documents desktop icon must carry both working members, got ${JSON.stringify(byHost['desktop:documents'])}`);
+    expect(byHost['window:module:documents']?.references === 2, `documents window icon must name both working members, got ${JSON.stringify(byHost['window:module:documents'])}`);
+    expect(byHost['desktop:documents']?.references === 2, `documents desktop icon must name both working members, got ${JSON.stringify(byHost['desktop:documents'])}`);
+    expect((after.appPresence || []).every((entry) => entry.creatures === 0), `app icons name members with badges, never creature copies, got ${JSON.stringify(after.appPresence)}`);
     expect(/Pico, Nia arbeiten hier/.test(byHost['window:module:documents']?.title || ''), `presence hint must name the members, got ${byHost['window:module:documents']?.title}`);
-    expect(byHost['window:module:ctox']?.creatures === 0, `finished tasks must not show presence, got ${JSON.stringify(byHost['window:module:ctox'])}`);
-    expect(byHost['desktop:ctox']?.creatures === 0, `finished tasks must not show desktop presence, got ${JSON.stringify(byHost['desktop:ctox'])}`);
+    expect(byHost['window:module:ctox']?.references === 0, `finished tasks must not show presence, got ${JSON.stringify(byHost['window:module:ctox'])}`);
+    expect(byHost['desktop:ctox']?.references === 0, `finished tasks must not show desktop presence, got ${JSON.stringify(byHost['desktop:ctox'])}`);
     expect((after.appPresence || []).every((entry) => entry.inside), `presence badges must stay inside their icon, got ${JSON.stringify(after.appPresence)}`);
   });
 
@@ -457,7 +497,8 @@ try {
     expect(await input.evaluate(e => e === document.activeElement), 'live projection must preserve typing focus');
     expect(await input.getAttribute('placeholder') === 'Aufgabe für Pico...', 'live projection retains the assigned member');
     expect((await page.locator('.ctox-chat-window.is-active [data-chat-title]').getAttribute('aria-label')).startsWith('Pico ·'), 'header identifies the actual assigned member');
-    expect(JSON.parse(await page.locator('.ctox-chat-window.is-active .ctox-crew-creature').getAttribute('data-crew-identity')).name === 'Pico', 'creature appearance follows the assigned member');
+    expect(await page.locator('.ctox-chat-window.is-active .ctox-chat-title .ctox-crew-ref').getAttribute('title') === 'Pico', 'the window badge follows the assigned member');
+    expect(await page.locator('.ctox-chat-window.is-active .ctox-crew-creature').count() === 0, 'a chat window draws no creature copy');
     expect(await inspection.locator('.ctox-chat-inspection-steps li').count() === 3, 'inspection keeps the same plan steps');
     expect(!(await page.locator('.ctox-chat-window.is-active .ctox-chat-messages').innerText()).includes('Ein neuer Arbeitsschritt läuft.'), 'work status must not appear as a crew reply');
   });
@@ -1829,11 +1870,14 @@ function harnessHtml() {
         appPresence: Array.from(document.querySelectorAll('.shell-window-v2-icon, .desktop-icon-glyph')).map((host) => ({
           host: host.classList.contains('desktop-icon-glyph') ? 'desktop:' + host.closest('.desktop-icon')?.dataset.target : 'window:' + host.closest('.shell-window')?.dataset.ownerId,
           creatures: host.querySelectorAll('[data-crew-presence] .ctox-crew-creature').length,
+          references: host.querySelectorAll('[data-crew-presence] .ctox-crew-ref').length,
           title: host.querySelector('[data-crew-presence]')?.getAttribute('title') || '',
           inside: (() => { const badge = host.querySelector('[data-crew-presence]'); if (!badge) return true; const a = host.getBoundingClientRect(); const b = badge.getBoundingClientRect(); return b.left >= a.left - 0.5 && b.right <= a.right + 0.5 && b.top >= a.top - 0.5 && b.bottom <= a.bottom + 0.5; })(),
         })),
         windowCreatureCount: document.querySelectorAll('.ctox-chat-window .ctox-crew-creature').length,
         dockCreatureCount: document.querySelectorAll('.ctox-chat-chip .ctox-crew-creature').length,
+        windowReferenceCount: document.querySelectorAll('.ctox-chat-window .ctox-crew-ref').length,
+        dockReferenceCount: document.querySelectorAll('.ctox-chat-chip .ctox-crew-ref').length,
         progressCardCount: document.querySelectorAll('.ctox-chat-delegation-card .ctox-progress-visual').length,
         progressHeaderText: document.querySelector('.ctox-chat-progress-head')?.textContent || '',
         progressSegmentCount: document.querySelectorAll('.ctox-progress-segment, .ctox-progress-review').length,

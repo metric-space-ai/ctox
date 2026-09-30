@@ -1,7 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
-import { renderCrewCreature, crewModeForTaskState, crewActivityFromProgress } from '../../shared/crew-renderer.js?v=20260927-crew-genome-v4';
-import { startCrewMotion } from '../../shared/crew-motion.js?v=20260927-crew-genome-v4';
+import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-truth-v7';
+import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-truth-v7';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 
 const REFRESH_DEBOUNCE_MS = 80;
@@ -312,7 +312,7 @@ export function ticketRowHtml(row, opts = {}) {
     + ' data-context-label="' + escapeAttr(row.title || row.key || row.id) + '"'
     + ' data-record-type="ticket" data-record-id="' + escapeAttr(row.id) + '" data-label="' + escapeAttr(row.title || row.key || row.id) + '"';
   const crew = row.crew && row.crew.html
-    ? '<span class="ctox-flow-creature-shell ticket-row-crew" title="' + escapeAttr([row.crew.name, row.crew.sentence].filter(Boolean).join(' · ')) + '">' + row.crew.html + '</span>'
+    ? '<span class="ticket-row-crew" title="' + escapeAttr([row.crew.name, row.crew.sentence].filter(Boolean).join(' · ')) + '">' + row.crew.html + '</span>'
     : '';
   if (view === 'list') {
     return '<div' + attrs + '>' + crew + '<span class="ticket-row-title">' + escapeHtml(row.title || row.key || 'Ticket') + '</span>' + badge + '</div>';
@@ -679,14 +679,6 @@ function crewMemberFor(task) {
   return id ? (state.crew?.members || []).find((member) => member.id === id) || null : null;
 }
 
-function crewTaskState(task) {
-  const status = String(task?.route_status || task?.status || '').toLowerCase();
-  if (['leased', 'running', 'processing'].includes(status)) return 'running';
-  if (['failed', 'error', 'cancelled', 'canceled'].includes(status)) return 'failed';
-  if (['handled', 'completed', 'done', 'success'].includes(status)) return 'success';
-  return 'queued';
-}
-
 function crewWaitSentence(task) {
   if (!task) return '';
   const t = state.t;
@@ -713,20 +705,16 @@ function crewWaitSentence(task) {
   return displayStatus(status || 'open');
 }
 
-function crewCreatureFor(task, placement = 'map') {
+// Tickets show the member working on them as its portrait; the living body
+// exists once per screen (crew bar seat or CTOX map), Owner 28.09.2026.
+function crewReferenceFor(task, size = 24) {
   const member = crewMemberFor(task);
-  const taskState = crewTaskState(task);
-  const progress = task?.execution_progress || null;
-  startCrewMotion();
-  return renderCrewCreature({
-    appearance: member ? { id: member.id, name: member.name, shape: member.shape, color: member.color } : null,
-    animationKey: member ? member.id : (task?.command_id || task?.id || 'crew'),
-    taskState,
-    mode: crewModeForTaskState(taskState, progress?.phase),
-    placement,
-    progressPercent: Number(progress?.percent) || 0,
-    activity: crewActivityFromProgress(progress),
-  });
+  startCrewMotion(); // installs the shared crew stylesheet (portrait included)
+  const status = String(task?.route_status || task?.status || '').toLowerCase();
+  const taskState = ['leased', 'running', 'processing'].includes(status) ? 'running'
+    : ['failed', 'error', 'cancelled', 'canceled'].includes(status) ? 'failed'
+      : ['handled', 'completed', 'done', 'success'].includes(status) ? 'success' : 'queued';
+  return renderCrewReference({ appearance: member ? { id: member.id, name: member.name, shape: member.shape, color: member.color } : null, size, mode: crewModeForTaskState(taskState, task?.execution_progress?.phase) });
 }
 
 function mayAssignCrew() {
@@ -751,7 +739,7 @@ function crewCardHtml(ticket) {
     <section class="ctox-card tickets-crew-card">
       <header>${escapeHtml(t('crew', 'Crew'))}</header>
       <div class="ctox-card-body tickets-crew-body">
-        <span class="ctox-flow-creature-shell tickets-crew-portrait">${crewCreatureFor(task)}</span>
+        <span class="tickets-crew-portrait">${crewReferenceFor(task, 32)}</span>
         <div class="tickets-crew-facts">
           <strong>${escapeHtml(member ? member.name : t('crewUnassigned', 'Crew, noch niemand zugeordnet'))}</strong>
           <small>${escapeHtml(crewWaitSentence(task))}</small>
@@ -810,7 +798,7 @@ function shapeTicket(ticket) {
   return {
     id: ticket.id,
     key: ticket.ticket_key || ticket.id,
-    crew: task ? { html: crewCreatureFor(task, 'map'), name: crewMemberFor(task)?.name || '', sentence: crewWaitSentence(task) } : null,
+    crew: task ? { html: crewReferenceFor(task, 20), name: crewMemberFor(task)?.name || '', sentence: crewWaitSentence(task) } : null,
     title: ticket.title || ticket.ticket_key || 'Ticket',
     status: ticket.remote_status || 'open',
     source: ticket.source_system || 'ctox',

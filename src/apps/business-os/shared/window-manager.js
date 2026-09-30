@@ -1358,7 +1358,11 @@ export function createWindowManager({
     const menu = win.element.querySelector('[data-window-layout-menu]');
     if (menu) menu.hidden = true;
     if (action === 'free') {
-      if (win.state === 'maximized' || win.element.classList.contains('is-snapped')) restoreSize(win);
+      if (win.state === 'maximized' || win.element.classList.contains('is-snapped')) {
+        restoreSize(win);
+        bus.emit('window:restored', { id: win.id, ownerId: win.ownerId });
+        persistFor(win);
+      }
     } else if (action === 'maximize') {
       if (win.state !== 'maximized') toggleMaximize(win.id);
     } else if (action === 'minimize') {

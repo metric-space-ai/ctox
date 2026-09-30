@@ -12682,6 +12682,8 @@ function ensureCtoxSmokeBinary() {
         }, 8000, `app audience ${label} tabs`);
 
         let result = null;
+        let tamperedScopedTaskbarPinsKey = '';
+        let storedScopedTaskbarPins = null;
         try {
           const helperPrivateHiddenForTeam = !canSeeModuleForAppVersion(privateModule, {
             session: outsideSession,

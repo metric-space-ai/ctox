@@ -1,15 +1,16 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260927-shell-v2-peer-authority-v414';
-import { CtoxResizer } from './shared/resizer.js?v=20260927-shell-v2-peer-authority-v414';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260927-shell-v2-peer-authority-v414';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260927-shell-v2-peer-authority-v414';
-import { createAppActions } from './shared/app-actions.js?v=20260927-shell-v2-peer-authority-v414';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260930-shell-v2-checkpoint-freshness-v431';
+import { CtoxResizer } from './shared/resizer.js?v=20260930-shell-v2-checkpoint-freshness-v431';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260930-shell-v2-checkpoint-freshness-v431';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20260930-shell-v2-checkpoint-freshness-v431';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260930-shell-v2-checkpoint-freshness-v431';
+import { createAppActions } from './shared/app-actions.js?v=20260930-shell-v2-checkpoint-freshness-v431';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260927-shell-v2-peer-authority-v414';
+} from './shared/app-lifecycle.js?v=20260930-shell-v2-checkpoint-freshness-v431';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +18,21 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260927-shell-v2-peer-authority-v414';
+  roleMayReadCollection,
+} from './shared/permissions.js?v=20260930-shell-v2-checkpoint-freshness-v431';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260927-shell-v2-peer-authority-v414';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260927-shell-v2-peer-authority-v414';
+} from './shared/branding.js?v=20260930-shell-v2-checkpoint-freshness-v431';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260930-shell-v2-checkpoint-freshness-v431';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260927-shell-v2-peer-authority-v414';
+} from './shared/presentation.js?v=20260930-shell-v2-checkpoint-freshness-v431';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +43,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260927-shell-v2-peer-authority-v414';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260927-shell-v2-peer-authority-v414';
-import { createDocumentsFacade } from './shared/documents.js?v=20260927-shell-v2-peer-authority-v414';
+} from './shared/shell-permissions-ui.js?v=20260930-shell-v2-checkpoint-freshness-v431';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260930-shell-v2-checkpoint-freshness-v431';
+import { createDocumentsFacade } from './shared/documents.js?v=20260930-shell-v2-checkpoint-freshness-v431';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,16 +53,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260927-shell-v2-peer-authority-v414';
+} from './shared/maintenance-state.js?v=20260930-shell-v2-checkpoint-freshness-v431';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260927-shell-v2-peer-authority-v414';
+} from './shared/workspace-session.js?v=20260930-shell-v2-checkpoint-freshness-v431';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260927-shell-v2-peer-authority-v414';
+} from './shared/taskbar-pins.js?v=20260930-shell-v2-checkpoint-freshness-v431';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -68,10 +70,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260927-shell-v2-peer-authority-v414';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260930-shell-v2-checkpoint-freshness-v431';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260927-shell-v2-peer-authority-v414';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260927-shell-v2-peer-authority-v414';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260930-shell-v2-checkpoint-freshness-v431';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260930-shell-v2-checkpoint-freshness-v431';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -79,8 +81,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20260927-shell-v2-peer-authority-v414';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260927-shell-v2-peer-authority-v414';
+} from './shared/startup-deadlines.js?v=20260930-shell-v2-checkpoint-freshness-v431';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260930-shell-v2-checkpoint-freshness-v431';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -88,7 +90,6 @@ const LOGGED_OUT_KEY = 'ctox.businessOs.loggedOut';
 const ACCOUNT_PREFS_KEY = 'ctox.businessOs.accountPreferences';
 const PAIRING_CONFIG_KEY = 'ctox.businessOs.pairingConfig';
 const RXDB_BOOTSTRAP_VERSION_KEY = 'ctox.businessOs.rxdbBootstrapVersion';
-const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
 const TASKBAR_PIN_HYDRATION_TIMEOUT_MS = 20_000;
@@ -99,7 +100,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260927-shell-v2-peer-authority-v414';
+const APP_BUILD = '20260930-shell-v2-checkpoint-freshness-v431';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -661,7 +662,8 @@ async function ensureAdvancedStatusRequiredCollections(requiredCollections, opti
   if (!Array.isArray(requiredCollections) || !state.sync?.startCollection) return;
   const names = requiredCollections
     .filter((collection) => typeof collection === 'string' && collection.trim())
-    .filter((collection) => state.db?.raw?.[collection]);
+    .filter((collection) => state.db?.raw?.[collection]
+      && state.sync.mayReadCollection?.(collection) !== false);
   await Promise.all(names.map((collection) => state.sync.startCollection(collection).catch(() => null)));
   if (options.allowRestart !== true) return;
   for (const collection of names) {
@@ -1250,6 +1252,7 @@ const shellMessages = {
 
 const els = {
   status: document.querySelector('[data-status-text]'),
+  collectionFreshnessWarning: document.querySelector('[data-collection-freshness-warning]'),
   ctoxWarning: document.querySelector('[data-ctox-shell-warning]'),
   maintenanceBanner: document.querySelector('[data-maintenance-banner]'),
   recoveryWarning: document.querySelector('[data-recovery-warning]'),
@@ -1326,10 +1329,12 @@ async function bootstrap() {
   setStartupProgress(30, shellText('bootSession'));
   setStartupProgress(50, shellText('bootDatastore'));
   const syncConfig = await loadSyncConfig();
-  await purgeLegacySharedBusinessDb(syncConfig);
-  await purgeSupersededBusinessDbGenerations(syncConfig).catch((error) => {
-    // Never fatal: a browser that refuses the cleanup must still boot.
-    console.warn('[business-os] superseded replica cleanup failed', error);
+  await reportLegacySharedBusinessDb(syncConfig).catch((error) => {
+    console.warn('[business-os] legacy replica inspection failed', error);
+  });
+  await reportSupersededBusinessDbGenerations(syncConfig).catch((error) => {
+    // Diagnostics must not make an authenticated browser unbootable.
+    console.warn('[business-os] superseded replica inspection failed', error);
   });
   await resetBusinessDataPlaneForBuildIfNeeded(syncConfig);
   await openBusinessDataPlane(syncConfig);
@@ -1478,7 +1483,7 @@ function businessDbName(syncConfig = state.syncConfig) {
     .join('_');
 }
 
-async function purgeLegacySharedBusinessDb(syncConfig) {
+async function reportLegacySharedBusinessDb(syncConfig) {
   const instanceId = String(syncConfig?.instance_id || syncConfig?.instanceId || 'default')
     .replace(/[^a-zA-Z0-9_-]+/g, '_')
     .slice(0, 80) || 'default';
@@ -1486,29 +1491,23 @@ async function purgeLegacySharedBusinessDb(syncConfig) {
     .replace(/[^a-zA-Z0-9_-]+/g, '_')
     .slice(0, 80) || 'local';
   const legacyName = [BUSINESS_DB_NAME, originId, instanceId].join('_');
-  const marker = `ctox.business-os.user-db-migration.v1:${legacyName}`;
-  if (localStorage.getItem(marker) === 'complete') return;
-  const { resetBusinessDb } = await loadBusinessDbModule();
-  let resetCompleted = true;
-  await resetBusinessDb({ name: legacyName }).catch((error) => {
-    console.warn('[business-os] legacy shared IndexedDB cleanup failed', error);
-    if (error?.code === 'recovery_export_required') {
-      resetCompleted = false;
-      return;
-    }
-    throw error;
-  });
-  if (resetCompleted) localStorage.setItem(marker, 'complete');
+  // This old replica may still contain the only copy of unacknowledged writes.
+  // Do not infer safety from a cached recovery-status marker or an export call.
+  if (typeof indexedDB?.databases !== 'function') return;
+  const entries = await indexedDB.databases();
+  if (entries.some((entry) => entry?.name === legacyName)) {
+    console.warn('[business-os] preserved legacy shared local replica for recovery', { name: legacyName });
+  }
 }
 
-// Advancing BUSINESS_DB_STORAGE_GENERATION deliberately opens a fresh replica
-// instead of migrating the old one. What it did NOT do was remove the replica
-// it walked away from, so every superseded generation stayed in IndexedDB
-// forever. Measured on a customer instance: 2059 MB of orphaned replicas, and a
-// tab that climbed to 3.2 GB of a 4 GB heap within 30 s and was killed by the
-// renderer before its first replication could finish — every click dead, no
-// error anywhere. A generation bump has to take its predecessor with it.
-async function purgeSupersededBusinessDbGenerations(syncConfig) {
+// A generation bump opens a new replica while the old primary and its recovery
+// journal may still hold writes that the server has not acknowledged. A
+// snapshot count is not a safe deletion gate: an old tab can write after the
+// count, and its versionchange handler can close the handle for deleteDatabase.
+// Preserve both databases until an explicit, verified recovery/retirement flow
+// exists. Old generations can consume substantial storage, so report them for
+// diagnosis instead of silently discarding potentially unique customer data.
+async function reportSupersededBusinessDbGenerations(syncConfig) {
   if (typeof indexedDB?.databases !== 'function') return;
   const currentName = businessDbName(syncConfig);
   const suffix = currentName.slice(
@@ -1530,27 +1529,12 @@ async function purgeSupersededBusinessDbGenerations(syncConfig) {
       && name.startsWith(prefix)
       && name.includes(suffix)
       && !name.includes(BUSINESS_DB_STORAGE_GENERATION)
+      && !name.endsWith('__recovery_v2')
     ));
   if (!superseded.length) return;
-  const removed = [];
-  for (const name of superseded) {
-    // Also take the paired recovery journal; it is scoped to the same replica.
-    for (const target of [name, `${name}__recovery_v2`]) {
-      const ok = await new Promise((resolve) => {
-        let settled = false;
-        const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
-        const request = indexedDB.deleteDatabase(target);
-        request.onsuccess = () => finish(true);
-        request.onerror = () => finish(false);
-        request.onblocked = () => finish(false);
-        setTimeout(() => finish(false), 8000);
-      });
-      if (ok) removed.push(target);
-    }
-  }
-  console.info('[business-os] removed superseded local replica generations', {
+  console.warn('[business-os] preserved superseded local replica generations for recovery', {
     current: currentName,
-    removed,
+    preserved: superseded,
   });
 }
 
@@ -1624,6 +1608,10 @@ async function openBusinessDataPlane(syncConfig) {
       config: syncConfig,
       onDiagnostic: updateSyncDiagnostics,
       capabilityTokenProvider: commandBusModule.getBusinessOsCapabilityToken,
+      mayReadCollection: (collection) => roleMayReadCollection(
+        businessActorFromSession(state.session, state.governance).role,
+        collection,
+      ),
     });
 
     setStartupProgress(69, shellText('bootServices'));
@@ -1633,13 +1621,10 @@ async function openBusinessDataPlane(syncConfig) {
       session: () => state.session,
       config: syncConfig,
     });
-    // Register the mutation plane before restored app windows enqueue their
-    // module collections. This gives foreground actions a ready shared-room
-    // registration instead of placing their one-row command behind the whole
-    // restored workspace bootstrap.
-    await state.sync.startCollection('business_commands').catch((error) => {
-      console.warn('[business-os] command transport warmup deferred', error);
-    });
+    // Request command transport early, but do not put its WebRTC registration
+    // on the cached workspace's first-paint path. A foreground command
+    // re-acquires this bridge through prepareCommandSync before insertion.
+    startCommandTransportWarmup(state.sync);
     // Reconcile only after transport registration. An unresolved native read
     // must not become an empty layout or a fresh local write during startup.
     // A replaced peer generation is a transport boundary, not authoritative
@@ -1683,6 +1668,14 @@ async function openBusinessDataPlane(syncConfig) {
     rejectDataPlaneReady(error);
     throw error;
   }
+}
+
+function startCommandTransportWarmup(sync) {
+  void Promise.resolve()
+    .then(() => sync.startCollection('business_commands'))
+    .catch((error) => {
+      console.warn('[business-os] command transport warmup deferred', error);
+    });
 }
 
 async function openBusinessDbAndRegisterCoreCollections(dbName) {
@@ -2540,7 +2533,16 @@ function isTrustedBusinessOsMessageSource(event) {
 // still emits `ctox-business-os-sync-diagnostics` for those views.
 function setupSyncToast() {
   document.querySelector('[data-sync-toast]')?.remove();
-  syncToastRefresh = () => {};
+  syncToastRefresh = renderCollectionFreshnessWarning;
+  renderCollectionFreshnessWarning();
+}
+
+function renderCollectionFreshnessWarning() {
+  renderFreshnessWarning(els.collectionFreshnessWarning, {
+    collections: Array.isArray(state.activeModule?.collections) ? state.activeModule.collections : [],
+    diagnostics: state.syncDiagnostics,
+    language: shellLang(),
+  });
 }
 
 function teardownModuleResizers() {
@@ -3737,6 +3739,7 @@ function shellText(key) {
 
 function updateSyncDiagnostics(snapshot) {
   state.syncDiagnostics = snapshot;
+  renderCollectionFreshnessWarning();
   if (hasWebRtcConnectedCollection(snapshot)) markBootTiming('firstWebRtcConnectedMs');
   updateModuleScriptPreloadAvailability(snapshot);
   window.ctoxBusinessOsSyncDiagnostics = snapshot;
@@ -4680,6 +4683,7 @@ function desktopAppDescriptorForModule(mod) {
   const selectedIcon = operatorIconFor(mod.id) || grokShellIconFor(mod.id);
   return {
     id: mod.id,
+    module: mod,
     title: moduleDisplayTitle(mod),
     glyph: taskbarMarkForModule(mod),
     category: workjetCategoryForModule(mod),
@@ -5460,7 +5464,7 @@ function renderModuleTab(target, options = {}) {
     ? shellText('pinned')
     : (button.dataset.running ? shellText('running') : '');
   const svgHtml = getRegisteredSvgIcon(target.id, 16, 1.8);
-  const lifecycle = target.kind === 'module'
+  const lifecycle = target.module
     ? appLifecycleBadge(target.module, {
       session: state.session,
       governance: state.governance,
@@ -5510,7 +5514,7 @@ function renderModuleTab(target, options = {}) {
   button.querySelector('[data-app-lifecycle-badge]')?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    if (target.kind === 'module') openAppLifecycleDrawer(target.module);
+    if (target.module) openAppLifecycleDrawer(target.module);
   });
   button.addEventListener('click', () => openLaunchTarget(target));
   return button;
@@ -5593,6 +5597,7 @@ function listLaunchTargets(kind = '') {
       glyph: app.glyph,
       category: workjetCategoryForTarget({ kind: 'app', app }),
       app,
+      module: app.module || null,
     }));
   const targetsById = new Map();
   for (const target of moduleTargets) {
@@ -6536,21 +6541,9 @@ function startModuleSync(mod) {
 
 async function recoverFromLocalRxDbSchemaDrift(error) {
   if (!isRxDbSchemaDriftError(error)) return false;
-  const repairToken = `${businessDbName()}:${RXDB_BOOTSTRAP_VERSION}`;
-  try {
-    if (sessionStorage.getItem(RXDB_SCHEMA_REPAIR_KEY) === repairToken) return false;
-    sessionStorage.setItem(RXDB_SCHEMA_REPAIR_KEY, repairToken);
-  } catch {}
-  console.warn('[business-os] local RxDB schema repair triggered; rebuilding browser cache', error);
-  setStatus('Lokale Datenverbindung wird neu aufgebaut');
-  try { await state.sync?.stop?.(); } catch (stopError) { console.warn('[business-os] sync stop before schema repair failed', stopError); }
-  try { await state.db?.close?.(); } catch (closeError) { console.warn('[business-os] db close before schema repair failed', closeError); }
-  try {
-    const { resetBusinessDb } = await loadBusinessDbModule();
-    await resetBusinessDb({ name: businessDbName() });
-  } catch (resetError) { console.warn('[business-os] RxDB schema repair reset failed', resetError); }
-  window.setTimeout(() => window.location.reload(), 250);
-  return true;
+  console.warn('[business-os] local RxDB schema drift; preserving local replica instead of resetting it', error);
+  setStatus('Lokale Datenbank benötigt eine sichere Wiederherstellung; Daten bleiben erhalten');
+  return false;
 }
 
 function isRxDbSchemaDriftError(error) {
@@ -7077,6 +7070,9 @@ const BUSINESS_CHAT_DB_COLLECTIONS = [
   // the takeover line reads the selection event of the tracked task.
   'ctox_crew_members',
   'ctox_harness_events',
+  // Worker truth for the crew bar count and app presence: only queue tasks a
+  // worker really executes (active_task_ids) count as work.
+  'ctox_harness_status',
   'ctox_queue_tasks',
   'desktop_file_chunks',
   'desktop_files',
@@ -11011,12 +11007,14 @@ function isLocalBusinessOsSurface() {
 async function loadModules(options = {}) {
   const normalized = typeof options === 'number' ? { timeoutMs: options } : (options || {});
   const allowShellSeed = normalized.allowShellSeed !== false && allowsPackagedModuleCatalogSeed();
+  const startup = {};
   const catalog = await loadModuleCatalog(normalized.timeoutMs, {
     allowShellSeed,
+    startup,
   });
   const merged = await ensurePackagedModuleList(
     normalizeModuleList(catalog.modules),
-    { allowShellSeed }
+    { allowShellSeed, useEmbeddedMetadata: startup.usedProjectedCatalog === true }
   );
   // Remember the catalog-provided allowlist so desktop-app gating (listDesktopApps)
   // stays in sync with the tab list. Only overwrite when the synced catalog actually
@@ -11239,7 +11237,14 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
     && moduleCatalogProjectionRevisionMs(injectedCatalog) >= moduleCatalogProjectionRevisionMs(cachedCatalog)
     ? injectedCatalog
     : cachedCatalog;
-  const shellCatalog = options.allowShellSeed === false ? null : await loadPackagedModuleCatalog();
+  if (projectedCatalog && options.startup) options.startup.usedProjectedCatalog = true;
+  // A warm local/native projection must render without waiting for static
+  // manifest and per-module asset fetches. Those are code metadata, not the
+  // authority for which apps this actor may see; the current build embeds the
+  // same packaged system catalog for the first paint.
+  const shellCatalog = options.allowShellSeed === false
+    ? null
+    : projectedCatalog ? loadEmbeddedPackagedModuleCatalog() : await loadPackagedModuleCatalog();
 
   if (projectedCatalog) {
     state.sync?.startCollection?.('business_module_catalog').catch((error) => {
@@ -11324,7 +11329,9 @@ function normalizeModuleList(modules) {
 }
 
 async function ensurePackagedModuleList(modules, options = {}) {
-  const shellCatalog = await loadPackagedModuleCatalog();
+  const shellCatalog = options.useEmbeddedMetadata
+    ? loadEmbeddedPackagedModuleCatalog()
+    : await loadPackagedModuleCatalog();
   const canonicalSystemIds = new Set(
     normalizeModuleList(shellCatalog?.modules).map((mod) => String(mod?.id || '').trim()),
   );
@@ -12999,6 +13006,18 @@ function getOfflineFallbackCatalog() {
     templates: [],
     governance: null,
     source: 'business-os-shell-embedded-catalog',
+  };
+}
+
+function loadEmbeddedPackagedModuleCatalog() {
+  const catalog = getOfflineFallbackCatalog();
+  const explicitlyAllowedIds = resolveModuleAllowlist();
+  return {
+    ...catalog,
+    modules: catalog.modules.filter((mod) => {
+      const id = String(mod?.id || '').trim();
+      return isSystemModule(mod) || explicitlyAllowedIds.has(id);
+    }),
   };
 }
 
@@ -14745,39 +14764,6 @@ function isManagedCollectionAuthorizationError(error) {
   );
 }
 
-function isLocalRxDbStartupError(error) {
-  const msg = String(error?.message || error || '');
-  return msg.includes('IndexedDB lock')
-    || msg.includes('IndexedDB open blocked')
-    || msg.includes('RxDB database creation timed out')
-    || msg.includes('RxDB database retry timed out')
-    || msg.includes('RxDB createRxDatabase timed out')
-    || msg.includes('RxDB database reset timed out');
-}
-
-async function resetLocalRxDbBeforeStartupRetry(error) {
-  if (!isLocalRxDbStartupError(error)) return false;
-  setStatus('Lokale Datenverbindung wird neu synchronisiert');
-  try { sessionStorage.removeItem(RXDB_SCHEMA_REPAIR_KEY); } catch {}
-  try { await state.sync?.stop?.(); } catch (stopError) { console.warn('[business-os] sync stop before startup retry reset failed', stopError); }
-  try { await state.db?.close?.(); } catch (closeError) { console.warn('[business-os] db close before startup retry reset failed', closeError); }
-  if (state.workspaceBrandingSubscription) {
-    try { state.workspaceBrandingSubscription.unsubscribe(); } catch (error) {}
-    state.workspaceBrandingSubscription = null;
-  }
-  state.workspaceBranding = applyWorkspaceBranding(null);
-  state.sync = null;
-  state.db = null;
-  try {
-    const { resetBusinessDb } = await loadBusinessDbModule();
-    await resetBusinessDb({ name: businessDbName() });
-    return true;
-  } catch (resetError) {
-    console.warn('[business-os] local RxDB startup retry reset failed', resetError);
-    return false;
-  }
-}
-
 function showStartupError(error) {
   // A fatal startup failure must also stop companions whose imports or schema work is pending.
   cancelBusinessCompanions();
@@ -14843,10 +14829,7 @@ function showStartupError(error) {
         window.ctoxBusinessOsDesktop.refreshManagedLaunch();
         return;
       }
-      retryBtn.textContent = isLocalRxDbStartupError(error)
-        ? 'Lokale Datenverbindung wird neu synchronisiert...'
-        : 'Wird neu geladen...';
-      await resetLocalRxDbBeforeStartupRetry(error);
+      retryBtn.textContent = 'Wird neu geladen...';
       window.location.reload();
     };
   }
@@ -15100,7 +15083,7 @@ function filterStartMenu(panel, query) {
 }
 
 function renderStartMenuLifecycleBadge(target) {
-  if (target?.kind !== 'module' || !target.module) return '';
+  if (!target?.module) return '';
   const lifecycle = appLifecycleBadge(target.module, {
     session: state.session,
     governance: state.governance,
@@ -15162,7 +15145,7 @@ function buildStartMenuItem(target) {
   el.querySelector('[data-module-lifecycle]')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (target.kind === 'module') openAppLifecycleDrawer(target.module);
+    if (target.module) openAppLifecycleDrawer(target.module);
   });
 
   el.querySelector('.start-menu-item-pin-btn').addEventListener('click', (e) => {

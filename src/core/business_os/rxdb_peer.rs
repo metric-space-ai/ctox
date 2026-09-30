@@ -57,12 +57,15 @@ pub(super) use super::rxdb_peer_desktop_files::{
 use super::rxdb_peer_intake::consume_business_commands_loop;
 pub(super) use super::rxdb_peer_intake::{
     accept_pending_business_command, business_command_poll_sleep_secs,
-    business_commands_source_change, business_commands_source_stamp, business_commands_table_stamp,
+    business_commands_source_change, business_commands_source_stamp,
     consume_pending_business_commands, enrich_native_command_lifecycle,
-    pending_business_command_documents, pending_business_command_documents_sync,
-    refresh_business_commands_source_stamp, schedule_business_command_intake_retry,
-    transient_business_command_retry_document, wait_for_business_command_wake,
-    BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET,
+    pending_business_command_documents, refresh_business_commands_source_stamp,
+    schedule_business_command_intake_retry, transient_business_command_retry_document,
+    wait_for_business_command_wake, BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET,
+};
+#[cfg(test)]
+pub(super) use super::rxdb_peer_intake::{
+    business_commands_table_stamp, pending_business_command_documents_sync,
 };
 pub(super) use super::rxdb_peer_projections::{
     bulk_upsert_business_record_projection_documents, find_projection_documents_by_id,
