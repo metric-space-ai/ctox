@@ -35313,6 +35313,7 @@ Business OS command:
             outbound_email: None,
             outbound_anchor: None,
         };
+        std::fs::create_dir_all(crate::paths::core_db(&root).parent().unwrap())?;
         let missing = review_execution_plan_evidence(&root, &job);
         assert!(
             missing[0].contains("no durable execution plan recorded"),
