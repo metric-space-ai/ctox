@@ -170,6 +170,8 @@ const STRATEGIC_DIRECTION_KIND: &str = "strategic-direction-pass";
 const FOUNDER_COMMUNICATION_REWORK_KIND: &str = "founder-communication-rework";
 const RUNTIME_API_RETRY_KIND: &str = "runtime-api-retry";
 const FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD: usize = 2;
+/// Review holds (not rejections) of the same founder rework before it stops.
+const FOUNDER_REWORK_HOLD_BLOCK_THRESHOLD: usize = 4;
 const REVIEW_CHECKPOINT_REQUEUE_BLOCK_THRESHOLD: usize = 5;
 #[cfg(test)]
 const BUSINESS_OS_APP_VALIDATION_CLEANUP_RETRY_DELAYS_MS: &[u64] = &[20, 100, 250];
@@ -7117,6 +7119,8 @@ fn start_prompt_worker(
             };
             review_disposition =
                 hold_unsent_founder_communication_rework(&root, &job, review_disposition);
+            review_disposition =
+                stop_founder_rework_hold_loop(&root, &job, review_disposition);
             let review_reason = match &review_disposition {
                 CompletionReviewDisposition::Hold { summary, .. }
                 | CompletionReviewDisposition::NoSend { summary }
@@ -16868,6 +16872,18 @@ fn route_external_messages(root: &Path, state: &Arc<Mutex<SharedState>>) -> Resu
         }
         let leased_message_key = message.message_key.clone();
         if is_founder_or_owner_inbound_message(&settings, &message) {
+            // An exhausted rework budget must end in the in-thread escalation,
+            // not in another deferral or a fresh drafting turn. The sweep only
+            // reaches failed/review_rework rows; a pending founder mail was
+            // re-leased every router pass instead (68 leases, 21 rework turns
+            // on a customer tenant, 30.09.2026).
+            if founder_communication_review_budget_exhausted(root, &message)? {
+                router_did_work = true;
+                if escalate_exhausted_founder_communication(root, state, &message)? == 0 {
+                    deferred_for_founder_rework.push(leased_message_key);
+                }
+                continue;
+            }
             if open_founder_communication_rework_for_inbound(root, &leased_message_key)? {
                 deferred_for_founder_rework.push(leased_message_key);
                 continue;
@@ -19940,6 +19956,47 @@ fn hold_unsent_founder_communication_rework(
     }
 }
 
+/// A review verdict that only holds a founder rework (e.g. "Requested work is
+/// blocked or unverified") never reached the rejection circuit-breaker, so the
+/// rework re-ran after every hold backoff: 21 drafting turns for one founder
+/// mail on a customer tenant (30.09.2026). Apply the same terminal stop to review holds,
+/// with a slightly higher threshold because holds also follow transient gaps.
+fn stop_founder_rework_hold_loop(
+    root: &Path,
+    job: &QueuedPrompt,
+    disposition: CompletionReviewDisposition,
+) -> CompletionReviewDisposition {
+    let CompletionReviewDisposition::Hold { reason, summary } = &disposition else {
+        return disposition;
+    };
+    if matches!(reason, review::HoldReason::MissingReviewEvidence) {
+        return disposition;
+    }
+    if founder_communication_rework_inbound_key(job).is_none() {
+        return disposition;
+    }
+    let Some(work_id) = job.ticket_self_work_id.as_deref() else {
+        return disposition;
+    };
+    let note = match founder_rework_loop_block_note_with_threshold(
+        root,
+        work_id,
+        summary,
+        FOUNDER_REWORK_HOLD_BLOCK_THRESHOLD,
+    ) {
+        Ok(Some(note)) => note,
+        Ok(None) | Err(_) => return disposition,
+    };
+    if let Err(error) = fail_founder_rework_queue_tasks_for_work(root, work_id, &note) {
+        eprintln!("[ctox service] founder rework hold loop stop failed for {work_id}: {error:#}");
+        return disposition;
+    }
+    if !founder_rework_loop_terminal_already_active(root, work_id).unwrap_or(false) {
+        fail_ticket_self_work_item(root, work_id, &note);
+    }
+    CompletionReviewDisposition::TerminalQueueFailure { summary: note }
+}
+
 fn inbound_email_reply_message_key(job: &QueuedPrompt) -> Option<&str> {
     job.leased_message_keys
         .iter()
@@ -21931,6 +21988,20 @@ fn founder_rework_review_loop_block_note(
     work_id: &str,
     summary: &str,
 ) -> Result<Option<String>> {
+    founder_rework_loop_block_note_with_threshold(
+        root,
+        work_id,
+        summary,
+        FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD,
+    )
+}
+
+fn founder_rework_loop_block_note_with_threshold(
+    root: &Path,
+    work_id: &str,
+    summary: &str,
+    threshold: usize,
+) -> Result<Option<String>> {
     let Some(item) = tickets::load_ticket_self_work_item(root, work_id)? else {
         return Ok(None);
     };
@@ -21938,7 +22009,7 @@ fn founder_rework_review_loop_block_note(
         return Ok(None);
     }
     let active_attempts = founder_rework_queue_attempt_count(root, work_id)?;
-    if active_attempts < FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD {
+    if active_attempts < threshold {
         return Ok(None);
     }
     Ok(Some(format!(
@@ -41976,6 +42047,114 @@ Use shell tools to create or update these files."
             )
             .expect("failed to count notes after second block");
         assert_eq!(note_count_after_second_block, note_count_after_first_block);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn founder_rework_review_holds_stop_the_loop_after_the_hold_budget() {
+        // Customer tenant 30.09.2026: "Requested work is blocked or unverified" held the
+        // founder rework 21 times; the rejection circuit-breaker never ran.
+        let root = temp_root("ctox-founder-rework-hold-loop");
+        let inbound_key = "email:lena@thesen-ag.com::inbox::hold-loop";
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: FOUNDER_COMMUNICATION_REWORK_KIND.to_string(),
+                title: "Founder communication rework: WG: Import falsch gelandet".to_string(),
+                body_text: "Answer the founder.".to_string(),
+                state: "queued".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "email-review:founder:hold-loop",
+                    "parent_message_key": inbound_key,
+                    "inbound_message_key": inbound_key,
+                    "dedupe_key": format!("founder-communication-rework:{inbound_key}"),
+                }),
+            },
+            false,
+        )
+        .expect("failed to seed founder rework");
+        let task = channels::create_queue_task(
+            &root,
+            channels::QueueTaskCreateRequest {
+                title: "Founder communication rework: WG: Import falsch gelandet".to_string(),
+                prompt: "Answer the founder.".to_string(),
+                thread_key: "email-review:founder:hold-loop".to_string(),
+                workspace_root: None,
+                priority: "urgent".to_string(),
+                suggested_skill: None,
+                parent_message_key: Some(inbound_key.to_string()),
+                extra_metadata: Some(serde_json::json!({
+                    "ticket_self_work_id": item.work_id.clone(),
+                    "ticket_self_work_kind": FOUNDER_COMMUNICATION_REWORK_KIND,
+                    "parent_message_key": inbound_key,
+                    "inbound_message_key": inbound_key,
+                })),
+            },
+        )
+        .expect("failed to create rework task");
+        let mut job = self_work_job();
+        job.ticket_self_work_id = Some(item.work_id.clone());
+        job.queue_task_metadata = serde_json::json!({
+            "ticket_self_work_kind": FOUNDER_COMMUNICATION_REWORK_KIND,
+            "inbound_message_key": inbound_key,
+        });
+        job.leased_message_keys = vec![task.message_key.clone()];
+        let hold = || CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "requested-work-blocked".to_string(),
+            },
+            summary: "Requested work is blocked or unverified.".to_string(),
+        };
+        let db_path = crate::paths::core_db(&root);
+        let conn = channels::open_channel_db(&db_path).expect("failed to open channel db");
+        let set_attempt = |attempt: i64| {
+            conn.execute(
+                "UPDATE communication_routing_state SET route_status='leased', attempt=?2 WHERE message_key=?1",
+                params![task.message_key, attempt],
+            )
+            .expect("failed to set attempt");
+        };
+
+        // Below the hold budget a review hold stays a hold (normal backoff retry).
+        set_attempt((FOUNDER_REWORK_HOLD_BLOCK_THRESHOLD - 1) as i64);
+        assert!(matches!(
+            stop_founder_rework_hold_loop(&root, &job, hold()),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+        // Missing review evidence is infrastructure, never a loop verdict.
+        set_attempt(FOUNDER_REWORK_HOLD_BLOCK_THRESHOLD as i64 + 5);
+        assert!(matches!(
+            stop_founder_rework_hold_loop(
+                &root,
+                &job,
+                CompletionReviewDisposition::Hold {
+                    reason: review::HoldReason::MissingReviewEvidence,
+                    summary: "evidence not persisted".to_string(),
+                },
+            ),
+            CompletionReviewDisposition::Hold { .. }
+        ));
+        // At the budget the loop ends terminally and the self-work is failed
+        // with the note the founder escalation sweep recognizes.
+        let stopped = stop_founder_rework_hold_loop(&root, &job, hold());
+        assert!(matches!(
+            stopped,
+            CompletionReviewDisposition::TerminalQueueFailure { .. }
+        ));
+        let reloaded = tickets::load_ticket_self_work_item(&root, &item.work_id)
+            .expect("failed to reload self-work")
+            .expect("missing self-work");
+        assert_eq!(reloaded.state, "failed");
+        assert!(founder_rework_loop_terminal_already_active(&root, &item.work_id)
+            .expect("terminal check"));
+        // A job that is not a founder rework is never touched.
+        let mut other = self_work_job();
+        other.ticket_self_work_id = Some(item.work_id.clone());
+        assert!(matches!(
+            stop_founder_rework_hold_loop(&root, &other, hold()),
+            CompletionReviewDisposition::Hold { .. }
+        ));
         let _ = std::fs::remove_dir_all(root);
     }
 
