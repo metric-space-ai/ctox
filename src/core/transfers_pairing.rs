@@ -181,7 +181,7 @@ pub(crate) fn pair(
         source_instance_id: invite.instance_id.clone(),
         account_epoch: 1,
     };
-    let directory = root.join("runtime/transfers/admission");
+    let directory = crate::paths::runtime_dir(root).join("transfers/admission");
     std::fs::create_dir_all(&directory)?;
     let temporary = tempfile::Builder::new()
         .prefix("pair-")

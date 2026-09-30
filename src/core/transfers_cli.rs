@@ -4,7 +4,10 @@ use ctox_transfers::{DaemonWorker, DownloadRequest, Store};
 use std::path::Path;
 
 fn store(root: &Path) -> Result<Store> {
-    Store::open(crate::paths::core_db(root), root.join("runtime/transfers"))
+    Store::open(
+        crate::paths::core_db(root),
+        crate::paths::runtime_dir(root).join("transfers"),
+    )
 }
 
 pub fn start_daemon(root: &Path) -> Result<DaemonWorker> {
@@ -79,4 +82,73 @@ pub fn handle(root: &Path, args: &[String]) -> Result<()> {
     };
     println!("{}", serde_json::to_string_pretty(&transfer)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn store_obeys_isolated_state_root() {
+        const CHILD_ROOT: &str = "CTOX_TEST_TRANSFER_STATE_ROOT_CHILD";
+        // Set the process-wide runtime override only in a dedicated child,
+        // never in the parent test process shared with other native tests.
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let root = std::path::PathBuf::from(root);
+            let state = std::path::PathBuf::from(std::env::var_os("CTOX_STATE_ROOT").unwrap());
+            let opened = store(&root).unwrap();
+            opened
+                .enqueue(DownloadRequest {
+                    id: "isolated-state".into(),
+                    sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                        .into(),
+                    size: 0,
+                    sources: vec!["http://127.0.0.1:9/not-requested".into()],
+                    peer_source: None,
+                })
+                .unwrap();
+            drop(opened);
+            assert!(state.join("ctox.sqlite3").is_file());
+            assert!(state.join("transfers").is_dir());
+            assert!(!root.join("runtime").exists());
+            assert_eq!(
+                store(&root)
+                    .unwrap()
+                    .get("isolated-state")
+                    .unwrap()
+                    .request
+                    .size,
+                0
+            );
+            return;
+        }
+
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path().join("shared-bundle");
+        std::fs::create_dir(&root).unwrap();
+        for name in ["instance-a", "instance-b"] {
+            let state = fixture.path().join(name);
+            std::fs::create_dir(&state).unwrap();
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "transfers_cli::tests::store_obeys_isolated_state_root",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env(CHILD_ROOT, &root)
+                .env("CTOX_STATE_ROOT", &state)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "child failed: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            // Enqueuing the same ID in each instance must remain independent.
+            assert!(state.join("transfers").is_dir());
+        }
+        assert!(!root.join("runtime").exists());
+    }
 }

@@ -233,7 +233,7 @@ async fn prepare(
 /// CLI work is bounded to authentication/grant admission. It cannot run payload
 /// downloads or open the daemon's database. The daemon revalidates after enqueue.
 pub(crate) fn enqueue_peer(root: &Path, store: &Store, download: PeerDownload) -> Result<Transfer> {
-    let directory = root.join("runtime/transfers/admission");
+    let directory = crate::paths::runtime_dir(root).join("transfers/admission");
     std::fs::create_dir_all(&directory)?;
     let temporary = tempfile::Builder::new()
         .prefix("native-")

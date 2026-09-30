@@ -51,6 +51,12 @@ rules still apply. Local pack/apply tests do not establish two-host acceptance.
 
 ## Native transfer workflow
 
+Use the identified native executable with the existing `CTOX_ROOT` bundle/source
+selection and `CTOX_STATE_ROOT` state-directory override for isolated instances.
+The core transfer metadata, downloaded objects and native query/admission
+databases all follow that same state directory. Use the same selections for
+every command and daemon restart; an installed launcher may override them.
+
 On A, quiesce the source and run
 `ctox workjet-transfer pack --source SOURCE --artifacts ARTIFACTS`.
 Publish each of `bundle.gitbundle`, `tracked.patch`, `index.patch`,

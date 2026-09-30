@@ -52,7 +52,7 @@ struct QueryDatabase {
 impl QueryDatabase {
     fn new(root: &Path) -> Arc<Self> {
         Arc::new(Self {
-            path: root.join("runtime/transfers/native-peer.sqlite3"),
+            path: crate::paths::runtime_dir(root).join("transfers/native-peer.sqlite3"),
             state: Mutex::new(DatabaseState::default()),
         })
     }
