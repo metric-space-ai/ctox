@@ -453,8 +453,11 @@ impl RxDatabase {
                 .map(|(_, collection)| collection)
                 .collect()
         };
-        for collection in collections {
+        // Release every query cycle even if one storage close returns an error.
+        for collection in &collections {
             collection.close();
+        }
+        for collection in collections {
             collection.storage_instance.close().await?;
         }
         if let Some(internal_store) = &self.internal_store {
