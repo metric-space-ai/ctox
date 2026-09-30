@@ -10,7 +10,11 @@ seconds. Other platforms keep fresh connections. Every query rediscovers the
 current table and reads current rows; there is no cached command, authorization
 or schema result. Attached domain-receipt databases are detached after every
 query. Errors, absence, replacement and retained transactions discard the
-connection. The existing notifier/lost-wakeup check and retry budget remain.
+connection. A main-file replacement that retains the previous nonempty WAL is
+rejected until the replacement owner removes or replaces that WAL: even a
+fresh SQLite connection can replay old frames onto the new main file. The
+read-only intake lane never deletes or checkpoints the SQLite file family.
+The existing notifier/lost-wakeup check and retry budget remain.
 
 ### Workjet computer schema upgrade (v0 to v1)
 

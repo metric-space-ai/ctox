@@ -32,7 +32,9 @@ use super::rxdb_peer_projections::{
 };
 use super::store;
 use anyhow::Context;
-use rusqlite::{Connection, OpenFlags, OptionalExtension};
+#[cfg(test)]
+use rusqlite::OpenFlags;
+use rusqlite::{Connection, OptionalExtension};
 use rxdb::rx_database::RxDatabase;
 use serde_json::json;
 use serde_json::Value;
@@ -99,6 +101,7 @@ pub(super) async fn business_commands_source_stamp(
     Ok(BusinessCommandsSourceStamp { table })
 }
 
+#[cfg(test)]
 pub(super) fn business_commands_table_stamp(
     root: &Path,
 ) -> anyhow::Result<BusinessCommandsTableStamp> {
@@ -632,6 +635,7 @@ pub(super) async fn pending_business_command_documents(
     .await
 }
 
+#[cfg(test)]
 pub(super) fn pending_business_command_documents_sync(
     root: &Path,
     limit: usize,

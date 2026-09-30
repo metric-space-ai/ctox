@@ -18,12 +18,16 @@ tokio::task_local! {
 #[derive(Default)]
 struct IntakeReader {
     connection: Mutex<Option<ReaderConnection>>,
+    #[cfg(unix)]
+    blocked_wal: Mutex<Option<(std::path::PathBuf, u64, u64)>>,
 }
 
 struct ReaderConnection {
     conn: Connection,
     #[cfg(unix)]
     identity: (std::path::PathBuf, u64, u64),
+    #[cfg(unix)]
+    wal_identity: Option<(std::path::PathBuf, u64, u64)>,
     opened_at: Instant,
     remaining_reads: u8,
 }
@@ -34,6 +38,20 @@ fn identity(path: &Path) -> anyhow::Result<(std::path::PathBuf, u64, u64)> {
     let canonical = std::fs::canonicalize(path)?;
     let metadata = std::fs::metadata(&canonical)?;
     Ok((canonical, metadata.dev(), metadata.ino()))
+}
+
+#[cfg(unix)]
+fn wal_identity(path: &Path) -> anyhow::Result<Option<(std::path::PathBuf, u64, u64)>> {
+    let mut wal = path.as_os_str().to_os_string();
+    wal.push("-wal");
+    let wal = std::path::PathBuf::from(wal);
+    match std::fs::metadata(&wal) {
+        // A header without frames cannot replay the old database's rows.
+        Ok(metadata) if metadata.len() > 32 => Ok(Some(identity(&wal)?)),
+        Ok(_) => Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 
 impl IntakeReader {
@@ -55,6 +73,34 @@ impl IntakeReader {
         }
         #[cfg(unix)]
         let current_identity = identity(path)?;
+        #[cfg(unix)]
+        let current_wal = wal_identity(path)?;
+        #[cfg(unix)]
+        {
+            let mut blocked = self
+                .blocked_wal
+                .lock()
+                .map_err(|_| anyhow::anyhow!("command intake WAL fence poisoned"))?;
+            // A fresh SQLite connection can replay an old WAL onto a replaced
+            // main file too. Never delete/checkpoint it from a read-only lane;
+            // keep rejecting this family until its stale WAL is removed/replaced.
+            if let Some(stale) = blocked.as_ref() {
+                anyhow::ensure!(
+                    current_wal.as_ref() != Some(stale),
+                    "command intake database replacement retained the old WAL"
+                );
+                *blocked = None;
+            }
+            if let Some(old) = previous.as_ref() {
+                if old.identity != current_identity
+                    && old.wal_identity.is_some()
+                    && old.wal_identity == current_wal
+                {
+                    *blocked = current_wal;
+                    anyhow::bail!("command intake database replacement retained the old WAL");
+                }
+            }
+        }
         let reusable = previous.filter(|reader| {
             let within_budget = reader.remaining_reads > 0
                 && reader.opened_at.elapsed() < Duration::from_secs(30)
@@ -83,6 +129,8 @@ impl IntakeReader {
                     conn,
                     #[cfg(unix)]
                     identity: current_identity.clone(),
+                    #[cfg(unix)]
+                    wal_identity: current_wal.clone(),
                     opened_at: Instant::now(),
                     remaining_reads: 64,
                 }
@@ -107,10 +155,18 @@ impl IntakeReader {
         reader.remaining_reads -= 1;
         #[cfg(unix)]
         {
-            anyhow::ensure!(
-                identity(path)? == current_identity,
-                "command intake database replaced during read"
-            );
+            let after_wal = wal_identity(path)?;
+            if identity(path)? != current_identity {
+                if reader.wal_identity.is_some() && reader.wal_identity == after_wal {
+                    *self
+                        .blocked_wal
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("command intake WAL fence poisoned"))? =
+                        after_wal;
+                }
+                anyhow::bail!("command intake database replaced during read");
+            }
+            reader.wal_identity = after_wal;
             *slot = Some(reader);
         }
         Ok(value)
@@ -265,11 +321,58 @@ mod tests {
         let writer = Connection::open(&replacement)?;
         writer.execute_batch("CREATE TABLE sample(value INTEGER); INSERT INTO sample VALUES(3)")?;
         drop(writer);
+        // Replace the complete SQLite family. Keeping the old WAL at this
+        // pathname is not a valid replacement: even an uncached fresh reader
+        // replays its rows onto the replacement main file.
+        std::fs::rename(&path, root.path().join("old.sqlite3"))?;
+        for suffix in ["-wal", "-shm"] {
+            let side = std::path::PathBuf::from(format!("{}{suffix}", path.display()));
+            if side.exists() {
+                std::fs::rename(side, root.path().join(format!("old.sqlite3{suffix}")))?;
+            }
+        }
         std::fs::rename(&replacement, &path)?;
         assert_eq!(value(&reader, &path)?, 3);
         std::fs::remove_file(&path)?;
         assert_eq!(value(&reader, &path)?, -1);
         assert!(reader.connection.lock().unwrap().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn intake_reader_rejects_main_only_replacement_until_the_old_wal_is_removed(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().join("commands.sqlite3");
+        let writer = Connection::open(&path)?;
+        writer.execute_batch("PRAGMA journal_mode=WAL; CREATE TABLE sample(value INTEGER); INSERT INTO sample VALUES(1)")?;
+        let reader = IntakeReader::default();
+        assert_eq!(value(&reader, &path)?, 1);
+        writer.execute("UPDATE sample SET value=2", [])?;
+        assert_eq!(value(&reader, &path)?, 2);
+        drop(writer);
+        let replacement = root.path().join("replacement.sqlite3");
+        let writer = Connection::open(&replacement)?;
+        writer.execute_batch("CREATE TABLE sample(value INTEGER); INSERT INTO sample VALUES(3)")?;
+        drop(writer);
+        std::fs::rename(&replacement, &path)?;
+        // Even a newly opened connection would replay value 2 from this WAL.
+        // Reject both the first and subsequent reads instead of accepting it.
+        for _ in 0..2 {
+            let error = value(&reader, &path).unwrap_err();
+            assert!(error.to_string().contains("retained the old WAL"));
+            assert!(reader.connection.lock().unwrap().is_none());
+        }
+        // Only the fixture's replacement owner removes the old sidecars. The
+        // production reader must never mutate or checkpoint this file family.
+        for suffix in ["-wal", "-shm"] {
+            let side = std::path::PathBuf::from(format!("{}{suffix}", path.display()));
+            if side.exists() {
+                std::fs::remove_file(side)?;
+            }
+        }
+        assert_eq!(value(&reader, &path)?, 3);
+        assert!(reader.blocked_wal.lock().unwrap().is_none());
         Ok(())
     }
 
