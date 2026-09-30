@@ -40,6 +40,7 @@ pub(crate) struct NativeTransferRendezvous {
     pub room: String,
     instance_id: String,
     signaling_urls: Vec<String>,
+    stun_urls: Vec<String>,
     browser_token: String,
     browser_token_hash: String,
     native_token_hash: String,
@@ -191,6 +192,16 @@ impl NativeTransferRouting {
             room: self.room.clone(),
             instance_id: instance_id.into(),
             signaling_urls: self.signaling_urls.clone(),
+            stun_urls: self
+                .ice_servers
+                .iter()
+                .filter(|server| server.username.is_empty() && server.credential.is_empty())
+                .flat_map(|server| server.urls.iter())
+                .filter(|raw| {
+                    Url::parse(raw).is_ok_and(|url| matches!(url.scheme(), "stun" | "stuns"))
+                })
+                .cloned()
+                .collect(),
             browser_token: self.browser_token.clone(),
             browser_token_hash: self.browser_token_hash.clone(),
             native_token_hash: self.native_token_hash.clone(),
@@ -213,6 +224,15 @@ impl NativeTransferRouting {
 }
 
 impl NativeTransferRendezvous {
+    /// Public STUN discovery can survive routing expiry; TURN credentials cannot.
+    /// Keep an explicit entry even when empty so native defaults stay disabled.
+    pub(crate) fn bootstrap_ice(&self) -> Vec<RTCIceServer> {
+        vec![RTCIceServer {
+            urls: self.stun_urls.clone(),
+            ..RTCIceServer::default()
+        }]
+    }
+
     pub(crate) fn signaling_at(&self, peer_id: &str, now_ms: i64) -> Result<Vec<String>> {
         ensure!(clean(peer_id, 256), "native peer session invalid");
         let issued = now_ms / 1000;

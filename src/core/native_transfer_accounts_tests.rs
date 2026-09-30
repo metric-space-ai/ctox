@@ -594,3 +594,42 @@ async fn invalid_retained_routing_cannot_be_laundered_into_recovery() {
         assert!(host.recovery_options(&account.target_id).await.is_err());
     }
 }
+
+#[test]
+fn retained_rendezvous_keeps_only_credential_free_stun_discovery() {
+    let root = tempfile::tempdir().unwrap();
+    let account = account(root.path());
+    let mut route = expired_snapshot(&account);
+    route
+        .ice_servers
+        .push(crate::native_transfer_routing::NativeTransferIceServer {
+            urls: vec![
+                "stun:stun.source.test:3478".into(),
+                "stuns:stun.source.test:5349".into(),
+                "turn:relay.source.test:3478".into(),
+            ],
+            username: String::new(),
+            credential: String::new(),
+        });
+    route
+        .ice_servers
+        .push(crate::native_transfer_routing::NativeTransferIceServer {
+            urls: vec!["stun:private.source.test:3478".into()],
+            username: "private".into(),
+            credential: "not-for-bootstrap".into(),
+        });
+    let retained = route
+        .retained_rendezvous(&account.instance_id, chrono::Utc::now().timestamp_millis())
+        .unwrap();
+    let ice = retained.bootstrap_ice();
+    assert_eq!(ice.len(), 1);
+    assert_eq!(
+        ice[0].urls,
+        vec!["stun:stun.source.test:3478", "stuns:stun.source.test:5349"]
+    );
+    assert!(ice[0].username.is_empty());
+    assert!(ice[0].credential.is_empty());
+    assert!(route
+        .validate(&account.instance_id, chrono::Utc::now().timestamp_millis())
+        .is_err());
+}

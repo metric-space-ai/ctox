@@ -179,9 +179,11 @@ known TURN credential expiry.
 After a cold restart, the account host can extract retained signaling material
 from an originally valid, encrypted source descriptor. This does not move its
 expiry or make it valid for payload use. A distinct rendezvous value contains
-no ICE credentials or payload deadline. The control-only recovery session uses
-explicitly empty recipient ICE configuration; it can use the source's currently
-advertised candidates, but never expired TURN credentials or local defaults.
+no ICE credentials or payload deadline. The control-only recovery session retains
+only credential-free STUN/STUNS discovery endpoints from that source snapshot.
+It strips every TURN/TURNS endpoint and credential-bearing ICE server, and uses
+an explicit empty entry when no public STUN was supplied, suppressing native
+defaults. It can also use the source's currently advertised candidates.
 Every reconnect rechecks the original account and unchanged rendezvous. Fresh
 source proof and the original P-256 device credentials remain mandatory.
 

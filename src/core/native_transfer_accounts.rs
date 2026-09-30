@@ -384,10 +384,11 @@ impl NativeTransferAccountHost {
             .map_err(|_| host_error())?;
         let mut options = (self.options)(account.clone()).await?;
         options.room = rendezvous.room.clone();
-        // Explicit empty ICE configuration, not Vec::new() (native defaults).
-        // The source still advertises its current candidates, including relay
-        // candidates. We never recycle an expired local TURN allocation.
-        options.ice_servers = vec![Default::default()];
+        // Retain only credential-free source STUN discovery. An explicit empty
+        // entry suppresses native defaults if the source supplied none. Never
+        // recycle expired TURN credentials; the source advertises its own
+        // current candidates on the newly authenticated connection.
+        options.ice_servers = rendezvous.bootstrap_ice();
         let host = self.clone();
         let enrolled = account.clone();
         let peer_id = options.peer_session_id.clone();
