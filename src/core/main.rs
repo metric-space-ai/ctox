@@ -31,6 +31,7 @@ mod install;
 mod iot;
 mod knowledge;
 mod mission;
+mod native_data_device;
 mod paths;
 mod persistence;
 mod report;
