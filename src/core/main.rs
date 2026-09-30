@@ -32,6 +32,7 @@ mod iot;
 mod knowledge;
 mod mission;
 mod native_data_device;
+mod native_transfer_accounts;
 mod paths;
 mod persistence;
 mod report;

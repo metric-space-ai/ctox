@@ -69,8 +69,26 @@ the native transport's existing cancellation/drop cleanup remains its backstop.
 These lifecycle and authority regressions require local verification before
 production wiring or acceptance is claimed.
 
-This source authority, signer and concrete adapter do not by themselves create the
-production saved-target/credential host, transfer service boot/recovery wiring,
+The native account-store consumer is now `NativeTransferAccountHost`. It reads
+versioned native enrollment records from the existing encrypted secret store;
+public pins/principal and bearer credentials occupy separate scopes, so restoring
+ID callbacks or resolving query-only options never loads the bearer. Target IDs
+are SHA-256 keyed, and credential records bind the complete original authority.
+Each callback resolves current native account state again, binds credential use
+to its concrete connection, loads the original enrolled signer and checks account
+state before and after key-store work. Missing, corrupt, inactive, switched or
+foreign records fail closed; reconnect never creates a key.
+
+The service owner constructs this host with a native query-only options factory,
+awaits `providers()`, and passes that host and map to
+`start_daemon_with_native_accounts`. Neither API accepts renderer credentials.
+This consumer is not an enrollment API: the authenticated native provisioning
+writer, atomic account-switch/revocation persistence, live options factory and
+production bootstrap call still need wiring. Its authored restart, revocation,
+foreign-credential, real-signature and missing/corrupt-key tests have not run.
+
+This source authority, signer and concrete adapter do not by themselves prove
+the production account enrollment, transfer service boot/recovery wiring,
 or two-host acceptance. Those integrations must consume the existing native
 secret/account/device authority without importing renderer tokens or bypassing
 WebRTC/RxDB. These obligations remain open until exercised through the real
