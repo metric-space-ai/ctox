@@ -25,25 +25,7 @@
 # Exit codes: 0 = all passed, non-zero = a stage failed (see logs).
 
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "$0")/../../../.." && pwd)"
-# Local dev keeps build artifacts under target.nosync/ to avoid iCloud sync;
-# CI uses the standard target/. Prefer .nosync if present, else fall back.
-if [[ -x "$ROOT/runtime/build/cargo-target/debug/ctox" ]]; then
-  CTOX="$ROOT/runtime/build/cargo-target/debug/ctox"
-elif [[ -x "$ROOT/runtime/build/cargo-target/release/ctox" ]]; then
-  CTOX="$ROOT/runtime/build/cargo-target/release/ctox"
-elif [[ -x "$ROOT/target.nosync/debug/ctox" ]]; then
-  CTOX="$ROOT/target.nosync/debug/ctox"
-elif [[ -x "$ROOT/target/debug/ctox" ]]; then
-  CTOX="$ROOT/target/debug/ctox"
-elif [[ -x "$ROOT/target.nosync/release/ctox" ]]; then
-  CTOX="$ROOT/target.nosync/release/ctox"
-elif [[ -x "$ROOT/target/release/ctox" ]]; then
-  CTOX="$ROOT/target/release/ctox"
-else
-  CTOX="$ROOT/target/debug/ctox" # will fail precondition below with a clear msg
-fi
 SQLITE_DB="$ROOT/runtime/ctox.sqlite3"
 STEALTH_FILE="$ROOT/src/tools/web-stack/assets/stealth_init.js"
 
@@ -73,6 +55,12 @@ assert_eq() {
 }
 
 # ── Preconditions ───────────────────────────────────────────────────────────
+# Fail before seeding/writing the runtime DB: the old stage2 changed an unused
+# mirror, so its rebuild could not prove a stealth regression in the daemon.
+if [[ $STAGE2 -eq 1 ]]; then
+  python3 "$ROOT/scripts/web_stack_source.py" mutation-check
+fi
+CTOX="$(python3 "$ROOT/scripts/web_stack_source.py" daemon-path)"
 
 [[ -x "$CTOX" ]] || die "ctox binary missing at $CTOX — run 'cargo build -p ctox' first"
 command -v jq >/dev/null 2>&1 || die "jq is required"

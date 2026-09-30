@@ -1,6 +1,41 @@
 # CTOX Web Stack
 
-This crate is the owned compile boundary for the CTOX web surface:
+The CTOX daemon compiles `ctox-web-stack` from the immutable Workjet Git
+revision in the root `Cargo.toml` and `Cargo.lock`. `src/tools/web-stack` is
+excluded from the root workspace. Editing or testing this local mirror does
+not change or validate the daemon dependency.
+
+Use these source-bound development entrypoints (local compilation still needs
+the shared admission gate):
+
+```sh
+python3 scripts/web_stack_source.py describe
+python3 scripts/web_stack_source.py test -- --lib unlock:: -- --test-threads=2
+python3 scripts/web_stack_source.py build -- --no-default-features --bin ctox-web-stack
+python3 scripts/web_stack_source.py daemon-build
+```
+
+The tool resolves the direct dependency through locked Cargo metadata, reports
+its immutable commit and effective manifest, and rejects modified Git caches
+or a local/path substitution. Focused checks use that source package; they do
+not establish the complete daemon dependency closure or installed acceptance.
+The E2E scripts require the `daemon-build` receipt and verify source state and
+binary checksum before choosing a daemon, rather than borrowing an old binary
+from another target directory.
+
+The real stealth-mutation stage currently fails before runtime writes: its
+legacy mutation targets this mirror, which is not embedded in the daemon.
+It requires an isolated mutation of the effective canonical source plus a
+failing probe and restored positive control. No passing mutation evidence is
+claimed; the tool never edits a shared Cargo Git cache.
+
+Standalone mirror checks via its local manifest remain available for explicit
+mirror/platform diagnostics. Preserve this directory: dynamic `scrape-targets`
+recipes are runtime inputs even though the Rust mirror is not compiled into
+the daemon. Canonical Rust changes belong in Workjet, followed by a reviewed
+pin/lock update in CTOX.
+
+The web surface includes:
 
 - `ctox_web_search`
 - `ctox_web_read`

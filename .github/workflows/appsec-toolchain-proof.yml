@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - ".github/workflows/appsec-toolchain-proof.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "scripts/web_stack_source.py"
+      - "scripts/test_web_stack_source.py"
       - "src/tools/appsec-pentest/**"
       - "src/skills/packs/security/appsec-pentest/**"
   schedule:
@@ -143,10 +147,13 @@ jobs:
             }
           }
 
+      - name: Test web-stack source binding
+        run: python scripts/test_web_stack_source.py
+
       - name: Build focused deployment audit CLIs
         run: |
           cargo build --locked --manifest-path src/tools/appsec-pentest/Cargo.toml
-          cargo build --locked --manifest-path src/tools/web-stack/Cargo.toml --no-default-features --bin ctox-web-stack
+          python scripts/web_stack_source.py build -- --no-default-features --bin ctox-web-stack
 
       - name: Test scanner environment isolation and probe evidence
         shell: bash
