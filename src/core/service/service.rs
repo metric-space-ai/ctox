@@ -1525,6 +1525,26 @@ where
     }
 }
 
+/// Freed glibc heap memory stays resident until something trims it. The
+/// long-running service returns it once a minute; see
+/// `limit_glibc_malloc_arenas` in main.rs for the measured case (6.86 GB ->
+/// 2.50 GB on one trim, 30.09.2026).
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn start_glibc_heap_trimmer() {
+    let _ = std::thread::Builder::new()
+        .name("ctox-heap-trim".to_string())
+        .spawn(|| loop {
+            std::thread::sleep(Duration::from_secs(60));
+            // SAFETY: malloc_trim is thread-safe and only releases free memory.
+            unsafe {
+                libc::malloc_trim(0);
+            }
+        });
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn start_glibc_heap_trimmer() {}
+
 pub fn run_foreground(root: &Path) -> Result<()> {
     let runtime_dir = root.join("runtime");
     std::fs::create_dir_all(&runtime_dir)
@@ -1533,6 +1553,7 @@ pub fn run_foreground(root: &Path) -> Result<()> {
     // Bring-up failure is fatal before any Business OS worker is started.
     let _sync_host = crate::sync_host::start_if_configured(root)?;
     install_service_panic_hook();
+    start_glibc_heap_trimmer();
     #[cfg(unix)]
     unsafe {
         signal(SIGPIPE, SIG_IGN);
