@@ -170,17 +170,28 @@ impl PeerRangeSource for ManagedNativePeer {
 /// HTTP-only operation neither opens this database nor starts a native session.
 pub(crate) fn daemon_peer(root: &Path) -> Arc<dyn PeerRangeSource> {
     let database = QueryDatabase::new(root);
+    let host = account_host(root, database.clone());
+    let peer = Arc::new(crate::transfers_peer::NativeTransferPeerResolver::with_account_host(host));
+    Arc::new(ManagedNativePeer { peer, database })
+}
+
+fn account_host(
+    root: &Path,
+    database: Arc<QueryDatabase>,
+) -> Arc<crate::native_transfer_accounts::NativeTransferAccountHost> {
     let options_database = database.clone();
-    let host = crate::native_transfer_accounts::NativeTransferAccountHost::new(
+    crate::native_transfer_accounts::NativeTransferAccountHost::new(
         root.to_path_buf(),
         Arc::new(move |_| {
             let database = options_database.clone();
             Box::pin(async move { database.options().await.map_err(std::io::Error::other) })
         }),
-    );
-    let peer = Arc::new(crate::transfers_peer::NativeTransferPeerResolver::with_account_host(host));
-    Arc::new(ManagedNativePeer { peer, database })
+    )
 }
+
+#[path = "transfers_admission.rs"]
+mod admission;
+pub(crate) use admission::{enqueue_peer, PeerDownload};
 
 #[cfg(test)]
 mod tests {

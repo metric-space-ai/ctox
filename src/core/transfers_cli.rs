@@ -46,11 +46,19 @@ pub fn handle(root: &Path, args: &[String]) -> Result<()> {
             sources: args[4..].to_vec(),
             peer_source: None,
         })?,
+        Some("peer-download") if args.len() == 6 => crate::transfers_native::enqueue_peer(
+            root,
+            &store,
+            crate::transfers_native::PeerDownload {
+                id: args[1].clone(), target_id: args[2].clone(), sha256: args[3].clone(),
+                size: args[4].parse()?, file_id: args[5].clone(),
+            },
+        )?,
         Some("status") if args.len() == 2 => store.get(&args[1])?,
         Some(action @ ("pause" | "resume" | "cancel")) if args.len() == 2 => {
             store.control(&args[1], action)?
         }
-        _ => bail!("usage: ctox transfer download ID SHA256 SIZE URL [MIRROR...] | status ID | pause ID | resume ID | cancel ID"),
+        _ => bail!("usage: ctox transfer download ID SHA256 SIZE URL [MIRROR...] | peer-download ID TARGET SHA256 SIZE FILE_ID | status ID | pause ID | resume ID | cancel ID"),
     };
     println!("{}", serde_json::to_string_pretty(&transfer)?);
     Ok(())

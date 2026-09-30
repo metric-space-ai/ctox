@@ -32,7 +32,7 @@ pub(crate) trait NativePeerJobAdmission: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
 
-fn principal_digest(principal: &NativeBusinessDataPrincipal) -> Result<String> {
+pub(crate) fn principal_digest(principal: &NativeBusinessDataPrincipal) -> Result<String> {
     Ok(format!(
         "{:x}",
         Sha256::digest(serde_json::to_vec(principal)?)
@@ -89,7 +89,7 @@ struct EnrolledPeerJobAdmission {
     grant_admission: Arc<dyn NativePeerJobAdmission>,
 }
 
-async fn current_account(
+pub(crate) async fn current_account(
     host: &dyn BusinessDataSessionHost,
     request: &DownloadRequest,
 ) -> Result<NativeBusinessDataPrincipal> {

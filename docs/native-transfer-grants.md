@@ -1,5 +1,24 @@
 # Source authority for native transfers
 
+The local operator command is:
+
+```
+ctox transfer peer-download ID TARGET SHA256 SIZE FILE_ID
+```
+
+`TARGET` selects an existing native enrollment; source pins, account epoch and
+principal are read from that enrollment. The command authenticates through the
+saved source route, requests a `desktop_files` grant and exercises the worker's
+current source-grant/file-policy checks. It never accepts a caller-supplied
+bearer, source pin or principal. A captured-account provider rejects account
+changes before credential release. Admission is bounded to 60 seconds and uses
+an isolated temporary query database under the installation's runtime directory,
+not the daemon's database. Transport and database cleanup precede job insertion.
+The daemon owns all payload downloads and revalidates the persisted original
+account/grant before reading or publishing. Use `status`, `pause`, `resume` and
+`cancel` on that job ID. Native enrollment and a valid source route must already
+exist; an expired cold route still requires authenticated recovery.
+
 `ctox.transfer.grant.v1` is an authenticated auxiliary method on the supervised
 native RxDB/WebRTC peer. It is not an HTTP endpoint or a collection projection.
 The daemon registers it before advertising the peer. Blocking policy, SQLite

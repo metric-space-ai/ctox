@@ -209,6 +209,48 @@ impl NativeTransferAccountHost {
         Arc::new(Self { root, options })
     }
 
+    /// Admission of a new job captures its account before connecting. Do not
+    /// release a different account's credentials if enrollment changes meanwhile.
+    pub(crate) fn provider_for_account(
+        &self,
+        expected: NativeTransferAccount,
+    ) -> NativeSessionTargetProvider {
+        let host = self.clone();
+        let provider = self.provider(expected.target_id.clone());
+        Arc::new(move |connection| {
+            let host = host.clone();
+            let provider = provider.clone();
+            let expected = expected.clone();
+            Box::pin(async move {
+                let stale = || rxdb::rx_error::new_rx_error("RC_WEBRTC_PEER", None);
+                if host
+                    .account(&expected.target_id)
+                    .await
+                    .map_err(|_| stale())?
+                    .as_ref()
+                    != Some(&expected)
+                {
+                    return Err(stale());
+                }
+                let target = provider(connection).await?;
+                // The underlying callback captures this exact account and checks
+                // it again before and after reading credentials/signing a nonce.
+                if host
+                    .account(&expected.target_id)
+                    .await
+                    .map_err(|_| stale())?
+                    .as_ref()
+                    != Some(&expected)
+                    || target.public_identity != expected.public_identity
+                    || target.instance_id != expected.instance_id
+                {
+                    return Err(stale());
+                }
+                Ok(target)
+            })
+        })
+    }
+
     /// Return the deadlines from the exact descriptor used for these options.
     /// A separate routing read could race another native refresh.
     pub(crate) async fn native_options_with_deadline(
@@ -517,7 +559,10 @@ impl NativeTransferAccountHost {
         Ok(account.active.then_some(account))
     }
 
-    async fn account(&self, target_id: &str) -> io::Result<Option<NativeTransferAccount>> {
+    pub(crate) async fn account(
+        &self,
+        target_id: &str,
+    ) -> io::Result<Option<NativeTransferAccount>> {
         let host = self.clone();
         let target_id = target_id.to_owned();
         tokio::task::spawn_blocking(move || host.read_account(&target_id))
