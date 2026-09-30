@@ -2023,6 +2023,11 @@ the original browser-insert duration; an incomplete diagnostic returns null.
 The seven primary marks and their mandatory budget report remain unchanged.
 Only the bounded timing-probe map holds these timestamps; no token, payload,
 new request, authorization cache or production configuration is added.
+The same sample includes at most two `authority_rounds`, separating fresh
+capability retrieval, peer renewal and bridge-readiness wait. The booleans
+`renewed` and `replaced` identify a second convergence round without retaining
+the token or peer identity. This attributes the measured renewal span; it does
+not relax the fresh native-authority requirement or the latency gate.
 For explicitly requested command timing probes, the native log additionally
 emits `command_intake_sample` with the command ID and measured authentication
 and identity-stamping milliseconds. Both phases precede the existing

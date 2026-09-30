@@ -994,9 +994,12 @@ async function acquireCommandPeerAuthority(commandId, syncPlan) {
   // Renewal can itself acquire a newer epoch. Reacquire once after reconnect,
   // then require convergence before any dependency push or immutable insert.
   for (let round = 0; round < 2; round++) {
+    const timing = commandTimingProbes.get(String(commandId || ''));
+    const renewalStarted = timing ? Date.now() : 0;
     const capability = await withTimeout(
       () => acquireCapabilityTokenForSubmit({ refresh: true }), remaining(), timeoutError,
     );
+    const capabilityResolved = timing ? Date.now() : 0;
     const token = requireCommandCapability(commandId, capability);
     const bridges = syncPlan.authorityBridges;
     const states = bridges.map(bridge => syncBridgeFromHandle(bridge)?.state);
@@ -1005,9 +1008,18 @@ async function acquireCommandPeerAuthority(commandId, syncPlan) {
       () => Promise.all(distinct.map(state => state.ensurePeerAuthority?.(token) || false)),
       remaining(), timeoutError,
     );
+    const peerRenewed = timing ? Date.now() : 0;
     await Promise.all(bridges.map(bridge => waitForSyncBridgeReady(bridge, remaining())));
     remaining();
     const replaced = bridges.some((bridge, index) => syncBridgeFromHandle(bridge)?.state !== states[index]);
+    if (timing) timing.authority_rounds.push({
+      round,
+      capability_ms: capabilityResolved - renewalStarted,
+      peer_renewal_ms: peerRenewed - capabilityResolved,
+      bridge_ready_ms: Date.now() - peerRenewed,
+      renewed: renewed.some(Boolean),
+      replaced,
+    });
     if (!renewed.some(Boolean) && !replaced) return token;
   }
   throw commandError(commandId, 'Peer authority changed again during command preparation.', {
@@ -1982,6 +1994,7 @@ function rememberCommandTimingProbe(commandId, startedAtMs) {
     started_at_ms: Number(startedAtMs) || Date.now(),
     marks: {},
     preinsert_marks: {},
+    authority_rounds: [],
   };
   commandTimingProbes.set(key, sample);
   return sample;
@@ -2085,5 +2098,6 @@ function cloneCommandTimingSample(sample) {
     marks: { ...sample.marks },
     preinsert_marks: { ...sample.preinsert_marks },
     preinsert_stages_ms: stages,
+    authority_rounds: sample.authority_rounds.map(round => ({ ...round })),
   };
 }

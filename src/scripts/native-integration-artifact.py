@@ -344,9 +344,9 @@ def main():
     run('shell-contract', ['node', 'src/apps/business-os/scripts/assert-shell-v2-contract.mjs'])
     startup = run('shell-startup-cache', ['node', '--test',
                   'src/apps/business-os/scripts/test-shell-window-cache-startup.mjs'])
-    if not re.search(r'^# tests 2$', startup, re.MULTILINE) or not re.search(
-            r'^# pass 2$', startup, re.MULTILINE):
-        raise RuntimeError('Shell startup cache regressions did not both pass')
+    if not re.search(r'^# tests 3$', startup, re.MULTILINE) or not re.search(
+            r'^# pass 3$', startup, re.MULTILINE):
+        raise RuntimeError('All three Shell startup cache regressions must pass')
     geometry_dir = EVIDENCE / 'shell-geometry'
     run('shell-geometry', ['node', 'src/apps/business-os/scripts/shell-v2-geometry-lab.mjs',
                           '--apps', 'mail', '--widths', '1180,720',

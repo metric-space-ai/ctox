@@ -1514,6 +1514,14 @@ test('command timing probe records seven correlated marks only when requested', 
   );
   // Independent waits distinguish peer renewal from the local storage span.
   assert.ok(sample.preinsert_stages_ms.fresh_peer_authority >= 10);
+  assert.equal(sample.authority_rounds.length, 1);
+  assert.ok(sample.authority_rounds[0].peer_renewal_ms >= 10);
+  assert.ok(sample.authority_rounds[0].capability_ms >= 0);
+  assert.ok(sample.authority_rounds[0].bridge_ready_ms >= 0);
+  assert.equal(sample.authority_rounds[0].renewed, false);
+  assert.equal(sample.authority_rounds[0].replaced, false);
+  const secondRead = peekCommandRoundtripTiming('cmd-timing-probe');
+  assert.equal(secondRead, null, 'consumption removes the bounded diagnostic sample');
   assert.ok(sample.preinsert_stages_ms.local_persistence >= 10);
   assert.ok(metrics.some((metric) => metric.name === 'roundtrip_total'));
   assert.ok(!JSON.stringify(sample).includes('capability_token'));
