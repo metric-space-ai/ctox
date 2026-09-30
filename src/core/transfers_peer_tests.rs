@@ -4,14 +4,14 @@ use ctox_sync::{
     business_data_contract::NativeBusinessDataDeviceIdentity, native::NativeSyncOptions,
 };
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicUsize, Ordering},
     Mutex,
 };
 
 struct Host {
     saved: Mutex<Option<SavedBusinessDataTarget>>,
     principal: Mutex<Option<NativeBusinessDataPrincipal>>,
-    switch_during_read: AtomicBool,
+    reads_before_switch: AtomicUsize,
 }
 
 // Spell out the async-trait ABI so the daemon needs no additional dependency
@@ -44,7 +44,13 @@ impl BusinessDataSessionHost for Host {
     {
         Box::pin(async move {
             assert_eq!(target_id, "target");
-            if self.switch_during_read.swap(false, Ordering::SeqCst) {
+            if self
+                .reads_before_switch
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |count| {
+                    count.checked_sub(1)
+                })
+                == Ok(1)
+            {
                 self.saved.lock().unwrap().as_mut().unwrap().account_epoch += 1;
             }
             Ok(self.principal.lock().unwrap().clone())
@@ -80,7 +86,7 @@ fn fixture() -> (Host, DownloadRequest) {
             account_epoch: 34,
         })),
         principal: Mutex::new(Some(principal.clone())),
-        switch_during_read: AtomicBool::new(false),
+        reads_before_switch: AtomicUsize::new(0),
     };
     let request = DownloadRequest {
         id: "bound-job".into(),
@@ -148,7 +154,7 @@ async fn current_authority_rejects_logout_account_device_and_enrollment_changes(
 #[tokio::test]
 async fn account_switch_during_snapshot_rejects_admission_and_enqueue() {
     let (host, mut request) = fixture();
-    host.switch_during_read.store(true, Ordering::SeqCst);
+    host.reads_before_switch.store(1, Ordering::SeqCst);
     assert!(current_account(&host, &request).await.is_err());
     let temp = tempfile::tempdir().unwrap();
     let store = Store::open(
@@ -157,7 +163,9 @@ async fn account_switch_during_snapshot_rejects_admission_and_enqueue() {
     )
     .unwrap();
     request.peer_source.as_mut().unwrap().account_binding = None;
-    host.switch_during_read.store(true, Ordering::SeqCst);
+    // Switch on the second principal read, after the original snapshot and
+    // the second saved-target check. A final epoch check must reject this.
+    host.reads_before_switch.store(2, Ordering::SeqCst);
     assert!(
         enqueue_enrolled_peer(&store, &host, "target", "grant", request.clone())
             .await

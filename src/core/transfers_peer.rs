@@ -74,8 +74,7 @@ pub(crate) async fn enqueue_enrolled_peer(
     });
     // A changed account during snapshot capture cannot create an admitted job.
     ensure!(
-        host.saved_target(target_id).await?.as_ref() == Some(&saved)
-            && host.current_principal(target_id).await?.as_ref() == Some(&principal),
+        current_account(host, &request).await? == principal,
         "account changed during transfer admission"
     );
     store.enqueue(request)
