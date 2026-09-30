@@ -21975,7 +21975,10 @@ fn founder_rework_queue_attempt_count(root: &Path, work_id: &str) -> Result<usiz
     let conn = channels::open_channel_db(&db_path)?;
     let count: i64 = conn.query_row(
         r#"
-        SELECT COUNT(*)
+        -- Re-leasing the same queue row is another execution attempt, not a
+        -- new message. Keep the existing minimum of one per admitted row so
+        -- legacy/unleased review-rework rows still spend their reserved budget.
+        SELECT COALESCE(SUM(MAX(1, COALESCE(r.attempt, 0))), 0)
         FROM communication_messages m
         LEFT JOIN communication_routing_state r ON r.message_key = m.message_key
         WHERE m.channel = 'queue'
@@ -41973,6 +41976,136 @@ Use shell tools to create or update these files."
             )
             .expect("failed to count notes after second block");
         assert_eq!(note_count_after_second_block, note_count_after_first_block);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn founder_rework_repeated_leases_of_one_task_exhaust_the_review_budget() {
+        let root = temp_root("ctox-founder-rework-repeated-lease-budget");
+        let inbound_key = "email:cto1@metric-space.ai::INBOX::repeated-lease";
+        let item = tickets::put_ticket_self_work_item(
+            &root,
+            tickets::TicketSelfWorkUpsertInput {
+                source_system: "local".to_string(),
+                kind: FOUNDER_COMMUNICATION_REWORK_KIND.to_string(),
+                title: "Founder communication rework: truthful reply".to_string(),
+                body_text: "Reply only after gathering real evidence.".to_string(),
+                state: "queued".to_string(),
+                metadata: serde_json::json!({
+                    "thread_key": "email-review:founder:repeated-lease",
+                    "parent_message_key": inbound_key,
+                    "inbound_message_key": inbound_key,
+                }),
+            },
+            false,
+        )
+        .expect("seed founder rework");
+        let create_task = |work_id: &str, thread: &str| {
+            channels::create_queue_task(
+                &root,
+                channels::QueueTaskCreateRequest {
+                    title: "Founder communication rework: truthful reply".to_string(),
+                    prompt: "Gather evidence; do not invent a UI change.".to_string(),
+                    thread_key: thread.to_string(),
+                    workspace_root: None,
+                    priority: "urgent".to_string(),
+                    suggested_skill: Some("follow-up-orchestrator".to_string()),
+                    parent_message_key: Some(inbound_key.to_string()),
+                    extra_metadata: Some(serde_json::json!({
+                        "ticket_self_work_id": work_id,
+                        "ticket_self_work_kind": FOUNDER_COMMUNICATION_REWORK_KIND,
+                        "parent_message_key": inbound_key,
+                        "inbound_message_key": inbound_key,
+                    })),
+                },
+            )
+            .expect("seed queue task")
+        };
+        let task = create_task(&item.work_id, "email-review:founder:repeated-lease");
+        let unrelated = create_task("different-work-id", "email-review:founder:other");
+        let conn = channels::open_channel_db(&crate::paths::core_db(&root)).unwrap();
+        conn.execute(
+            "UPDATE communication_routing_state SET route_status='review_rework', attempt=1 WHERE message_key=?1",
+            params![task.message_key],
+        ).unwrap();
+        conn.execute(
+            "UPDATE communication_routing_state SET attempt=99 WHERE message_key=?1",
+            params![unrelated.message_key],
+        )
+        .unwrap();
+        assert_eq!(
+            founder_rework_queue_attempt_count(&root, &item.work_id).unwrap(),
+            1
+        );
+        assert!(founder_rework_review_loop_block_note(
+            &root,
+            &item.work_id,
+            "Rejected ungrounded reply"
+        )
+        .unwrap()
+        .is_none());
+        conn.execute(
+            "UPDATE communication_routing_state SET attempt=?2 WHERE message_key=?1",
+            params![
+                task.message_key,
+                FOUNDER_REWORK_REQUEUE_BLOCK_THRESHOLD as i64
+            ],
+        )
+        .unwrap();
+        assert!(
+            founder_rework_review_loop_block_note(&root, &item.work_id, "Rejected again")
+                .unwrap()
+                .is_some()
+        );
+        // Production lease admission increments this durable attempt column.
+        // Twenty-one leases of one row must not still count as one message.
+        conn.execute(
+            "UPDATE communication_routing_state SET attempt=21 WHERE message_key=?1",
+            params![task.message_key],
+        )
+        .unwrap();
+        assert_eq!(
+            founder_rework_queue_attempt_count(&root, &item.work_id).unwrap(),
+            21
+        );
+        for _ in 0..2 {
+            assert!(requeue_review_rejected_self_work(
+                &root,
+                &item.work_id,
+                "Rejected invented UI change"
+            )
+            .unwrap()
+            .is_none());
+        }
+        assert_eq!(
+            channels::load_queue_task(&root, &task.message_key)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "failed"
+        );
+        assert_eq!(
+            tickets::load_ticket_self_work_item(&root, &item.work_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            "failed"
+        );
+        assert_eq!(
+            channels::load_queue_task(&root, &unrelated.message_key)
+                .unwrap()
+                .unwrap()
+                .route_status,
+            "pending"
+        );
+        let notes: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM ticket_self_work_notes WHERE work_id=?1",
+                params![item.work_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(notes, 1, "terminal loop disposition must remain idempotent");
         let _ = std::fs::remove_dir_all(root);
     }
 
