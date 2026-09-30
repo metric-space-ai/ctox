@@ -1250,6 +1250,11 @@ class CtoxWebRtcReplicationState {
     // after the remote/local validity keys and permission digest match during
     // handshake; until then an old marker must not make this collection live.
     this.firstPullCompletedAtMs = 0;
+    // Historical checkpoint reuse does not prove this connection is current.
+    // Only a drained pull after local writes/checkpoint reads in this generation does.
+    this.pullFresh = false;
+    this.pullFreshnessGeneration = 0;
+    this.lastSuccessfulPullAtMs = 0;
     this.localCheckpointValidityKey = '';
     // SYNC-12: a non-secret digest of THIS browser's own effective read-permission
     // identity (role + capability_epoch), stamped alongside retained checkpoints.
@@ -1449,12 +1454,12 @@ class CtoxWebRtcReplicationState {
     const periodicPullMs = this.periodicPullIntervalMs();
     if (periodicPullMs > 0) {
       // Master-change frames are a low-latency hint, not the sole correctness
-      // mechanism for the command control plane. A frame can be missed while
+      // mechanism for active data. A frame can be missed while
       // the browser reports its active-collection set or while an initial pull
-      // is in flight. The retained checkpoint makes this catch-up cheap and
-      // prevents an accepted native command from remaining `pending_sync`.
+      // is in flight. Keep the existing 1s command cadence and revalidate other
+      // active collections every minute from their retained checkpoint.
       this.periodicPullTimer = setInterval(() => {
-        this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+        this.pullFromRemotePeers({ revalidate: true }).catch((error) => this.error$.next(error));
       }, periodicPullMs);
     }
     const periodicPushMs = this.periodicPushIntervalMs();
@@ -1569,6 +1574,8 @@ class CtoxWebRtcReplicationState {
     // long after the native protocol response was produced.
     Object.assign(this.demandStatus, hybridLogicalClockStatus());
     this.activeRemotePeerId = peerId;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
     // Seed retained checkpoints only when the native storage generation and
@@ -1650,10 +1657,12 @@ class CtoxWebRtcReplicationState {
 
   // ----- pull / push (collection-tagged over the shared peer) -------------
 
-  async pullFromRemotePeers() {
+  async pullFromRemotePeers({ revalidate = false } = {}) {
     if (!this.pull || this.cancelled) return;
+    if (!revalidate) this.pullFresh = false;
     if (this.pullInProgressPromise) {
       this.pullAgainAfterCurrent = true;
+      this.publishTransportStatus();
       return this.pullInProgressPromise;
     }
     this.pullInProgress = true;
@@ -1671,6 +1680,7 @@ class CtoxWebRtcReplicationState {
         // master-change event or a page reload. Same shape as the bug the retry
         // timer below was added for, one level up.
         if (!peerIds.length || results.some((result) => result.status === 'rejected')) {
+          this.pullFresh = false;
           this.schedulePullRetry();
         }
       } while (this.pullAgainAfterCurrent && !this.cancelled);
@@ -1723,6 +1733,7 @@ class CtoxWebRtcReplicationState {
   }
 
   async pullFromPeer(peerId) {
+    const freshnessGeneration = this.pullFreshnessGeneration;
     const batchSize = Number(this.pull?.batchSize || 10);
     let activePeerId = peerId;
     let checkpoint = this.pullCheckpointsByPeer.get(activePeerId) || null;
@@ -1743,6 +1754,8 @@ class CtoxWebRtcReplicationState {
       }
       const documents = result.documents;
       if (documents.length) {
+        this.pullFresh = false;
+        this.publishTransportStatus();
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId),
         });
@@ -1756,7 +1769,11 @@ class CtoxWebRtcReplicationState {
       // drained completely, including the valid "synced but empty" case. Stamp
       // the marker before persisting so readiness survives a reload.
       if (!documents.length) this.markFirstPullCompleted();
-      await this.persistCheckpointsForPeer(activePeerId);
+      const checkpointPersisted = await this.persistCheckpointsForPeer(activePeerId);
+      if (!documents.length && checkpointPersisted && freshnessGeneration === this.pullFreshnessGeneration && !this.cancelled) {
+        this.pullFresh = true;
+        this.lastSuccessfulPullAtMs = Date.now();
+      }
       // Drain until an EMPTY answer, not until a partial batch: the master
       // legitimately returns fewer documents than asked for (the
       // desktop_file_chunks response limiter caps answers at 96 KiB with a
@@ -2518,6 +2535,13 @@ class CtoxWebRtcReplicationState {
     return 'never-synced';
   }
 
+  collectionFreshnessState() {
+    if (!this.pull) return null;
+    if (!this.hasOpenReadinessPeer()) return 'offline-pending';
+    if (!this.pullFresh) return 'catching-up';
+    return 'live';
+  }
+
   hasOpenReadinessPeer() {
     if ((this.shared?.openSharedPeerIds?.() || []).length > 0) return true;
     const negotiatedPeerId = this.shared?.negotiated?.peerId || '';
@@ -2544,6 +2568,8 @@ class CtoxWebRtcReplicationState {
     if (!peerId) return;
     const peerStates = new Map(this.peerStates$.getValue() || new Map());
     if (!peerStates.has(peerId)) return;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     // Retain the checkpoints (validity-keyed) BEFORE dropping the peer.
     // Discarding them outright meant EVERY reconnect re-synced the whole
     // collection from a null checkpoint — across ~80 collections that
@@ -2621,10 +2647,10 @@ class CtoxWebRtcReplicationState {
 
   async persistCheckpointsForPeer(peerId) {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
-    if (!validityKey) return;
+    if (!validityKey) return false;
     const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     const localValidityKey = localCheckpointValidityKey(localCheckpoint);
-    if (!localValidityKey) return;
+    if (!localValidityKey) return false;
     this.localCheckpointValidityKey = localValidityKey;
     const retained = {
       validityKey,
@@ -2641,6 +2667,7 @@ class CtoxWebRtcReplicationState {
     };
     this.retainedCheckpoints = retained;
     writePersistentCheckpoints(this.checkpointStorageKey, retained);
+    return true;
   }
 
   remoteProtocolForPeer(peerId) {
@@ -2710,7 +2737,7 @@ class CtoxWebRtcReplicationState {
 
   periodicPullIntervalMs() {
     if (!this.pull) return 0;
-    return ['business_commands', 'ctox_queue_tasks'].includes(this.collection.name) ? 1000 : 0;
+    return ['business_commands', 'ctox_queue_tasks'].includes(this.collection.name) ? 1000 : 60_000;
   }
 
   periodicPushIntervalMs() {
@@ -2806,6 +2833,9 @@ class CtoxWebRtcReplicationState {
       topic: this.topic,
       activePeerCount: Math.max(localPeerCount, sharedPeerCount, connectionPeerCount),
       collectionReadinessState: this.collectionReadinessState(),
+      collectionFreshnessState: this.collectionFreshnessState(),
+      pullEnabled: Boolean(this.pull),
+      lastSuccessfulPullAtMs: this.lastSuccessfulPullAtMs || null,
       firstPullCompletedAtMs: this.firstPullCompletedAtMs || null,
       pullInProgress: this.pullInProgress,
       pushInProgress: this.pushInProgress,
@@ -2877,6 +2907,11 @@ function localCheckpointValidityKey(checkpoint) {
     : '';
   if (!epoch) return '';
   const evictionGeneration = Number(checkpoint.evictionGeneration || 0);
+  const storeGeneration = checkpoint.localStoreGeneration;
+  if (storeGeneration !== undefined) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(storeGeneration)) return '';
+    return `${epoch}|${schemaHashValue}|ev${evictionGeneration}|store${storeGeneration}`;
+  }
   return evictionGeneration > 0
     ? `${epoch}|${schemaHashValue}|ev${evictionGeneration}`
     : `${epoch}|${schemaHashValue}`;
@@ -2899,13 +2934,18 @@ function localCheckpointStillCovers(retainedKey, currentKey) {
   return retained.collection === current.collection
     && retained.schemaHash === current.schemaHash
     && retained.evictionGeneration === current.evictionGeneration
+    && retained.storeGeneration === current.storeGeneration
     && Number.isFinite(retained.latestLwt)
     && Number.isFinite(current.latestLwt)
     && current.latestLwt >= retained.latestLwt;
 }
 
 function parseBrowserLocalCheckpointKey(key) {
-  const [epoch = '', schemaHash = '', evictionPart = ''] = String(key).split('|');
+  const parts = String(key).split('|');
+  if (parts.length > 4) return null;
+  const [epoch = '', schemaHash = '', evictionPart = '', storePart = ''] = parts;
+  const storeGeneration = storePart ? /^store([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(storePart)?.[1] : '';
+  if (storePart && !storeGeneration) return null;
   const match = /^browser:(.+):(\d+(?:\.\d+)?):([0-9a-f]+)$/.exec(epoch);
   if (!match) return null;
   const evictionGeneration = evictionPart
@@ -2917,6 +2957,7 @@ function parseBrowserLocalCheckpointKey(key) {
     latestLwt: Number(match[2]),
     schemaHash,
     evictionGeneration,
+    storeGeneration,
   };
 }
 

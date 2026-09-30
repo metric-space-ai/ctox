@@ -34,6 +34,12 @@ check('other collection does not cover', !covers(stored, key({ epoch: 'browser:b
 check('non-browser keys keep exact equality', !covers('local-epoch-1|x', 'local-epoch-2|x') && covers('local-epoch-1|x', 'local-epoch-1|x'));
 check('missing keys never cover', !covers('', stored) && !covers(stored, ''));
 check('no eviction keeps the pre-existing key format', stored === `browser:outbound_lead_generation_leads:1790778099978:1d2bdf24e8740ebd|${schema}`);
+const firstStore = '11111111-1111-4111-8111-111111111111';
+const replacementStore = '22222222-2222-4222-8222-222222222222';
+check('same persisted store identity resumes', covers(at(1000, { localStoreGeneration: firstStore }), at(2000, { localStoreGeneration: firstStore })));
+check('recreated store with newer head cannot resume', !covers(at(1000, { localStoreGeneration: firstStore }), at(2000, { localStoreGeneration: replacementStore })));
+check('legacy checkpoint requires a first generation-confirming pull', !covers(stored, at(1790778102996, { localStoreGeneration: firstStore })));
+check('malformed generation is not a checkpoint', key({ epoch: 'browser:fixture:1000:abc', localStoreGeneration: 'bad' }) === '');
 
 if (failures) {
   console.log(`${failures} failure(s)`);

@@ -2365,12 +2365,25 @@ var CtoxIndexedDbStorage = class {
     const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readwrite");
     const done = idbTransactionDone(tx);
     const documents = tx.objectStore(DOCUMENT_STORE);
+    done.catch(() => {
+    });
     const markers = tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE);
-    for (const name of names) {
-      documents.delete(IDBKeyRange.bound([name, ""], [name, INDEX_HIGH_KEY]));
-      markers.delete(name);
+    try {
+      for (const name of names) {
+        const marker = await localCheckpointMarker(markers, name);
+        documents.delete(IDBKeyRange.bound([name, ""], [name, INDEX_HIGH_KEY]));
+        markers.put({ ...marker, evictionGeneration: marker.evictionGeneration + 1 });
+      }
+      await done;
+    } catch (error) {
+      try {
+        tx.abort();
+      } catch {
+      }
+      await done.catch(() => {
+      });
+      throw error;
     }
-    await done;
     for (const name of names) {
       globalThis.dispatchEvent?.(new CustomEvent("ctox-rxdb-external-change", {
         detail: { databaseName: this.db.name, collection: name, ids: [], cleared: true }
@@ -3007,16 +3020,31 @@ var CtoxIndexedDbCollection = class {
   /// this on dirty docs; the sidecar enforces that.
   async hardDeleteByIds(ids) {
     if (!Array.isArray(ids) || !ids.length) return 0;
-    const tx = this.db.transaction(DOCUMENT_STORE, "readwrite");
-    const store = tx.objectStore(DOCUMENT_STORE);
-    let removed = 0;
-    for (const id of ids) {
-      await idbRequest(store.delete([this.name, String(id)]));
-      removed += 1;
+    const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readwrite");
+    const done = idbTransactionDone(tx);
+    const markers = tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE);
+    done.catch(() => {
+    });
+    try {
+      const marker = await localCheckpointMarker(markers, this.name);
+      const store = tx.objectStore(DOCUMENT_STORE);
+      let removed = 0;
+      for (const id of ids) {
+        await idbRequest(store.delete([this.name, String(id)]));
+        removed += 1;
+      }
+      if (removed) markers.put({ ...marker, evictionGeneration: marker.evictionGeneration + 1 });
+      await done;
+      return removed;
+    } catch (error) {
+      try {
+        tx.abort();
+      } catch {
+      }
+      await done.catch(() => {
+      });
+      throw error;
     }
-    await idbTransactionDone(tx);
-    if (removed) bumpLocalEvictionGeneration(this.db.name, this.name);
-    return removed;
   }
   async findDocumentsById(ids, { withDeleted = false } = {}) {
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
@@ -3245,11 +3273,15 @@ var CtoxIndexedDbCollection = class {
     };
   }
   async replicationCheckpointStatus(schemaHash2 = null) {
-    const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
+    const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readwrite");
+    const done = idbTransactionDone(tx);
+    done.catch(() => {
+    });
+    const marker = await localCheckpointMarker(tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE), this.name);
     const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
     const range = IDBKeyRange.bound([this.name, 0, ""], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], false, false);
     const record = await firstCursorValue(index.openCursor(range, "prev"));
-    await idbTransactionDone(tx);
+    await done;
     if (!record) {
       return {
         source: "browser",
@@ -3259,7 +3291,8 @@ var CtoxIndexedDbCollection = class {
         latestLwt: null,
         latestIdHash: null,
         epoch: `browser:${this.name}:empty`,
-        evictionGeneration: readLocalEvictionGeneration(this.db.name, this.name)
+        evictionGeneration: marker.evictionGeneration,
+        localStoreGeneration: marker.localStoreGeneration
       };
     }
     const latestIdHash = await sha256Hex(record.id);
@@ -3271,7 +3304,8 @@ var CtoxIndexedDbCollection = class {
       latestLwt: record.lwt,
       latestIdHash,
       epoch: `browser:${this.name}:${record.lwt}:${latestIdHash.slice(0, 16)}`,
-      evictionGeneration: readLocalEvictionGeneration(this.db.name, this.name)
+      evictionGeneration: marker.evictionGeneration,
+      localStoreGeneration: marker.localStoreGeneration
     };
   }
   schemaIndexes() {
@@ -4093,23 +4127,22 @@ var ctoxIndexedDbStorageTestInternals = {
   shouldAcceptDocumentWrite,
   storedRecordForWrite
 };
-function localEvictionGenerationKey(databaseName, collectionName) {
-  return `ctox.rxdb.evictions.v1.${encodeURIComponent(String(databaseName || ""))}.${encodeURIComponent(String(collectionName || ""))}`;
-}
-function readLocalEvictionGeneration(databaseName, collectionName) {
-  try {
-    const value = Number(globalThis.localStorage?.getItem?.(localEvictionGenerationKey(databaseName, collectionName)) || 0);
-    return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-  } catch {
-    return 0;
+async function localCheckpointMarker(store, collection) {
+  const previous = await idbRequest(store.get(collection));
+  if (previous?.localStoreGeneration !== void 0) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(previous.localStoreGeneration) || !Number.isSafeInteger(previous.evictionGeneration) || previous.evictionGeneration < 0 || previous.evictionGeneration >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Invalid local checkpoint generation");
+    }
+    return previous;
   }
-}
-function bumpLocalEvictionGeneration(databaseName, collectionName) {
-  try {
-    const key = localEvictionGenerationKey(databaseName, collectionName);
-    globalThis.localStorage?.setItem?.(key, String(readLocalEvictionGeneration(databaseName, collectionName) + 1));
-  } catch {
-  }
+  const marker = {
+    ...previous,
+    collection,
+    localStoreGeneration: globalThis.crypto.randomUUID(),
+    evictionGeneration: 0
+  };
+  await idbRequest(store.put(marker));
+  return marker;
 }
 
 // src/apps/business-os/rxdb/src/inbound-request-queue.mjs
@@ -10912,6 +10945,9 @@ var CtoxWebRtcReplicationState = class {
     this.checkpointStorageKey = persistentCheckpointStorageKey(topic, collection.name);
     this.retainedCheckpoints = readPersistentCheckpoints(this.checkpointStorageKey);
     this.firstPullCompletedAtMs = 0;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration = 0;
+    this.lastSuccessfulPullAtMs = 0;
     this.localCheckpointValidityKey = "";
     this.readPermissionDigest = "";
     this.activeRemotePeerId = null;
@@ -11073,7 +11109,7 @@ var CtoxWebRtcReplicationState = class {
     const periodicPullMs = this.periodicPullIntervalMs();
     if (periodicPullMs > 0) {
       this.periodicPullTimer = setInterval(() => {
-        this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+        this.pullFromRemotePeers({ revalidate: true }).catch((error) => this.error$.next(error));
       }, periodicPullMs);
     }
     const periodicPushMs = this.periodicPushIntervalMs();
@@ -11163,6 +11199,8 @@ var CtoxWebRtcReplicationState = class {
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
     Object.assign(this.demandStatus, hybridLogicalClockStatus());
     this.activeRemotePeerId = peerId;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
     const validityKey = checkpointValidityKeyFromProtocol(normalizedRemoteProtocol);
@@ -11224,10 +11262,12 @@ var CtoxWebRtcReplicationState = class {
     }
   }
   // ----- pull / push (collection-tagged over the shared peer) -------------
-  async pullFromRemotePeers() {
+  async pullFromRemotePeers({ revalidate = false } = {}) {
     if (!this.pull || this.cancelled) return;
+    if (!revalidate) this.pullFresh = false;
     if (this.pullInProgressPromise) {
       this.pullAgainAfterCurrent = true;
+      this.publishTransportStatus();
       return this.pullInProgressPromise;
     }
     this.pullInProgress = true;
@@ -11240,6 +11280,7 @@ var CtoxWebRtcReplicationState = class {
         const results = await Promise.allSettled(peerIds.map((peerId) => this.pullFromPeer(peerId)));
         this.reportPeerResults(results, peerIds);
         if (!peerIds.length || results.some((result) => result.status === "rejected")) {
+          this.pullFresh = false;
           this.schedulePullRetry();
         }
       } while (this.pullAgainAfterCurrent && !this.cancelled);
@@ -11288,6 +11329,7 @@ var CtoxWebRtcReplicationState = class {
     this.localPushTimer.unref?.();
   }
   async pullFromPeer(peerId) {
+    const freshnessGeneration = this.pullFreshnessGeneration;
     const batchSize = Number(this.pull?.batchSize || 10);
     let activePeerId = peerId;
     let checkpoint = this.pullCheckpointsByPeer.get(activePeerId) || null;
@@ -11306,6 +11348,8 @@ var CtoxWebRtcReplicationState = class {
       }
       const documents = result.documents;
       if (documents.length) {
+        this.pullFresh = false;
+        this.publishTransportStatus();
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId)
         });
@@ -11316,7 +11360,11 @@ var CtoxWebRtcReplicationState = class {
       checkpoint = result?.checkpoint || checkpoint;
       this.pullCheckpointsByPeer.set(activePeerId, checkpoint);
       if (!documents.length) this.markFirstPullCompleted();
-      await this.persistCheckpointsForPeer(activePeerId);
+      const checkpointPersisted = await this.persistCheckpointsForPeer(activePeerId);
+      if (!documents.length && checkpointPersisted && freshnessGeneration === this.pullFreshnessGeneration && !this.cancelled) {
+        this.pullFresh = true;
+        this.lastSuccessfulPullAtMs = Date.now();
+      }
       if (!documents.length) break;
     }
   }
@@ -11977,6 +12025,12 @@ var CtoxWebRtcReplicationState = class {
     if (!this.hasOpenReadinessPeer()) return "offline-pending";
     return "never-synced";
   }
+  collectionFreshnessState() {
+    if (!this.pull) return null;
+    if (!this.hasOpenReadinessPeer()) return "offline-pending";
+    if (!this.pullFresh) return "catching-up";
+    return "live";
+  }
   hasOpenReadinessPeer() {
     if ((this.shared?.openSharedPeerIds?.() || []).length > 0) return true;
     const negotiatedPeerId = this.shared?.negotiated?.peerId || "";
@@ -11997,6 +12051,8 @@ var CtoxWebRtcReplicationState = class {
     if (!peerId) return;
     const peerStates = new Map(this.peerStates$.getValue() || /* @__PURE__ */ new Map());
     if (!peerStates.has(peerId)) return;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
     const retainedPull = this.pullCheckpointsByPeer.get(peerId) || null;
     const retainedPush = this.pushCheckpointsByPeer.get(peerId) || null;
@@ -12075,10 +12131,10 @@ var CtoxWebRtcReplicationState = class {
   }
   async persistCheckpointsForPeer(peerId) {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
-    if (!validityKey) return;
+    if (!validityKey) return false;
     const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     const localValidityKey = localCheckpointValidityKey(localCheckpoint);
-    if (!localValidityKey) return;
+    if (!localValidityKey) return false;
     this.localCheckpointValidityKey = localValidityKey;
     const retained = {
       validityKey,
@@ -12095,6 +12151,7 @@ var CtoxWebRtcReplicationState = class {
     };
     this.retainedCheckpoints = retained;
     writePersistentCheckpoints(this.checkpointStorageKey, retained);
+    return true;
   }
   remoteProtocolForPeer(peerId) {
     const localProtocol = (this.peerStates$.getValue() || /* @__PURE__ */ new Map()).get(peerId)?.remoteProtocol || null;
@@ -12152,7 +12209,7 @@ var CtoxWebRtcReplicationState = class {
   }
   periodicPullIntervalMs() {
     if (!this.pull) return 0;
-    return ["business_commands", "ctox_queue_tasks"].includes(this.collection.name) ? 1e3 : 0;
+    return ["business_commands", "ctox_queue_tasks"].includes(this.collection.name) ? 1e3 : 6e4;
   }
   periodicPushIntervalMs() {
     if (!this.push) return 0;
@@ -12239,6 +12296,9 @@ var CtoxWebRtcReplicationState = class {
       topic: this.topic,
       activePeerCount: Math.max(localPeerCount, sharedPeerCount, connectionPeerCount),
       collectionReadinessState: this.collectionReadinessState(),
+      collectionFreshnessState: this.collectionFreshnessState(),
+      pullEnabled: Boolean(this.pull),
+      lastSuccessfulPullAtMs: this.lastSuccessfulPullAtMs || null,
       firstPullCompletedAtMs: this.firstPullCompletedAtMs || null,
       pullInProgress: this.pullInProgress,
       pushInProgress: this.pushInProgress,
@@ -12286,6 +12346,11 @@ function localCheckpointValidityKey(checkpoint) {
   const schemaHashValue = typeof checkpoint.schemaHash === "string" ? checkpoint.schemaHash.trim() : "";
   if (!epoch) return "";
   const evictionGeneration = Number(checkpoint.evictionGeneration || 0);
+  const storeGeneration = checkpoint.localStoreGeneration;
+  if (storeGeneration !== void 0) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(storeGeneration)) return "";
+    return `${epoch}|${schemaHashValue}|ev${evictionGeneration}|store${storeGeneration}`;
+  }
   return evictionGeneration > 0 ? `${epoch}|${schemaHashValue}|ev${evictionGeneration}` : `${epoch}|${schemaHashValue}`;
 }
 function localCheckpointStillCovers(retainedKey, currentKey) {
@@ -12294,10 +12359,14 @@ function localCheckpointStillCovers(retainedKey, currentKey) {
   const retained = parseBrowserLocalCheckpointKey(retainedKey);
   const current = parseBrowserLocalCheckpointKey(currentKey);
   if (!retained || !current) return false;
-  return retained.collection === current.collection && retained.schemaHash === current.schemaHash && retained.evictionGeneration === current.evictionGeneration && Number.isFinite(retained.latestLwt) && Number.isFinite(current.latestLwt) && current.latestLwt >= retained.latestLwt;
+  return retained.collection === current.collection && retained.schemaHash === current.schemaHash && retained.evictionGeneration === current.evictionGeneration && retained.storeGeneration === current.storeGeneration && Number.isFinite(retained.latestLwt) && Number.isFinite(current.latestLwt) && current.latestLwt >= retained.latestLwt;
 }
 function parseBrowserLocalCheckpointKey(key) {
-  const [epoch = "", schemaHash2 = "", evictionPart = ""] = String(key).split("|");
+  const parts = String(key).split("|");
+  if (parts.length > 4) return null;
+  const [epoch = "", schemaHash2 = "", evictionPart = "", storePart = ""] = parts;
+  const storeGeneration = storePart ? /^store([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(storePart)?.[1] : "";
+  if (storePart && !storeGeneration) return null;
   const match = /^browser:(.+):(\d+(?:\.\d+)?):([0-9a-f]+)$/.exec(epoch);
   if (!match) return null;
   const evictionGeneration = evictionPart ? Number(/^ev(\d+)$/.exec(evictionPart)?.[1] ?? NaN) : 0;
@@ -12306,7 +12375,8 @@ function parseBrowserLocalCheckpointKey(key) {
     collection: match[1],
     latestLwt: Number(match[2]),
     schemaHash: schemaHash2,
-    evictionGeneration
+    evictionGeneration,
+    storeGeneration
   };
 }
 function persistentCheckpointStorageKey(topic, collection) {

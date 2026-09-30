@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20260930-shell-v2-checkpoint-resume-v429';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260930-shell-v2-checkpoint-resume-v429';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260930-shell-v2-checkpoint-resume-v429';
+} from './sync-contract.js?v=20260930-shell-checkpoint-freshness-v430';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260930-shell-checkpoint-freshness-v430';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260930-shell-checkpoint-freshness-v430';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20260930-shell-v2-checkpoint-resume-v429';
+const MULTI_TAB_COORDINATOR_EPOCH = '20260930-shell-checkpoint-freshness-v430';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -2807,6 +2807,9 @@ function sanitizeReplicationTransportStatus(status) {
     lastAckLagMs: numberField('lastAckLagMs'),
     lastBufferedAmount: numberField('lastBufferedAmount'),
     collectionReadinessState: normalizeCollectionReadinessState(status.collectionReadinessState),
+    collectionFreshnessState: normalizeCollectionReadinessState(status.collectionFreshnessState),
+    pullEnabled: typeof status.pullEnabled === 'boolean' ? status.pullEnabled : null,
+    lastSuccessfulPullAtMs: numberField('lastSuccessfulPullAtMs'),
     firstPullCompletedAtMs: numberField('firstPullCompletedAtMs'),
     pullInProgress: status.pullInProgress === true,
     pushInProgress: status.pushInProgress === true,

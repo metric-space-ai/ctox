@@ -213,6 +213,32 @@ Unmounted desktops do not start further reconciliation writes. This makes a
 previously loaded desktop usable during a slow or offline reconnect, but does
 not by itself establish that the full tenant data set has converged.
 
+Browser checkpoint validity includes a persisted local store identity and an
+eviction generation in the existing IndexedDB collection marker store. Ordinary
+pulls/writes can advance the local head without invalidating incremental resume.
+Hard deletion and cache clearing advance the generation in the same document
+transaction; a failed marker write rolls deletion back. Store recreation gets
+a new identity. Legacy checkpoints without that identity require one confirming
+pull before reuse; existing records and recovery journals are retained. Schema,
+permission and native-generation changes keep their existing invalidation rules.
+
+Historical first-pull readiness survives valid checkpoint reuse so cached UI
+can still paint immediately. It does not certify the current connection's
+freshness. Pull transport diagnostics expose `collectionFreshnessState` and
+`lastSuccessfulPullAtMs`: only a fully drained pull after local storage work
+in the current peer generation confirms `live`. A disconnect, pending pull,
+or failed drain leaves displayed cache unconfirmed without resetting its
+checkpoint or journal. The active app shows an inline warning until its
+replicated collections regain that confirmation; document age is not a
+freshness test, since an authoritative collection can legitimately be idle.
+Active replicated collections revalidate from their retained checkpoint at
+least every minute (the command control plane keeps its existing one-second
+interval). Missing change hints cannot strand a quiet collection indefinitely.
+An empty revalidation preserves the confirmed UI state; returned changes or
+failure invalidate it. Confirmation older than two minutes is unconfirmed,
+including after browser suspension. Query-only collections use their existing
+strict demand-read contract and are excluded from this pull warning.
+
 Authoritative reconciliation uses the existing collection lease and
 query-demand-loader with an opaque `requireRevision` hydration token. Query
 readiness means the negotiated peer has query-fetch capability and the actual
