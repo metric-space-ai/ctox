@@ -309,6 +309,7 @@ jobs:
             --test-threads=2 | tee "$RUNNER_TEMP/ctox-host-proof/capability-grant-tests.log"
           for regression in \
             capability_epoch_revokes_tokens_after_role_or_grant_change \
+            capability_issuance_reuses_connection_but_reads_current_actor \
             capability_token_survives_idempotent_sync_grant_materialization \
             capability_token_survives_catalog_grants_after_install \
             capability_token_enforcement_gates_privileged_commands \

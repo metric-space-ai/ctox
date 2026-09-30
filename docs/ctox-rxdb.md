@@ -111,11 +111,15 @@ Two implementations, one contract:
 Capability issuance reconciles baseline and installed catalog grants before
 reading the actor's current role and capability epoch. Both materializers use
 one freshly loaded server-owned collection snapshot for that request and reuse
-prepared SQL statements within their transactions. The ownership snapshot and
+prepared SQL statements within their transactions. Grant reconciliation and
+the actor read reuse the existing thread-local, database-identity-fenced SQLite
+connection; each grant transaction commits before the actor read, and no
+transaction remains open while signing. The ownership snapshot and
 authorization decision are never cached between token issuances. New installed
 collections, grant changes and role changes remain part of the fresh issuance
 and WebRTC admission checks. The Full Host gate exercises revocation,
-idempotent reconciliation, newly installed catalog grants and server-owned
+idempotent reconciliation, current actors across reused connections,
+newly installed catalog grants and server-owned
 write exclusions before measuring the unchanged command latency budget.
 
 ## Shell artifact boundary

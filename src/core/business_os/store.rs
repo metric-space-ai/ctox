@@ -17490,23 +17490,23 @@ fn ensure_legacy_collection_grants_with_ownership(
     collections: &[String],
     server_owned_collections: &HashSet<String>,
 ) -> anyhow::Result<()> {
-    let mut conn = open_store(root)?;
-    let tx = conn.transaction()?;
-    let now = now_ms() as i64;
-    for collection in collections {
-        let collection = collection.trim();
-        if collection.is_empty()
-            || policy::ADMIN_ONLY_COLLECTIONS.contains(&collection)
-            || collection == "ctox_queue_tasks"
-            || policy::is_cockpit_projection(collection)
-        {
-            continue;
-        }
-        let server_owned_write = super::threads::is_threads_owned_collection(collection)
-            || server_owned_collections.contains(collection);
-        if server_owned_write {
-            tx.prepare_cached(
-                "UPDATE business_permission_grants
+    with_store_connection(root, |conn| {
+        let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+        let now = now_ms() as i64;
+        for collection in collections {
+            let collection = collection.trim();
+            if collection.is_empty()
+                || policy::ADMIN_ONLY_COLLECTIONS.contains(&collection)
+                || collection == "ctox_queue_tasks"
+                || policy::is_cockpit_projection(collection)
+            {
+                continue;
+            }
+            let server_owned_write = super::threads::is_threads_owned_collection(collection)
+                || server_owned_collections.contains(collection);
+            if server_owned_write {
+                tx.prepare_cached(
+                    "UPDATE business_permission_grants
                  SET active=0,
                      reason='Server-owned collection is read-only for browser sync',
                      updated_at_ms=?1
@@ -17515,47 +17515,48 @@ fn ensure_legacy_collection_grants_with_ownership(
                    AND scope_type='collection'
                    AND scope_id=?3
                    AND created_by='business-os-policy-migration'",
-            )?
-            .execute(params![
-                now,
-                BusinessOsPermission::DataWrite.as_str(),
-                collection
-            ])?;
-        }
-        for role in ["founder", "user"] {
-            for permission in [
-                BusinessOsPermission::DataRead,
-                BusinessOsPermission::DataWrite,
-            ] {
-                if permission == BusinessOsPermission::DataWrite && server_owned_write {
-                    continue;
-                }
-                let grant_id = format!(
-                    "migration.sync.{}.{}.{}",
-                    role,
-                    permission.as_str().replace('.', "_"),
+                )?
+                .execute(params![
+                    now,
+                    BusinessOsPermission::DataWrite.as_str(),
                     collection
-                );
-                tx.prepare_cached(
-                    "INSERT OR IGNORE INTO business_permission_grants
+                ])?;
+            }
+            for role in ["founder", "user"] {
+                for permission in [
+                    BusinessOsPermission::DataRead,
+                    BusinessOsPermission::DataWrite,
+                ] {
+                    if permission == BusinessOsPermission::DataWrite && server_owned_write {
+                        continue;
+                    }
+                    let grant_id = format!(
+                        "migration.sync.{}.{}.{}",
+                        role,
+                        permission.as_str().replace('.', "_"),
+                        collection
+                    );
+                    tx.prepare_cached(
+                        "INSERT OR IGNORE INTO business_permission_grants
                         (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
                          active, reason, created_by, created_at_ms, updated_at_ms)
                      VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
                              'Migrated legacy sync access to exact collection grant',
                              'business-os-policy-migration', ?5, ?5)",
-                )?
-                .execute(params![
-                    grant_id,
-                    role,
-                    permission.as_str(),
-                    collection,
-                    now
-                ])?;
+                    )?
+                    .execute(params![
+                        grant_id,
+                        role,
+                        permission.as_str(),
+                        collection,
+                        now
+                    ])?;
+                }
             }
         }
-    }
-    tx.commit()?;
-    Ok(())
+        tx.commit()?;
+        Ok(())
+    })
 }
 
 /// First-party catalog apps (Mail, Documents, Auth-Handoff) run as installed
@@ -17630,46 +17631,47 @@ fn ensure_first_party_catalog_collection_grants_with_ownership(
             &current_ownership
         }
     };
-    let mut conn = open_store(root)?;
-    let tx = conn.transaction()?;
-    let now = now_ms() as i64;
-    let mut inserted = 0usize;
-    for (module_id, collection) in &declared {
-        let server_owned_write = super::threads::is_threads_owned_collection(collection)
-            || server_owned_collections.contains(collection.as_str());
-        for role in ["admin", "chef"] {
-            for permission in [
-                BusinessOsPermission::DataRead,
-                BusinessOsPermission::DataWrite,
-            ] {
-                if permission == BusinessOsPermission::DataWrite && server_owned_write {
-                    continue;
-                }
-                let grant_id = format!(
-                    "catalog.first_party.{module_id}.{role}.{}.{collection}",
-                    permission.as_str().replace('.', "_")
-                );
-                inserted += tx
-                    .prepare_cached(
-                        "INSERT OR IGNORE INTO business_permission_grants
+    with_store_connection(root, |conn| {
+        let tx = rusqlite::Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+        let now = now_ms() as i64;
+        let mut inserted = 0usize;
+        for (module_id, collection) in &declared {
+            let server_owned_write = super::threads::is_threads_owned_collection(collection)
+                || server_owned_collections.contains(collection.as_str());
+            for role in ["admin", "chef"] {
+                for permission in [
+                    BusinessOsPermission::DataRead,
+                    BusinessOsPermission::DataWrite,
+                ] {
+                    if permission == BusinessOsPermission::DataWrite && server_owned_write {
+                        continue;
+                    }
+                    let grant_id = format!(
+                        "catalog.first_party.{module_id}.{role}.{}.{collection}",
+                        permission.as_str().replace('.', "_")
+                    );
+                    inserted += tx
+                        .prepare_cached(
+                            "INSERT OR IGNORE INTO business_permission_grants
                         (grant_id, subject_type, subject_id, permission, scope_type, scope_id,
                          active, reason, created_by, created_at_ms, updated_at_ms)
                      VALUES (?1, 'role', ?2, ?3, 'collection', ?4, 1,
                              'First-party catalog app data access for administrators',
                              'business-os-first-party-catalog', ?5, ?5)",
-                    )?
-                    .execute(params![
-                        grant_id,
-                        role,
-                        permission.as_str(),
-                        collection,
-                        now
-                    ])?;
+                        )?
+                        .execute(params![
+                            grant_id,
+                            role,
+                            permission.as_str(),
+                            collection,
+                            now
+                        ])?;
+                }
             }
         }
-    }
-    tx.commit()?;
-    Ok(inserted)
+        tx.commit()?;
+        Ok(inserted)
+    })
 }
 
 fn business_os_collection_names_for_legacy_grants() -> Vec<String> {
@@ -17785,15 +17787,20 @@ fn issue_business_os_capability_token_until_with_identity(
         &resolve_business_os_installed_app_root(root),
         Some(&ownership),
     )?;
-    let conn = open_store(root)?;
-    seed_configured_business_users(&conn)?;
-    let user = active_business_user(&conn, user_id.trim())?
-        .ok_or_else(|| anyhow::anyhow!("no active Business OS user {user_id:?}"))?;
-    let actor_epoch: i64 = conn.query_row(
-        "SELECT capability_epoch FROM business_users WHERE user_id = ?1 AND active = 1",
-        params![user.id.as_str()],
-        |row| row.get(0),
-    )?;
+    // Reuse the existing identity-fenced connection, never its authorization
+    // results. Materializers commit before this fresh actor/epoch read, and no
+    // connection borrow or transaction survives into signing.
+    let (user, actor_epoch) = with_store_connection(root, |conn| {
+        seed_configured_business_users(conn)?;
+        let user = active_business_user(conn, user_id.trim())?
+            .ok_or_else(|| anyhow::anyhow!("no active Business OS user {user_id:?}"))?;
+        let actor_epoch: i64 = conn.query_row(
+            "SELECT capability_epoch FROM business_users WHERE user_id = ?1 AND active = 1",
+            params![user.id.as_str()],
+            |row| row.get(0),
+        )?;
+        Ok((user, actor_epoch))
+    })?;
     let secret = capability_signing_secret(root)?;
     let token = super::capability::issue_capability_token_with_epoch_and_identity(
         &secret,
@@ -17836,10 +17843,10 @@ pub fn issue_business_os_capability_token_for_session(
         display_name
     };
     let role = normalize_business_role(&user.role);
-    let conn = open_store(root)?;
-    seed_configured_business_users(&conn)?;
-    conn.execute(
-        "INSERT INTO business_users
+    with_store_connection(root, |conn| {
+        seed_configured_business_users(conn)?;
+        conn.execute(
+            "INSERT INTO business_users
             (user_id, display_name, role, active, created_at_ms, updated_at_ms)
          VALUES (?1, ?2, ?3, 1, ?4, ?4)
          ON CONFLICT(user_id) DO UPDATE SET
@@ -17847,9 +17854,10 @@ pub fn issue_business_os_capability_token_for_session(
             role = excluded.role,
             active = 1,
             updated_at_ms = excluded.updated_at_ms",
-        params![user_id, display_name, role.as_str(), now_ms],
-    )?;
-    drop(conn);
+            params![user_id, display_name, role.as_str(), now_ms],
+        )?;
+        Ok(())
+    })?;
     issue_business_os_capability_token(root, user_id, now_ms)
 }
 
@@ -28703,6 +28711,49 @@ pub(super) mod tests {
             verify_capability_actor(root.path(), &grant_token).is_none(),
             "grant changes must invalidate an already-issued capability"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn capability_issuance_reuses_connection_but_reads_current_actor() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        seed_business_user(root.path(), "operator1", "user")?;
+        let now = now_ms() as i64;
+        let (first, _) = issue_business_os_capability_token(root.path(), "operator1", now)?;
+        assert_eq!(
+            verify_capability_role(root.path(), &first).as_deref(),
+            Some("user")
+        );
+
+        // A separate connection must be able to commit immediately after each
+        // issuance. Retaining a transaction or actor snapshot would make this
+        // write fail or let the following token retain the old authority.
+        let conn = open_store(root.path())?;
+        conn.busy_timeout(Duration::ZERO)?;
+        conn.execute(
+            "UPDATE business_users SET role = 'founder' WHERE user_id = 'operator1'",
+            [],
+        )?;
+        let (second, _) = issue_business_os_capability_token(root.path(), "operator1", now)?;
+        assert!(verify_capability_actor(root.path(), &first).is_none());
+        assert_eq!(
+            verify_capability_role(root.path(), &second).as_deref(),
+            Some("founder")
+        );
+        with_store_connection(root.path(), |cached| {
+            assert!(
+                cached.is_autocommit(),
+                "issuance must not retain a transaction"
+            );
+            Ok(())
+        })?;
+
+        conn.execute(
+            "UPDATE business_users SET active = 0 WHERE user_id = 'operator1'",
+            [],
+        )?;
+        assert!(issue_business_os_capability_token(root.path(), "operator1", now).is_err());
+        assert!(verify_capability_actor(root.path(), &second).is_none());
         Ok(())
     }
 
