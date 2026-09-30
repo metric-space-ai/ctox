@@ -1,4 +1,4 @@
-import { collectionFreshnessFromDiagnostics } from './sync-contract.js?v=20260930-shell-v2-eager-replica-v432';
+import { collectionFreshnessFromDiagnostics } from './sync-contract.js?v=20260930-shell-v2-eager-strict-revision-v433';
 
 // A warning changes the interpretation of cached data, not its availability.
 export function renderCollectionFreshnessWarning(warning, { collections = [], diagnostics, language = 'de' } = {}) {

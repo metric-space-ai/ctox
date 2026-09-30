@@ -756,7 +756,9 @@ class CtoxRxQuery {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     const demandLoader = this.collection.demandLoader;
-    if (demandLoader && !this.collection.localReplicaComplete) {
+    // Replica coverage answers ordinary reads only. Explicit revision tokens
+    // still require the loader's authority and connection-generation checks.
+    if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision)) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit))
         ? { window: { offset: Number(this.query.skip || 0), limit: 1 } }
         : {};

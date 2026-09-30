@@ -3,7 +3,7 @@
 // (30.09.2026) every Outbound reload still asked the native peer for 200 leads
 // (~20 MB) in one demand window, hit QUERY_COLLECTOR_TIMEOUT, and the app
 // showed "Noch keine Kampagne" over a complete local store.
-const { createRxDatabase, replicationWebRtcTestInternals } = await import(
+const { createRxDatabase, createQueryDemandLoader, createSidecarWithMemoryBackend, replicationWebRtcTestInternals } = await import(
   process.argv.includes('--source') ? '../src/index.mjs' : '../dist/ctox-rxdb-js.mjs'
 );
 
@@ -21,6 +21,11 @@ const database = await createRxDatabase({
           observe() { return () => {}; },
           async queryDocuments() { directReads += 1; return [rows.get(name)]; },
           async countDocuments() { directReads += 1; return 1; },
+          async bulkWrite() {}, // Keep the local row stale to prove strict reads return authority.
+          async findDocumentsById(ids) {
+            const row = rows.get(name);
+            return ids.includes(row.id) ? { [row.id]: row } : {};
+          },
         };
       },
       close() {},
@@ -63,6 +68,41 @@ eager.markFirstPullCompleted();
 check('drained eager pull marks the local replica complete', leads.localReplicaComplete === true);
 const docs = await leads.find({ selector: {}, sort: [{ id: 'asc' }], limit: 200 }).exec();
 check('complete eager replica answers locally', docs.length === 1 && docs[0].toJSON().id === 'lead-1' && timeoutLoader.calls === 1);
+
+// A complete replica is sufficient for ordinary reads, but cannot satisfy an
+// explicit authority token. Exercise the real loader across bridge generations.
+let generation = 'bridge-1';
+let authoritativeFetches = 0;
+const strictLoader = createQueryDemandLoader({
+  storageCollection: leads.storageCollection,
+  sidecar: createSidecarWithMemoryBackend({ databaseName: 'eager-strict-revision' }),
+  collectionName: leads.name,
+  schemaVersion: 0,
+  queryGeneration: () => generation,
+  requestQueryFetch: async () => {
+    authoritativeFetches += 1;
+    return {
+      documents: [{ id: 'lead-1', state: generation }],
+      authoritativeRevision: `native-${authoritativeFetches}`,
+    };
+  },
+});
+leads.setDemandLoader(strictLoader);
+const strictRead = token => leads.find({ selector: {}, requireRevision: token }).exec();
+let strictDocs = await strictRead('revision-1');
+check('complete eager replica forwards strict revision to authority',
+  authoritativeFetches === 1 && strictDocs[0].toJSON().state === 'bridge-1');
+await strictRead('revision-1');
+check('same strict token and bridge may reuse the authoritative window', authoritativeFetches === 1);
+await strictRead('revision-2');
+check('new strict token requires another authoritative fetch', authoritativeFetches === 2);
+generation = 'bridge-2';
+strictDocs = await strictRead('revision-2');
+check('changed bridge invalidates strict authority despite complete replica',
+  authoritativeFetches === 3 && strictDocs[0].toJSON().state === 'bridge-2');
+const ordinaryDocs = await leads.find().exec();
+check('strict read checks preserve the ordinary local fast path',
+  authoritativeFetches === 3 && ordinaryDocs[0].toJSON().state === 'local');
 
 eager.firstPullCompletedAtMs = 0;
 eager.publishLocalReplicaCoverage();
