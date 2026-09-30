@@ -241,7 +241,7 @@ mod tests {
                 &protocol,
                 Some(&nonce)
             ),
-            rxdb::plugins::replication_webrtc::WebRTCPeerSessionValidation::Accept
+            rxdb::plugins::replication_webrtc::webrtc_types::WebRTCPeerSessionValidation::Accept
         );
         BoundRecipient {
             token,
@@ -283,7 +283,9 @@ mod tests {
     #[test]
     fn recipient_uses_real_nonce_proof_and_changed_or_revoked_proof_is_denied() {
         use super::super::rxdb_peer::validate_device_bound_peer_session as validate;
-        use rxdb::plugins::replication_webrtc::WebRTCPeerSessionValidation::{Accept, Reject};
+        use rxdb::plugins::replication_webrtc::webrtc_types::WebRTCPeerSessionValidation::{
+            Accept, Reject,
+        };
         let (root, _, scope) = fixture();
         let recipient = bound_recipient(root.path(), "proof-recipient");
         assert_eq!(

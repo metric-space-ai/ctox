@@ -542,9 +542,9 @@ async fn expired_routing_bootstraps_without_ice_or_mutating_authority_and_stops_
             .unwrap(),
         before
     );
-    assert_eq!(
-        host.account(&account.target_id).await.unwrap(),
-        Some(account.clone())
+    assert!(
+        host.account(&account.target_id).await.unwrap() == Some(account.clone()),
+        "recovery must retain the original account"
     );
     assert!(
         host.native_options_with_deadline(&account.target_id)
