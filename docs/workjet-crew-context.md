@@ -247,8 +247,9 @@ fingerprint even if another caller wins admission concurrently.
 The native `workjet_project_native_` command identity also constrains reads to
 the current project owner. Command status and collection queries, plus their
 linked queue/run/event projections, use the existing Workjet ownership reader
-even though this task has no private chat. A malformed missing project reference
-fails closed. General chat commands retain their existing policy. Native privacy
+even though this task has no private chat. Native cancellation receipts resolve
+their typed target through Core and retain that same project restriction. A
+malformed missing project or cancellation-target reference fails closed. General chat commands retain their existing policy. Native privacy
 regressions cover other users including administrators, owner access, linked
 execution results and current project deletion; execution remains required before
 claiming installed privacy acceptance.

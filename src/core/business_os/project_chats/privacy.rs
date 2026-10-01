@@ -71,6 +71,25 @@ fn project_command(document: &Value) -> bool {
 // the chat policy merely by omitting a direct thread_id.
 fn associations<'a>(collection: &str, document: &'a Value) -> Vec<(&'static str, &'a str)> {
     let mut result = Vec::new();
+    // A native stop receipt has no project/chat field of its own. Resolve its
+    // typed target through the same canonical Core reader before deciding
+    // visibility; a missing target fails that read rather than becoming public.
+    if collection == "business_commands"
+        && document["command_type"] == "ctox.command.cancel"
+        && ["id", "command_id"].iter().any(|field| {
+            document[*field]
+                .as_str()
+                .is_some_and(|id| id.starts_with("workjet_project_cancel_"))
+        })
+    {
+        result.push((
+            "business_commands",
+            document["payload"]["target_command_id"]
+                .as_str()
+                .unwrap_or_default(),
+        ));
+    }
+
     if matches!(
         collection,
         "ctox_queue_tasks"

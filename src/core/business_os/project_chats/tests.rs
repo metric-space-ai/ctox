@@ -1066,6 +1066,34 @@ fn native_project_command_and_execution_reads_require_current_project_owner() ->
         ),
         None
     );
+    let cancellation = mcp_channel::call_tool(
+        root.path(),
+        "business_os.cancel_project_task",
+        json!({"target_command_id":command_id, "idempotency_key":"native-private-stop",
+            "_context":{"actor":"owner", "workspace":"project-test"}}),
+    )?;
+    let cancellation_id = cancellation["command_id"]
+        .as_str()
+        .context("cancellation")?;
+    assert!(mcp_channel::get_command_status(root.path(), &owner, cancellation_id).is_ok());
+    for role in ["user", "admin", "chef", "founder"] {
+        assert!(mcp_channel::get_command_status(
+            root.path(),
+            &mcp_context("other-user", role),
+            cancellation_id
+        )
+        .is_err());
+    }
+    let mut missing_target =
+        crate::mission::channels::business_command_projection(root.path(), cancellation_id)?;
+    missing_target["payload"]
+        .as_object_mut()
+        .context("cancellation payload")?
+        .remove("target_command_id");
+    assert_eq!(
+        document_visible_to_actor(root.path(), "business_commands", &missing_target, "owner"),
+        Some(false)
+    );
     // Revocation is read from the current native project, not a prior positive
     // visibility decision cached by the reader.
     let mut project =
