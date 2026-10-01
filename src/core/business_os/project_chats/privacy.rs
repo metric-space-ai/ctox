@@ -51,19 +51,17 @@ fn references(document: &Value, result: &mut BTreeSet<String>) {
 }
 
 fn project_command(document: &Value) -> bool {
-    match document.get("command_type").and_then(Value::as_str) {
-        Some(kind) if is_command(kind) && kind.starts_with("ctox.workjet.project.") => true,
-        // App-free native tasks have no private chat reference. Their native
-        // command identity still binds reads to the current project owner,
-        // including related queue/run/event projections. A malformed missing
-        // project_id is denied by visible_in_store rather than treated public.
-        Some("business_os.chat.task") => ["id", "command_id"].iter().any(|field| {
-            document[*field]
-                .as_str()
-                .is_some_and(|id| id.starts_with("workjet_project_native_"))
-        }),
-        _ => false,
-    }
+    // App-free native tasks have no private chat reference. Their reserved
+    // command identity binds reads even if a malformed projection omits type
+    // or project_id; visible_in_store then requires the actual project owner.
+    ["id", "command_id"].iter().any(|field| {
+        document[*field]
+            .as_str()
+            .is_some_and(|id| id.starts_with("workjet_project_native_"))
+    }) || document
+        .get("command_type")
+        .and_then(Value::as_str)
+        .is_some_and(|kind| is_command(kind) && kind.starts_with("ctox.workjet.project."))
 }
 
 // These existing projections form a bounded chain: run/event → queue →
@@ -75,7 +73,6 @@ fn associations<'a>(collection: &str, document: &'a Value) -> Vec<(&'static str,
     // typed target through the same canonical Core reader before deciding
     // visibility; a missing target fails that read rather than becoming public.
     if collection == "business_commands"
-        && document["command_type"] == "ctox.command.cancel"
         && ["id", "command_id"].iter().any(|field| {
             document[*field]
                 .as_str()
@@ -86,6 +83,11 @@ fn associations<'a>(collection: &str, document: &'a Value) -> Vec<(&'static str,
             "business_commands",
             document["payload"]["target_command_id"]
                 .as_str()
+                .filter(|id| {
+                    id.starts_with("workjet_project_native_")
+                        || id.starts_with("workjet_crew_")
+                        || id.starts_with("ctox_delegate_")
+                })
                 .unwrap_or_default(),
         ));
     }

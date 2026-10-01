@@ -1094,6 +1094,12 @@ fn native_project_command_and_execution_reads_require_current_project_owner() ->
         document_visible_to_actor(root.path(), "business_commands", &missing_target, "owner"),
         Some(false)
     );
+    // A damaged self-reference cannot recurse through cancellation records.
+    missing_target["payload"]["target_command_id"] = json!(cancellation_id);
+    assert_eq!(
+        document_visible_to_actor(root.path(), "business_commands", &missing_target, "owner"),
+        Some(false)
+    );
     // Revocation is read from the current native project, not a prior positive
     // visibility decision cached by the reader.
     let mut project =
