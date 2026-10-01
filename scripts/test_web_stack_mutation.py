@@ -91,7 +91,7 @@ class RunnerTests(unittest.TestCase):
         self.asset = None
         self.sandbox = None
 
-    def run_fake(self, negative="failed", wrong_package=False, changed_root=False):
+    def run_fake(self, negative="failed", wrong_package=False, changed_root=False, final_error=False):
         def copy(checkout, revision, destination, deadline):
             destination.mkdir()
             if destination.name == "ctox":
@@ -143,7 +143,8 @@ class RunnerTests(unittest.TestCase):
         old_handler = signal.getsignal(signal.SIGTERM)
         with patch.object(mutation, "source_state", side_effect=states), \
              patch.object(mutation, "capture", side_effect=["", str(self.checkout)]), \
-             patch.object(mutation, "resolve", return_value=self.binding), \
+             patch.object(mutation, "resolve", side_effect=mutation.BindingError("source verification deadline reached") if final_error else None,
+                          return_value=self.binding), \
              patch.object(mutation, "copy_revision", side_effect=copy), \
              patch.object(mutation.tempfile, "gettempdir", return_value=str(self.base)), \
              patch.object(mutation.sys, "platform", "linux"), \
@@ -198,6 +199,14 @@ class RunnerTests(unittest.TestCase):
         self.assertIsInstance(error, mutation.BindingError)
         self.assertFalse(receipt["passed"])
         self.assertEqual(self.probes, [])
+
+    def test_unavailable_final_verification_cannot_claim_a_pass(self):
+        result, error, receipt = self.run_fake(final_error=True)
+        self.assertIsNone(error)
+        self.assertEqual(result, 1)
+        self.assertFalse(receipt["passed"])
+        self.assertTrue(receipt["asset_restored"])
+        self.assertIn("deadline reached", receipt["final_validation_error"])
 
     def test_changed_operator_source_invalidates_otherwise_passing_cycle(self):
         result, error, receipt = self.run_fake(changed_root=True)

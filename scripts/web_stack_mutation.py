@@ -13,7 +13,7 @@ import sys
 import tempfile
 import time
 
-from web_stack_source import BindingError, bounded_env, capture, digest_file, resolve, source_state
+from web_stack_source import BindingError, bounded_env, capture, digest_file, remaining_budget, resolve, source_state
 
 MARKER = "(() => {\n  'use strict';"
 MUTATION = MARKER + "\n  return; /* e2e-sabotage */"
@@ -80,8 +80,9 @@ def direct_package(metadata, root):
 def run_mutation(root, binding):
     if os.name != "posix":
         raise BindingError("isolated mutation requires Linux/macOS process-group cleanup")
-    before = source_state(root)
-    if capture(["git", "status", "--porcelain"], root):
+    deadline = time.monotonic() + 1800
+    before = source_state(root, deadline=deadline)
+    if capture(["git", "status", "--porcelain"], root, timeout=remaining_budget(120, deadline)):
         raise BindingError("mutation probe requires a committed clean source checkout")
     temporary_base = Path(tempfile.gettempdir()).resolve()
     if sys.platform == "darwin" and not str(temporary_base).startswith("/Volumes/tmp/"):
@@ -92,7 +93,6 @@ def run_mutation(root, binding):
               "steps": [], "passed": False, "limits": {"workers": 2, "seconds": 1800}}
     evidence = directory / "result.json"
     print("mutation evidence: " + str(evidence), flush=True)
-    deadline = time.monotonic() + 1800
     env = bounded_env()
     env.update(CTOX_ROOT=str(directory / "ctox"), CTOX_STATE_ROOT=str(directory / "ctox/runtime"),
                CARGO_TARGET_DIR=str(directory / "target"), npm_config_cache=str(directory / "npm-cache"),
@@ -146,7 +146,8 @@ def run_mutation(root, binding):
         return code, stdout_path.read_text()
 
     try:
-        checkout = Path(capture(["git", "rev-parse", "--show-toplevel"], Path(binding["manifest"]).parent).strip())
+        checkout = Path(capture(["git", "rev-parse", "--show-toplevel"], Path(binding["manifest"]).parent,
+                                timeout=remaining_budget(120, deadline)).strip())
         relative = Path(binding["manifest"]).relative_to(checkout)
         copy_revision(root, before["head"], directory / "ctox", deadline)
         copy_revision(checkout, binding["revision"], directory / "workjet", deadline)
@@ -224,8 +225,8 @@ def run_mutation(root, binding):
             asset.write_bytes(original)
             record["asset_restored"] = digest_file(asset) == record.get("original_asset_sha256")
         try:
-            record["original_root_unchanged"] = source_state(root) == before
-            record["original_binding_unchanged"] = resolve(root) == binding
+            record["original_root_unchanged"] = source_state(root, deadline=deadline) == before
+            record["original_binding_unchanged"] = resolve(root, deadline=deadline) == binding
         except Exception as error:
             record["final_validation_error"] = str(error)
             record["original_root_unchanged"] = False

@@ -38,6 +38,10 @@ Cargo Git cache remain unchanged. Local compilation/browser preparation still
 requires shared admission; set `TMPDIR` on `/Volumes/tmp` on the operator Mac.
 The mutation runner supports Linux/macOS process-group cleanup. This does not
 remove Windows standalone/platform diagnostics or other source-bound checks.
+Cold locked Cargo resolution has a bounded 540-second budget; short Git reads
+retain 120 seconds. The mutation phase shares its remaining deadline with final
+source verification, so a completed probe cannot start a fresh full timeout
+after the phase deadline or claim success without that verification.
 
 Standalone mirror checks via its local manifest remain available for explicit
 mirror/platform diagnostics. Preserve this directory: dynamic `scrape-targets`

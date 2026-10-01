@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import time
 from urllib.parse import urlsplit, urlunsplit
 
 
@@ -20,10 +21,10 @@ class BindingError(RuntimeError):
     pass
 
 
-def capture(command, root):
+def capture(command, root, timeout=120):
     try:
         result = subprocess.run(command, cwd=root, text=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, timeout=120)
+                                stderr=subprocess.PIPE, timeout=timeout)
     except subprocess.TimeoutExpired as error:
         # Preserve the real fetch/resolution diagnostic on a bounded timeout.
         # subprocess.run has already killed/reaped its direct child; the
@@ -32,8 +33,8 @@ def capture(command, root):
         if isinstance(partial, bytes):
             partial = partial.decode("utf-8", errors="replace")
         sys.stderr.write(partial[-16384:])
-        raise BindingError("command timed out after 120s: %s (partial stderr %s bytes)" %
-                           (command[0], len(partial.encode("utf-8")))) from error
+        raise BindingError("command timed out after %ss: %s (partial stderr %s bytes)" %
+                           (timeout, command[0], len(partial.encode("utf-8")))) from error
     if result.returncode:
         # Cargo diagnostics go to stderr; never convert resolution failure into
         # a local-manifest fallback.
@@ -43,14 +44,26 @@ def capture(command, root):
     return result.stdout
 
 
-def resolve(root):
+def remaining_budget(seconds, deadline):
+    remaining = seconds if deadline is None else min(seconds, deadline - time.monotonic())
+    if remaining <= 0:
+        raise BindingError("source verification deadline reached")
+    return remaining
+
+
+def resolve(root, deadline=None):
+    # A cold locked graph can still be downloading after the short Git budget.
+    # Leave a margin below the admitted runner's 600s phase/900s overall caps;
+    # source inspection commands retain capture's 120s default.
     metadata = json.loads(capture([
         "cargo", "metadata", "--locked", "--format-version", "1",
-        "--manifest-path", str(root / "Cargo.toml")], root))
+        "--manifest-path", str(root / "Cargo.toml")], root, timeout=remaining_budget(540, deadline)))
     binding = select_dependency(metadata, root)
     checkout = Path(binding["manifest"]).parent
-    head = capture(["git", "rev-parse", "HEAD"], checkout).strip()
-    dirty = capture(["git", "status", "--porcelain", "--untracked-files=no"], checkout)
+    head = capture(["git", "rev-parse", "HEAD"], checkout,
+                   timeout=remaining_budget(120, deadline)).strip()
+    dirty = capture(["git", "status", "--porcelain", "--untracked-files=no"], checkout,
+                    timeout=remaining_budget(120, deadline))
     if head != binding["revision"] or dirty:
         raise BindingError("effective Git checkout is modified or differs from its resolved commit")
     return binding
@@ -97,12 +110,15 @@ def digest_file(path):
     return digest.hexdigest()
 
 
-def source_state(root):
+def source_state(root, deadline=None):
     # Include tracked edits in addition to HEAD: a reused binary after a local
     # source/lock change must not pass. Runtime/untracked fixtures are excluded.
-    head = capture(["git", "rev-parse", "HEAD"], root).strip()
-    diff = capture(["git", "diff", "HEAD", "--binary", "--", "."], root)
-    untracked = capture(["git", "ls-files", "--others", "--exclude-standard", "-z"], root)
+    head = capture(["git", "rev-parse", "HEAD"], root,
+                   timeout=remaining_budget(120, deadline)).strip()
+    diff = capture(["git", "diff", "HEAD", "--binary", "--", "."], root,
+                   timeout=remaining_budget(120, deadline))
+    untracked = capture(["git", "ls-files", "--others", "--exclude-standard", "-z"], root,
+                        timeout=remaining_budget(120, deadline))
     extras = [(name, digest_file(root / name)) for name in untracked.split("\0")
               if name and (root / name).is_file()]
     return {"head": head, "tracked_diff_sha256": hashlib.sha256(diff.encode()).hexdigest(),

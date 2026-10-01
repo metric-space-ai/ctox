@@ -83,6 +83,43 @@ class SourceTests(unittest.TestCase):
                 binding.capture(["cargo", "metadata"], self.root)
         self.assertEqual(output.getvalue(), diagnostic.decode())
 
+    def test_slow_metadata_gets_bounded_budget_without_relaxing_git_limit(self):
+        budgets = []
+        def command_result(command, **kwargs):
+            timeout = kwargs["timeout"]
+            budgets.append((command[0], timeout))
+            if command[0] == "cargo":
+                # Simulated cold graph exceeds the old short-command limit;
+                # no network, sleep, compile or real Cargo process is involved.
+                if timeout <= 120:
+                    raise subprocess.TimeoutExpired(command, timeout, stderr=b"Downloading crates")
+                stdout = json.dumps(self.metadata)
+            elif command[1:3] == ["rev-parse", "HEAD"]:
+                stdout = SHA
+            else:
+                stdout = ""
+            return subprocess.CompletedProcess(command, 0, stdout, "")
+        with patch.object(binding.subprocess, "run", side_effect=command_result):
+            self.assertEqual(binding.resolve(self.root), self.selected())
+        self.assertTrue(all(0 < seconds < 600 for _, seconds in budgets))
+        self.assertTrue(all(seconds <= 120 for tool, seconds in budgets if tool == "git"))
+
+    def test_expired_verification_never_starts_new_commands(self):
+        with patch.object(binding.time, "monotonic", return_value=10), patch.object(binding, "capture") as captured:
+            for action in (binding.resolve, binding.source_state):
+                with self.assertRaisesRegex(binding.BindingError, "deadline reached"):
+                    action(self.root, deadline=9)
+            captured.assert_not_called()
+
+    def test_resolution_stops_when_shared_deadline_expires_between_commands(self):
+        with patch.object(binding.time, "monotonic", side_effect=[0, 5, 11]), \
+             patch.object(binding, "capture", side_effect=[json.dumps(self.metadata), SHA]) as captured:
+            with self.assertRaisesRegex(binding.BindingError, "deadline reached"):
+                binding.resolve(self.root, deadline=10)
+        self.assertEqual(captured.call_count, 2)
+        self.assertEqual(captured.call_args_list[0].kwargs["timeout"], 10)
+        self.assertEqual(captured.call_args_list[1].kwargs["timeout"], 5)
+
     def test_metadata_error_has_no_mirror_fallback(self):
         with patch.object(binding, "capture", side_effect=binding.BindingError("resolution failed")):
             with self.assertRaisesRegex(binding.BindingError, "resolution failed"):
