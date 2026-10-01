@@ -10113,6 +10113,7 @@ var replicationWebRtcTestInternals = Object.freeze({
   // Local checkpoint reuse across ordinary pulls/writes, never across eviction.
   localCheckpointValidityKey,
   localCheckpointStillCovers,
+  remoteCheckpointStillCovers,
   // Eager replicas are never evicted by the demand sidecar.
   demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
@@ -11215,7 +11216,7 @@ var CtoxWebRtcReplicationState = class {
     if (this.cancelled) return;
     const retained = this.retainedCheckpoints;
     if (retained && validityKey) {
-      if (retained.validityKey === validityKey && localCheckpointStillCovers(retained.localValidityKey, localValidityKey) && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)) {
+      if (remoteCheckpointStillCovers(retained, validityKey, normalizedRemoteProtocol) && localCheckpointStillCovers(retained.localValidityKey, localValidityKey) && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)) {
         this.firstPullCompletedAtMs = retainedFirstPullCompletedAtMs(retained);
         this.publishLocalReplicaCoverage();
         if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
@@ -12345,6 +12346,18 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   }
   if (!epoch || !sessionId || !schemaHashValue) return "";
   return `${epoch}|${sessionId}|${schemaHashValue}`;
+}
+function remoteCheckpointStillCovers(retained, currentKey, remoteProtocol) {
+  const retainedKey = retained?.validityKey;
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const before = String(retainedKey).split("|");
+  const now = String(currentKey).split("|");
+  if (before.length !== 4 || now.length !== 4) return false;
+  if (before[0] !== now[0] || before[1] !== now[1] || before[2] !== now[2]) return false;
+  const retainedLwt = Number(retained?.pull?.lwt);
+  const remoteHeadLwt = Number(remoteProtocol?.checkpoint?.latestLwt);
+  return Number.isFinite(retainedLwt) && Number.isFinite(remoteHeadLwt) && remoteHeadLwt >= retainedLwt;
 }
 function localCheckpointValidityKey(checkpoint) {
   if (!checkpoint || typeof checkpoint !== "object") return "";
@@ -13891,6 +13904,19 @@ var CtoxRxQuery = class _CtoxRxQuery {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : {};
       demandOptions.signal = this.signal;
       docs = await demandLoader.resolveQuery(this.query, demandOptions);
+    } else if (demandLoader) {
+      const windowLimit = this.single && !Number.isFinite(Number(this.query.limit)) ? 1 : Math.min(
+        DEFAULT_WINDOW_LIMIT,
+        Math.max(1, Math.floor(Number(this.query.limit) || DEFAULT_WINDOW_LIMIT))
+      );
+      const windowed = { ...this.query, limit: windowLimit };
+      docs = typeof this.collection.storageCollection.queryDocuments === "function" ? await this.collection.storageCollection.queryDocuments(windowed, {
+        matchesSelector,
+        sortDocuments
+      }) : sortDocuments(
+        (await this.collection.storageCollection.allDocuments()).filter((doc) => matchesSelector(doc, windowed.selector)),
+        windowed.sort
+      ).slice(Math.max(0, Number(windowed.skip) || 0)).slice(0, windowLimit);
     } else if (isControlPlaneStatusCollection(this.collection.name)) {
       if (this.query.requireRevision) {
         throw Object.assign(new Error("QUERY_GENERATION_REQUIRED: strict demand read has no loader"), {

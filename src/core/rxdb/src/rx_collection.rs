@@ -242,6 +242,12 @@ impl RxCollection {
         if self.closed.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return;
         }
+        // Cached queries own this collection and materialized documents. Break
+        // collection -> query -> collection before releasing the database.
+        let queries = std::mem::take(&mut *self.query_cache.lock());
+        for query in queries.into_values() {
+            query.mark_uncached();
+        }
         if let Some(buffer) = &self.change_event_buffer {
             buffer.close();
         }
@@ -418,6 +424,11 @@ impl RxCollection {
         };
         let cached = {
             let mut cache = self.query_cache.lock();
+            // A query prepared just before close must not recreate the cycle.
+            if self.closed() {
+                query.mark_uncached();
+                return query;
+            }
             if let Some(existing) = cache.get(&key) {
                 Arc::clone(existing)
             } else {
