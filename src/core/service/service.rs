@@ -11916,6 +11916,53 @@ fn attachment_evidence_summaries(paths: &[String]) -> Vec<String> {
         .collect()
 }
 
+// The harness, not the worker, records the durable execution plan
+// (`update_plan` -> task_execution_plan_revisions). Reviewers that were not
+// told where it lives searched the unrelated mission tables planned_steps /
+// planned_goals, found nothing, and failed correct answer-only work for an
+// "unmet update_plan precondition"; the planless rework attempt then ended
+// terminally (customer tenant, 30.09.2026: 60 Sellify remark checks).
+fn review_execution_plan_evidence(root: &Path, job: &QueuedPrompt) -> Vec<String> {
+    let work_key = worker_attempt_work_key(job);
+    let progress = match lcm::run_task_execution_progress(&crate::paths::core_db(root), &work_key) {
+        Ok(Some(progress)) => progress,
+        Ok(None) => {
+            return vec![format!(
+                "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} | result=no durable execution plan recorded for this attempt"
+            )]
+        }
+        Err(error) => {
+            return vec![format!(
+                "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} | result=unreadable: {error}"
+            )]
+        }
+    };
+    let steps = progress
+        .get("steps")
+        .and_then(Value::as_array)
+        .map(|steps| {
+            steps
+                .iter()
+                .map(|step| {
+                    format!(
+                        "{}={}",
+                        step.get("label").and_then(Value::as_str).unwrap_or("?"),
+                        step.get("status").and_then(Value::as_str).unwrap_or("?")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        })
+        .unwrap_or_default();
+    vec![format!(
+        "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} | result=durable update_plan record revision={} completed={}/{} steps=[{}]. This table is the authoritative plan record; planned_steps/planned_goals belong to mission planning and are not written by update_plan.",
+        progress.get("revision").and_then(Value::as_i64).unwrap_or(0),
+        progress.get("completed_steps").and_then(Value::as_i64).unwrap_or(0),
+        progress.get("total_steps").and_then(Value::as_i64).unwrap_or(0),
+        steps,
+    )]
+}
+
 fn collect_review_evidence_summaries(
     root: &Path,
     job: &QueuedPrompt,
@@ -11965,6 +12012,7 @@ fn collect_review_evidence_summaries(
         conversation_id,
     ));
     evidence.extend(review_ticket_evidence_summaries(job));
+    evidence.extend(review_execution_plan_evidence(root, job));
     if evidence.is_empty() {
         evidence.push(
             "Harness collected no deterministic evidence for this review; reviewer must not treat missing evidence as verified."
@@ -35244,6 +35292,67 @@ Business OS command:
             channels::lease_queue_task(&root, &task.message_key, CHANNEL_ROUTER_LEASE_OWNER)
                 .is_err()
         );
+        Ok(())
+    }
+
+    #[test]
+    fn review_evidence_names_the_durable_update_plan_record() -> anyhow::Result<()> {
+        let root = temp_root("review-plan-evidence");
+        let job = QueuedPrompt {
+            queue_task_metadata: Value::Null,
+            prompt: "Werte die Freitextvermerke aus".into(),
+            goal: "Sellify-Vermerke prüfen".into(),
+            preview: "Sellify-Vermerke prüfen".into(),
+            source_label: "queue".into(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:system::review-plan-evidence".into()],
+            leased_ticket_event_keys: vec![],
+            thread_key: None,
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        std::fs::create_dir_all(crate::paths::core_db(&root).parent().unwrap())?;
+        let missing = review_execution_plan_evidence(&root, &job);
+        assert!(
+            missing[0].contains("no durable execution plan recorded"),
+            "{missing:?}"
+        );
+        let work_key = worker_attempt_work_key(&job);
+        let steps = [lcm::TaskExecutionPlanStepInput {
+            label: "Vermerke beurteilen".to_string(),
+            status: "completed".to_string(),
+        }];
+        lcm::run_record_task_execution_plan(
+            &crate::paths::core_db(&root),
+            lcm::TaskExecutionPlanUpdate {
+                work_key: &work_key,
+                task_id: "queue:system::review-plan-evidence",
+                command_id: "leadgen-sperrvermerk-fixture",
+                attempt_id: "attempt-review-plan-evidence",
+                explanation: None,
+                steps: &steps,
+            },
+        )?;
+        let evidence = review_execution_plan_evidence(&root, &job);
+        assert_eq!(evidence.len(), 1);
+        assert!(
+            evidence[0].contains("task_execution_plan_revisions")
+                && evidence[0].contains("completed=1/1")
+                && evidence[0].contains("Vermerke beurteilen=completed")
+                && evidence[0].contains("planned_steps/planned_goals"),
+            "{evidence:?}"
+        );
+        assert!(collect_review_evidence_summaries(
+            &root,
+            &job,
+            7411,
+            &[],
+            &CommandWritebackProbe::NotRequired,
+        )
+        .iter()
+        .any(|line| line.contains("Vermerke beurteilen=completed")));
         Ok(())
     }
 
