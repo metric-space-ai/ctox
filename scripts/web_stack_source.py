@@ -227,7 +227,12 @@ def main(argv=None):
         binding = resolve(root)
         print(json.dumps(binding, sort_keys=True), file=sys.stderr, flush=True)
         arguments = args.arguments[1:] if args.arguments[:1] == ["--"] else args.arguments
-        if args.action not in ("build", "test") and arguments:
+        sidecar_receipt = None
+        if args.action == "mutation-probe" and arguments:
+            if len(arguments) != 2 or arguments[0] != "--sidecar-build-receipt":
+                raise BindingError("mutation-probe accepts only --sidecar-build-receipt PATH")
+            sidecar_receipt = Path(arguments[1]).resolve()
+        elif args.action not in ("build", "test") and arguments:
             raise BindingError("this action accepts no extra arguments")
         if args.action in ("build", "test"):
             code = subprocess.call(focused_command(binding, args.action, arguments),
@@ -241,7 +246,7 @@ def main(argv=None):
             print(verified_binary(root, binding))
         elif args.action == "mutation-probe":
             from web_stack_mutation import run_mutation
-            return run_mutation(root, binding)
+            return run_mutation(root, binding, sidecar_build_receipt=sidecar_receipt)
         elif args.action == "mutation-check":
             check_mutation_asset(root, binding)
         else:

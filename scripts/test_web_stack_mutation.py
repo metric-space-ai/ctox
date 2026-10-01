@@ -130,6 +130,73 @@ class ProbeTests(unittest.TestCase):
             self.assertEqual(git("status", "--porcelain"), "")
 
 
+class SidecarReuseTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.root = self.base / "operator"
+        self.isolated = self.base / "isolated"
+        self.bundle = self.root / "src/core/coding_agents/pi-sidecar/dist/ctox-pi-sidecar.mjs"
+        self.bundle.parent.mkdir(parents=True)
+        self.bundle.write_bytes(b"actual generated bundle")
+        self.proof = {"sha256": mutation.digest_file(self.bundle), "bytes": self.bundle.stat().st_size,
+                      "sidecar_source_tree": "tree", "package_lock_blob": "lock",
+                      "node_version": "v26.6.0", "npm_version": "11.18.0",
+                      "official_build_script": True, "scripts_ignored_on_install": True}
+        prefix = ["npm", "--prefix", str(self.bundle.parent.parent)]
+        self.receipt = {"sidecar_build": self.proof, "stages": [
+            {"stage": "00a-locked-sidecar-install", "exit": 0,
+             "command": prefix + ["ci", "--ignore-scripts", "--no-audit", "--no-fund"]},
+            {"stage": "00b-real-sidecar-bundle", "exit": 0, "command": prefix + ["run", "build"]}]}
+        self.path = self.base / "receipt.json"
+
+    def reuse(self, values=None):
+        self.path.write_text(json.dumps(self.receipt))
+        with patch.object(mutation, "capture", side_effect=values or
+                          ["tree", "tree", "lock", "lock", "v26.6.0", "11.18.0"]):
+            return mutation.reuse_sidecar_bundle(self.root, self.isolated, self.path,
+                                                 mutation.time.monotonic() + 60)
+
+    def test_same_input_official_bundle_is_copied_and_recorded(self):
+        result = self.reuse()
+        copied = self.isolated / self.bundle.relative_to(self.root)
+        self.assertEqual(copied.read_bytes(), self.bundle.read_bytes())
+        self.assertEqual(result["sha256"], self.proof["sha256"])
+        self.assertEqual(result["receipt"], str(self.path.resolve()))
+        # Unrelated checks may have failed; only the two actual build stages
+        # establish this generated input's provenance.
+        self.receipt["passed"] = False
+        self.assertEqual(self.reuse()["sha256"], self.proof["sha256"])
+
+    def test_tampered_bundle_is_rejected_before_copy(self):
+        self.bundle.write_bytes(b"tampered generated bundle")
+        with self.assertRaises(mutation.BindingError):
+            self.reuse()
+        self.assertFalse(self.isolated.exists())
+
+    def test_changed_source_lock_or_tools_are_rejected_before_copy(self):
+        for index in range(6):
+            values = ["tree", "tree", "lock", "lock", "v26.6.0", "11.18.0"]
+            values[index] = "changed"
+            with self.subTest(index=index), self.assertRaises(mutation.BindingError):
+                self.reuse(values)
+            self.assertFalse(self.isolated.exists())
+
+    def test_unproven_or_failed_build_is_rejected(self):
+        for field in ("official_build_script", "scripts_ignored_on_install"):
+            self.proof[field] = False
+            with self.assertRaises(mutation.BindingError):
+                self.reuse()
+            self.proof[field] = True
+        for stage in self.receipt["stages"]:
+            stage["exit"] = 1
+            with self.assertRaises(mutation.BindingError):
+                self.reuse()
+            stage["exit"] = 0
+        self.assertFalse(self.isolated.exists())
+
+
 class CleanupTests(unittest.TestCase):
     def inspect_denied_signal(self, stdout):
         child = unittest.mock.Mock(pid=987654)
@@ -253,6 +320,7 @@ class RunnerTests(unittest.TestCase):
              patch.object(mutation, "resolve", side_effect=mutation.BindingError("source verification deadline reached") if final_error else None,
                           return_value=self.binding), \
              patch.object(mutation, "copy_revision", side_effect=copy), \
+             patch.object(mutation, "reuse_sidecar_bundle", return_value={"sha256": "proved"}), \
              patch.object(mutation.tempfile, "gettempdir", return_value=str(self.base)), \
              patch.object(mutation.sys, "platform", "linux"), \
              patch.object(mutation.subprocess, "Popen", side_effect=popen), \
@@ -261,7 +329,7 @@ class RunnerTests(unittest.TestCase):
              patch.dict(os.environ, {"CARGO_BUILD_JOBS": "2", "RUST_TEST_THREADS": "2"}), \
              contextlib.redirect_stdout(io.StringIO()):
             try:
-                result = mutation.run_mutation(self.root, self.binding)
+                result = mutation.run_mutation(self.root, self.binding, sidecar_build_receipt=self.base / "build.json")
                 error = None
             except BaseException as exc:
                 result, error = None, exc

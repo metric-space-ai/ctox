@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -185,7 +186,43 @@ def mutation_target_directory(binding):
     return target
 
 
-def run_mutation(root, binding):
+def reuse_sidecar_bundle(root, isolated, receipt_path, deadline):
+    """Copy only the generated bundle from a proven same-input official build."""
+    receipt = json.loads(Path(receipt_path).read_text())
+    proof = receipt["sidecar_build"]
+    if proof.get("official_build_script") is not True or proof.get("scripts_ignored_on_install") is not True:
+        raise BindingError("sidecar receipt lacks the official locked build")
+    stages = {stage["stage"]: stage for stage in receipt["stages"]}
+    for name, suffix in (("00a-locked-sidecar-install", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"]),
+                         ("00b-real-sidecar-bundle", ["run", "build"])):
+        stage = stages.get(name, {})
+        command = stage.get("command", [])
+        if stage.get("exit") != 0 or command != ["npm", "--prefix", str(root / "src/core/coding_agents/pi-sidecar"), *suffix]:
+            raise BindingError("sidecar receipt has no successful official stage: " + name)
+    relative = "src/core/coding_agents/pi-sidecar"
+    for selector, field in ((relative, "sidecar_source_tree"),
+                            (relative + "/package-lock.json", "package_lock_blob")):
+        current = capture(["git", "rev-parse", "HEAD:" + selector], root,
+                          timeout=remaining_budget(30, deadline)).strip()
+        copied = capture(["git", "rev-parse", "HEAD:" + selector], isolated,
+                         timeout=remaining_budget(30, deadline)).strip()
+        if current != proof[field] or copied != current:
+            raise BindingError("sidecar inputs differ from the recorded build")
+    for command, field in ((["node", "--version"], "node_version"), (["npm", "--version"], "npm_version")):
+        if capture(command, root, timeout=remaining_budget(30, deadline)).strip() != proof[field]:
+            raise BindingError("sidecar build tool version differs from receipt")
+    bundle = root / relative / "dist/ctox-pi-sidecar.mjs"
+    if not bundle.is_file() or bundle.stat().st_size != proof["bytes"] or digest_file(bundle) != proof["sha256"]:
+        raise BindingError("sidecar bundle differs from the recorded official build")
+    destination = isolated / relative / "dist/ctox-pi-sidecar.mjs"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(bundle, destination)
+    if digest_file(destination) != proof["sha256"]:
+        raise BindingError("copied sidecar bundle digest differs")
+    return {"receipt": str(Path(receipt_path).resolve()), **proof}
+
+
+def run_mutation(root, binding, sidecar_build_receipt=None):
     if os.name != "posix":
         raise BindingError("isolated mutation requires Linux/macOS process-group cleanup")
     deadline = time.monotonic() + 1800
@@ -258,6 +295,21 @@ def run_mutation(root, binding):
         relative = Path(binding["manifest"]).relative_to(checkout)
         copy_revision(root, before["head"], directory / "ctox", deadline)
         copy_revision(checkout, binding["revision"], directory / "workjet", deadline)
+        if sidecar_build_receipt is not None:
+            record["sidecar_build"] = reuse_sidecar_bundle(root, directory / "ctox",
+                                                          sidecar_build_receipt, deadline)
+        else:
+            sidecar = directory / "ctox/src/core/coding_agents/pi-sidecar"
+            for label, arguments, timeout in (
+                    ("sidecar-install", ["ci", "--ignore-scripts", "--no-audit", "--no-fund"], 300),
+                    ("sidecar-build", ["run", "build"], 120)):
+                code, _ = execute(label, ["npm", "--prefix", str(sidecar), *arguments], timeout)
+                if code:
+                    raise BindingError(label + " failed")
+            bundle = sidecar / "dist/ctox-pi-sidecar.mjs"
+            record["sidecar_build"] = {"sha256": digest_file(bundle), "bytes": bundle.stat().st_size,
+                                       "official_build_script": True, "scripts_ignored_on_install": True}
+        save()
         manifest = directory / "workjet" / relative
         original_manifest = manifest.read_bytes()
         if original_manifest != Path(binding["manifest"]).read_bytes():
@@ -287,6 +339,13 @@ def run_mutation(root, binding):
         record["canonical_pdf_dependency"] = require_git_pdf(metadata, package, binding)
         record["isolated_lock_sha256"] = digest_file(directory / "ctox/Cargo.lock")
         record["original_asset_sha256"] = digest_file(asset)
+
+        # wha-proto's cached build script embeds its source directory. A clone
+        # needs a fresh package build script; unrelated dependencies stay cached.
+        code, _ = execute("clear-relocated-protobuf-build", ["cargo", "clean", "--locked",
+                          "-p", "wha-proto", "--target-dir", str(target)] + cargo, 120)
+        if code:
+            raise BindingError("relocated protobuf package cache reset failed")
 
         def build(label):
             code, output = execute(label, ["cargo", "build", "--locked", "--bin", "ctox",

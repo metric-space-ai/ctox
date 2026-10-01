@@ -202,6 +202,25 @@ class SourceTests(unittest.TestCase):
             self.assertEqual(binding.main(["test", "--", "--lib"]), 9)
 
 
+    def test_mutation_receipt_is_explicit_and_preserved(self):
+        import web_stack_mutation
+        receipt = self.root / "sidecar-build.json"
+        with patch.object(binding, "resolve", return_value=self.selected()), \
+             patch.object(web_stack_mutation, "run_mutation", return_value=0) as run:
+            self.assertEqual(binding.main(["mutation-probe", "--sidecar-build-receipt", str(receipt)]), 0)
+        self.assertEqual(run.call_args.kwargs["sidecar_build_receipt"], receipt.resolve())
+
+    def test_mutation_rejects_unknown_or_incomplete_receipt_arguments(self):
+        import web_stack_mutation
+        for arguments in (["--config", "other"], ["--sidecar-build-receipt"],
+                          ["--sidecar-build-receipt", "proof.json", "--jobs=8"]):
+            with self.subTest(arguments=arguments), \
+                 patch.object(binding, "resolve", return_value=self.selected()), \
+                 patch.object(web_stack_mutation, "run_mutation") as run, \
+                 contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(binding.main(["mutation-probe", *arguments]), 1)
+                run.assert_not_called()
+
     def test_success_cannot_hide_changed_source_binding(self):
         selected = self.selected()
         changed = dict(selected, revision="a" * 40)
