@@ -32,7 +32,7 @@ ctox-pdf-parse = { path = "src/tools/pdf-parse" }
 ctox-qwen3-embedding-0-6b = { path = "src/core/inference/models/qwen3_embedding_0_6b" }
 ctox-voxtral-mini-4b-realtime-2602 = { path = "src/core/inference/models/voxtral_mini_4b_realtime_2602" }
 ctox-voxtral-4b-tts-2603 = { path = "src/core/inference/models/voxtral_4b_tts_2603" }
-ctox-web-stack = { git = "https://github.com/metric-space-ai/workjet", rev = "6dea11e81db58b8598f2185e5a5f9f41a4e4f768" }
+ctox-web-stack = { git = "https://github.com/metric-space-ai/workjet", rev = "d8d28ccc7c96b7d4a9b080090747b72bf8fba170" }
 ctox-sqlserver-adapter = { path = "src/tools/sqlserver-mcp" }
 ctox-postgres-adapter = { path = "src/tools/postgres-adapter" }
 rxdb = { package = "ctox-rxdb", path = "src/core/rxdb" }
