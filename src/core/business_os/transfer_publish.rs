@@ -80,6 +80,8 @@ mod tests {
         let fixture = tempfile::tempdir().unwrap();
         let root = fixture.path().join("instance");
         let artifacts = fixture.path().join("artifacts");
+        std::fs::create_dir_all(&root).unwrap();
+        crate::sync_host::handle_command(&root, &["init".into()]).unwrap();
         std::fs::create_dir_all(&artifacts).unwrap();
         for (name, bytes) in [
             ("bundle.gitbundle", vec![0x5a; 1024 * 1024 + 17]),

@@ -56,6 +56,11 @@ selection and `CTOX_STATE_ROOT` state-directory override for isolated instances.
 The core transfer metadata, downloaded objects and native query/admission
 databases all follow that same state directory. Use the same selections for
 every command and daemon restart; an installed launcher may override them.
+Create the isolated bundle/source directory before invoking commands. On a fresh
+A instance, run `ctox sync init` with those selections before starting its peer,
+reading its public identity or publishing files. This explicitly provisions the
+source signing identity in that instance's secret store; repeating it retains
+the existing identity. Identity reads and publication do not initialize it.
 For an isolated acceptance run, A can host its source peer with
 `ctox business-os peer start`; B can run the ordinary transfer worker with
 `ctox transfer run 300`. The latter owns only the transfer worker, drains it

@@ -106,6 +106,7 @@ mod tests {
         String,
     ) {
         let root = tempfile::tempdir().unwrap();
+        crate::sync_host::handle_command(root.path(), &["init".into()]).unwrap();
         let request = NativeTransferProvisionRequest {
             source_public_identity: crate::sync_host::signing_identity(root.path())
                 .unwrap()

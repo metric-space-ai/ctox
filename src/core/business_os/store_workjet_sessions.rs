@@ -3976,19 +3976,47 @@ pub(crate) mod tests {
             .as_array_mut()
             .unwrap()
             .push(json!("desktop-file-index"));
-        for malformed in [
-            json!({}),
-            json!({ "tree": "short", "patch_file_id": "desktop-file-index", "patch_sha256": "6".repeat(64) }),
-            json!({ "tree": "5".repeat(40), "patch_file_id": "desktop-file-index", "patch_sha256": "bad" }),
+        let before_rejection =
+            outbound_load_record(&open_store(root.path())?, TRANSFERS_COLLECTION, transfer_id)?
+                .context("transfer before malformed proof")?;
+        for (malformed, expected_error) in [
+            (json!({}), "missing field `tree`"),
+            (
+                json!({ "tree": "short", "patch_file_id": "desktop-file-index", "patch_sha256": "6".repeat(64) }),
+                "git.index.tree",
+            ),
+            (
+                json!({ "tree": "5".repeat(40), "patch_file_id": "desktop-file-index", "patch_sha256": "bad" }),
+                "git.index.patch_sha256",
+            ),
         ] {
             pack.payload["git"]["index"] = malformed;
-            assert!(handle_workjet_session_transfer_pack_complete_command(
+            let rejection = handle_workjet_session_transfer_pack_complete_command(
                 root.path(),
                 &pack,
                 "owner-1",
-                false
-            )
-            .is_err());
+                false,
+            );
+            let message = match rejection {
+                // Malformed payloads use the command's structured error contract.
+                Ok(response) => {
+                    assert_eq!(response["ok"], false);
+                    assert_eq!(response["error_code"], "idempotency_conflict");
+                    response["error"]
+                        .as_str()
+                        .context("rejection message")?
+                        .to_owned()
+                }
+                Err(error) => error.to_string(),
+            };
+            assert!(
+                message.contains(expected_error),
+                "unexpected rejection: {message}"
+            );
+            let after_rejection =
+                outbound_load_record(&open_store(root.path())?, TRANSFERS_COLLECTION, transfer_id)?
+                    .context("transfer after malformed proof")?;
+            assert_eq!(after_rejection, before_rejection);
         }
         pack.payload["git"]["index"] = index.clone();
         let packed = handle_workjet_session_transfer_pack_complete_command(
