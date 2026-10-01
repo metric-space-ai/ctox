@@ -227,6 +227,9 @@ export const replicationWebRtcTestInternals = Object.freeze({
   // Local checkpoint reuse across ordinary pulls/writes, never across eviction.
   localCheckpointValidityKey,
   localCheckpointStillCovers,
+  remoteCheckpointStillCovers,
+  // Eager replicas are never evicted by the demand sidecar.
+  demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
   // real state machines without opening a network connection.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -1250,6 +1253,7 @@ class CtoxWebRtcReplicationState {
     // after the remote/local validity keys and permission digest match during
     // handshake; until then an old marker must not make this collection live.
     this.firstPullCompletedAtMs = 0;
+    this.publishLocalReplicaCoverage();
     // Historical checkpoint reuse does not prove this connection is current.
     // Only a drained pull after local writes/checkpoint reads in this generation does.
     this.pullFresh = false;
@@ -1598,11 +1602,12 @@ class CtoxWebRtcReplicationState {
     const retained = this.retainedCheckpoints;
     if (retained && validityKey) {
       if (
-        retained.validityKey === validityKey
+        remoteCheckpointStillCovers(retained, validityKey, normalizedRemoteProtocol)
         && localCheckpointStillCovers(retained.localValidityKey, localValidityKey)
         && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)
       ) {
         this.firstPullCompletedAtMs = retainedFirstPullCompletedAtMs(retained);
+        this.publishLocalReplicaCoverage();
         if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
           this.pullCheckpointsByPeer.set(peerId, retained.pull);
         }
@@ -1615,6 +1620,7 @@ class CtoxWebRtcReplicationState {
         // later reconnect does the (correct) full resync. The readiness marker
         // shares this validity boundary and must be invalidated with them.
         this.firstPullCompletedAtMs = 0;
+        this.publishLocalReplicaCoverage();
         this.retainedCheckpoints = null;
         clearPersistentCheckpoints(this.checkpointStorageKey);
       }
@@ -2413,16 +2419,7 @@ class CtoxWebRtcReplicationState {
       ? createIndexedDbMetaBackend({ databaseName: dbName })
       : createMemoryMetaBackend();
     this.demandStatus.queryDemandLoadingEnabled = queryDemandEnabled || fileDemandEnabled;
-    const primaryDelete = async (collection, id) => {
-      if (collection !== this.collection.name) return;
-      const stored = await this.collection.storageCollection.getStoredRecord?.(id);
-      if (!stored || Number(stored.pushable || 0) !== 0) {
-        throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
-      }
-      if (typeof this.collection.storageCollection.hardDeleteByIds === 'function') {
-        await this.collection.storageCollection.hardDeleteByIds([id]);
-      }
-    };
+    const primaryDelete = demandSidecarPrimaryDelete(this);
     this.demandSidecar = new QueryMetaStorage(backend, {
       databaseName: dbName,
       schedulerKey: this.collection.storageCollection?.databaseName || this.topic,
@@ -2525,7 +2522,18 @@ class CtoxWebRtcReplicationState {
   markFirstPullCompleted() {
     if (this.firstPullCompletedAtMs > 0) return;
     this.firstPullCompletedAtMs = Date.now();
+    this.publishLocalReplicaCoverage();
     this.publishTransportStatus();
+  }
+
+  // An eagerly pulled collection whose pull has drained (or resumed from a
+  // valid retained checkpoint) holds the whole authorized collection locally.
+  // Its queries must read that replica instead of a query-demand round trip:
+  // on the customer tenant (30.09.2026) every Outbound reload asked the native
+  // peer for 200 leads (~20 MB) in one window, hit QUERY_COLLECTOR_TIMEOUT,
+  // and the app stayed at "Noch keine Kampagne" with a complete local store.
+  publishLocalReplicaCoverage() {
+    this.collection?.setLocalReplicaComplete?.(Boolean(this.pull) && this.firstPullCompletedAtMs > 0);
   }
 
   collectionReadinessState() {
@@ -2897,6 +2905,29 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   }
   if (!epoch || !sessionId || !schemaHashValue) return '';
   return `${epoch}|${sessionId}|${schemaHashValue}`;
+}
+
+// The native epoch hashes the collection HEAD (latest lwt/id). Requiring it to
+// be byte-identical discarded the retained pull checkpoint after every server
+// write, so a busy collection re-pulled completely on each reload (customer
+// tenant, 30.09.2026: leads ~53 MB per reload while remark checks wrote).
+// Same storage generation, collection and schema with a head that has not
+// moved behind the retained pull position means the incremental pull from that
+// position delivers exactly the missing changes. A head older than the retained
+// position (restore/rewrite) or any other key shape keeps exact equality.
+function remoteCheckpointStillCovers(retained, currentKey, remoteProtocol) {
+  const retainedKey = retained?.validityKey;
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const before = String(retainedKey).split('|');
+  const now = String(currentKey).split('|');
+  if (before.length !== 4 || now.length !== 4) return false;
+  if (before[0] !== now[0] || before[1] !== now[1] || before[2] !== now[2]) return false;
+  const retainedLwt = Number(retained?.pull?.lwt);
+  const remoteHeadLwt = Number(remoteProtocol?.checkpoint?.latestLwt);
+  return Number.isFinite(retainedLwt)
+    && Number.isFinite(remoteHeadLwt)
+    && remoteHeadLwt >= retainedLwt;
 }
 
 function localCheckpointValidityKey(checkpoint) {
@@ -3344,6 +3375,28 @@ function shouldPersistFetchedFileChunks(collectionName = '') {
   // so materializing generic file_id/sequence/bytes_base64 rows would corrupt
   // their browser cache. The consumer verifies and uses the returned stream.
   return String(collectionName || '') === 'desktop_file_chunks';
+}
+
+// The demand sidecar's LRU budget governs rows that query demand loading
+// materialized, not the replica of an eagerly pulled collection. Deleting an
+// eager row cannot be repaired by the incremental pull (the row is older than
+// the checkpoint), so every such eviction had to invalidate the retained
+// checkpoint: on the customer tenant (30.09.2026) Outbound queries touched
+// more than the 6 MiB budget of leads, the sidecar evicted thousands of rows,
+// and each reload re-pulled ~20 MB while the app briefly saw an emptied store.
+// For eager collections only the sidecar bookkeeping is dropped.
+function demandSidecarPrimaryDelete(state) {
+  return async (collection, id) => {
+    if (collection !== state.collection.name) return;
+    if (state.pull) return;
+    const stored = await state.collection.storageCollection.getStoredRecord?.(id);
+    if (!stored || Number(stored.pushable || 0) !== 0) {
+      throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
+    }
+    if (typeof state.collection.storageCollection.hardDeleteByIds === 'function') {
+      await state.collection.storageCollection.hardDeleteByIds([id]);
+    }
+  };
 }
 
 function shouldAttachQueryDemandLoader(collectionName = '') {

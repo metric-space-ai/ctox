@@ -1,4 +1,4 @@
-import { collectionFreshnessFromDiagnostics } from './sync-contract.js?v=20260930-shell-v2-checkpoint-freshness-v431';
+import { collectionFreshnessFromDiagnostics } from './sync-contract.js?v=20261001-shell-v2-checkpoint-head-v434';
 
 // A warning changes the interpretation of cached data, not its availability.
 export function renderCollectionFreshnessWarning(warning, { collections = [], diagnostics, language = 'de' } = {}) {
