@@ -80,6 +80,9 @@ const USER_AGENT: &str = "ctox-web-stack/0.1 (+https://ctox.local)";
 /// Builds the XING-specific continuation executed inside an authenticated
 /// Browser-App session. Credentials stay inside the generic login boundary;
 /// this continuation receives only the research query and country.
+/// Member records retain their observed current-employer quote at the canonical
+/// profile URL. The query itself is never company evidence; a rendered search
+/// response does not establish an exhaustive no-match verdict.
 pub fn build_authenticated_browser_capture(company: &str, country: &str) -> anyhow::Result<String> {
     let company = serde_json::to_string(company)?;
     let country = serde_json::to_string(country)?;
@@ -204,6 +207,10 @@ const XING_BROWSER_RECORD_PARSER: &str = r#"const parseXingRecords = (companyNam
     records.push({ field, value: cleanValue, confidence, source_url: url, note });
   };
   const providerLinks = (snapshot) => (snapshot?.links || []).filter((link) => providerUrl(link.url));
+  const memberNames = new Map(providerLinks(memberSearch).map((link) => {
+    const profile = canonicalProfile(link.url);
+    return [profile?.url, profile ? nameFromSlug(profile.slug) || nameFromVisibleResult(link) : ""];
+  }).filter(([url, name]) => url && name));
   const companyHit = providerLinks(companySearch).find((link) => {
     const url = providerUrl(link.url);
     return url && /^\/(?:pages|companies)\/[^/]+(?:\/.*)?$/i.test(url.pathname)
@@ -211,7 +218,7 @@ const XING_BROWSER_RECORD_PARSER: &str = r#"const parseXingRecords = (companyNam
   });
   if (companyHit) {
     const visibleName = (companyHit.contextLines || []).find((line) => relevantCompanyText(line))
-      || companyHit.text || companyName;
+      || companyHit.text;
     push("firma_name", visibleName, "high", "XING company search result", companyHit.url);
   }
 
@@ -219,17 +226,21 @@ const XING_BROWSER_RECORD_PARSER: &str = r#"const parseXingRecords = (companyNam
   for (const link of providerLinks(memberSearch)) {
     const profile = canonicalProfile(link.url);
     if (!profile || profiles.some((entry) => entry.profile.url === profile.url)) continue;
-    const lines = (link.contextLines || []).map((line) => clean(line)).filter(Boolean);
-    const companyIndex = currentCompanyIndex(lines);
-    if (companyIndex < 0) continue;
-    const name = nameFromSlug(profile.slug) || nameFromVisibleResult(link);
+    const name = memberNames.get(profile.url) || "";
     const nameParts = name.split(/\s+/).filter(Boolean);
     if (nameParts.length < 2 || !nameParts.every(validNameToken)) continue;
+    const contextLines = (link.contextLines || []).map((line) => clean(line)).filter(Boolean);
+    // Never borrow employer/role lines from the next member card.
+    const neighborIndex = contextLines.findIndex((line) => Array.from(memberNames.entries())
+      .some(([url, otherName]) => url !== profile.url && personNameKey(line) === personNameKey(otherName)));
+    const lines = neighborIndex >= 0 ? contextLines.slice(0, neighborIndex) : contextLines;
+    const companyIndex = currentCompanyIndex(lines);
+    if (companyIndex < 0) continue;
+    const employer = lines[companyIndex];
+    if (personNameKey(name) === personNameKey(companyName.replace(/\b(?:gmbh|ag|kg|ohg|gbr|ltd)\b/gi, ""))
+        && !/\b(?:gmbh|ag|kg|ohg|gbr|ltd|sarl|sàrl)\b/i.test(employer)) continue;
     profiles.push({ link, lines, companyIndex, profile, name, nameParts });
     if (profiles.length >= 8) break;
-  }
-  if (!companyHit && profiles.length > 0) {
-    push("firma_name", companyName, "medium", "XING member results match company", memberSearch.sourceUrl);
   }
   // Namen ALLER gefundenen Profile: das Zeilenfenster unten kann in die
   // benachbarte Trefferkarte hineinragen, und deren Personenname darf nie als
@@ -244,16 +255,17 @@ const XING_BROWSER_RECORD_PARSER: &str = r#"const parseXingRecords = (companyNam
     return /^(Dr\.|Prof\.|Dipl\.[-\w.]*)\s+\p{Lu}[\p{L}-]+\s+\p{Lu}[\p{L}-]+$/u.test(clean(text));
   };
   for (const { lines, companyIndex, profile, name, nameParts } of profiles) {
-    push("person_vorname", nameParts[0], "medium", "XING member search result", profile.url);
-    push("person_nachname", nameParts.slice(1).join(" "), "medium", "XING member search result", profile.url);
-    push("person_xing", profile.url, "high", "XING canonical profile URL", profile.url);
+    const employerNote = `XING member result current employer: "${lines[companyIndex]}"`;
+    push("person_vorname", nameParts[0], "medium", employerNote, profile.url);
+    push("person_nachname", nameParts.slice(1).join(" "), "medium", employerNote, profile.url);
+    push("person_xing", profile.url, "high", employerNote, profile.url);
 
     const candidateIndexes = [companyIndex - 1, companyIndex - 2, companyIndex + 1, companyIndex + 2]
       .filter((index) => index >= 0 && index < lines.length);
     const functionLine = candidateIndexes.map((index) => lines[index])
       .find((line) => plausibleFunctionLine(line, name) && !sieht_aus_wie_personenname(line));
     if (functionLine) {
-      push("person_funktion", functionLine, "medium", "XING member result employment context", profile.url);
+      push("person_funktion", functionLine, "medium", employerNote, profile.url);
     }
   }
   return records;
@@ -312,13 +324,25 @@ const captureSearch = async (kind, baseUrl) => {
     const clean = (value, max = 2000) => String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
     const lines = (value) => String(value || "").split(/\n+/).map((line) => clean(line, 240)).filter(Boolean);
     const contextFor = (link) => {
-      const preferred = link.closest('li, article, [role="listitem"], [data-testid*="result" i], [data-testid*="card" i]');
-      let node = preferred || link.parentElement;
-      let contextLines = lines(node?.innerText || node?.textContent || link.innerText || "");
-      for (let depth = 0; node && depth < 6 && contextLines.join(" ").length < 80; depth += 1) {
-        node = node.parentElement;
-        const candidate = lines(node?.innerText || node?.textContent || "");
-        if (candidate.join(" ").length <= 2000) contextLines = candidate;
+      const identityPath = searchKind === "members" ? /^\/profile\/[^/]+\/?$/i : /^\/(?:pages|companies)\/[^/]+(?:\/.*)?$/i;
+      const identityOf = (raw) => {
+        try {
+          const url = new URL(raw);
+          return /^(?:www\.)?xing\.com$/i.test(url.hostname) && identityPath.test(url.pathname)
+            ? url.pathname.replace(/\/$/, "").toLowerCase() : null;
+        } catch { return null; }
+      };
+      const ownIdentity = identityOf(link.href);
+      if (!ownIdentity) return [];
+      let contextLines = [];
+      for (let node = link.parentElement, depth = 0; node && depth < 6; node = node.parentElement, depth += 1) {
+        const identities = new Set(Array.from(node.querySelectorAll("a[href]"))
+          .map((anchor) => identityOf(anchor.href)).filter(Boolean));
+        if (identities.size !== 1 || !identities.has(ownIdentity)) break;
+        const candidate = lines(node.innerText || node.textContent || "");
+        if (candidate.join(" ").length > 2000) break;
+        contextLines = candidate;
+        if (node.matches('li, article, [role="listitem"], [data-testid*="result" i], [data-testid*="card" i]')) break;
       }
       return contextLines;
     };
@@ -343,6 +367,9 @@ const captureSearch = async (kind, baseUrl) => {
     ...snapshot,
     kind,
     sourceUrl: page.url(),
+    responseUrl: response?.url?.() || "",
+    httpStatus,
+    requestedUrl: targetUrl,
     status: blocked ? "blocked" : (notFound ? "not_found" : "completed"),
   };
 };
@@ -362,12 +389,39 @@ if ([companySearch.status, memberSearch.status].every((status) => status === "bl
   return { status: "blocked", source_url: memberSearch.sourceUrl, country, records: [] };
 }
 
-const records = parseXingRecords(company, companySearch, memberSearch);
+const queryCompletion = (snapshot) => {
+  const matchesQuery = (raw) => {
+    try {
+      const url = new URL(raw);
+      const expected = new URL(snapshot.requestedUrl);
+      return hostAllowed(url.href) && url.pathname === expected.pathname
+        && url.searchParams.get("keywords") === company;
+    } catch { return false; }
+  };
+  return {
+    kind: snapshot.kind,
+    query: company,
+    requested_url: snapshot.requestedUrl || "",
+    response_url: snapshot.responseUrl || "",
+    source_url: snapshot.sourceUrl,
+    http_status: snapshot.httpStatus || 0,
+    response_bound: snapshot.status === "completed" && snapshot.httpStatus === 200
+      && matchesQuery(snapshot.responseUrl) && matchesQuery(snapshot.sourceUrl),
+    result_completion: "unconfirmed",
+  };
+};
+const query_completion = [companySearch, memberSearch].map(queryCompletion);
+const records = parseXingRecords(company,
+  query_completion[0].response_bound ? companySearch : null,
+  query_completion[1].response_bound ? memberSearch : null);
 return {
-  status: records.length > 0 ? "succeeded" : "no_match",
+  // A rendered search response does not prove exhaustive person-query completion.
+  status: records.length > 0 ? "succeeded"
+    : (query_completion.every((item) => item.response_bound) ? "no_extractable_fields" : "capture_incomplete"),
   source_url: memberSearch.status === "completed" ? memberSearch.sourceUrl : companySearch.sourceUrl,
   country,
   records,
+  query_completion,
 };"#;
 
 struct Xing;
@@ -778,6 +832,21 @@ mod tests {
             .filter(|record| record.get("field").and_then(Value::as_str) == Some(field))
             .filter_map(|record| record.get("value").and_then(Value::as_str))
             .collect()
+    }
+
+    #[test]
+    fn browser_capture_keeps_profile_bound_evidence_and_response_completion() {
+        let test = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/xing-browser-evidence.mjs");
+        let output = Command::new("node")
+            .arg(test)
+            .output()
+            .expect("Node.js is required for XING evidence tests");
+        assert!(
+            output.status.success(),
+            "XING evidence regressions failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
