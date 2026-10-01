@@ -1,5 +1,21 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Workjet project list readiness
+
+Project control starts its three collection bridges concurrently. The command
+bus owns authenticated connection readiness; listing projects must not wait for
+the complete historical `business_commands` pull or the queue-task projection.
+After a correlated successful native list receipt, projects and working copies
+are read concurrently through direct, generation-bound native query bridges
+with a new `requireRevision` token. Cached rows cannot confirm the result.
+Missing authority, a replaced generation or a changed actor/database rejects
+the list; an authorized empty native result is valid.
+
+Collection acquisition, command completion and both queries share a 29-second
+deadline inside Workjet's existing 30-second desktop call. Timeout does not
+extend that call or introduce an HTTP data bridge. Query streams are aborted
+when the list settles; shared replication bridges are not stopped.
+
 ### Native query cache shutdown
 
 Closing a native collection drains its query cache and marks those queries
