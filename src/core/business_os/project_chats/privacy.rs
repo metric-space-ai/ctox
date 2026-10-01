@@ -51,10 +51,19 @@ fn references(document: &Value, result: &mut BTreeSet<String>) {
 }
 
 fn project_command(document: &Value) -> bool {
-    document
-        .get("command_type")
-        .and_then(Value::as_str)
-        .is_some_and(|kind| is_command(kind) && kind.starts_with("ctox.workjet.project."))
+    match document.get("command_type").and_then(Value::as_str) {
+        Some(kind) if is_command(kind) && kind.starts_with("ctox.workjet.project.") => true,
+        // App-free native tasks have no private chat reference. Their native
+        // command identity still binds reads to the current project owner,
+        // including related queue/run/event projections. A malformed missing
+        // project_id is denied by visible_in_store rather than treated public.
+        Some("business_os.chat.task") => ["id", "command_id"].iter().any(|field| {
+            document[*field]
+                .as_str()
+                .is_some_and(|id| id.starts_with("workjet_project_native_"))
+        }),
+        _ => false,
+    }
 }
 
 // These existing projections form a bounded chain: run/event → queue →

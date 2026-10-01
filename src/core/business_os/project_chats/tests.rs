@@ -965,6 +965,121 @@ fn project_crew_admission_uses_native_chat_binding_and_rejects_revocation() -> a
 }
 
 #[test]
+fn native_project_command_and_execution_reads_require_current_project_owner() -> anyhow::Result<()>
+{
+    let root = fixture()?;
+    let (_capability, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        "owner",
+        "Owner",
+        "admin",
+        chrono::Utc::now().timestamp_millis(),
+    )?;
+    // Real ingress creates the canonical command/task link; no command or task
+    // admission is synthesized in a business-record mirror.
+    let admitted = mcp_channel::call_tool(
+        root.path(),
+        "business_os.start_project_task",
+        json!({
+            "project_id":"project", "title":"Private native task",
+            "instruction":"Private project instruction", "idempotency_key":"native-private-read",
+            "_context":{"actor":"owner", "workspace":"project-test"}
+        }),
+    )?;
+    let command_id = admitted["command_id"].as_str().context("native command")?;
+    let task_id = admitted["task_id"].as_str().context("native task")?;
+    let owner = mcp_context("owner", "admin");
+    assert_eq!(
+        mcp_channel::get_command_status(root.path(), &owner, command_id)?
+            .record
+            .data["payload"]["instruction"],
+        "Private project instruction"
+    );
+    let conn = open_store(root.path())?;
+    let records = [
+        (
+            "ctox_queue_tasks",
+            task_id,
+            json!({"id":task_id,"command_id":command_id,"title":"Private queue result","updated_at_ms":1}),
+        ),
+        (
+            "ctox_runs",
+            "native-private-run",
+            json!({"id":"native-private-run","task_id":task_id,"retrospective":"Private result","updated_at_ms":1}),
+        ),
+        (
+            "ctox_harness_events",
+            "native-private-event",
+            json!({"id":"native-private-event","task_id":task_id,"title":"Private event","updated_at_ms":1}),
+        ),
+    ];
+    let mut projections = Vec::new();
+    for (collection, id, record) in &records {
+        persist(&conn, collection, id, record.clone(), &mut projections)?;
+    }
+    publish(root.path(), &projections)?;
+    for role in ["user", "admin", "chef", "founder"] {
+        let other = mcp_context("other-user", role);
+        assert!(mcp_channel::get_command_status(root.path(), &other, command_id).is_err());
+        assert!(
+            mcp_channel::query_records(root.path(), &other, "business_commands", Some(100))?
+                .items
+                .iter()
+                .all(|record| record.data["id"] != command_id)
+        );
+        for (collection, id, _) in &records {
+            assert!(mcp_channel::get_record(root.path(), &other, collection, id).is_err());
+            assert!(
+                mcp_channel::query_records(root.path(), &other, collection, Some(100))?
+                    .items
+                    .iter()
+                    .all(|record| record.data["id"] != *id)
+            );
+        }
+    }
+    for (collection, id, _) in &records {
+        assert_eq!(
+            mcp_channel::get_record(root.path(), &owner, collection, id)?
+                .record
+                .data["id"],
+            *id
+        );
+    }
+    // Restrict the typed native identity even when a malformed projection omits
+    // project_id. Unrelated ordinary chat commands keep their existing policy.
+    let canonical = crate::mission::channels::business_command_projection(root.path(), command_id)?;
+    let mut malformed = canonical.clone();
+    malformed["payload"]
+        .as_object_mut()
+        .context("payload")?
+        .remove("project_id");
+    assert_eq!(
+        document_visible_to_actor(root.path(), "business_commands", &malformed, "owner"),
+        Some(false)
+    );
+    assert_eq!(
+        document_visible_to_actor(
+            root.path(),
+            "business_commands",
+            &json!({"id":"ordinary-chat", "command_type":"business_os.chat.task", "payload":{"instruction":"Ordinary work"}}),
+            "other-user"
+        ),
+        None
+    );
+    // Revocation is read from the current native project, not a prior positive
+    // visibility decision cached by the reader.
+    let mut project =
+        outbound_load_record(&conn, "workjet_projects", "project")?.context("project")?;
+    project["is_deleted"] = json!(true);
+    store::upsert_business_record(&conn, "workjet_projects", "project", 2, project)?;
+    assert!(mcp_channel::get_command_status(root.path(), &owner, command_id).is_err());
+    for (collection, id, _) in &records {
+        assert!(mcp_channel::get_record(root.path(), &owner, collection, id).is_err());
+    }
+    Ok(())
+}
+
+#[test]
 fn native_project_task_needs_no_app_crew_or_executor_and_replays_one_task() -> anyhow::Result<()> {
     use crate::mission::channels;
     let root = fixture()?;
