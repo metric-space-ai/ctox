@@ -764,6 +764,29 @@ class CtoxRxQuery {
         : {};
       demandOptions.signal = this.signal;
       docs = await demandLoader.resolveQuery(this.query, demandOptions);
+    } else if (demandLoader) {
+      // A complete eager replica answers locally, but in the same window the
+      // loader serves (at most DEFAULT_WINDOW_LIMIT rows), so callers see the
+      // result shape they always had. Unbounded local reads handed the chat
+      // dock all 871 Business chats on the customer tenant (01.10.2026); it merged and
+      // re-persisted every one on each pass and froze the page.
+      const windowLimit = this.single && !Number.isFinite(Number(this.query.limit))
+        ? 1
+        : Math.min(
+          DEFAULT_WINDOW_LIMIT,
+          Math.max(1, Math.floor(Number(this.query.limit) || DEFAULT_WINDOW_LIMIT)),
+        );
+      const windowed = { ...this.query, limit: windowLimit };
+      docs = typeof this.collection.storageCollection.queryDocuments === 'function'
+        ? await this.collection.storageCollection.queryDocuments(windowed, {
+          matchesSelector,
+          sortDocuments,
+        })
+        : sortDocuments(
+          (await this.collection.storageCollection.allDocuments())
+            .filter((doc) => matchesSelector(doc, windowed.selector)),
+          windowed.sort,
+        ).slice(Math.max(0, Number(windowed.skip) || 0)).slice(0, windowLimit);
     } else if (isControlPlaneStatusCollection(this.collection.name)) {
       // Replication cancellation detaches the loader. A warm local row is not
       // evidence that the current actor may still read it after reconnect.
