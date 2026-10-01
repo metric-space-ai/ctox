@@ -7,6 +7,7 @@ Neither the operator checkout, root lock nor Cargo Git cache is modified.
 import json
 import os
 from pathlib import Path
+import re
 import signal
 import subprocess
 import sys
@@ -16,7 +17,8 @@ import time
 from web_stack_source import BindingError, bounded_env, capture, digest_file, remaining_budget, resolve, source_state
 
 MARKER = "(() => {\n  'use strict';"
-MUTATION = MARKER + "\n  return; /* e2e-sabotage */"
+# Concatenated IIFEs may start after a semicolon rather than a new line.
+OPENING = re.compile(r'''\(\(\) => \{\r?\n[ \t]+(?P<quote>['"])use strict(?P=quote);[ \t]*(?=\r?\n)''')
 
 
 def copy_revision(checkout, revision, destination, deadline=None):
@@ -36,9 +38,13 @@ def copy_revision(checkout, revision, destination, deadline=None):
 
 def mutated_bytes(original):
     text = original.decode("utf-8")
-    if text.count(MARKER) != 1:
+    openings = list(OPENING.finditer(text))
+    if len(openings) != 1:
         raise BindingError("canonical stealth IIFE opening must match exactly once")
-    return text.replace(MARKER, MUTATION, 1).encode("utf-8")
+    opening = openings[0]
+    newline = "\r\n" if "\r\n" in opening.group() else "\n"
+    return (text[:opening.end()] + newline + "  return; /* e2e-sabotage */"
+            + text[opening.end():]).encode("utf-8")
 
 
 def require_probe(stdout, code, negative):

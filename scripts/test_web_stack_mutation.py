@@ -15,6 +15,22 @@ import web_stack_mutation as mutation
 
 
 class ProbeTests(unittest.TestCase):
+    def test_canonical_header_quotes_and_line_endings_are_preserved(self):
+        for quote in ("'", '"'):
+            for newline in ("\n", "\r\n"):
+                with self.subTest(quote=quote, newline=repr(newline)):
+                    header = "// Canonical source license header" + newline
+                    opening = "(() => {" + newline + "  " + quote + "use strict" + quote + ";"
+                    body = newline + "  globalThis.stealthApplied = true;" + newline + "})();"
+                    original = (header + opening + body).encode()
+                    self.assertEqual(mutation.mutated_bytes(original),
+                                     (header + opening + newline + "  return; /* e2e-sabotage */" + body).encode())
+
+    def test_mixed_quote_openings_are_still_ambiguous(self):
+        original = (mutation.MARKER + "\n})();\n" + mutation.MARKER.replace("'", '"') + "\n})();").encode()
+        with self.assertRaises(mutation.BindingError):
+            mutation.mutated_bytes(original)
+
     def test_marker_requires_exactly_one_known_opening(self):
         original = (mutation.MARKER + "\n})();").encode()
         self.assertIn(b"return; /* e2e-sabotage */", mutation.mutated_bytes(original))
