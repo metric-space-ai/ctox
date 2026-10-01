@@ -13667,12 +13667,30 @@ async function readWorkjetProjectListRows(bridge, query, requireRevision, deadli
   const generation = peer.collectionQueryGenerationToken?.(peer.activeRemotePeerId);
   const loader = peer.collection?.demandLoader;
   if (!generation || !loader) throw new Error('Workjet native project query authority is unavailable.');
-  const rows = await awaitWorkjetProjectListStep(peer.collection.find({
-    ...query, requireRevision, signal,
-  }).exec(), deadline, 'native projection');
-  if (peer.cancelled || peer.collection.demandLoader !== loader
-    || peer.collectionQueryGenerationToken?.(peer.activeRemotePeerId) !== generation) {
-    throw new Error('Workjet native project query generation changed.');
+  const primaryPath = peer.collection.schema?.primaryPath || 'id';
+  const rows = [];
+  const ids = new Set();
+  while (rows.length < query.limit) {
+    const limit = Math.min(200, query.limit - rows.length);
+    const page = await awaitWorkjetProjectListStep(peer.collection.find({
+      ...query, limit, skip: rows.length, sort: [{ [primaryPath]: 'asc' }], requireRevision, signal,
+    }).exec(), deadline, 'native projection');
+    if (peer.cancelled || peer.collection.demandLoader !== loader
+      || peer.collectionQueryGenerationToken?.(peer.activeRemotePeerId) !== generation) {
+      throw new Error('Workjet native project query generation changed.');
+    }
+    if (!Array.isArray(page) || page.length > limit) {
+      throw new Error('Workjet native project query exceeded its bounded window.');
+    }
+    for (const document of page) {
+      const id = (document?.toJSON?.() || document)?.[primaryPath];
+      if (typeof id !== 'string' || !id || ids.has(id)) {
+        throw new Error('Workjet native project query returned an invalid or repeated identity.');
+      }
+      ids.add(id);
+    }
+    rows.push(...page);
+    if (page.length < limit) break;
   }
   return rows;
 }

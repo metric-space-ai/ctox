@@ -239,7 +239,8 @@ function nativeProjectListFixture({ start, dispatch, exec } = {}) {
           assert.match(query.requireRevision, /^cmd_workjet_project_list_/);
           assert.ok(query.signal instanceof AbortSignal);
           reads.push({ name, query });
-          return { async exec() { return exec ? exec(name, query, peer) : rows[name]; } };
+          return { async exec() { return exec ? exec(name, query, peer)
+            : rows[name].slice(query.skip || 0, (query.skip || 0) + query.limit); } };
         },
       },
     };
@@ -294,6 +295,37 @@ test('each project list requires new native authority and accepts a confirmed em
   fixture.rows.workjet_working_copies.length = 0;
   assert.deepEqual((await fixture.invoke()).projects, []);
   assert.notEqual(fixture.reads[0].query.requireRevision, fixture.reads[2].query.requireRevision);
+});
+
+test('native working-copy reads page through 200-row windows up to the declared 500-row cap', async () => {
+  const fixture = nativeProjectListFixture();
+  fixture.rows.workjet_working_copies = Array.from({ length: 520 }, (_, index) => ({
+    id: `copy-${String(index).padStart(3, '0')}`, project_id: 'native-project',
+    computer_id: `computer-${index}`, path: `guest://native/${index}`,
+    status: 'active', owner_user_id: 'owner-1',
+  }));
+  assert.equal((await fixture.invoke()).projects[0].workingCopies.length, 500);
+  const pages = fixture.reads.filter(({ name }) => name === 'workjet_working_copies');
+  assert.deepEqual(pages.map(({ query }) => query.limit), [200, 200, 100]);
+  assert.deepEqual(pages.map(({ query }) => query.skip), [0, 200, 400]);
+});
+
+test('a replaced generation or duplicated page boundary cannot deliver a partial native copy list', async () => {
+  for (const mode of ['generation', 'duplicate']) {
+    const fixture = nativeProjectListFixture({ exec: (name, query, peer) => {
+      if (name === 'workjet_projects') return fixture.rows.workjet_projects;
+      if (query.skip && mode === 'generation') peer.generation = 'generation-2';
+      const offset = query.skip && mode === 'duplicate' ? 0 : query.skip;
+      return fixture.rows.workjet_working_copies.slice(offset, offset + query.limit);
+    } });
+    fixture.rows.workjet_working_copies = Array.from({ length: 220 }, (_, index) => ({
+      id: `copy-${String(index).padStart(3, '0')}`, project_id: 'native-project',
+      computer_id: `computer-${index}`, path: `guest://native/${index}`,
+      status: 'active', owner_user_id: 'owner-1',
+    }));
+    await assert.rejects(fixture.invoke(), /generation changed|repeated identity/);
+    assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
+  }
 });
 
 test('missing, rejected or replaced native project authority cannot return cached data', async () => {

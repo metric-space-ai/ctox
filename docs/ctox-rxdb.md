@@ -8,6 +8,9 @@ the complete historical `business_commands` pull or the queue-task projection.
 After a correlated successful native list receipt, projects and working copies
 are read concurrently through direct, generation-bound native query bridges
 with a new `requireRevision` token. Cached rows cannot confirm the result.
+Working copies use stable-ID-sorted 200-row native windows up to the existing
+500-row API cap; a changed generation or repeated page boundary rejects the
+whole list rather than delivering a partial result.
 Missing authority, a replaced generation or a changed actor/database rejects
 the list; an authorized empty native result is valid.
 
