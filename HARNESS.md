@@ -61,6 +61,14 @@ within the turn before progress counters and durable persistence. A real plan
 is still required before review: the adapter never invents completed steps
 from a reply or a writeback receipt.
 
+The completion reviewer receives the latest durable plan revision for the
+stable work key, including its task and command identities, phase, review
+status and step statuses. This is a latest-work-key query, not an attempt-local
+filter: retries can create a newer revision while prior revisions remain
+evidence. Completed plan steps do not establish review approval or prove a
+requested side effect. Missing, incomplete and failed-review evidence remains
+subject to the deterministic completion and recovery gates.
+
 Plan steps own the first 90 percent of progress, divided equally and rounded:
 `round(90 * completed_steps / total_steps)`. Completed model work remains at
 90 percent through pending or failed native review; validated review sets 100
