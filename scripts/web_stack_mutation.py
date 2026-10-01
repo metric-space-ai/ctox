@@ -83,6 +83,43 @@ def direct_package(metadata, root):
     return matches[0]
 
 
+def git_pdf_source(binding):
+    repository, revision = binding["source"].rsplit("#", 1)
+    if revision != binding["revision"]:
+        raise BindingError("canonical PDF source revision differs from web-stack")
+    return repository, "git+%s?rev=%s#%s" % (repository, revision, revision)
+
+
+def retain_pdf_git_dependency(manifest, binding):
+    # A Git package's sibling path dependency inherits its Git identity. Moving
+    # only web-stack to a path must not turn PDF into a second local package.
+    if manifest.resolve() == Path(binding["manifest"]).resolve():
+        raise BindingError("cannot rewrite the canonical Cargo checkout")
+    repository, source = git_pdf_source(binding)
+    old = 'ctox-pdf-parse = { path = "../pdf-parse", optional = true }'
+    original = manifest.read_text()
+    if original.count(old) != 1:
+        raise BindingError("canonical optional PDF sibling selector must match exactly once")
+    new = 'ctox-pdf-parse = { git = %s, rev = %s, optional = true }' % (
+        json.dumps(repository), json.dumps(binding["revision"]))
+    manifest.write_text(original.replace(old, new, 1))
+    return source
+
+
+def require_git_pdf(metadata, package, binding):
+    nodes = [n for n in metadata["resolve"]["nodes"] if n["id"] == package["id"]]
+    deps = [d for n in nodes for d in n["deps"] if d["name"] in ("ctox_pdf_parse", "ctox-pdf-parse")]
+    packages = {p["id"]: p for p in metadata["packages"]}
+    if len(deps) != 1 or deps[0]["pkg"] not in packages:
+        raise BindingError("isolated canonical PDF dependency missing/ambiguous")
+    pdf = packages[deps[0]["pkg"]]
+    sibling = Path(binding["manifest"]).parent.parent / "pdf-parse/Cargo.toml"
+    if (pdf["name"] != "ctox-pdf-parse" or pdf.get("source") != git_pdf_source(binding)[1]
+            or Path(pdf["manifest_path"]).resolve() != sibling.resolve()):
+        raise BindingError("isolated PDF dependency lost its original canonical Git identity")
+    return {"id": pdf["id"], "source": pdf["source"], "manifest": pdf["manifest_path"]}
+
+
 def run_mutation(root, binding):
     if os.name != "posix":
         raise BindingError("isolated mutation requires Linux/macOS process-group cleanup")
@@ -109,6 +146,8 @@ def run_mutation(root, binding):
     signal.signal(signal.SIGTERM, interrupted)
     asset = None
     original = None
+    manifest = None
+    original_manifest = None
 
     def save():
         evidence.write_text(json.dumps(record, indent=2) + "\n")
@@ -158,6 +197,12 @@ def run_mutation(root, binding):
         copy_revision(root, before["head"], directory / "ctox", deadline)
         copy_revision(checkout, binding["revision"], directory / "workjet", deadline)
         manifest = directory / "workjet" / relative
+        original_manifest = manifest.read_bytes()
+        if original_manifest != Path(binding["manifest"]).read_bytes():
+            raise BindingError("isolated canonical manifest differs from resolved source")
+        record["original_manifest_sha256"] = digest_file(manifest)
+        record["expected_pdf_git_source"] = retain_pdf_git_dependency(manifest, binding)
+        record["isolated_manifest_sha256"] = digest_file(manifest)
         asset = manifest.parent / "assets/stealth_init.js"
         original = asset.read_bytes()
         record["original_asset_sha256"] = digest_file(asset)
@@ -172,10 +217,12 @@ def run_mutation(root, binding):
         code, output = execute("resolve-isolated", ["cargo", "metadata", "--format-version", "1"] + cargo, 180)
         if code:
             raise BindingError("isolated path resolution failed")
-        package = direct_package(json.loads(output), directory / "ctox")
+        metadata = json.loads(output)
+        package = direct_package(metadata, directory / "ctox")
         if package.get("source") is not None or Path(package["manifest_path"]).resolve() != manifest.resolve():
             raise BindingError("daemon does not actually compile the isolated canonical copy")
         record["isolated_manifest"] = str(manifest)
+        record["canonical_pdf_dependency"] = require_git_pdf(metadata, package, binding)
         record["isolated_lock_sha256"] = digest_file(directory / "ctox/Cargo.lock")
         record["original_asset_sha256"] = digest_file(asset)
 
@@ -227,6 +274,9 @@ def run_mutation(root, binding):
         record["error"] = str(error)
         raise
     finally:
+        if manifest is not None and original_manifest is not None:
+            manifest.write_bytes(original_manifest)
+            record["manifest_restored"] = digest_file(manifest) == record.get("original_manifest_sha256")
         if asset is not None and original is not None:
             asset.write_bytes(original)
             record["asset_restored"] = digest_file(asset) == record.get("original_asset_sha256")

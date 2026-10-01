@@ -15,6 +15,44 @@ import web_stack_mutation as mutation
 
 
 class ProbeTests(unittest.TestCase):
+    def test_copied_pdf_selector_keeps_original_git_identity_and_features(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "copied/Cargo.toml"
+            manifest.parent.mkdir()
+            original = '[features]\nfull = ["dep:ctox-pdf-parse"]\n[dependencies]\nctox-pdf-parse = { path = "../pdf-parse", optional = true }\n'
+            manifest.write_text(original)
+            revision = "b" * 40
+            binding = {"manifest": str(Path(tmp) / "canonical/Cargo.toml"),
+                       "source": "https://example.test/workjet#" + revision, "revision": revision}
+            source = mutation.retain_pdf_git_dependency(manifest, binding)
+            self.assertEqual(source, "git+https://example.test/workjet?rev=" + revision + "#" + revision)
+            changed = manifest.read_text()
+            self.assertIn('full = ["dep:ctox-pdf-parse"]', changed)
+            self.assertIn('optional = true', changed)
+            self.assertIn('git = "https://example.test/workjet"', changed)
+            self.assertIn('rev = "' + revision + '"', changed)
+            self.assertNotIn('path =', changed)
+
+    def test_pdf_rewrite_refuses_canonical_checkout(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "Cargo.toml"
+            original = 'ctox-pdf-parse = { path = "../pdf-parse", optional = true }'
+            manifest.write_text(original)
+            binding = {"manifest": str(manifest), "source": "https://example.test/workjet#" + "b" * 40, "revision": "b" * 40}
+            with self.assertRaises(mutation.BindingError):
+                mutation.retain_pdf_git_dependency(manifest, binding)
+            self.assertEqual(manifest.read_text(), original)
+
+    def test_missing_or_duplicate_pdf_selector_is_rejected_unchanged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            manifest = Path(tmp) / "Cargo.toml"
+            binding = {"manifest": str(Path(tmp) / "original/Cargo.toml"), "source": "https://example.test/workjet#" + "b" * 40, "revision": "b" * 40}
+            for text in ('[dependencies]\n', 'ctox-pdf-parse = { path = "../pdf-parse", optional = true }\n' * 2):
+                manifest.write_text(text)
+                with self.assertRaises(mutation.BindingError):
+                    mutation.retain_pdf_git_dependency(manifest, binding)
+                self.assertEqual(manifest.read_text(), text)
+
     def test_canonical_header_quotes_and_line_endings_are_preserved(self):
         for quote in ("'", '"'):
             for newline in ("\n", "\r\n"):
@@ -95,7 +133,8 @@ class RunnerTests(unittest.TestCase):
         self.checkout = self.base / "cargo-checkout"
         self.canonical = self.checkout / "native/web-stack/Cargo.toml"
         self.canonical.parent.mkdir(parents=True)
-        self.canonical.write_text("canonical manifest")
+        self.manifest_text = '[dependencies]\nctox-pdf-parse = { path = "../pdf-parse", optional = true }\n'
+        self.canonical.write_text(self.manifest_text)
         self.original = (mutation.MARKER + "\n})();").encode()
         assets = self.canonical.parent / "assets"
         assets.mkdir()
@@ -107,7 +146,7 @@ class RunnerTests(unittest.TestCase):
         self.asset = None
         self.sandbox = None
 
-    def run_fake(self, negative="failed", wrong_package=False, changed_root=False, final_error=False):
+    def run_fake(self, negative="failed", wrong_package=False, changed_root=False, final_error=False, wrong_pdf=False):
         def copy(checkout, revision, destination, deadline):
             destination.mkdir()
             if destination.name == "ctox":
@@ -116,7 +155,7 @@ class RunnerTests(unittest.TestCase):
             else:
                 manifest = destination / "native/web-stack/Cargo.toml"
                 manifest.parent.mkdir(parents=True)
-                manifest.write_text("canonical manifest")
+                manifest.write_text(self.manifest_text)
                 self.asset = manifest.parent / "assets/stealth_init.js"
                 self.asset.parent.mkdir()
                 self.asset.write_bytes(self.original)
@@ -131,8 +170,11 @@ class RunnerTests(unittest.TestCase):
                 metadata = {"packages": [
                     {"id": "root", "name": "ctox", "manifest_path": str(root / "Cargo.toml")},
                     {"id": "copied", "name": "ctox-web-stack", "source": None,
-                     "manifest_path": str(self.asset.parent.parent / "Cargo.toml") if not wrong_package else str(self.canonical)}],
-                    "resolve": {"nodes": [{"id": "root", "deps": [{"name": "ctox_web_stack", "pkg": "copied"}]}]}}
+                     "manifest_path": str(self.asset.parent.parent / "Cargo.toml") if not wrong_package else str(self.canonical)},
+                    {"id": "git-pdf", "name": "ctox-pdf-parse", "source": None if wrong_pdf else mutation.git_pdf_source(self.binding)[1],
+                     "manifest_path": str(self.canonical.parent.parent / "pdf-parse/Cargo.toml")}],
+                    "resolve": {"nodes": [{"id": "root", "deps": [{"name": "ctox_web_stack", "pkg": "copied"}]},
+                                           {"id": "copied", "deps": [{"name": "ctox_pdf_parse", "pkg": "git-pdf"}]}]}}
                 json.dump(metadata, kwargs["stdout"])
             elif label.startswith("build-"):
                 executable = self.sandbox / "target/debug/ctox"
@@ -175,6 +217,8 @@ class RunnerTests(unittest.TestCase):
                 result, error = None, exc
         self.assertEqual(signal.getsignal(signal.SIGTERM), old_handler)
         self.assertEqual(self.asset.read_bytes(), self.original)
+        self.assertEqual((self.asset.parent.parent / "Cargo.toml").read_text(), self.manifest_text)
+        self.assertEqual(self.canonical.read_text(), self.manifest_text)
         self.assertEqual((self.canonical.parent / "assets/stealth_init.js").read_bytes(), self.original)
         receipt = json.loads((self.sandbox / "result.json").read_text())
         return result, error, receipt
@@ -186,6 +230,7 @@ class RunnerTests(unittest.TestCase):
         self.assertTrue(receipt["passed"])
         self.assertTrue(receipt["original_binding_unchanged"])
         self.assertTrue(receipt["asset_restored"])
+        self.assertTrue(receipt["manifest_restored"])
         self.assertEqual(self.probes, ["initial-positive", "mutated-negative", "restored-positive"])
         self.assertNotEqual(receipt["build-mutated"]["sha256"], receipt["build-initial"]["sha256"])
         self.assertEqual(receipt["build-restored"]["sha256"], receipt["build-initial"]["sha256"])
@@ -215,6 +260,14 @@ class RunnerTests(unittest.TestCase):
         self.assertIsInstance(error, mutation.BindingError)
         self.assertFalse(receipt["passed"])
         self.assertEqual(self.probes, [])
+
+    def test_wrong_pdf_source_fails_before_build_or_probe(self):
+        _, error, receipt = self.run_fake(wrong_pdf=True)
+        self.assertIsInstance(error, mutation.BindingError)
+        self.assertFalse(receipt["passed"])
+        self.assertTrue(receipt["manifest_restored"])
+        self.assertEqual(self.probes, [])
+        self.assertFalse(any('build' in command for command in self.commands))
 
     def test_unavailable_final_verification_cannot_claim_a_pass(self):
         result, error, receipt = self.run_fake(final_error=True)

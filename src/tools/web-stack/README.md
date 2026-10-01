@@ -27,7 +27,11 @@ The real stealth-mutation stage uses `python3 scripts/web_stack_source.py
 mutation-probe` (also the `--stage2` E2E entrypoint). It copies the committed
 root revision and resolved canonical Workjet revision into a task-owned
 `TMPDIR` sandbox. Only that copy receives a Cargo path patch and isolated
-lockfile. Each daemon build must report the copied dependency artifact; the
+lockfile. Its optional PDF sibling selector retains the original immutable
+Git source; otherwise Cargo cannot distinguish that copied path package from
+the daemon's root-local PDF package in one lockfile. Metadata must prove the
+same canonical Git PDF identity, and the copied manifest is restored on exit.
+Each daemon build must report the copied dependency artifact; the
 runner records executable, asset and lock checksums. It requires an initial
 positive probe, actual failed tests after mutation, then restoration, rebuild
 and a positive control. A malformed/network failure still fails the run after
