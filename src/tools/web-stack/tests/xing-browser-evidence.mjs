@@ -28,6 +28,8 @@ assert.ok(records.every((record) => record.note === `XING member result current 
 assert.equal(records.find((record) => record.field === 'person_funktion').value, 'Leiterin Einkauf');
 assert.ok(!records.some((record) => record.field === 'firma_name'), 'Member-query echo must never become a company fact');
 assert.equal(parse(company, [profile('Anna_Muster', ['Anna Muster', 'Ehemaliges Unternehmen', company])]).length, 0);
+assert.equal(parse(company, [profile('Anna_Muster', ['Anna Muster', 'Ehemaliges Unternehmen', 'Director', 'Kontakte: 284', company])]).length, 0, 'A former-employment heading persists across intervening role/metadata lines');
+assert.equal(parse(company, [profile('Anna_Muster', ['Anna Muster', 'Ehemaliges Unternehmen', 'Ford-Werke Köln', 'Derzeitiges Unternehmen:', 'Leiterin Einkauf', company])]).length, 4, 'An explicit current heading starts a new employment section');
 assert.equal(parse('Josef Göbel GmbH', [profile('Josef_Goebel', ['Josef Göbel', 'Senior Software Engineer', 'Josef Göbel'])]).length, 0);
 const neighbor = profile('Ford_Mitarbeiter', ['Ford Mitarbeiter', 'Director', 'Ford-Werke Köln', ...good.contextLines]);
 assert.ok(parse(company, [neighbor, good]).every((record) => record.source_url === good.url), 'Neighbor card must not lend its employer');

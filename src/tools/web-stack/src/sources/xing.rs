@@ -164,11 +164,15 @@ const XING_BROWSER_RECORD_PARSER: &str = r#"const parseXingRecords = (companyNam
     }
     return "";
   };
-  const formerEmployment = /\b(?:ehemalige[snr]?\s+unternehmen|ehemalig|former\s+(?:company|employer)|previous\s+(?:company|employer))\b/i;
+  const formerEmployment = /\b(?:ehemalig(?:e[snr]?)?|former\s+(?:company|employer)|previous\s+(?:company|employer))\b/i;
+  const employmentHeading = /^(?:(?:ehemalige[snr]?|aktuelle[snr]?|derzeitige[snr]?)\s+unternehmen|(?:former|previous|current)\s+(?:company|employer))(?:\s*:|\s*$)/i;
   const currentCompanyIndex = (lines) => {
     const matches = lines.map((line, index) => relevantCompanyText(line) ? index : -1).filter((index) => index >= 0);
     return matches.find((index) => {
-      const employmentLabel = lines.slice(Math.max(0, index - 2), index + 1).join(" ");
+      // Role/location/contact lines do not end an employment section.
+      // Only a later explicit current-company heading can supersede a former one.
+      const heading = lines.slice(0, index + 1).findLast((line) => employmentHeading.test(line));
+      const employmentLabel = heading || lines.slice(Math.max(0, index - 2), index + 1).join(" ");
       return !formerEmployment.test(employmentLabel);
     }) ?? -1;
   };
