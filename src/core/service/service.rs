@@ -11949,12 +11949,12 @@ fn review_execution_plan_evidence(root: &Path, job: &QueuedPrompt) -> Vec<String
         Ok(Some(progress)) => progress,
         Ok(None) => {
             return vec![format!(
-                "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} | result=no durable execution plan recorded for this attempt"
+                "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} scope=latest_work_key | result=no durable execution plan recorded for this work_key"
             )]
         }
         Err(error) => {
             return vec![format!(
-                "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} | result=unreadable: {error}"
+                "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} scope=latest_work_key | result=unreadable: {error}"
             )]
         }
     };
@@ -11976,8 +11976,12 @@ fn review_execution_plan_evidence(root: &Path, job: &QueuedPrompt) -> Vec<String
         })
         .unwrap_or_default();
     vec![format!(
-        "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} | result=durable update_plan record revision={} completed={}/{} steps=[{}]. This table is the authoritative plan record; planned_steps/planned_goals belong to mission planning and are not written by update_plan.",
+        "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} scope=latest_work_key | result=durable update_plan record task_id={:?} command_id={:?} revision={} phase={} review_status={} completed={}/{} steps=[{}]. This is the latest durable revision for this work_key, not an attempt-filtered query. This table is the authoritative plan record; planned_steps/planned_goals belong to mission planning and are not written by update_plan. Completed plan steps do not establish review approval or requested side effects.",
+        progress.get("task_id").and_then(Value::as_str).unwrap_or(""),
+        progress.get("command_id").and_then(Value::as_str).unwrap_or(""),
         progress.get("revision").and_then(Value::as_i64).unwrap_or(0),
+        progress.get("phase").and_then(Value::as_str).unwrap_or("unknown"),
+        progress.pointer("/review/status").and_then(Value::as_str).unwrap_or("unknown"),
         progress.get("completed_steps").and_then(Value::as_i64).unwrap_or(0),
         progress.get("total_steps").and_then(Value::as_i64).unwrap_or(0),
         steps,
@@ -35374,6 +35378,271 @@ Business OS command:
         )
         .iter()
         .any(|line| line.contains("Vermerke beurteilen=completed")));
+        Ok(())
+    }
+
+    #[test]
+    fn review_evidence_preserves_failed_incomplete_plan_after_reopen() -> anyhow::Result<()> {
+        let (root, job, _) = incomplete_plan_queue_fixture("review-plan-failed-latest")?;
+        let work_key = worker_attempt_work_key(&job);
+        let db_path = crate::paths::core_db(&root);
+        {
+            let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+            engine.prepare_task_execution_review(&work_key)?;
+            engine.set_task_execution_review_status(&work_key, "failed")?;
+        }
+        // The collector opens the persisted store again; worker prose and the
+        // completed prefix must not turn a rejected 1/2 plan into approval.
+        let evidence = collect_review_evidence_summaries(
+            &root,
+            &job,
+            7410,
+            &[],
+            &CommandWritebackProbe::NotRequired,
+        );
+        let plan = evidence
+            .iter()
+            .find(|line| line.contains("target=task_execution_plan_revisions"))
+            .expect("the actual reviewer collector must include the durable plan");
+        assert!(plan.contains("scope=latest_work_key"), "{plan}");
+        assert!(
+            plan.contains(&format!("task_id={:?}", job.leased_message_keys[0])),
+            "{plan}"
+        );
+        assert!(
+            plan.contains("command_id=\"review-plan-failed-latest\""),
+            "{plan}"
+        );
+        assert!(
+            plan.contains("phase=review review_status=failed completed=1/2"),
+            "{plan}"
+        );
+        assert!(
+            plan.contains("Verify remaining fields=in_progress"),
+            "{plan}"
+        );
+        assert!(
+            accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)?.is_some()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn review_evidence_uses_retry_revision_instead_of_previous_completed_plan() -> anyhow::Result<()>
+    {
+        let name = "review-plan-retry-latest";
+        let (root, job, attempt_id) = incomplete_plan_queue_fixture(name)?;
+        let work_key = worker_attempt_work_key(&job);
+        let db_path = crate::paths::core_db(&root);
+        {
+            let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+            engine.record_task_execution_plan(lcm::TaskExecutionPlanUpdate {
+                work_key: &work_key,
+                task_id: &job.leased_message_keys[0],
+                command_id: name,
+                attempt_id: &attempt_id,
+                explanation: None,
+                steps: &[
+                    lcm::TaskExecutionPlanStepInput {
+                        label: "Save research chunk".into(),
+                        status: "completed".into(),
+                    },
+                    lcm::TaskExecutionPlanStepInput {
+                        label: "Verify remaining fields".into(),
+                        status: "completed".into(),
+                    },
+                ],
+            })?;
+            engine.prepare_task_execution_review(&work_key)?;
+            let completed = engine.set_task_execution_review_status(&work_key, "completed")?;
+            assert_eq!(completed["percent"], 100);
+            engine.record_task_execution_plan(lcm::TaskExecutionPlanUpdate {
+                work_key: &work_key,
+                task_id: &job.leased_message_keys[0],
+                command_id: name,
+                attempt_id: &format!("{attempt_id}-retry"),
+                explanation: Some("A new retry has its own unfinished work"),
+                steps: &[lcm::TaskExecutionPlanStepInput {
+                    label: "Inspect the new retry".into(),
+                    status: "in_progress".into(),
+                }],
+            })?;
+        }
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+        let latest = engine.task_execution_progress(&work_key)?.unwrap();
+        assert_eq!(latest["revision"], 2);
+        assert_eq!(latest["percent"], 0);
+        drop(engine);
+        let evidence = review_execution_plan_evidence(&root, &job);
+        let plan = &evidence[0];
+        assert!(
+            plan.contains("revision=2 phase=working review_status=pending completed=0/1"),
+            "{plan}"
+        );
+        assert!(plan.contains("Inspect the new retry=in_progress"), "{plan}");
+        assert!(!plan.contains("Save research chunk=completed"), "{plan}");
+        assert!(plan.contains("not an attempt-filtered query"), "{plan}");
+        assert!(
+            accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)?.is_some()
+        );
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let revisions: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM task_execution_plan_revisions WHERE work_key=?1",
+            [&work_key],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            revisions, 2,
+            "the previous completed revision must remain durable evidence"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn review_evidence_completed_plan_survives_writeback_ack_recovery() -> anyhow::Result<()> {
+        let name = "review-plan-complete-ack-recovery";
+        let (root, job, attempt_id) = incomplete_plan_queue_fixture(name)?;
+        let db_path = crate::paths::core_db(&root);
+        let work_key = worker_attempt_work_key(&job);
+        let task_id = &job.leased_message_keys[0];
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+        engine.record_task_execution_plan(lcm::TaskExecutionPlanUpdate {
+            work_key: &work_key,
+            task_id,
+            command_id: name,
+            attempt_id: &attempt_id,
+            explanation: Some("Both required steps are saved before review"),
+            steps: &[
+                lcm::TaskExecutionPlanStepInput {
+                    label: "Save research chunk".into(),
+                    status: "completed".into(),
+                },
+                lcm::TaskExecutionPlanStepInput {
+                    label: "Verify remaining fields".into(),
+                    status: "completed".into(),
+                },
+            ],
+        })?;
+        engine.prepare_task_execution_review(&work_key)?;
+        let evidence = collect_review_evidence_summaries(
+            &root,
+            &job,
+            7410,
+            &[],
+            &CommandWritebackProbe::NotRequired,
+        );
+        let plan = evidence
+            .iter()
+            .find(|line| line.contains("target=task_execution_plan_revisions"))
+            .expect("the actual reviewer collector includes the persisted completed plan");
+        assert!(plan.contains(&format!("task_id={task_id:?}")), "{plan}");
+        assert!(plan.contains(&format!("command_id={name:?}")), "{plan}");
+        assert!(
+            plan.contains("review_status=in_progress completed=2/2"),
+            "{plan}"
+        );
+        assert!(plan.contains("Verify remaining fields=completed"), "{plan}");
+        assert!(
+            accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None,)?
+                .is_none()
+        );
+
+        // The review verdict is an explicit fixture, not inferred from the
+        // completed plan or supplied by a model. Exercise native completion.
+        channels::record_business_command_review(
+            &root,
+            task_id,
+            "passed",
+            "passed",
+            &json!({"fixture":true, "durable_plan_evidence":plan}),
+        )?;
+        engine.set_task_execution_review_status(&work_key, "completed")?;
+        let progress_before = engine.task_execution_progress(&work_key)?.unwrap();
+        let writeback_calls = std::cell::Cell::new(0usize);
+        let first = apply_business_command_writebacks_for_attempt(
+            &root,
+            &db_path,
+            &attempt_id,
+            &job.leased_message_keys,
+            || {
+                writeback_calls.set(writeback_calls.get() + 1);
+                Ok(
+                    crate::business_os::store::complete_business_command_from_queue_reply(
+                        &root,
+                        task_id,
+                        "Saved partial research result",
+                    )?
+                    .is_some() as usize,
+                )
+            },
+        )?;
+        assert_eq!(first, 1);
+        assert_eq!(route_status_for(&root, task_id), "handled");
+        let terminal_before: (String, Option<String>) = channels::open_channel_db(&db_path)?
+            .query_row(
+                "SELECT updated_at, acked_at FROM communication_routing_state WHERE message_key=?1",
+                [task_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+        assert!(terminal_before.1.is_some());
+        assert!(
+            engine
+                .worker_attempt(&attempt_id)?
+                .unwrap()
+                .queue_effects_applied_at
+                .is_none(),
+            "simulate a crash after the command writeback ack but before its attempt marker"
+        );
+        drop(engine);
+
+        let reopened = LcmEngine::open(&db_path, LcmConfig::default())?;
+        let resumed = reopened.recoverable_worker_attempt(&work_key)?.unwrap();
+        assert_eq!(resumed.attempt_id, attempt_id, "reuse the saved attempt");
+        let replayed = apply_business_command_writebacks_for_attempt(
+            &root,
+            &db_path,
+            &attempt_id,
+            &job.leased_message_keys,
+            || {
+                writeback_calls.set(writeback_calls.get() + 1);
+                Ok(
+                    crate::business_os::store::complete_business_command_from_queue_reply(
+                        &root,
+                        task_id,
+                        "Saved partial research result",
+                    )?
+                    .is_some() as usize,
+                )
+            },
+        )?;
+        assert_eq!(replayed, 0);
+        assert_eq!(writeback_calls.get(), 1, "no second native writeback");
+        assert!(reopened
+            .worker_attempt(&attempt_id)?
+            .unwrap()
+            .queue_effects_applied_at
+            .is_some());
+        assert_eq!(
+            reopened.task_execution_progress(&work_key)?.unwrap(),
+            progress_before,
+            "recovery must preserve the approved durable plan"
+        );
+        let conn = channels::open_channel_db(&db_path)?;
+        let terminal_after: (String, Option<String>) = conn.query_row(
+            "SELECT updated_at, acked_at FROM communication_routing_state WHERE message_key=?1",
+            [task_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(
+            terminal_after, terminal_before,
+            "no terminal timestamp rewrite"
+        );
+        let completions: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_command_transitions WHERE command_id=?1 AND reason='command-specific writeback completed after review and validation'",
+            [name], |row| row.get(0),
+        )?;
+        assert_eq!(completions, 1);
+        assert!(channels::lease_queue_task(&root, task_id, CHANNEL_ROUTER_LEASE_OWNER).is_err());
         Ok(())
     }
 
