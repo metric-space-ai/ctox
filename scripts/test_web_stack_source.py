@@ -3,6 +3,8 @@
 import copy
 import importlib.util
 import json
+import contextlib
+import io
 import os
 from pathlib import Path
 import subprocess
@@ -71,6 +73,15 @@ class SourceTests(unittest.TestCase):
     def test_source_credentials_not_logged(self):
         self.metadata["packages"][1]["source"] = "git+https://user:secret@example.test/repo?token=private#" + SHA
         self.assertEqual(self.selected()["source"], "https://example.test/repo#" + SHA)
+
+    def test_bounded_timeout_retains_actual_cargo_diagnostic(self):
+        diagnostic = b"Updating Git source\nnetwork fetch stalled\n"
+        error = subprocess.TimeoutExpired(["cargo", "metadata"], 120, stderr=diagnostic)
+        output = io.StringIO()
+        with patch.object(binding.subprocess, "run", side_effect=error), contextlib.redirect_stderr(output):
+            with self.assertRaisesRegex(binding.BindingError, "partial stderr 42 bytes"):
+                binding.capture(["cargo", "metadata"], self.root)
+        self.assertEqual(output.getvalue(), diagnostic.decode())
 
     def test_metadata_error_has_no_mirror_fallback(self):
         with patch.object(binding, "capture", side_effect=binding.BindingError("resolution failed")):

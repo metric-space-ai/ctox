@@ -21,8 +21,19 @@ class BindingError(RuntimeError):
 
 
 def capture(command, root):
-    result = subprocess.run(command, cwd=root, text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, timeout=120)
+    try:
+        result = subprocess.run(command, cwd=root, text=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, timeout=120)
+    except subprocess.TimeoutExpired as error:
+        # Preserve the real fetch/resolution diagnostic on a bounded timeout.
+        # subprocess.run has already killed/reaped its direct child; the
+        # admitted runner also cleans the enclosing owned process group.
+        partial = error.stderr or b""
+        if isinstance(partial, bytes):
+            partial = partial.decode("utf-8", errors="replace")
+        sys.stderr.write(partial[-16384:])
+        raise BindingError("command timed out after 120s: %s (partial stderr %s bytes)" %
+                           (command[0], len(partial.encode("utf-8")))) from error
     if result.returncode:
         # Cargo diagnostics go to stderr; never convert resolution failure into
         # a local-manifest fallback.
