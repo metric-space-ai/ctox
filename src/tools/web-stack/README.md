@@ -32,7 +32,10 @@ Git source; otherwise Cargo cannot distinguish that copied path package from
 the daemon's root-local PDF package in one lockfile. Metadata must prove the
 same canonical Git PDF identity, and the copied manifest is restored on exit.
 Each daemon build must report the copied dependency artifact; the
-runner records executable, asset and lock checksums. It requires an initial
+runner records executable, asset and lock checksums. Cold builds have a fixed
+1200-second ceiling within the unchanged 1800-second probe deadline. Command
+failure and cleanup failure remain separate; denied signals require an independent
+process-group check, and an unresolved group stops further probes. It requires an initial
 positive probe, actual failed tests after mutation, then restoration, rebuild
 and a positive control. A malformed/network failure still fails the run after
 the restored control; cancellation restores the asset without claiming an

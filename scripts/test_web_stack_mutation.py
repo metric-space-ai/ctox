@@ -122,6 +122,38 @@ class ProbeTests(unittest.TestCase):
             self.assertEqual(git("status", "--porcelain"), "")
 
 
+class CleanupTests(unittest.TestCase):
+    def inspect_denied_signal(self, stdout):
+        child = unittest.mock.Mock(pid=987654)
+        child.wait.return_value = 0
+        row = {}
+        with patch.object(mutation.os, "killpg", side_effect=PermissionError(1, "denied")), \
+             patch.object(mutation.subprocess, "run", return_value=unittest.mock.Mock(stdout=stdout)):
+            try:
+                mutation.stop_owned_group(child, row)
+                error = None
+            except Exception as exc:
+                error = exc
+        return row, error
+
+    def test_permission_error_is_absence_only_after_independent_group_check(self):
+        row, error = self.inspect_denied_signal("123 456\n")
+        self.assertIsNone(error)
+        self.assertEqual(row["denied_signal"]["members"], [])
+        self.assertIn("ps verified", row["cleanup"])
+
+    def test_permission_error_with_present_group_cannot_claim_cleanup(self):
+        row, error = self.inspect_denied_signal("987654 987654\n987655 987654\n")
+        self.assertIsInstance(error, mutation.CleanupError)
+        self.assertEqual(row["denied_signal"]["members"], [987654, 987655])
+        self.assertNotIn("cleanup", row)
+
+    def test_unreadable_group_snapshot_cannot_claim_absence(self):
+        row, error = self.inspect_denied_signal("not numeric process metadata\n")
+        self.assertIsInstance(error, mutation.CleanupError)
+        self.assertNotIn("cleanup", row)
+
+
 @unittest.skipUnless(os.name == "posix", "mutation runner requires POSIX process-group cleanup")
 class RunnerTests(unittest.TestCase):
     def setUp(self):
@@ -146,7 +178,7 @@ class RunnerTests(unittest.TestCase):
         self.asset = None
         self.sandbox = None
 
-    def run_fake(self, negative="failed", wrong_package=False, changed_root=False, final_error=False, wrong_pdf=False):
+    def run_fake(self, negative="failed", wrong_package=False, changed_root=False, final_error=False, wrong_pdf=False, timeout_stage=None, cleanup_denied=False):
         def copy(checkout, revision, destination, deadline):
             destination.mkdir()
             if destination.name == "ctox":
@@ -163,6 +195,7 @@ class RunnerTests(unittest.TestCase):
         def popen(command, **kwargs):
             self.commands.append(command)
             label = Path(kwargs["stdout"].name).stem
+            self.current_label = label
             process = unittest.mock.Mock(pid=987654)
             process.wait.return_value = 0
             root = Path(kwargs["cwd"])
@@ -194,9 +227,15 @@ class RunnerTests(unittest.TestCase):
                     failed = label == "mutated-negative" and negative == "failed"
                     json.dump({"probes": [{"failed_count": int(failed), "failed_tests": ["webdriver"] if failed else []}]}, kwargs["stdout"])
                     process.wait.return_value = int(failed)
+            if label == timeout_stage:
+                process.wait.side_effect = [subprocess.TimeoutExpired(command, 1200), 0]
             self.assertEqual(kwargs["env"]["CARGO_BUILD_JOBS"], "2")
             self.assertEqual(kwargs["env"]["CTOX_STATE_ROOT"], str(root / "runtime"))
             return process
+        def killpg(pid, signum):
+            if cleanup_denied and self.current_label == timeout_stage:
+                raise PermissionError(1, "denied")
+            raise ProcessLookupError
         states = [{"head": "a" * 40}, {"head": "c" * 40 if changed_root else "a" * 40}]
         old_handler = signal.getsignal(signal.SIGTERM)
         with patch.object(mutation, "source_state", side_effect=states), \
@@ -207,7 +246,8 @@ class RunnerTests(unittest.TestCase):
              patch.object(mutation.tempfile, "gettempdir", return_value=str(self.base)), \
              patch.object(mutation.sys, "platform", "linux"), \
              patch.object(mutation.subprocess, "Popen", side_effect=popen), \
-             patch.object(mutation.os, "killpg", side_effect=ProcessLookupError), \
+             patch.object(mutation.os, "killpg", side_effect=killpg), \
+             patch.object(mutation.subprocess, "run", return_value=unittest.mock.Mock(stdout="987654 987654\n")), \
              patch.dict(os.environ, {"CARGO_BUILD_JOBS": "2", "RUST_TEST_THREADS": "2"}), \
              contextlib.redirect_stdout(io.StringIO()):
             try:
@@ -222,6 +262,25 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual((self.canonical.parent / "assets/stealth_init.js").read_bytes(), self.original)
         receipt = json.loads((self.sandbox / "result.json").read_text())
         return result, error, receipt
+
+    def test_timeout_remains_primary_when_cleanup_signal_is_denied(self):
+        _, error, receipt = self.run_fake(timeout_stage="build-initial", cleanup_denied=True)
+        self.assertIsInstance(error, subprocess.TimeoutExpired)
+        self.assertTrue(receipt["cleanup_failed"])
+        self.assertFalse(receipt["passed"])
+        self.assertIn("still present", receipt["steps"][-1]["cleanup_error"])
+        self.assertEqual(self.probes, [])
+        self.assertEqual(receipt["limits"]["seconds"], 1800)
+        self.assertEqual(receipt["limits"]["build_seconds"], 1200)
+
+    def test_unresolved_negative_cleanup_restores_without_starting_control(self):
+        _, error, receipt = self.run_fake(timeout_stage="mutated-negative", cleanup_denied=True)
+        self.assertIsInstance(error, subprocess.TimeoutExpired)
+        self.assertTrue(receipt["asset_restored"])
+        self.assertTrue(receipt["manifest_restored"])
+        self.assertFalse(receipt["passed"])
+        self.assertNotIn("restored-positive", self.probes)
+        self.assertNotIn("build-restored", receipt)
 
     def test_full_cycle_isolates_source_and_checks_restored_control(self):
         result, error, receipt = self.run_fake()

@@ -21,6 +21,59 @@ MARKER = "(() => {\n  'use strict';"
 OPENING = re.compile(r'''\(\(\) => \{\r?\n[ \t]+(?P<quote>['"])use strict(?P=quote);[ \t]*(?=\r?\n)''')
 
 
+BUILD_TIMEOUT_SECONDS = 1200
+
+
+class CleanupError(BindingError):
+    """Owned processes could not be proven stopped; never continue probing."""
+
+
+def signal_owned_group(child, signum, row):
+    try:
+        os.killpg(child.pid, signum)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError as error:
+        # A denied signal proves neither liveness nor absence. Query numeric
+        # group membership, without exposing unrelated command lines.
+        try:
+            result = subprocess.run(["ps", "-axo", "pid=,pgid="], check=True,
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    text=True, timeout=5)
+            members = []
+            for line in result.stdout.splitlines():
+                if not line.strip():
+                    continue
+                pid, pgid = map(int, line.split())
+                if pgid == child.pid:
+                    members.append(pid)
+        except Exception as inspection_error:
+            raise CleanupError("owned group inspection failed after denied signal") from inspection_error
+        row["denied_signal"] = {"signal": signum, "members": members}
+        if members:
+            raise CleanupError("signal denied; owned group still present: %s" % members) from error
+        row["cleanup"] = "owned group absent (ps verified after denied signal)"
+        return False
+
+
+def stop_owned_group(child, row):
+    if signal_owned_group(child, signal.SIGTERM, row):
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            signal_owned_group(child, signal.SIGKILL, row)
+            child.wait(timeout=5)
+    else:
+        child.wait(timeout=5)
+    # An exited leader may leave descendants; keep group escalation.
+    if signal_owned_group(child, 0, row):
+        if signal_owned_group(child, signal.SIGKILL, row):
+            row["cleanup"] = "remaining owned group killed"
+    else:
+        row.setdefault("cleanup", "owned group absent")
+
+
 def copy_revision(checkout, revision, destination, deadline=None):
     # Local shared-object clones retain exact Git revision/build metadata and
     # tracked symlinks. No upstream fetch or live checkout mutation occurs.
@@ -133,7 +186,8 @@ def run_mutation(root, binding):
     # A retained task-owned evidence directory, not a background watcher.
     directory = Path(tempfile.mkdtemp(prefix="web-stack-mutation-", dir=temporary_base))
     record = {"root_head": before["head"], "binding": binding, "directory": str(directory),
-              "steps": [], "passed": False, "limits": {"workers": 2, "seconds": 1800}}
+              "steps": [], "passed": False,
+              "limits": {"workers": 2, "seconds": 1800, "build_seconds": BUILD_TIMEOUT_SECONDS}}
     evidence = directory / "result.json"
     print("mutation evidence: " + str(evidence), flush=True)
     env = bounded_env()
@@ -173,21 +227,15 @@ def run_mutation(root, binding):
                 raise
             finally:
                 try:
-                    os.killpg(child.pid, signal.SIGTERM)
-                    child.wait(timeout=5)
-                except ProcessLookupError:
-                    pass
-                except subprocess.TimeoutExpired:
-                    os.killpg(child.pid, signal.SIGKILL); child.wait()
-                # An exited leader can leave descendants behind. Escalate on
-                # the owned group even when wait() has already reaped it.
-                try:
-                    os.killpg(child.pid, 0)
-                    os.killpg(child.pid, signal.SIGKILL)
-                    row["cleanup"] = "remaining owned group killed"
-                except ProcessLookupError:
-                    row["cleanup"] = "owned group absent"
-                save()
+                    stop_owned_group(child, row)
+                except Exception as cleanup_error:
+                    row["cleanup_error"] = str(cleanup_error)
+                    record["cleanup_failed"] = True
+                    # Preserve timeout/cancellation as the primary failure.
+                    if "error" not in row:
+                        raise CleanupError(str(cleanup_error)) from cleanup_error
+                finally:
+                    save()
         return code, stdout_path.read_text()
 
     try:
@@ -228,7 +276,8 @@ def run_mutation(root, binding):
 
         def build(label):
             code, output = execute(label, ["cargo", "build", "--locked", "--bin", "ctox",
-                                           "--message-format=json-render-diagnostics"] + cargo)
+                                           "--message-format=json-render-diagnostics"] + cargo,
+                                   BUILD_TIMEOUT_SECONDS)
             if code:
                 raise BindingError(label + " failed")
             messages = [json.loads(line) for line in output.splitlines() if line.startswith("{")]
@@ -259,6 +308,8 @@ def run_mutation(root, binding):
                 raise BindingError("mutation did not change the executable")
             probe("mutated-negative", True)
         except Exception as error:
+            if record.get("cleanup_failed"):
+                raise
             negative_error = error
             record["negative_error"] = str(error)
         finally:
