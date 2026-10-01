@@ -124,6 +124,17 @@ an actor from incoming metadata. The regression covers terminal state, outbox
 delivery to both stores, credential retention/redaction, forged projection
 identity and unchanged core intent/hash.
 
+### MCP app collection read authority
+
+Once a native RxDB collection table exists, MCP single-record and list reads
+use only that table. Native absence, including a physically purged tombstone
+or an empty table, cannot be replaced by an older `business_records` shadow.
+Present native tombstones retain their deletion flags and native ordering.
+Legacy shadow reads remain available when no native table exists for that
+collection; their write-time ordering and limits remain unchanged. This is a
+read boundary, not a record repair or a claim that the installed browser has
+converged. It does not change native table selection or actor permissions.
+
 ### Outbound MCP research record identity
 
 `web_stack.person_research` binds its proposal to the raw persisted

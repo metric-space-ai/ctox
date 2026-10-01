@@ -11271,16 +11271,18 @@ pub fn pull_mcp_app_collection_record(
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
                 )
                 .optional()?;
-            if let Some((raw, deleted)) = row {
-                return Ok(Some(mcp_rxdb_document(record_id, &raw, deleted)?));
-            }
+            // Presence of the native collection owns absence too. A purged
+            // tombstone must not expose an older live business_records shadow.
+            return row
+                .map(|(raw, deleted)| mcp_rxdb_document(record_id, &raw, deleted))
+                .transpose();
         }
     }
     pull_collection_record(root, collection, record_id)
 }
 
-/// RxDB owns each ID it contains. Merge shadow-only IDs by write time before
-/// applying the limit so a recent fallback cannot disappear behind older rows.
+/// A present native collection owns the complete MCP result, including absence.
+/// Legacy shadow reads are allowed only when no native collection table exists.
 pub fn pull_mcp_app_collection_records(
     root: &Path,
     collection: &str,
@@ -11333,47 +11335,38 @@ pub fn pull_mcp_app_collection_records(
             ));
         }
     }
-    let shadow_only = with_store_connection(root, |conn| {
-        let mut statement = conn.prepare(
-            "SELECT record_id, deleted, updated_at_ms, payload_json
+    let shadow_only = if rxdb.is_none() {
+        with_store_connection(root, |conn| {
+            let mut statement = conn.prepare(
+                "SELECT record_id, deleted, updated_at_ms, payload_json
                  FROM business_records WHERE collection = ?1
                  ORDER BY updated_at_ms DESC, record_id DESC",
-        )?;
-        let mut rows = statement.query([collection])?;
-        let mut fallback = Vec::new();
-        while fallback.len() < limit {
-            let Some(row) = rows.next()? else { break };
-            let id: String = row.get(0)?;
-            if let Some((rxdb_conn, table)) = rxdb.as_ref() {
-                let exists = rxdb_conn
-                    .query_row(
-                        &format!("SELECT 1 FROM {table} WHERE id = ?1"),
-                        [&id],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .optional()?
-                    .is_some();
-                if exists {
-                    continue;
-                }
+            )?;
+            let mut rows = statement.query([collection])?;
+            let mut fallback = Vec::new();
+            while fallback.len() < limit {
+                let Some(row) = rows.next()? else { break };
+                let id: String = row.get(0)?;
+                let deleted: i64 = row.get(1)?;
+                let updated_at_ms: i64 = row.get(2)?;
+                let raw: String = row.get(3)?;
+                let mut document: Value = serde_json::from_str(&raw)
+                    .with_context(|| format!("parse shadow document `{collection}/{id}`"))?;
+                let object = document.as_object_mut().with_context(|| {
+                    format!("shadow document `{collection}/{id}` is not an object")
+                })?;
+                object
+                    .entry("id".to_string())
+                    .or_insert_with(|| Value::String(id.clone()));
+                object.insert("_deleted".to_string(), Value::Bool(deleted != 0));
+                object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+                fallback.push((updated_at_ms as f64, id, document));
             }
-            let deleted: i64 = row.get(1)?;
-            let updated_at_ms: i64 = row.get(2)?;
-            let raw: String = row.get(3)?;
-            let mut document: Value = serde_json::from_str(&raw)
-                .with_context(|| format!("parse shadow document `{collection}/{id}`"))?;
-            let object = document
-                .as_object_mut()
-                .with_context(|| format!("shadow document `{collection}/{id}` is not an object"))?;
-            object
-                .entry("id".to_string())
-                .or_insert_with(|| Value::String(id.clone()));
-            object.insert("_deleted".to_string(), Value::Bool(deleted != 0));
-            object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
-            fallback.push((updated_at_ms as f64, id, document));
-        }
-        Ok(fallback)
-    })?;
+            Ok(fallback)
+        })?
+    } else {
+        Vec::new()
+    };
     documents.extend(shadow_only);
     documents.sort_by(|left, right| {
         right
