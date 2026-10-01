@@ -32,10 +32,15 @@ fn fixture(status: &str) -> anyhow::Result<(TempDir, Connection, Value)> {
     let temp = tempdir()?;
     fs::create_dir_all(temp.path().join("runtime"))?;
     let conn = Connection::open(rxdb_store_path(temp.path()))?;
-    conn.execute(
-        &format!("CREATE TABLE {TABLE} (id TEXT PRIMARY KEY, data TEXT NOT NULL)"),
-        [],
-    )?;
+    // Exercise the real native-row layout, including the persisted head used
+    // by checkpoint-safe projections; a two-column table cannot model it.
+    conn.execute_batch(&format!(
+        "CREATE TABLE {TABLE} (
+            id TEXT PRIMARY KEY NOT NULL, revision TEXT,
+            deleted INTEGER NOT NULL, lastWriteTime REAL NOT NULL,
+            data TEXT NOT NULL
+        )"
+    ))?;
     let lead = json!({
         "id": LEAD,
         "_rev": "7-existing",
@@ -48,7 +53,11 @@ fn fixture(status: &str) -> anyhow::Result<(TempDir, Connection, Value)> {
         "data": {"firma_name": "Customer"}
     });
     conn.execute(
-        &format!("INSERT INTO {TABLE} (id, data) VALUES (?1, ?2)"),
+        &format!(
+            "INSERT INTO {TABLE}
+            (id, revision, deleted, lastWriteTime, data)
+            VALUES (?1, '7-existing', 0, 42, ?2)"
+        ),
         params![LEAD, lead.to_string()],
     )?;
     Ok((temp, conn, lead))
@@ -141,6 +150,20 @@ fn scoped_research_still_queues_and_preserves_customer_fields() -> anyhow::Resul
     assert_eq!(after["task_id"], "new-task");
     assert_eq!(after["data"], before["data"]);
     assert_ne!(after["_rev"], before["_rev"]);
+    let (revision, deleted, last_write): (String, i64, f64) = conn.query_row(
+        &format!("SELECT revision, deleted, lastWriteTime FROM {TABLE} WHERE id=?1"),
+        [LEAD],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(
+        revision,
+        after["_rev"].as_str().expect("projected revision")
+    );
+    assert_eq!(deleted, 0);
+    assert!(
+        last_write > 42.0,
+        "queued research must advance its native head"
+    );
     Ok(())
 }
 
