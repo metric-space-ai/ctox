@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20261001-shell-v2-checkpoint-head-v434';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {

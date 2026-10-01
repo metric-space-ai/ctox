@@ -13904,6 +13904,19 @@ var CtoxRxQuery = class _CtoxRxQuery {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : {};
       demandOptions.signal = this.signal;
       docs = await demandLoader.resolveQuery(this.query, demandOptions);
+    } else if (demandLoader) {
+      const windowLimit = this.single && !Number.isFinite(Number(this.query.limit)) ? 1 : Math.min(
+        DEFAULT_WINDOW_LIMIT,
+        Math.max(1, Math.floor(Number(this.query.limit) || DEFAULT_WINDOW_LIMIT))
+      );
+      const windowed = { ...this.query, limit: windowLimit };
+      docs = typeof this.collection.storageCollection.queryDocuments === "function" ? await this.collection.storageCollection.queryDocuments(windowed, {
+        matchesSelector,
+        sortDocuments
+      }) : sortDocuments(
+        (await this.collection.storageCollection.allDocuments()).filter((doc) => matchesSelector(doc, windowed.selector)),
+        windowed.sort
+      ).slice(Math.max(0, Number(windowed.skip) || 0)).slice(0, windowLimit);
     } else if (isControlPlaneStatusCollection(this.collection.name)) {
       if (this.query.requireRevision) {
         throw Object.assign(new Error("QUERY_GENERATION_REQUIRED: strict demand read has no loader"), {
