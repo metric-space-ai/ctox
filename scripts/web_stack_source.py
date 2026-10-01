@@ -171,6 +171,16 @@ def focused_command(binding, action, arguments):
            (flag in ("-p", "-j") and arg.startswith(flag))
            for arg in before_separator for flag in selectors):
         raise BindingError("source/job selector overrides are not allowed")
+    runner = arguments[arguments.index("--") + 1:] if "--" in arguments else []
+    for index, arg in enumerate(runner):
+        if arg == "--test-threads":
+            value = runner[index + 1] if index + 1 < len(runner) else ""
+        elif arg.startswith("--test-threads="):
+            value = arg.split("=", 1)[1]
+        else:
+            continue
+        if value not in ("1", "2"):
+            raise BindingError("Rust test runner --test-threads must be 1 or 2")
     return ["cargo", action, "--locked", "--manifest-path", binding["manifest"]] + arguments
 
 

@@ -173,6 +173,18 @@ def require_git_pdf(metadata, package, binding):
     return {"id": pdf["id"], "source": pdf["source"], "manifest": pdf["manifest_path"]}
 
 
+def mutation_target_directory(binding):
+    # Source isolation does not require discarding this same project's Cargo
+    # dependency cache. Source/package/executable receipts still prove each build.
+    target = Path(binding["target_directory"])
+    if not target.is_absolute():
+        raise BindingError("mutation target directory must be absolute")
+    target = target.resolve()
+    if sys.platform == "darwin" and not str(target).startswith("/Volumes/tmp/"):
+        raise BindingError("mutation target directory must be on /Volumes/tmp")
+    return target
+
+
 def run_mutation(root, binding):
     if os.name != "posix":
         raise BindingError("isolated mutation requires Linux/macOS process-group cleanup")
@@ -191,8 +203,10 @@ def run_mutation(root, binding):
     evidence = directory / "result.json"
     print("mutation evidence: " + str(evidence), flush=True)
     env = bounded_env()
+    target = mutation_target_directory(binding)
+    record["target_directory"] = str(target)
     env.update(CTOX_ROOT=str(directory / "ctox"), CTOX_STATE_ROOT=str(directory / "ctox/runtime"),
-               CARGO_TARGET_DIR=str(directory / "target"), npm_config_cache=str(directory / "npm-cache"),
+               CARGO_TARGET_DIR=str(target), npm_config_cache=str(directory / "npm-cache"),
                PLAYWRIGHT_BROWSERS_PATH=str(directory / "browser-cache"), XDG_CACHE_HOME=str(directory / "cache"))
     old_handler = signal.getsignal(signal.SIGTERM)
     def interrupted(signum, frame):

@@ -138,6 +138,19 @@ class SourceTests(unittest.TestCase):
         cmd = binding.focused_command(self.selected(), "test", args)
         self.assertEqual(cmd, ["cargo", "test", "--locked", "--manifest-path", str(self.canonical)] + args)
 
+    def test_nested_rust_worker_overrides_fail_for_equal_split_and_repeated_args(self):
+        for runner in (["--test-threads=8"], ["--test-threads", "8"],
+                       ["--test-threads=2", "--test-threads=8"],
+                       ["--test-threads"], ["--test-threads=0"]):
+            with self.subTest(runner=runner), self.assertRaises(binding.BindingError):
+                binding.focused_command(self.selected(), "test", ["--lib", "unlock::", "--"] + runner)
+
+    def test_bounded_rust_worker_args_are_preserved(self):
+        for runner in (["--test-threads=1"], ["--test-threads", "1"],
+                       ["--test-threads=2"], ["--test-threads", "2"]):
+            args = ["--lib", "unlock::", "--"] + runner
+            self.assertEqual(binding.focused_command(self.selected(), "test", args)[5:], args)
+
     def test_selector_and_job_overrides_fail(self):
         for arg in ("--manifest-path=x", "-pother", "--workspace", "-j8", "--config=x"):
             with self.assertRaises(binding.BindingError):

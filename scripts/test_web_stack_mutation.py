@@ -15,6 +15,14 @@ import web_stack_mutation as mutation
 
 
 class ProbeTests(unittest.TestCase):
+    def test_metadata_target_is_reused_and_mac_system_disk_is_rejected(self):
+        with patch.object(mutation.sys, "platform", "darwin"):
+            target = "/Volumes/tmp/dev-artifacts/ctox/web-stack-source-binding/target"
+            self.assertEqual(mutation.mutation_target_directory({"target_directory": target}), Path(target).resolve())
+            for invalid in ("/tmp/ctox-target", "relative-target"):
+                with self.assertRaises(mutation.BindingError):
+                    mutation.mutation_target_directory({"target_directory": invalid})
+
     def test_copied_pdf_selector_keeps_original_git_identity_and_features(self):
         with tempfile.TemporaryDirectory() as tmp:
             manifest = Path(tmp) / "copied/Cargo.toml"
@@ -172,7 +180,8 @@ class RunnerTests(unittest.TestCase):
         assets.mkdir()
         (assets / "stealth_init.js").write_bytes(self.original)
         self.binding = {"manifest": str(self.canonical), "revision": "b" * 40,
-                        "source": "https://github.com/metric-space-ai/workjet#" + "b" * 40}
+                        "source": "https://github.com/metric-space-ai/workjet#" + "b" * 40,
+                        "target_directory": str(self.base / "task-target")}
         self.probes = []
         self.commands = []
         self.asset = None
@@ -210,7 +219,7 @@ class RunnerTests(unittest.TestCase):
                                            {"id": "copied", "deps": [{"name": "ctox_pdf_parse", "pkg": "git-pdf"}]}]}}
                 json.dump(metadata, kwargs["stdout"])
             elif label.startswith("build-"):
-                executable = self.sandbox / "target/debug/ctox"
+                executable = Path(kwargs["env"]["CARGO_TARGET_DIR"]) / "debug/ctox"
                 executable.parent.mkdir(parents=True, exist_ok=True)
                 executable.write_bytes(b"compiled:" + self.asset.read_bytes())
                 for artifact in ({"reason": "compiler-artifact", "package_id": "copied"},
@@ -231,6 +240,7 @@ class RunnerTests(unittest.TestCase):
                 process.wait.side_effect = [subprocess.TimeoutExpired(command, 1200), 0]
             self.assertEqual(kwargs["env"]["CARGO_BUILD_JOBS"], "2")
             self.assertEqual(kwargs["env"]["CTOX_STATE_ROOT"], str(root / "runtime"))
+            self.assertEqual(kwargs["env"]["CARGO_TARGET_DIR"], self.binding["target_directory"])
             return process
         def killpg(pid, signum):
             if cleanup_denied and self.current_label == timeout_stage:
