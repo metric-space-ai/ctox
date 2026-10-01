@@ -41,6 +41,7 @@ class ProbeTests(unittest.TestCase):
         with self.assertRaises(mutation.BindingError):
             mutation.require_probe(payload, 1, False)
 
+    @unittest.skipUnless(os.name == "posix", "POSIX mutation copy preserves native symlinks")
     def test_local_copy_preserves_selected_old_revision_and_symlink(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "origin"
@@ -67,6 +68,7 @@ class ProbeTests(unittest.TestCase):
             self.assertEqual(git("status", "--porcelain"), "")
 
 
+@unittest.skipUnless(os.name == "posix", "mutation runner requires POSIX process-group cleanup")
 class RunnerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -144,7 +146,7 @@ class RunnerTests(unittest.TestCase):
              patch.object(mutation, "resolve", return_value=self.binding), \
              patch.object(mutation, "copy_revision", side_effect=copy), \
              patch.object(mutation.tempfile, "gettempdir", return_value=str(self.base)), \
-             patch.object(mutation.os, "uname", return_value=unittest.mock.Mock(sysname="Linux")), \
+             patch.object(mutation.sys, "platform", "linux"), \
              patch.object(mutation.subprocess, "Popen", side_effect=popen), \
              patch.object(mutation.os, "killpg", side_effect=ProcessLookupError), \
              patch.dict(os.environ, {"CARGO_BUILD_JOBS": "2", "RUST_TEST_THREADS": "2"}), \

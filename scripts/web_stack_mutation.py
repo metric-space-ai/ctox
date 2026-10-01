@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -77,11 +78,13 @@ def direct_package(metadata, root):
 
 
 def run_mutation(root, binding):
+    if os.name != "posix":
+        raise BindingError("isolated mutation requires Linux/macOS process-group cleanup")
     before = source_state(root)
     if capture(["git", "status", "--porcelain"], root):
         raise BindingError("mutation probe requires a committed clean source checkout")
     temporary_base = Path(tempfile.gettempdir()).resolve()
-    if os.uname().sysname == "Darwin" and not str(temporary_base).startswith("/Volumes/tmp/"):
+    if sys.platform == "darwin" and not str(temporary_base).startswith("/Volumes/tmp/"):
         raise BindingError("set TMPDIR on /Volumes/tmp before the mutation probe")
     # A retained task-owned evidence directory, not a background watcher.
     directory = Path(tempfile.mkdtemp(prefix="web-stack-mutation-", dir=temporary_base))

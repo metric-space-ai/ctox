@@ -36,6 +36,8 @@ unexecuted control. Child process groups have bounded lifetimes and retained
 logs in the evidence directory. The operator root, lock, runtime and shared
 Cargo Git cache remain unchanged. Local compilation/browser preparation still
 requires shared admission; set `TMPDIR` on `/Volumes/tmp` on the operator Mac.
+The mutation runner supports Linux/macOS process-group cleanup. This does not
+remove Windows standalone/platform diagnostics or other source-bound checks.
 
 Standalone mirror checks via its local manifest remain available for explicit
 mirror/platform diagnostics. Preserve this directory: dynamic `scrape-targets`
