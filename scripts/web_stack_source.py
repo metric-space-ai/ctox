@@ -22,7 +22,7 @@ class BindingError(RuntimeError):
 
 def capture(command, root):
     result = subprocess.run(command, cwd=root, text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE)
+                            stderr=subprocess.PIPE, timeout=120)
     if result.returncode:
         # Cargo diagnostics go to stderr; never convert resolution failure into
         # a local-manifest fallback.
@@ -182,7 +182,7 @@ def build_daemon(root, binding):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=["describe", "build", "test", "daemon-build",
-                                           "daemon-path", "mutation-check"])
+                                           "daemon-path", "mutation-check", "mutation-probe"])
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     root = Path(__file__).resolve().parent.parent
@@ -202,12 +202,15 @@ def main(argv=None):
             return build_daemon(root, binding)
         if args.action == "daemon-path":
             print(verified_binary(root, binding))
+        elif args.action == "mutation-probe":
+            from web_stack_mutation import run_mutation
+            return run_mutation(root, binding)
         elif args.action == "mutation-check":
             check_mutation_asset(root, binding)
         else:
             print(json.dumps(binding, indent=2))
         return 0
-    except (BindingError, ValueError, KeyError, OSError) as error:
+    except (BindingError, ValueError, KeyError, OSError, subprocess.TimeoutExpired) as error:
         print("web-stack source binding failed: %s" % error, file=sys.stderr)
         return 1
 

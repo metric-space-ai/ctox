@@ -24,6 +24,8 @@ on:
       - 'Cargo.lock'
       - 'scripts/web_stack_source.py'
       - 'scripts/test_web_stack_source.py'
+      - 'scripts/web_stack_mutation.py'
+      - 'scripts/test_web_stack_mutation.py'
       - '.github/workflows/web-search.yml'
   pull_request:
     branches: [main]
@@ -36,6 +38,8 @@ on:
       - 'Cargo.lock'
       - 'scripts/web_stack_source.py'
       - 'scripts/test_web_stack_source.py'
+      - 'scripts/web_stack_mutation.py'
+      - 'scripts/test_web_stack_mutation.py'
       - '.github/workflows/web-search.yml'
   workflow_dispatch:
     inputs:
@@ -80,7 +84,7 @@ jobs:
             jq sqlite3
 
       - name: Test web-stack source binding
-        run: python3 scripts/test_web_stack_source.py
+        run: python3 -m unittest discover -s scripts -p 'test_web_stack*.py'
 
       - name: Build ctox
         run: python3 scripts/web_stack_source.py daemon-build

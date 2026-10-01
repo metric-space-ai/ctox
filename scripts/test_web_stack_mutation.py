@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""Mutation runner contract tests; no compilation, network or real browser."""
+import contextlib
+import io
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import web_stack_mutation as mutation
+
+
+class ProbeTests(unittest.TestCase):
+    def test_marker_requires_exactly_one_known_opening(self):
+        original = (mutation.MARKER + "\n})();").encode()
+        self.assertIn(b"return; /* e2e-sabotage */", mutation.mutated_bytes(original))
+        for malformed in (b"different script", original + original):
+            with self.assertRaises(mutation.BindingError):
+                mutation.mutated_bytes(malformed)
+
+    def test_negative_requires_real_test_failures(self):
+        cases = [("not JSON", 1), ('{"error":"network timeout"}', 1),
+                 ('{"probes":[]}', 1),
+                 ('{"probes":[{"failed_count":true,"failed_tests":["webdriver"]}]}', 1),
+                 ('{"probes":[{"failed_count":1,"failed_tests":[]}]}', 1),
+                 ('{"probes":[{"failed_count":1,"failed_tests":["webdriver"]}]}', 0),
+                 ('{"probes":[{"failed_count":0}]}', 1)]
+        for stdout, code in cases:
+            with self.subTest(stdout=stdout, code=code), self.assertRaises(mutation.BindingError):
+                mutation.require_probe(stdout, code, True)
+        valid = json.dumps({"probes": [{"failed_count": 1, "failed_tests": ["webdriver"]}]})
+        self.assertEqual(mutation.require_probe(valid, 1, True)["failed_count"], 1)
+
+    def test_positive_requires_zero_exit_and_zero_failures(self):
+        payload = json.dumps({"probes": [{"failed_count": 0, "failed_tests": []}]})
+        self.assertEqual(mutation.require_probe(payload, 0, False)["exit"], 0)
+        with self.assertRaises(mutation.BindingError):
+            mutation.require_probe(payload, 1, False)
+
+    def test_local_copy_preserves_selected_old_revision_and_symlink(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "origin"
+            root.mkdir()
+            def git(*args):
+                return subprocess.run(["git", *args], cwd=root, check=True, text=True,
+                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE).stdout.strip()
+            git("init", "--quiet")
+            (root / "source").write_text("first")
+            (root / "link").symlink_to("source")
+            git("add", ".")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "--quiet", "-m", "first")
+            old = git("rev-parse", "HEAD")
+            (root / "source").write_text("second")
+            git("-c", "user.name=Test", "-c", "user.email=test@example.test",
+                "commit", "--quiet", "-am", "second")
+            current = git("rev-parse", "HEAD")
+            copied = Path(tmp) / "copy"
+            mutation.copy_revision(root, old, copied)
+            self.assertEqual((copied / "source").read_text(), "first")
+            self.assertTrue((copied / "link").is_symlink())
+            self.assertEqual(subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=copied, text=True).strip(), old)
+            self.assertEqual(git("rev-parse", "HEAD"), current)
+            self.assertEqual(git("status", "--porcelain"), "")
+
+
+class RunnerTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+        self.root = self.base / "operator"
+        self.root.mkdir()
+        self.checkout = self.base / "cargo-checkout"
+        self.canonical = self.checkout / "native/web-stack/Cargo.toml"
+        self.canonical.parent.mkdir(parents=True)
+        self.canonical.write_text("canonical manifest")
+        self.original = (mutation.MARKER + "\n})();").encode()
+        assets = self.canonical.parent / "assets"
+        assets.mkdir()
+        (assets / "stealth_init.js").write_bytes(self.original)
+        self.binding = {"manifest": str(self.canonical), "revision": "b" * 40,
+                        "source": "https://github.com/metric-space-ai/workjet#" + "b" * 40}
+        self.probes = []
+        self.commands = []
+        self.asset = None
+        self.sandbox = None
+
+    def run_fake(self, negative="failed", wrong_package=False, changed_root=False):
+        def copy(checkout, revision, destination, deadline):
+            destination.mkdir()
+            if destination.name == "ctox":
+                (destination / "Cargo.toml").write_text("root manifest")
+                (destination / "Cargo.lock").write_text("isolated lock")
+            else:
+                manifest = destination / "native/web-stack/Cargo.toml"
+                manifest.parent.mkdir(parents=True)
+                manifest.write_text("canonical manifest")
+                self.asset = manifest.parent / "assets/stealth_init.js"
+                self.asset.parent.mkdir()
+                self.asset.write_bytes(self.original)
+            self.sandbox = destination.parent
+        def popen(command, **kwargs):
+            self.commands.append(command)
+            label = Path(kwargs["stdout"].name).stem
+            process = unittest.mock.Mock(pid=987654)
+            process.wait.return_value = 0
+            root = Path(kwargs["cwd"])
+            if label == "resolve-isolated":
+                metadata = {"packages": [
+                    {"id": "root", "name": "ctox", "manifest_path": str(root / "Cargo.toml")},
+                    {"id": "copied", "name": "ctox-web-stack", "source": None,
+                     "manifest_path": str(self.asset.parent.parent / "Cargo.toml") if not wrong_package else str(self.canonical)}],
+                    "resolve": {"nodes": [{"id": "root", "deps": [{"name": "ctox_web_stack", "pkg": "copied"}]}]}}
+                json.dump(metadata, kwargs["stdout"])
+            elif label.startswith("build-"):
+                executable = self.sandbox / "target/debug/ctox"
+                executable.parent.mkdir(parents=True, exist_ok=True)
+                executable.write_bytes(b"compiled:" + self.asset.read_bytes())
+                for artifact in ({"reason": "compiler-artifact", "package_id": "copied"},
+                                 {"reason": "compiler-artifact", "package_id": "root", "target": {"name": "ctox"}, "executable": str(executable)}):
+                    kwargs["stdout"].write(json.dumps(artifact) + "\n")
+            elif label.endswith("positive") or label == "mutated-negative":
+                self.probes.append(label)
+                if label == "mutated-negative" and negative == "interrupted":
+                    process.wait.side_effect = [KeyboardInterrupt("cancelled"), 0]
+                elif label == "mutated-negative" and negative == "malformed":
+                    kwargs["stdout"].write('{"error":"network"}')
+                    process.wait.return_value = 1
+                else:
+                    failed = label == "mutated-negative" and negative == "failed"
+                    json.dump({"probes": [{"failed_count": int(failed), "failed_tests": ["webdriver"] if failed else []}]}, kwargs["stdout"])
+                    process.wait.return_value = int(failed)
+            self.assertEqual(kwargs["env"]["CARGO_BUILD_JOBS"], "2")
+            self.assertEqual(kwargs["env"]["CTOX_STATE_ROOT"], str(root / "runtime"))
+            return process
+        states = [{"head": "a" * 40}, {"head": "c" * 40 if changed_root else "a" * 40}]
+        old_handler = signal.getsignal(signal.SIGTERM)
+        with patch.object(mutation, "source_state", side_effect=states), \
+             patch.object(mutation, "capture", side_effect=["", str(self.checkout)]), \
+             patch.object(mutation, "resolve", return_value=self.binding), \
+             patch.object(mutation, "copy_revision", side_effect=copy), \
+             patch.object(mutation.tempfile, "gettempdir", return_value=str(self.base)), \
+             patch.object(mutation.os, "uname", return_value=unittest.mock.Mock(sysname="Linux")), \
+             patch.object(mutation.subprocess, "Popen", side_effect=popen), \
+             patch.object(mutation.os, "killpg", side_effect=ProcessLookupError), \
+             patch.dict(os.environ, {"CARGO_BUILD_JOBS": "2", "RUST_TEST_THREADS": "2"}), \
+             contextlib.redirect_stdout(io.StringIO()):
+            try:
+                result = mutation.run_mutation(self.root, self.binding)
+                error = None
+            except BaseException as exc:
+                result, error = None, exc
+        self.assertEqual(signal.getsignal(signal.SIGTERM), old_handler)
+        self.assertEqual(self.asset.read_bytes(), self.original)
+        self.assertEqual((self.canonical.parent / "assets/stealth_init.js").read_bytes(), self.original)
+        receipt = json.loads((self.sandbox / "result.json").read_text())
+        return result, error, receipt
+
+    def test_full_cycle_isolates_source_and_checks_restored_control(self):
+        result, error, receipt = self.run_fake()
+        self.assertIsNone(error)
+        self.assertEqual(result, 0)
+        self.assertTrue(receipt["passed"])
+        self.assertTrue(receipt["original_binding_unchanged"])
+        self.assertTrue(receipt["asset_restored"])
+        self.assertEqual(self.probes, ["initial-positive", "mutated-negative", "restored-positive"])
+        self.assertNotEqual(receipt["build-mutated"]["sha256"], receipt["build-initial"]["sha256"])
+        self.assertEqual(receipt["build-restored"]["sha256"], receipt["build-initial"]["sha256"])
+        self.assertTrue(any("--config" in command and "--locked" in command for command in self.commands))
+
+    def test_malformed_negative_still_runs_restored_positive_and_fails(self):
+        result, error, receipt = self.run_fake(negative="malformed")
+        self.assertIsInstance(error, mutation.BindingError)
+        self.assertFalse(receipt["passed"])
+        self.assertIn("restored-positive", self.probes)
+
+    def test_unexpected_mutation_pass_still_runs_control_and_fails(self):
+        _, error, receipt = self.run_fake(negative="passed")
+        self.assertIsInstance(error, mutation.BindingError)
+        self.assertFalse(receipt["passed"])
+        self.assertIn("restored-positive", self.probes)
+
+    def test_cancel_restores_asset_without_claiming_a_control(self):
+        _, error, receipt = self.run_fake(negative="interrupted")
+        self.assertIsInstance(error, KeyboardInterrupt)
+        self.assertTrue(receipt["asset_restored"])
+        self.assertFalse(receipt["passed"])
+        self.assertNotIn("restored-positive", self.probes)
+
+    def test_wrong_isolated_dependency_fails_before_build_and_probe(self):
+        _, error, receipt = self.run_fake(wrong_package=True)
+        self.assertIsInstance(error, mutation.BindingError)
+        self.assertFalse(receipt["passed"])
+        self.assertEqual(self.probes, [])
+
+    def test_changed_operator_source_invalidates_otherwise_passing_cycle(self):
+        result, error, receipt = self.run_fake(changed_root=True)
+        self.assertIsNone(error)
+        self.assertEqual(result, 1)
+        self.assertFalse(receipt["passed"])
+        self.assertFalse(receipt["original_root_unchanged"])
+
+
+if __name__ == "__main__":
+    unittest.main()

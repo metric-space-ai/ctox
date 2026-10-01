@@ -8,6 +8,8 @@ on:
       - "Cargo.lock"
       - "scripts/web_stack_source.py"
       - "scripts/test_web_stack_source.py"
+      - "scripts/web_stack_mutation.py"
+      - "scripts/test_web_stack_mutation.py"
       - "src/tools/appsec-pentest/**"
       - "src/skills/packs/security/appsec-pentest/**"
   schedule:
@@ -148,7 +150,7 @@ jobs:
           }
 
       - name: Test web-stack source binding
-        run: python scripts/test_web_stack_source.py
+        run: python -m unittest discover -s scripts -p 'test_web_stack*.py'
 
       - name: Build focused deployment audit CLIs
         run: |

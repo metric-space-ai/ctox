@@ -23,11 +23,19 @@ The E2E scripts require the `daemon-build` receipt and verify source state and
 binary checksum before choosing a daemon, rather than borrowing an old binary
 from another target directory.
 
-The real stealth-mutation stage currently fails before runtime writes: its
-legacy mutation targets this mirror, which is not embedded in the daemon.
-It requires an isolated mutation of the effective canonical source plus a
-failing probe and restored positive control. No passing mutation evidence is
-claimed; the tool never edits a shared Cargo Git cache.
+The real stealth-mutation stage uses `python3 scripts/web_stack_source.py
+mutation-probe` (also the `--stage2` E2E entrypoint). It copies the committed
+root revision and resolved canonical Workjet revision into a task-owned
+`TMPDIR` sandbox. Only that copy receives a Cargo path patch and isolated
+lockfile. Each daemon build must report the copied dependency artifact; the
+runner records executable, asset and lock checksums. It requires an initial
+positive probe, actual failed tests after mutation, then restoration, rebuild
+and a positive control. A malformed/network failure still fails the run after
+the restored control; cancellation restores the asset without claiming an
+unexecuted control. Child process groups have bounded lifetimes and retained
+logs in the evidence directory. The operator root, lock, runtime and shared
+Cargo Git cache remain unchanged. Local compilation/browser preparation still
+requires shared admission; set `TMPDIR` on `/Volumes/tmp` on the operator Mac.
 
 Standalone mirror checks via its local manifest remain available for explicit
 mirror/platform diagnostics. Preserve this directory: dynamic `scrape-targets`
