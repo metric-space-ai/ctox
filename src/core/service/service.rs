@@ -35498,6 +35498,154 @@ Business OS command:
         Ok(())
     }
 
+    #[test]
+    fn review_evidence_completed_plan_survives_writeback_ack_recovery() -> anyhow::Result<()> {
+        let name = "review-plan-complete-ack-recovery";
+        let (root, job, attempt_id) = incomplete_plan_queue_fixture(name)?;
+        let db_path = crate::paths::core_db(&root);
+        let work_key = worker_attempt_work_key(&job);
+        let task_id = &job.leased_message_keys[0];
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+        engine.record_task_execution_plan(lcm::TaskExecutionPlanUpdate {
+            work_key: &work_key,
+            task_id,
+            command_id: name,
+            attempt_id: &attempt_id,
+            explanation: Some("Both required steps are saved before review"),
+            steps: &[
+                lcm::TaskExecutionPlanStepInput {
+                    label: "Save research chunk".into(),
+                    status: "completed".into(),
+                },
+                lcm::TaskExecutionPlanStepInput {
+                    label: "Verify remaining fields".into(),
+                    status: "completed".into(),
+                },
+            ],
+        })?;
+        engine.prepare_task_execution_review(&work_key)?;
+        let evidence = collect_review_evidence_summaries(
+            &root,
+            &job,
+            7410,
+            &[],
+            &CommandWritebackProbe::NotRequired,
+        );
+        let plan = evidence
+            .iter()
+            .find(|line| line.contains("target=task_execution_plan_revisions"))
+            .expect("the actual reviewer collector includes the persisted completed plan");
+        assert!(plan.contains(&format!("task_id={task_id:?}")), "{plan}");
+        assert!(plan.contains(&format!("command_id={name:?}")), "{plan}");
+        assert!(
+            plan.contains("review_status=in_progress completed=2/2"),
+            "{plan}"
+        );
+        assert!(plan.contains("Verify remaining fields=completed"), "{plan}");
+        assert!(
+            accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None,)?
+                .is_none()
+        );
+
+        // The review verdict is an explicit fixture, not inferred from the
+        // completed plan or supplied by a model. Exercise native completion.
+        channels::record_business_command_review(
+            &root,
+            task_id,
+            "passed",
+            "passed",
+            &json!({"fixture":true, "durable_plan_evidence":plan}),
+        )?;
+        engine.set_task_execution_review_status(&work_key, "completed")?;
+        let progress_before = engine.task_execution_progress(&work_key)?.unwrap();
+        let writeback_calls = std::cell::Cell::new(0usize);
+        let first = apply_business_command_writebacks_for_attempt(
+            &root,
+            &db_path,
+            &attempt_id,
+            &job.leased_message_keys,
+            || {
+                writeback_calls.set(writeback_calls.get() + 1);
+                Ok(
+                    crate::business_os::store::complete_business_command_from_queue_reply(
+                        &root,
+                        task_id,
+                        "Saved partial research result",
+                    )?
+                    .is_some() as usize,
+                )
+            },
+        )?;
+        assert_eq!(first, 1);
+        assert_eq!(route_status_for(&root, task_id), "handled");
+        let terminal_before: (String, Option<String>) = channels::open_channel_db(&db_path)?
+            .query_row(
+                "SELECT updated_at, acked_at FROM communication_routing_state WHERE message_key=?1",
+                [task_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+        assert!(terminal_before.1.is_some());
+        assert!(
+            engine
+                .worker_attempt(&attempt_id)?
+                .unwrap()
+                .queue_effects_applied_at
+                .is_none(),
+            "simulate a crash after the command writeback ack but before its attempt marker"
+        );
+        drop(engine);
+
+        let reopened = LcmEngine::open(&db_path, LcmConfig::default())?;
+        let resumed = reopened.recoverable_worker_attempt(&work_key)?.unwrap();
+        assert_eq!(resumed.attempt_id, attempt_id, "reuse the saved attempt");
+        let replayed = apply_business_command_writebacks_for_attempt(
+            &root,
+            &db_path,
+            &attempt_id,
+            &job.leased_message_keys,
+            || {
+                writeback_calls.set(writeback_calls.get() + 1);
+                Ok(
+                    crate::business_os::store::complete_business_command_from_queue_reply(
+                        &root,
+                        task_id,
+                        "Saved partial research result",
+                    )?
+                    .is_some() as usize,
+                )
+            },
+        )?;
+        assert_eq!(replayed, 0);
+        assert_eq!(writeback_calls.get(), 1, "no second native writeback");
+        assert!(reopened
+            .worker_attempt(&attempt_id)?
+            .unwrap()
+            .queue_effects_applied_at
+            .is_some());
+        assert_eq!(
+            reopened.task_execution_progress(&work_key)?.unwrap(),
+            progress_before,
+            "recovery must preserve the approved durable plan"
+        );
+        let conn = channels::open_channel_db(&db_path)?;
+        let terminal_after: (String, Option<String>) = conn.query_row(
+            "SELECT updated_at, acked_at FROM communication_routing_state WHERE message_key=?1",
+            [task_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(
+            terminal_after, terminal_before,
+            "no terminal timestamp rewrite"
+        );
+        let completions: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_command_transitions WHERE command_id=?1 AND reason='command-specific writeback completed after review and validation'",
+            [name], |row| row.get(0),
+        )?;
+        assert_eq!(completions, 1);
+        assert!(channels::lease_queue_task(&root, task_id, CHANNEL_ROUTER_LEASE_OWNER).is_err());
+        Ok(())
+    }
+
     fn incomplete_plan_queue_fixture(
         name: &str,
     ) -> anyhow::Result<(PathBuf, QueuedPrompt, String)> {
