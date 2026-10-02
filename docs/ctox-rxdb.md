@@ -1,5 +1,18 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Fresh native schema initialization
+
+Before dispatching native Business OS commands into a fresh root, run
+`ctox business-os rxdb init --root <source-root>`. This registers the compiled
+canonical native schemas and verifies every collection handle, including
+optional collections. It creates no domain records or Business OS app, starts
+no peer, and makes no WebRTC readiness claim. Repeating it preserves existing
+records. Schema drift that skips an optional collection fails initialization;
+this command does not silently repair or erase incompatible data.
+
+A fixture that already has empty canonical tables proves command behavior
+after initialization; it does not prove fresh-root bootstrap.
+
 ### Workjet project list readiness
 
 Project control starts its three collection bridges concurrently. The command

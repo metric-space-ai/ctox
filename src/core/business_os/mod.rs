@@ -97,6 +97,7 @@ pub fn audit_customer_apps(root: &std::path::Path) -> anyhow::Result<serde_json:
 pub(crate) use browser_runtime::BrowserSessionAutomationRequest;
 pub use outbound_update_digest::tick as outbound_update_digest_tick;
 pub use rxdb_peer::enqueue_business_command_document;
+pub use rxdb_peer::initialize_business_os_rxdb;
 pub use rxdb_peer::native_peer_status;
 pub use rxdb_peer::repair_optional_rxdb_collection_schema_drift;
 pub use rxdb_peer::run_native_peer_foreground;
