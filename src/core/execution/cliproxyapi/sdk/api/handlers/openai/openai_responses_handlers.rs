@@ -21,7 +21,7 @@ use crate::internal::translator::claude::openai::responses::{
     convert_openai_responses_request_to_claude, ClaudeResponsesStreamDecoder,
 };
 use crate::sdk::api::handlers::responses_sse_framer::{
-    is_codex_responses_client, repair_responses_sse_frame, responses_transport_failure_frame,
+    is_codex_responses_client, responses_transport_failure_frame, ResponsesSseFramer,
 };
 use crate::sdk::translator::TranslationContext;
 
@@ -564,6 +564,7 @@ pub enum OpenAiResponsesRouteResponse {
 
 pub struct OpenAiResponsesAntigravityStream {
     upstream: AntigravityTrackedResponsesStream,
+    framer: ResponsesSseFramer,
     terminal: bool,
     emitted_failure: bool,
     codex_client: bool,
@@ -573,6 +574,7 @@ impl OpenAiResponsesAntigravityStream {
     fn new(upstream: AntigravityTrackedResponsesStream) -> Self {
         Self {
             upstream,
+            framer: ResponsesSseFramer::new(false),
             terminal: false,
             emitted_failure: false,
             codex_client: false,
@@ -581,6 +583,7 @@ impl OpenAiResponsesAntigravityStream {
 
     fn with_codex_client(mut self, codex_client: bool) -> Self {
         self.codex_client = codex_client;
+        self.framer = ResponsesSseFramer::new(codex_client);
         self
     }
 
@@ -588,28 +591,54 @@ impl OpenAiResponsesAntigravityStream {
         if self.terminal {
             return None;
         }
-        match self.upstream.next_event().await {
-            Some(Ok(mut chunk)) => {
-                if chunk.starts_with(b"event: response.completed\n")
-                    || chunk.starts_with(b"event: response.incomplete\n")
-                {
-                    self.terminal = true;
-                } else if chunk.starts_with(b"event: response.failed\n")
-                    || chunk.starts_with(b"event: error\n")
-                {
-                    redact_provider_stream_failure_message(
-                        &mut chunk,
-                        "Antigravity upstream stream failed",
-                    );
-                    chunk = repair_responses_sse_frame(&chunk, self.codex_client);
-                    self.terminal = true;
-                    self.upstream.record_terminal_failure().await;
+        loop {
+            match self.upstream.next_event().await {
+                Some(Ok(mut chunk)) => {
+                    if chunk.is_empty() {
+                        return Some(chunk);
+                    }
+                    if chunk.starts_with(b"event: response.failed\n")
+                        || chunk.starts_with(b"event: error\n")
+                    {
+                        redact_provider_stream_failure_message(
+                            &mut chunk,
+                            "Antigravity upstream stream failed",
+                        );
+                    }
+                    let emitted = self.framer.write_chunk(&chunk);
+                    if self.framer.is_failure() {
+                        self.terminal = true;
+                        self.emitted_failure = true;
+                        self.upstream.record_terminal_failure().await;
+                    } else if self.framer.is_terminal() {
+                        self.terminal = true;
+                    }
+                    if !emitted.is_empty() {
+                        return Some(emitted);
+                    }
+                    if self.terminal {
+                        return None;
+                    }
                 }
-                Some(chunk)
+                Some(Err(_)) => return self.failure_chunk().await,
+                None => {
+                    let flushed = self.framer.flush();
+                    if self.framer.is_failure() {
+                        self.terminal = true;
+                        self.emitted_failure = true;
+                        self.upstream.record_terminal_failure().await;
+                    } else if self.framer.is_terminal() {
+                        self.terminal = true;
+                    }
+                    if !flushed.is_empty() {
+                        return Some(flushed);
+                    }
+                    if self.terminal {
+                        return None;
+                    }
+                    return self.failure_chunk().await;
+                }
             }
-            Some(Err(_)) => self.failure_chunk().await,
-            None if self.terminal => None,
-            None => self.failure_chunk().await,
         }
     }
 
@@ -618,12 +647,14 @@ impl OpenAiResponsesAntigravityStream {
             self.terminal = true;
             return None;
         }
+        let sequence = self.framer.data_frames();
         self.emitted_failure = true;
         self.terminal = true;
         self.upstream.record_terminal_failure().await;
         Some(responses_transport_failure_frame(
             "Antigravity upstream stream failed",
             self.codex_client,
+            sequence,
         ))
     }
 }
@@ -642,6 +673,7 @@ impl std::fmt::Debug for OpenAiResponsesAntigravityStream {
 pub struct OpenAiResponsesCodexStream {
     upstream: CodexTrackedResponsesStreamResponse,
     decoder: crate::internal::translator::common::SseDecoder,
+    framer: ResponsesSseFramer,
     pending: VecDeque<Vec<u8>>,
     terminal: bool,
     emitted_failure: bool,
@@ -653,6 +685,7 @@ impl OpenAiResponsesCodexStream {
         Self {
             upstream,
             decoder: crate::internal::translator::common::SseDecoder::new(),
+            framer: ResponsesSseFramer::new(false),
             pending: VecDeque::new(),
             terminal: false,
             emitted_failure: false,
@@ -662,6 +695,7 @@ impl OpenAiResponsesCodexStream {
 
     fn with_codex_client(mut self, codex_client: bool) -> Self {
         self.codex_client = codex_client;
+        self.framer = ResponsesSseFramer::new(codex_client);
         self
     }
 
@@ -691,6 +725,16 @@ impl OpenAiResponsesCodexStream {
                     if failed {
                         self.upstream.record_terminal_failure().await;
                     }
+                    let flushed = self.framer.flush();
+                    if self.framer.is_terminal() {
+                        self.terminal = true;
+                    }
+                    if self.framer.is_failure() {
+                        self.upstream.record_terminal_failure().await;
+                    }
+                    if !flushed.is_empty() {
+                        self.pending.push_back(flushed);
+                    }
                     if let Some(chunk) = self.pending.pop_front() {
                         return Some(chunk);
                     }
@@ -711,27 +755,26 @@ impl OpenAiResponsesCodexStream {
         let mut failed = false;
         for mut event in events {
             if let Ok(mut value) = serde_json::from_slice::<Value>(&event.data) {
-                match value.get("type").and_then(Value::as_str) {
-                    Some("response.completed" | "response.incomplete") => self.terminal = true,
-                    Some("response.failed" | "error") => {
-                        self.terminal = true;
-                        failed = true;
-                        redact_json_messages(&mut value, "Codex upstream stream failed");
-                        if let Ok(data) = serde_json::to_vec(&value) {
-                            event.data = data;
-                        }
+                if matches!(
+                    value.get("type").and_then(Value::as_str),
+                    Some("response.failed" | "error")
+                ) {
+                    redact_json_messages(&mut value, "Codex upstream stream failed");
+                    if let Ok(data) = serde_json::to_vec(&value) {
+                        event.data = data;
                     }
-                    _ => {}
                 }
             }
-            let encoded = repair_responses_sse_frame(&encode_sse_event(&event), self.codex_client);
-            if encoded.starts_with(b"event: response.failed\n")
-                || encoded.starts_with(b"event: error\n")
-            {
+            let encoded = self.framer.write_chunk(&encode_sse_event(&event));
+            if self.framer.is_terminal() {
                 self.terminal = true;
+            }
+            if self.framer.is_failure() {
                 failed = true;
             }
-            self.pending.push_back(encoded);
+            if !encoded.is_empty() {
+                self.pending.push_back(encoded);
+            }
         }
         failed
     }
@@ -741,12 +784,14 @@ impl OpenAiResponsesCodexStream {
             self.terminal = true;
             return None;
         }
+        let sequence = self.framer.data_frames();
         self.emitted_failure = true;
         self.terminal = true;
         self.upstream.record_terminal_failure().await;
         Some(responses_transport_failure_frame(
             "Codex upstream stream failed",
             self.codex_client,
+            sequence,
         ))
     }
 }
@@ -814,6 +859,7 @@ pub struct OpenAiResponsesStreamBootstrap {
     upstream: ClaudeTrackedMessagesStreamResponse,
     context: TranslationContext,
     decoder: ClaudeResponsesStreamDecoder,
+    framer: ResponsesSseFramer,
     pending: VecDeque<Vec<u8>>,
     terminal: bool,
     failed: bool,
@@ -836,6 +882,7 @@ impl OpenAiResponsesStreamBootstrap {
             upstream,
             context: TranslationContext::default(),
             decoder: ClaudeResponsesStreamDecoder::new(),
+            framer: ResponsesSseFramer::new(codex_client),
             pending: VecDeque::new(),
             terminal: false,
             failed: false,
@@ -882,6 +929,16 @@ impl OpenAiResponsesStreamBootstrap {
                         &self.translated_request,
                     );
                     self.enqueue(output);
+                    let flushed = self.framer.flush();
+                    if self.framer.is_terminal() {
+                        self.terminal = true;
+                    }
+                    if self.framer.is_failure() {
+                        self.failed = true;
+                    }
+                    if !flushed.is_empty() {
+                        self.pending.push_back(flushed);
+                    }
                     if self.failed {
                         self.upstream.record_terminal_failure().await;
                     }
@@ -898,19 +955,16 @@ impl OpenAiResponsesStreamBootstrap {
     fn enqueue(&mut self, chunks: Vec<Vec<u8>>) {
         for mut chunk in chunks {
             redact_stream_failure_message(&mut chunk);
-            let chunk = repair_responses_sse_frame(&chunk, self.codex_client);
-            if chunk.starts_with(b"event: response.completed\n")
-                || chunk.starts_with(b"event: response.failed\n")
-                || chunk.starts_with(b"event: error\n")
-            {
+            let emitted = self.framer.write_chunk(&chunk);
+            if self.framer.is_terminal() {
                 self.terminal = true;
             }
-            if chunk.starts_with(b"event: response.failed\n")
-                || chunk.starts_with(b"event: error\n")
-            {
+            if self.framer.is_failure() {
                 self.failed = true;
             }
-            self.pending.push_back(chunk);
+            if !emitted.is_empty() {
+                self.pending.push_back(emitted);
+            }
         }
     }
 

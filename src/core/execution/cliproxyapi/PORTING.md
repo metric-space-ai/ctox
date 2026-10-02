@@ -135,9 +135,15 @@ the accepted pin:
   `request.tools`, which upstream's top-level walk does not see. Codex
   Responses clients still do not integer-normalize their own target.
 - Non-Codex Responses clients receive nested `event: error` stream failures.
-  A Codex user agent or official Originator still receives
-  `event: response.failed`. Private-event filtering and completed-payload
-  repair are not ported.
+  A Codex user agent or official Originator (`Codex Desktop/`, `codex-tui/`,
+  `codex_cli_rs`, `codex_exec/`, or the matching Originator) still receives
+  `event: response.failed`. The live Responses framer now buffers split
+  frames, drops `responsesapi.*` timing events, drops `codex.*` events for
+  other clients, keeps `codex.response.metadata` for an official Codex
+  client while still dropping `codex.rate_limits`, and fills an empty
+  `response.output` from earlier `response.output_item.done` items.
+  `responsesStreamErrorText` sanitizing inside the framer is still the
+  handler redaction that runs before the frame is repaired.
 - Kimi reorders interleaved Responses tool outputs before chat translation.
   The Responses `apply_patch` bridge is not ported.
 - API-key model-compatibility helpers integer-normalize before the host
