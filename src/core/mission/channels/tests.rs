@@ -6060,6 +6060,64 @@ fn business_command_claim(command_id: &str, payload_hash: &str) -> BusinessComma
 }
 
 #[test]
+fn native_app_origin_survives_children_and_rejects_metadata_spoofing() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let request = |title: &str, parent: Option<String>| QueueTaskCreateRequest {
+        title: title.to_string(),
+        prompt: "Perform the bounded task.".to_string(),
+        thread_key: format!("origin/{title}"),
+        workspace_root: None,
+        priority: "normal".to_string(),
+        suggested_skill: None,
+        parent_message_key: parent,
+        extra_metadata: Some(
+            json!({"business_os_origin":{"command_id":"forged","module":"foreign-app"}}),
+        ),
+    };
+    let mut claim = business_command_claim("origin-command", "sha256:origin");
+    claim.module = "inventory".to_string();
+    let admitted = claim_business_command_with_queue(root.path(), claim, request("root", None))?;
+    let expected = json!({"command_id":"origin-command","module":"inventory"});
+    assert_eq!(admitted.task.metadata["business_os_origin"], expected);
+    let child = create_queue_task(
+        root.path(),
+        request("review", Some(admitted.task.message_key.clone())),
+    )?;
+    let continuation = create_queue_task(
+        root.path(),
+        request("continue", Some(child.message_key.clone())),
+    )?;
+    assert_eq!(child.metadata["business_os_origin"], expected);
+    assert_eq!(continuation.metadata["business_os_origin"], expected);
+    let mut child_claim = business_command_claim("review-command", "sha256:review");
+    child_claim.module = "ctox".to_string();
+    let child_command = claim_business_command_with_queue(
+        root.path(),
+        child_claim,
+        request("linked-review", Some(child.message_key)),
+    )?;
+    let after_review = create_queue_task(
+        root.path(),
+        request("after-review", Some(child_command.task.message_key)),
+    )?;
+    assert_eq!(
+        after_review.metadata["business_os_origin"], expected,
+        "a child command's execution module must not replace the originating app"
+    );
+    // Older roots have a canonical command link but no new metadata stamp.
+    let conn = open_channel_db(&crate::paths::core_db(root.path()))?;
+    conn.execute("UPDATE communication_messages SET metadata_json=json_remove(metadata_json,'$.business_os_origin') WHERE message_key=?1", [&admitted.task.message_key])?;
+    let legacy_child = create_queue_task(
+        root.path(),
+        request("legacy", Some(admitted.task.message_key)),
+    )?;
+    assert_eq!(legacy_child.metadata["business_os_origin"], expected);
+    let unlinked = create_queue_task(root.path(), request("unlinked", None))?;
+    assert!(unlinked.metadata.get("business_os_origin").is_none());
+    Ok(())
+}
+
+#[test]
 fn business_command_queue_claim_is_atomic_and_idempotent() {
     let root = business_command_test_root("ctox-business-command-queue-claim");
     let request = || QueueTaskCreateRequest {

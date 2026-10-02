@@ -2405,6 +2405,30 @@ Each has shipped (or would ship) real production breakage.
 
 ### Cockpit projections (PR-1)
 
+#### App origin and current execution
+
+`ctox_queue_tasks.source_module` identifies the originating app; `module=ctox`
+identifies the queue surface and must not be used as that origin. Native command
+admission stamps private queue metadata with its accepted command ID and module.
+Child/review/continuation tasks with an explicit parent inherit that stamp in
+the same tenant's core transaction. Legacy parent roots resolve through their
+canonical command/task link. Caller-supplied origin metadata is discarded.
+Queue edits and retry/terminal transitions retain the origin; unrelated tasks
+without an admitted parent remain unattributed rather than adopting an open app.
+
+The existing command projection associates `command_id`, `module`,
+`task_id`/`execution_task_id` and `execution_phase`. Queue rows associate their
+task ID, numeric `attempt`, `crew_member_id`, `lease_worker_id` and expiring lease.
+`status=running` alone means leased. Current worker snapshots publish
+`ctox_harness_status.active_task_ids`; finalized `ctox_runs.id` is an attempt ID,
+not evidence of current execution. Replaying a persisted status keeps diagnostics
+but clears service/busy/active-worker/task claims until a live worker publication.
+These existing projections do not yet expose
+a per-attempt live snapshot fence. A consumer must show unknown when it cannot
+bind the current task/attempt, lease, terminal state and fresh connected native
+generation; app visibility, queue length or process liveness cannot fill that
+gap. No new collection, permission grant or HTTP bridge is introduced here.
+
 The cockpit uses only the existing native-store → CTOX DB → WebRTC path. There
 are no browser HTTP data endpoints. Source ledgers remain durable; retention
 removes their Business OS/RxDB projections with tombstones, never core evidence.

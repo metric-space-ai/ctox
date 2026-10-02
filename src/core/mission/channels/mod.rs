@@ -3123,6 +3123,44 @@ fn create_queue_task_with_metadata_tx(
     tx: &Transaction<'_>,
     request: QueueTaskCreateRequest,
 ) -> Result<QueueTaskView> {
+    create_queue_task_with_native_app_origin_tx(tx, request, None)
+}
+
+fn queue_task_native_app_origin(conn: &Connection, task_id: &str) -> Result<Option<Value>> {
+    if let Some(task) = load_queue_task_from_conn(conn, task_id)? {
+        if let Some(origin) = task.metadata.get("business_os_origin") {
+            if let (Some(command_id), Some(module)) = (
+                origin.get("command_id").and_then(Value::as_str),
+                origin.get("module").and_then(Value::as_str),
+            ) {
+                let admitted: bool = conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM business_command_aggregates WHERE command_id=?1 AND module=?2)",
+                    params![command_id, module], |row| row.get(0),
+                )?;
+                if admitted {
+                    return Ok(Some(origin.clone()));
+                }
+            }
+        }
+    }
+    // A legacy root has a canonical link but no origin stamp yet.
+    let linked = conn
+        .query_row(
+            "SELECT l.command_id, a.module FROM business_command_task_links l
+         JOIN business_command_aggregates a ON a.command_id=l.command_id
+         WHERE l.task_id=?1",
+            [task_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    Ok(linked.map(|(command_id, module)| json!({"command_id":command_id,"module":module})))
+}
+
+fn create_queue_task_with_native_app_origin_tx(
+    tx: &Transaction<'_>,
+    request: QueueTaskCreateRequest,
+    native_origin: Option<Value>,
+) -> Result<QueueTaskView> {
     let title = request.title.trim();
     let prompt = request.prompt.trim();
     if title.is_empty() {
@@ -3163,6 +3201,19 @@ fn create_queue_task_with_metadata_tx(
     });
     if let Some(extra) = request.extra_metadata {
         merge_object_metadata(&mut metadata, extra);
+    }
+    // App provenance comes from native admission or an admitted parent in this
+    // same tenant store. A caller-supplied metadata value is never authority.
+    metadata
+        .as_object_mut()
+        .unwrap()
+        .remove("business_os_origin");
+    let inherited = match request.parent_message_key.as_deref() {
+        Some(parent) => queue_task_native_app_origin(tx, parent)?,
+        None => None,
+    };
+    if let Some(origin) = inherited.or(native_origin) {
+        metadata["business_os_origin"] = origin;
     }
     enforce_queue_task_spawn(
         tx,
