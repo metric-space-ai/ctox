@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { assertWarmCommandBudget } from './command-roundtrip-budget.mjs';
-import { synthesizeRoundtripSamples } from './command-roundtrip-stage-report.mjs';
+import { buildRoundtripStageReport, synthesizeRoundtripSamples } from './command-roundtrip-stage-report.mjs';
 
 // Synthetic inputs test the rejection boundary only; they are not performance evidence.
 const fixture = (total) => synthesizeRoundtripSamples(30).map((sample) => ({
@@ -11,6 +11,18 @@ const fixture = (total) => synthesizeRoundtripSamples(30).map((sample) => ({
   },
 }));
 assert.equal(assertWarmCommandBudget(fixture(299)).summary.total.raw.p50, 299);
+const overlapping = synthesizeRoundtripSamples(30).map((sample) => ({
+  ...sample,
+  marks: {
+    ...sample.marks,
+    // A flush ACK can arrive after native intake without violating causality.
+    browser_push_confirmed: sample.marks.browser_terminal_observed - 1,
+  },
+}));
+assert.equal(assertWarmCommandBudget(overlapping).issues.length, 0);
+const impossible = synthesizeRoundtripSamples(1);
+impossible[0].marks.native_rxdb_projection_committed += 1_000;
+assert.equal(buildRoundtripStageReport(impossible).issues[0]?.kind, 'clock_offset_infeasible');
 assert.throws(() => assertWarmCommandBudget(fixture(300)), /below 300 ms/);
 assert.throws(() => assertWarmCommandBudget(fixture(500)), /below 300 ms/);
 assert.throws(() => assertWarmCommandBudget(fixture(200).slice(1)), /at least 30/);

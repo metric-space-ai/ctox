@@ -39,6 +39,26 @@ export function collectionReadinessFromDiagnostics(collection, entry, { syncMode
   });
 }
 
+// Cache readiness and current authoritative freshness have different lifetimes.
+// Older runtimes without a current-pull confirmation remain unconfirmed.
+export function collectionFreshnessFromDiagnostics(collection, entry, { syncMode, nowMs = Date.now() } = {}) {
+  const local = syncMode !== undefined && syncMode !== null && syncMode !== '' && syncMode !== SYNC_TRANSPORT;
+  let state = local ? 'live'
+    : normalizeCollectionReadinessState(entry?.frameTransport?.collectionFreshnessState) || 'catching-up';
+  const confirmedAt = Number(entry?.frameTransport?.lastSuccessfulPullAtMs || 0);
+  if (!local && state === 'live' && (!confirmedAt || nowMs - confirmedAt > 120_000)) {
+    state = 'catching-up';
+  }
+  return Object.freeze({
+    requiresPullConfirmation: !local && entry?.frameTransport?.pullEnabled !== false,
+    collection,
+    state,
+    ready: state === 'live',
+    syncing: state === 'catching-up' || state === 'never-synced',
+    updatedAt: entry?.updatedAt || null,
+  });
+}
+
 export function collectionTopic(syncRoom, collection) {
   if (!syncRoom) throw new Error('Business OS sync requires sync_room');
   if (!collection) throw new Error('Business OS sync requires collection name');

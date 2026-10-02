@@ -2320,8 +2320,17 @@ capture_supported: false,
         should_queue_repair: true,
         reason: "explicit_failure_mode_portal_drift".to_string(),
     };
-    let action = session_expiry_reauthorization(&registered, &probe, &payload, &drift)
-        .expect("login landing on a protected source must yield a reauthorization action");
+    assert!(session_expiry_reauthorization(&registered, &probe, &payload, &drift).is_none());
+    assert_eq!(drift.status, ScrapeRunStatus::PortalDrift);
+    let empty_payload = json!({"records":[]});
+    let derived_drift = Classification {
+        status: ScrapeRunStatus::PortalDrift,
+        should_queue_repair: true,
+        reason: "empty_record_set_on_reachable_portal".to_string(),
+    };
+    let action =
+        session_expiry_reauthorization(&registered, &probe, &empty_payload, &derived_drift)
+            .expect("derived empty output on the protected login page needs reauthorization");
     assert_eq!(action["kind"], "auth-assist-request");
     assert_eq!(action["source_id"], "rocketreach.com");
     assert_eq!(action["login_url"], "https://rocketreach.co/login");
@@ -2335,14 +2344,51 @@ capture_supported: false,
     assert!(!serialized.contains("password"));
     assert!(!serialized.contains("hunter"));
 
+    let explicit_auth = json!({"records":[], "failure_mode":"authorization_required"});
+    let auth_classification = Classification {
+        status: ScrapeRunStatus::AuthorizationRequired,
+        should_queue_repair: true,
+        reason: "explicit_failure_mode_authorization_required".to_string(),
+    };
+    assert!(session_expiry_reauthorization(
+        &registered,
+        &probe,
+        &explicit_auth,
+        &auth_classification
+    )
+    .is_some());
+    // An unrecognized explicit adapter diagnostic is not evidence of expiry,
+    // even when the generic classifier reports an empty record set.
+    let invalid_input =
+        json!({"records":[], "failure_mode":"invalid_input", "detail":"missing source_id"});
+    assert!(
+        session_expiry_reauthorization(&registered, &probe, &invalid_input, &derived_drift)
+            .is_none()
+    );
+    for reason in ["http_404", "command_failed_exit_Some(1)"] {
+        let failed_run = Classification {
+            status: ScrapeRunStatus::PortalDrift,
+            should_queue_repair: true,
+            reason: reason.to_string(),
+        };
+        assert!(
+            session_expiry_reauthorization(&registered, &probe, &empty_payload, &failed_run)
+                .is_none()
+        );
+    }
+
     // Genuine drift away from the login page stays portal_drift.
     let drifted_probe = ProbeResult {
         final_url: "https://rocketreach.co/search".to_string(),
         ..probe
     };
-    assert!(
-        session_expiry_reauthorization(&registered, &drifted_probe, &payload, &drift).is_none()
-    );
+    assert!(session_expiry_reauthorization(
+        &registered,
+        &drifted_probe,
+        &empty_payload,
+        &derived_drift
+    )
+    .is_none());
     let _ = fs::remove_dir_all(root);
 }
 

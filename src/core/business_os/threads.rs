@@ -1956,6 +1956,23 @@ fn create_handoff(
 ) -> anyhow::Result<Value> {
     let target = required_string(&command.payload, &["target_user_id", "assigned_user_id"])?;
     let expectation = required_string(&command.payload, &["expectation", "body", "message"])?;
+    let thread_id = first_string_field(&command.payload, &["thread_id"])
+        .or_else(|| command.record_id.clone())
+        .context("thread_id is required")?;
+    let thread = load_record(root, "user_threads", &thread_id)?
+        .with_context(|| format!("thread {thread_id} not found"))?;
+    ensure_thread_participant_or_admin(session, &thread)?;
+    if let Some(expected) = command
+        .payload
+        .get("expected_updated_at_ms")
+        .and_then(Value::as_i64)
+    {
+        anyhow::ensure!(
+            document_updated_at_ms(&thread) == expected,
+            "thread changed; refresh before handing off"
+        );
+    }
+    active_business_user_display_name(root, &target)?;
     let return_reason =
         first_string_field(&command.payload, &["return_reason"]).unwrap_or_default();
     let due_at_ms = command
@@ -3574,6 +3591,7 @@ fn refresh_thread_states(
 
     let assigned_user_id = value_string(&thread, "assigned_user_id");
     let thread_status = value_string(&thread, "status").to_ascii_lowercase();
+    let machine_work = value_string(&thread, "kind") == "ctox_task";
     if thread_status == "needs_review" {
         for notification in &notifications {
             if matches!(
@@ -3626,24 +3644,36 @@ fn refresh_thread_states(
         }
         let unread_count = unread_by_user.get(&user_id).copied().unwrap_or(0);
         let mut attention_reasons = Vec::new();
-        let mut attention_score = if unread_count > 0 { 40 } else { 0 };
+        let mut attention_score = 0;
+        let actionable_thread = !matches!(
+            thread_status.as_str(),
+            "archived" | "completed" | "closed" | "cancelled" | "canceled"
+        );
+        if unread_count > 0 && actionable_thread && !machine_work {
+            attention_reasons.push("Ungelesen".to_owned());
+            attention_score = 40;
+        }
         if pending_reviewers.contains(&user_id) {
             attention_reasons.push("Freigabe nötig".to_owned());
             attention_score = attention_score.max(80);
         }
-        if unread_mentions.contains(&user_id) {
+        if unread_mentions.contains(&user_id) && actionable_thread {
             attention_reasons.push("Erwähnung".to_owned());
             attention_score = attention_score.max(60);
+        }
+        if assigned_user_id == user_id && actionable_thread && !machine_work {
+            attention_reasons.push("Zugewiesen".to_owned());
+            attention_score = attention_score.max(50);
         }
         if open_handoff_targets.contains(&user_id) {
             attention_reasons.push("Übergabe an dich".to_owned());
             attention_score = attention_score.max(65);
         }
-        if blocked {
+        if blocked && assigned_user_id == user_id {
             attention_reasons.push("Blockiert".to_owned());
             attention_score = attention_score.max(70);
         }
-        if latest_ctox_failed {
+        if latest_ctox_failed && assigned_user_id == user_id {
             attention_reasons.push("Fehlgeschlagen".to_owned());
             attention_score = attention_score.max(70);
         }
@@ -5309,6 +5339,77 @@ mod tests {
             array_strings(thread.get("participant_ids")),
             vec!["alice".to_owned()]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn handoff_rejects_invalid_target_and_stale_thread_before_writing_message() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        seed_threads_user(temp.path(), "alice", "Alice", "user")?;
+        seed_threads_user(temp.path(), "bob", "Bob", "user")?;
+        let actor = json!({
+            "actor": { "id": "alice", "display_name": "Alice", "role": "user" }
+        });
+        store::accept_rxdb_business_command(
+            temp.path(),
+            json!({
+                "id": "cmd-handoff-seed",
+                "module": "threads",
+                "command_type": "threads.note.create",
+                "record_id": "handoff-thread",
+                "payload": {
+                    "thread_id": "handoff-thread",
+                    "body": "Initial note",
+                    "source_context": {
+                        "module": "threads",
+                        "record_type": "thread",
+                        "record_id": "handoff-thread"
+                    }
+                },
+                "client_context": actor
+            }),
+        )?;
+        let thread =
+            load_record(temp.path(), "user_threads", "handoff-thread")?.context("seeded thread")?;
+        let version = document_updated_at_ms(&thread);
+
+        for (command_id, message_id, target, expected) in [
+            (
+                "cmd-handoff-unknown",
+                "msg-handoff-unknown",
+                "unknown",
+                version,
+            ),
+            ("cmd-handoff-stale", "msg-handoff-stale", "bob", version - 1),
+        ] {
+            let denied = store::accept_rxdb_business_command(
+                temp.path(),
+                json!({
+                    "id": command_id,
+                    "module": "threads",
+                    "command_type": "threads.handoff.create",
+                    "record_id": "handoff-thread",
+                    "payload": {
+                        "thread_id": "handoff-thread",
+                        "message_id": message_id,
+                        "target_user_id": target,
+                        "expectation": "Follow up",
+                        "expected_updated_at_ms": expected
+                    },
+                    "client_context": actor
+                }),
+            );
+            assert!(denied.is_err(), "invalid handoff must be rejected");
+            assert!(
+                load_record(temp.path(), "user_thread_messages", message_id)?.is_none(),
+                "rejected handoff must not leave a message"
+            );
+            let unchanged = load_record(temp.path(), "user_threads", "handoff-thread")?
+                .context("thread after rejected handoff")?;
+            assert_eq!(document_updated_at_ms(&unchanged), version);
+            assert!(value_string(&unchanged, "assigned_user_id").is_empty());
+        }
         Ok(())
     }
 

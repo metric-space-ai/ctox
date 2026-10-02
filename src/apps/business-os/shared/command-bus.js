@@ -48,6 +48,13 @@ const COMMAND_LIFECYCLE_TIMING_MARKS = Object.freeze({
   local_inserted: 'browser_local_inserted',
   push_confirmed: 'browser_push_confirmed',
 });
+const COMMAND_PREINSERT_PHASES = Object.freeze([
+  'capability_resolved',
+  'database_resolved',
+  'sync_ready',
+  'authority_resolved',
+  'local_write_started',
+]);
 let activeCommandWatcherCount = 0;
 const commandTimingProbes = new Map();
 // Finite exact-id retries cover normal native handlers even when a multiplexed
@@ -249,16 +256,18 @@ let capabilityTokenRequestInFlight = null;
 
 export async function getBusinessOsCapabilityToken({
   timeoutMs = COMMAND_CAPABILITY_TIMEOUT_MS,
+  refresh = false,
 } = {}) {
-  const result = await acquireBusinessOsCapabilityToken({ timeoutMs });
+  const result = await acquireBusinessOsCapabilityToken({ timeoutMs, refresh });
   return result.token;
 }
 
 async function acquireBusinessOsCapabilityToken({
   timeoutMs = COMMAND_CAPABILITY_TIMEOUT_MS,
+  refresh = false,
 } = {}) {
   const now = Date.now();
-  if (capabilityTokenCache.token && now < capabilityTokenCache.expiresAtMs - 60_000) {
+  if (!refresh && capabilityTokenCache.token && now < capabilityTokenCache.expiresAtMs - 60_000) {
     return capabilityAcquisitionResult({ token: capabilityTokenCache.token });
   }
   if (now < capabilityTokenCache.failureUntilMs) {
@@ -277,6 +286,13 @@ async function acquireBusinessOsCapabilityToken({
     };
     return capabilityAcquisitionResult({ token: capabilityTokenCache.token });
   }
+  // A native peer reconfiguration can change the grant epoch without expiring
+  // the token. A protocol handshake renews HTTP-session authority; concurrent
+  // reads/submits join that request instead of consuming the old positive cache.
+  // Device-injected authority above stays host-owned and negative caches remain
+  // in force. Renewal never authorizes a locally asserted identity.
+  capabilityTokenCache.token = null;
+  capabilityTokenCache.expiresAtMs = 0;
   if (!capabilityTokenRequestInFlight) {
     capabilityTokenRequestInFlight = requestBusinessOsCapabilityToken(timeoutMs);
   }
@@ -415,12 +431,27 @@ function injectedBusinessOsCapabilityToken(now = Date.now()) {
   return null;
 }
 
-async function acquireCapabilityTokenForSubmit() {
-  let result = await acquireBusinessOsCapabilityToken();
+async function acquireCapabilityTokenForSubmit({ refresh = false } = {}) {
+  let result = await acquireBusinessOsCapabilityToken({ refresh });
   if (result.token || !result.transient) return result;
   await delay(COMMAND_CAPABILITY_REFRESH_RETRY_BACKOFF_MS);
-  result = await acquireBusinessOsCapabilityToken();
+  result = await acquireBusinessOsCapabilityToken({ refresh });
   return result;
+}
+
+function requireCommandCapability(commandId, capability) {
+  if (
+    CTOX_COMMAND_AUTHORIZATION.defaultRequirement === 'capability'
+    && !CTOX_COMMAND_AUTHORIZATION.offlineIntentAllowed
+    && !capability.token
+  ) {
+    throw commandError(commandId, 'Business OS authorization is currently unavailable.', {
+      code: 'auth_required',
+      transient: capability.transient,
+      retryable: true,
+    });
+  }
+  return capability.token;
 }
 
 async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt = 0 }) {
@@ -436,24 +467,13 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
     );
   }
   const capability = await acquireCapabilityTokenForSubmit();
-  const capabilityToken = capability.token;
+  const capabilityToken = requireCommandCapability(commandId, capability);
   emitCommandLifecycle(commandId, command.command_type || command.type, 'capability_resolved', submitStartedAt);
   // Every Business OS command mutates native/domain state. Offline reads stay
   // local-first, but mutation intent without a current server-issued actor
   // capability would be immutable and can never become authorized later.
   // Fail before insertion instead of creating a command that is guaranteed to
   // be rejected after replication.
-  if (
-    CTOX_COMMAND_AUTHORIZATION.defaultRequirement === 'capability'
-    && !CTOX_COMMAND_AUTHORIZATION.offlineIntentAllowed
-    && !capabilityToken
-  ) {
-    throw commandError(commandId, 'Business OS authorization is currently unavailable.', {
-      code: 'auth_required',
-      transient: capability.transient,
-      retryable: true,
-    });
-  }
   const doc = await commandDocument(
     command,
     commandId,
@@ -469,6 +489,8 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
   const syncPlan = await prepareCommandSync({ db: currentDb, sync, command });
   emitCommandLifecycle(commandId, command.command_type || command.type, 'sync_ready', submitStartedAt);
   try {
+    doc.client_context.capability_token = await acquireCommandPeerAuthority(commandId, syncPlan);
+    recordCommandPreinsertMark(commandId, 'authority_resolved');
     try {
       await flushSyncBridges(syncPlan.beforeCommand, [], syncPlan.flushTimeoutMs);
     } catch (error) {
@@ -486,8 +508,26 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
         submitStartedAt,
       );
     }
+    // Bridge readiness/dependency delivery can span a native reconfiguration.
+    // Bind the latest acquired authority at the immutable local-insert boundary,
+    // not the token captured before the reconnect. This is not command replay.
+    // A grant change need not have caused a reconnect yet. Revalidate at this
+    // mutation boundary rather than reusing even an unexpired positive cache.
+    if (syncPlan.beforeCommand.length) {
+      doc.client_context.capability_token = await acquireCommandPeerAuthority(commandId, syncPlan);
+    }
+    assertCommandDocumentTransportBudget(doc, commandId);
     const localWriteStartedAt = Date.now();
-    await insertOrPatchCommandDocument(collection, commandId, doc);
+    recordCommandPreinsertMark(commandId, 'local_write_started', localWriteStartedAt);
+    const inserted = await insertOrPatchCommandDocument(collection, commandId, doc);
+    if (!inserted) {
+      // Same immutable payload already exists. Track that persisted command;
+      // never push this freshly prepared document with a different capability
+      // or reset the native status through the explicit submit path.
+      rememberActiveCommandId(commandId);
+      recordCommandMetric(sync, 'submit_receipt', commandId, Date.now() - submitStartedAt);
+      return localCommandReceipt({ db, sync, commandId, pushConfirmed: false });
+    }
     emitCommandLifecycle(commandId, command.command_type || command.type, 'local_inserted', submitStartedAt);
     recordCommandMetric(sync, 'local_submit', commandId, Date.now() - localWriteStartedAt);
 
@@ -593,6 +633,7 @@ function pushConfirmationRemainsPending(error, bridges) {
   // specific command id rather than only the leader flush attempt.
   if ((bridges || []).some((bridge) => syncBridgeFromHandle(bridge)?.mode === 'follower')) return false;
   const code = cleanContextText(error?.code);
+  if (error?.terminal === true || code === 'ctox_replication_push_rejected') return false;
   return ![
     'ctox_rxdb_schema_hash_mismatch',
     'idempotency_conflict',
@@ -623,6 +664,7 @@ function emitCommandLifecycle(commandId, commandType, phase, startedAt = 0) {
     elapsed_ms: startedAt ? Math.max(0, Date.now() - Number(startedAt)) : 0,
   };
   recordCommandTimingFromLifecycle(detail.command_id, detail.phase);
+  recordCommandPreinsertMark(detail.command_id, detail.phase);
   globalThis.dispatchEvent?.(new CustomEvent('ctox-business-command-lifecycle', { detail }));
   console.info('[command-bus]', JSON.stringify(detail));
 }
@@ -886,6 +928,7 @@ async function prepareCommandSync({ db, sync, command = null }) {
   const dependencyCollections = commandDependencySyncCollections(command);
   const queueProjectionRequired = command?.sync_queue_tasks !== false;
   const readyTimeoutMs = commandSyncReadyTimeoutMs(command);
+  const readyDeadlineAtMs = Date.now() + readyTimeoutMs;
   const leases = [];
   try {
     const dependencyBridges = await Promise.all(
@@ -917,11 +960,13 @@ async function prepareCommandSync({ db, sync, command = null }) {
       : [...dependencyBridges, ...submitBridges];
     await Promise.all(
       bridgesRequiredBeforeInsert.map((bridge) => (
-        waitForSyncBridgeReady(bridge, readyTimeoutMs)
+        waitForSyncBridgeReady(bridge, Math.max(1, readyDeadlineAtMs - Date.now()))
       )),
     );
     return {
       beforeCommand: dependencyBridges,
+      authorityBridges: bridgesRequiredBeforeInsert,
+      readyDeadlineAtMs,
       submitBridges,
       afterCommand,
       leases,
@@ -932,6 +977,54 @@ async function prepareCommandSync({ db, sync, command = null }) {
     await releaseSyncLeases(leases);
     throw error;
   }
+}
+
+async function acquireCommandPeerAuthority(commandId, syncPlan) {
+  const timeoutError = {
+    code: 'native_unavailable',
+    message: 'Peer authority renewal did not finish before the command deadline.',
+  };
+  const remaining = () => {
+    const milliseconds = syncPlan.readyDeadlineAtMs - Date.now();
+    if (milliseconds <= 0) throw commandError(commandId, timeoutError.message, {
+      code: timeoutError.code, retryable: true,
+    });
+    return milliseconds;
+  };
+  // Renewal can itself acquire a newer epoch. Reacquire once after reconnect,
+  // then require convergence before any dependency push or immutable insert.
+  for (let round = 0; round < 2; round++) {
+    const timing = commandTimingProbes.get(String(commandId || ''));
+    const renewalStarted = timing ? Date.now() : 0;
+    const capability = await withTimeout(
+      () => acquireCapabilityTokenForSubmit({ refresh: true }), remaining(), timeoutError,
+    );
+    const capabilityResolved = timing ? Date.now() : 0;
+    const token = requireCommandCapability(commandId, capability);
+    const bridges = syncPlan.authorityBridges;
+    const states = bridges.map(bridge => syncBridgeFromHandle(bridge)?.state);
+    const distinct = [...new Set(states.filter(Boolean))];
+    const renewed = await withTimeout(
+      () => Promise.all(distinct.map(state => state.ensurePeerAuthority?.(token) || false)),
+      remaining(), timeoutError,
+    );
+    const peerRenewed = timing ? Date.now() : 0;
+    await Promise.all(bridges.map(bridge => waitForSyncBridgeReady(bridge, remaining())));
+    remaining();
+    const replaced = bridges.some((bridge, index) => syncBridgeFromHandle(bridge)?.state !== states[index]);
+    if (timing) timing.authority_rounds.push({
+      round,
+      capability_ms: capabilityResolved - renewalStarted,
+      peer_renewal_ms: peerRenewed - capabilityResolved,
+      bridge_ready_ms: Date.now() - peerRenewed,
+      renewed: renewed.some(Boolean),
+      replaced,
+    });
+    if (!renewed.some(Boolean) && !replaced) return token;
+  }
+  throw commandError(commandId, 'Peer authority changed again during command preparation.', {
+    code: 'native_unavailable', retryable: true,
+  });
 }
 
 function commandSyncFlushTimeoutMs(command) {
@@ -1107,7 +1200,7 @@ function desktopFileAttachmentRefs(payload) {
 async function insertOrPatchCommandDocument(collection, commandId, doc) {
   try {
     await collection.insert(doc);
-    return;
+    return true;
   } catch (error) {
     if (!isRxDbConflictError(error)) throw error;
   }
@@ -1115,7 +1208,7 @@ async function insertOrPatchCommandDocument(collection, commandId, doc) {
   const existing = existingDoc?.toJSON?.() || existingDoc || null;
   if (!existing) {
     await collection.insert(doc);
-    return;
+    return true;
   }
   const existingHash = String(existing.payload_hash || await payloadHashForCommandDocument(existing));
   if (existingHash !== doc.payload_hash) {
@@ -1124,6 +1217,7 @@ async function insertOrPatchCommandDocument(collection, commandId, doc) {
       retryable: false,
     });
   }
+  return false;
 }
 
 async function payloadHashForCommandDocument(document) {
@@ -1339,6 +1433,11 @@ async function waitForCommandState({ db, sync, commandId, until, options = {} })
             requireRevision,
           }));
         } catch (error) {
+          // A reconnect can retire the strict-read generation before its
+          // replacement is ready. Keep the existing bounded revalidation and
+          // caller deadline; this condition must never fall back to cache.
+          if (error?.code === 'QUERY_GENERATION_REQUIRED'
+              || error?.message === 'QUERY_GENERATION_REQUIRED: strict demand read has no bridge generation') return;
           if (isLocalFallbackCommandTrackingQueryError(error)) {
             try {
               inspect(await findLocalDoc(currentDb?.raw?.business_commands, commandId));
@@ -1590,6 +1689,11 @@ function isLocalFallbackCommandTrackingQueryError(error) {
   const codes = [error?.code, error?.cause?.code, error?.data?.code]
     .map((code) => String(code || ''));
   const message = String(error?.message || error || '');
+  // A native schema reconfiguration cancels reads tied to the old peer.
+  // Keep tracking this exact command within the existing finite retry/deadline
+  // budget; neither redispatch it nor turn other cancellations into retries.
+  if (message === 'QUERY_CANCELLED: peer-peer-close'
+      || message === 'QUERY_CANCELLED: peer-capability-authority-changed') return true;
   return [
     'SQLITE_QUERY_STREAM_UNSUPPORTED',
     'QUERY_FETCH_STREAM_UNSUPPORTED',
@@ -1889,6 +1993,8 @@ function rememberCommandTimingProbe(commandId, startedAtMs) {
     command_id: key,
     started_at_ms: Number(startedAtMs) || Date.now(),
     marks: {},
+    preinsert_marks: {},
+    authority_rounds: [],
   };
   commandTimingProbes.set(key, sample);
   return sample;
@@ -1913,6 +2019,15 @@ function recordCommandTimingMark(commandId, markName, atMs = Date.now()) {
   if (!Number.isFinite(stamp)) return;
   if (!Number.isFinite(sample.marks[markName])) {
     sample.marks[markName] = stamp;
+  }
+}
+
+function recordCommandPreinsertMark(commandId, phase, atMs = Date.now()) {
+  if (!COMMAND_PREINSERT_PHASES.includes(phase)) return;
+  const sample = commandTimingProbes.get(String(commandId || ''));
+  if (!sample || !Number.isFinite(atMs)) return;
+  if (!Number.isFinite(sample.preinsert_marks[phase])) {
+    sample.preinsert_marks[phase] = atMs;
   }
 }
 
@@ -1954,7 +2069,9 @@ export function commandRoundtripStagesFromMarks(marks = {}) {
   return {
     browser_insert: marks.browser_local_inserted - marks.browser_dispatch_started,
     push: marks.browser_push_confirmed - marks.browser_local_inserted,
-    push_to_native_intake: marks.native_dispatch_entered - marks.browser_push_confirmed,
+    // Flush acknowledgement and native intake may overlap. The local insert
+    // is the causal Browser predecessor for native intake.
+    local_to_native_intake: marks.native_dispatch_entered - marks.browser_local_inserted,
     native_processing: marks.native_handler_completed - marks.native_dispatch_entered,
     projection_commit: marks.native_rxdb_projection_committed - marks.native_handler_completed,
     commit_to_browser_observed: marks.browser_terminal_observed - marks.native_rxdb_projection_committed,
@@ -1963,9 +2080,24 @@ export function commandRoundtripStagesFromMarks(marks = {}) {
 }
 
 function cloneCommandTimingSample(sample) {
+  const boundaries = [
+    sample.marks.browser_dispatch_started,
+    ...COMMAND_PREINSERT_PHASES.map(phase => sample.preinsert_marks[phase]),
+    sample.marks.browser_local_inserted,
+  ];
+  const names = [
+    'initial_capability', 'document_and_database', 'sync_readiness',
+    'fresh_peer_authority', 'dependencies_and_revalidation', 'local_persistence',
+  ];
+  const stages = boundaries.every(Number.isFinite)
+    ? Object.fromEntries(names.map((name, index) => [name, boundaries[index + 1] - boundaries[index]]))
+    : null;
   return {
     command_id: String(sample.command_id || ''),
     started_at_ms: Number(sample.started_at_ms) || 0,
     marks: { ...sample.marks },
+    preinsert_marks: { ...sample.preinsert_marks },
+    preinsert_stages_ms: stages,
+    authority_rounds: sample.authority_rounds.map(round => ({ ...round })),
   };
 }

@@ -210,6 +210,7 @@ try {
     if (width === 1280) {
       await assertDelayedHarnessStatus(page);
       await assertStatusDuringTaskHydration(page);
+      await assertGroupedCreatureMouseClick();
     }
     await page.close();
   }
@@ -218,6 +219,36 @@ try {
   await writeFile(path.join(out,'results.json'),JSON.stringify(results,null,2));
   await browser.close();
   await new Promise(resolve=>server.close(resolve));
+}
+
+// A member with several tasks opens their list on a real mouse click. The
+// canvas' pan pointer capture used to retarget pointerup/click to the canvas,
+// so the ×N list only opened by keyboard (thesen, 28.09.2026).
+async function assertGroupedCreatureMouseClick() {
+  // Own page: the status fixtures above install a task source that would
+  // replace these tasks on the next live read.
+  const page = await browser.newPage({ viewport: { width: 1280, height: 710 } });
+  await page.goto(`http://127.0.0.1:${server.address().port}/`);
+  await page.locator('body[data-fixture-ready="true"]').waitFor({ timeout: 10000 });
+  await page.evaluate(() => {
+    const {state,hooks}=window.crewFixture;
+    state.crewMembers=[{id:'crew:tavi',name:'Tavi',shape:'blob',color:'#00aa9a',archived:false,state:'on_duty'}];
+    const task=(id)=>({id,taskId:id,title:`Task ${id}`,status:'running',routeStatus:'running',crewMemberId:'crew:tavi',updatedAtMs:Date.now(),executionProgress:{phase:'working',steps:[]}});
+    state.model={...state.model,tasks:[task('g1'),task('g2'),task('g3')]};
+    state.selectedTaskId='g1';
+    hooks.renderMain(state);
+  });
+  const slot = page.locator('.ctox-flow-creature-slot[data-crew-tasks]');
+  assert.equal(await slot.count(), 1, 'one being carries the three tasks');
+  const box = await slot.boundingBox();
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  const popover = page.locator('[data-crew-tasks-pop]');
+  await popover.waitFor({ timeout: 3000 });
+  assert.equal(await popover.locator('[data-crew-pop-task]').count(), 3, 'the list names every task of the member');
+  await popover.locator('[data-crew-pop-task="g2"]').click();
+  assert.equal(await page.locator('[data-crew-tasks-pop]').count(), 0, 'picking a task closes the list');
+  assert.equal(await page.evaluate(() => window.crewFixture.state.selectedTaskId), 'g2', 'the picked task is selected');
+  await page.close();
 }
 
 async function assertDelayedHarnessStatus(page) {

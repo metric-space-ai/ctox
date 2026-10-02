@@ -1,6 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { showBusinessPrompt } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
-import { crewCreatureHtml } from '../../shared/business-chat.js?v=20260906-crew-home-v339';
+import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-truth-v7';
+import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-truth-v7';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 
 const REFRESH_DEBOUNCE_MS = 80;
@@ -207,6 +208,9 @@ const state = {
   lang: 'de',
   t: (key, fallback) => fallback || key,
   selectedId: '',
+  requestedRecordId: '',
+  returnThreadId: '',
+  focusedCaseId: '',
   search: '',
   status: 'all',
   band: 'all',
@@ -308,7 +312,7 @@ export function ticketRowHtml(row, opts = {}) {
     + ' data-context-label="' + escapeAttr(row.title || row.key || row.id) + '"'
     + ' data-record-type="ticket" data-record-id="' + escapeAttr(row.id) + '" data-label="' + escapeAttr(row.title || row.key || row.id) + '"';
   const crew = row.crew && row.crew.html
-    ? '<span class="ctox-flow-creature-shell ticket-row-crew" title="' + escapeAttr([row.crew.name, row.crew.sentence].filter(Boolean).join(' · ')) + '">' + row.crew.html + '</span>'
+    ? '<span class="ticket-row-crew" title="' + escapeAttr([row.crew.name, row.crew.sentence].filter(Boolean).join(' · ')) + '">' + row.crew.html + '</span>'
     : '';
   if (view === 'list') {
     return '<div' + attrs + '>' + crew + '<span class="ticket-row-title">' + escapeHtml(row.title || row.key || 'Ticket') + '</span>' + badge + '</div>';
@@ -342,6 +346,9 @@ export function resolveTicketListState({ loading = false, sourceCount = 0, readi
 
 export async function mount(ctx) {
   state.ctx = ctx;
+  state.requestedRecordId = String(ctx.args?.record || ctx.args?.record_id || ctx.args?.case_id || '').trim();
+  state.returnThreadId = String(ctx.args?.return_thread_id || '').trim();
+  state.focusedCaseId = '';
   state.lang = ctx.locale === 'en' ? 'en' : 'de';
   const messages = await loadModuleMessages(import.meta.url, state.lang, labels);
   state.t = (key, fallback) => messages[key] ?? fallback ?? key;
@@ -359,6 +366,17 @@ export async function mount(ctx) {
   applyStaticLabels();
   seedGrammarState();
   wireUi();
+  const onAppLaunch = (event) => {
+    const args = event?.detail?.args || {};
+    const recordId = String(args.record || args.record_id || args.case_id || '').trim();
+    if (!recordId) return;
+    state.requestedRecordId = recordId;
+    state.returnThreadId = String(args.return_thread_id || '').trim();
+    focusRequestedTicket();
+    render();
+    scrollFocusedTicketCase();
+  };
+  ctx.host.addEventListener('ctox-business-os-app-launch', onAppLaunch);
   const stopReadiness = wireTicketReadiness();
   state.cleanup = stopReadiness;
   render();
@@ -367,6 +385,7 @@ export async function mount(ctx) {
   state.cleanup = () => {
     stopReadiness();
     stopRealtime();
+    ctx.host.removeEventListener('ctox-business-os-app-launch', onAppLaunch);
   };
   return () => {
     state.cleanup?.();
@@ -571,7 +590,54 @@ async function refreshTickets() {
   state.crew = await loadCrewForTickets();
   state.loading = false;
   syncSelectionToVisible();
+  focusRequestedTicket();
   render();
+  scrollFocusedTicketCase();
+}
+
+function scrollFocusedTicketCase() {
+  if (!state.focusedCaseId) return;
+  const caseId = state.focusedCaseId;
+  requestAnimationFrame(() => {
+    const card = [...state.ctx.host.querySelectorAll('[data-context-record-type="ticket_case"]')]
+      .find((item) => item.dataset.contextRecordId === caseId);
+    card?.scrollIntoView?.({ block: 'nearest' });
+  });
+}
+
+function focusRequestedTicket() {
+  const recordId = state.requestedRecordId;
+  if (!recordId || state.loading) return;
+  const ticketCase = state.data.ctox_ticket_cases.find((item) => item.id === recordId || item.case_id === recordId);
+  const ticket = state.data.ctox_ticket_items.find((item) => item.id === recordId || item.ticket_key === recordId)
+    || (ticketCase && state.data.ctox_ticket_items.find((item) => item.ticket_key === ticketCase.ticket_key));
+  if (!ticket) {
+    setCommandStatus(`Verknüpftes Ticket ${recordId} ist hier nicht verfügbar.`, true);
+    if (['ctox_ticket_items', 'ctox_ticket_cases'].every((name) =>
+      state.ctx?.sync?.collectionReadiness?.(name)?.ready === true)) {
+      reportTicketFocus('unavailable', recordId);
+    }
+    return;
+  }
+  state.search = '';
+  state.band = 'all';
+  state.status = 'all';
+  const search = root()?.querySelector('[data-pg-search]');
+  if (search) search.value = '';
+  state.selectedId = ticket.id;
+  state.focusedCaseId = ticketCase?.case_id || '';
+  if (ticketCase) state.opsMode = 'open';
+  state.requestedRecordId = '';
+  setCommandStatus(ticketCase ? 'Verknüpfter Ticket-Fall geöffnet.' : 'Verknüpftes Ticket geöffnet.');
+  queueMicrotask(() => reportTicketFocus('record_focused', recordId));
+}
+
+function reportTicketFocus(status, recordId) {
+  if (!state.returnThreadId) return;
+  state.ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
+    bubbles: true,
+    detail: { module: 'tickets', status, recordId, returnThreadId: state.returnThreadId },
+  }));
 }
 
 // --- Crew on tickets: the member holding a ticket's queue task -----------------
@@ -613,14 +679,6 @@ function crewMemberFor(task) {
   return id ? (state.crew?.members || []).find((member) => member.id === id) || null : null;
 }
 
-function crewTaskState(task) {
-  const status = String(task?.route_status || task?.status || '').toLowerCase();
-  if (['leased', 'running', 'processing'].includes(status)) return 'running';
-  if (['failed', 'error', 'cancelled', 'canceled'].includes(status)) return 'failed';
-  if (['handled', 'completed', 'done', 'success'].includes(status)) return 'success';
-  return 'queued';
-}
-
 function crewWaitSentence(task) {
   if (!task) return '';
   const t = state.t;
@@ -647,13 +705,16 @@ function crewWaitSentence(task) {
   return displayStatus(status || 'open');
 }
 
-function crewCreatureFor(task, placement = 'map') {
+// Tickets show the member working on them as its portrait; the living body
+// exists once per screen (crew bar seat or CTOX map), Owner 28.09.2026.
+function crewReferenceFor(task, size = 24) {
   const member = crewMemberFor(task);
-  return crewCreatureHtml({
-    crewKey: member ? member.id : (task?.command_id || task?.id || 'crew'),
-    crewIdentity: member ? { name: member.name, shape: member.shape, color: member.color } : null,
-    executionProgress: task?.execution_progress || null,
-  }, crewTaskState(task), placement);
+  startCrewMotion(); // installs the shared crew stylesheet (portrait included)
+  const status = String(task?.route_status || task?.status || '').toLowerCase();
+  const taskState = ['leased', 'running', 'processing'].includes(status) ? 'running'
+    : ['failed', 'error', 'cancelled', 'canceled'].includes(status) ? 'failed'
+      : ['handled', 'completed', 'done', 'success'].includes(status) ? 'success' : 'queued';
+  return renderCrewReference({ appearance: member ? { id: member.id, name: member.name, shape: member.shape, color: member.color } : null, size, mode: crewModeForTaskState(taskState, task?.execution_progress?.phase) });
 }
 
 function mayAssignCrew() {
@@ -678,7 +739,7 @@ function crewCardHtml(ticket) {
     <section class="ctox-card tickets-crew-card">
       <header>${escapeHtml(t('crew', 'Crew'))}</header>
       <div class="ctox-card-body tickets-crew-body">
-        <span class="ctox-flow-creature-shell tickets-crew-portrait">${crewCreatureFor(task)}</span>
+        <span class="tickets-crew-portrait">${crewReferenceFor(task, 32)}</span>
         <div class="tickets-crew-facts">
           <strong>${escapeHtml(member ? member.name : t('crewUnassigned', 'Crew, noch niemand zugeordnet'))}</strong>
           <small>${escapeHtml(crewWaitSentence(task))}</small>
@@ -737,7 +798,7 @@ function shapeTicket(ticket) {
   return {
     id: ticket.id,
     key: ticket.ticket_key || ticket.id,
-    crew: task ? { html: crewCreatureFor(task, 'map'), name: crewMemberFor(task)?.name || '', sentence: crewWaitSentence(task) } : null,
+    crew: task ? { html: crewReferenceFor(task, 20), name: crewMemberFor(task)?.name || '', sentence: crewWaitSentence(task) } : null,
     title: ticket.title || ticket.ticket_key || 'Ticket',
     status: ticket.remote_status || 'open',
     source: ticket.source_system || 'ctox',
@@ -757,6 +818,7 @@ function syncSelectionToVisible() {
 function selectRecord(id) {
   if (!id) return;
   state.selectedId = id;
+  state.focusedCaseId = '';
   // New ticket → operations pane returns to auto (reveals only if a flow needs
   // it). Selection is an in-place class flip, never a list rebuild.
   state.opsMode = 'auto';
@@ -870,7 +932,8 @@ function renderDetail() {
   }
   applyTicketContext(detail, ticket, 'detail');
   const events = eventsForTicket(ticket.ticket_key);
-  const primary = casesForTicket(ticket.ticket_key)[0] || null;
+  const primary = casesForTicket(ticket.ticket_key).find((item) => item.case_id === state.focusedCaseId)
+    || casesForTicket(ticket.ticket_key)[0] || null;
   const verifications = primary ? verificationsForCase(primary.case_id) : [];
   const writebacks = primary ? writebacksForCase(primary.case_id) : [];
   const opsOpen = resolveOpsVisible(state.opsMode, ticketFlowActive(ticket));
@@ -1027,7 +1090,7 @@ function renderCase(item) {
   const clarifications = state.data.ctox_ticket_clarification_requests.filter((clarification) => clarification.case_id === item.case_id);
   const actions = caseActionIconsHtml(item);
   return `
-    <article class="ctox-card" ${recordContextAttrs({
+    <article class="ctox-card${item.case_id === state.focusedCaseId ? ' is-selected' : ''}" ${recordContextAttrs({
     type: 'ticket_case',
     id: item.case_id || item.id,
     label: item.label || item.case_id,

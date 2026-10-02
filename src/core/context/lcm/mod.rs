@@ -69,6 +69,40 @@ const MAX_SUMMARY_RATIO: f64 = 0.8;
 #[cfg(test)]
 static TEMP_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// A deterministic completion rejection, distinct from a retryable store error.
+#[derive(Debug, Clone)]
+pub struct IncompleteTaskExecutionPlan {
+    pub work_key: String,
+    pub revision: i64,
+    pub completed: i64,
+    pub total: i64,
+}
+
+impl IncompleteTaskExecutionPlan {
+    pub fn from_progress(work_key: &str, progress: &serde_json::Value) -> Option<Self> {
+        let completed = progress["completed_steps"].as_i64()?;
+        let total = progress["total_steps"].as_i64()?;
+        (total > 0 && completed != total).then(|| Self {
+            work_key: work_key.to_string(),
+            revision: progress["revision"].as_i64().unwrap_or(0),
+            completed,
+            total,
+        })
+    }
+}
+
+impl std::fmt::Display for IncompleteTaskExecutionPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "task execution plan is incomplete ({}/{} steps completed); work_key={} revision={}",
+            self.completed, self.total, self.work_key, self.revision
+        )
+    }
+}
+
+impl std::error::Error for IncompleteTaskExecutionPlan {}
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SummaryKind {
@@ -1820,10 +1854,13 @@ impl LcmEngine {
             total > 0,
             "task execution plan must contain at least one step"
         );
-        anyhow::ensure!(
-            review_status != "completed" || completed == total,
-            "task execution plan is incomplete ({completed}/{total} steps completed)"
-        );
+        if review_status == "completed" {
+            if let Some(incomplete) =
+                IncompleteTaskExecutionPlan::from_progress(work_key, &progress)
+            {
+                return Err(incomplete.into());
+            }
+        }
         let (phase, percent) = if review_status == "completed" {
             ("completed", 100)
         } else {
