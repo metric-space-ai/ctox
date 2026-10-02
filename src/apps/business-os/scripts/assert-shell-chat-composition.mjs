@@ -65,6 +65,13 @@ try {
     `Shell-V2 windows expose layout immediately left of close: ${JSON.stringify(titleBarControls)}`,
   );
   const layoutTrigger = page.locator('.shell-window [data-window-layout-trigger]');
+  const triggerBox = await layoutTrigger.boundingBox();
+  const closeBox = await page.locator('.shell-window [data-window-control="close"]').boundingBox();
+  expect(triggerBox && closeBox && triggerBox.width > 0 && triggerBox.height > 0
+    && closeBox.width > 0 && closeBox.height > 0
+    && triggerBox.x + triggerBox.width <= closeBox.x + 1,
+  'the visible layout trigger must sit left of Close');
+  expect(await layoutTrigger.locator('svg').count() === 1, 'the layout trigger must show a window icon');
   await layoutTrigger.click();
   const layoutOptions = await page.locator('.shell-window [data-window-layout-menu] [data-window-layout-control]')
     .evaluateAll((nodes) => nodes.map((node) => node.dataset.windowLayoutControl));
@@ -103,6 +110,10 @@ try {
   await chooseLayout(page, 'maximize');
   const maximized = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'expanded-maximized', ...maximized });
+  await chooseLayout(page, 'maximize');
+  const maximizedAgain = await page.evaluate(() => window.shellHarness.collect());
+  expect(maximizedAgain.windowState === 'maximized' && closeRect(maximizedAgain.window, maximized.window),
+    'choosing maximize again must remain maximized, not toggle back to free');
   // Window-neutral overlay contract (shared/shell-chat-composition.js,
   // f0d376fbc 2026-07-17 "chat as window-neutral overlay"): the chat dock
   // floats ABOVE app windows and reserves ZERO work-area inset, so a maximized
@@ -163,7 +174,8 @@ try {
 
   await chooseLayout(page, 'free');
   await page.evaluate(() => window.shellHarness.setSize(420, 300));
-  await dragWindowToLayerPoint(page, work, { left: work.left + work.width - 422, top: work.top + inset });
+  const rightStart = await page.evaluate(() => window.shellHarness.collect());
+  await dragWindowToLayerPoint(page, work, { left: work.left + work.width - rightStart.window.width - 2, top: work.top + inset });
   const rightEdge = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'drag-free-right-edge', ...rightEdge });
   expect(rightEdge.snapZone === null, `dragging to the right work edge must remain free, got ${rightEdge.snapZone}`);
@@ -182,6 +194,21 @@ try {
   const topSnap = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'layout-snap-top', ...topSnap });
   expect(topSnap.snapZone === 'top', `the top menu action must snap top, got ${topSnap.snapZone}`);
+  await chooseLayout(page, 'free');
+
+  await page.evaluate(() => window.shellHarness.setSize(420, 300));
+  const bottomStart = await page.evaluate(() => window.shellHarness.collect());
+  await dragWindowToLayerPoint(page, work, {
+    left: work.left + 120,
+    top: work.top + work.height - bottomStart.window.height - 2,
+  });
+  const bottomEdge = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'drag-free-bottom-edge', ...bottomEdge });
+  expect(bottomEdge.snapZone === null, `dragging to the bottom work edge must remain free, got ${bottomEdge.snapZone}`);
+  await chooseLayout(page, 'bottom');
+  const bottomSnap = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'layout-snap-bottom', ...bottomSnap });
+  expect(bottomSnap.snapZone === 'bottom', `the bottom menu action must snap bottom, got ${bottomSnap.snapZone}`);
   await chooseLayout(page, 'free');
 
   // Reopening must use the last explicit menu selection, including returning
@@ -302,7 +329,7 @@ async function dragWindowToLayerPoint(page, work, { left, top }) {
   const grab = await windowDragGrabPoint(page);
   const rect = await page.evaluate(() => {
     const el = document.querySelector('.shell-window').getBoundingClientRect();
-    return { left: el.left, top: el.top };
+    return { left: el.left, top: el.top, width: el.width, height: el.height };
   });
   await page.mouse.move(grab.x, grab.y);
   await page.mouse.down();
@@ -311,8 +338,23 @@ async function dragWindowToLayerPoint(page, work, { left, top }) {
     grab.y + (work.originTop + top - rect.top),
     { steps: 12 },
   );
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const during = await page.evaluate(() => window.shellHarness.collect());
+  expect(during.snapPreviewVisible === false, 'moving near an edge must not show a workspace snap preview during the drag');
   await page.mouse.up();
   await page.waitForTimeout(80);
+  const after = await page.evaluate(() => window.shellHarness.collect());
+  const expected = {
+    x: work.originLeft + left, y: work.originTop + top,
+    width: rect.width, height: rect.height,
+  };
+  expect(closeRect(after.window, expected, 2), `drag must reach the requested free position without resizing: ${JSON.stringify({ before: rect, expected, after: after.window })}`);
+  expect(Math.abs(after.window.x - rect.left) > 1 || Math.abs(after.window.y - rect.top) > 1,
+    `drag must actually move the window: ${JSON.stringify({ before: rect, after: after.window })}`);
+  expect(after.snapZone === null && after.windowState === 'normal', 'edge drag must preserve free window state');
+  expect(after.snapPreviewVisible === false, 'edge drag must not show a workspace snap preview');
+  observations.push({ phase: 'coordinate-verified-free-drag', before: rect, expected, after: after.window,
+    duringSnapPreviewVisible: during.snapPreviewVisible, afterSnapPreviewVisible: after.snapPreviewVisible });
 }
 
 function serveRequest(request, response) {
@@ -483,6 +525,7 @@ function harnessHtml() {
         chatSide:document.body.hasAttribute('data-shell-chat-dock-side'),
         chatCompact:document.body.hasAttribute('data-shell-chat-dock-compact'),
         snapZone:document.querySelector('.shell-window')?.dataset.snapZone || null,
+        snapPreviewVisible:(() => { const preview=document.querySelector('[data-snap-preview]'); return Boolean(preview && !preview.hidden && getComputedStyle(preview).display!=='none'); })(),
         windowState:wm.describe(handle.id)?.state,
         overlap:{
           windowChat:intersection(windowRect, chatRect),
