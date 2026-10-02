@@ -20,6 +20,12 @@ pub(crate) enum ScrapeRunStatus {
     /// capture. Distinct from `PortalDrift` (genuine layout/domain drift)
     /// and from `Blocked` (upstream challenge/verification).
     AuthorizationRequired,
+    /// The provider answered, but the paying account behind the stored
+    /// credential is not active (Bright Data "HTTP 400: Customer is not
+    /// active" on 77 LinkedIn runs in one production incident). Neither a network
+    /// problem nor a missing credential nor bad input; a script repair cannot
+    /// fix it, only the account owner can.
+    ProviderAccountInactive,
 }
 
 #[derive(Debug)]
@@ -41,6 +47,25 @@ pub(super) fn classify_outcome(
         .and_then(Value::as_str)
         .map(str::trim)
         .unwrap_or("");
+    let detail = payload
+        .get("detail")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    // Checked before temporary_unreachable/blocked: adapters report the
+    // provider's account refusal under those modes, and neither may queue a
+    // script repair for it.
+    if explicit_failure == "provider_account_inactive"
+        || (matches!(
+            explicit_failure,
+            "temporary_unreachable" | "blocked" | "auth_required" | "authorization_required"
+        ) && super::account_state::is_provider_account_inactive(detail))
+    {
+        return Classification {
+            status: ScrapeRunStatus::ProviderAccountInactive,
+            should_queue_repair: false,
+            reason: "provider_account_inactive".to_string(),
+        };
+    }
     if explicit_failure == "temporary_unreachable" {
         return Classification {
             status: ScrapeRunStatus::TemporaryUnreachable,

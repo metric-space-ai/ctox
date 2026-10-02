@@ -2624,9 +2624,33 @@ fn numbers_in(text: &str) -> Vec<(f64, std::ops::Range<usize>)> {
 /// size class never proves an exact value.
 /// A quote backs a value only when it states it: figures by number
 /// ([`quantity_quote_backs`]), a personal e-mail address by the address
-/// itself ([`email_quote_backs`]).
-fn quote_backs_value(field: &str, value: &str, quote: &str) -> bool {
-    quantity_quote_backs(field, value, quote) && email_quote_backs(field, value, quote)
+/// itself ([`email_quote_backs`]), and names/titles as whole words.
+pub(super) fn quote_backs_value(field: &str, value: &str, quote: &str) -> bool {
+    quantity_quote_backs(field, value, quote)
+        && email_quote_backs(field, value, quote)
+        && person_name_quote_backs(field, value, quote)
+}
+
+/// A claimed name or title needs to occur in the cited text, not merely in
+/// an invented value next to a valid source URL. Token boundaries reject
+/// "NotAda" and "Lovelacee"; Unicode case, whitespace, hyphens, apostrophes
+/// and title punctuation do not distinguish the same observed name.
+fn person_name_quote_backs(field: &str, value: &str, quote: &str) -> bool {
+    if !matches!(field, "person_vorname" | "person_nachname" | "person_titel") {
+        return true;
+    }
+    let words = |text: &str| {
+        text.to_lowercase()
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let wanted = words(value);
+    !wanted.is_empty()
+        && words(quote)
+            .windows(wanted.len())
+            .any(|observed| observed == wanted.as_slice())
 }
 
 /// BNT, 23.09.2026: `person_email` robert.suesse@bnt-chemicals.de was
@@ -4365,6 +4389,94 @@ mod tests {
         );
     }
 
+    #[test]
+    fn person_names_and_titles_require_the_value_in_the_own_quote() {
+        let invalid = [
+            ("person_vorname", "Ada", "Grace Hopper"),
+            ("person_vorname", "Ada", "NotAda Lovelace"),
+            ("person_vorname", "Ada", "Adam Lovelace"),
+            ("person_nachname", "Lovelace", "Ada Lovelacee"),
+            ("person_titel", "Dr.", "Managing director"),
+        ];
+        for (field, value, quote) in invalid {
+            let requested = vec![field.to_string()];
+            let mut fields = serde_json::Map::new();
+            fields.insert(field.to_string(), serde_json::json!({
+                "status": "verified", "value": value,
+                "sources": [{"url": "https://firma.test/team", "quote": quote, "person_key": "A"}]
+            }));
+            let incoming = serde_json::json!({"A": fields});
+            let mut lead =
+                serde_json::json!({"contacts": [{"person_key": "A", "name": "Ada Lovelace"}]});
+            let rejections = apply_person_field_status(
+                &mut lead,
+                &incoming,
+                &BTreeMap::new(),
+                &requested,
+                &no_crm(),
+                None,
+            );
+            assert!(
+                rejections
+                    .iter()
+                    .any(|line| line.contains("verified ohne gueltigen Beleg")),
+                "{field} {value}: {rejections:?}"
+            );
+            assert!(lead.get("person_field_status").is_none(), "{field} {quote}");
+            assert_eq!(lead["contacts"][0]["name"], "Ada Lovelace");
+        }
+
+        // The existing single-external-source rule is sufficient. Title
+        // punctuation and equivalent compound-name punctuation remain usable.
+        for (field, value, quote) in [
+            ("person_vorname", "Ada", "Prof. Dr. Ada Lovelace"),
+            ("person_nachname", "Lovelace", "Prof. Dr. Ada Lovelace"),
+            ("person_titel", "Prof. Dr.", "Prof Dr Ada Lovelace"),
+            (
+                "person_vorname",
+                "Giselher Jürgen",
+                "Giselher Jürgen Bezler",
+            ),
+            ("person_vorname", "Jean-Luc", "Jean Luc Picard"),
+            ("person_nachname", "O'Neill", "Dr. Sara O’Neill"),
+        ] {
+            let requested = vec![field.to_string()];
+            let mut fields = serde_json::Map::new();
+            fields.insert(field.to_string(), serde_json::json!({
+                "status": "verified", "value": value,
+                "sources": [{"url": "https://firma.test/team", "quote": quote, "person_key": "A"}]
+            }));
+            let incoming = serde_json::json!({"A": fields});
+            let mut lead = serde_json::json!({"contacts": [{"person_key": "A"}]});
+            let rejections = apply_person_field_status(
+                &mut lead,
+                &incoming,
+                &BTreeMap::new(),
+                &requested,
+                &no_crm(),
+                None,
+            );
+            assert!(rejections.is_empty(), "{field} {value}: {rejections:?}");
+            project_person_field_status(&mut lead);
+            assert_eq!(
+                lead["person_field_status"]["A"][field]["status"],
+                "verified"
+            );
+            assert_eq!(lead["person_field_status"]["A"][field]["value"], value);
+            assert_eq!(
+                lead["person_field_status"]["A"][field]["sources"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                lead["contacts"][0]["field_status"][field]["status"],
+                "verified"
+            );
+        }
+    }
+
     // Codex counterexample: key A, verified a@…, the source names b@… and B.
     #[test]
     fn a_person_status_needs_its_own_key_and_a_quote_naming_the_value() {
@@ -5952,8 +6064,9 @@ mod tests {
             "Grit.Hartmann@bnt-chemicals.de",
             "grit.hartmann [at] bnt-chemicals [dot] de"
         ));
-        // Other fields are not affected.
-        assert!(quote_backs_value("person_vorname", "Robert", bnt));
+        // The same absent name must not verify Robert either.
+        assert!(!quote_backs_value("person_vorname", "Robert", bnt));
+        assert!(quote_backs_value("person_vorname", "Norman", bnt));
     }
 
     #[test]
