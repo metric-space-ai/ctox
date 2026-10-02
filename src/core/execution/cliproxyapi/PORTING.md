@@ -15,6 +15,17 @@
 - Current gate: open candidate `e2bff0107bb307337aaa19018ccddd55f64253d5`
   (tag `v8.0.11`, verified 2026-10-02). The accepted pin is still
   `a88197f845c979132c8978ea223c6af05cc81536`. This candidate is not promoted.
+- Latest observed upstream release: `v8.0.12`, published 2026-10-02 20:21:45 UTC,
+  commit `2044a01f422998de79a5da8015141b878886534d`. This is an additional
+  required follow-up candidate for the requested current-upstream outcome,
+  not a promotion of the frozen v8.0.11 review. Its delta against v8.0.11 is
+  32 files (+3,530 / -77 lines), including Claude auth/date handling, Codex
+  apply_patch and Responses conversion, config auth indexing, plugin routing
+  and conductor unauthorized-refresh/cooldown behavior. Classification,
+  semantic porting, local/Go parity checks and promotion evidence are pending.
+  Preserve the v8.0.11 review; do not claim the full update is current after
+  only that candidate passes.
+  Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.12.
 - Scaffolds: not counted
 - Owner of shared registry/module graph: CTOX integration lane
 
