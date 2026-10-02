@@ -4,7 +4,8 @@
 
 //! Request-side `apply_patch` bridge for a non-Codex executor.
 //!
-//! `ApplyPatchResponsesState` still has no Rust stream transformer. This
-//! function is the request half Go runs before Kimi reorders Responses input.
+//! The response-event bridge lives in the translator and is not wrapped
+//! here yet. `ApplyPatchResponsesState` still has no Rust stream transformer.
+//! This function is the request half Go runs before Kimi reorders Responses input.
 
 pub use crate::internal::translator::common::normalize_apply_patch_responses_request;
