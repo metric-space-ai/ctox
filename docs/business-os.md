@@ -1,5 +1,33 @@
 # CTOX Business OS
 
+## Operator coding presets and daemon readiness
+
+`ctox coding-agent models` reads the public `ctox.coding.models.v1`
+document through the existing private service socket for the selected root.
+It includes opaque preset IDs and `subscription_listener_ready`; it does not
+return tokens or configure accounts. This inspection skips the short-lived
+CLI database ledger. A present but unreachable, rejected or incompatible
+daemon is an error, not permission to invent a local model route.
+
+`ctox coding-agent turn --preset <id>` resolves that exact daemon-published
+preset immediately before the existing bounded embedded-pi turn. The
+daemon's process-local subscription readiness remains authoritative. An
+offline root retains its existing local capability rules; no subscription
+listener or account is synthesized. Business OS commands retain their native
+policy checks and daemon-local resolver. The IPC addition reads metadata only:
+it cannot forward an arbitrary turn, raw model, header or credential.
+
+Use an actually advertised model ID. A Desktop worker label or missing static
+catalogue entry does not establish account eligibility or provider availability.
+This correction neither adds a GPT model alias nor selects a fallback provider.
+
+For an identified root, use `ctox coding-agent models --root <root>` and
+`ctox coding-agent turn --module <id> --prompt <text> --preset <id> --root <root>`.
+The global root is selected by main. Coding handlers accept its one validated
+argument pair without reselecting the root; missing or duplicate pairs and
+unknown options fail. Only valid catalogue inspection skips the CLI ledger;
+turns retain their existing lifecycle and policy checks.
+
 ## Queue instruction boundary
 
 Native queue admission preserves the complete selected `payload.instruction`

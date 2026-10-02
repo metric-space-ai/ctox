@@ -1,5 +1,18 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Fresh native schema initialization
+
+Before dispatching native Business OS commands into a fresh root, run
+`ctox business-os rxdb init --root <source-root>`. This registers the compiled
+canonical native schemas and verifies every collection handle, including
+optional collections. It creates no domain records or Business OS app, starts
+no peer, and makes no WebRTC readiness claim. Repeating it preserves existing
+records. Schema drift that skips an optional collection fails initialization;
+this command does not silently repair or erase incompatible data.
+
+A fixture that already has empty canonical tables proves command behavior
+after initialization; it does not prove fresh-root bootstrap.
+
 ### Workjet project list readiness
 
 Project control starts its three collection bridges concurrently. The command
@@ -123,6 +136,17 @@ A projection that lacks matching native admission identity does not manufacture
 an actor from incoming metadata. The regression covers terminal state, outbox
 delivery to both stores, credential retention/redaction, forged projection
 identity and unchanged core intent/hash.
+
+### MCP app collection read authority
+
+Once a native RxDB collection table exists, MCP single-record and list reads
+use only that table. Native absence, including a physically purged tombstone
+or an empty table, cannot be replaced by an older `business_records` shadow.
+Present native tombstones retain their deletion flags and native ordering.
+Legacy shadow reads remain available when no native table exists for that
+collection; their write-time ordering and limits remain unchanged. This is a
+read boundary, not a record repair or a claim that the installed browser has
+converged. It does not change native table selection or actor permissions.
 
 ### Outbound MCP research record identity
 
@@ -403,6 +427,15 @@ relationship; no cross-WAL atomicity is implied.
 Workspace branding (`business_workspace_branding`) is treated as Business OS
 collection data under the same boundary: update through the Business OS command
 path, replicate through CTOX Sync Engine/WebRTC, never through HTTP.
+
+Native lead research projections require an explicit `business_os.chat.task`
+from `outbound-lead-generation` with a supported `business_command` writeback
+contract targeting `outbound.lead.research_writeback` in
+`outbound_lead_generation_leads`, and the lead's ID in `record_ids`.
+A chat task's `record_id` alone does not establish research intent: CRM-note
+reviews and unrelated tasks must preserve the lead's status, command/task IDs,
+research error, timestamp and revision. The same scope applies when a lease
+promotes a queued lead to running; its existing command ownership still applies.
 
 HTTP is **delivery and bootstrap only**: static shell assets, launch context,
 packed `ctox_config`, `/.well-known/ctox-business-os.json` status. In managed

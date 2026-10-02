@@ -881,6 +881,8 @@ pub struct PreparedChatPrompt {
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ServiceIpcRequest {
     Status,
+    /// Public coding topology only; never forwards a turn, model or credential.
+    CodingModelCapabilities,
     ChatSubmit {
         prompt: String,
         #[serde(default)]
@@ -3424,6 +3426,26 @@ pub fn dispatch_business_command(
     crate::business_os::store::accept_rxdb_business_command(root, document)
 }
 
+/// Read public coding metadata from the daemon owning subscription readiness.
+/// A present but unavailable/incompatible socket fails closed, without falling
+/// back to process-local readiness or a caller-supplied raw model.
+#[cfg(unix)]
+pub(crate) fn coding_model_capabilities_via_service(root: &Path) -> Result<Option<Value>> {
+    if !service_socket_path(root).exists() {
+        return Ok(None);
+    }
+    match send_service_ipc_request(root, ServiceIpcRequest::CodingModelCapabilities)? {
+        ServiceIpcResponse::Json {
+            status: 200,
+            payload,
+        } if payload.get("schema").and_then(Value::as_str) == Some("ctox.coding.models.v1") => {
+            Ok(Some(payload))
+        }
+        ServiceIpcResponse::Error { message } => anyhow::bail!(message),
+        _ => anyhow::bail!("daemon coding model capabilities are unavailable or incompatible"),
+    }
+}
+
 /// Route browser-backed Business OS web-stack work to the running daemon.
 /// Returns `None` when no daemon is available so offline CLI use can retain
 /// the existing in-process behavior.
@@ -4028,6 +4050,10 @@ fn handle_service_ipc_request(
             let (status, payload) = resolve_scrape_api_payload(root, &path)?;
             Ok(ServiceIpcResponse::Json { status, payload })
         }
+        ServiceIpcRequest::CodingModelCapabilities => Ok(ServiceIpcResponse::Json {
+            status: 200,
+            payload: crate::coding_agents::pi_sidecar::coding_model_capabilities(root),
+        }),
         ServiceIpcRequest::KnowledgeData { argv } => {
             // Dispatch the knowledge subcommand inside the daemon process so
             // the SQLite write is committed by the long-lived daemon's
@@ -4772,6 +4798,7 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
         // the server's write then hit EPIPE ("failed to flush service socket
         // response", ctox#21). 5s comfortably covers the bounded queue reads.
         ServiceIpcRequest::Status => Duration::from_secs(5),
+        ServiceIpcRequest::CodingModelCapabilities => Duration::from_secs(5),
         ServiceIpcRequest::ScrapeApi { .. } => Duration::from_millis(750),
         ServiceIpcRequest::ChatSubmit { .. } => Duration::from_secs(10),
         ServiceIpcRequest::Stop => Duration::from_secs(2),
@@ -4834,6 +4861,188 @@ fn web_stack_ipc_timeout(argv: &[String]) -> Duration {
     });
     let slack_ms = if waits_for_email_otp { 210_000 } else { 15_000 };
     Duration::from_millis(timeout_ms.saturating_add(slack_ms))
+}
+
+#[cfg(all(test, unix))]
+mod coding_model_cli_ipc_tests {
+    use super::*;
+
+    fn serve(root: &Path, responses: Vec<ServiceIpcResponse>) -> std::thread::JoinHandle<()> {
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let socket = service_socket_path(root);
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        std::thread::spawn(move || {
+            for response in responses {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "CLI did not request daemon metadata"
+                            );
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("socket accept failed: {error}"),
+                    }
+                };
+                // macOS can inherit the listener's nonblocking flag on accept.
+                // Match the blocking production listener, retaining the deadline.
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut line = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut line)
+                    .unwrap();
+                assert!(matches!(
+                    serde_json::from_str::<ServiceIpcRequest>(&line).unwrap(),
+                    ServiceIpcRequest::CodingModelCapabilities
+                ));
+                writeln!(stream, "{}", serde_json::to_string(&response).unwrap()).unwrap();
+            }
+            drop(listener);
+            std::fs::remove_file(socket).unwrap();
+        })
+    }
+
+    fn published() -> Value {
+        serde_json::json!({
+            "schema":"ctox.coding.models.v1", "subscription_listener_ready":true,
+            "presets":[{"id":"codex-subscription-advertised-fixture", "model":{
+                "id":"advertised-fixture", "provider":"ctox-gateway",
+                "headers":{"X-CTOX-Provider":"codex"}
+            }}]
+        })
+    }
+
+    #[test]
+    fn cli_resolves_only_the_same_root_daemon_published_preset() {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let id = "codex-subscription-advertised-fixture";
+        assert!(
+            crate::coding_agents::pi_sidecar::resolve_coding_model_preset(root.path(), id).is_err()
+        );
+        let response = published();
+        let server = serve(
+            root.path(),
+            vec![
+                ServiceIpcResponse::Json {
+                    status: 200,
+                    payload: response.clone(),
+                },
+                ServiceIpcResponse::Json {
+                    status: 200,
+                    payload: response.clone(),
+                },
+                ServiceIpcResponse::Json {
+                    status: 200,
+                    payload: response.clone(),
+                },
+            ],
+        );
+        assert_eq!(
+            crate::coding_agents::pi_sidecar::coding_model_capabilities_for_cli(root.path())
+                .unwrap(),
+            response
+        );
+        crate::coding_agents::handle_cli(
+            root.path(),
+            &[
+                "models".to_owned(),
+                "--root".to_owned(),
+                root.path().display().to_string(),
+            ],
+        )
+        .unwrap();
+        assert!(
+            crate::coding_agents::pi_sidecar::resolve_coding_model_preset_for_cli(other.path(), id)
+                .is_err()
+        );
+        let model =
+            crate::coding_agents::pi_sidecar::resolve_coding_model_preset_for_cli(root.path(), id)
+                .unwrap()
+                .unwrap();
+        assert_eq!(model["id"], "advertised-fixture");
+        assert_eq!(model["headers"]["X-CTOX-Provider"], "codex");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn cli_does_not_fallback_after_daemon_metadata_rejection() {
+        let root = tempfile::tempdir().unwrap();
+        let server = serve(
+            root.path(),
+            vec![ServiceIpcResponse::Error {
+                message: "coding metadata denied".into(),
+            }],
+        );
+        let error = crate::coding_agents::pi_sidecar::resolve_coding_model_preset_for_cli(
+            root.path(),
+            "ctox",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("coding metadata denied"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn cli_rejects_wrong_daemon_metadata_schema_or_status() {
+        for (status, schema) in [(200, "wrong.schema"), (503, "ctox.coding.models.v1")] {
+            let root = tempfile::tempdir().unwrap();
+            let server = serve(
+                root.path(),
+                vec![ServiceIpcResponse::Json {
+                    status,
+                    payload: serde_json::json!({"schema":schema,"presets":[]}),
+                }],
+            );
+            assert!(
+                crate::coding_agents::pi_sidecar::coding_model_capabilities_for_cli(root.path())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("unavailable or incompatible")
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn cli_rejects_named_preset_without_explicit_model() {
+        for absent in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let mut payload = published();
+            if absent {
+                payload["presets"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("model");
+            } else {
+                payload["presets"][0]["model"] = Value::Null;
+            }
+            let server = serve(
+                root.path(),
+                vec![ServiceIpcResponse::Json {
+                    status: 200,
+                    payload,
+                }],
+            );
+            let error = crate::coding_agents::pi_sidecar::resolve_coding_model_preset_for_cli(
+                root.path(),
+                "codex-subscription-advertised-fixture",
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("preset is malformed"));
+            assert!(!root.path().join("coding-agents").exists());
+            server.join().unwrap();
+        }
+    }
 }
 
 #[cfg(test)]
