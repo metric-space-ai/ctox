@@ -25,8 +25,11 @@ export function browserFrameBinding(response, request, surface) {
   const binding = nativeBinding(response);
   if (!currentRequest(request, surface) || !binding
     || binding.session_id !== request.sessionId
+    || !nonempty(response?.screenshot?.base64)
     || response?.nav?.active_tab_id !== binding.active_tab_id) return null;
   if (surface.activeTabId && surface.activeTabId !== binding.active_tab_id) return null;
+  if (surface.runtimeGeneration && surface.runtimeGeneration !== binding.runtime_generation) return null;
+  if (surface.tabId && surface.tabId !== binding.tab_id) return null;
   return Object.freeze({ ...binding, epoch: request.epoch, leaseId: request.leaseId });
 }
 
@@ -35,6 +38,8 @@ export function browserInputBinding(frameBinding, surface) {
     leaseId: frameBinding.leaseId, epoch: frameBinding.epoch }, surface)
     || !nonempty(frameBinding.runtime_generation) || !nonempty(frameBinding.active_tab_id)
     || !nonempty(frameBinding.tab_id)
+    || (surface.runtimeGeneration && surface.runtimeGeneration !== frameBinding.runtime_generation)
+    || (surface.tabId && surface.tabId !== frameBinding.tab_id)
     || (surface.activeTabId && surface.activeTabId !== frameBinding.active_tab_id)) return null;
   return { runtime_generation: frameBinding.runtime_generation,
     active_tab_id: frameBinding.active_tab_id };

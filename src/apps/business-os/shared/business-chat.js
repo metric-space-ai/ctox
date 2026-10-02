@@ -18,6 +18,7 @@ const CHAT_STATE_KEY = 'ctox.businessOs.chat.v1';
 const CHAT_SUBMISSIONS = new WeakMap();
 const CHAT_CHANNEL = 'business_os.llm.chat';
 const CHAT_COLLECTION = 'business_chats';
+const CHAT_QUERY_WINDOW_LIMIT = 200;
 const CHAT_OPEN_EVENT = 'ctox-business-os-chat-open';
 const CHAT_LAYOUT_EVENT = 'ctox-business-os-chat-layout';
 const MANY_CHAT_THRESHOLD = 12;
@@ -630,6 +631,9 @@ export function initBusinessChat({
   };
 
   let chatHydrationRetryTimer = null;
+  let chatHydrationDisposed = false;
+  let chatHydrationInFlight = false;
+  let chatHydrationRequested = false;
   let chatLayoutObserver = null;
   const scheduleChatHydrationRetry = (delayMs = 750) => {
     if (chatHydrationRetryTimer) return;
@@ -640,17 +644,27 @@ export function initBusinessChat({
   };
 
   const syncChats = () => {
+    if (chatHydrationDisposed) return;
+    if (chatHydrationInFlight) {
+      chatHydrationRequested = true;
+      return;
+    }
     if (shouldDeferRemoteChatHydration(root, state)) {
       scheduleChatHydrationRetry();
       return;
     }
+    chatHydrationInFlight = true;
+    chatHydrationRequested = false;
     const presentationTicket = currentChatOpenOwnership(state);
     captureDrafts(root, state);
     hydrateChatsFromRxDb({ state, db, session }).then((changed) => {
-      if (changed && ownsChatOpenOwnership(state, presentationTicket)) {
+      if (!chatHydrationDisposed && changed && ownsChatOpenOwnership(state, presentationTicket)) {
         renderChatRoot({ root, state, commandBus, db, getActiveModule });
       }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => {
+      chatHydrationInFlight = false;
+      if (!chatHydrationDisposed && chatHydrationRequested) syncChats();
+    });
   };
 
   startChatLiveCollections({
@@ -953,7 +967,9 @@ export function initBusinessChat({
     chatLayoutObserver.observe(root);
   }
 
-  const businessChatsSub = db?.raw?.[CHAT_COLLECTION]?.$?.subscribe?.(syncChats) || null;
+  // A whole-collection observable retains every historical chat on its delta
+  // path. The companion needs the same bounded selection as its hydration.
+  const businessChatsSub = db?.raw?.[CHAT_COLLECTION]?.find?.({ selector: {}, limit: CHAT_QUERY_WINDOW_LIMIT })?.$?.subscribe?.(syncChats) || null;
   trackingWatch = createTrackedMessageWatch({
     state,
     db,
@@ -963,6 +979,8 @@ export function initBusinessChat({
   trackingWatch.refresh({ schedule: true });
 
   root.__ctoxChatCleanup = () => {
+    chatHydrationDisposed = true;
+    chatHydrationRequested = false;
     crewPoolDisposed = true;
     if (crewPoolRetryTimer) window.clearTimeout(crewPoolRetryTimer);
     crewChangeSubscription?.unsubscribe?.();
@@ -5177,7 +5195,7 @@ async function hydrateChatsFromRxDb({ state, db, session }) {
   const owner = ownerUserId(session) || state.ownerUserId || '';
   state.ownerUserId = owner;
   pruneChatDeletionTombstones(state);
-  const docs = await collection.find().exec();
+  const docs = await collection.find({ selector: {}, limit: CHAT_QUERY_WINDOW_LIMIT }).exec();
   const remoteChats = docs
     .map((doc) => doc.toJSON())
     .filter((chat) => !chat?._deleted)
