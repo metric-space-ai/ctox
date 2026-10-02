@@ -1205,15 +1205,7 @@ fn outbound_handle_research_source_registry_read(
 ) -> anyhow::Result<Value> {
     let antwort = scrape::dispatch_capturing(root, &["list-targets".to_string()])
         .context("scrape registry could not be read")?;
-    let ziele = antwort
-        .as_array()
-        .cloned()
-        .or_else(|| {
-            antwort
-                .as_object()
-                .and_then(|map| map.values().find_map(|v| v.as_array().cloned()))
-        })
-        .context("scrape registry returned no target list")?;
+    let ziele = outbound_registry_target_list(&antwort)?;
     let gesucht = command
         .payload
         .get("target_keys")
@@ -1273,6 +1265,31 @@ fn outbound_handle_research_source_registry_read(
         "targets": eintraege,
         "script": script,
     }))
+}
+
+/// Accept the native list-targets envelope or the legacy direct list. Unrelated
+/// arrays and failed envelopes must never become a successful empty registry.
+fn outbound_registry_target_list(answer: &Value) -> anyhow::Result<Vec<Value>> {
+    let targets = if let Some(targets) = answer.as_array() {
+        targets
+    } else {
+        anyhow::ensure!(
+            answer.get("ok").and_then(Value::as_bool) == Some(true),
+            "scrape registry returned no successful target envelope"
+        );
+        answer
+            .get("targets")
+            .and_then(Value::as_array)
+            .context("scrape registry returned no target list")?
+    };
+    anyhow::ensure!(
+        targets.iter().all(|target| target
+            .get("target_key")
+            .and_then(Value::as_str)
+            .is_some_and(|key| !key.trim().is_empty())),
+        "scrape registry returned a malformed target entry"
+    );
+    Ok(targets.clone())
 }
 
 /// Provider account state per scrape target (capabilities/scrape/
@@ -13548,6 +13565,37 @@ mod registry_last_run_detail_tests {
             state.get("credential_version").is_none(),
             "no credential details"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn registry_target_list_never_uses_an_error_or_unrelated_array() -> anyhow::Result<()> {
+        let targets = serde_json::json!([{ "target_key": "linkedin-com" }]);
+        assert_eq!(outbound_registry_target_list(&targets)?.len(), 1);
+        assert_eq!(
+            outbound_registry_target_list(&serde_json::json!({"ok": true, "targets": targets}))?
+                .len(),
+            1
+        );
+        assert!(outbound_registry_target_list(&serde_json::json!([]))?.is_empty());
+        assert!(
+            outbound_registry_target_list(&serde_json::json!({"ok": true, "targets": []}))?
+                .is_empty()
+        );
+        for invalid in [
+            serde_json::json!({"ok": false, "targets": []}),
+            serde_json::json!({"ok": true, "errors": []}),
+            serde_json::json!({"ok": true, "errors": [], "targets": "bad"}),
+            serde_json::json!({"targets": []}),
+            serde_json::json!({"ok": "true", "targets": []}),
+            serde_json::json!([{}]),
+            serde_json::json!([{ "target_key": " " }]),
+        ] {
+            assert!(
+                outbound_registry_target_list(&invalid).is_err(),
+                "{invalid}"
+            );
+        }
         Ok(())
     }
 
