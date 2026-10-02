@@ -851,8 +851,13 @@ fn deduplicate_contacts(contacts: &mut Vec<Value>) {
         let id = identity(&contact, "id");
         let person_key = identity(&contact, "person_key");
         let duplicate_of = kept.iter().position(|existing| {
-            (id.is_some() && identity(existing, "id") == id)
-                || (person_key.is_some() && identity(existing, "person_key") == person_key)
+            let existing_key = identity(existing, "person_key");
+            // An imported/reused row id cannot override two distinct person
+            // identities. Match by key when both contacts carry one.
+            if person_key.is_some() && existing_key.is_some() {
+                return existing_key == person_key;
+            }
+            id.is_some() && identity(existing, "id") == id
         });
         if let Some(index) = duplicate_of {
             // The later row may carry a field the first one lacked.
@@ -1106,7 +1111,7 @@ fn researched_alias_has_canonical_value(
 
 /// The contact a keyed person field belongs to: the one carrying that
 /// `person_key` (or Sellify person id), else a new contact with that key.
-/// Without a key the first contact stays the target, as before.
+/// Without a key, construct an empty discovery record; never inherit a contact.
 fn contact_for_person_key(contacts: &[Value], key: Option<&str>) -> Value {
     match key {
         Some(key) => contacts
@@ -3886,6 +3891,52 @@ mod tests {
         assert!(!contacts_match(&one, &two));
         let same = serde_json::json!({"person_key": "norman-quandt", "person_vorname": "N.", "person_nachname": "Quandt"});
         assert!(contacts_match(&one, &same));
+    }
+
+    #[test]
+    fn deduplication_never_merges_distinct_person_keys_over_a_shared_row_id() {
+        let first = serde_json::json!({"id": "imported-row", "person_key": "grace-hopper", "name": "Grace Hopper", "email": "info@company.test"});
+        let second = serde_json::json!({"id": "imported-row", "person_key": "ada-lovelace", "name": "Ada Lovelace", "email": "info@company.test"});
+        let mut contacts = vec![first.clone(), second.clone()];
+        deduplicate_contacts(&mut contacts);
+        assert_eq!(contacts, vec![first.clone(), second.clone()]);
+
+        // Imported ids can predate stable person keys. The real projection
+        // must preserve both identities after a keyed update as well.
+        let patch = outbound_lead_generation_research_outcome_patch(
+            &serde_json::json!({"id": "lead-shared-row", "contacts": contacts}),
+            &serde_json::json!({"fields": {
+                "person_position": {"value": "Admiral", "person_key": "grace-hopper"}
+            }}),
+            1,
+        );
+        let projected = patch["contacts"].as_array().unwrap();
+        assert_eq!(projected.len(), 2);
+        assert_eq!(projected[0]["name"], "Grace Hopper");
+        assert_eq!(projected[0]["person_position"], "Admiral");
+        assert_eq!(projected[1], second);
+
+        // Same keyed identity still coalesces even with different row ids.
+        let mut same_person = vec![
+            first.clone(),
+            serde_json::json!({
+                "id": "new-provider-row", "person_key": "grace-hopper", "phone": "+49 1234567"
+            }),
+        ];
+        deduplicate_contacts(&mut same_person);
+        assert_eq!(same_person.len(), 1);
+        assert_eq!(same_person[0]["person_key"], "grace-hopper");
+        assert_eq!(same_person[0]["phone"], "+49 1234567");
+
+        // Legacy unkeyed duplicate ids retain their existing behaviour.
+        let mut legacy = vec![
+            serde_json::json!({"id": "legacy", "name": "Grace Hopper"}),
+            serde_json::json!({"id": "legacy", "email": "grace@company.test"}),
+        ];
+        deduplicate_contacts(&mut legacy);
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0]["name"], "Grace Hopper");
+        assert_eq!(legacy[0]["email"], "grace@company.test");
     }
 
     #[test]

@@ -145,6 +145,9 @@ are listed in `payload.unbound_person_field_keys`, outside the researched-field
 list. Existing imported names and contact details remain unchanged. Initial
 legacy discovery from an empty contact list and explicit keyed updates remain
 supported; this does not certify the source quality of those values.
+Contact deduplication also preserves two distinct nonempty person keys even
+when imported contacts share a local row ID. Duplicate rows with the same
+person key still coalesce; unkeyed legacy row-ID matching remains supported.
 
 Sellify lookups require a readable collection and use one read-only SQLite
 transaction for ID, exact-field, fuzzy-field, and campaign-group probes.
