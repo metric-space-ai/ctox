@@ -10,11 +10,12 @@ const source = fs.readFileSync(fixtureUrl, 'utf8')
   .replaceAll('import.meta.url', JSON.stringify(fixtureUrl.href));
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 
-for (const stage of ['launch', 'context', 'context-close-error']) {
+for (const stage of ['launch', 'context', 'context-close-error', 'evidence-write-error']) {
   test(`composition fixture cleans owned allocations after ${stage} failure`, async () => {
     const failure = new Error(`injected ${stage} failure`);
     let browserCloses = 0;
     let serverCloses = 0;
+    let evidence;
     const server = {
       listening: false,
       listen(_port, _host, callback) { this.listening = true; queueMicrotask(callback); },
@@ -33,9 +34,17 @@ for (const stage of ['launch', 'context', 'context-close-error']) {
     fixtureRequire.resolve = () => '/fixture/playwright';
     const run = new AsyncFunction('createServer', 'createRequire', 'fs', 'path', 'fileURLToPath', source);
     await assert.rejects(run(() => server, () => fixtureRequire,
-      { mkdirSync() {}, existsSync() { return true; } }, path, fileURLToPath), error => error === failure);
+      { mkdirSync() {}, existsSync() { return true; }, writeFileSync(_path, value) {
+        if (stage === 'evidence-write-error') throw new Error('injected evidence failure');
+        evidence = JSON.parse(value);
+      } }, path, fileURLToPath), error => error === failure);
     assert.equal(serverCloses, 1, 'owned server must close even if Chromium never launched');
     assert.equal(server.listening, false);
     assert.equal(browserCloses, stage === 'launch' ? 0 : 1);
+    if (stage !== 'evidence-write-error') {
+      assert.equal(evidence.ok, false, 'failed allocations must not leave a stale success receipt');
+      assert.match(evidence.failures[0], new RegExp(`injected ${stage} failure`));
+      assert.equal(evidence.failureSnapshot, null, 'uncreated pages have no manufactured browser snapshot');
+    }
   });
 }

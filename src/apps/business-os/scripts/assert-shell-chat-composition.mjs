@@ -21,6 +21,7 @@ const observations = [];
 const consoleEvents = [];
 const server = createServer((request, response) => serveRequest(request, response));
 let browser;
+let page;
 
 try {
   const port = await listen(server);
@@ -31,7 +32,7 @@ try {
     args: ['--disable-gpu'],
   });
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
-  const page = await context.newPage();
+  page = await context.newPage();
   page.on('console', (message) => consoleEvents.push({ type: message.type(), text: message.text() }));
   page.on('pageerror', (error) => consoleEvents.push({ type: 'pageerror', text: error?.stack || String(error) }));
   page.on('requestfailed', (request) => consoleEvents.push({ type: 'requestfailed', text: `${request.method()} ${request.url()}` }));
@@ -312,6 +313,40 @@ try {
   } else {
     console.log(JSON.stringify({ ok: true, reportPath, screenshotPath, phases: observations.length }, null, 2));
   }
+} catch (error) {
+  // A failing click must retain its actual hit target and completed phases
+  // before teardown, not leave a stale success report from an earlier run.
+  failures.push(error?.stack || String(error));
+  let failureSnapshot = null;
+  let failureCaptureError = null;
+  let captureTimer;
+  try {
+    if (page) failureSnapshot = await Promise.race([
+      page.evaluate(() => {
+        const trigger = document.querySelector('.shell-window [data-window-layout-trigger]');
+        const rect = trigger?.getBoundingClientRect();
+        const describe = node => ({ tag: node.tagName, className: node.className?.baseVal ?? node.className });
+        return {
+          state: window.shellHarness?.collect(),
+          trigger: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+          triggerCenterHits: rect ? document.elementsFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+            .slice(0, 12).map(describe) : [],
+          chatWindows: window.shellHarness?.collectChatWindows(),
+        };
+      }),
+      new Promise((_, reject) => { captureTimer = setTimeout(() => reject(new Error('failure snapshot deadline')), 3000); }),
+    ]);
+    if (page) await page.screenshot({ path: path.join(outputDir, 'shell-chat-composition-failure.png'), fullPage: true, timeout: 3000 });
+  } catch (captureError) {
+    failureCaptureError = captureError?.message || String(captureError);
+  } finally {
+    clearTimeout(captureTimer);
+  }
+  try {
+    fs.writeFileSync(reportPath, JSON.stringify({ ok: false, failures, observations, consoleEvents,
+      failureSnapshot, failureCaptureError, screenshotPath }, null, 2));
+  } catch { /* Evidence failure must not replace the original failure or skip cleanup. */ }
+  throw error;
 } finally {
   if (browser) await browser.close().catch(() => {});
   if (server.listening) await new Promise((resolve) => server.close(resolve));
