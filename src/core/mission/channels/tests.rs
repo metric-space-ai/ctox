@@ -122,6 +122,24 @@ fn queue_turn_fence_cannot_interrupt_a_released_new_worker() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn queue_turn_fence_fails_closed_without_creating_a_missing_store() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let fence = QueueTurnLeaseFence {
+        root: root.path().to_owned(),
+        message_keys: vec!["queue:system::missing".into()],
+        worker_id: "worker-target".into(),
+    };
+    let db_path = resolve_db_path(root.path(), None);
+    assert!(!db_path.exists());
+    assert!(fence.open_reader().is_err());
+    assert!(
+        !db_path.exists(),
+        "lease probe must not initialize a new store"
+    );
+    Ok(())
+}
+
 fn unique_test_db_path(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "{prefix}-{}.db",

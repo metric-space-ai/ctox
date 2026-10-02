@@ -33,8 +33,10 @@ turn while continuing to drain events, with a ten-second bound. Only a terminal
 event matching both identities is a stop witness. An acknowledgement alone is
 not one. The cancelled session is discarded even when that witness is missing;
 its bounded existing teardown remains the fallback. Pre-start and pre-reply
-checks reject revoked work. This does not undo writes committed before the
-interrupt or implement cancellation for a separately owned external executor.
+checks reject revoked work, including cancellation during context preparation.
+Usage already observed before interruption remains recorded even though the
+reply is suppressed. This does not undo writes committed before the interrupt
+or implement cancellation for a separately owned external executor.
 
 ## Runtime State
 

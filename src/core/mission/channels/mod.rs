@@ -4156,13 +4156,6 @@ pub fn renew_message_leases(
     Ok(renewed)
 }
 
-/// lease-3 (F-002): durable worker identity for queue-task leases. The worker
-/// that actually starts a leased slice persists its instance-unique id on the
-/// lease row so a recovery sweep (or operator) can tell a lease held by a
-/// live worker apart from one left behind by a worker that disappeared. This
-/// write is deliberately constrained to rows still leased by the expected
-/// owner, so a stale worker can never stamp a lease that was already
-/// reclaimed and re-leased by someone else.
 /// Exact native lease identity supplied to a service-owned harness turn.
 /// A cancelled, missing or re-leased row revokes the old turn's authority.
 #[derive(Debug, Clone)]
@@ -4204,6 +4197,13 @@ impl QueueTurnLeaseFence {
     }
 }
 
+/// lease-3 (F-002): durable worker identity for queue-task leases. The worker
+/// that actually starts a leased slice persists its instance-unique id on the
+/// lease row so a recovery sweep (or operator) can tell a lease held by a
+/// live worker apart from one left behind by a worker that disappeared. This
+/// write is deliberately constrained to rows still leased by the expected
+/// owner, so a stale worker can never stamp a lease that was already
+/// reclaimed and re-leased by someone else.
 pub fn record_queue_lease_worker(
     root: &Path,
     message_keys: &[String],

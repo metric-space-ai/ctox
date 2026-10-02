@@ -1854,6 +1854,14 @@ impl PersistentSession {
             persistent_thread_name: persistent_thread_name.as_deref(),
         };
         let timeouts = production_session_control_timeouts();
+        // Context compaction/tokenization may take time. A cancellation
+        // committed during that preparation must not start a model turn.
+        if let (Some(fence), Some(reader)) = (queue_turn_lease, lease_reader.as_ref()) {
+            anyhow::ensure!(
+                fence.still_owned(reader)?,
+                "queue turn cancelled before turn start: native lease revoked"
+            );
+        }
         let turn_resp: TurnStartResponse = start_bound_turn(
             client,
             seq,
@@ -1903,6 +1911,15 @@ impl PersistentSession {
                         let terminal = interrupt_cancelled_queue_turn(
                             client, seq, &thread_id, &turn_id,
                         ).await;
+                        // Cancellation suppresses the reply, not the cost
+                        // of model work already observed before the stop.
+                        if !pending_api_cost_records.is_empty() {
+                            if let Err(err) = api_costs::record_api_model_usage_batch(
+                                root, &pending_api_cost_records,
+                            ) {
+                                eprintln!("[ctox direct-session] cost tracking failed: {err}");
+                            }
+                        }
                         progress(&serde_json::json!({
                             "event_kind": "worker.turn_cancelled",
                             "title": "Queue turn interrupted",
