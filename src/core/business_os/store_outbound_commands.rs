@@ -13619,7 +13619,12 @@ mod registry_last_run_detail_tests {
         );
         let conn = Connection::open(crate::paths::core_db(root))?;
         conn.execute_batch(
-            "INSERT INTO scrape_account_state VALUES
+            "INSERT INTO scrape_target
+               (target_id, target_key, display_name, start_url, workspace_dir, created_at, updated_at)
+             VALUES
+               ('t-invalid', 'fixture-registry-integrity', 'Registry Integrity Fixture',
+                'https://fixture.invalid/', 'fixture', '2026-10-02T00:00:00Z', '2026-10-02T00:00:00Z');
+             INSERT INTO scrape_account_state VALUES
                ('t-invalid', 1, 'Customer is not active', 'run-causal', 'run-causal',
                 NULL, NULL, 'not-a-number', 0, NULL, 0, 0);",
         )?;
