@@ -39,6 +39,10 @@ fn execute_cli(root: &Path, args: &[String]) -> anyhow::Result<Value> {
         None | Some("help") | Some("--help") | Some("-h") => Ok(help_outcome()),
         Some("turn") => run_coding_turn_cli(root, &args[1..]),
         Some("smoke") => run_coding_smoke_cli(root, &args[1..]),
+        Some("models") => {
+            anyhow::ensure!(args.len() == 1, "usage: ctox coding-agent models");
+            pi_sidecar::coding_model_capabilities_for_cli(root)
+        }
         Some("route") => {
             anyhow::ensure!(args.len() == 1, "usage: ctox coding-agent route");
             pi_sidecar::inherited_coding_route_status(root)
@@ -139,7 +143,7 @@ fn run_coding_turn_cli(root: &Path, args: &[String]) -> anyhow::Result<Value> {
         // Resolve at execution time from the native capability topology. The
         // operator passes the same opaque identifier as Business OS; URLs,
         // headers, account handles and credentials remain server-authored.
-        model = pi_sidecar::resolve_coding_model_preset(root, &preset_id)?;
+        model = pi_sidecar::resolve_coding_model_preset_for_cli(root, &preset_id)?;
     }
     let dist = pi_sidecar::resolve_sidecar_dist(root)?;
     pi_sidecar::run_module_coding_turn(root, &dist, &module, &prompt, faux, model)
@@ -149,7 +153,7 @@ fn help_outcome() -> Value {
     json!({
         "ok": true,
         "operation": "help",
-        "stdout": "ctox coding-agent turn --module <id> --prompt <text> [--faux] [--preset <id> | --model <json>]\nctox coding-agent smoke --preset <id> [--prompt <text>]\nctox coding-agent route  (nonsecret inherited provider, origin and wire API)\n",
+        "stdout": "ctox coding-agent turn --module <id> --prompt <text> [--faux] [--preset <id> | --model <json>]\nctox coding-agent smoke --preset <id> [--prompt <text>]\nctox coding-agent models  (daemon-published opaque presets and readiness)\nctox coding-agent route  (nonsecret inherited provider, origin and wire API)\n",
         "stderr": "",
         "exit_code": 0,
     })

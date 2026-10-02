@@ -375,6 +375,12 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
     if args.first().map(String::as_str) == Some("office") {
         return true;
     }
+    if matches!(args, [command, area] if matches!(command.as_str(), "coding-agent" | "coding-agents") && area == "models")
+    {
+        // Metadata uses the existing private daemon control socket and must
+        // not wait on a second SQLite ledger write in the short-lived CLI.
+        return true;
+    }
     if service::sandboxed_cli_command_allowed(args) {
         return true;
     }
@@ -5205,6 +5211,17 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>();
         assert!(!super::skips_cli_turn_ledger(&inspect));
+    }
+
+    #[test]
+    fn coding_models_inspection_skips_ledger_without_exempting_turns() {
+        for command in ["coding-agent", "coding-agents"] {
+            let models = vec![command.to_owned(), "models".to_owned()];
+            assert!(super::skips_cli_startup_db(&models));
+            assert!(super::skips_cli_turn_ledger(&models));
+            let turn = vec![command.to_owned(), "turn".to_owned()];
+            assert!(!super::skips_cli_turn_ledger(&turn));
+        }
     }
 
     #[test]
