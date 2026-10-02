@@ -131,6 +131,14 @@ A failed lookup has an unknown (`null`) record count and a bounded error code,
 not a false empty result or raw database error. The enclosing command/workspace
 binds the receipt to the research; it is not a synthetic scrape run.
 
+The native person-research worker saves the Lead result before publishing a
+completed command. A rejected Lead writeback produces a failed command with
+operation `person_research_writeback`, retaining the previous Lead values.
+A successful result is projected once, so completion does not duplicate
+evidence or launch a second contact-validation sweep. This ordering is a
+delivery barrier, not a cross-database atomicity claim; command publication
+failures still use the existing recovery path.
+
 Sellify lookups require a readable collection and use one read-only SQLite
 transaction for ID, exact-field, fuzzy-field, and campaign-group probes.
 Before opening that snapshot, best-effort index preparation on an existing

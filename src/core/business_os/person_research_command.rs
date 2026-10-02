@@ -318,19 +318,12 @@ fn spawn_worker(root: PathBuf, command: BusinessCommand) -> anyhow::Result<bool>
                             } else {
                                 "completed"
                             };
-                            let lead_result = outcome.clone();
-                            (
-                                store::write_rxdb_control_command_outcome(
-                                    &root,
-                                    &worker_command,
-                                    "completed",
-                                    gap_task.as_ref().map(|task| task.message_key.as_str()),
-                                    Some("completed"),
-                                    outcome,
-                                ),
+                            persist_completed_person_research_outcome(
+                                &root,
+                                &worker_command,
                                 lead_status,
-                                None,
-                                Some(lead_result),
+                                gap_task.as_ref().map(|task| task.message_key.as_str()),
+                                outcome,
                             )
                         }
                         Err(error) => {
@@ -382,7 +375,9 @@ fn spawn_worker(root: PathBuf, command: BusinessCommand) -> anyhow::Result<bool>
                 eprintln!(
                     "[business-os] person research `{worker_command_id}` outcome failed: {error:#}"
                 );
-            } else {
+            } else if lead_result.is_none() {
+                // Successful results were saved before publishing completion.
+                // Only failure lifecycle metadata remains to be projected here.
                 log_lead_projection_error(
                     &worker_command_id,
                     project_outbound_lead_generation_lead_state(
@@ -390,7 +385,7 @@ fn spawn_worker(root: PathBuf, command: BusinessCommand) -> anyhow::Result<bool>
                         &worker_command,
                         lead_status,
                         lead_error.as_deref(),
-                        lead_result.as_ref(),
+                        None,
                     ),
                 );
             }
@@ -399,6 +394,70 @@ fn spawn_worker(root: PathBuf, command: BusinessCommand) -> anyhow::Result<bool>
         return Err(error.into());
     }
     Ok(true)
+}
+
+// A completed command is a barrier for readers: its lead result must already
+// be durable. Logging a rejected projection after completion hides a lost
+// research result. This is ordered delivery, not a cross-database transaction.
+fn persist_completed_person_research_outcome(
+    root: &Path,
+    command: &BusinessCommand,
+    lead_status: &'static str,
+    thread_key: Option<&str>,
+    outcome: Value,
+) -> (
+    anyhow::Result<Value>,
+    &'static str,
+    Option<String>,
+    Option<Value>,
+) {
+    let writeback = if command.module.trim() == "outbound-lead-generation"
+        && command
+            .record_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+        && outbound_lead_generation_writeback_record_id(command).is_none()
+    {
+        Err(anyhow::anyhow!(
+            "missing or mismatched bounded lead writeback contract"
+        ))
+    } else {
+        project_outbound_lead_generation_lead_state(
+            root,
+            command,
+            lead_status,
+            None,
+            Some(&outcome),
+        )
+    };
+    if let Err(error) = writeback {
+        let message = error.to_string();
+        return (
+            store::write_rxdb_failed_control_command_outcome(
+                root,
+                command,
+                "person_research_writeback",
+                error,
+            ),
+            "failed",
+            Some(message),
+            None,
+        );
+    }
+    let lead_result = outcome.clone();
+    (
+        store::write_rxdb_control_command_outcome(
+            root,
+            command,
+            "completed",
+            thread_key,
+            Some("completed"),
+            outcome,
+        ),
+        lead_status,
+        None,
+        Some(lead_result),
+    )
 }
 
 fn project_outbound_lead_generation_lead_state(
@@ -2484,6 +2543,126 @@ fn inject_sellify_candidates(payload: &mut Value, record: &Value) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_research_requires_durable_lead_writeback() -> anyhow::Result<()> {
+        for failure in ["none", "sqlite", "contract"] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path();
+            for collection in ["outbound_lead_generation_leads", "business_commands"] {
+                super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                    root, collection,
+                )?;
+            }
+            let mut command = BusinessCommand {
+                id: Some("cmd-writeback-barrier".to_string()),
+                module: "outbound-lead-generation".to_string(),
+                command_type: "web_stack.person_research".to_string(),
+                record_id: Some("lead-writeback-barrier".to_string()),
+                payload: serde_json::json!({
+                    "writeback_contract": {
+                        "collection": "outbound_lead_generation_leads",
+                        "record_ids": ["lead-writeback-barrier"]
+                    }
+                }),
+                client_context: Value::Null,
+                origin: store::CommandOrigin::TrustedLocal,
+            };
+            store::upsert_rxdb_collection_record(
+                root,
+                "outbound_lead_generation_leads",
+                "lead-writeback-barrier",
+                1,
+                serde_json::json!({
+                    "id": "lead-writeback-barrier", "research_status": "running",
+                    "data": {"firma_name": "Imported company"},
+                    "contacts": [{"id": "retained-contact", "person_vorname": "Grace"}]
+                }),
+            )?;
+            if failure == "contract" {
+                command.payload["writeback_contract"]["record_ids"] =
+                    serde_json::json!(["another-lead"]);
+            }
+            if failure == "sqlite" {
+                let conn = rusqlite::Connection::open(store::rxdb_store_path(root))?;
+                conn.execute_batch(
+                    "CREATE TRIGGER reject_lead_result_insert
+                     BEFORE INSERT ON ctox_business_os__outbound_lead_generation_leads__v0
+                     WHEN NEW.id = 'lead-writeback-barrier'
+                     BEGIN SELECT RAISE(ABORT, 'writeback fixture rejection'); END;
+                     CREATE TRIGGER reject_lead_result_update
+                     BEFORE UPDATE ON ctox_business_os__outbound_lead_generation_leads__v0
+                     WHEN NEW.id = 'lead-writeback-barrier'
+                     BEGIN SELECT RAISE(ABORT, 'writeback fixture rejection'); END;",
+                )?;
+            }
+            let outcome = serde_json::json!({
+                "fields": {"firma_name": {"value": "Researched company", "candidates": []}},
+                "evidence": [{"field": "firma_name", "source_id": "impressum",
+                    "source_url": "https://company.test/impressum",
+                    "quote": "Researched company"}]
+            });
+            let (persisted, lead_status, error, result) = persist_completed_person_research_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                outcome.clone(),
+            );
+            persisted?;
+            let lead = store::load_rxdb_collection_record(
+                root,
+                "outbound_lead_generation_leads",
+                "lead-writeback-barrier",
+            )?
+            .expect("lead remains readable");
+            let published = store::load_rxdb_collection_record(
+                root,
+                "business_commands",
+                "cmd-writeback-barrier",
+            )?
+            .expect("command outcome is durable");
+            assert_eq!(lead["contacts"][0]["id"], "retained-contact");
+            if failure != "none" {
+                assert_eq!(lead_status, "failed");
+                assert!(error
+                    .as_deref()
+                    .is_some_and(|error| !error.trim().is_empty()));
+                assert!(result.is_none());
+                assert_eq!(lead["data"]["firma_name"], "Imported company");
+                assert_eq!(lead["research_status"], "running");
+                assert_eq!(published["status"], "failed");
+                assert_eq!(
+                    published["result"]["operation"],
+                    "person_research_writeback"
+                );
+                assert!(published["result"]["error_chain"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|reason| reason.contains(if failure == "sqlite" {
+                        "writeback fixture rejection"
+                    } else {
+                        "bounded lead writeback contract"
+                    })));
+                assert_eq!(published["result"]["ok"], false);
+            } else {
+                assert_eq!(lead_status, "completed");
+                assert!(error.is_none());
+                assert_eq!(result, Some(outcome));
+                assert_eq!(lead["research_status"], "completed");
+                assert_eq!(lead["data"]["firma_name"], "Researched company");
+                assert_eq!(
+                    lead["evidence"].as_array().unwrap().len(),
+                    1,
+                    "completion must not project the same evidence twice"
+                );
+                assert_eq!(published["status"], "completed");
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn sellify_lookup_receipts_distinguish_actual_success_empty_and_failure() -> anyhow::Result<()>
