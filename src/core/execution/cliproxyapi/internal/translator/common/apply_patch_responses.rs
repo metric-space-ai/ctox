@@ -4,8 +4,9 @@
 
 //! Adapts Responses `apply_patch` declarations and explicit custom history.
 //!
-//! Winners are collected before rewriting. The response-event bridge
-//! (`ApplyPatchResponsesBridge`) is not in this module yet.
+//! Winners are collected before rewriting. Stream decoding and event
+//! payloads live in the sibling modules. `ApplyPatchResponsesBridge` is not
+//! in this module yet.
 
 use std::collections::{HashMap, HashSet};
 

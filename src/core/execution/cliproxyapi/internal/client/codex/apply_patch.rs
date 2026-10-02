@@ -169,17 +169,11 @@ fn parse_json_string(bytes: &[u8], mut index: usize) -> Result<(String, usize), 
                     b'r' => decoded.push('\r'),
                     b't' => decoded.push('\t'),
                     b'u' => {
-                        let hex = bytes
-                            .get(index..index + 4)
-                            .ok_or("decode apply_patch arguments object")?;
-                        index += 4;
-                        let digits = std::str::from_utf8(hex)
-                            .map_err(|_| "decode apply_patch arguments object")?;
-                        let code = u32::from_str_radix(digits, 16)
-                            .map_err(|_| "decode apply_patch arguments object")?;
-                        decoded.push(
-                            char::from_u32(code).ok_or("decode apply_patch arguments object")?,
-                        );
+                        // encoding/json combines a surrogate pair and replaces an unpaired
+                        // surrogate with U+FFFD. The streaming decoder still rejects those.
+                        let (character, next) = decode_json_unicode_escape(bytes, index)?;
+                        index = next;
+                        decoded.push(character);
                     }
                     _ => return Err("decode apply_patch arguments object"),
                 }
@@ -197,6 +191,46 @@ fn parse_json_string(bytes: &[u8], mut index: usize) -> Result<(String, usize), 
         }
     }
     Err("decode apply_patch arguments object")
+}
+
+pub(crate) fn unmarshal_json_string(quoted: &[u8]) -> Result<String, &'static str> {
+    let (value, next) = parse_json_string(quoted, 0)?;
+    if next != quoted.len() {
+        return Err("decode apply_patch arguments object");
+    }
+    Ok(value)
+}
+
+fn decode_json_unicode_escape(bytes: &[u8], index: usize) -> Result<(char, usize), &'static str> {
+    let code = read_json_hex4(bytes, index)?;
+    let next = index + 4;
+    if (0xD800..=0xDBFF).contains(&code) {
+        if bytes.get(next..next + 2) == Some(br"\u") {
+            if let Ok(low) = read_json_hex4(bytes, next + 2) {
+                if (0xDC00..=0xDFFF).contains(&low) {
+                    let combined =
+                        0x1_0000 + (u32::from(code - 0xD800) << 10) + u32::from(low - 0xDC00);
+                    let character =
+                        char::from_u32(combined).ok_or("decode apply_patch arguments object")?;
+                    return Ok((character, next + 6));
+                }
+            }
+        }
+        return Ok(('\u{FFFD}', next));
+    }
+    if (0xDC00..=0xDFFF).contains(&code) {
+        return Ok(('\u{FFFD}', next));
+    }
+    let character = char::from_u32(u32::from(code)).ok_or("decode apply_patch arguments object")?;
+    Ok((character, next))
+}
+
+fn read_json_hex4(bytes: &[u8], index: usize) -> Result<u16, &'static str> {
+    let hex = bytes
+        .get(index..index + 4)
+        .ok_or("decode apply_patch arguments object")?;
+    let digits = std::str::from_utf8(hex).map_err(|_| "decode apply_patch arguments object")?;
+    u16::from_str_radix(digits, 16).map_err(|_| "decode apply_patch arguments object")
 }
 
 fn utf8_width(byte: u8) -> Option<usize> {
@@ -311,6 +345,18 @@ mod tests {
         assert_eq!(
             unwrap_input(" \n\t{ \"input\" : \"patch\" }\r\n ").as_deref(),
             Ok("patch")
+        );
+        assert_eq!(
+            unwrap_input(r#"{"input":"before\uD83D\uDE00after"}"#).as_deref(),
+            Ok("before😀after")
+        );
+        assert_eq!(
+            unwrap_input(r#"{"input":"\uD800\uDC00\uDBFF\uDFFF"}"#).as_deref(),
+            Ok("\u{10000}\u{10FFFF}")
+        );
+        assert_eq!(
+            unwrap_input(r#"{"input":"\uD83D"}"#).as_deref(),
+            Ok("\u{FFFD}")
         );
     }
 }

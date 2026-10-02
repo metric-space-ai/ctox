@@ -1,5 +1,7 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
+mod apply_patch_events;
+mod apply_patch_input;
 mod apply_patch_responses;
 mod bytes;
 mod cache_control;
