@@ -61,6 +61,14 @@ within the turn before progress counters and durable persistence. A real plan
 is still required before review: the adapter never invents completed steps
 from a reply or a writeback receipt.
 
+The completion reviewer receives the latest durable plan revision for the
+stable work key, including its task and command identities, phase, review
+status and step statuses. This is a latest-work-key query, not an attempt-local
+filter: retries can create a newer revision while prior revisions remain
+evidence. Completed plan steps do not establish review approval or prove a
+requested side effect. Missing, incomplete and failed-review evidence remains
+subject to the deterministic completion and recovery gates.
+
 Plan steps own the first 90 percent of progress, divided equally and rounded:
 `round(90 * completed_steps / total_steps)`. Completed model work remains at
 90 percent through pending or failed native review; validated review sets 100
@@ -572,6 +580,15 @@ persisted reviewer provenance.
 Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually
 fails terminally instead of creating unbounded review/rework cascades.
+
+Founder communication rework spends its existing two-attempt review-rejection
+budget from the durable routing `attempt` count, scoped to the same self-work
+item. Re-leasing one queue row therefore cannot bypass the budget by keeping
+the message count at one. Legacy or not-yet-leased rows still reserve at least
+one attempt each. Exhaustion fails the matching rework rows and item once;
+unrelated work and the original email are not sent or mutated by this counter.
+The separate reviewed-send evidence gate still prevents an unsent rework from
+closing successfully.
 
 Transient model/API failures also keep the original durable identity. A typed
 Business OS command moves from `running` to `retry_wait` before its linked queue

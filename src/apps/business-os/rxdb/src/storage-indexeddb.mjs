@@ -109,12 +109,20 @@ export class CtoxIndexedDbStorage {
     const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], 'readwrite');
     const done = idbTransactionDone(tx);
     const documents = tx.objectStore(DOCUMENT_STORE);
+    done.catch(() => {}); // A request failure can reject before we await completion.
     const markers = tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE);
-    for (const name of names) {
-      documents.delete(IDBKeyRange.bound([name, ''], [name, INDEX_HIGH_KEY]));
-      markers.delete(name);
+    try {
+      for (const name of names) {
+        const marker = await localCheckpointMarker(markers, name);
+        documents.delete(IDBKeyRange.bound([name, ''], [name, INDEX_HIGH_KEY]));
+        markers.put({ ...marker, evictionGeneration: marker.evictionGeneration + 1 });
+      }
+      await done;
+    } catch (error) {
+      try { tx.abort(); } catch {}
+      await done.catch(() => {});
+      throw error;
     }
-    await done;
     for (const name of names) {
       globalThis.dispatchEvent?.(new CustomEvent('ctox-rxdb-external-change', {
         detail: { databaseName: this.db.name, collection: name, ids: [], cleared: true },
@@ -842,15 +850,26 @@ export class CtoxIndexedDbCollection {
   /// this on dirty docs; the sidecar enforces that.
   async hardDeleteByIds(ids) {
     if (!Array.isArray(ids) || !ids.length) return 0;
-    const tx = this.db.transaction(DOCUMENT_STORE, 'readwrite');
-    const store = tx.objectStore(DOCUMENT_STORE);
-    let removed = 0;
-    for (const id of ids) {
-      await idbRequest(store.delete([this.name, String(id)]));
-      removed += 1;
+    const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], 'readwrite');
+    const done = idbTransactionDone(tx);
+    const markers = tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE);
+    done.catch(() => {});
+    try {
+      const marker = await localCheckpointMarker(markers, this.name);
+      const store = tx.objectStore(DOCUMENT_STORE);
+      let removed = 0;
+      for (const id of ids) {
+        await idbRequest(store.delete([this.name, String(id)]));
+        removed += 1;
+      }
+      if (removed) markers.put({ ...marker, evictionGeneration: marker.evictionGeneration + 1 });
+      await done;
+      return removed;
+    } catch (error) {
+      try { tx.abort(); } catch {}
+      await done.catch(() => {});
+      throw error;
     }
-    await idbTransactionDone(tx);
-    return removed;
   }
 
   async findDocumentsById(ids, { withDeleted = false } = {}) {
@@ -1094,11 +1113,14 @@ export class CtoxIndexedDbCollection {
   }
 
   async replicationCheckpointStatus(schemaHash = null) {
-    const tx = this.db.transaction(DOCUMENT_STORE, 'readonly');
+    const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], 'readwrite');
+    const done = idbTransactionDone(tx);
+    done.catch(() => {});
+    const marker = await localCheckpointMarker(tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE), this.name);
     const index = tx.objectStore(DOCUMENT_STORE).index('collectionLwtId');
     const range = IDBKeyRange.bound([this.name, 0, ''], [this.name, Number.MAX_SAFE_INTEGER, '\uffff'], false, false);
     const record = await firstCursorValue(index.openCursor(range, 'prev'));
-    await idbTransactionDone(tx);
+    await done;
     if (!record) {
       return {
         source: 'browser',
@@ -1108,6 +1130,8 @@ export class CtoxIndexedDbCollection {
         latestLwt: null,
         latestIdHash: null,
         epoch: `browser:${this.name}:empty`,
+        evictionGeneration: marker.evictionGeneration,
+        localStoreGeneration: marker.localStoreGeneration,
       };
     }
     const latestIdHash = await sha256Hex(record.id);
@@ -1119,6 +1143,8 @@ export class CtoxIndexedDbCollection {
       latestLwt: record.lwt,
       latestIdHash,
       epoch: `browser:${this.name}:${record.lwt}:${latestIdHash.slice(0, 16)}`,
+      evictionGeneration: marker.evictionGeneration,
+      localStoreGeneration: marker.localStoreGeneration,
     };
   }
 
@@ -2137,3 +2163,26 @@ export const ctoxIndexedDbStorageTestInternals = {
   shouldAcceptDocumentWrite,
   storedRecordForWrite,
 };
+
+// The marker shares the document transaction. A failed marker write aborts
+// eviction too, and a recreated database cannot match a former store's key.
+// Legacy v4 databases acquire a marker without deleting any existing rows.
+async function localCheckpointMarker(store, collection) {
+  const previous = await idbRequest(store.get(collection));
+  if (previous?.localStoreGeneration !== undefined) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(previous.localStoreGeneration)
+        || !Number.isSafeInteger(previous.evictionGeneration) || previous.evictionGeneration < 0
+        || previous.evictionGeneration >= Number.MAX_SAFE_INTEGER) {
+      throw new Error('Invalid local checkpoint generation');
+    }
+    return previous;
+  }
+  const marker = {
+    ...previous,
+    collection,
+    localStoreGeneration: globalThis.crypto.randomUUID(),
+    evictionGeneration: 0,
+  };
+  await idbRequest(store.put(marker));
+  return marker;
+}

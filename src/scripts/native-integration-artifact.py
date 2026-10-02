@@ -21,12 +21,13 @@ TARGET = 'x86_64-unknown-linux-gnu'
 FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'knowledge::data::tests::',
            'business_os::rxdb_peer_knowledge_rows::tests::',
+           'business_os::rxdb_peer_intake_reader::tests::',
            'startup_clamp_waits_for_a_concurrent_writer_instead_of_failing',
            'knowledge_tables_sync_tombstones_legacy_chunks_and_strips_base_rows',
            'queue_task_update_keeps_its_place_unless_priority_changes',
            'mission::channels::tests::business_command',
            'mission::channels::tests::business_control',
-           'incomplete_plan',
+           'incomplete_plan', 'business_command_instruction_limit_',
            'command_writeback_tests',
            'direct_plan_v2',
            'cockpit_bring_up_materializes_no_legacy_grants',
@@ -66,6 +67,9 @@ FILTERS = ['coding_agents::pi_sidecar::', 'reply_capture::tests',
            'communication::email_account_cli::tests::',
            'echoed_subject_tests',
            'founder_rework_cannot_close_before_a_reviewed_email_was_sent',
+           'repeated_founder_rework_review_rejections_block_the_loop',
+           'founder_rework_repeated_leases_of_one_task_exhaust_the_review_budget',
+           'founder_rework_review_holds_stop_the_loop_after_the_hold_budget',
            'confirmed_founder_reply_recovers_failed_inbound_without_another_send',
            'registered_exchange_account_builds_isolated_client_options',
            'instance_failure_does_not_skip_registered_accounts',
@@ -77,6 +81,9 @@ REQUIRED_MAIL_TESTS = {
     'echoed_thread_subject_is_dropped_from_the_body',
     'other_headers_and_foreign_subjects_stay_for_the_review',
     'founder_rework_cannot_close_before_a_reviewed_email_was_sent',
+    'repeated_founder_rework_review_rejections_block_the_loop',
+    'founder_rework_repeated_leases_of_one_task_exhaust_the_review_budget',
+    'founder_rework_review_holds_stop_the_loop_after_the_hold_budget',
     'confirmed_founder_reply_recovers_failed_inbound_without_another_send',
     'exchange_account_roundtrip_preserves_other_accounts_and_hides_password',
     'stdin_contract_is_bounded_and_does_not_echo_invalid_secret_values',
@@ -98,6 +105,11 @@ REQUIRED_MAIL_TESTS = {
     'ews_empty_folder_limits_and_explicit_empty_body',
 }
 REQUIRED_RUNTIME_TESTS = {
+    'intake_reader_sees_new_schema_and_releases_an_unfinished_transaction',
+    'intake_reader_scope_survives_blocking_tasks_and_keeps_peers_separate',
+    'intake_reader_reuses_connection_but_reads_external_changes_and_replacement',
+    'intake_reader_detaches_receipts_and_discards_errors_and_expired_connections',
+    'intake_reader_rejects_main_only_replacement_until_the_old_wal_is_removed',
     'authenticated_automation_stdin_is_bounded_and_command_specific',
     'authenticated_automation_ipc_preserves_source_and_auth_gate',
     'authenticated_automation_ipc_does_not_bypass_command_session_validation',
@@ -231,10 +243,14 @@ def main():
             'node', '--test', '--test-concurrency=1',
             *['src/apps/business-os/shared/' + name for name in sync_tests],
         ])
-        for metric, expected in [('tests', 26), ('pass', 26), ('fail', 0), ('skipped', 0)]:
+        freshness_case = 'current pull freshness is distinct from historical live cache readiness'
+        if len(re.findall(r'^ok \d+ - ' + re.escape(freshness_case) + r'$', sync_output, re.MULTILINE)) != 1:
+            raise RuntimeError('Required current-pull freshness regression did not pass exactly once')
+        for metric, expected in [('tests', 27), ('pass', 27), ('fail', 0), ('skipped', 0)]:
             if re.findall(r'^# ' + metric + r' (\d+)$', sync_output, re.MULTILINE) != [str(expected)]:
                 raise RuntimeError(f'Unexpected shell native-read regression {metric} count')
-        RECORD['shell_native_read_tests'] = 26
+        RECORD['shell_native_read_tests'] = 27
+        RECORD['required_shell_freshness_test'] = freshness_case
         save()
     compiled = run('test-compile', ['cargo', 'test', '--locked', '--release',
                    '--bin', 'ctox', '--target', TARGET, '--jobs', '2',
@@ -296,6 +312,15 @@ def main():
         if any(count != 1 for count in mail_counts.values()):
             raise RuntimeError(f'Required mail regressions absent or ambiguous: {mail_counts}')
         RECORD['required_mail_tests'] = mail_counts
+        instruction_tests = {
+            'business_command_instruction_limit_preserves_the_complete_unicode_boundary',
+            'business_command_instruction_limit_precedes_attachment_and_queue_writes',
+        }
+        instruction_counts = {test: sum(name.rsplit('::', 1)[-1] == test for name in names)
+                              for test in instruction_tests}
+        if any(count != 1 for count in instruction_counts.values()):
+            raise RuntimeError(f'Required instruction regressions absent or ambiguous: {instruction_counts}')
+        RECORD['required_instruction_tests'] = instruction_counts
     RECORD.update(discovered_tests=names, group_counts=counts,
                   required_runtime_tests=runtime_counts)
     save()
@@ -338,13 +363,15 @@ def main():
     run('browser-runtime', ['npm', '--prefix', 'src/apps/business-os', 'exec',
                             'playwright', 'install', '--with-deps', 'chromium'])
     run('business-os-js-tests', ['npm', '--prefix', 'src/apps/business-os', 'test'])
+    run('desktop-icon-cancellation', ['node', '--test',
+                                      'src/apps/business-os/modules/desktop/tests/desktop.test.mjs'])
     run('business-os-module-bundles', ['npm', '--prefix', 'src/apps/business-os', 'run', 'test:module-bundles'])
     run('shell-contract', ['node', 'src/apps/business-os/scripts/assert-shell-v2-contract.mjs'])
     startup = run('shell-startup-cache', ['node', '--test',
                   'src/apps/business-os/scripts/test-shell-window-cache-startup.mjs'])
-    if not re.search(r'^# tests 2$', startup, re.MULTILINE) or not re.search(
-            r'^# pass 2$', startup, re.MULTILINE):
-        raise RuntimeError('Shell startup cache regressions did not both pass')
+    if not re.search(r'^# tests 3$', startup, re.MULTILINE) or not re.search(
+            r'^# pass 3$', startup, re.MULTILINE):
+        raise RuntimeError('All three Shell startup cache regressions must pass')
     geometry_dir = EVIDENCE / 'shell-geometry'
     run('shell-geometry', ['node', 'src/apps/business-os/scripts/shell-v2-geometry-lab.mjs',
                           '--apps', 'mail', '--widths', '1180,720',

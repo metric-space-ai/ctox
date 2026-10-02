@@ -206,7 +206,7 @@ test('report failures preserve exit, signal, timing and bounded diagnostics', as
       platform: 'linux', readStart: () => 10,
       spawnRecord: () => fakeRecorder(outputPrefix + '.perf.data'),
       async runReport(executable, args, options) {
-        assert.equal(options.timeout, 5000);
+        assert.equal(options.timeout, 20000);
         if (timedOut) {
           // Exercise Node's actual execFile timeout error shape, without perf
           // or a native host. The owned child is terminated by execFile.
@@ -225,7 +225,7 @@ test('report failures preserve exit, signal, timing and bounded diagnostics', as
     const result = await profile.completion;
     assert.equal(result.reason, 'perf-report-failed');
     assert.equal(result.available, false);
-    assert.equal(result.reportTimeoutMs, 5000);
+    assert.equal(result.reportTimeoutMs, 20000);
     assert.ok(result.reportStartedAtMs >= result.recordStoppedAtMs);
     assert.ok(result.reportFinishedAtMs >= result.reportStartedAtMs);
     assert.equal(result.reportDurationMs, result.reportFinishedAtMs - result.reportStartedAtMs);
@@ -243,6 +243,27 @@ test('report failures preserve exit, signal, timing and bounded diagnostics', as
     assert.deepEqual(JSON.parse(fs.readFileSync(outputPrefix + '.json', 'utf8')), result);
     assert.equal(fs.existsSync(outputPrefix + '.report.txt'), false);
   }
+});
+
+test('a report beyond the former five-second deadline still requires samples', { timeout: 12000 }, async t => {
+  const outputPrefix = temporary(t);
+  const profile = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 5 }, {
+    platform: 'linux', readStart: () => 10,
+    spawnRecord: () => fakeRecorder(outputPrefix + '.perf.data'),
+    runReport(executable, args, options) {
+      assert.equal(options.timeout, 20000);
+      const { execFile } = require('node:child_process');
+      const { promisify } = require('node:util');
+      return promisify(execFile)(process.execPath,
+        ['-e', "setTimeout(() => process.stdout.write('# Samples: 12 of event cpu-clock:u\\nctox::work\\n'), 5200)"],
+        { encoding: 'utf8', timeout: options.timeout, maxBuffer: options.maxBuffer });
+    },
+  });
+  const result = await profile.completion;
+  assert.equal(result.available, true);
+  assert.equal(result.reason, 'sampled');
+  assert.equal(result.reportedSamples, '12');
+  assert.ok(result.reportDurationMs >= 5000);
 });
 
 test('report failure Unicode diagnostics and null-code summary obey byte limits', async t => {
@@ -410,7 +431,10 @@ test('verbose recorder diagnostics retain a bounded terminal error without accep
 test('one evidenced startup thread exit recovers within the original time and byte budgets', async t => {
   const native = child(), outputPrefix = temporary(t);
   let spawned = 0, reports = 0;
-  const profile = startNativeSymbolProfile(native, { outputPrefix, delayMs: 0, durationMs: 120 }, {
+  // The fixture performs real temporary-file writes. Leave room for slow disk
+  // scheduling while still requiring the retry to share one fixed deadline.
+  const recordingBudgetMs = 5000;
+  const profile = startNativeSymbolProfile(native, { outputPrefix, delayMs: 0, durationMs: recordingBudgetMs }, {
     platform: 'linux', readStart: () => 10,
     readThreads: () => [{ tid: 4343, startedTicks: 11 }],
     readThreadStart(pid, tid) {
@@ -429,7 +453,7 @@ test('one evidenced startup thread exit recovers within the original time and by
       }, 35);
       else {
         assert.equal(output, outputPrefix + '.retry-1.perf.data');
-        assert.equal(args[args.indexOf('--max-size') + 1], String(32 * 1024 * 1024 - 7));
+        assert.equal(args[args.indexOf('--max-size') + 1], `${32 * 1024 * 1024 - 7}B`);
         assert.equal(args[args.indexOf('--pid') + 1], '4242');
       }
       return recorder;
@@ -442,8 +466,8 @@ test('one evidenced startup thread exit recovers within the original time and by
   });
   const result = await profile.completion;
   assert.equal(result.available, true); assert.equal(spawned, 2); assert.equal(reports, 1);
-  assert.equal(result.recordingDeadlineAtMs, result.startedAtMs + 120);
-  assert.ok(result.attempts[1].recordingBudgetMs < 100, 'recovery must consume the original budget');
+  assert.equal(result.recordingDeadlineAtMs, result.startedAtMs + recordingBudgetMs);
+  assert.ok(result.attempts[1].recordingBudgetMs < recordingBudgetMs, 'recovery must consume the original budget');
   assert.equal(result.attempts[0].code, 255);
   assert.equal(result.attempts[0].recovery.tid, 4343);
   assert.equal(result.attempts[0].recovery.threadStartedTicks, 11);
@@ -496,19 +520,67 @@ test('thread recovery rejects missing ownership, live or reused tasks, identity 
   }
 });
 
-test('a second vanished thread is terminal and preserves both failed attempts', async t => {
+test('two distinct vanished owned threads recover within one time and byte budget', async t => {
+  const outputPrefix = temporary(t);
+  const partials = ['partial', 'attempt-two'];
+  let spawned = 0, reports = 0, profile;
+  profile = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 5000 }, {
+    platform: 'linux', readStart: () => 10,
+    readThreads: () => [{ tid: spawned === 0 ? 4343 : spawned === 1 ? 4545 : 4646, startedTicks: 11 + spawned }],
+    readThreadStart() { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); },
+    spawnRecord(executable, args) {
+      spawned++;
+      const output = args.at(-1);
+      const recorder = fakeRecorder(output, { exitSignal: 'SIGINT' });
+      if (spawned <= 2) setImmediate(() => {
+        fs.writeFileSync(output, partials[spawned - 1]);
+        recorder.stderr.write(`couldn't open /proc/${spawned === 1 ? 4343 : 4545}/status\n`);
+        recorder.exitCode = 255; recorder.emit('close', 255, null);
+      });
+      else {
+        assert.equal(output, outputPrefix + '.retry-2.perf.data');
+        assert.equal(args[args.indexOf('--max-size') + 1], `${32 * 1024 * 1024 - 18}B`);
+        setTimeout(() => { void profile.stop('fixture-finalizer'); }, 20);
+      }
+      return recorder;
+    },
+    async runReport(executable, args) {
+      reports++;
+      assert.equal(args.at(-1), outputPrefix + '.retry-2.perf.data');
+      return { stdout: '# Samples: 13 of event cpu-clock:u\nctox::work\n' };
+    },
+  });
+  const result = await profile.completion;
+  assert.equal(result.available, true); assert.equal(result.reason, 'sampled');
+  assert.equal(spawned, 3); assert.equal(reports, 1);
+  assert.equal(result.maxRecordAttempts, 3);
+  assert.equal(result.recordingDeadlineAtMs, result.startedAtMs + 5000);
+  assert.ok(result.attempts[1].recordingBudgetMs < result.attempts[0].recordingBudgetMs);
+  assert.ok(result.attempts[2].recordingBudgetMs < result.attempts[1].recordingBudgetMs);
+  assert.deepEqual(result.attempts.slice(0, 2).map(attempt => attempt.recovery?.tid), [4343, 4545]);
+  assert.deepEqual(result.attempts.slice(0, 2).map(attempt => attempt.recovery?.retainedBytes), [7, 18]);
+  assert.equal(result.retainedBytes, 18);
+  assert.equal(result.reportedSamples, '13');
+  assert.equal(result.dataFile, 'native.retry-2.perf.data');
+  assert.equal(fs.readFileSync(outputPrefix + '.perf.data', 'utf8'), partials[0]);
+  assert.equal(fs.readFileSync(outputPrefix + '.retry-1.perf.data', 'utf8'), partials[1]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(outputPrefix + '.json', 'utf8')), result);
+});
+
+test('a third vanished thread is terminal and preserves all failed attempts', async t => {
   const outputPrefix = temporary(t);
   let spawned = 0;
-  const { completion } = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 100 }, {
+  const tids = [4343, 4545, 4646];
+  const { completion } = startNativeSymbolProfile(child(), { outputPrefix, delayMs: 0, durationMs: 5000 }, {
     platform: 'linux', readStart: () => 10,
-    readThreads: () => [{ tid: 4343, startedTicks: 11 }],
+    readThreads: () => [{ tid: tids[spawned], startedTicks: 11 + spawned }],
     readThreadStart() { throw Object.assign(new Error('gone'), { code: 'ENOENT' }); },
     spawnRecord(executable, args) {
       spawned++;
       const recorder = fakeRecorder(args.at(-1));
       setImmediate(() => {
         fs.writeFileSync(args.at(-1), 'partial-' + spawned);
-        recorder.stderr.write("couldn't open /proc/4343/status\n");
+        recorder.stderr.write(`couldn't open /proc/${tids[spawned - 1]}/status\n`);
         recorder.exitCode = 255; recorder.emit('close', 255, null);
       });
       return recorder;
@@ -517,10 +589,14 @@ test('a second vanished thread is terminal and preserves both failed attempts', 
   });
   const result = await completion;
   assert.equal(result.reason, 'perf-record-failed');
-  assert.equal(result.available, false); assert.equal(spawned, 2);
-  assert.deepEqual(result.attempts.map(attempt => attempt.code), [255, 255]);
+  assert.equal(result.available, false); assert.equal(spawned, 3);
+  assert.equal(result.maxRecordAttempts, 3);
+  assert.deepEqual(result.attempts.map(attempt => attempt.code), [255, 255, 255]);
+  assert.deepEqual(result.attempts.map(attempt => attempt.dataFile),
+    ['native.perf.data', 'native.retry-1.perf.data', 'native.retry-2.perf.data']);
   assert.equal(fs.readFileSync(outputPrefix + '.perf.data', 'utf8'), 'partial-1');
   assert.equal(fs.readFileSync(outputPrefix + '.retry-1.perf.data', 'utf8'), 'partial-2');
+  assert.equal(fs.readFileSync(outputPrefix + '.retry-2.perf.data', 'utf8'), 'partial-3');
 });
 
 test('a requested stop cannot trigger thread-exit recovery', async t => {

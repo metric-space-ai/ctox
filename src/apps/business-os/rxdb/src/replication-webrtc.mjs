@@ -224,6 +224,12 @@ export const replicationWebRtcTestInternals = Object.freeze({
   decodeCapabilityTokenClaims,
   readPermissionDigestFromCapabilityToken,
   readPermissionDigestMatches,
+  // Local checkpoint reuse across ordinary pulls/writes, never across eviction.
+  localCheckpointValidityKey,
+  localCheckpointStillCovers,
+  remoteCheckpointStillCovers,
+  // Eager replicas are never evicted by the demand sidecar.
+  demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
   // real state machines without opening a network connection.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -1247,6 +1253,12 @@ class CtoxWebRtcReplicationState {
     // after the remote/local validity keys and permission digest match during
     // handshake; until then an old marker must not make this collection live.
     this.firstPullCompletedAtMs = 0;
+    this.publishLocalReplicaCoverage();
+    // Historical checkpoint reuse does not prove this connection is current.
+    // Only a drained pull after local writes/checkpoint reads in this generation does.
+    this.pullFresh = false;
+    this.pullFreshnessGeneration = 0;
+    this.lastSuccessfulPullAtMs = 0;
     this.localCheckpointValidityKey = '';
     // SYNC-12: a non-secret digest of THIS browser's own effective read-permission
     // identity (role + capability_epoch), stamped alongside retained checkpoints.
@@ -1446,12 +1458,12 @@ class CtoxWebRtcReplicationState {
     const periodicPullMs = this.periodicPullIntervalMs();
     if (periodicPullMs > 0) {
       // Master-change frames are a low-latency hint, not the sole correctness
-      // mechanism for the command control plane. A frame can be missed while
+      // mechanism for active data. A frame can be missed while
       // the browser reports its active-collection set or while an initial pull
-      // is in flight. The retained checkpoint makes this catch-up cheap and
-      // prevents an accepted native command from remaining `pending_sync`.
+      // is in flight. Keep the existing 1s command cadence and revalidate other
+      // active collections every minute from their retained checkpoint.
       this.periodicPullTimer = setInterval(() => {
-        this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+        this.pullFromRemotePeers({ revalidate: true }).catch((error) => this.error$.next(error));
       }, periodicPullMs);
     }
     const periodicPushMs = this.periodicPushIntervalMs();
@@ -1566,6 +1578,8 @@ class CtoxWebRtcReplicationState {
     // long after the native protocol response was produced.
     Object.assign(this.demandStatus, hybridLogicalClockStatus());
     this.activeRemotePeerId = peerId;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
     // Seed retained checkpoints only when the native storage generation and
@@ -1588,12 +1602,12 @@ class CtoxWebRtcReplicationState {
     const retained = this.retainedCheckpoints;
     if (retained && validityKey) {
       if (
-        retained.validityKey === validityKey
-        && retained.localValidityKey
-        && retained.localValidityKey === localValidityKey
+        remoteCheckpointStillCovers(retained, validityKey, normalizedRemoteProtocol)
+        && localCheckpointStillCovers(retained.localValidityKey, localValidityKey)
         && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)
       ) {
         this.firstPullCompletedAtMs = retainedFirstPullCompletedAtMs(retained);
+        this.publishLocalReplicaCoverage();
         if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
           this.pullCheckpointsByPeer.set(peerId, retained.pull);
         }
@@ -1606,6 +1620,7 @@ class CtoxWebRtcReplicationState {
         // later reconnect does the (correct) full resync. The readiness marker
         // shares this validity boundary and must be invalidated with them.
         this.firstPullCompletedAtMs = 0;
+        this.publishLocalReplicaCoverage();
         this.retainedCheckpoints = null;
         clearPersistentCheckpoints(this.checkpointStorageKey);
       }
@@ -1648,10 +1663,12 @@ class CtoxWebRtcReplicationState {
 
   // ----- pull / push (collection-tagged over the shared peer) -------------
 
-  async pullFromRemotePeers() {
+  async pullFromRemotePeers({ revalidate = false } = {}) {
     if (!this.pull || this.cancelled) return;
+    if (!revalidate) this.pullFresh = false;
     if (this.pullInProgressPromise) {
       this.pullAgainAfterCurrent = true;
+      this.publishTransportStatus();
       return this.pullInProgressPromise;
     }
     this.pullInProgress = true;
@@ -1669,6 +1686,7 @@ class CtoxWebRtcReplicationState {
         // master-change event or a page reload. Same shape as the bug the retry
         // timer below was added for, one level up.
         if (!peerIds.length || results.some((result) => result.status === 'rejected')) {
+          this.pullFresh = false;
           this.schedulePullRetry();
         }
       } while (this.pullAgainAfterCurrent && !this.cancelled);
@@ -1721,6 +1739,7 @@ class CtoxWebRtcReplicationState {
   }
 
   async pullFromPeer(peerId) {
+    const freshnessGeneration = this.pullFreshnessGeneration;
     const batchSize = Number(this.pull?.batchSize || 10);
     let activePeerId = peerId;
     let checkpoint = this.pullCheckpointsByPeer.get(activePeerId) || null;
@@ -1741,6 +1760,8 @@ class CtoxWebRtcReplicationState {
       }
       const documents = result.documents;
       if (documents.length) {
+        this.pullFresh = false;
+        this.publishTransportStatus();
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId),
         });
@@ -1754,7 +1775,11 @@ class CtoxWebRtcReplicationState {
       // drained completely, including the valid "synced but empty" case. Stamp
       // the marker before persisting so readiness survives a reload.
       if (!documents.length) this.markFirstPullCompleted();
-      await this.persistCheckpointsForPeer(activePeerId);
+      const checkpointPersisted = await this.persistCheckpointsForPeer(activePeerId);
+      if (!documents.length && checkpointPersisted && freshnessGeneration === this.pullFreshnessGeneration && !this.cancelled) {
+        this.pullFresh = true;
+        this.lastSuccessfulPullAtMs = Date.now();
+      }
       // Drain until an EMPTY answer, not until a partial batch: the master
       // legitimately returns fewer documents than asked for (the
       // desktop_file_chunks response limiter caps answers at 96 KiB with a
@@ -2394,16 +2419,7 @@ class CtoxWebRtcReplicationState {
       ? createIndexedDbMetaBackend({ databaseName: dbName })
       : createMemoryMetaBackend();
     this.demandStatus.queryDemandLoadingEnabled = queryDemandEnabled || fileDemandEnabled;
-    const primaryDelete = async (collection, id) => {
-      if (collection !== this.collection.name) return;
-      const stored = await this.collection.storageCollection.getStoredRecord?.(id);
-      if (!stored || Number(stored.pushable || 0) !== 0) {
-        throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
-      }
-      if (typeof this.collection.storageCollection.hardDeleteByIds === 'function') {
-        await this.collection.storageCollection.hardDeleteByIds([id]);
-      }
-    };
+    const primaryDelete = demandSidecarPrimaryDelete(this);
     this.demandSidecar = new QueryMetaStorage(backend, {
       databaseName: dbName,
       schedulerKey: this.collection.storageCollection?.databaseName || this.topic,
@@ -2506,7 +2522,18 @@ class CtoxWebRtcReplicationState {
   markFirstPullCompleted() {
     if (this.firstPullCompletedAtMs > 0) return;
     this.firstPullCompletedAtMs = Date.now();
+    this.publishLocalReplicaCoverage();
     this.publishTransportStatus();
+  }
+
+  // An eagerly pulled collection whose pull has drained (or resumed from a
+  // valid retained checkpoint) holds the whole authorized collection locally.
+  // Its queries must read that replica instead of a query-demand round trip:
+  // on the customer tenant (30.09.2026) every Outbound reload asked the native
+  // peer for 200 leads (~20 MB) in one window, hit QUERY_COLLECTOR_TIMEOUT,
+  // and the app stayed at "Noch keine Kampagne" with a complete local store.
+  publishLocalReplicaCoverage() {
+    this.collection?.setLocalReplicaComplete?.(Boolean(this.pull) && this.firstPullCompletedAtMs > 0);
   }
 
   collectionReadinessState() {
@@ -2514,6 +2541,13 @@ class CtoxWebRtcReplicationState {
     if (this.pullInProgress) return 'catching-up';
     if (!this.hasOpenReadinessPeer()) return 'offline-pending';
     return 'never-synced';
+  }
+
+  collectionFreshnessState() {
+    if (!this.pull) return null;
+    if (!this.hasOpenReadinessPeer()) return 'offline-pending';
+    if (!this.pullFresh) return 'catching-up';
+    return 'live';
   }
 
   hasOpenReadinessPeer() {
@@ -2542,6 +2576,8 @@ class CtoxWebRtcReplicationState {
     if (!peerId) return;
     const peerStates = new Map(this.peerStates$.getValue() || new Map());
     if (!peerStates.has(peerId)) return;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     // Retain the checkpoints (validity-keyed) BEFORE dropping the peer.
     // Discarding them outright meant EVERY reconnect re-synced the whole
     // collection from a null checkpoint — across ~80 collections that
@@ -2619,10 +2655,10 @@ class CtoxWebRtcReplicationState {
 
   async persistCheckpointsForPeer(peerId) {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
-    if (!validityKey) return;
+    if (!validityKey) return false;
     const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     const localValidityKey = localCheckpointValidityKey(localCheckpoint);
-    if (!localValidityKey) return;
+    if (!localValidityKey) return false;
     this.localCheckpointValidityKey = localValidityKey;
     const retained = {
       validityKey,
@@ -2639,6 +2675,7 @@ class CtoxWebRtcReplicationState {
     };
     this.retainedCheckpoints = retained;
     writePersistentCheckpoints(this.checkpointStorageKey, retained);
+    return true;
   }
 
   remoteProtocolForPeer(peerId) {
@@ -2708,7 +2745,7 @@ class CtoxWebRtcReplicationState {
 
   periodicPullIntervalMs() {
     if (!this.pull) return 0;
-    return ['business_commands', 'ctox_queue_tasks'].includes(this.collection.name) ? 1000 : 0;
+    return ['business_commands', 'ctox_queue_tasks'].includes(this.collection.name) ? 1000 : 60_000;
   }
 
   periodicPushIntervalMs() {
@@ -2804,6 +2841,9 @@ class CtoxWebRtcReplicationState {
       topic: this.topic,
       activePeerCount: Math.max(localPeerCount, sharedPeerCount, connectionPeerCount),
       collectionReadinessState: this.collectionReadinessState(),
+      collectionFreshnessState: this.collectionFreshnessState(),
+      pullEnabled: Boolean(this.pull),
+      lastSuccessfulPullAtMs: this.lastSuccessfulPullAtMs || null,
       firstPullCompletedAtMs: this.firstPullCompletedAtMs || null,
       pullInProgress: this.pullInProgress,
       pushInProgress: this.pushInProgress,
@@ -2867,6 +2907,29 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   return `${epoch}|${sessionId}|${schemaHashValue}`;
 }
 
+// The native epoch hashes the collection HEAD (latest lwt/id). Requiring it to
+// be byte-identical discarded the retained pull checkpoint after every server
+// write, so a busy collection re-pulled completely on each reload (customer
+// tenant, 30.09.2026: leads ~53 MB per reload while remark checks wrote).
+// Same storage generation, collection and schema with a head that has not
+// moved behind the retained pull position means the incremental pull from that
+// position delivers exactly the missing changes. A head older than the retained
+// position (restore/rewrite) or any other key shape keeps exact equality.
+function remoteCheckpointStillCovers(retained, currentKey, remoteProtocol) {
+  const retainedKey = retained?.validityKey;
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const before = String(retainedKey).split('|');
+  const now = String(currentKey).split('|');
+  if (before.length !== 4 || now.length !== 4) return false;
+  if (before[0] !== now[0] || before[1] !== now[1] || before[2] !== now[2]) return false;
+  const retainedLwt = Number(retained?.pull?.lwt);
+  const remoteHeadLwt = Number(remoteProtocol?.checkpoint?.latestLwt);
+  return Number.isFinite(retainedLwt)
+    && Number.isFinite(remoteHeadLwt)
+    && remoteHeadLwt >= retainedLwt;
+}
+
 function localCheckpointValidityKey(checkpoint) {
   if (!checkpoint || typeof checkpoint !== 'object') return '';
   const epoch = typeof checkpoint.epoch === 'string' ? checkpoint.epoch.trim() : '';
@@ -2874,7 +2937,59 @@ function localCheckpointValidityKey(checkpoint) {
     ? checkpoint.schemaHash.trim()
     : '';
   if (!epoch) return '';
-  return `${epoch}|${schemaHashValue}`;
+  const evictionGeneration = Number(checkpoint.evictionGeneration || 0);
+  const storeGeneration = checkpoint.localStoreGeneration;
+  if (storeGeneration !== undefined) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(storeGeneration)) return '';
+    return `${epoch}|${schemaHashValue}|ev${evictionGeneration}|store${storeGeneration}`;
+  }
+  return evictionGeneration > 0
+    ? `${epoch}|${schemaHashValue}|ev${evictionGeneration}`
+    : `${epoch}|${schemaHashValue}`;
+}
+
+// The local key guards against reusing a pull checkpoint after the browser
+// store LOST rows. Requiring the newest local row to be byte-identical also
+// rejected every checkpoint after one ordinary pull or local write since it was
+// stored, so on a busy tenant each page load re-pulled whole eager collections
+// (customer tenant, 30.09.2026: 21 MB of leads and ~35 MB per reload, 60-75 s). A
+// browser-store key stays valid while schema and eviction generation are
+// unchanged and the newest local row is not older than when it was retained.
+// Any other key shape keeps exact equality.
+function localCheckpointStillCovers(retainedKey, currentKey) {
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const retained = parseBrowserLocalCheckpointKey(retainedKey);
+  const current = parseBrowserLocalCheckpointKey(currentKey);
+  if (!retained || !current) return false;
+  return retained.collection === current.collection
+    && retained.schemaHash === current.schemaHash
+    && retained.evictionGeneration === current.evictionGeneration
+    && retained.storeGeneration === current.storeGeneration
+    && Number.isFinite(retained.latestLwt)
+    && Number.isFinite(current.latestLwt)
+    && current.latestLwt >= retained.latestLwt;
+}
+
+function parseBrowserLocalCheckpointKey(key) {
+  const parts = String(key).split('|');
+  if (parts.length > 4) return null;
+  const [epoch = '', schemaHash = '', evictionPart = '', storePart = ''] = parts;
+  const storeGeneration = storePart ? /^store([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(storePart)?.[1] : '';
+  if (storePart && !storeGeneration) return null;
+  const match = /^browser:(.+):(\d+(?:\.\d+)?):([0-9a-f]+)$/.exec(epoch);
+  if (!match) return null;
+  const evictionGeneration = evictionPart
+    ? Number(/^ev(\d+)$/.exec(evictionPart)?.[1] ?? NaN)
+    : 0;
+  if (!Number.isFinite(evictionGeneration)) return null;
+  return {
+    collection: match[1],
+    latestLwt: Number(match[2]),
+    schemaHash,
+    evictionGeneration,
+    storeGeneration,
+  };
 }
 
 function persistentCheckpointStorageKey(topic, collection) {
@@ -3260,6 +3375,28 @@ function shouldPersistFetchedFileChunks(collectionName = '') {
   // so materializing generic file_id/sequence/bytes_base64 rows would corrupt
   // their browser cache. The consumer verifies and uses the returned stream.
   return String(collectionName || '') === 'desktop_file_chunks';
+}
+
+// The demand sidecar's LRU budget governs rows that query demand loading
+// materialized, not the replica of an eagerly pulled collection. Deleting an
+// eager row cannot be repaired by the incremental pull (the row is older than
+// the checkpoint), so every such eviction had to invalidate the retained
+// checkpoint: on the customer tenant (30.09.2026) Outbound queries touched
+// more than the 6 MiB budget of leads, the sidecar evicted thousands of rows,
+// and each reload re-pulled ~20 MB while the app briefly saw an emptied store.
+// For eager collections only the sidecar bookkeeping is dropped.
+function demandSidecarPrimaryDelete(state) {
+  return async (collection, id) => {
+    if (collection !== state.collection.name) return;
+    if (state.pull) return;
+    const stored = await state.collection.storageCollection.getStoredRecord?.(id);
+    if (!stored || Number(stored.pushable || 0) !== 0) {
+      throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
+    }
+    if (typeof state.collection.storageCollection.hardDeleteByIds === 'function') {
+      await state.collection.storageCollection.hardDeleteByIds([id]);
+    }
+  };
 }
 
 function shouldAttachQueryDemandLoader(collectionName = '') {

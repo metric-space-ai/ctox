@@ -290,6 +290,24 @@ fn raise_open_file_limit() {
 #[cfg(not(unix))]
 fn raise_open_file_limit() {}
 
+/// glibc gives every thread that contends for the heap its own 64 MiB arena
+/// (up to 8 per core) and keeps freed chunks in them. The service's tokio and
+/// worker threads build large transient buffers (sync pulls, query fetches),
+/// so freed memory piled up as resident arenas: on the customer tenant
+/// (30.09.2026, 6 cores) ctox-real reached 6.86 GB after 43 minutes, and
+/// `malloc_trim(0)` returned 4.36 GB of it (2.50 GB left). Bounding the arena
+/// count must happen before the first threads start.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn limit_glibc_malloc_arenas() {
+    // SAFETY: mallopt only adjusts allocator tuning; called before threads spawn.
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 4);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn limit_glibc_malloc_arenas() {}
+
 /// Select one process-wide Rustls provider before any background subsystem can
 /// build a TLS client. CTOX enables both provider features through independent
 /// integrations, so Rustls cannot infer the provider reliably at first use.
@@ -303,6 +321,7 @@ fn main() -> anyhow::Result<()> {
     // `ctox-linux-sandbox`; arg0_dispatch performs that dispatch before the
     // regular CTOX startup path runs.
     let _arg0_dispatch = ctox_arg0::arg0_dispatch();
+    limit_glibc_malloc_arenas();
     install_process_rustls_crypto_provider();
     raise_open_file_limit();
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -354,6 +373,15 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
     // Office file tools run within the caller's filesystem sandbox and do not
     // read or mutate daemon state. They must not wait on its SQLite ledger.
     if args.first().map(String::as_str) == Some("office") {
+        return true;
+    }
+    if matches!(
+        args.first().map(String::as_str),
+        Some("coding-agent" | "coding-agents")
+    ) && coding_agents::coding_models_cli_args_are_valid(&args[1..])
+    {
+        // Metadata uses the existing private daemon control socket and must
+        // not wait on a second SQLite ledger write in the short-lived CLI.
         return true;
     }
     if service::sandboxed_cli_command_allowed(args) {
@@ -5186,6 +5214,24 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>();
         assert!(!super::skips_cli_turn_ledger(&inspect));
+    }
+
+    #[test]
+    fn coding_models_inspection_skips_ledger_without_exempting_turns() {
+        for command in ["coding-agent", "coding-agents"] {
+            let models = vec![command.to_owned(), "models".to_owned()];
+            assert!(super::skips_cli_startup_db(&models));
+            assert!(super::skips_cli_turn_ledger(&models));
+            let mut rooted_models = models.clone();
+            rooted_models.extend(["--root".to_owned(), "/explicit-root".to_owned()]);
+            assert!(super::skips_cli_startup_db(&rooted_models));
+            assert!(super::skips_cli_turn_ledger(&rooted_models));
+            let turn = vec![command.to_owned(), "turn".to_owned()];
+            assert!(!super::skips_cli_turn_ledger(&turn));
+            let mut rooted_turn = turn;
+            rooted_turn.extend(["--root".to_owned(), "/explicit-root".to_owned()]);
+            assert!(!super::skips_cli_turn_ledger(&rooted_turn));
+        }
     }
 
     #[test]

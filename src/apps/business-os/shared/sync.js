@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20260928-shell-v2-crew-role-sync-v425';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260928-shell-v2-crew-role-sync-v425';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260928-shell-v2-crew-role-sync-v425';
+} from './sync-contract.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20260928-shell-v2-crew-role-sync-v425';
+const MULTI_TAB_COORDINATOR_EPOCH = '20261001-shell-v2-workjet-project-messages-v437';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -677,15 +677,24 @@ export function createSyncRuntime({
     },
     async leaseModule(moduleManifest, reason = 'module-window') {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
-      const collections = moduleSyncCollections(moduleManifest?.collections || [])
-        .filter(mayReadCollection);
+      const collections = moduleSyncCollections(moduleManifest?.collections || []);
       const leases = [];
       try {
         for (const collection of collections) {
-          leases.push(await this.leaseCollection(
-            collection,
-            `${reason}:${moduleManifest?.id || 'unknown'}`,
-          ));
+          // Session/governance can resolve while a module's leases are opening.
+          // Check the current role for each collection, not a snapshot taken
+          // before the asynchronous loop began.
+          if (!mayReadCollection(collection)) continue;
+          try {
+            const lease = await this.leaseCollection(
+              collection,
+              `${reason}:${moduleManifest?.id || 'unknown'}`,
+            );
+            if (mayReadCollection(collection)) leases.push(lease);
+            else await lease.release();
+          } catch (error) {
+            if (error?.code !== COLLECTION_READ_FORBIDDEN) throw error;
+          }
           await delay(25);
         }
       } catch (error) {
@@ -2798,6 +2807,9 @@ function sanitizeReplicationTransportStatus(status) {
     lastAckLagMs: numberField('lastAckLagMs'),
     lastBufferedAmount: numberField('lastBufferedAmount'),
     collectionReadinessState: normalizeCollectionReadinessState(status.collectionReadinessState),
+    collectionFreshnessState: normalizeCollectionReadinessState(status.collectionFreshnessState),
+    pullEnabled: typeof status.pullEnabled === 'boolean' ? status.pullEnabled : null,
+    lastSuccessfulPullAtMs: numberField('lastSuccessfulPullAtMs'),
     firstPullCompletedAtMs: numberField('firstPullCompletedAtMs'),
     pullInProgress: status.pullInProgress === true,
     pushInProgress: status.pushInProgress === true,

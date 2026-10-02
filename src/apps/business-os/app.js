@@ -1,15 +1,16 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260928-shell-v2-crew-role-sync-v425';
-import { CtoxResizer } from './shared/resizer.js?v=20260928-shell-v2-crew-role-sync-v425';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260928-shell-v2-crew-role-sync-v425';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260928-shell-v2-crew-role-sync-v425';
-import { createAppActions } from './shared/app-actions.js?v=20260928-shell-v2-crew-role-sync-v425';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { CtoxResizer } from './shared/resizer.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { createAppActions } from './shared/app-actions.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260928-shell-v2-crew-role-sync-v425';
+} from './shared/app-lifecycle.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -18,20 +19,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20260928-shell-v2-crew-role-sync-v425';
+} from './shared/permissions.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260928-shell-v2-crew-role-sync-v425';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260928-shell-v2-crew-role-sync-v425';
+} from './shared/branding.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260928-shell-v2-crew-role-sync-v425';
+} from './shared/presentation.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -42,9 +43,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260928-shell-v2-crew-role-sync-v425';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260928-shell-v2-crew-role-sync-v425';
-import { createDocumentsFacade } from './shared/documents.js?v=20260928-shell-v2-crew-role-sync-v425';
+} from './shared/shell-permissions-ui.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { createDocumentsFacade } from './shared/documents.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -52,16 +53,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260928-shell-v2-crew-role-sync-v425';
+} from './shared/maintenance-state.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260928-shell-v2-crew-role-sync-v425';
+} from './shared/workspace-session.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260928-shell-v2-crew-role-sync-v425';
+} from './shared/taskbar-pins.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -69,10 +70,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260928-shell-v2-crew-role-sync-v425';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260928-shell-v2-crew-role-sync-v425';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260928-shell-v2-crew-role-sync-v425';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -80,8 +81,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20260928-shell-v2-crew-role-sync-v425';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260928-shell-v2-crew-role-sync-v425';
+} from './shared/startup-deadlines.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261001-shell-v2-workjet-project-messages-v437';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -99,7 +100,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260928-shell-v2-crew-role-sync-v425';
+const APP_BUILD = '20261001-shell-v2-workjet-project-messages-v437';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -1251,6 +1252,7 @@ const shellMessages = {
 
 const els = {
   status: document.querySelector('[data-status-text]'),
+  collectionFreshnessWarning: document.querySelector('[data-collection-freshness-warning]'),
   ctoxWarning: document.querySelector('[data-ctox-shell-warning]'),
   maintenanceBanner: document.querySelector('[data-maintenance-banner]'),
   recoveryWarning: document.querySelector('[data-recovery-warning]'),
@@ -1619,13 +1621,10 @@ async function openBusinessDataPlane(syncConfig) {
       session: () => state.session,
       config: syncConfig,
     });
-    // Register the mutation plane before restored app windows enqueue their
-    // module collections. This gives foreground actions a ready shared-room
-    // registration instead of placing their one-row command behind the whole
-    // restored workspace bootstrap.
-    await state.sync.startCollection('business_commands').catch((error) => {
-      console.warn('[business-os] command transport warmup deferred', error);
-    });
+    // Request command transport early, but do not put its WebRTC registration
+    // on the cached workspace's first-paint path. A foreground command
+    // re-acquires this bridge through prepareCommandSync before insertion.
+    startCommandTransportWarmup(state.sync);
     // Reconcile only after transport registration. An unresolved native read
     // must not become an empty layout or a fresh local write during startup.
     // A replaced peer generation is a transport boundary, not authoritative
@@ -1669,6 +1668,14 @@ async function openBusinessDataPlane(syncConfig) {
     rejectDataPlaneReady(error);
     throw error;
   }
+}
+
+function startCommandTransportWarmup(sync) {
+  void Promise.resolve()
+    .then(() => sync.startCollection('business_commands'))
+    .catch((error) => {
+      console.warn('[business-os] command transport warmup deferred', error);
+    });
 }
 
 async function openBusinessDbAndRegisterCoreCollections(dbName) {
@@ -2526,7 +2533,16 @@ function isTrustedBusinessOsMessageSource(event) {
 // still emits `ctox-business-os-sync-diagnostics` for those views.
 function setupSyncToast() {
   document.querySelector('[data-sync-toast]')?.remove();
-  syncToastRefresh = () => {};
+  syncToastRefresh = renderCollectionFreshnessWarning;
+  renderCollectionFreshnessWarning();
+}
+
+function renderCollectionFreshnessWarning() {
+  renderFreshnessWarning(els.collectionFreshnessWarning, {
+    collections: Array.isArray(state.activeModule?.collections) ? state.activeModule.collections : [],
+    diagnostics: state.syncDiagnostics,
+    language: shellLang(),
+  });
 }
 
 function teardownModuleResizers() {
@@ -3723,6 +3739,7 @@ function shellText(key) {
 
 function updateSyncDiagnostics(snapshot) {
   state.syncDiagnostics = snapshot;
+  renderCollectionFreshnessWarning();
   if (hasWebRtcConnectedCollection(snapshot)) markBootTiming('firstWebRtcConnectedMs');
   updateModuleScriptPreloadAvailability(snapshot);
   window.ctoxBusinessOsSyncDiagnostics = snapshot;
@@ -4666,6 +4683,7 @@ function desktopAppDescriptorForModule(mod) {
   const selectedIcon = operatorIconFor(mod.id) || grokShellIconFor(mod.id);
   return {
     id: mod.id,
+    module: mod,
     title: moduleDisplayTitle(mod),
     glyph: taskbarMarkForModule(mod),
     category: workjetCategoryForModule(mod),
@@ -5446,7 +5464,7 @@ function renderModuleTab(target, options = {}) {
     ? shellText('pinned')
     : (button.dataset.running ? shellText('running') : '');
   const svgHtml = getRegisteredSvgIcon(target.id, 16, 1.8);
-  const lifecycle = target.kind === 'module'
+  const lifecycle = target.module
     ? appLifecycleBadge(target.module, {
       session: state.session,
       governance: state.governance,
@@ -5496,7 +5514,7 @@ function renderModuleTab(target, options = {}) {
   button.querySelector('[data-app-lifecycle-badge]')?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    if (target.kind === 'module') openAppLifecycleDrawer(target.module);
+    if (target.module) openAppLifecycleDrawer(target.module);
   });
   button.addEventListener('click', () => openLaunchTarget(target));
   return button;
@@ -5579,6 +5597,7 @@ function listLaunchTargets(kind = '') {
       glyph: app.glyph,
       category: workjetCategoryForTarget({ kind: 'app', app }),
       app,
+      module: app.module || null,
     }));
   const targetsById = new Map();
   for (const target of moduleTargets) {
@@ -10988,12 +11007,14 @@ function isLocalBusinessOsSurface() {
 async function loadModules(options = {}) {
   const normalized = typeof options === 'number' ? { timeoutMs: options } : (options || {});
   const allowShellSeed = normalized.allowShellSeed !== false && allowsPackagedModuleCatalogSeed();
+  const startup = {};
   const catalog = await loadModuleCatalog(normalized.timeoutMs, {
     allowShellSeed,
+    startup,
   });
   const merged = await ensurePackagedModuleList(
     normalizeModuleList(catalog.modules),
-    { allowShellSeed }
+    { allowShellSeed, useEmbeddedMetadata: startup.usedProjectedCatalog === true }
   );
   // Remember the catalog-provided allowlist so desktop-app gating (listDesktopApps)
   // stays in sync with the tab list. Only overwrite when the synced catalog actually
@@ -11216,7 +11237,14 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
     && moduleCatalogProjectionRevisionMs(injectedCatalog) >= moduleCatalogProjectionRevisionMs(cachedCatalog)
     ? injectedCatalog
     : cachedCatalog;
-  const shellCatalog = options.allowShellSeed === false ? null : await loadPackagedModuleCatalog();
+  if (projectedCatalog && options.startup) options.startup.usedProjectedCatalog = true;
+  // A warm local/native projection must render without waiting for static
+  // manifest and per-module asset fetches. Those are code metadata, not the
+  // authority for which apps this actor may see; the current build embeds the
+  // same packaged system catalog for the first paint.
+  const shellCatalog = options.allowShellSeed === false
+    ? null
+    : projectedCatalog ? loadEmbeddedPackagedModuleCatalog() : await loadPackagedModuleCatalog();
 
   if (projectedCatalog) {
     state.sync?.startCollection?.('business_module_catalog').catch((error) => {
@@ -11301,7 +11329,9 @@ function normalizeModuleList(modules) {
 }
 
 async function ensurePackagedModuleList(modules, options = {}) {
-  const shellCatalog = await loadPackagedModuleCatalog();
+  const shellCatalog = options.useEmbeddedMetadata
+    ? loadEmbeddedPackagedModuleCatalog()
+    : await loadPackagedModuleCatalog();
   const canonicalSystemIds = new Set(
     normalizeModuleList(shellCatalog?.modules).map((mod) => String(mod?.id || '').trim()),
   );
@@ -12979,6 +13009,18 @@ function getOfflineFallbackCatalog() {
   };
 }
 
+function loadEmbeddedPackagedModuleCatalog() {
+  const catalog = getOfflineFallbackCatalog();
+  const explicitlyAllowedIds = resolveModuleAllowlist();
+  return {
+    ...catalog,
+    modules: catalog.modules.filter((mod) => {
+      const id = String(mod?.id || '').trim();
+      return isSystemModule(mod) || explicitlyAllowedIds.has(id);
+    }),
+  };
+}
+
 async function loadPackagedModuleCatalog() {
   const exposeCompleteQaCatalog = allowsCompleteQaModuleCatalog();
   const canonicalSystemIds = await loadCanonicalSystemModuleIds();
@@ -13380,7 +13422,13 @@ async function workjetProjectControl(request = {}) {
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
   const requestSession = state.session;
   const requestDb = state.db;
-  const { projectBridge, workingCopyBridge } = await requireWorkjetProjectDataPlane();
+  // Reserve a delivery margin inside Workjet's 30-second desktop call.
+  const listDeadline = action === 'project.list'
+    ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
+  const acquisition = requireWorkjetProjectDataPlane();
+  const { projectBridge, workingCopyBridge } = listDeadline
+    ? await awaitWorkjetProjectListStep(acquisition, listDeadline, 'collections')
+    : await acquisition;
 
   if (action === 'project.worker.add' || action === 'project.chat.create') {
     const creatingChat = action === 'project.chat.create';
@@ -13430,7 +13478,14 @@ async function workjetProjectControl(request = {}) {
   if (action === 'project.list') {
     assertWorkjetProjectPayloadKeys(request, new Set(['action']));
     const commandId = `cmd_workjet_project_list_${newId()}`;
-    await state.commandBus.dispatch({
+    const assertCurrentIdentity = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Workjet project session changed before the list was delivered.');
+      }
+    };
+    assertCurrentIdentity();
+    const receipt = await awaitWorkjetProjectListStep(state.commandBus.dispatch({
       id: commandId,
       command_id: commandId,
       module: 'ctox',
@@ -13441,14 +13496,40 @@ async function workjetProjectControl(request = {}) {
         source: 'workjet-project-control',
         actor: actorContext(state.session),
       },
-    }, { until: 'terminal', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
-    await waitForSyncBridgeReady(projectBridge, WORKJET_PROJECT_CONTROL_TIMEOUT_MS);
-    await waitForSyncBridgeReady(workingCopyBridge, WORKJET_PROJECT_CONTROL_TIMEOUT_MS);
-    const workingCopies = await listProjectedWorkjetWorkingCopies(ownerUserId);
+    }, {
+      until: 'terminal',
+      sync_queue_tasks: false,
+      timeoutMs: Math.max(1, listDeadline - Date.now()),
+    }), listDeadline, 'command');
+    assertCurrentIdentity();
+    if (receipt?.command_id !== commandId || receipt?.status !== 'completed'
+      || receipt?.ok !== true || receipt?.result?.ok !== true
+      || receipt?.result?.collection !== 'workjet_projects') {
+      throw new Error('Workjet project list returned an uncorrelated or unsuccessful receipt.');
+    }
+    const selector = { owner_user_id: { $eq: ownerUserId } };
+    const controller = new AbortController();
+    let projectDocs;
+    let copyDocs;
+    try {
+      [projectDocs, copyDocs] = await Promise.all([
+        readWorkjetProjectListRows(projectBridge, {
+          selector, limit: WORKJET_PROJECT_CONTROL_MAX_RESULTS,
+        }, commandId, listDeadline, controller.signal),
+        readWorkjetProjectListRows(workingCopyBridge, {
+          selector, limit: WORKJET_PROJECT_CONTROL_MAX_WORKING_COPIES,
+        }, commandId, listDeadline, controller.signal),
+      ]);
+    } finally {
+      controller.abort();
+    }
+    assertCurrentIdentity();
+    const workingCopies = await listProjectedWorkjetWorkingCopies(ownerUserId, copyDocs);
     const projects = await listProjectedWorkjetProjects(
       ownerUserId,
       WORKJET_PROJECT_CONTROL_MAX_RESULTS,
       workingCopies,
+      projectDocs,
     );
     return { action: 'project.list', projects };
   }
@@ -13544,18 +13625,79 @@ async function requireWorkjetProjectDataPlane() {
   }
   const collection = state.db?.collection?.('workjet_projects');
   if (!collection) throw new Error('workjet_projects collection is not registered.');
-  const commandBridge = await state.sync?.startCollection?.('business_commands');
-  await waitForSyncBridgeReady(commandBridge, 15_000);
-  const projectBridge = await state.sync?.startCollection?.('workjet_projects');
-  await waitForSyncBridgeReady(projectBridge, 15_000);
-  const workingCopyBridge = await state.sync?.startCollection?.('workjet_working_copies');
-  await waitForSyncBridgeReady(workingCopyBridge, 15_000);
+  // Command submission owns authenticated readiness, not a historical pull.
+  const [, projectBridge, workingCopyBridge] = await Promise.all([
+    state.sync?.startCollection?.('business_commands'),
+    state.sync?.startCollection?.('workjet_projects', { pin: false, forceDirect: true }),
+    state.sync?.startCollection?.('workjet_working_copies', { pin: false, forceDirect: true }),
+  ]);
   return { projectBridge, workingCopyBridge };
 }
 
-async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = []) {
+async function awaitWorkjetProjectListStep(operation, deadline, phase) {
+  let timer;
+  const timeout = () => Object.assign(
+    new Error(`Workjet project list did not finish ${phase} before its deadline.`),
+    { code: 'WORKJET_PROJECT_TIMEOUT', retryable: true },
+  );
+  try {
+    const value = await Promise.race([
+      operation,
+      new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(timeout()), Math.max(0, deadline - Date.now()));
+      }),
+    ]);
+    if (Date.now() >= deadline) throw timeout();
+    return value;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readWorkjetProjectListRows(bridge, query, requireRevision, deadline, signal) {
+  const current = !bridge?.state && bridge?.ready
+    ? await awaitWorkjetProjectListStep(bridge.ready, deadline, 'bridge') : bridge;
+  const peer = current?.state;
+  if (!peer?.awaitQueryReady || peer.cancelled) {
+    throw new Error('Workjet project query readiness is unavailable.');
+  }
+  await awaitWorkjetProjectListStep(
+    peer.awaitQueryReady(Math.max(1, deadline - Date.now())), deadline, 'query readiness',
+  );
+  const generation = peer.collectionQueryGenerationToken?.(peer.activeRemotePeerId);
+  const loader = peer.collection?.demandLoader;
+  if (!generation || !loader) throw new Error('Workjet project query authority is unavailable.');
+  const primaryPath = peer.collection.schema?.primaryPath || 'id';
+  const rows = [];
+  const ids = new Set();
+  while (rows.length < query.limit) {
+    const limit = Math.min(200, query.limit - rows.length);
+    const page = await awaitWorkjetProjectListStep(peer.collection.find({
+      ...query, limit, skip: rows.length, sort: [{ [primaryPath]: 'asc' }], requireRevision, signal,
+    }).exec(), deadline, 'native projection');
+    if (peer.cancelled || peer.collection.demandLoader !== loader
+      || peer.collectionQueryGenerationToken?.(peer.activeRemotePeerId) !== generation) {
+      throw new Error('Workjet project query generation changed.');
+    }
+    if (!Array.isArray(page) || page.length > limit) {
+      throw new Error('Workjet project query exceeded its bounded window.');
+    }
+    for (const document of page) {
+      const id = (document?.toJSON?.() || document)?.[primaryPath];
+      if (typeof id !== 'string' || !id || ids.has(id)) {
+        throw new Error('Workjet project query returned an invalid or repeated identity.');
+      }
+      ids.add(id);
+    }
+    rows.push(...page);
+    if (page.length < limit) break;
+  }
+  return rows;
+}
+
+async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = [], nativeDocs = null) {
   const collection = state.db?.collection?.('workjet_projects');
-  const docs = await collection.find({
+  const docs = nativeDocs ?? await collection.find({
     selector: { owner_user_id: { $eq: ownerUserId } },
     limit: Math.min(limit, WORKJET_PROJECT_CONTROL_MAX_RESULTS),
   }).exec();
@@ -13616,9 +13758,9 @@ async function waitForProjectedWorkjetProject(
   throw error;
 }
 
-async function listProjectedWorkjetWorkingCopies(ownerUserId) {
+async function listProjectedWorkjetWorkingCopies(ownerUserId, nativeDocs = null) {
   const collection = state.db?.collection?.('workjet_working_copies');
-  const docs = await collection.find({
+  const docs = nativeDocs ?? await collection.find({
     selector: { owner_user_id: { $eq: ownerUserId } },
     limit: WORKJET_PROJECT_CONTROL_MAX_WORKING_COPIES,
   }).exec();
@@ -15041,7 +15183,7 @@ function filterStartMenu(panel, query) {
 }
 
 function renderStartMenuLifecycleBadge(target) {
-  if (target?.kind !== 'module' || !target.module) return '';
+  if (!target?.module) return '';
   const lifecycle = appLifecycleBadge(target.module, {
     session: state.session,
     governance: state.governance,
@@ -15103,7 +15245,7 @@ function buildStartMenuItem(target) {
   el.querySelector('[data-module-lifecycle]')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (target.kind === 'module') openAppLifecycleDrawer(target.module);
+    if (target.module) openAppLifecycleDrawer(target.module);
   });
 
   el.querySelector('.start-menu-item-pin-btn').addEventListener('click', (e) => {

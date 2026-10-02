@@ -208,6 +208,7 @@ class CtoxRxCollection {
     this.storageCollection = storageCollection;
     this.demandLoader = null;
     this.demandLoaderListeners = new Set();
+    this.localReplicaComplete = false;
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
       deltaLiveQueryApplies: 0,
@@ -223,6 +224,13 @@ class CtoxRxCollection {
     if (isControlPlaneStatusCollection(this.name)) {
       for (const listener of this.demandLoaderListeners) listener();
     }
+  }
+
+  // Set by the replication state of an eagerly pulled collection once its
+  // pull drained. Control-plane ledgers stay behind their authorized demand
+  // windows regardless (permission boundary, see exec()).
+  setLocalReplicaComplete(complete) {
+    this.localReplicaComplete = Boolean(complete) && !isControlPlaneStatusCollection(this.name);
   }
 
   subscribeDemandLoaderChange(listener) {
@@ -748,12 +756,37 @@ class CtoxRxQuery {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     const demandLoader = this.collection.demandLoader;
-    if (demandLoader) {
+    // Replica coverage answers ordinary reads only. Explicit revision tokens
+    // still require the loader's authority and connection-generation checks.
+    if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision)) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit))
         ? { window: { offset: Number(this.query.skip || 0), limit: 1 } }
         : {};
       demandOptions.signal = this.signal;
       docs = await demandLoader.resolveQuery(this.query, demandOptions);
+    } else if (demandLoader) {
+      // A complete eager replica answers locally, but in the same window the
+      // loader serves (at most DEFAULT_WINDOW_LIMIT rows), so callers see the
+      // result shape they always had. Unbounded local reads handed the chat
+      // dock all 871 Business chats on the customer tenant (01.10.2026); it merged and
+      // re-persisted every one on each pass and froze the page.
+      const windowLimit = this.single && !Number.isFinite(Number(this.query.limit))
+        ? 1
+        : Math.min(
+          DEFAULT_WINDOW_LIMIT,
+          Math.max(1, Math.floor(Number(this.query.limit) || DEFAULT_WINDOW_LIMIT)),
+        );
+      const windowed = { ...this.query, limit: windowLimit };
+      docs = typeof this.collection.storageCollection.queryDocuments === 'function'
+        ? await this.collection.storageCollection.queryDocuments(windowed, {
+          matchesSelector,
+          sortDocuments,
+        })
+        : sortDocuments(
+          (await this.collection.storageCollection.allDocuments())
+            .filter((doc) => matchesSelector(doc, windowed.selector)),
+          windowed.sort,
+        ).slice(Math.max(0, Number(windowed.skip) || 0)).slice(0, windowLimit);
     } else if (isControlPlaneStatusCollection(this.collection.name)) {
       // Replication cancellation detaches the loader. A warm local row is not
       // evidence that the current actor may still read it after reconnect.

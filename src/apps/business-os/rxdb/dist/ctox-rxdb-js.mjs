@@ -2365,12 +2365,25 @@ var CtoxIndexedDbStorage = class {
     const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readwrite");
     const done = idbTransactionDone(tx);
     const documents = tx.objectStore(DOCUMENT_STORE);
+    done.catch(() => {
+    });
     const markers = tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE);
-    for (const name of names) {
-      documents.delete(IDBKeyRange.bound([name, ""], [name, INDEX_HIGH_KEY]));
-      markers.delete(name);
+    try {
+      for (const name of names) {
+        const marker = await localCheckpointMarker(markers, name);
+        documents.delete(IDBKeyRange.bound([name, ""], [name, INDEX_HIGH_KEY]));
+        markers.put({ ...marker, evictionGeneration: marker.evictionGeneration + 1 });
+      }
+      await done;
+    } catch (error) {
+      try {
+        tx.abort();
+      } catch {
+      }
+      await done.catch(() => {
+      });
+      throw error;
     }
-    await done;
     for (const name of names) {
       globalThis.dispatchEvent?.(new CustomEvent("ctox-rxdb-external-change", {
         detail: { databaseName: this.db.name, collection: name, ids: [], cleared: true }
@@ -3007,15 +3020,31 @@ var CtoxIndexedDbCollection = class {
   /// this on dirty docs; the sidecar enforces that.
   async hardDeleteByIds(ids) {
     if (!Array.isArray(ids) || !ids.length) return 0;
-    const tx = this.db.transaction(DOCUMENT_STORE, "readwrite");
-    const store = tx.objectStore(DOCUMENT_STORE);
-    let removed = 0;
-    for (const id of ids) {
-      await idbRequest(store.delete([this.name, String(id)]));
-      removed += 1;
+    const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readwrite");
+    const done = idbTransactionDone(tx);
+    const markers = tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE);
+    done.catch(() => {
+    });
+    try {
+      const marker = await localCheckpointMarker(markers, this.name);
+      const store = tx.objectStore(DOCUMENT_STORE);
+      let removed = 0;
+      for (const id of ids) {
+        await idbRequest(store.delete([this.name, String(id)]));
+        removed += 1;
+      }
+      if (removed) markers.put({ ...marker, evictionGeneration: marker.evictionGeneration + 1 });
+      await done;
+      return removed;
+    } catch (error) {
+      try {
+        tx.abort();
+      } catch {
+      }
+      await done.catch(() => {
+      });
+      throw error;
     }
-    await idbTransactionDone(tx);
-    return removed;
   }
   async findDocumentsById(ids, { withDeleted = false } = {}) {
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
@@ -3244,11 +3273,15 @@ var CtoxIndexedDbCollection = class {
     };
   }
   async replicationCheckpointStatus(schemaHash2 = null) {
-    const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
+    const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readwrite");
+    const done = idbTransactionDone(tx);
+    done.catch(() => {
+    });
+    const marker = await localCheckpointMarker(tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE), this.name);
     const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
     const range = IDBKeyRange.bound([this.name, 0, ""], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], false, false);
     const record = await firstCursorValue(index.openCursor(range, "prev"));
-    await idbTransactionDone(tx);
+    await done;
     if (!record) {
       return {
         source: "browser",
@@ -3257,7 +3290,9 @@ var CtoxIndexedDbCollection = class {
         schemaHash: schemaHash2,
         latestLwt: null,
         latestIdHash: null,
-        epoch: `browser:${this.name}:empty`
+        epoch: `browser:${this.name}:empty`,
+        evictionGeneration: marker.evictionGeneration,
+        localStoreGeneration: marker.localStoreGeneration
       };
     }
     const latestIdHash = await sha256Hex(record.id);
@@ -3268,7 +3303,9 @@ var CtoxIndexedDbCollection = class {
       schemaHash: schemaHash2,
       latestLwt: record.lwt,
       latestIdHash,
-      epoch: `browser:${this.name}:${record.lwt}:${latestIdHash.slice(0, 16)}`
+      epoch: `browser:${this.name}:${record.lwt}:${latestIdHash.slice(0, 16)}`,
+      evictionGeneration: marker.evictionGeneration,
+      localStoreGeneration: marker.localStoreGeneration
     };
   }
   schemaIndexes() {
@@ -4090,6 +4127,23 @@ var ctoxIndexedDbStorageTestInternals = {
   shouldAcceptDocumentWrite,
   storedRecordForWrite
 };
+async function localCheckpointMarker(store, collection) {
+  const previous = await idbRequest(store.get(collection));
+  if (previous?.localStoreGeneration !== void 0) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(previous.localStoreGeneration) || !Number.isSafeInteger(previous.evictionGeneration) || previous.evictionGeneration < 0 || previous.evictionGeneration >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Invalid local checkpoint generation");
+    }
+    return previous;
+  }
+  const marker = {
+    ...previous,
+    collection,
+    localStoreGeneration: globalThis.crypto.randomUUID(),
+    evictionGeneration: 0
+  };
+  await idbRequest(store.put(marker));
+  return marker;
+}
 
 // src/apps/business-os/rxdb/src/inbound-request-queue.mjs
 var InboundRequestQueue = class {
@@ -10056,6 +10110,12 @@ var replicationWebRtcTestInternals = Object.freeze({
   decodeCapabilityTokenClaims,
   readPermissionDigestFromCapabilityToken,
   readPermissionDigestMatches,
+  // Local checkpoint reuse across ordinary pulls/writes, never across eviction.
+  localCheckpointValidityKey,
+  localCheckpointStillCovers,
+  remoteCheckpointStillCovers,
+  // Eager replicas are never evicted by the demand sidecar.
+  demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
   // real state machines without opening a network connection.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -10888,6 +10948,10 @@ var CtoxWebRtcReplicationState = class {
     this.checkpointStorageKey = persistentCheckpointStorageKey(topic, collection.name);
     this.retainedCheckpoints = readPersistentCheckpoints(this.checkpointStorageKey);
     this.firstPullCompletedAtMs = 0;
+    this.publishLocalReplicaCoverage();
+    this.pullFresh = false;
+    this.pullFreshnessGeneration = 0;
+    this.lastSuccessfulPullAtMs = 0;
     this.localCheckpointValidityKey = "";
     this.readPermissionDigest = "";
     this.activeRemotePeerId = null;
@@ -11049,7 +11113,7 @@ var CtoxWebRtcReplicationState = class {
     const periodicPullMs = this.periodicPullIntervalMs();
     if (periodicPullMs > 0) {
       this.periodicPullTimer = setInterval(() => {
-        this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+        this.pullFromRemotePeers({ revalidate: true }).catch((error) => this.error$.next(error));
       }, periodicPullMs);
     }
     const periodicPushMs = this.periodicPushIntervalMs();
@@ -11139,6 +11203,8 @@ var CtoxWebRtcReplicationState = class {
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
     Object.assign(this.demandStatus, hybridLogicalClockStatus());
     this.activeRemotePeerId = peerId;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
     const validityKey = checkpointValidityKeyFromProtocol(normalizedRemoteProtocol);
@@ -11150,8 +11216,9 @@ var CtoxWebRtcReplicationState = class {
     if (this.cancelled) return;
     const retained = this.retainedCheckpoints;
     if (retained && validityKey) {
-      if (retained.validityKey === validityKey && retained.localValidityKey && retained.localValidityKey === localValidityKey && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)) {
+      if (remoteCheckpointStillCovers(retained, validityKey, normalizedRemoteProtocol) && localCheckpointStillCovers(retained.localValidityKey, localValidityKey) && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)) {
         this.firstPullCompletedAtMs = retainedFirstPullCompletedAtMs(retained);
+        this.publishLocalReplicaCoverage();
         if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
           this.pullCheckpointsByPeer.set(peerId, retained.pull);
         }
@@ -11160,6 +11227,7 @@ var CtoxWebRtcReplicationState = class {
         }
       } else {
         this.firstPullCompletedAtMs = 0;
+        this.publishLocalReplicaCoverage();
         this.retainedCheckpoints = null;
         clearPersistentCheckpoints(this.checkpointStorageKey);
       }
@@ -11200,10 +11268,12 @@ var CtoxWebRtcReplicationState = class {
     }
   }
   // ----- pull / push (collection-tagged over the shared peer) -------------
-  async pullFromRemotePeers() {
+  async pullFromRemotePeers({ revalidate = false } = {}) {
     if (!this.pull || this.cancelled) return;
+    if (!revalidate) this.pullFresh = false;
     if (this.pullInProgressPromise) {
       this.pullAgainAfterCurrent = true;
+      this.publishTransportStatus();
       return this.pullInProgressPromise;
     }
     this.pullInProgress = true;
@@ -11216,6 +11286,7 @@ var CtoxWebRtcReplicationState = class {
         const results = await Promise.allSettled(peerIds.map((peerId) => this.pullFromPeer(peerId)));
         this.reportPeerResults(results, peerIds);
         if (!peerIds.length || results.some((result) => result.status === "rejected")) {
+          this.pullFresh = false;
           this.schedulePullRetry();
         }
       } while (this.pullAgainAfterCurrent && !this.cancelled);
@@ -11264,6 +11335,7 @@ var CtoxWebRtcReplicationState = class {
     this.localPushTimer.unref?.();
   }
   async pullFromPeer(peerId) {
+    const freshnessGeneration = this.pullFreshnessGeneration;
     const batchSize = Number(this.pull?.batchSize || 10);
     let activePeerId = peerId;
     let checkpoint = this.pullCheckpointsByPeer.get(activePeerId) || null;
@@ -11282,6 +11354,8 @@ var CtoxWebRtcReplicationState = class {
       }
       const documents = result.documents;
       if (documents.length) {
+        this.pullFresh = false;
+        this.publishTransportStatus();
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId)
         });
@@ -11292,7 +11366,11 @@ var CtoxWebRtcReplicationState = class {
       checkpoint = result?.checkpoint || checkpoint;
       this.pullCheckpointsByPeer.set(activePeerId, checkpoint);
       if (!documents.length) this.markFirstPullCompleted();
-      await this.persistCheckpointsForPeer(activePeerId);
+      const checkpointPersisted = await this.persistCheckpointsForPeer(activePeerId);
+      if (!documents.length && checkpointPersisted && freshnessGeneration === this.pullFreshnessGeneration && !this.cancelled) {
+        this.pullFresh = true;
+        this.lastSuccessfulPullAtMs = Date.now();
+      }
       if (!documents.length) break;
     }
   }
@@ -11842,16 +11920,7 @@ var CtoxWebRtcReplicationState = class {
     });
     const backend = indexedDbAvailable ? createIndexedDbMetaBackend({ databaseName: dbName }) : createMemoryMetaBackend();
     this.demandStatus.queryDemandLoadingEnabled = queryDemandEnabled || fileDemandEnabled;
-    const primaryDelete = async (collection, id) => {
-      if (collection !== this.collection.name) return;
-      const stored = await this.collection.storageCollection.getStoredRecord?.(id);
-      if (!stored || Number(stored.pushable || 0) !== 0) {
-        throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
-      }
-      if (typeof this.collection.storageCollection.hardDeleteByIds === "function") {
-        await this.collection.storageCollection.hardDeleteByIds([id]);
-      }
-    };
+    const primaryDelete = demandSidecarPrimaryDelete(this);
     this.demandSidecar = new QueryMetaStorage(backend, {
       databaseName: dbName,
       schedulerKey: this.collection.storageCollection?.databaseName || this.topic,
@@ -11945,13 +12014,29 @@ var CtoxWebRtcReplicationState = class {
   markFirstPullCompleted() {
     if (this.firstPullCompletedAtMs > 0) return;
     this.firstPullCompletedAtMs = Date.now();
+    this.publishLocalReplicaCoverage();
     this.publishTransportStatus();
+  }
+  // An eagerly pulled collection whose pull has drained (or resumed from a
+  // valid retained checkpoint) holds the whole authorized collection locally.
+  // Its queries must read that replica instead of a query-demand round trip:
+  // on the customer tenant (30.09.2026) every Outbound reload asked the native
+  // peer for 200 leads (~20 MB) in one window, hit QUERY_COLLECTOR_TIMEOUT,
+  // and the app stayed at "Noch keine Kampagne" with a complete local store.
+  publishLocalReplicaCoverage() {
+    this.collection?.setLocalReplicaComplete?.(Boolean(this.pull) && this.firstPullCompletedAtMs > 0);
   }
   collectionReadinessState() {
     if (this.firstPullCompletedAtMs > 0) return "live";
     if (this.pullInProgress) return "catching-up";
     if (!this.hasOpenReadinessPeer()) return "offline-pending";
     return "never-synced";
+  }
+  collectionFreshnessState() {
+    if (!this.pull) return null;
+    if (!this.hasOpenReadinessPeer()) return "offline-pending";
+    if (!this.pullFresh) return "catching-up";
+    return "live";
   }
   hasOpenReadinessPeer() {
     if ((this.shared?.openSharedPeerIds?.() || []).length > 0) return true;
@@ -11973,6 +12058,8 @@ var CtoxWebRtcReplicationState = class {
     if (!peerId) return;
     const peerStates = new Map(this.peerStates$.getValue() || /* @__PURE__ */ new Map());
     if (!peerStates.has(peerId)) return;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
     const retainedPull = this.pullCheckpointsByPeer.get(peerId) || null;
     const retainedPush = this.pushCheckpointsByPeer.get(peerId) || null;
@@ -12051,10 +12138,10 @@ var CtoxWebRtcReplicationState = class {
   }
   async persistCheckpointsForPeer(peerId) {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
-    if (!validityKey) return;
+    if (!validityKey) return false;
     const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     const localValidityKey = localCheckpointValidityKey(localCheckpoint);
-    if (!localValidityKey) return;
+    if (!localValidityKey) return false;
     this.localCheckpointValidityKey = localValidityKey;
     const retained = {
       validityKey,
@@ -12071,6 +12158,7 @@ var CtoxWebRtcReplicationState = class {
     };
     this.retainedCheckpoints = retained;
     writePersistentCheckpoints(this.checkpointStorageKey, retained);
+    return true;
   }
   remoteProtocolForPeer(peerId) {
     const localProtocol = (this.peerStates$.getValue() || /* @__PURE__ */ new Map()).get(peerId)?.remoteProtocol || null;
@@ -12128,7 +12216,7 @@ var CtoxWebRtcReplicationState = class {
   }
   periodicPullIntervalMs() {
     if (!this.pull) return 0;
-    return ["business_commands", "ctox_queue_tasks"].includes(this.collection.name) ? 1e3 : 0;
+    return ["business_commands", "ctox_queue_tasks"].includes(this.collection.name) ? 1e3 : 6e4;
   }
   periodicPushIntervalMs() {
     if (!this.push) return 0;
@@ -12215,6 +12303,9 @@ var CtoxWebRtcReplicationState = class {
       topic: this.topic,
       activePeerCount: Math.max(localPeerCount, sharedPeerCount, connectionPeerCount),
       collectionReadinessState: this.collectionReadinessState(),
+      collectionFreshnessState: this.collectionFreshnessState(),
+      pullEnabled: Boolean(this.pull),
+      lastSuccessfulPullAtMs: this.lastSuccessfulPullAtMs || null,
       firstPullCompletedAtMs: this.firstPullCompletedAtMs || null,
       pullInProgress: this.pullInProgress,
       pushInProgress: this.pushInProgress,
@@ -12256,12 +12347,56 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   if (!epoch || !sessionId || !schemaHashValue) return "";
   return `${epoch}|${sessionId}|${schemaHashValue}`;
 }
+function remoteCheckpointStillCovers(retained, currentKey, remoteProtocol) {
+  const retainedKey = retained?.validityKey;
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const before = String(retainedKey).split("|");
+  const now = String(currentKey).split("|");
+  if (before.length !== 4 || now.length !== 4) return false;
+  if (before[0] !== now[0] || before[1] !== now[1] || before[2] !== now[2]) return false;
+  const retainedLwt = Number(retained?.pull?.lwt);
+  const remoteHeadLwt = Number(remoteProtocol?.checkpoint?.latestLwt);
+  return Number.isFinite(retainedLwt) && Number.isFinite(remoteHeadLwt) && remoteHeadLwt >= retainedLwt;
+}
 function localCheckpointValidityKey(checkpoint) {
   if (!checkpoint || typeof checkpoint !== "object") return "";
   const epoch = typeof checkpoint.epoch === "string" ? checkpoint.epoch.trim() : "";
   const schemaHashValue = typeof checkpoint.schemaHash === "string" ? checkpoint.schemaHash.trim() : "";
   if (!epoch) return "";
-  return `${epoch}|${schemaHashValue}`;
+  const evictionGeneration = Number(checkpoint.evictionGeneration || 0);
+  const storeGeneration = checkpoint.localStoreGeneration;
+  if (storeGeneration !== void 0) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(storeGeneration)) return "";
+    return `${epoch}|${schemaHashValue}|ev${evictionGeneration}|store${storeGeneration}`;
+  }
+  return evictionGeneration > 0 ? `${epoch}|${schemaHashValue}|ev${evictionGeneration}` : `${epoch}|${schemaHashValue}`;
+}
+function localCheckpointStillCovers(retainedKey, currentKey) {
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const retained = parseBrowserLocalCheckpointKey(retainedKey);
+  const current = parseBrowserLocalCheckpointKey(currentKey);
+  if (!retained || !current) return false;
+  return retained.collection === current.collection && retained.schemaHash === current.schemaHash && retained.evictionGeneration === current.evictionGeneration && retained.storeGeneration === current.storeGeneration && Number.isFinite(retained.latestLwt) && Number.isFinite(current.latestLwt) && current.latestLwt >= retained.latestLwt;
+}
+function parseBrowserLocalCheckpointKey(key) {
+  const parts = String(key).split("|");
+  if (parts.length > 4) return null;
+  const [epoch = "", schemaHash2 = "", evictionPart = "", storePart = ""] = parts;
+  const storeGeneration = storePart ? /^store([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(storePart)?.[1] : "";
+  if (storePart && !storeGeneration) return null;
+  const match = /^browser:(.+):(\d+(?:\.\d+)?):([0-9a-f]+)$/.exec(epoch);
+  if (!match) return null;
+  const evictionGeneration = evictionPart ? Number(/^ev(\d+)$/.exec(evictionPart)?.[1] ?? NaN) : 0;
+  if (!Number.isFinite(evictionGeneration)) return null;
+  return {
+    collection: match[1],
+    latestLwt: Number(match[2]),
+    schemaHash: schemaHash2,
+    evictionGeneration,
+    storeGeneration
+  };
 }
 function persistentCheckpointStorageKey(topic, collection) {
   return `ctox.rxdb.checkpoints.v1.${encodeURIComponent(String(topic || ""))}.${encodeURIComponent(String(collection || ""))}`;
@@ -12574,6 +12709,19 @@ function primaryValue(doc = {}, primaryPath = "id") {
 }
 function shouldPersistFetchedFileChunks(collectionName = "") {
   return String(collectionName || "") === "desktop_file_chunks";
+}
+function demandSidecarPrimaryDelete(state) {
+  return async (collection, id) => {
+    if (collection !== state.collection.name) return;
+    if (state.pull) return;
+    const stored = await state.collection.storageCollection.getStoredRecord?.(id);
+    if (!stored || Number(stored.pushable || 0) !== 0) {
+      throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
+    }
+    if (typeof state.collection.storageCollection.hardDeleteByIds === "function") {
+      await state.collection.storageCollection.hardDeleteByIds([id]);
+    }
+  };
 }
 function shouldAttachQueryDemandLoader(collectionName = "") {
   const name = String(collectionName || "");
@@ -13264,6 +13412,7 @@ var CtoxRxCollection = class {
     this.storageCollection = storageCollection;
     this.demandLoader = null;
     this.demandLoaderListeners = /* @__PURE__ */ new Set();
+    this.localReplicaComplete = false;
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
       deltaLiveQueryApplies: 0,
@@ -13278,6 +13427,12 @@ var CtoxRxCollection = class {
     if (isControlPlaneStatusCollection(this.name)) {
       for (const listener of this.demandLoaderListeners) listener();
     }
+  }
+  // Set by the replication state of an eagerly pulled collection once its
+  // pull drained. Control-plane ledgers stay behind their authorized demand
+  // windows regardless (permission boundary, see exec()).
+  setLocalReplicaComplete(complete) {
+    this.localReplicaComplete = Boolean(complete) && !isControlPlaneStatusCollection(this.name);
   }
   subscribeDemandLoaderChange(listener) {
     this.demandLoaderListeners.add(listener);
@@ -13745,10 +13900,23 @@ var CtoxRxQuery = class _CtoxRxQuery {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     const demandLoader = this.collection.demandLoader;
-    if (demandLoader) {
+    if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision)) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : {};
       demandOptions.signal = this.signal;
       docs = await demandLoader.resolveQuery(this.query, demandOptions);
+    } else if (demandLoader) {
+      const windowLimit = this.single && !Number.isFinite(Number(this.query.limit)) ? 1 : Math.min(
+        DEFAULT_WINDOW_LIMIT,
+        Math.max(1, Math.floor(Number(this.query.limit) || DEFAULT_WINDOW_LIMIT))
+      );
+      const windowed = { ...this.query, limit: windowLimit };
+      docs = typeof this.collection.storageCollection.queryDocuments === "function" ? await this.collection.storageCollection.queryDocuments(windowed, {
+        matchesSelector,
+        sortDocuments
+      }) : sortDocuments(
+        (await this.collection.storageCollection.allDocuments()).filter((doc) => matchesSelector(doc, windowed.selector)),
+        windowed.sort
+      ).slice(Math.max(0, Number(windowed.skip) || 0)).slice(0, windowLimit);
     } else if (isControlPlaneStatusCollection(this.collection.name)) {
       if (this.query.requireRevision) {
         throw Object.assign(new Error("QUERY_GENERATION_REQUIRED: strict demand read has no loader"), {
