@@ -20,6 +20,13 @@ A storage adapter that cannot cancel an in-progress read must finish it before
 the next snapshot starts; its late result cannot publish after unsubscribe.
 Strict revision tokens and permission checks remain on the existing loader.
 
+The global Shell chat consumes its bounded live-query snapshot directly;
+receiving that snapshot does not start another storage/demand read. During a
+pending merge it retains only the newest window (at most200 rows). Explicit
+hydration without a snapshot still executes the bounded query. Disposal releases
+the pending snapshot. Existing ownership/deletion filters, merge semantics and
+local drafts/history remain unchanged; this is not a native acceptance signal.
+
 The deferred-storage regression proves the concurrency bound and generation
 fence, not tenant startup latency, Windows memory behavior or installed OOM
 resolution. Those require retained-profile browser measurements on the exact
