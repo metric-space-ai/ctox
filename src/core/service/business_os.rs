@@ -8885,7 +8885,11 @@ mod tests {
         for expected in [
             "rocketreach.com",
             "rocketreach.co",
-            "RocketReach company identity verified",
+            // Check executable company/person guards, not an obsolete note.
+            "if (!companyEvidence) return { records: [], companyMatched: false, protectedFieldCount: 0 };",
+            "companyProfileUrl(candidate.url)",
+            "relevantCompanyText(candidate.name) && relevantCompanyText(candidate.text)",
+            "if (!companyContext || !name) continue;",
             "person_vorname",
             "person_nachname",
             "person_position",
@@ -8901,7 +8905,12 @@ mod tests {
         }
         assert!(!source.contains("ROCKETREACH_BROWSER_LOGIN"));
         assert!(!source.contains("credentialValue"));
-        assert!(!source.contains("password"));
+        // URL validators reject embedded credentials; their password
+        // property is a veto, not a secret read or login form instruction.
+        let credential_url_veto = "url.protocol !== \"https:\" || url.username || url.password";
+        assert_eq!(source.matches(credential_url_veto).count(), 2);
+        let source_without_url_vetoes = source.replace(credential_url_veto, "");
+        assert!(!source_without_url_vetoes.contains("password"));
         assert!(!source.contains("console."));
         Ok(())
     }
