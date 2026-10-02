@@ -41,6 +41,7 @@ function makeStorageCollection(databaseName) {
     sidecar,
     collectionName: 'spreadsheet_rows',
     schemaVersion: 1,
+    queryGeneration: () => 'spreadsheet-authority-generation',
     requestQueryFetch: async (request) => {
       fetches += 1;
       fetchedFingerprints.push(request.queryFingerprint);

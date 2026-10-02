@@ -710,6 +710,7 @@
         "user_notifications",
         "user_thread_links",
         "user_thread_messages",
+        "user_thread_states",
         "user_threads"
       ],
       "notes": "Scoped system exception: Threads resolves user thread, notification, task approval, command and queue projections through the scoped system facade. Browser/Rust dynamic-app smoke denies foreign collections through collection(), property, raw and collections access."

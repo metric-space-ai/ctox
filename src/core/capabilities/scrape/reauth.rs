@@ -211,18 +211,29 @@ pub(super) fn url_is_login_landing(
 /// Build the typed reauthorization action for a run when the evidence shows
 /// an expired/invalid session on a credential-protected source: either the
 /// adapter script classified `authorization_required` explicitly, or the
-/// portal probe landed on the source's own login page while the run drifted
-/// (which is how an expired stored session presents — the login redirect is
-/// not layout drift). Returns the action payload to persist and to hand off.
+/// portal probe landed on the source's own login page after a derived empty
+/// result. Explicit adapter diagnostics, failed commands and missing pages are
+/// never reclassified as session expiry. Returns the action payload to persist
+/// and to hand off.
 pub(super) fn session_expiry_reauthorization(
     target: &RegisteredTarget,
     probe: &ProbeResult,
     payload: &Value,
     classification: &Classification,
 ) -> Option<Value> {
-    let explicit =
-        payload.get("failure_mode").and_then(Value::as_str) == Some("authorization_required");
-    let login_landing_upgrade = classification.status == ScrapeRunStatus::PortalDrift
+    let explicit = payload
+        .get("failure_mode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        == Some("authorization_required");
+    let no_reported_failure = match payload.get("failure_mode") {
+        None | Some(Value::Null) => true,
+        Some(Value::String(mode)) => mode.trim().is_empty(),
+        _ => false,
+    };
+    let login_landing_upgrade = no_reported_failure
+        && classification.status == ScrapeRunStatus::PortalDrift
+        && classification.reason == "empty_record_set_on_reachable_portal"
         && probe.reachable
         && !probe.human_verification;
     if !explicit && !login_landing_upgrade {

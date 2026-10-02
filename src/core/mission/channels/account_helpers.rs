@@ -154,8 +154,56 @@ pub(super) fn ensure_account_tx(
     channel: &str,
     address: &str,
     provider: &str,
-    profile_json: Value,
+    mut profile_json: Value,
 ) -> Result<()> {
+    // Native send/test profiles describe the connector, not Business OS
+    // account access. Preserve the existing email owner and shares only when
+    // these fields are absent. The account configuration path supplies
+    // explicit empty values to revoke access, which must not be restored.
+    if channel == "email" {
+        if let Some(incoming) = profile_json.as_object_mut() {
+            let missing_owner =
+                !incoming.contains_key("ownerUserId") && !incoming.contains_key("owner_user_id");
+            let missing_shares = !incoming.contains_key("shared_user_ids")
+                && !incoming.contains_key("sharedUserIds")
+                && !incoming.contains_key("member_user_ids");
+            if missing_owner || missing_shares {
+                let previous: Option<String> = tx
+                    .query_row(
+                        "SELECT profile_json FROM communication_accounts \
+                         WHERE account_key = ?1 AND channel = 'email'",
+                        [account_key],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if let Some(previous) = previous
+                    .as_deref()
+                    .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                    .and_then(|value| value.as_object().cloned())
+                {
+                    if missing_owner {
+                        if let Some(owner) = previous
+                            .get("owner_user_id")
+                            .or_else(|| previous.get("ownerUserId"))
+                            .filter(|value| value.is_string())
+                        {
+                            incoming.insert("ownerUserId".into(), owner.clone());
+                        }
+                    }
+                    if missing_shares {
+                        if let Some(shares) = previous
+                            .get("shared_user_ids")
+                            .or_else(|| previous.get("sharedUserIds"))
+                            .or_else(|| previous.get("member_user_ids"))
+                            .filter(|value| value.is_array())
+                        {
+                            incoming.insert("shared_user_ids".into(), shares.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
     let now = now_iso_string();
     tx.execute(
         r#"

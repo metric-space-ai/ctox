@@ -182,6 +182,23 @@ test('module appbar source action follows the same source-view permission', () =
   );
 });
 
+test('module target menu exposes the production trailing pin control', () => {
+  let toggles = 0;
+  const toggle = () => { toggles += 1; };
+  const item = buildModuleTargetContextItems({
+    target: { id: 'inventory', kind: 'module', title: 'Inventory', glyph: '□' },
+    pinned: true,
+    labels,
+    actions: { togglePin: toggle },
+  }).find((candidate) => candidate.key === 'unpin');
+
+  assert.equal(item.trailingIcon, '−');
+  assert.equal(item.trailingLabel, 'Von Bar lösen');
+  assert.equal(typeof item.trailingAction, 'function');
+  item.trailingAction();
+  assert.equal(toggles, 1);
+});
+
 test('lifecycle drawer permission view uses business-facing manager and readonly copy', () => {
   const manager = buildLifecyclePermissionView({ canManage: true, canOpenSource: true });
   assert.equal(manager.state, 'manager');

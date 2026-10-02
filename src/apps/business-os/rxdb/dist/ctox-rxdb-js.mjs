@@ -45,6 +45,15 @@ var CTOX_FILE_RPC = Object.freeze({
   cancel: "rxdb.file.cancel",
   maxBytesPerChunk: 262144
 });
+var CTOX_ROWS_FETCH_CAPABILITY = "ctox-rxdb-rows-fetch-v1";
+var CTOX_ROWS_RPC = Object.freeze({
+  fetch: "rxdb.rows.fetch",
+  chunk: "rxdb.rows.chunk",
+  error: "rxdb.rows.error",
+  cancel: "rxdb.rows.cancel",
+  maxBytesPerChunk: 262144,
+  maxRowsPerWindow: 1e3
+});
 var CTOX_PRESENCE_CAPABILITY = "ctox-presence-v1";
 var CTOX_PRESENCE_RPC = Object.freeze({
   update: "rxdb.presence.update",
@@ -248,7 +257,7 @@ var CTOX_BUSINESS_OS_SCHEMA_HASHES = Object.freeze({
   user_thread_messages: "3e9ac54c218496245fdeaa9e8cd6f2f649455448703bada2ac290a1de4fd7646",
   user_thread_states: "71e70b8a2e44bd2b851b24fde40a5b4cd42cd9e0b6158525055a9c04743de9eb",
   user_threads: "97a226600a64559f18c795e6a6c39b56e478d455bc5ce1485b714e1d13c2e5cb",
-  workjet_computers: "ad5b7f32d8237ac93399904960c193e40de34e2f1b521306d8d1aeea590645b1",
+  workjet_computers: "367b6f7af7849a06616267a13d2ef49e539e10b2267628dc860b1d82ba10f595",
   workjet_project_chats: "f68e34d8702d58f1ffc430bd12edb61f01528b26a2e5197df3e46e393819bc2e",
   workjet_project_workers: "f2c2dfcf7f722902e47a2d947b81f8afae740b6a642bb9b392a4260ce79d4892",
   workjet_projects: "16bf130df1fb7883a21198744dd3f5c2c0ecd621e39355b6f0d875d59cbe9a0e",
@@ -753,13 +762,33 @@ var cachedNodeId = null;
 var nativeClockOffsetMs = 0;
 var nativeClockObservedAtMs = null;
 var clockSkewDetected = false;
+var nativeClockSource = null;
 var CLOCK_SKEW_LIMIT_MS = 5 * 60 * 1e3;
-function setHybridLogicalClockTimeAnchor(nativeTimeMs, observedAtMs = Date.now()) {
+var MAX_NATIVE_CLOCK_SAMPLE_RTT_MS = 1e4;
+var MAX_CLOCK_SAMPLE_WALL_DRIFT_MS = 2e3;
+function setHybridLogicalClockTimeAnchor(nativeTimeMs, observedAtMs = Date.now(), source = null) {
   if (!Number.isFinite(nativeTimeMs) || !Number.isFinite(observedAtMs)) return hybridLogicalClockStatus();
   nativeClockOffsetMs = Math.trunc(nativeTimeMs) - Math.trunc(observedAtMs);
   nativeClockObservedAtMs = Math.trunc(observedAtMs);
   clockSkewDetected = Math.abs(nativeClockOffsetMs) > CLOCK_SKEW_LIMIT_MS;
+  nativeClockSource = source;
   return hybridLogicalClockStatus();
+}
+function clearHybridLogicalClockTimeAnchor(source = null) {
+  if (source !== null && source !== nativeClockSource) return hybridLogicalClockStatus();
+  nativeClockOffsetMs = 0;
+  nativeClockObservedAtMs = null;
+  clockSkewDetected = false;
+  nativeClockSource = null;
+  return hybridLogicalClockStatus();
+}
+function setHybridLogicalClockTimeAnchorFromRoundTrip(nativeTimeMs, startedAtMs, receivedAtMs, elapsedMs, source = null) {
+  const wallElapsedMs = receivedAtMs - startedAtMs;
+  if (!Number.isFinite(nativeTimeMs) || !Number.isFinite(startedAtMs) || !Number.isFinite(receivedAtMs) || !Number.isFinite(elapsedMs) || elapsedMs < 0 || elapsedMs > MAX_NATIVE_CLOCK_SAMPLE_RTT_MS || wallElapsedMs < 0 || Math.abs(wallElapsedMs - elapsedMs) > MAX_CLOCK_SAMPLE_WALL_DRIFT_MS) {
+    if (source !== null && source !== nativeClockSource) clearHybridLogicalClockTimeAnchor();
+    return hybridLogicalClockStatus();
+  }
+  return setHybridLogicalClockTimeAnchor(nativeTimeMs, startedAtMs + elapsedMs / 2, source);
 }
 function correctedHybridLogicalClockNowMs(nowMs = Date.now()) {
   return Math.max(0, Math.trunc(Number(nowMs) || 0) + nativeClockOffsetMs);
@@ -936,12 +965,15 @@ var recoveryCryptoTestInternals = Object.freeze({
 });
 
 // src/apps/business-os/rxdb/src/recovery-journal.mjs
-var JOURNAL_VERSION = 3;
+var JOURNAL_VERSION = 4;
 var BATCH_STORE = "batches";
 var BATCH_STATE_COLLECTION_INDEX = "stateCollection";
+var BATCH_STATE_INDEX = "state";
+var BATCH_DOCUMENT_ID_INDEX = "documentIds";
 var CONFLICT_STORE = "conflicts";
 var META_STORE = "meta";
 var ACKED_RETENTION_MS = 24 * 60 * 60 * 1e3;
+var GC_SCAN_INTERVAL_MS = 60 * 60 * 1e3;
 var PREVIEW_TTL_MS = 10 * 60 * 1e3;
 var previews = /* @__PURE__ */ new Map();
 function sweepExpiredPreviews(nowMs = Date.now()) {
@@ -961,6 +993,7 @@ var CtoxRecoveryJournal = class {
     this.instanceId = instanceId;
     this.quotaCoordinator = quotaCoordinator;
     this.replayers = /* @__PURE__ */ new Map();
+    this.lastGcAtMs = 0;
   }
   registerCollection(collection, { schemaHash: schemaHash2 = "", applyBatch, resolveConflict = null, applyMaster = null } = {}) {
     if (!collection || typeof applyBatch !== "function") return;
@@ -1002,25 +1035,34 @@ var CtoxRecoveryJournal = class {
     await this.publishStatus();
   }
   async markMasterAcknowledged(collection, documents = {}) {
-    const batches = await this.listBatches("pending", collection);
-    for (const batch of batches) {
-      if (batch.collection !== collection) continue;
-      const acked = new Set(batch.ackedIds || []);
-      for (const id of batch.documentIds || []) {
-        const master = documents[id];
-        const local = batch.committedDocs?.[id];
-        if (master && local && masterAcknowledgesLocal(master, local, collection)) acked.add(id);
-      }
-      const complete = (batch.documentIds || []).every((id) => acked.has(id));
-      await updateRecord(this.db, BATCH_STORE, batch.batchId, (current) => ({
-        ...current,
-        ackedIds: [...acked],
-        state: complete ? "master_acked" : "pending",
-        masterAckedAtMs: complete ? Date.now() : 0
-      }));
+    const ids = Object.keys(documents).filter((id) => documents[id]);
+    if (!ids.length) return;
+    const batchIds = await getBatchIdsByDocumentIds(this.db, ids);
+    let changed = false;
+    for (const batchId of batchIds) {
+      const updated = await updateRecord(this.db, BATCH_STORE, batchId, (current) => {
+        if (current.state !== "pending" || current.collection !== collection) return null;
+        const acked = new Set(current.ackedIds || []);
+        const previousCount = acked.size;
+        for (const id of current.documentIds || []) {
+          if (acked.has(id)) continue;
+          const master = documents[id];
+          const local = current.committedDocs?.[id];
+          if (master && local && masterAcknowledgesLocal(master, local, collection)) acked.add(id);
+        }
+        const complete = (current.documentIds || []).every((id) => acked.has(id));
+        if (acked.size === previousCount && !complete) return null;
+        return {
+          ...current,
+          ackedIds: [...acked],
+          state: complete ? "master_acked" : "pending",
+          masterAckedAtMs: complete ? Date.now() : 0
+        };
+      });
+      if (updated) changed = true;
     }
-    await this.gc();
-    await this.publishStatus();
+    const pruned = changed || Date.now() - this.lastGcAtMs >= GC_SCAN_INTERVAL_MS ? await this.gc() : 0;
+    if (changed || pruned) await this.publishStatus();
   }
   // SYNC-40: force-acknowledge local writes the native peer terminally REJECTED
   // (authz/schema), not ones it accepted. `markMasterAcknowledged` only clears a
@@ -1032,23 +1074,29 @@ var CtoxRecoveryJournal = class {
   async markReconciled(collection, ids = []) {
     const idSet = new Set((Array.isArray(ids) ? ids : []).map((id) => String(id)));
     if (!idSet.size) return;
-    const batches = await this.listBatches("pending", collection);
-    for (const batch of batches) {
-      if (batch.collection !== collection) continue;
-      const relevant = (batch.documentIds || []).filter((id) => idSet.has(String(id)));
-      if (!relevant.length) continue;
-      const acked = new Set(batch.ackedIds || []);
-      for (const id of relevant) acked.add(id);
-      const complete = (batch.documentIds || []).every((id) => acked.has(id));
-      await updateRecord(this.db, BATCH_STORE, batch.batchId, (current) => ({
-        ...current,
-        ackedIds: [...acked],
-        state: complete ? "master_acked" : "pending",
-        masterAckedAtMs: complete ? Date.now() : current.masterAckedAtMs || 0
-      }));
+    const batchIds = await getBatchIdsByDocumentIds(this.db, [...idSet]);
+    let changed = false;
+    for (const batchId of batchIds) {
+      const updated = await updateRecord(this.db, BATCH_STORE, batchId, (current) => {
+        if (current.state !== "pending" || current.collection !== collection) return null;
+        const acked = new Set(current.ackedIds || []);
+        const previousCount = acked.size;
+        for (const id of current.documentIds || []) {
+          if (idSet.has(String(id))) acked.add(id);
+        }
+        const complete = (current.documentIds || []).every((id) => acked.has(id));
+        if (acked.size === previousCount && !complete) return null;
+        return {
+          ...current,
+          ackedIds: [...acked],
+          state: complete ? "master_acked" : "pending",
+          masterAckedAtMs: complete ? Date.now() : current.masterAckedAtMs || 0
+        };
+      });
+      if (updated) changed = true;
     }
-    await this.gc();
-    await this.publishStatus();
+    const pruned = changed || Date.now() - this.lastGcAtMs >= GC_SCAN_INTERVAL_MS ? await this.gc() : 0;
+    if (changed || pruned) await this.publishStatus();
   }
   async replayRegisteredCollections(collection = null) {
     const batches = await this.listBatches("pending", collection);
@@ -1170,7 +1218,7 @@ var CtoxRecoveryJournal = class {
       databaseName: this.databaseName,
       instanceId: this.instanceId,
       pendingBatches: batches.length,
-      pendingWrites: batches.reduce((sum, batch) => sum + (batch.documentIds?.length || 0), 0),
+      pendingWrites: countOutstandingWrites(batches),
       pendingBytes: bytes,
       oldestPendingAtMs: batches.reduce((oldest, batch) => Math.min(oldest, batch.createdAtMs || oldest), Number.MAX_SAFE_INTEGER) === Number.MAX_SAFE_INTEGER ? 0 : batches.reduce((oldest, batch) => Math.min(oldest, batch.createdAtMs || oldest), Number.MAX_SAFE_INTEGER),
       unresolvedConflicts: conflicts.length,
@@ -1197,7 +1245,7 @@ var CtoxRecoveryJournal = class {
     return {
       filename: `ctox-recovery-${this.instanceId}-${(/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-")}.ctox-recovery`,
       blob: new Blob([text], { type: "application/vnd.ctox.recovery+json" }),
-      pendingWrites: content.pendingBatches.reduce((sum, batch) => sum + (batch.documentIds?.length || 0), 0)
+      pendingWrites: countOutstandingWrites(content.pendingBatches)
     };
   }
   async previewImport(file, passphrase) {
@@ -1227,7 +1275,7 @@ var CtoxRecoveryJournal = class {
     return {
       previewId,
       pendingBatches: content.pendingBatches?.length || 0,
-      pendingWrites: (content.pendingBatches || []).reduce((sum, batch) => sum + (batch.documentIds?.length || 0), 0),
+      pendingWrites: countOutstandingWrites(content.pendingBatches || []),
       conflicts: content.conflicts?.length || 0,
       schemaMismatches,
       createdAtMs: content.createdAtMs
@@ -1253,17 +1301,21 @@ var CtoxRecoveryJournal = class {
     return { imported: true, replay };
   }
   async listBatches(state = null, collection = null) {
-    const rows = (state && collection ? await getAllRecordsByIndex(this.db, BATCH_STORE, BATCH_STATE_COLLECTION_INDEX, [state, collection]) : await getAllRecords(this.db, BATCH_STORE)).sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
+    const rows = (state && collection ? await getAllRecordsByIndex(this.db, BATCH_STORE, BATCH_STATE_COLLECTION_INDEX, [state, collection]) : state ? await getAllRecordsByIndex(this.db, BATCH_STORE, BATCH_STATE_INDEX, state) : await getAllRecords(this.db, BATCH_STORE)).sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
     return rows.filter((row) => (!state || row.state === state) && (!collection || row.collection === collection));
   }
   async gc(now = Date.now()) {
     const rows = await this.listBatches("master_acked");
+    let pruned = 0;
     for (const row of rows) {
       if (now - Number(row.masterAckedAtMs || 0) >= ACKED_RETENTION_MS) {
         await deleteRecord(this.db, BATCH_STORE, row.batchId);
+        pruned += 1;
       }
     }
-    await this.gcConflicts(now);
+    pruned += await this.gcConflicts(now);
+    this.lastGcAtMs = Date.now();
+    return pruned;
   }
   // SYNC-53: resolved conflict records hold full local+master+base documents
   // (~3x a document each) and were never reclaimed — `resolveConflict` only
@@ -1333,6 +1385,12 @@ function openJournalDatabase(name) {
       const batches = db.objectStoreNames.contains(BATCH_STORE) ? request.transaction.objectStore(BATCH_STORE) : db.createObjectStore(BATCH_STORE, { keyPath: "batchId" });
       if (!batches.indexNames.contains(BATCH_STATE_COLLECTION_INDEX)) {
         batches.createIndex(BATCH_STATE_COLLECTION_INDEX, ["state", "collection"], { unique: false });
+      }
+      if (!batches.indexNames.contains(BATCH_STATE_INDEX)) {
+        batches.createIndex(BATCH_STATE_INDEX, "state", { unique: false });
+      }
+      if (!batches.indexNames.contains(BATCH_DOCUMENT_ID_INDEX)) {
+        batches.createIndex(BATCH_DOCUMENT_ID_INDEX, "documentIds", { unique: false, multiEntry: true });
       }
       if (!db.objectStoreNames.contains(CONFLICT_STORE)) db.createObjectStore(CONFLICT_STORE, { keyPath: "conflictId" });
       if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE, { keyPath: "key" });
@@ -1416,6 +1474,13 @@ function getAllRecords(db, storeName) {
 function getAllRecordsByIndex(db, storeName, indexName, key) {
   return transact(db, storeName, "readonly", (store) => requestResult(store.index(indexName).getAll(key)));
 }
+function getBatchIdsByDocumentIds(db, ids) {
+  return transact(db, BATCH_STORE, "readonly", async (store) => {
+    const index = store.index(BATCH_DOCUMENT_ID_INDEX);
+    const matches = await Promise.all([...new Set(ids)].map((id) => requestResult(index.getAllKeys(id))));
+    return [...new Set(matches.flat())];
+  });
+}
 function deleteRecord(db, storeName, key) {
   return transact(db, storeName, "readwrite", (store) => requestResult(store.delete(key)));
 }
@@ -1423,9 +1488,17 @@ async function updateRecord(db, storeName, key, update) {
   return transact(db, storeName, "readwrite", async (store) => {
     const current = await requestResult(store.get(key));
     if (!current) return false;
-    await requestResult(store.put(update(current)));
+    const next = update(current);
+    if (next == null) return false;
+    await requestResult(store.put(next));
     return true;
   });
+}
+function countOutstandingWrites(batches) {
+  return batches.reduce((count, batch) => {
+    const acked = new Set(batch.ackedIds || []);
+    return count + (batch.documentIds || []).filter((id) => !acked.has(id)).length;
+  }, 0);
 }
 function documentId(doc = {}, primaryPath = "id") {
   return String(valueAtPath(doc, primaryPath) || doc.id || doc._id || doc.key || doc.uuid || "");
@@ -1514,6 +1587,7 @@ var recoveryJournalTestInternals = Object.freeze({
   ACKED_RETENTION_MS,
   PREVIEW_TTL_MS,
   masterAcknowledgesLocal,
+  countOutstandingWrites,
   previews,
   sweepExpiredPreviews
 });
@@ -1654,7 +1728,7 @@ var QueryMetaStorage = class {
     await this.backend.putQueryWindow(record);
     return record;
   }
-  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, queryShape = null }) {
+  async upsertQueryWindow({ collection, queryFingerprint: queryFingerprint2, offset, limit, documentIds, complete, authoritativeRevision, satisfiedRevision = null, satisfiedGeneration = null, queryShape = null, permissionDigest = void 0 }) {
     const now = this.clock();
     const existing = await this.backend.getQueryWindow(
       [collection, queryFingerprint2, offset, limit].join("|")
@@ -1676,6 +1750,12 @@ var QueryMetaStorage = class {
       // Opaque caller requireRevision token this window's last successful
       // fetch satisfied — distinct from the server echo above.
       satisfiedRevision: satisfiedRevision ?? null,
+      satisfiedGeneration: satisfiedGeneration ?? null,
+      // SYNC-12: read-permission identity (digest of role+epoch capability
+      // claims) this window's membership was authorized under. The demand
+      // loader refuses to serve control-plane windows whose stamp mismatches
+      // the current digest. Omitted on upsert: keep the previous stamp.
+      permissionDigest: permissionDigest === void 0 ? existing?.permissionDigest ?? null : permissionDigest ?? null,
       queryShape: queryShape && typeof queryShape === "object" ? structuredCloneSafe3(queryShape) : null,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
@@ -2285,12 +2365,25 @@ var CtoxIndexedDbStorage = class {
     const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readwrite");
     const done = idbTransactionDone(tx);
     const documents = tx.objectStore(DOCUMENT_STORE);
+    done.catch(() => {
+    });
     const markers = tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE);
-    for (const name of names) {
-      documents.delete(IDBKeyRange.bound([name, ""], [name, INDEX_HIGH_KEY]));
-      markers.delete(name);
+    try {
+      for (const name of names) {
+        const marker = await localCheckpointMarker(markers, name);
+        documents.delete(IDBKeyRange.bound([name, ""], [name, INDEX_HIGH_KEY]));
+        markers.put({ ...marker, evictionGeneration: marker.evictionGeneration + 1 });
+      }
+      await done;
+    } catch (error) {
+      try {
+        tx.abort();
+      } catch {
+      }
+      await done.catch(() => {
+      });
+      throw error;
     }
-    await done;
     for (const name of names) {
       globalThis.dispatchEvent?.(new CustomEvent("ctox-rxdb-external-change", {
         detail: { databaseName: this.db.name, collection: name, ids: [], cleared: true }
@@ -2384,11 +2477,20 @@ var CtoxIndexedDbCollection = class {
   }
   async acknowledgePersistedMasterRecovery() {
     const batches = await this.recoveryJournal?.listBatches?.("pending", this.name) || [];
-    const ids = [...new Set(batches.filter((batch) => batch.collection === this.name).flatMap((batch) => batch.documentIds || []))];
+    const ids = [...new Set(batches.filter((batch) => batch.collection === this.name).flatMap((batch) => {
+      const acked = new Set(batch.ackedIds || []);
+      return (batch.documentIds || []).filter((id) => !acked.has(id));
+    }))];
     if (!ids.length) return;
     const documents = {};
-    for (const id of ids) {
-      const record = await this.getStoredRecord(id);
+    const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
+    const done = idbTransactionDone(tx);
+    const store = tx.objectStore(DOCUMENT_STORE);
+    const records = await Promise.all(ids.map((id) => idbRequest(store.get([this.name, id]))));
+    await done;
+    for (let index = 0; index < ids.length; index += 1) {
+      const id = ids[index];
+      const record = records[index];
       if (record?.replicationOriginRole && record.doc) documents[id] = record.doc;
     }
     if (Object.keys(documents).length) {
@@ -2918,15 +3020,31 @@ var CtoxIndexedDbCollection = class {
   /// this on dirty docs; the sidecar enforces that.
   async hardDeleteByIds(ids) {
     if (!Array.isArray(ids) || !ids.length) return 0;
-    const tx = this.db.transaction(DOCUMENT_STORE, "readwrite");
-    const store = tx.objectStore(DOCUMENT_STORE);
-    let removed = 0;
-    for (const id of ids) {
-      await idbRequest(store.delete([this.name, String(id)]));
-      removed += 1;
+    const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readwrite");
+    const done = idbTransactionDone(tx);
+    const markers = tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE);
+    done.catch(() => {
+    });
+    try {
+      const marker = await localCheckpointMarker(markers, this.name);
+      const store = tx.objectStore(DOCUMENT_STORE);
+      let removed = 0;
+      for (const id of ids) {
+        await idbRequest(store.delete([this.name, String(id)]));
+        removed += 1;
+      }
+      if (removed) markers.put({ ...marker, evictionGeneration: marker.evictionGeneration + 1 });
+      await done;
+      return removed;
+    } catch (error) {
+      try {
+        tx.abort();
+      } catch {
+      }
+      await done.catch(() => {
+      });
+      throw error;
     }
-    await idbTransactionDone(tx);
-    return removed;
   }
   async findDocumentsById(ids, { withDeleted = false } = {}) {
     const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
@@ -3155,11 +3273,15 @@ var CtoxIndexedDbCollection = class {
     };
   }
   async replicationCheckpointStatus(schemaHash2 = null) {
-    const tx = this.db.transaction(DOCUMENT_STORE, "readonly");
+    const tx = this.db.transaction([DOCUMENT_STORE, COLLECTION_SCHEMA_MARKER_STORE], "readwrite");
+    const done = idbTransactionDone(tx);
+    done.catch(() => {
+    });
+    const marker = await localCheckpointMarker(tx.objectStore(COLLECTION_SCHEMA_MARKER_STORE), this.name);
     const index = tx.objectStore(DOCUMENT_STORE).index("collectionLwtId");
     const range = IDBKeyRange.bound([this.name, 0, ""], [this.name, Number.MAX_SAFE_INTEGER, "\uFFFF"], false, false);
     const record = await firstCursorValue(index.openCursor(range, "prev"));
-    await idbTransactionDone(tx);
+    await done;
     if (!record) {
       return {
         source: "browser",
@@ -3168,7 +3290,9 @@ var CtoxIndexedDbCollection = class {
         schemaHash: schemaHash2,
         latestLwt: null,
         latestIdHash: null,
-        epoch: `browser:${this.name}:empty`
+        epoch: `browser:${this.name}:empty`,
+        evictionGeneration: marker.evictionGeneration,
+        localStoreGeneration: marker.localStoreGeneration
       };
     }
     const latestIdHash = await sha256Hex(record.id);
@@ -3179,7 +3303,9 @@ var CtoxIndexedDbCollection = class {
       schemaHash: schemaHash2,
       latestLwt: record.lwt,
       latestIdHash,
-      epoch: `browser:${this.name}:${record.lwt}:${latestIdHash.slice(0, 16)}`
+      epoch: `browser:${this.name}:${record.lwt}:${latestIdHash.slice(0, 16)}`,
+      evictionGeneration: marker.evictionGeneration,
+      localStoreGeneration: marker.localStoreGeneration
     };
   }
   schemaIndexes() {
@@ -4001,6 +4127,23 @@ var ctoxIndexedDbStorageTestInternals = {
   shouldAcceptDocumentWrite,
   storedRecordForWrite
 };
+async function localCheckpointMarker(store, collection) {
+  const previous = await idbRequest(store.get(collection));
+  if (previous?.localStoreGeneration !== void 0) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(previous.localStoreGeneration) || !Number.isSafeInteger(previous.evictionGeneration) || previous.evictionGeneration < 0 || previous.evictionGeneration >= Number.MAX_SAFE_INTEGER) {
+      throw new Error("Invalid local checkpoint generation");
+    }
+    return previous;
+  }
+  const marker = {
+    ...previous,
+    collection,
+    localStoreGeneration: globalThis.crypto.randomUUID(),
+    evictionGeneration: 0
+  };
+  await idbRequest(store.put(marker));
+  return marker;
+}
 
 // src/apps/business-os/rxdb/src/inbound-request-queue.mjs
 var InboundRequestQueue = class {
@@ -4357,7 +4500,7 @@ var CtoxWebRtcNativePeer = class {
         maxFrames: MAX_PEER_SEND_QUEUE_FRAMES,
         maxBytes: MAX_PEER_SEND_QUEUE_BYTES
       });
-      this.removeConnection(connection.remotePeerId, "send-queue-budget-exceeded");
+      this.removeConnection(connection.remotePeerId, "send-queue-budget-exceeded", null, { expectedConnection: connection });
       return false;
     }
     queue[item.priority].push({
@@ -4396,15 +4539,16 @@ var CtoxWebRtcNativePeer = class {
         });
         if (item.inline) {
           await this.waitForSendBuffer(connection.channel, connection);
-          if (this.connections.get(connection.remotePeerId) !== connection || connection.channel?.readyState !== "open") {
-            this.removeConnection(connection.remotePeerId, "send-queue-channel-closed");
+          if (this.connections.get(connection.remotePeerId) !== connection) break;
+          if (connection.channel?.readyState !== "open") {
+            this.removeConnection(connection.remotePeerId, "send-queue-channel-closed", null, { expectedConnection: connection });
             break;
           }
           try {
             connection.channel.send(item.text);
             this.recordSentInlineFrame(item.payload, connection.channel);
           } catch (error) {
-            this.removeConnection(connection.remotePeerId, "send-queue-send-failed");
+            this.removeConnection(connection.remotePeerId, "send-queue-send-failed", null, { expectedConnection: connection });
             throw error;
           }
           continue;
@@ -4414,7 +4558,7 @@ var CtoxWebRtcNativePeer = class {
         } catch (error) {
           const peerClosed = isPeerClosedError(error);
           if (this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState !== "open") {
-            this.removeConnection(connection.remotePeerId, "frame-send-channel-closed");
+            this.removeConnection(connection.remotePeerId, "frame-send-channel-closed", null, { expectedConnection: connection });
           }
           this.events.emit("error", {
             code: peerClosed ? "ctox_webrtc_peer_closed" : "ctox_webrtc_frame_send_failed",
@@ -4614,6 +4758,10 @@ var CtoxWebRtcNativePeer = class {
       channel.addEventListener?.("bufferedamountlow", done, { once: true });
       timer = setTimeout(() => {
         cleanup();
+        if (connection && this.connections.get(connection.remotePeerId) !== connection) {
+          resolve();
+          return;
+        }
         this.recordTransportStatus({
           backpressureStallCount: this.transportStats.backpressureStallCount + 1,
           rejectedFrames: this.transportStats.rejectedFrames + 1
@@ -4628,7 +4776,7 @@ var CtoxWebRtcNativePeer = class {
             connection.remotePeerId,
             "send-buffer-stalled",
             error,
-            { reconnect: false }
+            { reconnect: false, expectedConnection: connection }
           );
         }
         reject(error);
@@ -4640,17 +4788,19 @@ var CtoxWebRtcNativePeer = class {
   // key; responses are still correlated by request `id`.
   request(remotePeerId, method, params = [], timeoutMs = 15e3, collection = null) {
     const id = `${this.options.clientId}|${Date.now()}|${this.requestCounter++}`;
+    const requestPeerId = String(remotePeerId || "");
+    const requestConnection = this.connections.get(requestPeerId) || null;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         const error = new Error(`Timed out waiting for WebRTC response ${method}`);
-        const peerId = String(remotePeerId || "");
+        const peerId = requestPeerId;
         const connection = this.connections.get(peerId);
-        if (connection) {
+        if (connection && connection === requestConnection) {
           this.recordConnectionEvent(connection, "request-timeout", { method });
           if (shouldRecycleConnectionAfterRequestTimeout(method)) {
             this.forceInitiatorPeers.add(peerId);
-            this.removeConnection(peerId, `request-timeout-${method}`);
+            this.removeConnection(peerId, `request-timeout-${method}`, null, { expectedConnection: connection });
           }
         }
         reject(error);
@@ -4953,7 +5103,7 @@ var CtoxWebRtcNativePeer = class {
       });
       this.events.emit("peer-state", { peerId: remotePeerId, state: "handshake-timeout" });
       this.forceInitiatorPeers.add(remotePeerId);
-      this.removeConnection(remotePeerId, "rtc-handshake-timeout");
+      this.removeConnection(remotePeerId, "rtc-handshake-timeout", null, { expectedConnection: connection });
     }, RTC_HANDSHAKE_TIMEOUT_MS);
     this.recordConnectionEvent(connection, "created", { state: peer.connectionState || "new" });
     peer.onicecandidate = (event) => {
@@ -4980,6 +5130,7 @@ var CtoxWebRtcNativePeer = class {
       });
     };
     peer.onconnectionstatechange = () => {
+      if (this.connections.get(remotePeerId) !== connection) return;
       const state = peer.connectionState;
       this.recordConnectionEvent(connection, "connection-state", { state });
       this.events.emit("peer-state", { peerId: remotePeerId, state });
@@ -4991,7 +5142,7 @@ var CtoxWebRtcNativePeer = class {
           const live = this.connections.get(remotePeerId);
           const liveState = live?.peer?.connectionState || "";
           if (live === connection && ["disconnected", "failed"].includes(liveState)) {
-            this.removeConnection(remotePeerId, "peer-disconnected-grace-expired");
+            this.removeConnection(remotePeerId, "peer-disconnected-grace-expired", null, { expectedConnection: connection });
           }
         }, ICE_DISCONNECTED_GRACE_MS));
         return;
@@ -5002,7 +5153,7 @@ var CtoxWebRtcNativePeer = class {
         this.disconnectedGraceTimers.delete(remotePeerId);
       }
       if (["closed", "failed"].includes(state)) {
-        this.removeConnection(remotePeerId, `peer-${state}`);
+        this.removeConnection(remotePeerId, `peer-${state}`, null, { expectedConnection: connection });
       } else if (state === "connected") {
         updateSelectedCandidatePair(connection).then(() => {
           this.recordConnectionEvent(connection, "selected-candidate-pair", {
@@ -5169,7 +5320,7 @@ var CtoxWebRtcNativePeer = class {
     channel.onclose = () => {
       if (!isCurrentChannel()) return;
       this.recordConnectionEvent(connection, "datachannel-close", { readyState: channel.readyState || "closed" });
-      this.removeConnection(connection.remotePeerId, "channel-close");
+      this.removeConnection(connection.remotePeerId, "channel-close", null, { expectedConnection: connection });
     };
   }
   enqueueInboundDataChannelFrame(connection, channel, payload) {
@@ -5716,13 +5867,14 @@ var CtoxWebRtcNativePeer = class {
     }
     connection.auxChannels.clear();
   }
-  removeConnection(remotePeerId, reason = "closed", pendingError = null, { reconnect = true } = {}) {
+  removeConnection(remotePeerId, reason = "closed", pendingError = null, { reconnect = true, expectedConnection = null } = {}) {
     const peerId = String(remotePeerId || "");
+    const connection = this.connections.get(peerId);
+    if (expectedConnection && connection !== expectedConnection) return;
     this.clearObservedRequestsForPeer(
       peerId,
       pendingError || createPeerClosedError(peerId, reason)
     );
-    const connection = this.connections.get(peerId);
     if (!connection) return;
     this.connections.delete(peerId);
     this.inboundRequests.cancel(connection.inboundRequestOwner);
@@ -6635,6 +6787,7 @@ var CLIENT_QUERY_STREAM_LIMIT = Math.max(1, Math.min(6, SERVER_QUERY_STREAM_LIMI
 var CLIENT_QUERY_QUEUE_LIMIT = 128;
 var CLIENT_QUERY_QUEUE_BUDGET_BYTES = 1024 * 1024;
 var CLIENT_FILE_COLLECTOR_LIMIT = 8;
+var CLIENT_ROWS_COLLECTOR_LIMIT = 8;
 var DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES = 8 * 1024 * 1024;
 var QUERY_STREAM_LIMIT_RETRY_MS = 160;
 var QUERY_STREAM_LIMIT_RETRIES = 6;
@@ -6642,6 +6795,7 @@ var QUERY_RATE_LIMIT_RETRY_MS = 100;
 var QUERY_RATE_LIMIT_RETRIES = 16;
 var QUERY_PEER_RETRY_MS = 250;
 var QUERY_PEER_RETRIES = 24;
+var QUERY_ACK_TIMEOUT_RETRIES = 1;
 var AUTHORIZED_PEER_WAIT_TIMEOUT_MS = 6e4;
 var QUERY_PEER_WAIT_POLL_MS = 100;
 var QUERY_FETCH_REQUEST_TIMEOUT_MS = 45e3;
@@ -6652,17 +6806,20 @@ var DEFAULT_COLLECTOR_TIMEOUT_MS = Math.max(
 var GLOBAL_QUERY_STREAM_STATE_KEY = /* @__PURE__ */ Symbol.for("ctox.rxdb.query-stream-state.v1");
 var CANCELLED_QUERY_REQUEST_LIMIT = 256;
 var DEFAULT_FILE_COLLECTOR_BUDGET_BYTES = 512 * 1024;
+var DEFAULT_ROWS_COLLECTOR_BUDGET_BYTES = 8 * 1024 * 1024;
 function createDemandLoadingTransport({
   getPeerId,
   collectorTimeoutMs = DEFAULT_COLLECTOR_TIMEOUT_MS,
   fileCollectorBudgetBytes = DEFAULT_FILE_COLLECTOR_BUDGET_BYTES,
-  queryCollectorBudgetBytes = DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES
+  queryCollectorBudgetBytes = DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES,
+  rowsCollectorBudgetBytes = DEFAULT_ROWS_COLLECTOR_BUDGET_BYTES
 } = {}) {
   if (typeof getPeerId !== "function") {
     throw new TypeError("createDemandLoadingTransport requires getPeerId");
   }
   const queryCollectors = /* @__PURE__ */ new Map();
   const fileCollectors = /* @__PURE__ */ new Map();
+  const rowsCollectors = /* @__PURE__ */ new Map();
   const queryStreamState = getGlobalQueryStreamState();
   const cancelledQueryRequests = /* @__PURE__ */ new Map();
   const transportOwner = /* @__PURE__ */ Symbol("ctox-demand-transport-owner");
@@ -6674,6 +6831,10 @@ function createDemandLoadingTransport({
   const acceptedQueryBudgetBytes = Math.max(
     Number(CTOX_QUERY_RPC.maxBytesPerChunk) || 1,
     Number(queryCollectorBudgetBytes) || DEFAULT_QUERY_COLLECTOR_BUDGET_BYTES
+  );
+  const acceptedRowsBudgetBytes = Math.max(
+    Number(CTOX_ROWS_RPC.maxBytesPerChunk) || 1,
+    Number(rowsCollectorBudgetBytes) || DEFAULT_ROWS_COLLECTOR_BUDGET_BYTES
   );
   const metrics = {
     queryFetchRequests: 0,
@@ -6695,17 +6856,29 @@ function createDemandLoadingTransport({
     queryCollectorTimeouts: 0,
     fileCollectorTimeouts: 0,
     fileCollectorBudgetExceeded: 0,
-    queryCollectorBudgetExceeded: 0
+    queryCollectorBudgetExceeded: 0,
+    rowsFetchRequests: 0,
+    rowsChunksReceived: 0,
+    rowsCollectorsRejected: 0,
+    rowsCancelRequests: 0,
+    maxPendingRowsCollectors: 0,
+    maxBufferedRowsChunks: 0,
+    maxBufferedRowsChunkBytes: 0,
+    rowsCollectorTimeouts: 0,
+    rowsCollectorBudgetExceeded: 0
   };
   function updatePeaks() {
     metrics.maxPendingQueryCollectors = Math.max(metrics.maxPendingQueryCollectors, queryCollectors.size);
     metrics.maxPendingFileCollectors = Math.max(metrics.maxPendingFileCollectors, fileCollectors.size);
+    metrics.maxPendingRowsCollectors = Math.max(metrics.maxPendingRowsCollectors, rowsCollectors.size);
     metrics.maxQueuedQueryRequests = Math.max(metrics.maxQueuedQueryRequests, queryStreamState.queue.length);
     metrics.maxQueuedQueryBytes = Math.max(metrics.maxQueuedQueryBytes, queuedQueryBytes());
     metrics.maxBufferedQueryChunks = Math.max(metrics.maxBufferedQueryChunks, bufferedChunkCount(queryCollectors));
     metrics.maxBufferedQueryChunkBytes = Math.max(metrics.maxBufferedQueryChunkBytes, bufferedQueryChunkBytes(queryCollectors));
     metrics.maxBufferedFileChunks = Math.max(metrics.maxBufferedFileChunks, bufferedChunkCount(fileCollectors));
     metrics.maxBufferedFileChunkBytes = Math.max(metrics.maxBufferedFileChunkBytes, bufferedFileChunkBytes(fileCollectors));
+    metrics.maxBufferedRowsChunks = Math.max(metrics.maxBufferedRowsChunks, bufferedRowsChunkCount(rowsCollectors));
+    metrics.maxBufferedRowsChunkBytes = Math.max(metrics.maxBufferedRowsChunkBytes, bufferedRowsChunkBytes(rowsCollectors));
   }
   function routeQueryChunk(chunk) {
     if (!chunk || !chunk.requestId) return;
@@ -6805,6 +6978,51 @@ function createDemandLoadingTransport({
     e.retryable = Boolean(err.retryable);
     slot.reject(e);
   }
+  function routeRowsChunk(chunk) {
+    if (!chunk || !chunk.requestId) return;
+    const slot = rowsCollectors.get(chunk.requestId);
+    if (!slot) return;
+    const seq = Number(chunk.seq);
+    if (!Number.isInteger(seq) || seq < 0) return;
+    if (!slot.bySeq.has(seq)) {
+      slot.bufferedBytes += rowsChunkBytes(chunk);
+      if (slot.bufferedBytes > acceptedRowsBudgetBytes) {
+        rowsCollectors.delete(chunk.requestId);
+        clearCollectorTimer(slot);
+        metrics.rowsCollectorsRejected += 1;
+        metrics.rowsCollectorBudgetExceeded += 1;
+        const error = new Error(`ROWS_COLLECTOR_BUDGET_EXCEEDED: ${slot.bufferedBytes} > ${acceptedRowsBudgetBytes}`);
+        error.code = "ROWS_COLLECTOR_BUDGET_EXCEEDED";
+        error.retryable = false;
+        slot.reject(error);
+        Promise.resolve(
+          peer?.request?.(slot.peerId, CTOX_ROWS_RPC.cancel, [{ requestId: chunk.requestId }], 2e3)
+        ).catch(() => {
+        });
+        return;
+      }
+      slot.bySeq.set(seq, chunk);
+    }
+    metrics.rowsChunksReceived += 1;
+    updatePeaks();
+    if (chunk.final === true && slot.finalSeq == null) slot.finalSeq = seq;
+    if (!rowsWindowComplete(slot)) return;
+    rowsCollectors.delete(chunk.requestId);
+    clearCollectorTimer(slot);
+    slot.resolve(assembleRowsWindow(slot));
+  }
+  function routeRowsError(err) {
+    if (!err || !err.requestId) return;
+    const slot = rowsCollectors.get(err.requestId);
+    if (!slot) return;
+    rowsCollectors.delete(err.requestId);
+    clearCollectorTimer(slot);
+    metrics.rowsCollectorsRejected += 1;
+    const e = new Error(`${err.code || "ROWS_ERROR"}: ${err.message || ""}`);
+    e.code = err.code;
+    e.retryable = Boolean(err.retryable);
+    slot.reject(e);
+  }
   const requestHandlers = {
     "rxdb.query.chunk": async ({ params }) => {
       routeQueryChunk(params?.[0]);
@@ -6821,9 +7039,18 @@ function createDemandLoadingTransport({
     "rxdb.file.error": async ({ params }) => {
       routeFileError(params?.[0]);
       return ACK_RESPONSE;
+    },
+    [CTOX_ROWS_RPC.chunk]: async ({ params }) => {
+      routeRowsChunk(params?.[0]);
+      return ACK_RESPONSE;
+    },
+    [CTOX_ROWS_RPC.error]: async ({ params }) => {
+      routeRowsError(params?.[0]);
+      return ACK_RESPONSE;
     }
   };
   let peer = null;
+  let rowsRequestSequence = 0;
   function attach(p) {
     peer = p;
   }
@@ -6913,12 +7140,13 @@ function createDemandLoadingTransport({
       } catch (error) {
         const peerUnavailable = isRetryableQueryPeerUnavailable(error);
         const rateLimited = isRetryableQueryRateLimited(error);
-        const retryLimit = peerUnavailable ? QUERY_PEER_RETRIES : rateLimited ? QUERY_RATE_LIMIT_RETRIES : QUERY_STREAM_LIMIT_RETRIES;
+        const ackTimeout = isQueryAckTimeout(error);
+        const retryLimit = ackTimeout ? QUERY_ACK_TIMEOUT_RETRIES : peerUnavailable ? QUERY_PEER_RETRIES : rateLimited ? QUERY_RATE_LIMIT_RETRIES : QUERY_STREAM_LIMIT_RETRIES;
         if (!isRetryableQueryFetch(error) || attempt >= retryLimit) {
           throw error;
         }
         attempt += 1;
-        const retryDelayMs = peerUnavailable ? QUERY_PEER_RETRY_MS : rateLimited ? QUERY_RATE_LIMIT_RETRY_MS : QUERY_STREAM_LIMIT_RETRY_MS;
+        const retryDelayMs = peerUnavailable || ackTimeout ? QUERY_PEER_RETRY_MS : rateLimited ? QUERY_RATE_LIMIT_RETRY_MS : QUERY_STREAM_LIMIT_RETRY_MS;
         await delay4(retryDelayMs * attempt);
       }
     }
@@ -6959,7 +7187,7 @@ function createDemandLoadingTransport({
     return Boolean(error?.retryable) && (code === "STREAM_LIMIT_EXCEEDED" || message.includes("STREAM_LIMIT_EXCEEDED"));
   }
   function isRetryableQueryFetch(error) {
-    return isRetryableQueryStreamLimit(error) || isRetryableQueryRateLimited(error) || isRetryableQueryPeerUnavailable(error);
+    return isRetryableQueryStreamLimit(error) || isRetryableQueryRateLimited(error) || isQueryAckTimeout(error) || isRetryableQueryPeerUnavailable(error);
   }
   function isRetryableQueryRateLimited(error) {
     const code = String(error?.code || "");
@@ -6968,7 +7196,10 @@ function createDemandLoadingTransport({
   }
   function isRetryableQueryPeerUnavailable(error) {
     const message = String(error?.message || "");
-    return message === "PEER_UNAVAILABLE" || /WebRTC peer .* is not open/.test(message) || message.includes("Timed out waiting for WebRTC response rxdb.query.fetch");
+    return message === "PEER_UNAVAILABLE" || /WebRTC peer .* is not open/.test(message);
+  }
+  function isQueryAckTimeout(error) {
+    return String(error?.message || "").includes("Timed out waiting for WebRTC response rxdb.query.fetch");
   }
   function delay4(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -7057,9 +7288,112 @@ function createDemandLoadingTransport({
     }
     return cancelled;
   }
+  async function fetchRows({
+    collection,
+    collectionName,
+    tableId,
+    offset,
+    limit,
+    signal,
+    requestId
+  } = {}) {
+    const resolvedRequestId = String(requestId || `rows-${Date.now()}-${rowsRequestSequence += 1}`);
+    if (signal?.aborted) throw createRowsCancelError(rowsAbortReason(signal));
+    if (!peer) throw new Error("demand transport has no peer attached");
+    if (rowsCollectors.size >= CLIENT_ROWS_COLLECTOR_LIMIT) {
+      const error = new Error("ROWS_COLLECTOR_LIMIT: too many active browser row collectors");
+      error.code = "ROWS_COLLECTOR_LIMIT";
+      error.retryable = true;
+      throw error;
+    }
+    const peerId = await waitForPeerId(
+      AUTHORIZED_PEER_WAIT_TIMEOUT_MS,
+      () => Boolean(signal?.aborted)
+    );
+    if (signal?.aborted) throw createRowsCancelError(rowsAbortReason(signal));
+    if (!peerId) throw new Error("PEER_UNAVAILABLE");
+    let removeAbort = () => {
+    };
+    const promise = new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(createRowsCancelError(rowsAbortReason(signal)));
+        return;
+      }
+      const onAbort = () => {
+        requestRowsCancel({ requestId: resolvedRequestId, reason: rowsAbortReason(signal) }).catch(() => {
+        });
+      };
+      if (signal) {
+        signal.addEventListener("abort", onAbort, { once: true });
+        removeAbort = () => signal.removeEventListener("abort", onAbort);
+      }
+      rowsCollectors.set(resolvedRequestId, {
+        bySeq: /* @__PURE__ */ new Map(),
+        finalSeq: null,
+        resolve: (value) => {
+          removeAbort();
+          resolve(value);
+        },
+        reject: (error) => {
+          removeAbort();
+          reject(error);
+        },
+        peerId,
+        bufferedBytes: 0
+      });
+      metrics.rowsFetchRequests += 1;
+      updatePeaks();
+    });
+    try {
+      await peer.request(peerId, CTOX_ROWS_RPC.fetch, [{
+        requestId: resolvedRequestId,
+        collectionName: String(collectionName || collection || "knowledge_tables"),
+        tableId: normalizeRowsTableId(tableId),
+        offset: normalizeRowsOffset(offset),
+        limit: normalizeRowsLimit(limit)
+      }]);
+    } catch (err) {
+      const slot = rowsCollectors.get(resolvedRequestId);
+      clearCollectorTimer(slot);
+      rowsCollectors.delete(resolvedRequestId);
+      removeAbort();
+      throw err;
+    }
+    if (signal?.aborted) {
+      await requestRowsCancel({ requestId: resolvedRequestId, reason: rowsAbortReason(signal) });
+      return promise;
+    }
+    if (rowsCollectors.has(resolvedRequestId)) {
+      armCollectorTimeout(rowsCollectors, resolvedRequestId, "rows", peerId, CTOX_ROWS_RPC.cancel);
+    }
+    return promise;
+  }
+  async function requestRowsCancel({ requestId, reason = "client-abort" } = {}) {
+    if (!requestId) return false;
+    metrics.rowsCancelRequests += 1;
+    const slot = rowsCollectors.get(requestId);
+    const error = createRowsCancelError(reason);
+    let cancelled = false;
+    if (slot) {
+      rowsCollectors.delete(requestId);
+      clearCollectorTimer(slot);
+      metrics.rowsCollectorsRejected += 1;
+      slot.reject(error);
+      cancelled = true;
+    }
+    const peerId = slot?.peerId || (peer ? resolvePeerId() : "");
+    if (peer && peerId) {
+      try {
+        await peer.request(peerId, CTOX_ROWS_RPC.cancel, [{ requestId }], 2e3);
+      } catch {
+      }
+    }
+    return cancelled;
+  }
   function abortPeerRequests(peerId, reason = "peer-close") {
     const queryError = createQueryCancelError(reason);
     const fileError = createFileCancelError(reason);
+    const rowsError = createRowsCancelError(reason);
     let rejected = 0;
     for (const [requestId, slot] of [...queryCollectors.entries()]) {
       if (peerId && slot.peerId !== peerId) continue;
@@ -7077,6 +7411,14 @@ function createDemandLoadingTransport({
       slot.reject(fileError);
       rejected += 1;
     }
+    for (const [requestId, slot] of [...rowsCollectors.entries()]) {
+      if (peerId && slot.peerId !== peerId) continue;
+      rowsCollectors.delete(requestId);
+      clearCollectorTimer(slot);
+      metrics.rowsCollectorsRejected += 1;
+      slot.reject(rowsError);
+      rejected += 1;
+    }
     rejected += rejectQueuedQueryRequestsForOwner(reason);
     return rejected;
   }
@@ -7092,6 +7434,7 @@ function createDemandLoadingTransport({
       schema: "ctox.rxdb.demand_transport.v1",
       pendingQueryCollectors: queryCollectors.size,
       pendingFileCollectors: fileCollectors.size,
+      pendingRowsCollectors: rowsCollectors.size,
       queuedQueryRequests: queryStreamState.queue.length,
       queuedQueryBytes: queuedQueryBytes(),
       activeQueryStreams: queryStreamState.active,
@@ -7099,8 +7442,11 @@ function createDemandLoadingTransport({
       bufferedQueryChunkBytes: bufferedQueryChunkBytes(queryCollectors),
       bufferedFileChunks: bufferedChunkCount(fileCollectors),
       bufferedFileChunkBytes: bufferedFileChunkBytes(fileCollectors),
+      bufferedRowsChunks: bufferedRowsChunkCount(rowsCollectors),
+      bufferedRowsChunkBytes: bufferedRowsChunkBytes(rowsCollectors),
       fileCollectorBudgetBytes: acceptedFileBudgetBytes,
       queryCollectorBudgetBytes: acceptedQueryBudgetBytes,
+      rowsCollectorBudgetBytes: acceptedRowsBudgetBytes,
       cancelledQueryRequestCacheSize: cancelledQueryRequests.size,
       ...metrics
     };
@@ -7221,6 +7567,9 @@ function createDemandLoadingTransport({
       if (kind === "query") {
         metrics.queryCollectorsRejected += 1;
         metrics.queryCollectorTimeouts += 1;
+      } else if (kind === "rows") {
+        metrics.rowsCollectorsRejected += 1;
+        metrics.rowsCollectorTimeouts += 1;
       } else {
         metrics.fileCollectorsRejected += 1;
         metrics.fileCollectorTimeouts += 1;
@@ -7229,8 +7578,9 @@ function createDemandLoadingTransport({
       error.code = `${kind.toUpperCase()}_COLLECTOR_TIMEOUT`;
       error.retryable = true;
       slot.reject(error);
+      const cancelParams = kind === "rows" ? [{ requestId }] : [{ requestId, reason: "collector-timeout" }];
       Promise.resolve(
-        peer?.request?.(peerId, cancelMethod, [{ requestId, reason: "collector-timeout" }], 2e3)
+        peer?.request?.(peerId, cancelMethod, cancelParams, 2e3)
       ).catch(() => {
       });
     }, terminalTimeoutMs);
@@ -7285,11 +7635,88 @@ function createDemandLoadingTransport({
     requestQueryCancel,
     requestFileFetch,
     requestFileCancel,
+    fetchRows,
+    requestRowsCancel,
     abortPeerRequests,
     pendingQueryCount,
     pendingFileCount,
     diagnostics
   };
+}
+function rowsWindowComplete(slot) {
+  if (!slot || slot.finalSeq == null) return false;
+  for (let seq = 0; seq <= slot.finalSeq; seq += 1) {
+    if (!slot.bySeq.has(seq)) return false;
+  }
+  return true;
+}
+function assembleRowsWindow(slot) {
+  const ordered = [];
+  for (let seq = 0; seq <= slot.finalSeq; seq += 1) ordered.push(slot.bySeq.get(seq));
+  const finalChunk = ordered[ordered.length - 1] || {};
+  const rows = [];
+  for (const chunk of ordered) {
+    if (Array.isArray(chunk?.rows)) rows.push(...chunk.rows);
+  }
+  const rowCount = Number(finalChunk.rowCount);
+  return {
+    requestId: String(finalChunk.requestId || ""),
+    tableId: finalChunk.tableId == null ? "" : String(finalChunk.tableId),
+    offset: Number.isFinite(Number(finalChunk.offset)) ? Number(finalChunk.offset) : 0,
+    rowCount: Number.isFinite(rowCount) ? rowCount : rows.length,
+    contentHash: finalChunk.contentHash ?? null,
+    schemaHash: finalChunk.schemaHash ?? null,
+    rows
+  };
+}
+function rowsChunkBytes(chunk) {
+  if (!chunk || typeof chunk !== "object") return 0;
+  try {
+    return JSON.stringify(chunk.rows ?? []).length;
+  } catch {
+    return 0;
+  }
+}
+function bufferedRowsChunkCount(collectors) {
+  let total = 0;
+  for (const slot of collectors.values()) total += slot?.bySeq?.size || 0;
+  return total;
+}
+function bufferedRowsChunkBytes(collectors) {
+  let total = 0;
+  for (const slot of collectors.values()) total += Number(slot?.bufferedBytes) || 0;
+  return total;
+}
+function normalizeRowsTableId(tableId) {
+  const raw = String(tableId || "").trim();
+  return raw.startsWith("table:") ? raw.slice("table:".length) : raw;
+}
+function normalizeRowsOffset(offset) {
+  const value = Number(offset);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.floor(value);
+}
+function normalizeRowsLimit(limit) {
+  const cap = Math.max(1, Number(CTOX_ROWS_RPC.maxRowsPerWindow) || 1);
+  const value = Number(limit);
+  if (!Number.isFinite(value) || value <= 0) return cap;
+  return Math.min(cap, Math.floor(value));
+}
+function rowsAbortReason(signal) {
+  const reason = signal?.reason;
+  if (typeof reason === "string" && reason.trim()) return reason.trim();
+  if (reason && typeof reason === "object" && typeof reason.message === "string" && reason.message.trim()) {
+    return reason.message.trim();
+  }
+  return "client-abort";
+}
+function createRowsCancelError(reason) {
+  const text = typeof reason === "string" && reason.trim() ? reason.trim() : "client-abort";
+  const error = new Error(`ROWS_CANCELLED: ${text}`);
+  error.name = "AbortError";
+  error.code = "ROWS_CANCELLED";
+  error.retryable = false;
+  return error;
 }
 function bufferedChunkCount(collectors) {
   let total = 0;
@@ -7467,12 +7894,23 @@ function createQueryDemandLoader({
   status = null,
   clock = Date.now,
   queryWindowRevalidateMs = DEFAULT_QUERY_WINDOW_REVALIDATE_MS,
+  // Opaque identity of the bridge/connection generation. Strict
+  // requireRevision reads must never cross this boundary.
+  queryGeneration = null,
   // Origin stamp (object or provider fn) for every document this loader
   // writes into the primary store. Demand-fetched documents ARE master
   // state: without the stamp they counted as unsynced LOCAL writes, so the
   // push pipeline echoed them (and cache-eviction tombstones — i.e. DELETES)
   // back to the master, and the LWW gate let them veto later master pulls.
-  replicationOrigin = null
+  replicationOrigin = null,
+  // SYNC-12 boundary for control-plane reads: live provider for this
+  // browser's read-permission digest (hash of the role+epoch capability
+  // claims). A role or grant change bumps the digest; control-plane windows
+  // stamped under a superseded digest must not be served locally before a
+  // newly authorized fetch re-stamps their membership. An empty current
+  // digest (identity unresolvable right now) cannot authorize a local
+  // control-plane window; retained replication checkpoints are separate.
+  readPermissionDigest = null
 }) {
   if (!storageCollection) throw new TypeError("demand loader requires storageCollection");
   if (!sidecar) throw new TypeError("demand loader requires sidecar");
@@ -7481,6 +7919,9 @@ function createQueryDemandLoader({
     throw new TypeError("demand loader requires requestQueryFetch");
   }
   const resolveReplicationOrigin = () => (typeof replicationOrigin === "function" ? replicationOrigin() : replicationOrigin) || null;
+  const resolveReadPermissionDigest = () => String(
+    (typeof readPermissionDigest === "function" ? readPermissionDigest() : readPermissionDigest) || ""
+  );
   const boundedQueryWindowRevalidateMs = Math.max(
     250,
     Number(queryWindowRevalidateMs) || DEFAULT_QUERY_WINDOW_REVALIDATE_MS
@@ -7489,9 +7930,23 @@ function createQueryDemandLoader({
   const coordinatedByFingerprint = /* @__PURE__ */ new Map();
   let nextRequestSequence = 0;
   const resolvingByInput = /* @__PURE__ */ new Map();
+  const consumerSignals = /* @__PURE__ */ new WeakMap();
+  let nextConsumerSignalSequence = 0;
   return {
-    async resolveQuery(query, { window: window2 } = {}) {
+    currentReadPermissionDigest: resolveReadPermissionDigest,
+    async resolveQuery(query, { window: window2, signal } = {}) {
       const normalizedWindow = normalizeWindow(window2, query);
+      const strictRequireRevision = Boolean(query?.requireRevision);
+      const generation = strictRequireRevision ? String(queryGeneration?.() || "") : "";
+      if (strictRequireRevision && !generation) {
+        throw new Error("QUERY_GENERATION_REQUIRED: strict demand read has no bridge generation");
+      }
+      const consumerSignal = signal && typeof signal.addEventListener === "function" ? signal : null;
+      let signalToken = "";
+      if (consumerSignal) {
+        signalToken = consumerSignals.get(consumerSignal) || `signal-${nextConsumerSignalSequence += 1}`;
+        consumerSignals.set(consumerSignal, signalToken);
+      }
       const fingerprintInput = {
         collection: collectionName,
         schemaVersion: schemaVersion ?? 0,
@@ -7503,7 +7958,9 @@ function createQueryDemandLoader({
       };
       const inputKey = JSON.stringify({
         ...fingerprintInput,
-        requireRevision: query?.requireRevision ?? null
+        requireRevision: query?.requireRevision ?? null,
+        requireGeneration: generation || null,
+        signalToken: signalToken || null
       });
       const existingInvocation = resolvingByInput.get(inputKey);
       if (existingInvocation) {
@@ -7516,25 +7973,53 @@ function createQueryDemandLoader({
         requestId,
         fingerprint: null,
         cancelledReason: null,
-        rejectCancellation: null
+        rejectCancellation: null,
+        consumerCancelled: false,
+        detachConsumerSignal: null
       };
       const cancellationPromise = new Promise((_, reject) => {
         invocationEntry.rejectCancellation = reject;
       });
       cancellationPromise.catch(() => {
       });
+      if (consumerSignal) {
+        const abortConsumer = () => {
+          if (invocationEntry.cancelledReason) return;
+          invocationEntry.consumerCancelled = true;
+          invocationEntry.cancelledReason = "consumer-abort";
+          invocationEntry.rejectCancellation?.(createQueryCancelledError("consumer-abort"));
+          Promise.resolve().then(() => requestCancel?.({
+            requestId: invocationEntry.requestId,
+            fingerprint: invocationEntry.fingerprint,
+            reason: "consumer-abort"
+          })).catch(() => {
+          });
+        };
+        if (consumerSignal.aborted) abortConsumer();
+        else consumerSignal.addEventListener("abort", abortConsumer, { once: true });
+        invocationEntry.detachConsumerSignal = () => {
+          consumerSignal.removeEventListener("abort", abortConsumer);
+          invocationEntry.detachConsumerSignal = null;
+        };
+      }
+      const assertFresh = () => {
+        throwIfQueryCancelled(invocationEntry);
+        if (strictRequireRevision && queryGeneration?.() !== generation) {
+          throw createQueryGenerationChangedError();
+        }
+      };
       const invocationJob = (async () => {
         const fingerprint = await queryFingerprint(fingerprintInput);
         invocationEntry.fingerprint = fingerprint;
-        throwIfQueryCancelled(invocationEntry);
+        assertFresh();
         const sidecarKey = [collectionName, fingerprint, normalizedWindow.offset, normalizedWindow.limit];
         const cached = await sidecar.getQueryWindow(sidecarKey);
-        throwIfQueryCancelled(invocationEntry);
+        assertFresh();
         const cachedDocumentsAvailable = await queryWindowDocumentsAvailable(
           storageCollection,
           cached?.documentIds
         );
-        throwIfQueryCancelled(invocationEntry);
+        assertFresh();
         if (cached && (cached.complete || cached.everCompleted) && !cachedDocumentsAvailable) {
           await sidecar.invalidateQueryWindow(sidecarKey);
           cached.complete = false;
@@ -7545,19 +8030,36 @@ function createQueryDemandLoader({
         const emptyWindowStale = cached && (!Array.isArray(cached.documentIds) || cached.documentIds.length === 0) && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= EMPTY_QUERY_WINDOW_REVALIDATE_MS;
         const mutableMembershipWindowStale = isMutableMembershipCollection(collectionName) && cached && Array.isArray(cached.documentIds) && cached.documentIds.length > 0 && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= MUTABLE_QUERY_MEMBERSHIP_REVALIDATE_MS;
         const queryWindowStale = cached && clock() - Number(cached.updatedAt || cached.createdAt || 0) >= boundedQueryWindowRevalidateMs;
-        if (cached && cached.complete && cachedDocumentsAvailable && !emptyWindowStale && !mutableMembershipWindowStale && !queryWindowStale) {
-          if (query?.requireRevision && cached.satisfiedRevision !== query.requireRevision) {
+        const controlPlaneRead = isControlPlaneStatusCollection(collectionName);
+        const controlPlanePermissionMismatchNow = () => controlPlaneRead && cached && (cached.complete || cached.everCompleted) && !windowReadPermissionDigestMatches(cached.permissionDigest, resolveReadPermissionDigest());
+        const controlPlaneFallbackMembership = () => controlPlanePermissionMismatchNow() || controlPlaneRead && !cached ? [] : cached?.documentIds;
+        const serveWindowDocuments = async (windowRecord, membershipIds) => {
+          const documents = await readLocalDocuments(
+            storageCollection,
+            query,
+            normalizedWindow,
+            membershipIds
+          );
+          if (controlPlaneRead && !windowReadPermissionDigestMatches(
+            windowRecord?.permissionDigest,
+            resolveReadPermissionDigest()
+          )) {
+            return [];
+          }
+          return documents;
+        };
+        if (cached && cached.complete && cachedDocumentsAvailable && !emptyWindowStale && !mutableMembershipWindowStale && !queryWindowStale && !controlPlanePermissionMismatchNow()) {
+          if (strictRequireRevision) {
+            if (cached.satisfiedRevision === query.requireRevision && cached.satisfiedGeneration === generation && !controlPlaneWindowStale) {
+              await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
+              return serveWindowDocuments(cached, cached.documentIds);
+            }
           } else if (!controlPlaneWindowStale) {
             await touchSidecarAccess(sidecar, collectionName, cached.documentIds);
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached.documentIds
-            );
+            return serveWindowDocuments(cached, cached.documentIds);
           }
         }
-        const dedupKey = `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
+        const dedupKey = strictRequireRevision ? `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}|strict|${query.requireRevision}|${generation}` : `${collectionName}|${fingerprint}|${normalizedWindow.offset}|${normalizedWindow.limit}`;
         const startFetchJob = () => {
           if (inflightByFingerprint.has(dedupKey)) {
             bumpStatus(status, "queryFetchDedupHitCount");
@@ -7568,7 +8070,9 @@ function createQueryDemandLoader({
           throwIfQueryCancelled(invocationEntry);
           const job = (async () => {
             const startedAt = clock();
+            const fetchPermissionDigest = resolveReadPermissionDigest();
             try {
+              assertFresh();
               const result = await Promise.race([
                 requestQueryFetch({
                   requestId,
@@ -7586,7 +8090,12 @@ function createQueryDemandLoader({
                 }),
                 cancellationPromise
               ]);
+              assertFresh();
+              if (controlPlaneRead && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())) {
+                throw createQueryCancelledError("permission-identity-changed");
+              }
               await materializeChunks(storageCollection, result.documents || [], resolveReplicationOrigin());
+              assertFresh();
               const documentIds = (result.documents || []).map(extractId).filter(Boolean);
               await sidecar.upsertQueryWindow({
                 collection: collectionName,
@@ -7597,14 +8106,24 @@ function createQueryDemandLoader({
                 complete: true,
                 authoritativeRevision: result.authoritativeRevision ?? null,
                 satisfiedRevision: query?.requireRevision ?? null,
+                satisfiedGeneration: strictRequireRevision ? generation : null,
+                // SYNC-12: stamp the read-permission identity this authorized
+                // fetch ran under; a later role/grant change (new digest) must
+                // not be served this membership.
+                permissionDigest: fetchPermissionDigest || null,
                 queryShape: {
                   selector: query?.selector ?? {},
                   sort: normalizeSort(query?.sort)
                 }
               });
+              assertFresh();
               await sidecar.touchDocuments(collectionName, documentIds, {
                 estimatedBytes: estimateBytesPerDocument(result.documents || [])
               });
+              assertFresh();
+              if (controlPlaneRead && !windowReadPermissionDigestMatches(fetchPermissionDigest, resolveReadPermissionDigest())) {
+                throw createQueryCancelledError("permission-identity-changed");
+              }
               bumpStatus(status, "queryFetchSuccessCount");
               if (status) status.lastQueryFetchMs = clock() - startedAt;
               v15Log("fetch:ok", { fingerprint, docs: documentIds.length, ms: clock() - startedAt });
@@ -7613,12 +8132,8 @@ function createQueryDemandLoader({
               if (isQueryCancelledError(error)) {
                 bumpStatus(status, "queryFetchCancelCount");
                 v15Log("fetch:cancel", { fingerprint, error: String(error?.message ?? error) });
-                return readLocalDocuments(
-                  storageCollection,
-                  query,
-                  normalizedWindow,
-                  cached?.documentIds
-                );
+                if (strictRequireRevision || invocationEntry.consumerCancelled) throw error;
+                return serveWindowDocuments(cached, controlPlaneFallbackMembership());
               }
               bumpStatus(status, "queryFetchErrorCount");
               v15Log("fetch:error", { fingerprint, error: String(error?.message ?? error) });
@@ -7634,14 +8149,14 @@ function createQueryDemandLoader({
         const runCoordinatedFetchJob = async () => {
           if (!multiTabBroker?.claim) return startFetchJob();
           if (multiTabBroker.closed) {
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached?.documentIds
-            );
+            if (strictRequireRevision || invocationEntry.consumerCancelled) {
+              throw createQueryCancelledError("multi-tab-broker-closed");
+            }
+            return serveWindowDocuments(cached, controlPlaneFallbackMembership());
           }
+          assertFresh();
           const leader = await multiTabBroker.claim(dedupKey);
+          assertFresh();
           if (leader) {
             try {
               return await startFetchJob();
@@ -7650,33 +8165,30 @@ function createQueryDemandLoader({
             }
           }
           await multiTabBroker.waitForRemote?.(dedupKey, 5e3);
+          assertFresh();
           if (multiTabBroker.closed) {
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              cached?.documentIds
-            );
+            if (strictRequireRevision || invocationEntry.consumerCancelled) {
+              throw createQueryCancelledError("multi-tab-broker-closed");
+            }
+            return serveWindowDocuments(cached, controlPlaneFallbackMembership());
           }
           const materialized = await sidecar.getQueryWindow(sidecarKey);
-          if (materialized?.complete && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds)) {
+          assertFresh();
+          if (materialized?.complete && await queryWindowDocumentsAvailable(storageCollection, materialized.documentIds) && (!controlPlaneRead || windowReadPermissionDigestMatches(
+            materialized.permissionDigest,
+            resolveReadPermissionDigest()
+          )) && (!strictRequireRevision || materialized.satisfiedRevision === query.requireRevision && materialized.satisfiedGeneration === generation)) {
             bumpStatus(status, "queryFetchDedupHitCount");
-            return readLocalDocuments(
-              storageCollection,
-              query,
-              normalizedWindow,
-              materialized.documentIds
-            );
+            return serveWindowDocuments(materialized, materialized.documentIds);
           }
           const takeover = await multiTabBroker.claim(dedupKey);
+          assertFresh();
           if (!takeover) {
             if (multiTabBroker.closed) {
-              return readLocalDocuments(
-                storageCollection,
-                query,
-                normalizedWindow,
-                cached?.documentIds
-              );
+              if (strictRequireRevision || invocationEntry.consumerCancelled) {
+                throw createQueryCancelledError("multi-tab-broker-closed");
+              }
+              return serveWindowDocuments(cached, controlPlaneFallbackMembership());
             }
             return startFetchJob();
           }
@@ -7700,21 +8212,13 @@ function createQueryDemandLoader({
           coordinatedByFingerprint.set(dedupKey, job);
           return job;
         };
-        if (cached?.everCompleted && cachedDocumentsAvailable && !emptyWindowStale && !query?.requireRevision) {
-          if (controlPlaneWindowStale) {
-            return coordinatedFetchJob();
-          }
+        if (cached?.everCompleted && cachedDocumentsAvailable && !emptyWindowStale && !controlPlanePermissionMismatchNow() && !query?.requireRevision) {
           coordinatedFetchJob().catch(() => {
           });
           bumpStatus(status, "queryFetchStaleServedCount");
           v15Log("fetch:stale-served", { collection: collectionName, fingerprint, offset: normalizedWindow.offset, limit: normalizedWindow.limit });
           await touchSidecarAccess(sidecar, collectionName, cached.documentIds || []);
-          return readLocalDocuments(
-            storageCollection,
-            query,
-            normalizedWindow,
-            cached.documentIds || []
-          );
+          return serveWindowDocuments(cached, cached.documentIds || []);
         }
         return coordinatedFetchJob();
       })();
@@ -7723,8 +8227,10 @@ function createQueryDemandLoader({
       try {
         return await invocationJob;
       } finally {
+        invocationEntry.detachConsumerSignal?.();
         if (resolvingByInput.get(inputKey)?.job === invocationJob) resolvingByInput.delete(inputKey);
         invocationEntry.rejectCancellation = null;
+        invocationEntry.detachConsumerSignal = null;
       }
     },
     inflightSize() {
@@ -7912,6 +8418,10 @@ function normalizeSort(sort) {
     return { [key]: direction === -1 || direction === "desc" || direction === "DESC" ? "desc" : "asc" };
   });
 }
+function windowReadPermissionDigestMatches(storedDigest, currentDigest) {
+  if (!currentDigest) return false;
+  return String(storedDigest || "") === currentDigest;
+}
 async function readLocalDocuments(storageCollection, query, window2, documentIds = null) {
   if (Array.isArray(documentIds)) {
     if (documentIds.length === 0) return [];
@@ -7993,6 +8503,13 @@ function createQueryCancelledError(reason) {
 function throwIfQueryCancelled(invocationEntry) {
   if (!invocationEntry.cancelledReason) return;
   throw createQueryCancelledError(invocationEntry.cancelledReason);
+}
+function createQueryGenerationChangedError() {
+  const error = new Error("QUERY_CANCELLED: generation-replaced");
+  error.code = "QUERY_CANCELLED";
+  error.retryable = false;
+  error.generationChanged = true;
+  return error;
 }
 var v15LogSink = null;
 function setV15LogSink(fn) {
@@ -8325,6 +8842,211 @@ function dedupeSorted(values) {
     if (out.length === 0 || out[out.length - 1] !== v) out.push(v);
   }
   return out;
+}
+
+// src/apps/business-os/rxdb/src/rows-demand-loader.mjs
+var ROWS_RESULT_CACHE_BUDGET_BYTES = 8 * 1024 * 1024;
+function createRowsDemandLoader({
+  transport,
+  collectionName = "knowledge_tables"
+} = {}) {
+  if (!transport || typeof transport.fetchRows !== "function") {
+    throw new TypeError("rows loader requires transport.fetchRows");
+  }
+  const inflight = /* @__PURE__ */ new Map();
+  const cache = /* @__PURE__ */ new Map();
+  const latestHashByTable = /* @__PURE__ */ new Map();
+  let cacheBytes = 0;
+  let requestSequence = 0;
+  function fetchRows(tableId, { offset = 0, limit = CTOX_ROWS_RPC.maxRowsPerWindow, signal } = {}) {
+    const normalizedOffset = normalizeOffset(offset);
+    const normalizedLimit = normalizeLimit(limit);
+    const requestId = `rows-${Date.now()}-${requestSequence += 1}`;
+    const controller = new AbortController();
+    const slot = { controller, tableId };
+    const onCallerAbort = () => controller.abort(signal?.reason || "client-abort");
+    if (signal) {
+      if (signal.aborted) controller.abort(signal.reason || "client-abort");
+      else signal.addEventListener("abort", onCallerAbort, { once: true });
+    }
+    inflight.set(requestId, slot);
+    const job = (async () => {
+      try {
+        if (controller.signal.aborted) throw cancellationError(controller.signal.reason);
+        const cached = readCache(tableId, normalizedOffset, normalizedLimit);
+        if (cached) return cached;
+        const window2 = await transport.fetchRows({
+          collection: collectionName,
+          tableId,
+          offset: normalizedOffset,
+          limit: normalizedLimit,
+          signal: controller.signal,
+          requestId
+        });
+        const result = {
+          rows: Array.isArray(window2?.rows) ? window2.rows : [],
+          rowCount: finiteCount(window2?.rowCount),
+          contentHash: window2?.contentHash ?? null,
+          schemaHash: window2?.schemaHash ?? null,
+          offset: Number.isFinite(Number(window2?.offset)) ? Number(window2.offset) : normalizedOffset
+        };
+        remember(tableId, result, normalizedOffset, normalizedLimit);
+        return result;
+      } finally {
+        signal?.removeEventListener?.("abort", onCallerAbort);
+        if (inflight.get(requestId) === slot) inflight.delete(requestId);
+      }
+    })();
+    slot.promise = job;
+    return job;
+  }
+  async function fetchAllRows(tableId, {
+    pageSize = CTOX_ROWS_RPC.maxRowsPerWindow,
+    signal
+  } = {}) {
+    const limit = normalizeLimit(pageSize);
+    const rows = [];
+    let offset = 0;
+    let rowCount = null;
+    let contentHash = null;
+    let schemaHash2 = null;
+    for (; ; ) {
+      if (signal?.aborted) throw createCancelError(signal.reason || "client-abort");
+      const page = await fetchRows(tableId, { offset, limit, signal });
+      if (rowCount == null) rowCount = page.rowCount;
+      if (contentHash == null) contentHash = page.contentHash;
+      else if (page.contentHash != null && page.contentHash !== contentHash) {
+        const error = new Error("ROWS_SOURCE_ERROR: content hash changed while paging");
+        error.code = "ROWS_SOURCE_ERROR";
+        error.retryable = true;
+        throw error;
+      }
+      schemaHash2 = page.schemaHash ?? schemaHash2;
+      const pageRows = Array.isArray(page.rows) ? page.rows : [];
+      if (pageRows.length === 0) {
+        if (rowCount != null && offset < rowCount) {
+          const error = new Error("ROWS_SOURCE_ERROR: row window ended before rowCount");
+          error.code = "ROWS_SOURCE_ERROR";
+          error.retryable = true;
+          throw error;
+        }
+        break;
+      }
+      rows.push(...pageRows);
+      offset += pageRows.length;
+      if (rowCount != null && offset >= rowCount) break;
+      if (pageRows.length < limit) break;
+    }
+    return {
+      rows,
+      rowCount: rowCount == null ? rows.length : rowCount,
+      contentHash,
+      schemaHash: schemaHash2,
+      offset: 0
+    };
+  }
+  function abortAllInFlight(reason = "client-abort") {
+    const slots = [...inflight.values()];
+    inflight.clear();
+    for (const slot of slots) {
+      try {
+        slot.promise?.catch?.(() => {
+        });
+      } catch {
+      }
+      try {
+        slot.controller.abort(reason);
+      } catch {
+      }
+    }
+    return slots.length;
+  }
+  function readCache(tableId, offset, limit) {
+    const hash = latestHashByTable.get(normalizeRowsTableId2(tableId));
+    if (!hash) return null;
+    const key = cacheKey(tableId, hash, offset, limit);
+    const entry = cache.get(key);
+    if (!entry) return null;
+    cache.delete(key);
+    cache.set(key, entry);
+    return entry.value;
+  }
+  function remember(tableId, result, offset, limit) {
+    const hash = result?.contentHash == null ? "" : String(result.contentHash);
+    if (!hash) return;
+    const normalizedId = normalizeRowsTableId2(tableId);
+    const previous = latestHashByTable.get(normalizedId);
+    if (previous && previous !== hash) dropTable(normalizedId);
+    latestHashByTable.set(normalizedId, hash);
+    const bytes = estimateBytes3(result.rows);
+    if (bytes > ROWS_RESULT_CACHE_BUDGET_BYTES) return;
+    const key = cacheKey(tableId, hash, offset, limit);
+    if (cache.has(key)) {
+      cacheBytes -= cache.get(key).bytes;
+      cache.delete(key);
+    }
+    cache.set(key, { value: result, bytes, tableId: normalizedId });
+    cacheBytes += bytes;
+    while (cacheBytes > ROWS_RESULT_CACHE_BUDGET_BYTES && cache.size > 0) {
+      const oldest = cache.keys().next().value;
+      const entry = cache.get(oldest);
+      cache.delete(oldest);
+      cacheBytes -= entry?.bytes || 0;
+    }
+  }
+  function dropTable(normalizedId) {
+    for (const [key, entry] of [...cache.entries()]) {
+      if (entry?.tableId !== normalizedId) continue;
+      cache.delete(key);
+      cacheBytes -= entry.bytes || 0;
+    }
+  }
+  return {
+    fetchRows,
+    fetchAllRows,
+    abortAllInFlight
+  };
+}
+function cacheKey(tableId, contentHash, offset, limit) {
+  return `${normalizeRowsTableId2(tableId)}\0${contentHash}\0${offset}\0${limit}`;
+}
+function normalizeRowsTableId2(tableId) {
+  const raw = String(tableId || "").trim();
+  return raw.startsWith("table:") ? raw.slice("table:".length) : raw;
+}
+function normalizeOffset(offset) {
+  const value = Number(offset);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.floor(value);
+}
+function normalizeLimit(limit) {
+  const cap = Math.max(1, Number(CTOX_ROWS_RPC.maxRowsPerWindow) || 1);
+  const value = Number(limit);
+  if (!Number.isFinite(value) || value <= 0) return cap;
+  return Math.min(cap, Math.floor(value));
+}
+function finiteCount(value) {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : 0;
+}
+function estimateBytes3(rows) {
+  try {
+    return JSON.stringify(rows ?? []).length;
+  } catch {
+    return ROWS_RESULT_CACHE_BUDGET_BYTES + 1;
+  }
+}
+function cancellationError(reason) {
+  if (reason && typeof reason === "object" && reason.code === "ROWS_CANCELLED") return reason;
+  return createCancelError(typeof reason === "string" ? reason : "client-abort");
+}
+function createCancelError(reason) {
+  const text = typeof reason === "string" && reason.trim() ? reason.trim() : "client-abort";
+  const error = new Error(`ROWS_CANCELLED: ${text}`);
+  error.name = "AbortError";
+  error.code = "ROWS_CANCELLED";
+  error.retryable = false;
+  return error;
 }
 
 // src/apps/business-os/rxdb/src/query-meta-backend-indexeddb.mjs
@@ -9269,6 +9991,15 @@ function randomTabId() {
 }
 
 // src/apps/business-os/rxdb/src/replication-webrtc.mjs
+var GENERATION_OBJECT_IDS = /* @__PURE__ */ new WeakMap();
+var nextGenerationObjectId = 0;
+function generationObjectId(value) {
+  if (!value || typeof value !== "object" && typeof value !== "function") return String(value || "");
+  if (!GENERATION_OBJECT_IDS.has(value)) {
+    GENERATION_OBJECT_IDS.set(value, `obj-${nextGenerationObjectId += 1}`);
+  }
+  return GENERATION_OBJECT_IDS.get(value);
+}
 var ACTIVE_COLLECTIONS_METHOD = "rxdb.activeCollections";
 var GLOBAL_QUERY_META_BUDGET_BYTES = 512 * 1024 * 1024;
 var DEFAULT_QUERY_META_BUDGET_BYTES = 6 * 1024 * 1024;
@@ -9307,6 +10038,11 @@ function remoteSupportsQueryFetch(remoteProtocol) {
   const flag = remoteProtocol.v1_5?.queryDemandLoadingEnabled;
   if (flag === false) return false;
   return true;
+}
+function remoteSupportsRowsFetch(remoteProtocol) {
+  if (!remoteProtocol || typeof remoteProtocol !== "object") return false;
+  const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
+  return capabilities.includes(CTOX_ROWS_FETCH_CAPABILITY);
 }
 function getConnectionHandlerSimplePeer({ signalingServerUrl, config } = {}) {
   return {
@@ -9374,6 +10110,12 @@ var replicationWebRtcTestInternals = Object.freeze({
   decodeCapabilityTokenClaims,
   readPermissionDigestFromCapabilityToken,
   readPermissionDigestMatches,
+  // Local checkpoint reuse across ordinary pulls/writes, never across eviction.
+  localCheckpointValidityKey,
+  localCheckpointStillCovers,
+  remoteCheckpointStillCovers,
+  // Eager replicas are never evicted by the demand sidecar.
+  demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
   // real state machines without opening a network connection.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -9403,9 +10145,14 @@ var SharedRoomPeer = class {
       getPeerId: () => this.activeRemotePeerId
     });
     this.activeRemotePeerId = null;
+    this.clockAnchorSource = null;
+    this.clockAnchorPeerId = null;
     this.started = false;
     this.peerOpenQueue = Promise.resolve();
     this.negotiated = null;
+    this.peerAuthorities = /* @__PURE__ */ new WeakMap();
+    this.authorityRefreshPromise = null;
+    this.authorityRefreshScopeKey = null;
     this.schemaMismatchCollections = /* @__PURE__ */ new Set();
     this.collectionCatchUps = /* @__PURE__ */ new Map();
     this.collectionCatchUpGenerations = /* @__PURE__ */ new Map();
@@ -9648,7 +10395,7 @@ var SharedRoomPeer = class {
       iceServersRefreshUrl: this.iceServersRefreshUrl,
       refreshIceServers: this.refreshIceServers,
       expectedNativePeerId: this.expectedNativePeerId || "",
-      protocolPayload: async ({ collection, params } = {}) => this.buildProtocolPayload(collection, params),
+      protocolPayload: async ({ peerId, collection, params } = {}) => this.buildProtocolPayload(collection, params, peerId),
       requestHandlers: {
         masterChangesSince: async ({ params, peerId, collection }) => this.routeMasterChangesSince(collection, params, peerId),
         masterWrite: async ({ params, peerId, collection }) => this.routeMasterWrite(collection, params, peerId),
@@ -9688,6 +10435,11 @@ var SharedRoomPeer = class {
       try {
         this.demandTransport.abortPeerRequests(event.detail?.peerId, event.detail?.reason || "peer-close");
       } catch {
+      }
+      if (this.clockAnchorSource && this.clockAnchorPeerId === event.detail?.peerId) {
+        clearHybridLogicalClockTimeAnchor(this.clockAnchorSource);
+        this.clockAnchorSource = null;
+        this.clockAnchorPeerId = null;
       }
       if (this.negotiated && this.negotiated.peerId === event.detail?.peerId) {
         this.negotiated = null;
@@ -9801,8 +10553,63 @@ var SharedRoomPeer = class {
       }
     }
   }
-  async buildProtocolPayload(collection, params = []) {
-    return this.buildProtocolPayloadUncached(collection, params);
+  async buildProtocolPayload(collection, params = [], peerId = "") {
+    const connection = this.peer?.connections?.get?.(peerId);
+    const payload = await this.buildProtocolPayloadUncached(collection, params);
+    const authority = await peerAuthorityDescriptor(payload?.peerSession?.capabilityToken);
+    if (this.authorityRefreshScopeKey && authority?.scopeKey !== this.authorityRefreshScopeKey) {
+      throw peerAuthorityError("auth_required", "Peer authority changed account or device scope.");
+    }
+    if (connection && this.peer?.connections?.get?.(peerId) === connection && authority && !this.peerAuthorities.has(connection)) {
+      this.peerAuthorities.set(connection, authority);
+    }
+    return payload;
+  }
+  async ensurePeerAuthority(capabilityToken) {
+    const desired = await peerAuthorityDescriptor(capabilityToken);
+    if (!desired || desired.expiresAtMs <= Date.now()) {
+      throw peerAuthorityError("auth_required", "A current capability is required for peer renewal.");
+    }
+    if (this.authorityRefreshPromise) {
+      if (desired.scopeKey !== this.authorityRefreshScopeKey) {
+        throw peerAuthorityError("auth_required", "Concurrent peer renewal changed account or device scope.");
+      }
+      await this.authorityRefreshPromise;
+      return true;
+    }
+    const peerId = this.negotiated?.peerId;
+    const connection = this.peer?.connections?.get?.(peerId);
+    if (!connection || !this.isPeerOpen(peerId)) {
+      throw peerAuthorityError("native_unavailable", "Peer authority has no current connection.");
+    }
+    const captured = this.peerAuthorities.get(connection);
+    if (!captured) {
+      throw peerAuthorityError("native_unavailable", "Peer authority has no handshake binding.");
+    }
+    if (captured.scopeKey !== desired.scopeKey) {
+      throw peerAuthorityError("auth_required", "A changed account or device requires its own database scope.");
+    }
+    if (captured.permissionKey === desired.permissionKey && captured.expiresAtMs > Date.now()) return false;
+    this.authorityRefreshScopeKey = captured.scopeKey;
+    const refresh = (async () => {
+      this.peer.removeConnection(peerId, "capability-authority-changed");
+      const negotiated = await this.ensureNegotiatedPeer();
+      const replacement = this.peer?.connections?.get?.(negotiated?.peerId);
+      const renewed = replacement && this.peerAuthorities.get(replacement);
+      if (!replacement || replacement === connection || !this.isPeerOpen(negotiated?.peerId) || !renewed || renewed.scopeKey !== captured.scopeKey) {
+        throw peerAuthorityError("native_unavailable", "Peer renewal did not establish a fresh scoped handshake.");
+      }
+      return true;
+    })();
+    this.authorityRefreshPromise = refresh;
+    try {
+      return await refresh;
+    } finally {
+      if (this.authorityRefreshPromise === refresh) {
+        this.authorityRefreshPromise = null;
+        this.authorityRefreshScopeKey = null;
+      }
+    }
   }
   async buildProtocolPayloadUncached(collection, params = []) {
     const registration = collection && this.collections.get(collection) || this.representativeCollection();
@@ -9926,22 +10733,25 @@ var SharedRoomPeer = class {
   async routeMasterChangesSince(collection, params, peerId) {
     const registration = collection && this.collections.get(collection);
     if (!registration) {
-      return { documents: [], checkpoint: params?.[0] || null };
+      return missingMasterHandlerResult(collection, "pull");
     }
     return registration.state.masterChangesSince(params, peerId);
   }
   async routeMasterWrite(collection, params, peerId) {
     const registration = collection && this.collections.get(collection);
-    if (!registration) return [];
+    if (!registration) return missingMasterHandlerResult(collection, "push");
     return registration.state.masterWrite(params, peerId);
   }
   async negotiatePeer(peerId) {
     const representative = this.representativeCollection();
     if (!representative) return null;
     if (!this.isPeerOpen(peerId)) return null;
+    const connection = this.peer?.connections?.get?.(peerId);
     this.handshakeMetrics.protocolNegotiations += 1;
     const localProtocol = await this.peer.protocolPayload(peerId, [], representative.collection);
     if (!this.isPeerOpen(peerId)) return null;
+    const clockRequestStartedAtMs = Date.now();
+    const clockRequestStartedMonotonicMs = globalThis.performance?.now?.() ?? null;
     const remoteProtocol = await this.peer.request(
       peerId,
       "ctoxProtocol",
@@ -9949,6 +10759,8 @@ var SharedRoomPeer = class {
       SHARED_HANDSHAKE_TIMEOUT_MS,
       representative.collection
     );
+    const clockResponseReceivedAtMs = Date.now();
+    const clockRequestElapsedMs = clockRequestStartedMonotonicMs === null ? clockResponseReceivedAtMs - clockRequestStartedAtMs : globalThis.performance.now() - clockRequestStartedMonotonicMs;
     const normalizedRemoteProtocol = normalizeRemoteProtocol(remoteProtocol);
     if (!this.isPeerOpen(peerId)) return null;
     const multiplexed = protocolHandshakeIsMultiplexed(
@@ -9986,6 +10798,17 @@ var SharedRoomPeer = class {
       }
     }
     await this.awaitRemoteMasterReady(peerId);
+    if (!connection || !this.isPeerOpen(peerId) || this.peer?.connections?.get?.(peerId) !== connection) return null;
+    const clockAnchorSource = `${this.key}:${generationObjectId(connection)}`;
+    setHybridLogicalClockTimeAnchorFromRoundTrip(
+      normalizedRemoteProtocol.nativeTimeMs,
+      clockRequestStartedAtMs,
+      clockResponseReceivedAtMs,
+      clockRequestElapsedMs,
+      clockAnchorSource
+    );
+    this.clockAnchorSource = clockAnchorSource;
+    this.clockAnchorPeerId = peerId;
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
     this.sendActiveCollections();
@@ -10102,6 +10925,7 @@ var CtoxWebRtcReplicationState = class {
     this.canceled$ = new CtoxSubject(false);
     this.peerStates$ = new CtoxSubject(/* @__PURE__ */ new Map());
     this.transportStatus$ = new CtoxSubject({});
+    this.queryReady$ = new CtoxSubject(null);
     this.masterChange$ = new CtoxSubject();
     this.shared = null;
     this.initialReplicationDeferred = createDeferred();
@@ -10124,16 +10948,107 @@ var CtoxWebRtcReplicationState = class {
     this.checkpointStorageKey = persistentCheckpointStorageKey(topic, collection.name);
     this.retainedCheckpoints = readPersistentCheckpoints(this.checkpointStorageKey);
     this.firstPullCompletedAtMs = 0;
+    this.publishLocalReplicaCoverage();
+    this.pullFresh = false;
+    this.pullFreshnessGeneration = 0;
+    this.lastSuccessfulPullAtMs = 0;
     this.localCheckpointValidityKey = "";
     this.readPermissionDigest = "";
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
+    this.knowledgeRowsLoader = null;
     this.demandStatus = createV1_5StatusState();
     this.schemaHashValue = null;
     this.peerReadyPromisesByPeer = /* @__PURE__ */ new Map();
+    this.queryReadyAttempt = null;
   }
   get peer() {
     return this.shared?.peer || null;
+  }
+  collectionQueryGenerationToken(peerId = this.activeRemotePeerId) {
+    const negotiated = this.shared?.negotiated || null;
+    if (!negotiated || negotiated.peerId !== peerId) return "";
+    const connection = this.shared?.peer?.connections?.get?.(peerId) || null;
+    if (!this.shared?.isPeerOpen?.(peerId)) return "";
+    const remoteProtocol = negotiated.remoteProtocol || null;
+    const peerSessionId = String(remoteProtocol?.peerSession?.sessionId || "").trim();
+    const storageGeneration = String(remoteProtocol?.storageGeneration || "").trim();
+    const collectionProtocol = this.shared.remoteProtocolForCollection?.(
+      remoteProtocol,
+      this.collection?.name
+    ) || remoteProtocol;
+    const checkpointEpoch = String(collectionProtocol?.checkpoint?.epoch || "").trim();
+    const schemaHash2 = String(
+      collectionProtocol?.collection?.schemaHash || remoteProtocol?.collectionSchemas?.[this.collection?.name]?.schemaHash || ""
+    ).trim();
+    const authority = peerSessionId && storageGeneration && checkpointEpoch && schemaHash2 ? {
+      peerSessionId,
+      storageGeneration,
+      checkpointEpoch,
+      schemaHash: schemaHash2
+    } : {
+      negotiatedObjectId: generationObjectId(negotiated),
+      connectionObjectId: generationObjectId(connection)
+    };
+    return JSON.stringify({
+      databaseName: this.collection?.storageCollection?.databaseName || "",
+      collectionName: this.collection?.name || "",
+      schemaVersion: this.collection?.schema?.version ?? null,
+      shared: generationObjectId(this.shared),
+      peerId,
+      authority
+    });
+  }
+  publishQueryReady(peerId) {
+    if (this.cancelled) return;
+    const generation = this.collectionQueryGenerationToken(peerId);
+    const loaderIsCurrent = this.demandLoader && this.collection?.demandLoader === this.demandLoader;
+    if (!generation || !loaderIsCurrent) return;
+    this.demandStatus.queryDemandReadyGeneration = generation;
+    this.queryReady$.next(generation);
+  }
+  async awaitQueryReady(timeoutMs = 15e3) {
+    const budgetMs = Math.max(250, Number(timeoutMs) || 15e3);
+    const subscriptions = [];
+    let timer = null;
+    try {
+      return await new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = (fn, value) => {
+          if (settled) return;
+          settled = true;
+          fn(value);
+        };
+        const inspect = () => {
+          if (settled) return;
+          if (this.cancelled) return finish(reject, new Error("WebRTC replication cancelled"));
+          const negotiated = this.shared?.negotiated || null;
+          if (!negotiated) return;
+          if (!negotiated.queryFetchCapable) {
+            return finish(reject, new Error(`Native WebRTC peer lacks ${CTOX_QUERY_FETCH_CAPABILITY}`));
+          }
+          const generation = this.collectionQueryGenerationToken(negotiated.peerId);
+          if (!generation) return;
+          if (this.demandStatus.queryDemandReadyGeneration === generation) {
+            return finish(resolve, generation);
+          }
+        };
+        subscriptions.push(this.queryReady$?.subscribe?.(inspect));
+        subscriptions.push(this.peerStates$?.subscribe?.(inspect));
+        inspect();
+        timer = setTimeout(() => {
+          finish(reject, new Error(`Native query readiness exceeded ${budgetMs}ms`));
+        }, budgetMs);
+      });
+    } finally {
+      if (timer) clearTimeout(timer);
+      for (const subscription of subscriptions) {
+        try {
+          subscription?.unsubscribe?.();
+        } catch {
+        }
+      }
+    }
   }
   async requestNative(method, params = {}, options = {}) {
     if (this.cancelled) throw new Error("WebRTC replication state is cancelled");
@@ -10169,7 +11084,7 @@ var CtoxWebRtcReplicationState = class {
         timeoutMs
       );
     }
-    return this.peer.request(negotiated.peerId, String(method || ""), [params], timeoutMs, this.collection);
+    return this.peer.request(negotiated.peerId, String(method || ""), [params], timeoutMs, this.collection?.name || null);
   }
   async start(connectionHandlerCreator) {
     this.schemaHashValue = await this.collection.schema.hash();
@@ -10198,7 +11113,7 @@ var CtoxWebRtcReplicationState = class {
     const periodicPullMs = this.periodicPullIntervalMs();
     if (periodicPullMs > 0) {
       this.periodicPullTimer = setInterval(() => {
-        this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+        this.pullFromRemotePeers({ revalidate: true }).catch((error) => this.error$.next(error));
       }, periodicPullMs);
     }
     const periodicPushMs = this.periodicPushIntervalMs();
@@ -10246,9 +11161,20 @@ var CtoxWebRtcReplicationState = class {
   emitError(error) {
     this.error$.next(error);
   }
+  async ensurePeerAuthority(capabilityToken) {
+    if (this.cancelled || !this.shared) {
+      throw peerAuthorityError("native_unavailable", "The command bridge has no live shared peer.");
+    }
+    const shared = this.shared;
+    const changed = await shared.ensurePeerAuthority(capabilityToken);
+    if (this.cancelled || this.shared !== shared) {
+      throw peerAuthorityError("native_unavailable", "The command bridge changed during peer renewal.");
+    }
+    return changed;
+  }
   async buildProtocolPayload(deviceProofNonce = null) {
     const checkpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
-    const capabilityToken = await resolveCapabilityToken(this.ctox);
+    const capabilityToken = await resolveCapabilityToken(this.ctox, { refresh: true });
     const deviceProof = await resolveDeviceProof(this.ctox, deviceProofNonce);
     return buildProtocolPayload({
       collectionName: this.collection.name,
@@ -10275,13 +11201,10 @@ var CtoxWebRtcReplicationState = class {
   async runPeerReady(peerId, normalizedRemoteProtocol, queryFetchCapable) {
     if (this.cancelled) return;
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
-    if (Number.isFinite(normalizedRemoteProtocol?.nativeTimeMs)) {
-      Object.assign(
-        this.demandStatus,
-        setHybridLogicalClockTimeAnchor(normalizedRemoteProtocol.nativeTimeMs, Date.now())
-      );
-    }
+    Object.assign(this.demandStatus, hybridLogicalClockStatus());
     this.activeRemotePeerId = peerId;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
     const validityKey = checkpointValidityKeyFromProtocol(normalizedRemoteProtocol);
@@ -10293,8 +11216,9 @@ var CtoxWebRtcReplicationState = class {
     if (this.cancelled) return;
     const retained = this.retainedCheckpoints;
     if (retained && validityKey) {
-      if (retained.validityKey === validityKey && retained.localValidityKey && retained.localValidityKey === localValidityKey && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)) {
+      if (remoteCheckpointStillCovers(retained, validityKey, normalizedRemoteProtocol) && localCheckpointStillCovers(retained.localValidityKey, localValidityKey) && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)) {
         this.firstPullCompletedAtMs = retainedFirstPullCompletedAtMs(retained);
+        this.publishLocalReplicaCoverage();
         if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
           this.pullCheckpointsByPeer.set(peerId, retained.pull);
         }
@@ -10303,6 +11227,7 @@ var CtoxWebRtcReplicationState = class {
         }
       } else {
         this.firstPullCompletedAtMs = 0;
+        this.publishLocalReplicaCoverage();
         this.retainedCheckpoints = null;
         clearPersistentCheckpoints(this.checkpointStorageKey);
       }
@@ -10317,9 +11242,10 @@ var CtoxWebRtcReplicationState = class {
     this.peerStates$.next(peerStates);
     this.active$.next(true);
     this.transportStatus$.next(this.decorateTransportStatus(this.shared?.getTransportStatus?.() || this.transportStatus$.getValue?.() || {}));
-    if (queryFetchCapable && !this.demandLoaderActive) {
+    if (queryFetchCapable) {
       try {
         await this.enableDemandLoading();
+        this.publishQueryReady?.(peerId);
       } catch (error) {
         this.error$.next(error);
       }
@@ -10342,10 +11268,12 @@ var CtoxWebRtcReplicationState = class {
     }
   }
   // ----- pull / push (collection-tagged over the shared peer) -------------
-  async pullFromRemotePeers() {
+  async pullFromRemotePeers({ revalidate = false } = {}) {
     if (!this.pull || this.cancelled) return;
+    if (!revalidate) this.pullFresh = false;
     if (this.pullInProgressPromise) {
       this.pullAgainAfterCurrent = true;
+      this.publishTransportStatus();
       return this.pullInProgressPromise;
     }
     this.pullInProgress = true;
@@ -10358,6 +11286,7 @@ var CtoxWebRtcReplicationState = class {
         const results = await Promise.allSettled(peerIds.map((peerId) => this.pullFromPeer(peerId)));
         this.reportPeerResults(results, peerIds);
         if (!peerIds.length || results.some((result) => result.status === "rejected")) {
+          this.pullFresh = false;
           this.schedulePullRetry();
         }
       } while (this.pullAgainAfterCurrent && !this.cancelled);
@@ -10406,6 +11335,7 @@ var CtoxWebRtcReplicationState = class {
     this.localPushTimer.unref?.();
   }
   async pullFromPeer(peerId) {
+    const freshnessGeneration = this.pullFreshnessGeneration;
     const batchSize = Number(this.pull?.batchSize || 10);
     let activePeerId = peerId;
     let checkpoint = this.pullCheckpointsByPeer.get(activePeerId) || null;
@@ -10413,9 +11343,19 @@ var CtoxWebRtcReplicationState = class {
       const response = await this.requestMasterChangesSince(activePeerId, checkpoint, batchSize);
       if (this.cancelled) return;
       activePeerId = response.peerId || activePeerId;
-      const result = response.result || {};
-      const documents = Array.isArray(result?.documents) ? result.documents : [];
+      const result = response.result;
+      if (!result || typeof result !== "object" || !Array.isArray(result.documents)) {
+        const error = new Error(`masterChangesSince returned no documents array for ${this.collection.name}`);
+        error.code = "ctox_replication_invalid_master_changes_result";
+        error.phase = "replication-io";
+        error.direction = "pull";
+        error.collection = this.collection.name;
+        throw error;
+      }
+      const documents = result.documents;
       if (documents.length) {
+        this.pullFresh = false;
+        this.publishTransportStatus();
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId)
         });
@@ -10426,7 +11366,11 @@ var CtoxWebRtcReplicationState = class {
       checkpoint = result?.checkpoint || checkpoint;
       this.pullCheckpointsByPeer.set(activePeerId, checkpoint);
       if (!documents.length) this.markFirstPullCompleted();
-      await this.persistCheckpointsForPeer(activePeerId);
+      const checkpointPersisted = await this.persistCheckpointsForPeer(activePeerId);
+      if (!documents.length && checkpointPersisted && freshnessGeneration === this.pullFreshnessGeneration && !this.cancelled) {
+        this.pullFresh = true;
+        this.lastSuccessfulPullAtMs = Date.now();
+      }
       if (!documents.length) break;
     }
   }
@@ -10581,7 +11525,7 @@ var CtoxWebRtcReplicationState = class {
           throw replicationErrorResultError(masterWriteResult, this.collection.name);
         }
         const conflicts = masterWriteResult;
-        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
         if (!conflictMap.size) {
           rows = [];
           break;
@@ -10650,7 +11594,7 @@ var CtoxWebRtcReplicationState = class {
         }
         throw replicationErrorResultError(conflicts, this.collection.name);
       }
-      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
       if (!conflictMap.size) {
         rows = [];
         break;
@@ -10920,6 +11864,10 @@ var CtoxWebRtcReplicationState = class {
     } catch {
     }
     try {
+      this.knowledgeRowsLoader?.abortAllInFlight?.("replication-cancel");
+    } catch {
+    }
+    try {
       this.demandSidecar?.stopEvictionScheduler?.();
     } catch {
     }
@@ -10933,8 +11881,12 @@ var CtoxWebRtcReplicationState = class {
     }
     this.demandLoader = null;
     this.demandFileLoader = null;
+    this.knowledgeRowsLoader = null;
     this.multiTabBroker = null;
     this.demandLoaderActive = false;
+    this.demandStatus.queryDemandReadyGeneration = null;
+    this.queryReadyAttempt = null;
+    this.queryReady$?.next?.(null);
   }
   /// V1.5 production wiring: build the sidecar + query demand loader and attach
   /// them to the underlying collection so that `find().exec()` and observable
@@ -10958,6 +11910,7 @@ var CtoxWebRtcReplicationState = class {
       }
       this.demandLoader = null;
       this.demandFileLoader = null;
+      this.knowledgeRowsLoader = null;
       this.demandLoaderActive = true;
       return null;
     }
@@ -10967,16 +11920,7 @@ var CtoxWebRtcReplicationState = class {
     });
     const backend = indexedDbAvailable ? createIndexedDbMetaBackend({ databaseName: dbName }) : createMemoryMetaBackend();
     this.demandStatus.queryDemandLoadingEnabled = queryDemandEnabled || fileDemandEnabled;
-    const primaryDelete = async (collection, id) => {
-      if (collection !== this.collection.name) return;
-      const stored = await this.collection.storageCollection.getStoredRecord?.(id);
-      if (!stored || Number(stored.pushable || 0) !== 0) {
-        throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
-      }
-      if (typeof this.collection.storageCollection.hardDeleteByIds === "function") {
-        await this.collection.storageCollection.hardDeleteByIds([id]);
-      }
-    };
+    const primaryDelete = demandSidecarPrimaryDelete(this);
     this.demandSidecar = new QueryMetaStorage(backend, {
       databaseName: dbName,
       schedulerKey: this.collection.storageCollection?.databaseName || this.topic,
@@ -11035,7 +11979,12 @@ var CtoxWebRtcReplicationState = class {
       requestCancel: ({ requestId, reason }) => demandTransport.requestQueryCancel({ requestId, reason }),
       status: this.demandStatus,
       multiTabBroker: this.multiTabBroker,
-      replicationOrigin: demandReplicationOrigin
+      queryGeneration: () => this.collectionQueryGenerationToken(this.activeRemotePeerId),
+      replicationOrigin: demandReplicationOrigin,
+      // SYNC-12: live provider — runPeerReady recomputes this digest at every
+      // handshake, so a same-session role/grant change takes effect at the
+      // next control-plane read without rebuilding the loader.
+      readPermissionDigest: () => this.readPermissionDigest || ""
     }) : null;
     if (typeof this.collection.setDemandLoader === "function") {
       this.collection.setDemandLoader(this.demandLoader);
@@ -11057,6 +12006,7 @@ var CtoxWebRtcReplicationState = class {
       requestFileCancel: ({ requestId, reason }) => demandTransport.requestFileCancel({ requestId, reason }),
       status: this.demandStatus
     }) : null;
+    this.knowledgeRowsLoader = knowledgeRowsLoaderForState(this, demandTransport);
     this.demandLoaderActive = true;
     this.demandStatus.queryDemandLoadingActive = queryDemandEnabled || fileDemandEnabled;
     return this.demandLoader;
@@ -11064,13 +12014,29 @@ var CtoxWebRtcReplicationState = class {
   markFirstPullCompleted() {
     if (this.firstPullCompletedAtMs > 0) return;
     this.firstPullCompletedAtMs = Date.now();
+    this.publishLocalReplicaCoverage();
     this.publishTransportStatus();
+  }
+  // An eagerly pulled collection whose pull has drained (or resumed from a
+  // valid retained checkpoint) holds the whole authorized collection locally.
+  // Its queries must read that replica instead of a query-demand round trip:
+  // on the customer tenant (30.09.2026) every Outbound reload asked the native
+  // peer for 200 leads (~20 MB) in one window, hit QUERY_COLLECTOR_TIMEOUT,
+  // and the app stayed at "Noch keine Kampagne" with a complete local store.
+  publishLocalReplicaCoverage() {
+    this.collection?.setLocalReplicaComplete?.(Boolean(this.pull) && this.firstPullCompletedAtMs > 0);
   }
   collectionReadinessState() {
     if (this.firstPullCompletedAtMs > 0) return "live";
     if (this.pullInProgress) return "catching-up";
     if (!this.hasOpenReadinessPeer()) return "offline-pending";
     return "never-synced";
+  }
+  collectionFreshnessState() {
+    if (!this.pull) return null;
+    if (!this.hasOpenReadinessPeer()) return "offline-pending";
+    if (!this.pullFresh) return "catching-up";
+    return "live";
   }
   hasOpenReadinessPeer() {
     if ((this.shared?.openSharedPeerIds?.() || []).length > 0) return true;
@@ -11092,6 +12058,8 @@ var CtoxWebRtcReplicationState = class {
     if (!peerId) return;
     const peerStates = new Map(this.peerStates$.getValue() || /* @__PURE__ */ new Map());
     if (!peerStates.has(peerId)) return;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
     const retainedPull = this.pullCheckpointsByPeer.get(peerId) || null;
     const retainedPush = this.pushCheckpointsByPeer.get(peerId) || null;
@@ -11116,12 +12084,18 @@ var CtoxWebRtcReplicationState = class {
     this.pushCheckpointsByPeer.delete(peerId);
     this.peerStates$.next(peerStates);
     this.publishTransportStatus();
+    this.demandStatus.queryDemandReadyGeneration = null;
+    this.queryReady$?.next?.(null);
     try {
       this.demandLoader?.abortAllInFlight?.(`peer-${reason}`);
     } catch {
     }
     try {
       this.demandFileLoader?.abortAllInFlight?.(`peer-${reason}`);
+    } catch {
+    }
+    try {
+      this.knowledgeRowsLoader?.abortAllInFlight?.(`peer-${reason}`);
     } catch {
     }
     try {
@@ -11164,10 +12138,10 @@ var CtoxWebRtcReplicationState = class {
   }
   async persistCheckpointsForPeer(peerId) {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
-    if (!validityKey) return;
+    if (!validityKey) return false;
     const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     const localValidityKey = localCheckpointValidityKey(localCheckpoint);
-    if (!localValidityKey) return;
+    if (!localValidityKey) return false;
     this.localCheckpointValidityKey = localValidityKey;
     const retained = {
       validityKey,
@@ -11184,6 +12158,7 @@ var CtoxWebRtcReplicationState = class {
     };
     this.retainedCheckpoints = retained;
     writePersistentCheckpoints(this.checkpointStorageKey, retained);
+    return true;
   }
   remoteProtocolForPeer(peerId) {
     const localProtocol = (this.peerStates$.getValue() || /* @__PURE__ */ new Map()).get(peerId)?.remoteProtocol || null;
@@ -11241,7 +12216,7 @@ var CtoxWebRtcReplicationState = class {
   }
   periodicPullIntervalMs() {
     if (!this.pull) return 0;
-    return ["business_commands", "ctox_queue_tasks"].includes(this.collection.name) ? 1e3 : 0;
+    return ["business_commands", "ctox_queue_tasks"].includes(this.collection.name) ? 1e3 : 6e4;
   }
   periodicPushIntervalMs() {
     if (!this.push) return 0;
@@ -11328,6 +12303,9 @@ var CtoxWebRtcReplicationState = class {
       topic: this.topic,
       activePeerCount: Math.max(localPeerCount, sharedPeerCount, connectionPeerCount),
       collectionReadinessState: this.collectionReadinessState(),
+      collectionFreshnessState: this.collectionFreshnessState(),
+      pullEnabled: Boolean(this.pull),
+      lastSuccessfulPullAtMs: this.lastSuccessfulPullAtMs || null,
       firstPullCompletedAtMs: this.firstPullCompletedAtMs || null,
       pullInProgress: this.pullInProgress,
       pushInProgress: this.pushInProgress,
@@ -11369,12 +12347,56 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   if (!epoch || !sessionId || !schemaHashValue) return "";
   return `${epoch}|${sessionId}|${schemaHashValue}`;
 }
+function remoteCheckpointStillCovers(retained, currentKey, remoteProtocol) {
+  const retainedKey = retained?.validityKey;
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const before = String(retainedKey).split("|");
+  const now = String(currentKey).split("|");
+  if (before.length !== 4 || now.length !== 4) return false;
+  if (before[0] !== now[0] || before[1] !== now[1] || before[2] !== now[2]) return false;
+  const retainedLwt = Number(retained?.pull?.lwt);
+  const remoteHeadLwt = Number(remoteProtocol?.checkpoint?.latestLwt);
+  return Number.isFinite(retainedLwt) && Number.isFinite(remoteHeadLwt) && remoteHeadLwt >= retainedLwt;
+}
 function localCheckpointValidityKey(checkpoint) {
   if (!checkpoint || typeof checkpoint !== "object") return "";
   const epoch = typeof checkpoint.epoch === "string" ? checkpoint.epoch.trim() : "";
   const schemaHashValue = typeof checkpoint.schemaHash === "string" ? checkpoint.schemaHash.trim() : "";
   if (!epoch) return "";
-  return `${epoch}|${schemaHashValue}`;
+  const evictionGeneration = Number(checkpoint.evictionGeneration || 0);
+  const storeGeneration = checkpoint.localStoreGeneration;
+  if (storeGeneration !== void 0) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(storeGeneration)) return "";
+    return `${epoch}|${schemaHashValue}|ev${evictionGeneration}|store${storeGeneration}`;
+  }
+  return evictionGeneration > 0 ? `${epoch}|${schemaHashValue}|ev${evictionGeneration}` : `${epoch}|${schemaHashValue}`;
+}
+function localCheckpointStillCovers(retainedKey, currentKey) {
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const retained = parseBrowserLocalCheckpointKey(retainedKey);
+  const current = parseBrowserLocalCheckpointKey(currentKey);
+  if (!retained || !current) return false;
+  return retained.collection === current.collection && retained.schemaHash === current.schemaHash && retained.evictionGeneration === current.evictionGeneration && retained.storeGeneration === current.storeGeneration && Number.isFinite(retained.latestLwt) && Number.isFinite(current.latestLwt) && current.latestLwt >= retained.latestLwt;
+}
+function parseBrowserLocalCheckpointKey(key) {
+  const parts = String(key).split("|");
+  if (parts.length > 4) return null;
+  const [epoch = "", schemaHash2 = "", evictionPart = "", storePart = ""] = parts;
+  const storeGeneration = storePart ? /^store([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(storePart)?.[1] : "";
+  if (storePart && !storeGeneration) return null;
+  const match = /^browser:(.+):(\d+(?:\.\d+)?):([0-9a-f]+)$/.exec(epoch);
+  if (!match) return null;
+  const evictionGeneration = evictionPart ? Number(/^ev(\d+)$/.exec(evictionPart)?.[1] ?? NaN) : 0;
+  if (!Number.isFinite(evictionGeneration)) return null;
+  return {
+    collection: match[1],
+    latestLwt: Number(match[2]),
+    schemaHash: schemaHash2,
+    evictionGeneration,
+    storeGeneration
+  };
 }
 function persistentCheckpointStorageKey(topic, collection) {
   return `ctox.rxdb.checkpoints.v1.${encodeURIComponent(String(topic || ""))}.${encodeURIComponent(String(collection || ""))}`;
@@ -11435,9 +12457,17 @@ function hashString(value) {
   }
   return (hash >>> 0).toString(36);
 }
-function documentsByPrimaryPath(documents = [], primaryPath = "id") {
+function documentsByPrimaryPath(documents, primaryPath = "id", collection = "") {
+  if (!Array.isArray(documents)) {
+    const error = new Error(`masterWrite returned no conflict array for ${collection || "unknown collection"}`);
+    error.code = "ctox_replication_invalid_master_write_result";
+    error.phase = "replication-io";
+    error.direction = "push";
+    error.collection = collection;
+    throw error;
+  }
   const map = /* @__PURE__ */ new Map();
-  for (const doc of Array.isArray(documents) ? documents : []) {
+  for (const doc of documents) {
     const id = primaryValue(doc, primaryPath);
     if (id) map.set(id, doc);
   }
@@ -11481,6 +12511,18 @@ function replicationErrorResult(result) {
   return Boolean(
     result && typeof result === "object" && !Array.isArray(result) && result.type === "ctoxError" && result.scope === "replication"
   );
+}
+function missingMasterHandlerResult(collection, direction) {
+  return {
+    type: "ctoxError",
+    scope: "replication",
+    rxdb: true,
+    code: "RC_WEBRTC_PEER",
+    phase: "replication-io",
+    direction,
+    collection: String(collection || ""),
+    message: `no master handler registered for ${collection || "unknown collection"}`
+  };
 }
 function replicationErrorResultError(result, collection) {
   const message = String(result?.message || result?.code || "replication request failed");
@@ -11541,10 +12583,10 @@ function isStalePendingBusinessCommandConflict(row = {}) {
   const masterStatus = String(master.status || "").trim();
   return localStatus === "pending_sync" && masterStatus && masterStatus !== "pending_sync";
 }
-async function resolveCapabilityToken(ctox = {}) {
+async function resolveCapabilityToken(ctox = {}, options = {}) {
   if (typeof ctox?.capabilityTokenProvider === "function") {
     try {
-      const token = await ctox.capabilityTokenProvider();
+      const token = await ctox.capabilityTokenProvider(options);
       return typeof token === "string" && token.trim() ? token.trim() : null;
     } catch {
       return null;
@@ -11577,6 +12619,35 @@ async function resolveDeviceProof(ctox = {}, nonce = null) {
   } catch {
     return null;
   }
+}
+async function peerAuthorityDescriptor(token) {
+  if (typeof token !== "string" || !token.trim()) return null;
+  try {
+    const payload = JSON.parse(base64UrlDecodeToString(token.split(".")[0]));
+    if (typeof payload.uid === "string" && payload.uid && typeof payload.role === "string" && payload.role && Number.isFinite(payload.epoch) && Number.isFinite(payload.exp)) {
+      const scopeKey = JSON.stringify([
+        payload.uid,
+        payload.device_pairing_id || "",
+        payload.device_id || "",
+        payload.cnf?.jkt || ""
+      ]);
+      return {
+        scopeKey,
+        permissionKey: JSON.stringify([scopeKey, payload.role, payload.epoch]),
+        expiresAtMs: payload.exp
+      };
+    }
+  } catch {
+  }
+  const key = "opaque:" + await sha256Hex(token);
+  return { scopeKey: key, permissionKey: key, expiresAtMs: Infinity };
+}
+function peerAuthorityError(code, message) {
+  return Object.assign(new Error(message), {
+    code,
+    retryable: code === "native_unavailable",
+    transient: code === "native_unavailable"
+  });
 }
 function decodeCapabilityTokenClaims(token) {
   if (typeof token !== "string" || !token) return null;
@@ -11639,6 +12710,19 @@ function primaryValue(doc = {}, primaryPath = "id") {
 function shouldPersistFetchedFileChunks(collectionName = "") {
   return String(collectionName || "") === "desktop_file_chunks";
 }
+function demandSidecarPrimaryDelete(state) {
+  return async (collection, id) => {
+    if (collection !== state.collection.name) return;
+    if (state.pull) return;
+    const stored = await state.collection.storageCollection.getStoredRecord?.(id);
+    if (!stored || Number(stored.pushable || 0) !== 0) {
+      throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
+    }
+    if (typeof state.collection.storageCollection.hardDeleteByIds === "function") {
+      await state.collection.storageCollection.hardDeleteByIds([id]);
+    }
+  };
+}
 function shouldAttachQueryDemandLoader(collectionName = "") {
   const name = String(collectionName || "");
   if (name === "document_blob_chunks" || name === "spreadsheet_blob_chunks") return true;
@@ -11646,6 +12730,21 @@ function shouldAttachQueryDemandLoader(collectionName = "") {
 }
 function shouldAttachFileDemandLoader(collectionName = "") {
   return String(collectionName || "") !== "desktop_file_chunks";
+}
+function knowledgeRowsLoaderForState(state, demandTransport) {
+  if (String(state?.collection?.name || "") !== "knowledge_tables") return null;
+  if (typeof demandTransport?.fetchRows !== "function") return null;
+  if (!remoteSupportsRowsFetch(rowsRemoteProtocol(state))) return null;
+  return createRowsDemandLoader({
+    transport: demandTransport,
+    collectionName: "knowledge_tables"
+  });
+}
+function rowsRemoteProtocol(state) {
+  const peerId = state?.activeRemotePeerId || state?.shared?.negotiated?.peerId || "";
+  const fromPeer = peerId ? state?.peerStates$?.getValue?.()?.get?.(peerId)?.remoteProtocol : null;
+  if (fromPeer) return fromPeer;
+  return state?.shared?.negotiated?.remoteProtocol || null;
 }
 function shouldAttachFileDemandLoaderBeforeCollectionHandshake(collectionName = "") {
   const name = String(collectionName || "");
@@ -11745,6 +12844,10 @@ function createMultiTabSyncCoordinator({
   let electionTimer = null;
   let releaseLock = null;
   let lockRequestRunning = false;
+  let releaseWaitAbort = null;
+  let retryReleaseElection = false;
+  let lifecycleSuspended = false;
+  let resumeReleasedLeader = false;
   const emitRole = () => {
     const status = snapshot();
     for (const listener of listeners) {
@@ -11828,19 +12931,37 @@ function createMultiTabSyncCoordinator({
     if (changed) emitRole();
     if (reason) post({ type: "follower", reason });
   };
-  const tryWebLock = async () => {
-    if (closed || lockRequestRunning || !globalThis.navigator?.locks?.request) return false;
+  const tryWebLock = async (waitForRelease = false) => {
+    if (closed || lifecycleSuspended || !globalThis.navigator?.locks?.request) return false;
+    if (lockRequestRunning) {
+      if (waitForRelease) retryReleaseElection = true;
+      return false;
+    }
     lockRequestRunning = true;
+    const abort = waitForRelease ? new AbortController() : null;
+    if (abort) releaseWaitAbort = abort;
     let resolveAttempt;
     const attempted = new Promise((resolve) => {
       resolveAttempt = resolve;
     });
-    navigator.locks.request(lockName, { mode: "exclusive", ifAvailable: true }, async (lock) => {
-      if (!lock || closed) {
-        lockRequestRunning = false;
-        resolveAttempt(false);
+    const finishFailedAttempt = () => {
+      if (releaseWaitAbort === abort) releaseWaitAbort = null;
+      lockRequestRunning = false;
+      resolveAttempt(false);
+      if (retryReleaseElection && !closed) {
+        retryReleaseElection = false;
+        tryWebLock(true).catch(() => {
+        });
+      }
+    };
+    const options = waitForRelease ? { mode: "exclusive", signal: abort.signal } : { mode: "exclusive", ifAvailable: true };
+    navigator.locks.request(lockName, options, async (lock) => {
+      if (!lock || closed || lifecycleSuspended) {
+        finishFailedAttempt();
         return;
       }
+      if (releaseWaitAbort === abort) releaseWaitAbort = null;
+      retryReleaseElection = false;
       becomeLeader("web-lock");
       resolveAttempt(true);
       await new Promise((resolve) => {
@@ -11849,14 +12970,18 @@ function createMultiTabSyncCoordinator({
       releaseLock = null;
       lockRequestRunning = false;
       becomeFollower("", "web-lock-released");
-    }).catch(() => {
-      lockRequestRunning = false;
-      resolveAttempt(false);
-    });
+      if (retryReleaseElection && !closed && !lifecycleSuspended && !leaderTabId) {
+        retryReleaseElection = false;
+        tryWebLock(true).catch(() => {
+        });
+      } else {
+        retryReleaseElection = false;
+      }
+    }).catch(finishFailedAttempt);
     return attempted;
   };
   const attemptElection = async () => {
-    if (closed || role === "leader") return;
+    if (closed || lifecycleSuspended || role === "leader") return;
     if (clock() - leaderSeenAtMs < LEASE_TTL_MS) return;
     if (globalThis.navigator?.locks?.request) {
       await tryWebLock();
@@ -11884,11 +13009,15 @@ function createMultiTabSyncCoordinator({
       } else if (message.type === "leader-claim") {
         if (role === "leader") post({ type: "leader-heartbeat", reason: "claim-rejected" });
         else if (!leaderTabId || String(message.tabId) < leaderTabId) leaderTabId = String(message.tabId);
-      } else if (message.type === "leader-release" && String(message.tabId || "") === leaderTabId) {
+      } else if (message.type === "leader-release" && String(message.tabId || "") && (!leaderTabId || String(message.tabId) === leaderTabId)) {
         leaderSeenAtMs = 0;
         leaderTabId = "";
-        attemptElection().catch(() => {
-        });
+        if (!lifecycleSuspended) {
+          if (globalThis.navigator?.locks?.request) tryWebLock(true).catch(() => {
+          });
+          else attemptElection().catch(() => {
+          });
+        }
       } else if (message.type === "dirty" && role === "leader") {
         handleDirty(message).catch(() => {
         });
@@ -11923,14 +13052,27 @@ function createMultiTabSyncCoordinator({
     };
   }
   const lifecycleRelease = () => {
+    lifecycleSuspended = true;
+    retryReleaseElection = false;
+    releaseWaitAbort?.abort();
     if (role === "leader") {
+      resumeReleasedLeader = true;
+      leaderSeenAtMs = 0;
+      leaderTabId = "";
       post({ type: "leader-release" });
       releaseLock?.();
     }
     becomeFollower("", "page-lifecycle");
   };
-  const lifecycleResume = () => attemptElection().catch(() => {
-  });
+  const lifecycleResume = () => {
+    lifecycleSuspended = false;
+    const reacquireReleasedLine = resumeReleasedLeader && !leaderTabId;
+    resumeReleasedLeader = false;
+    if (reacquireReleasedLine && globalThis.navigator?.locks?.request) tryWebLock(true).catch(() => {
+    });
+    else attemptElection().catch(() => {
+    });
+  };
   function start() {
     if (started) return Promise.resolve(snapshot());
     started = true;
@@ -12032,6 +13174,10 @@ function createMultiTabSyncCoordinator({
     async close() {
       if (role === "leader") post({ type: "leader-release" });
       closed = true;
+      lifecycleSuspended = true;
+      resumeReleasedLeader = false;
+      retryReleaseElection = false;
+      releaseWaitAbort?.abort();
       releaseLock?.();
       if (heartbeatTimer) clearInterval(heartbeatTimer);
       if (electionTimer) clearInterval(electionTimer);
@@ -12265,6 +13411,8 @@ var CtoxRxCollection = class {
     };
     this.storageCollection = storageCollection;
     this.demandLoader = null;
+    this.demandLoaderListeners = /* @__PURE__ */ new Set();
+    this.localReplicaComplete = false;
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
       deltaLiveQueryApplies: 0,
@@ -12273,7 +13421,22 @@ var CtoxRxCollection = class {
     };
   }
   setDemandLoader(loader) {
-    this.demandLoader = loader || null;
+    const nextLoader = loader || null;
+    if (this.demandLoader === nextLoader) return;
+    this.demandLoader = nextLoader;
+    if (isControlPlaneStatusCollection(this.name)) {
+      for (const listener of this.demandLoaderListeners) listener();
+    }
+  }
+  // Set by the replication state of an eagerly pulled collection once its
+  // pull drained. Control-plane ledgers stay behind their authorized demand
+  // windows regardless (permission boundary, see exec()).
+  setLocalReplicaComplete(complete) {
+    this.localReplicaComplete = Boolean(complete) && !isControlPlaneStatusCollection(this.name);
+  }
+  subscribeDemandLoaderChange(listener) {
+    this.demandLoaderListeners.add(listener);
+    return () => this.demandLoaderListeners.delete(listener);
   }
   async insert(doc) {
     const normalized = normalizeDoc(doc, this.schema.primaryPath);
@@ -12314,6 +13477,36 @@ var CtoxRxCollection = class {
   count(query = {}) {
     return {
       exec: async () => {
+        if (isControlPlaneStatusCollection(this.name)) {
+          const normalized2 = normalizeQuery(query, this.schema.primaryPath);
+          const maximum = Number.isFinite(normalized2.limit) ? normalized2.limit : Number.POSITIVE_INFINITY;
+          const offset = normalized2.skip || 0;
+          const startingLoader = this.demandLoader;
+          if (!startingLoader || maximum <= 0) return 0;
+          const readDigest = () => {
+            try {
+              return String(startingLoader.currentReadPermissionDigest?.() || "");
+            } catch {
+              return "";
+            }
+          };
+          const startingDigest = readDigest();
+          if (!startingDigest) return 0;
+          let total = 0;
+          while (total < maximum) {
+            if (this.demandLoader !== startingLoader || readDigest() !== startingDigest) return 0;
+            const pageLimit = Math.min(DEFAULT_WINDOW_LIMIT, maximum - total);
+            const page = await this.find({
+              ...normalized2,
+              skip: offset + total,
+              limit: pageLimit
+            }).exec();
+            if (this.demandLoader !== startingLoader || readDigest() !== startingDigest) return 0;
+            total += page.length;
+            if (page.length < pageLimit) break;
+          }
+          return total;
+        }
         const normalized = normalizeQuery(query, this.schema.primaryPath);
         if (typeof this.storageCollection.countDocuments === "function") {
           return this.storageCollection.countDocuments(normalized, {
@@ -12390,6 +13583,7 @@ var CtoxRxCollection = class {
         let initialRetryTimer = null;
         let initialRetryAttempt = 0;
         let initialized = false;
+        let snapshotGeneration = 0;
         let pendingSuccess = {};
         let pendingChanges = {};
         const documentsById = /* @__PURE__ */ new Map();
@@ -12413,10 +13607,12 @@ var CtoxRxCollection = class {
         };
         const flushInitial = async () => {
           if (!active) return;
+          const generation = ++snapshotGeneration;
           let documents;
           try {
             documents = await this.find().exec();
           } catch (error) {
+            if (!active || generation !== snapshotGeneration) return;
             if (isIndexedDbConnectionClosingError(error)) return;
             if (active && isRetryableObservableInitError(error)) {
               const delayMs = observableInitRetryDelayMs(initialRetryAttempt);
@@ -12429,7 +13625,7 @@ var CtoxRxCollection = class {
             }
             throw error;
           }
-          if (!active) return;
+          if (!active || generation !== snapshotGeneration) return;
           initialRetryAttempt = 0;
           documentsById.clear();
           for (const doc of documents) {
@@ -12447,6 +13643,10 @@ var CtoxRxCollection = class {
         const flushDelta = () => {
           pendingTimer = null;
           if (!active) return;
+          if (isControlPlaneStatusCollection(this.name)) {
+            void flushInitial();
+            return;
+          }
           if (!initialized) {
             const changes = Object.values(pendingChanges);
             pendingChanges = {};
@@ -12462,6 +13662,10 @@ var CtoxRxCollection = class {
           emitSnapshot();
         };
         const emit = (event) => {
+          if (isControlPlaneStatusCollection(this.name)) {
+            if (pendingTimer == null) pendingTimer = setTimeout(flushDelta, debounceMs);
+            return;
+          }
           pendingSuccess = {
             ...pendingSuccess,
             ...successPayloadFromChangeEvent(event)
@@ -12473,6 +13677,16 @@ var CtoxRxCollection = class {
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushDelta, debounceMs);
         };
+        const unsubscribeLoader = this.subscribeDemandLoaderChange(() => {
+          if (!active) return;
+          snapshotGeneration += 1;
+          documentsById.clear();
+          pendingSuccess = {};
+          pendingChanges = {};
+          initialized = false;
+          emitSnapshot();
+          void flushInitial();
+        });
         void flushInitial();
         const unsubscribe = this.observe(emit);
         return {
@@ -12487,6 +13701,7 @@ var CtoxRxCollection = class {
               initialRetryTimer = null;
             }
             unsubscribe();
+            unsubscribeLoader();
             registry.subscriptionEnded(this.name);
           }
         };
@@ -12518,6 +13733,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
   constructor(collection, query, single) {
     this.collection = collection;
     this.query = normalizeQuery(query, collection.schema.primaryPath);
+    this.signal = query?.signal && typeof query.signal.addEventListener === "function" ? query.signal : null;
     this.single = single;
     this.$ = {
       subscribe: (listener) => {
@@ -12526,10 +13742,12 @@ var CtoxRxQuery = class _CtoxRxQuery {
         registry.subscriptionStarted(this.collection.name);
         let pendingTimer = null;
         let initialized = false;
+        let queryEmissionGeneration = 0;
         let pendingPrimaryDoc = void 0;
         const primaryId = this.single ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath) : "";
-        const canApplyPrimaryDelta = Boolean(primaryId);
-        const canApplyQueryDelta = !this.single && canApplyUnboundedQueryDelta(this.query);
+        const controlPlaneRead = isControlPlaneStatusCollection(this.collection.name);
+        const canApplyPrimaryDelta = !controlPlaneRead && Boolean(primaryId);
+        const canApplyQueryDelta = !controlPlaneRead && !this.single && canApplyUnboundedQueryDelta(this.query);
         let pendingSuccess = {};
         const queryDocumentsById = /* @__PURE__ */ new Map();
         const emitQueryDocuments = () => {
@@ -12549,11 +13767,12 @@ var CtoxRxQuery = class _CtoxRxQuery {
         const flushEmit = () => {
           pendingTimer = null;
           if (!active) return;
+          const generation = ++queryEmissionGeneration;
           if (initialized && !canApplyPrimaryDelta && !canApplyQueryDelta) {
             this.collection.recordComplexLiveQueryReexec(this.query);
           }
           this.exec().then((value) => {
-            if (!active) return;
+            if (!active || generation !== queryEmissionGeneration) return;
             initialized = true;
             if (pendingPrimaryDoc !== void 0 && canApplyPrimaryDelta) {
               listener(wrapPrimaryDeltaDocument(this.collection, pendingPrimaryDoc));
@@ -12616,6 +13835,16 @@ var CtoxRxQuery = class _CtoxRxQuery {
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushEmit, 50);
         };
+        const unsubscribeLoader = this.collection.subscribeDemandLoaderChange(() => {
+          if (!active) return;
+          queryEmissionGeneration += 1;
+          pendingSuccess = {};
+          pendingPrimaryDoc = void 0;
+          queryDocumentsById.clear();
+          initialized = false;
+          listener(this.single ? null : []);
+          flushEmit();
+        });
         flushEmit();
         const unsubscribe = this.collection.observe(emit);
         return {
@@ -12626,6 +13855,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
               pendingTimer = null;
             }
             unsubscribe();
+            unsubscribeLoader();
             registry.subscriptionEnded(this.collection.name);
           }
         };
@@ -12669,9 +13899,32 @@ var CtoxRxQuery = class _CtoxRxQuery {
   async exec() {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
-    if (this.collection.demandLoader) {
-      const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : void 0;
-      docs = await this.collection.demandLoader.resolveQuery(this.query, demandOptions);
+    const demandLoader = this.collection.demandLoader;
+    if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision)) {
+      const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : {};
+      demandOptions.signal = this.signal;
+      docs = await demandLoader.resolveQuery(this.query, demandOptions);
+    } else if (demandLoader) {
+      const windowLimit = this.single && !Number.isFinite(Number(this.query.limit)) ? 1 : Math.min(
+        DEFAULT_WINDOW_LIMIT,
+        Math.max(1, Math.floor(Number(this.query.limit) || DEFAULT_WINDOW_LIMIT))
+      );
+      const windowed = { ...this.query, limit: windowLimit };
+      docs = typeof this.collection.storageCollection.queryDocuments === "function" ? await this.collection.storageCollection.queryDocuments(windowed, {
+        matchesSelector,
+        sortDocuments
+      }) : sortDocuments(
+        (await this.collection.storageCollection.allDocuments()).filter((doc) => matchesSelector(doc, windowed.selector)),
+        windowed.sort
+      ).slice(Math.max(0, Number(windowed.skip) || 0)).slice(0, windowLimit);
+    } else if (isControlPlaneStatusCollection(this.collection.name)) {
+      if (this.query.requireRevision) {
+        throw Object.assign(new Error("QUERY_GENERATION_REQUIRED: strict demand read has no loader"), {
+          code: "QUERY_GENERATION_REQUIRED",
+          retryable: false
+        });
+      }
+      docs = [];
     } else if (typeof this.collection.storageCollection.queryDocuments === "function") {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {
         matchesSelector,
@@ -12687,6 +13940,16 @@ var CtoxRxQuery = class _CtoxRxQuery {
       if (Number.isFinite(this.query.limit)) {
         docs = docs.slice(0, this.query.limit);
       }
+    }
+    if (isControlPlaneStatusCollection(this.collection.name) && demandLoader !== this.collection.demandLoader) {
+      if (this.query.requireRevision) {
+        throw Object.assign(new Error("QUERY_CANCELLED: generation-replaced"), {
+          code: "QUERY_CANCELLED",
+          retryable: false,
+          generationChanged: true
+        });
+      }
+      docs = [];
     }
     const wrapped = docs.map((doc) => new CtoxRxDocument(this.collection, doc));
     return this.single ? wrapped[0] || null : wrapped;
@@ -13216,6 +14479,7 @@ export {
   canonicalQueryJson,
   canonicalizeQueryInput,
   clearCollectionSyncProfiles,
+  clearHybridLogicalClockTimeAnchor,
   compareHybridLogicalClocks,
   correctedHybridLogicalClockNowMs,
   createActiveCollectionRegistry,
@@ -13229,6 +14493,7 @@ export {
   createMultiTabSyncCoordinator,
   createPresenceRegistry,
   createQueryDemandLoader,
+  createRowsDemandLoader,
   createRxDatabase,
   createSidecarWithMemoryBackend,
   createV1_5StatusState,
@@ -13262,6 +14527,7 @@ export {
   recoveryJournalTestInternals,
   registerCollectionSyncProfile,
   remoteSupportsQueryFetch,
+  remoteSupportsRowsFetch,
   removeRxDatabase,
   replicateWebRTC,
   replicationWebRtcTestInternals,
@@ -13269,6 +14535,7 @@ export {
   schemaHash,
   schemaHashSource,
   setHybridLogicalClockTimeAnchor,
+  setHybridLogicalClockTimeAnchorFromRoundTrip,
   setV15LogSink,
   sha256Hex,
   sha256Json,

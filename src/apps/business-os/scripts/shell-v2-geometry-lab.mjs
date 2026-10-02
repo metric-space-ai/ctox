@@ -79,6 +79,20 @@ function labHtml(app, width = WIDTH) {
     <div class="shell-window-v2-icon"><img alt="" src="/${app.base}/${app.id}/icon.svg" onerror="this.remove()"></div>
     <header class="shell-window-header" data-window-header></header>
     <div class="shell-window-controls">
+      <div class="shell-window-layout-control">
+        <button class="shell-window-control shell-window-control--layout" data-window-control="layout" data-window-layout-control="toggle" aria-label="Fensteranordnung" aria-haspopup="menu" aria-expanded="false">
+          <span class="shell-window-layout-glyph shell-window-layout-glyph--free" aria-hidden="true"></span>
+        </button>
+        <div class="shell-window-layout-menu" data-window-layout-menu role="menu" hidden>
+          <button type="button" data-window-layout-control="free" role="menuitem" aria-label="Freies Fenster"><span class="shell-window-layout-glyph shell-window-layout-glyph--free" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="maximize" role="menuitem" aria-label="Maximieren"><span class="shell-window-layout-glyph shell-window-layout-glyph--maximize" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="minimize" role="menuitem" aria-label="Minimieren"><span class="shell-window-layout-glyph shell-window-layout-glyph--minimize" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="left" role="menuitem" aria-label="Links anheften"><span class="shell-window-layout-glyph shell-window-layout-glyph--left" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="right" role="menuitem" aria-label="Rechts anheften"><span class="shell-window-layout-glyph shell-window-layout-glyph--right" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="top" role="menuitem" aria-label="Oben anheften"><span class="shell-window-layout-glyph shell-window-layout-glyph--top" aria-hidden="true"></span></button>
+          <button type="button" data-window-layout-control="bottom" role="menuitem" aria-label="Unten anheften"><span class="shell-window-layout-glyph shell-window-layout-glyph--bottom" aria-hidden="true"></span></button>
+        </div>
+      </div>
       <button class="shell-window-control shell-window-control--close" aria-label="Schliessen">×</button>
     </div>
     <div class="shell-window-content">

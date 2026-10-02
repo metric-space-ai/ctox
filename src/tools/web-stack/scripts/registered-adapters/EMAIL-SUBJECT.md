@@ -1,5 +1,11 @@
 # Email validation result identity
 
+These are preserved September 13 source baselines, not the current THESEN
+registered revisions. In particular, later MailTester catch-all protections
+must be retained. Do not replace a newer runtime script with this baseline;
+compare `show-latest` and carry the subject guard into that current script
+before any separately validated registration. This PR does not activate them.
+
 These standalone scripts preserve the live THESEN provider workflows while
 adding an explicit, provider-evidenced `subject_email` to each accepted
 `person_email_validation` record. The research consumer must bind that subject

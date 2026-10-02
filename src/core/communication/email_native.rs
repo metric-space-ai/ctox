@@ -41,6 +41,8 @@ const DEFAULT_GRAPH_BASE_URL: &str = "https://graph.microsoft.com/v1.0";
 const DEFAULT_GRAPH_USER: &str = "me";
 const DEFAULT_EWS_VERSION: &str = "Exchange2013";
 const DEFAULT_EWS_AUTH_TYPE: &str = "basic";
+const EWS_GET_ITEM_BATCH_SIZE: usize = 20;
+const EWS_MAX_FOLDER_ITEMS: usize = 100;
 const DEFAULT_ACTIVE_SYNC_PATH: &str = "Microsoft-Server-ActiveSync";
 const DEFAULT_ACTIVE_SYNC_DEVICE_TYPE: &str = "CodexCLI";
 const DEFAULT_ACTIVE_SYNC_PROTOCOL_VERSION: &str = "14.1";
@@ -163,8 +165,37 @@ pub(crate) fn send(
     runtime: &BTreeMap<String, String>,
     request: &EmailSendCommandRequest<'_>,
 ) -> Result<Value> {
-    let options = send_options_from_request(root, runtime, request)?;
+    let runtime = personal_account_send_runtime(root, runtime, request.sender_email);
+    let options = send_options_from_request(root, &runtime, request)?;
     execute_send(&options, request)
+}
+
+/// A send from a personal mailbox (Mail app account, e.g. an Exchange/OWA box)
+/// must log in with THAT account's server, user and secret. Before this, every
+/// send used the instance credentials (CTO_EMAIL_*) and only the From address
+/// changed, so a personal sender was rejected by its own server.
+fn personal_account_send_runtime(
+    root: &Path,
+    runtime: &BTreeMap<String, String>,
+    sender_email: &str,
+) -> BTreeMap<String, String> {
+    let sender = sender_email.trim().to_ascii_lowercase();
+    let instance = setting(runtime, "CTO_EMAIL_ADDRESS").to_ascii_lowercase();
+    if sender.is_empty() || sender == instance {
+        return runtime.clone();
+    }
+    let Some(account) = super::email_accounts::load_accounts(root)
+        .unwrap_or_default()
+        .into_iter()
+        .find(|account| account.address.trim().eq_ignore_ascii_case(&sender))
+    else {
+        return runtime.clone();
+    };
+    let mut personal = runtime.clone();
+    personal.extend(super::email_accounts::account_runtime_overrides(
+        root, &account,
+    ));
+    personal
 }
 
 pub(crate) fn test(
@@ -181,15 +212,21 @@ pub(crate) fn service_sync(
     settings: &BTreeMap<String, String>,
 ) -> Result<Option<Value>> {
     // Instanz-Konto (CTO_EMAIL_*) plus persönliche Konten aus der Mail-App.
-    let instance = service_sync_single(root, settings)?;
-    let accounts = super::email_accounts::load_accounts(root).unwrap_or_default();
+    let instance = service_sync_single(root, settings);
+    let accounts = super::email_accounts::load_accounts(root)?;
     if accounts.is_empty() {
-        return Ok(instance);
+        return instance;
     }
     let instance_address = setting(settings, "CTO_EMAIL_ADDRESS").to_ascii_lowercase();
     let mut results = Vec::new();
-    if let Some(value) = instance {
-        results.push(json!({ "account": instance_address, "scope": "instance", "result": value }));
+    match instance {
+        Ok(Some(value)) => results.push(json!({
+            "account": instance_address, "scope": "instance", "result": value
+        })),
+        Ok(None) => {}
+        Err(error) => results.push(json!({
+            "account": instance_address, "scope": "instance", "error": error.to_string()
+        })),
     }
     for account in accounts {
         if account.address == instance_address {
@@ -205,6 +242,13 @@ pub(crate) fn service_sync(
             }
             Ok(None) => json!({ "account": account.address, "scope": "personal", "skipped": true }),
             Err(error) => {
+                // Without this line a rejected mailbox (EWS 401) failed silently
+                // every cycle; nothing in the journal said why no mail arrived.
+                eprintln!(
+                    "[email] personal account sync failed account={} error={}",
+                    account.address,
+                    error.to_string().chars().take(300).collect::<String>()
+                );
                 json!({ "account": account.address, "scope": "personal", "error": error.to_string() })
             }
         };
@@ -216,13 +260,40 @@ pub(crate) fn service_sync(
     Ok(Some(json!({ "accounts": results })))
 }
 
+/// Fetch only the persisted account selected by the operator. Do not first
+/// synchronize the instance account or inherit its credentials/endpoints.
+pub(crate) fn sync_registered_account(root: &Path, address: &str, limit: usize) -> Result<Value> {
+    let settings = registered_account_settings(root, address, limit)?;
+    service_sync_single(root, &settings)?.context("registered email account has no address")
+}
+
+fn registered_account_settings(
+    root: &Path,
+    address: &str,
+    limit: usize,
+) -> Result<BTreeMap<String, String>> {
+    anyhow::ensure!(
+        (1..=100).contains(&limit),
+        "email sync limit must be 1..100"
+    );
+    let address = super::email_accounts::normalize_address(address);
+    let account = super::email_accounts::load_accounts(root)?
+        .into_iter()
+        .find(|account| account.address == address)
+        .context("registered email account not found")?;
+    let mut settings = super::email_accounts::account_runtime_overrides(root, &account);
+    settings.insert("CTO_EMAIL_FOLDER".into(), "INBOX".into());
+    settings.insert("CTO_EMAIL_LIMIT".into(), limit.to_string());
+    Ok(settings)
+}
+
 fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Result<Option<Value>> {
     let email = setting(settings, "CTO_EMAIL_ADDRESS");
     if email.is_empty() {
         return Ok(None);
     }
     let db_path = root.join("runtime/ctox.sqlite3");
-    let mut args = vec!["sync".to_string(), "--email".to_string(), email];
+    let mut args = vec!["sync".to_string(), "--email".to_string(), email.clone()];
     if let Some(provider) = settings
         .get("CTO_EMAIL_PROVIDER")
         .map(|value| value.trim())
@@ -277,7 +348,51 @@ fn service_sync_single(root: &Path, settings: &BTreeMap<String, String>) -> Resu
         passthrough_args: &args,
         skip_flags: &["--db", "--channel"],
     };
-    sync(root, &runtime, &request).map(Some)
+    let mut inbox = sync(root, &runtime, &request)?;
+    // Exchange exposes Sent Items as a separate folder. Synchronizing only
+    // INBOX left a personal mailbox with no sent history in the Mail app.
+    if should_sync_sent_folder(settings) {
+        let mut sent_args = args;
+        sent_args.push("--folder".to_string());
+        sent_args.push("sent".to_string());
+        let sent_request = AdapterSyncCommandRequest {
+            db_path: db_path.as_path(),
+            passthrough_args: &sent_args,
+            skip_flags: &["--db", "--channel"],
+        };
+        match sync(root, &runtime, &sent_request) {
+            Ok(sent) => {
+                if let Some(result) = inbox.as_object_mut() {
+                    result.insert("sentSync".to_string(), sent);
+                }
+            }
+            Err(error) => {
+                // Keep the successful Inbox pass visible even if Sent Items
+                // times out or is denied. The failed folder has its own sync
+                // run and an explicit partial result for operator diagnosis.
+                let detail = error.to_string();
+                eprintln!(
+                    "[email] sent folder sync failed account={} error={}",
+                    email, detail
+                );
+                if let Some(result) = inbox.as_object_mut() {
+                    result.insert("partial".to_string(), Value::Bool(true));
+                    result.insert(
+                        "sentSync".to_string(),
+                        json!({"ok": false, "error": detail}),
+                    );
+                }
+            }
+        }
+    }
+    Ok(Some(inbox))
+}
+
+fn should_sync_sent_folder(settings: &BTreeMap<String, String>) -> bool {
+    let provider = normalize_provider(&setting(settings, "CTO_EMAIL_PROVIDER"));
+    let folder = setting(settings, "CTO_EMAIL_FOLDER");
+    matches!(provider.as_str(), "ews" | "owa")
+        && (folder.is_empty() || folder.eq_ignore_ascii_case("inbox"))
 }
 
 fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -> Result<Value> {
@@ -308,6 +423,7 @@ fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -
                 request.cc,
                 request.subject,
                 request.body,
+                request.body_html,
                 &message_id,
                 request.thread_key,
                 request.attachments,
@@ -319,6 +435,7 @@ fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -
             GraphClient::from_options(options)?.send_mail(
                 request.subject,
                 request.body,
+                request.body_html,
                 request.to,
                 request.cc,
                 &[],
@@ -329,6 +446,7 @@ fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -
             EwsClient::from_options(options)?.send_mail(
                 request.subject,
                 request.body,
+                request.body_html,
                 request.to,
                 request.cc,
                 &[],
@@ -342,6 +460,7 @@ fn execute_send(options: &EmailOptions, request: &EmailSendCommandRequest<'_>) -
                 request.cc,
                 request.subject,
                 request.body,
+                request.body_html,
                 &message_id,
                 request.thread_key,
                 request.attachments,
@@ -467,6 +586,7 @@ fn execute_test(options: &EmailOptions) -> Result<Value> {
                 &[],
                 &subject,
                 &body,
+                None,
                 &message_id,
                 "",
                 &[],
@@ -534,17 +654,45 @@ fn execute_test(options: &EmailOptions) -> Result<Value> {
     }))
 }
 
+fn sync_account_profile(
+    conn: &Connection,
+    account_key: &str,
+    options: &EmailOptions,
+) -> Result<Value> {
+    let existing: Option<String> = conn
+        .query_row(
+            "SELECT profile_json FROM communication_accounts WHERE account_key = ?1",
+            [account_key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let mut profile = match existing {
+        Some(raw) => {
+            serde_json::from_str::<Value>(&raw).context("invalid email account profile")?
+        }
+        None => json!({}),
+    };
+    let target = profile
+        .as_object_mut()
+        .context("email account profile must be an object")?;
+    if let Value::Object(connection) = build_profile_json(options) {
+        target.extend(connection);
+    }
+    Ok(profile)
+}
+
 fn execute_sync(options: &EmailOptions) -> Result<Value> {
     require_provider_credentials(options)?;
     let mut conn = open_channel_db(&options.db_path)?;
     let account_key = account_key_from_email(&options.email);
+    let profile = sync_account_profile(&conn, &account_key, options)?;
     ensure_account(
         &mut conn,
         &account_key,
         "email",
         &options.email,
         &options.provider,
-        build_profile_json(options),
+        profile,
     )?;
     let started_at = now_iso_string();
     let mut fetched_count = 0i64;
@@ -574,9 +722,14 @@ fn execute_sync(options: &EmailOptions) -> Result<Value> {
                     let sender_address = extract_address(&parsed.from_header);
                     let sender_display = extract_display_name(&parsed.from_header)
                         .unwrap_or_else(|| sender_address.clone());
-                    let direction = synced_message_direction(&sender_address, &options.email);
-                    let thread_key =
+                    let direction = synced_message_direction_in_folder(
+                        &options.folder,
+                        &sender_address,
+                        &options.email,
+                    );
+                    let provider_thread_key =
                         thread_key_from_email(&parsed, &format!("{account_key}::{uid}"));
+                    let thread_key = account_thread_key(&conn, &account_key, &provider_thread_key)?;
                     let observed_at = now_iso_string();
                     let raw_payload_ref = write_raw_payload(&options.raw_dir, &uid, &fetched.raw)?;
                     let technical_self_test = is_ctox_mail_self_test(
@@ -670,8 +823,9 @@ fn execute_sync(options: &EmailOptions) -> Result<Value> {
                 )?;
                 fetched_count = items.len() as i64;
                 for item in items {
-                    store_provider_message(&mut conn, options, &account_key, item)?;
-                    stored_count += 1;
+                    if store_provider_message(&mut conn, options, &account_key, item)? {
+                        stored_count += 1;
+                    }
                 }
             }
             "activesync" => {
@@ -737,6 +891,41 @@ fn generated_sync_run_key(account_key: &str, folder: &str, started_at: &str) -> 
     )
 }
 
+// Existing installations have raw provider conversation IDs as thread keys.
+// Keep the incumbent account's key stable, but namespace a second mailbox
+// when a provider reuses the same conversation or RFC Message-ID. This avoids
+// rewriting already projected thread IDs or losing their route references.
+fn account_thread_key(
+    conn: &Connection,
+    account_key: &str,
+    provider_thread_key: &str,
+) -> Result<String> {
+    let scoped = format!(
+        "mail-account:{}:{}:{}",
+        account_key.len(),
+        account_key,
+        provider_thread_key
+    );
+    let already_scoped: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM communication_messages WHERE thread_key = ?1 AND account_key = ?2)",
+        rusqlite::params![scoped, account_key],
+        |row| row.get(0),
+    )?;
+    if already_scoped != 0 {
+        return Ok(scoped);
+    }
+    let used_by_another_account: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM communication_messages WHERE thread_key = ?1 AND account_key <> ?2)",
+        rusqlite::params![provider_thread_key, account_key],
+        |row| row.get(0),
+    )?;
+    Ok(if used_by_another_account != 0 {
+        scoped
+    } else {
+        provider_thread_key.to_string()
+    })
+}
+
 fn store_provider_message(
     conn: &mut Connection,
     options: &EmailOptions,
@@ -745,10 +934,41 @@ fn store_provider_message(
 ) -> Result<bool> {
     let message_key = message_key_from_remote(account_key, &item.folder_hint, &item.remote_id);
     if known_communication_message(conn, &message_key)? {
+        // Older EWS polls persisted envelopes without bodies. Enrich those rows
+        // in place rather than replaying the upsert/refresh path, which would
+        // overwrite read state, routing metadata and thread customization.
+        if matches!(options.provider.as_str(), "ews" | "owa")
+            && (!item.body_text.is_empty() || !item.body_html.is_empty())
+        {
+            let enriched = conn.execute(
+                r#"UPDATE communication_messages
+                   SET body_text = ?1, body_html = ?2,
+                       preview = CASE WHEN preview = '' OR preview = subject
+                                      THEN ?3 ELSE preview END
+                   WHERE message_key = ?4 AND channel = 'email'
+                     AND account_key = ?5 AND remote_id = ?6 AND folder_hint = ?7
+                     AND body_text = '' AND body_html = ''"#,
+                rusqlite::params![
+                    item.body_text,
+                    item.body_html,
+                    item.preview,
+                    message_key,
+                    account_key,
+                    item.remote_id,
+                    item.folder_hint,
+                ],
+            )? > 0;
+            reconcile_delayed_ews_sent_copy(conn, options, account_key, &item)?;
+            return Ok(enriched);
+        }
+        reconcile_delayed_ews_sent_copy(conn, options, account_key, &item)?;
         return Ok(false);
     }
+
+    let thread_key = account_thread_key(conn, account_key, &item.thread_key)?;
     let observed_at = now_iso_string();
-    let direction = synced_message_direction(&item.sender_address, &options.email);
+    let direction =
+        synced_message_direction_in_folder(&item.folder_hint, &item.sender_address, &options.email);
     let raw_payload_ref = provider_attachment_refs(&item.metadata).join("\n");
     upsert_communication_message(
         conn,
@@ -756,7 +976,7 @@ fn store_provider_message(
             message_key: &message_key,
             channel: "email",
             account_key,
-            thread_key: &item.thread_key,
+            thread_key: &thread_key,
             remote_id: &item.remote_id,
             direction,
             folder_hint: &item.folder_hint,
@@ -779,8 +999,133 @@ fn store_provider_message(
             metadata_json: &serde_json::to_string(&item.metadata)?,
         },
     )?;
-    refresh_thread(conn, &item.thread_key)?;
+    reconcile_delayed_ews_sent_copy(conn, options, account_key, &item)?;
+    refresh_thread(conn, &thread_key)?;
     Ok(true)
+}
+
+// EWS assigns its own InternetMessageId, so the local id written by send cannot
+// join a later Sent-folder poll. Confirm only a unique, exact account/content/
+// addressing/time match. This updates durable send evidence; it never sends.
+fn reconcile_delayed_ews_sent_copy(
+    conn: &Connection,
+    options: &EmailOptions,
+    account_key: &str,
+    item: &MailboxMessage,
+) -> Result<()> {
+    if !matches!(options.provider.as_str(), "ews" | "owa")
+        || !item.folder_hint.eq_ignore_ascii_case("sent")
+        || item.body_text.trim().is_empty()
+    {
+        return Ok(());
+    }
+    let Some(sent_at) = chrono::DateTime::parse_from_rfc3339(&item.external_created_at)
+        .ok()
+        .map(|time| time.timestamp())
+    else {
+        return Ok(());
+    };
+    let internet_message_id = item
+        .metadata
+        .get("internetMessageId")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    // One Exchange Sent item is evidence for at most one durable send. A later
+    // identical send must not consume an older item's repeat poll.
+    let already_consumed: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM communication_messages \
+         WHERE channel = 'email' AND account_key = ?1 AND direction = 'outbound' \
+           AND folder_hint = 'sent' AND status = 'confirmed' \
+           AND remote_id LIKE 'pending-send-%' \
+           AND (json_extract(metadata_json, '$.sentCopyConfirmation.remoteId') = ?2 \
+             OR json_extract(metadata_json, '$.adapterResult.delivery.remoteId') = ?2 \
+             OR (?3 <> '' AND json_extract(metadata_json, '$.sentCopyConfirmation.internetMessageId') = ?3)))",
+        rusqlite::params![account_key, item.remote_id, internet_message_id],
+        |row| row.get(0),
+    )?;
+    if already_consumed {
+        return Ok(());
+    }
+    let normalize_addresses = |addresses: &[String]| -> BTreeSet<String> {
+        addresses
+            .iter()
+            .map(|address| address.trim().to_lowercase())
+            .collect()
+    };
+    let normalize_body = |body: &str| body.replace("\r\n", "\n").trim().to_string();
+    let mut statement = conn.prepare(
+        "SELECT message_key, sender_address, recipient_addresses_json, cc_addresses_json, \
+                body_text, external_created_at, metadata_json \
+         FROM communication_messages \
+         WHERE channel = 'email' AND account_key = ?1 AND direction = 'outbound' \
+           AND folder_hint = 'sent' AND status = 'accepted' \
+           AND remote_id LIKE 'pending-send-%' AND subject = ?2",
+    )?;
+    let candidates = statement
+        .query_map(rusqlite::params![account_key, item.subject], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let matches = candidates
+        .into_iter()
+        .filter_map(
+            |(key, sender, to_json, cc_json, body, created_at, metadata_json)| {
+                let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)
+                    .ok()?
+                    .timestamp();
+                let to = serde_json::from_str::<Vec<String>>(&to_json).ok()?;
+                let cc = serde_json::from_str::<Vec<String>>(&cc_json).ok()?;
+                let metadata = serde_json::from_str::<Value>(&metadata_json).ok()?;
+                let adapter = metadata.get("adapterResult")?;
+                if metadata.get("source").and_then(Value::as_str) != Some("ctox-send-durability")
+                    || adapter.get("ok").and_then(Value::as_bool) != Some(true)
+                    || adapter.get("status").and_then(Value::as_str) != Some("accepted")
+                    || !sender
+                        .trim()
+                        .eq_ignore_ascii_case(item.sender_address.trim())
+                    || normalize_addresses(&to) != normalize_addresses(&item.recipient_addresses)
+                    || normalize_addresses(&cc) != normalize_addresses(&item.cc_addresses)
+                    || normalize_body(&body) != normalize_body(&item.body_text)
+                    || !(-60..=1800).contains(&(sent_at - created_at))
+                {
+                    return None;
+                }
+                Some((key, metadata))
+            },
+        )
+        .collect::<Vec<_>>();
+    // Repeated identical sends cannot be paired reliably without a provider id.
+    if matches.len() != 1 {
+        return Ok(());
+    }
+    let (message_key, mut metadata) = matches.into_iter().next().expect("one match");
+    metadata["sentCopyConfirmation"] = json!({
+        "provider": options.provider,
+        "remoteId": item.remote_id,
+        "internetMessageId": internet_message_id,
+        "sentAt": item.external_created_at,
+    });
+    conn.execute(
+        "UPDATE communication_messages SET status = 'confirmed', metadata_json = ?2, \
+                observed_at = ?3 WHERE message_key = ?1 AND account_key = ?4 \
+                AND status = 'accepted' AND folder_hint = 'sent'",
+        rusqlite::params![
+            message_key,
+            serde_json::to_string(&metadata)?,
+            now_iso_string(),
+            account_key
+        ],
+    )?;
+    Ok(())
 }
 
 fn provider_attachment_refs(metadata: &Value) -> Vec<String> {
@@ -1648,6 +1993,7 @@ fn build_smtp_raw_message(
     cc: &[String],
     subject: &str,
     body: &str,
+    body_html: Option<&str>,
     message_id: &str,
     thread_key: &str,
     attachments: &[String],
@@ -1664,6 +2010,26 @@ fn build_smtp_raw_message(
     }
     lines.push(format!("Date: {}", smtp_date_header()));
     lines.push("MIME-Version: 1.0".to_string());
+    if let (true, Some(html)) = (attachments.is_empty(), body_html) {
+        // Text and HTML of the same message; clients show the richest part.
+        let boundary = format!("ctox-alt-{}", stable_digest(message_id));
+        lines.push(format!(
+            "Content-Type: multipart/alternative; boundary=\"{boundary}\""
+        ));
+        lines.push(String::new());
+        for (mime, content) in [("text/plain", body), ("text/html", html)] {
+            lines.push(format!("--{boundary}"));
+            lines.push(format!("Content-Type: {mime}; charset=utf-8"));
+            lines.push("Content-Transfer-Encoding: base64".to_string());
+            lines.push(String::new());
+            for chunk in BASE64_STANDARD.encode(content).as_bytes().chunks(76) {
+                lines.push(String::from_utf8_lossy(chunk).to_string());
+            }
+        }
+        lines.push(format!("--{boundary}--"));
+        lines.push(String::new());
+        return Ok(lines.join("\r\n"));
+    }
     if attachments.is_empty() {
         lines.push("Content-Type: text/plain; charset=utf-8".to_string());
         lines.push("Content-Transfer-Encoding: 8bit".to_string());
@@ -1809,6 +2175,18 @@ fn synced_message_direction(sender_address: &str, account_email: &str) -> &'stat
         "outbound"
     } else {
         "inbound"
+    }
+}
+
+fn synced_message_direction_in_folder(
+    folder_hint: &str,
+    sender_address: &str,
+    account_email: &str,
+) -> &'static str {
+    match folder_hint.trim().to_ascii_lowercase().as_str() {
+        "sent" | "sentitems" => "outbound",
+        "inbox" | "incoming" => "inbound",
+        _ => synced_message_direction(sender_address, account_email),
     }
 }
 
@@ -2650,6 +3028,7 @@ impl GraphClient {
         &self,
         subject: &str,
         body: &str,
+        body_html: Option<&str>,
         to: &[String],
         cc: &[String],
         bcc: &[String],
@@ -2682,7 +3061,10 @@ impl GraphClient {
             .collect::<Result<Vec<_>>>()?;
         let mut message = json!({
                 "subject": subject,
-                "body": {"contentType": "Text", "content": body},
+                "body": match body_html {
+                    Some(html) => json!({"contentType": "HTML", "content": html}),
+                    None => json!({"contentType": "Text", "content": body}),
+                },
                 "toRecipients": mk(to),
                 "ccRecipients": mk(cc),
                 "bccRecipients": mk(bcc),
@@ -2858,7 +3240,7 @@ impl EwsClient {
         Ok(headers)
     }
 
-    fn request(&self, op_name: &str, op_attributes: &str, body: &str) -> Result<Document<'static>> {
+    fn request(&self, op_name: &str, op_attributes: &str, body: &str) -> Result<String> {
         let envelope = format!(
             r#"<?xml version="1.0" encoding="utf-8"?>
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages" xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">
@@ -2881,10 +3263,9 @@ impl EwsClient {
         if !(200..300).contains(&response.status) && !body.trim_start().starts_with('<') {
             bail!("EWS HTTP {}: {}", response.status, body);
         }
-        let leaked: &'static str = Box::leak(body.into_boxed_str());
-        let document = Document::parse(leaked).context("failed to parse EWS XML response")?;
+        let document = Document::parse(&body).context("failed to parse EWS XML response")?;
         assert_ews_success(response.status, &document)?;
-        Ok(document)
+        Ok(body)
     }
 
     fn list_folder(
@@ -2893,41 +3274,16 @@ impl EwsClient {
         top: usize,
         query: Option<&str>,
     ) -> Result<Vec<MailboxMessage>> {
-        let parent_folder = distinguished_folder_xml(folder_id);
-        let query_xml = query
-            .filter(|value| !value.trim().is_empty())
-            .map(|value| format!("<m:QueryString>{}</m:QueryString>", xml_escape(value)))
-            .unwrap_or_default();
-        let body = format!(
-            r#"<m:ItemShape>
-<t:BaseShape>IdOnly</t:BaseShape>
-<t:AdditionalProperties>
-<t:FieldURI FieldURI="item:Subject"/>
-<t:FieldURI FieldURI="message:From"/>
-<t:FieldURI FieldURI="message:ToRecipients"/>
-<t:FieldURI FieldURI="message:CcRecipients"/>
-<t:FieldURI FieldURI="item:DateTimeReceived"/>
-<t:FieldURI FieldURI="message:IsRead"/>
-<t:FieldURI FieldURI="item:HasAttachments"/>
-<t:FieldURI FieldURI="item:ConversationId"/>
-</t:AdditionalProperties>
-</m:ItemShape>
-<m:ParentFolderIds>{}</m:ParentFolderIds>
-<m:IndexedPageItemView MaxEntriesReturned="{}" Offset="0" BasePoint="Beginning"/>{}"#,
-            parent_folder, top, query_xml
-        );
-        let document = self.request("FindItem", r#" Traversal="Shallow""#, &body)?;
-        Ok(document
-            .descendants()
-            .filter(|node| node.is_element() && node.tag_name().name() == "Message")
-            .filter_map(|node| normalize_ews_mail_item(node, folder_id))
-            .collect())
+        list_ews_folder(folder_id, top, query, |operation, attributes, body| {
+            self.request(operation, attributes, body)
+        })
     }
 
     fn send_mail(
         &self,
         subject: &str,
         body: &str,
+        body_html: Option<&str>,
         to: &[String],
         cc: &[String],
         bcc: &[String],
@@ -2957,11 +3313,12 @@ impl EwsClient {
 <m:Items><t:Message>
 <t:ItemClass>IPM.Note</t:ItemClass>
 <t:Subject>{}</t:Subject>
-<t:Body BodyType="Text">{}</t:Body>{}{}{}{}
+<t:Body BodyType="{}">{}</t:Body>{}{}{}{}
 </t:Message></m:Items>"#,
             distinguished_folder_xml("sentitems"),
             xml_escape(subject),
-            xml_escape(body),
+            if body_html.is_some() { "HTML" } else { "Text" },
+            xml_escape(body_html.unwrap_or(body)),
             recipients("ToRecipients", to),
             recipients("CcRecipients", cc),
             recipients("BccRecipients", bcc),
@@ -2974,6 +3331,142 @@ impl EwsClient {
         )?;
         Ok(())
     }
+}
+
+// FindItem is discovery only: GetItem returns the full body. Best preserves the
+// stored text/HTML format. Keep each batch small, with no retries or partial poll
+// success; the caller must not persist envelope-only messages after a failure.
+// https://learn.microsoft.com/en-us/exchange/client-developer/web-service-reference/bodytype
+// https://learn.microsoft.com/en-us/exchange/client-developer/exchange-web-services/how-to-process-email-messages-in-batches-by-using-ews-in-exchange
+fn list_ews_folder(
+    folder_id: &str,
+    top: usize,
+    query: Option<&str>,
+    mut request: impl FnMut(&str, &str, &str) -> Result<String>,
+) -> Result<Vec<MailboxMessage>> {
+    if top == 0 {
+        return Ok(Vec::new());
+    }
+    if top > EWS_MAX_FOLDER_ITEMS {
+        bail!("EWS folder limit {top} exceeds bounded maximum {EWS_MAX_FOLDER_ITEMS}");
+    }
+    let query_xml = query
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("<m:QueryString>{}</m:QueryString>", xml_escape(value)))
+        .unwrap_or_default();
+    let body = format!(
+        r#"<m:ItemShape><t:BaseShape>IdOnly</t:BaseShape></m:ItemShape>
+<m:IndexedPageItemView MaxEntriesReturned="{top}" Offset="0" BasePoint="Beginning"/>
+<m:ParentFolderIds>{}</m:ParentFolderIds>{query_xml}"#,
+        distinguished_folder_xml(folder_id),
+    );
+    let xml = request("FindItem", r#" Traversal="Shallow""#, &body)?;
+    let document = Document::parse(&xml).context("failed to parse EWS FindItem response")?;
+    let responses = ews_response_messages(&document, "FindItemResponseMessage", 1)?;
+    let items = responses[0]
+        .children()
+        .find(|node| node.has_tag_name("RootFolder"))
+        .and_then(|node| node.children().find(|child| child.has_tag_name("Items")))
+        .context("EWS FindItem response is missing RootFolder/Items")?;
+    let mut ids = Vec::new();
+    let mut unique_ids = BTreeSet::new();
+    for node in items.children().filter(|node| node.has_tag_name("Message")) {
+        let id = node
+            .children()
+            .find(|child| child.has_tag_name("ItemId"))
+            .and_then(|child| child.attribute("Id"))
+            .filter(|id| !id.trim().is_empty())
+            .context("EWS FindItem message is missing ItemId")?;
+        if !unique_ids.insert(id) {
+            bail!("EWS FindItem returned a duplicate ItemId");
+        }
+        ids.push(id.to_string());
+        if ids.len() > top {
+            bail!("EWS FindItem returned more messages than requested");
+        }
+    }
+    let mut messages = Vec::with_capacity(ids.len());
+    for (batch_index, batch) in ids.chunks(EWS_GET_ITEM_BATCH_SIZE).enumerate() {
+        let item_ids = batch
+            .iter()
+            .map(|id| format!(r#"<t:ItemId Id="{}"/>"#, xml_escape(id)))
+            .collect::<String>();
+        // InReplyTo belongs to item:, not message:, in the EWS FieldURI schema.
+        let body = format!(
+            r#"<m:ItemShape>
+<t:BaseShape>IdOnly</t:BaseShape><t:BodyType>Best</t:BodyType>
+<t:AdditionalProperties>
+<t:FieldURI FieldURI="item:Body"/>
+<t:FieldURI FieldURI="item:Subject"/>
+<t:FieldURI FieldURI="message:From"/>
+<t:FieldURI FieldURI="message:ToRecipients"/>
+<t:FieldURI FieldURI="message:CcRecipients"/>
+<t:FieldURI FieldURI="item:DateTimeReceived"/>
+<t:FieldURI FieldURI="item:DateTimeSent"/>
+<t:FieldURI FieldURI="message:IsRead"/>
+<t:FieldURI FieldURI="item:HasAttachments"/>
+<t:FieldURI FieldURI="item:ConversationId"/>
+<t:FieldURI FieldURI="message:InternetMessageId"/>
+<t:FieldURI FieldURI="item:InReplyTo"/>
+<t:FieldURI FieldURI="message:References"/>
+</t:AdditionalProperties></m:ItemShape><m:ItemIds>{item_ids}</m:ItemIds>"#,
+        );
+        let hydrated = (|| -> Result<Vec<MailboxMessage>> {
+            let xml = request("GetItem", "", &body)?;
+            let document = Document::parse(&xml).context("failed to parse EWS GetItem response")?;
+            let responses =
+                ews_response_messages(&document, "GetItemResponseMessage", batch.len())?;
+            let mut by_id = BTreeMap::new();
+            for response in responses {
+                let items = response
+                    .children()
+                    .find(|node| node.has_tag_name("Items"))
+                    .context("EWS GetItem response is missing Items")?;
+                let mut items = items.children().filter(|node| node.is_element());
+                let node = items.next().context("EWS GetItem returned no message")?;
+                if !node.has_tag_name("Message") || items.next().is_some() {
+                    bail!("EWS GetItem must return exactly one Message per response");
+                }
+                let message = normalize_ews_mail_item(node, folder_id)?;
+                if !batch.contains(&message.remote_id) {
+                    bail!("EWS GetItem returned an unrequested ItemId");
+                }
+                if by_id.insert(message.remote_id.clone(), message).is_some() {
+                    bail!("EWS GetItem returned a duplicate ItemId");
+                }
+            }
+            batch
+                .iter()
+                .map(|id| {
+                    by_id
+                        .remove(id)
+                        .context("EWS GetItem omitted a requested ItemId")
+                })
+                .collect()
+        })()
+        .with_context(|| format!("EWS GetItem hydration batch {} failed", batch_index + 1))?;
+        messages.extend(hydrated);
+    }
+    Ok(messages)
+}
+
+fn ews_response_messages<'a, 'input>(
+    document: &'a Document<'input>,
+    name: &str,
+    expected: usize,
+) -> Result<Vec<roxmltree::Node<'a, 'input>>> {
+    assert_ews_success(200, document)?;
+    let responses = document
+        .descendants()
+        .filter(|node| node.has_tag_name(name))
+        .collect::<Vec<_>>();
+    if responses.len() != expected {
+        bail!(
+            "EWS {name}: expected {expected} responses, received {}",
+            responses.len()
+        );
+    }
+    Ok(responses)
 }
 
 fn build_ews_file_attachments_xml(paths: &[String]) -> Result<String> {
@@ -3007,20 +3500,16 @@ fn assert_ews_success(status: u16, document: &Document<'_>) -> Result<()> {
             descendant_text(fault, "faultstring").unwrap_or_else(|| "SOAP Fault".to_string());
         bail!("EWS SOAP Fault: {text}");
     }
-    for response_message in document.descendants().filter(|node| {
-        node.is_element()
-            && node
-                .tag_name()
-                .name()
-                .to_lowercase()
-                .contains("responsemessage")
-    }) {
+    for response_message in document
+        .descendants()
+        .filter(|node| node.is_element() && node.tag_name().name().ends_with("ResponseMessage"))
+    {
         let response_class = response_message
             .attribute("ResponseClass")
-            .unwrap_or("Success");
-        if response_class != "Success" {
-            let code = descendant_text(response_message, "ResponseCode")
-                .unwrap_or_else(|| "Error".to_string());
+            .unwrap_or("MissingResponseClass");
+        let code = descendant_text(response_message, "ResponseCode")
+            .unwrap_or_else(|| "MissingResponseCode".to_string());
+        if response_class != "Success" || code != "NoError" {
             let text = descendant_text(response_message, "MessageText")
                 .unwrap_or_else(|| "EWS error".to_string());
             bail!("EWS {response_class}: {code} - {text}");
@@ -3042,11 +3531,13 @@ fn distinguished_folder_xml(folder_id: &str) -> String {
 fn normalize_ews_mail_item(
     node: roxmltree::Node<'_, '_>,
     folder_id_fallback: &str,
-) -> Option<MailboxMessage> {
+) -> Result<MailboxMessage> {
     let remote_id = node
         .children()
         .find(|child| child.is_element() && child.tag_name().name() == "ItemId")
-        .and_then(|child| child.attribute("Id"))?
+        .and_then(|child| child.attribute("Id"))
+        .filter(|id| !id.trim().is_empty())
+        .context("EWS GetItem message is missing ItemId")?
         .to_string();
     let conversation_id = node
         .children()
@@ -3075,34 +3566,127 @@ fn normalize_ews_mail_item(
                 sender_address.clone()
             }
         });
-    Some(MailboxMessage {
+    let subject = descendant_text(node, "Subject").unwrap_or_else(|| "(ohne Betreff)".to_string());
+    let body = node
+        .children()
+        .find(|child| child.has_tag_name("Body"))
+        .context("EWS GetItem message is missing Body")?;
+    if body
+        .attribute("IsTruncated")
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+    {
+        bail!("EWS GetItem returned a truncated Body");
+    }
+    // roxmltree decodes XML entities and CDATA once. Preserve body whitespace;
+    // an explicitly empty Body is valid, unlike an omitted hydration property.
+    let content = body
+        .children()
+        .filter(|child| child.is_text())
+        .filter_map(|child| child.text())
+        .collect::<String>();
+    let (body_text, body_html) = match body.attribute("BodyType") {
+        Some("Text") => (content, String::new()),
+        Some("HTML") => (ews_html_body_text(&content), content),
+        _ => bail!("EWS GetItem Body has missing or unsupported BodyType"),
+    };
+    let received_at = descendant_text(node, "DateTimeReceived");
+    let sent_at = descendant_text(node, "DateTimeSent");
+    let external_created_at = if mailbox_folder_to_hint(folder_id_fallback) == "sent" {
+        sent_at.or(received_at)
+    } else {
+        received_at.or(sent_at)
+    }
+    .unwrap_or_else(now_iso_string);
+    let internet_message_id = descendant_text(node, "InternetMessageId").unwrap_or_default();
+    Ok(MailboxMessage {
         remote_id,
         thread_key: conversation_id.clone(),
         folder_hint: mailbox_folder_to_hint(folder_id_fallback),
-        subject: descendant_text(node, "Subject").unwrap_or_else(|| "(ohne Betreff)".to_string()),
+        subject: subject.clone(),
         sender_display,
         sender_address,
         recipient_addresses: descendant_mailbox_addresses(node, "ToRecipients"),
         cc_addresses: descendant_mailbox_addresses(node, "CcRecipients"),
-        body_text: String::new(),
-        body_html: String::new(),
-        preview: preview_text(
-            "",
-            &descendant_text(node, "Subject").unwrap_or_else(|| "(ohne Betreff)".to_string()),
-        ),
+        preview: preview_text(&body_text, &subject),
+        body_text,
+        body_html,
         seen: descendant_text(node, "IsRead")
             .map(|value| value.to_lowercase() != "false")
             .unwrap_or(true),
         has_attachments: descendant_text(node, "HasAttachments")
             .map(|value| value.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
-        external_created_at: descendant_text(node, "DateTimeReceived")
-            .unwrap_or_else(now_iso_string),
+        external_created_at,
         metadata: json!({
             "conversationId": conversation_id,
             "ewsFolderId": folder_id_fallback,
+            "internetMessageId": internet_message_id,
+            "messageId": internet_message_id,
+            "inReplyTo": descendant_text(node, "InReplyTo").unwrap_or_default(),
+            "references": descendant_text(node, "References").unwrap_or_default(),
         }),
     })
+}
+
+fn ews_html_body_text(input: &str) -> String {
+    // Parse markup before decoding its text: stripping tags after replacing
+    // &lt;/&gt; loses literal angle-bracket content from human replies.
+    let document = scraper::Html::parse_document(input);
+    let mut output = String::new();
+    // An explicit stack keeps deeply nested mail from growing the call stack.
+    let mut pending = vec![(document.tree.root(), false)];
+    while let Some((node, closing_block)) = pending.pop() {
+        if closing_block {
+            output.push(' ');
+            continue;
+        }
+        match node.value() {
+            scraper::Node::Text(text) => output.push_str(text),
+            scraper::Node::Element(element) => {
+                if matches!(element.name(), "head" | "style" | "script" | "template") {
+                    continue;
+                }
+                if matches!(
+                    element.name(),
+                    "address"
+                        | "article"
+                        | "aside"
+                        | "blockquote"
+                        | "br"
+                        | "div"
+                        | "dl"
+                        | "dt"
+                        | "dd"
+                        | "footer"
+                        | "h1"
+                        | "h2"
+                        | "h3"
+                        | "h4"
+                        | "h5"
+                        | "h6"
+                        | "header"
+                        | "hr"
+                        | "li"
+                        | "main"
+                        | "ol"
+                        | "p"
+                        | "pre"
+                        | "section"
+                        | "table"
+                        | "td"
+                        | "th"
+                        | "tr"
+                        | "ul"
+                ) {
+                    output.push(' ');
+                    pending.push((node, true));
+                }
+                pending.extend(node.children().rev().map(|child| (child, false)));
+            }
+            _ => pending.extend(node.children().rev().map(|child| (child, false))),
+        }
+    }
+    output.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn descendant_text(node: roxmltree::Node<'_, '_>, name: &str) -> Option<String> {
@@ -3940,14 +4524,176 @@ mod tests {
         acquire_graph_access_token, build_ews_file_attachments_xml, effective_graph_password,
         effective_graph_username, extract_address, imap_fetch_message_id_headers_command,
         imap_search_message_id_command, latest_imap_uids, latest_known_imap_uid,
-        parse_rfc822_headers, require_provider_credentials, synced_message_direction, EmailOptions,
-        LATEST_KNOWN_IMAP_UID_SQL,
+        parse_rfc822_headers, require_provider_credentials, synced_message_direction,
+        synced_message_direction_in_folder, EmailOptions, LATEST_KNOWN_IMAP_UID_SQL,
     };
     use crate::communication_store::{
         open_channel_db, upsert_communication_message, UpsertMessage,
     };
     use std::io::Write;
     use std::path::PathBuf;
+
+    #[test]
+    fn exchange_service_sync_adds_sent_only_for_inbox_poll() {
+        let mut settings = std::collections::BTreeMap::new();
+        settings.insert("CTO_EMAIL_PROVIDER".to_string(), "owa".to_string());
+        assert!(super::should_sync_sent_folder(&settings));
+        settings.insert("CTO_EMAIL_FOLDER".to_string(), "INBOX".to_string());
+        assert!(super::should_sync_sent_folder(&settings));
+        settings.insert("CTO_EMAIL_PROVIDER".to_string(), "exchange".to_string());
+        assert!(super::should_sync_sent_folder(&settings));
+        settings.insert("CTO_EMAIL_FOLDER".to_string(), "sent".to_string());
+        assert!(!super::should_sync_sent_folder(&settings));
+        settings.insert("CTO_EMAIL_PROVIDER".to_string(), "imap".to_string());
+        settings.insert("CTO_EMAIL_FOLDER".to_string(), "INBOX".to_string());
+        assert!(!super::should_sync_sent_folder(&settings));
+    }
+
+    #[test]
+    fn registered_exchange_account_builds_isolated_client_options() -> anyhow::Result<()> {
+        use crate::communication::email_accounts::{upsert_account, EmailAccountConfig};
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("runtime"))?;
+        let global = std::collections::BTreeMap::from([
+            ("CTO_EMAIL_ADDRESS".into(), "crew@example.test".into()),
+            ("CTO_EMAIL_PASSWORD".into(), "crew-fixture".into()),
+            (
+                "CTO_EMAIL_EWS_URL".into(),
+                "https://crew.example.test/EWS/Exchange.asmx".into(),
+            ),
+            ("CTO_EMAIL_EWS_USERNAME".into(), "DOMAIN\\crew".into()),
+            ("CTO_EMAIL_EWS_AUTH_TYPE".into(), "bearer".into()),
+            (
+                "CTO_EMAIL_EWS_BEARER_TOKEN".into(),
+                "crew-token-fixture".into(),
+            ),
+            ("CTO_EMAIL_FOLDER".into(), "sent".into()),
+        ]);
+        crate::inference::runtime_env::save_runtime_env_map(root, &global)?;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis() as i64;
+        crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+            root,
+            "lena-owner",
+            "Lena Owner",
+            "user",
+            now,
+        )?;
+        upsert_account(
+            root,
+            EmailAccountConfig {
+                address: "lena@example.test".into(),
+                provider: "owa".into(),
+                username: "DOMAIN\\lena".into(),
+                owa_url: "https://lena.example.test/owa/".into(),
+                owner_user_id: "lena-owner".into(),
+                ..Default::default()
+            },
+            Some("lena-fixture"),
+        )?;
+        let settings = super::registered_account_settings(root, "LENA@example.test", 3)?;
+        let runtime = super::runtime_from_settings(root, &settings);
+        let db_path = root.join("runtime/ctox.sqlite3");
+        let request = super::AdapterSyncCommandRequest {
+            db_path: &db_path,
+            passthrough_args: &[],
+            skip_flags: &[],
+        };
+        let options = super::sync_options_from_args(root, &runtime, &request)?;
+        assert_eq!(options.email, "lena@example.test");
+        assert_eq!(options.folder, "INBOX");
+        assert_eq!(options.limit, 3);
+        let client = super::EwsClient::from_options(&options)?;
+        assert_eq!(client.url, "https://lena.example.test/EWS/Exchange.asmx");
+        assert_eq!(client.username, "DOMAIN\\lena");
+        assert_eq!(client.password, "lena-fixture");
+        assert_eq!(client.auth_type, "basic");
+        assert!(client.bearer_token.is_empty());
+        assert!(super::registered_account_settings(root, "missing@example.test", 3).is_err());
+        assert!(super::registered_account_settings(root, "lena@example.test", 0).is_err());
+        assert!(super::registered_account_settings(root, "lena@example.test", 101).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn instance_failure_does_not_skip_registered_accounts() -> anyhow::Result<()> {
+        use crate::communication::email_accounts::{upsert_account, EmailAccountConfig};
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("runtime"))?;
+        upsert_account(
+            root,
+            EmailAccountConfig {
+                address: "lena@example.test".into(),
+                provider: "owa".into(),
+                owa_url: "https://lena.example.test/owa/".into(),
+                ..Default::default()
+            },
+            None,
+        )?;
+        // Both lack credentials and fail before any network access. The
+        // instance error must not prevent the personal account's own attempt.
+        let settings = std::collections::BTreeMap::from([
+            ("CTO_EMAIL_ADDRESS".into(), "crew@example.test".into()),
+            ("CTO_EMAIL_PROVIDER".into(), "owa".into()),
+            ("CTO_EMAIL_PASSWORD".into(), String::new()),
+        ]);
+        let result = super::service_sync(root, &settings)?.unwrap();
+        let accounts = result["accounts"].as_array().unwrap();
+        assert_eq!(accounts.len(), 2);
+        assert_eq!(accounts[0]["account"], "crew@example.test");
+        assert!(accounts[0]["error"].is_string());
+        assert_eq!(accounts[1]["account"], "lena@example.test");
+        assert!(accounts[1]["error"].is_string());
+        Ok(())
+    }
+
+    #[test]
+    fn sync_keeps_account_assignment_when_connection_fails() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut options = empty_options();
+        options.db_path = dir.path().join("channels.sqlite3");
+        options.raw_dir = dir.path().join("raw");
+        options.email = "lena@example.test".into();
+        options.provider = "owa".into();
+        options.password = "fixture-password".into();
+        options.ews_auth_type = "basic".into();
+        options.limit = 1;
+        // Invalid URL fails inside the transport without contacting a server,
+        // after execute_sync has refreshed the account connection profile.
+        options.ews_url = "not-a-url".into();
+        let mut conn = open_channel_db(&options.db_path)?;
+        super::ensure_account(
+            &mut conn,
+            "email:lena@example.test",
+            "email",
+            &options.email,
+            "owa",
+            serde_json::json!({
+                "ownerUserId": "lena-owner",
+                "shared_user_ids": ["delegate"],
+                "displayName": "Lena",
+                "ewsUrl": "old-endpoint"
+            }),
+        )?;
+        drop(conn);
+        assert!(super::execute_sync(&options).is_err());
+        let conn = open_channel_db(&options.db_path)?;
+        let raw: String = conn.query_row(
+            "SELECT profile_json FROM communication_accounts WHERE account_key = ?1",
+            ["email:lena@example.test"],
+            |row| row.get(0),
+        )?;
+        let profile: serde_json::Value = serde_json::from_str(&raw)?;
+        assert_eq!(profile["ownerUserId"], "lena-owner");
+        assert_eq!(profile["shared_user_ids"], serde_json::json!(["delegate"]));
+        assert_eq!(profile["displayName"], "Lena");
+        assert_eq!(profile["ewsUrl"], "not-a-url");
+        assert!(!raw.contains("fixture-password"));
+        Ok(())
+    }
 
     fn empty_options() -> EmailOptions {
         EmailOptions {
@@ -3996,6 +4742,304 @@ mod tests {
         options.graph_access_token = token.into();
         options
     }
+
+    #[test]
+    fn provider_conversation_is_isolated_between_email_accounts() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut conn = open_channel_db(&temp.path().join("ctox.sqlite3"))?;
+        let mut options = empty_options();
+        options.provider = "ews".into();
+        options.trust_level = "low".into();
+        let message = |remote_id: &str, sender: &str| super::MailboxMessage {
+            remote_id: remote_id.into(),
+            thread_key: "shared-provider-conversation".into(),
+            folder_hint: "inbox".into(),
+            subject: "Shared subject".into(),
+            sender_display: sender.into(),
+            sender_address: sender.into(),
+            recipient_addresses: vec![],
+            cc_addresses: vec![],
+            body_text: sender.into(),
+            body_html: String::new(),
+            preview: sender.into(),
+            seen: false,
+            has_attachments: false,
+            external_created_at: "2026-09-23T00:00:00Z".into(),
+            metadata: serde_json::json!({}),
+        };
+        options.email = "alice@example.test".into();
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:alice@example.test",
+            message("alice-remote", "alice-sender@example.test"),
+        )?);
+        options.email = "bob@example.test".into();
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:bob@example.test",
+            message("bob-remote", "bob-sender@example.test"),
+        )?);
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:bob@example.test",
+            message("bob-remote-2", "bob-sender@example.test"),
+        )?);
+        let mut statement = conn.prepare(
+            "SELECT account_key, participant_keys_json, message_count, thread_key FROM communication_threads ORDER BY account_key",
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].0, "email:alice@example.test");
+        assert_eq!(rows[0].2, 1);
+        assert_eq!(rows[0].3, "shared-provider-conversation");
+        assert!(!rows[0].1.contains("bob-sender@example.test"));
+        assert_eq!(rows[1].0, "email:bob@example.test");
+        assert_eq!(rows[1].2, 2);
+        assert!(rows[1].3.starts_with("mail-account:"));
+        assert!(!rows[1].1.contains("alice-sender@example.test"));
+        Ok(())
+    }
+
+    #[test]
+    fn delayed_ews_sent_copy_confirms_only_unique_matching_account_without_resend(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut conn = open_channel_db(&temp.path().join("ctox.sqlite3"))?;
+        let insert_pending = |conn: &mut rusqlite::Connection,
+                              account: &str,
+                              suffix: &str,
+                              subject: &str| {
+            let key = format!("{account}::pending_send::{suffix}");
+            upsert_communication_message(
+                conn,
+                UpsertMessage {
+                    message_key: &key,
+                    channel: "email",
+                    account_key: account,
+                    thread_key: &format!("thread-{suffix}"),
+                    remote_id: &format!("pending-send-{suffix}"),
+                    direction: "outbound",
+                    folder_hint: "sent",
+                    sender_display: "Lena",
+                    sender_address: "lena@example.test",
+                    recipient_addresses_json: "[\"one@example.test\",\"two@example.test\"]",
+                    cc_addresses_json: "[]",
+                    bcc_addresses_json: "[]",
+                    subject,
+                    preview: "Exact body",
+                    body_text: "Exact body\r\n",
+                    body_html: "",
+                    raw_payload_ref: "",
+                    trust_level: "high",
+                    status: "accepted",
+                    seen: true,
+                    has_attachments: false,
+                    external_created_at: "2026-09-28T09:48:20Z",
+                    observed_at: "2026-09-28T09:48:20Z",
+                    metadata_json: r#"{"source":"ctox-send-durability","adapterResult":{"ok":true,"status":"accepted","messageId":"<local-id@example.test>","delivery":{"confirmed":false}}}"#,
+                },
+            )?;
+            Ok::<_, anyhow::Error>(key)
+        };
+        let lena = insert_pending(&mut conn, "email:lena@example.test", "lena", "Digest")?;
+        let other = insert_pending(&mut conn, "email:other@example.test", "other", "Digest")?;
+        let mut options = empty_options();
+        options.provider = "owa".into();
+        options.email = "lena@example.test".into();
+        options.trust_level = "low".into();
+        let sent = super::MailboxMessage {
+            remote_id: "AQMk-provider-item".into(),
+            thread_key: "exchange-conversation".into(),
+            folder_hint: "sent".into(),
+            subject: "Digest".into(),
+            sender_display: "Lena".into(),
+            sender_address: "lena@example.test".into(),
+            recipient_addresses: vec!["one@example.test".into(), "two@example.test".into()],
+            cc_addresses: vec![],
+            body_text: "Exact body\n".into(),
+            body_html: String::new(),
+            preview: "Exact body".into(),
+            seen: true,
+            has_attachments: false,
+            external_created_at: "2026-09-28T09:48:23Z".into(),
+            metadata: serde_json::json!({"internetMessageId":"<real-id@example.test>"}),
+        };
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            sent.clone()
+        )?);
+        assert!(!super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            sent.clone()
+        )?);
+        {
+            let read = |key: &str| -> anyhow::Result<(String, serde_json::Value)> {
+                let (status, metadata): (String, String) = conn.query_row(
+                    "SELECT status, metadata_json FROM communication_messages WHERE message_key = ?1",
+                    [key],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                Ok((status, serde_json::from_str(&metadata)?))
+            };
+            let (status, metadata) = read(&lena)?;
+            assert_eq!(status, "confirmed");
+            assert_eq!(
+                metadata["sentCopyConfirmation"]["remoteId"],
+                "AQMk-provider-item"
+            );
+            assert_eq!(
+                metadata["sentCopyConfirmation"]["internetMessageId"],
+                "<real-id@example.test>"
+            );
+            assert_eq!(metadata["adapterResult"]["delivery"]["confirmed"], false);
+            assert_eq!(read(&other)?.0, "accepted");
+        }
+        let later = insert_pending(&mut conn, "email:lena@example.test", "later", "Digest")?;
+        conn.execute(
+            "UPDATE communication_messages SET external_created_at = '2026-09-28T09:48:40Z' WHERE message_key = ?1",
+            [&later],
+        )?;
+        // The first provider item is older than B, but still inside the
+        // allowed clock-skew window. Re-polling it must not confirm B.
+        assert!(!super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            sent.clone()
+        )?);
+        let later_status: String = conn.query_row(
+            "SELECT status FROM communication_messages WHERE message_key = ?1",
+            [&later],
+            |row| row.get(0),
+        )?;
+        assert_eq!(later_status, "accepted");
+        let mut second_sent = sent;
+        second_sent.remote_id = "AQMk-second-item".into();
+        second_sent.external_created_at = "2026-09-28T09:48:45Z".into();
+        second_sent.metadata =
+            serde_json::json!({"internetMessageId":"<second-real-id@example.test>"});
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            second_sent
+        )?);
+        let later_status: String = conn.query_row(
+            "SELECT status FROM communication_messages WHERE message_key = ?1",
+            [&later],
+            |row| row.get(0),
+        )?;
+        assert_eq!(later_status, "confirmed");
+        let first = insert_pending(&mut conn, "email:lena@example.test", "repeat-1", "Repeated")?;
+        let second = insert_pending(&mut conn, "email:lena@example.test", "repeat-2", "Repeated")?;
+        let repeated = super::MailboxMessage {
+            remote_id: "AQMk-repeated".into(),
+            thread_key: "exchange-repeated".into(),
+            folder_hint: "sent".into(),
+            subject: "Repeated".into(),
+            sender_display: "Lena".into(),
+            sender_address: "lena@example.test".into(),
+            recipient_addresses: vec!["one@example.test".into(), "two@example.test".into()],
+            cc_addresses: vec![],
+            body_text: "Exact body".into(),
+            body_html: String::new(),
+            preview: "Exact body".into(),
+            seen: true,
+            has_attachments: false,
+            external_created_at: "2026-09-28T09:48:23Z".into(),
+            metadata: serde_json::json!({"internetMessageId":"<repeated@example.test>"}),
+        };
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            repeated
+        )?);
+        for key in [&first, &second] {
+            let status: String = conn.query_row(
+                "SELECT status FROM communication_messages WHERE message_key = ?1",
+                [key],
+                |row| row.get(0),
+            )?;
+            assert_eq!(status, "accepted");
+        }
+        let immediately_confirmed = insert_pending(
+            &mut conn,
+            "email:lena@example.test",
+            "immediate-a",
+            "Immediate",
+        )?;
+        conn.execute(
+            "UPDATE communication_messages SET status = 'confirmed', metadata_json = ?2 WHERE message_key = ?1",
+            rusqlite::params![
+                immediately_confirmed,
+                r#"{"source":"ctox-send-durability","adapterResult":{"ok":true,"status":"confirmed","delivery":{"confirmed":true,"remoteId":"AQMk-immediate"}}}"#,
+            ],
+        )?;
+        let immediate_copy = super::MailboxMessage {
+            remote_id: "AQMk-immediate".into(),
+            thread_key: "exchange-immediate".into(),
+            folder_hint: "sent".into(),
+            subject: "Immediate".into(),
+            sender_display: "Lena".into(),
+            sender_address: "lena@example.test".into(),
+            recipient_addresses: vec!["one@example.test".into(), "two@example.test".into()],
+            cc_addresses: vec![],
+            body_text: "Exact body".into(),
+            body_html: String::new(),
+            preview: "Exact body".into(),
+            seen: true,
+            has_attachments: false,
+            external_created_at: "2026-09-28T09:48:23Z".into(),
+            metadata: serde_json::json!({"internetMessageId":"<immediate@example.test>"}),
+        };
+        assert!(super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            immediate_copy.clone()
+        )?);
+        let after_immediate = insert_pending(
+            &mut conn,
+            "email:lena@example.test",
+            "immediate-b",
+            "Immediate",
+        )?;
+        conn.execute(
+            "UPDATE communication_messages SET external_created_at = '2026-09-28T09:48:40Z' WHERE message_key = ?1",
+            [&after_immediate],
+        )?;
+        assert!(!super::store_provider_message(
+            &mut conn,
+            &options,
+            "email:lena@example.test",
+            immediate_copy
+        )?);
+        let status: String = conn.query_row(
+            "SELECT status FROM communication_messages WHERE message_key = ?1",
+            [&after_immediate],
+            |row| row.get(0),
+        )?;
+        assert_eq!(status, "accepted");
+        Ok(())
+    }
+
     #[test]
     fn synced_message_direction_treats_self_authored_mail_as_outbound() {
         assert_eq!(
@@ -4008,6 +5052,26 @@ mod tests {
     fn synced_message_direction_keeps_external_sender_as_inbound() {
         assert_eq!(
             synced_message_direction("Max Mustermann <founder@example.com>", "cto1@example.com"),
+            "inbound"
+        );
+    }
+
+    #[test]
+    fn synced_message_direction_uses_mailbox_folder_for_aliases_and_self_mail() {
+        assert_eq!(
+            synced_message_direction_in_folder(
+                "sent",
+                "Delegated <alias@example.com>",
+                "owner@example.com",
+            ),
+            "outbound"
+        );
+        assert_eq!(
+            synced_message_direction_in_folder(
+                "INBOX",
+                "Owner <owner@example.com>",
+                "owner@example.com",
+            ),
             "inbound"
         );
     }
@@ -4201,6 +5265,634 @@ mod tests {
         assert!(xml.contains("<t:FileAttachment>"));
         assert!(xml.contains("<t:ContentType>text/csv; charset=utf-8</t:ContentType>"));
         assert!(xml.contains("<t:Content>YSxiCg==</t:Content>"));
+    }
+
+    fn ews_envelope(operation: &str, responses: &str) -> String {
+        format!(
+            r#"<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"
+            xmlns:m="http://schemas.microsoft.com/exchange/services/2006/messages"
+            xmlns:t="http://schemas.microsoft.com/exchange/services/2006/types">
+            <s:Body><m:{operation}Response><m:ResponseMessages>{responses}</m:ResponseMessages>
+            </m:{operation}Response></s:Body></s:Envelope>"#
+        )
+    }
+
+    fn ews_find_fixture(ids: &[&str]) -> String {
+        let items = ids
+            .iter()
+            .map(|id| {
+                format!(
+                    r#"<t:Message><t:ItemId Id="{}" ChangeKey="old"/></t:Message>"#,
+                    super::xml_escape(id),
+                )
+            })
+            .collect::<String>();
+        ews_envelope(
+            "FindItem",
+            &format!(
+                r#"<m:FindItemResponseMessage ResponseClass="Success">
+            <m:ResponseCode>NoError</m:ResponseCode><m:RootFolder IncludesLastItemInRange="true">
+            <t:Items>{items}</t:Items></m:RootFolder></m:FindItemResponseMessage>"#
+            ),
+        )
+    }
+
+    fn ews_get_fixture_item(id: &str, body: &str) -> String {
+        format!(
+            r#"<m:GetItemResponseMessage ResponseClass="Success"><m:ResponseCode>NoError</m:ResponseCode>
+            <m:Items><t:Message><t:ItemId Id="{}" ChangeKey="new"/>
+            <t:Subject>Re: Project &amp; next steps</t:Subject>{body}
+            <t:ConversationId Id="conversation-1"/>
+            <t:InternetMessageId>&lt;reply@example.test&gt;</t:InternetMessageId>
+            <t:InReplyTo>&lt;parent@example.test&gt;</t:InReplyTo>
+            <t:References>&lt;root@example.test&gt; &lt;parent@example.test&gt;</t:References>
+            <t:From><t:Mailbox><t:Name>Sender</t:Name><t:EmailAddress>sender@example.test</t:EmailAddress></t:Mailbox></t:From>
+            <t:ToRecipients><t:Mailbox><t:EmailAddress>AGENT@example.test</t:EmailAddress></t:Mailbox></t:ToRecipients>
+            <t:CcRecipients><t:Mailbox><t:EmailAddress>CC@example.test</t:EmailAddress></t:Mailbox></t:CcRecipients>
+            <t:IsRead>false</t:IsRead><t:HasAttachments>true</t:HasAttachments>
+            <t:DateTimeReceived>2026-09-12T08:00:00Z</t:DateTimeReceived>
+            <t:DateTimeSent>2026-09-12T07:59:00Z</t:DateTimeSent>
+            </t:Message></m:Items></m:GetItemResponseMessage>"#,
+            super::xml_escape(id)
+        )
+    }
+
+    fn ews_recovery_message(body: &str) -> anyhow::Result<super::MailboxMessage> {
+        let mut messages = super::list_ews_folder("inbox", 1, None, |op, _, _| {
+            Ok(if op == "FindItem" {
+                ews_find_fixture(&["existing-item"])
+            } else {
+                ews_envelope(
+                    "GetItem",
+                    &ews_get_fixture_item(
+                        "existing-item",
+                        &format!(
+                            "<t:Body BodyType=\"Text\">{}</t:Body>",
+                            super::xml_escape(body)
+                        ),
+                    ),
+                )
+            })
+        })?;
+        Ok(messages.remove(0))
+    }
+
+    fn ews_recovery_row(
+        conn: &rusqlite::Connection,
+        table: &str,
+        key_column: &str,
+        key: &str,
+    ) -> anyhow::Result<std::collections::BTreeMap<String, rusqlite::types::Value>> {
+        let mut statement =
+            conn.prepare(&format!("SELECT * FROM {table} WHERE {key_column} = ?1"))?;
+        let columns = statement
+            .column_names()
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        Ok(statement.query_row([key], |row| {
+            columns
+                .iter()
+                .enumerate()
+                .map(|(index, name)| {
+                    Ok((name.clone(), row.get::<_, rusqlite::types::Value>(index)?))
+                })
+                .collect::<rusqlite::Result<_>>()
+        })?)
+    }
+
+    #[test]
+    fn ews_resync_recovers_persisted_empty_body_without_replaying_message_state(
+    ) -> anyhow::Result<()> {
+        for provider in ["ews", "owa"] {
+            let temp = tempfile::tempdir()?;
+            let mut conn = open_channel_db(&temp.path().join("channels.sqlite3"))?;
+            let mut options = empty_options();
+            options.email = "agent@example.test".into();
+            options.provider = provider.into();
+            options.trust_level = "untrusted".into();
+            let account = "email:agent@example.test";
+            let old = ews_recovery_message("")?;
+            let key = super::message_key_from_remote(account, &old.folder_hint, &old.remote_id);
+            let thread = old.thread_key.clone();
+            assert!(super::store_provider_message(
+                &mut conn, &options, account, old
+            )?);
+            super::ensure_routing_rows_for_inbound(&conn)?;
+            conn.execute(
+                "UPDATE communication_messages SET seen=1, status='reviewed', trust_level='trusted',
+                 raw_payload_ref='preserved-attachment', metadata_json='{\"user_note\":\"keep\"}'
+                 WHERE message_key=?1", [&key],
+            )?;
+            conn.execute(
+                "UPDATE communication_threads SET subject='User title', metadata_json='{\"pinned\":true}'
+                 WHERE thread_key=?1", [&thread],
+            )?;
+            conn.execute(
+                "UPDATE communication_routing_state SET route_status='handled', acked_at='2026-09-12T10:00:00Z',
+                 lease_owner='original-worker', failure_attempt_count=2, last_error='preserve audit'
+                 WHERE message_key=?1", [&key],
+            )?;
+            // The same remote ID in another account must not be enriched.
+            let other_account = "email:other@example.test";
+            let mut other = ews_recovery_message("")?;
+            other.thread_key = "other-account-thread".into();
+            let other_key =
+                super::message_key_from_remote(other_account, &other.folder_hint, &other.remote_id);
+            assert!(super::store_provider_message(
+                &mut conn,
+                &options,
+                other_account,
+                other
+            )?);
+            super::ensure_routing_rows_for_inbound(&conn)?;
+            let mut expected =
+                ews_recovery_row(&conn, "communication_messages", "message_key", &key)?;
+
+            let thread_before =
+                ews_recovery_row(&conn, "communication_threads", "thread_key", &thread)?;
+            let routing_before =
+                ews_recovery_row(&conn, "communication_routing_state", "message_key", &key)?;
+            let other_before =
+                ews_recovery_row(&conn, "communication_messages", "message_key", &other_key)?;
+            let clock_before: i64 = conn.query_row(
+                "SELECT version FROM communication_projection_clock WHERE id=1",
+                [],
+                |row| row.get(0),
+            )?;
+            let mut hydrated = ews_recovery_message("Recovered reply & detail")?;
+            // Fresh envelope differences must not undo operator decisions.
+            hydrated.subject = "Changed remote subject".into();
+            hydrated.thread_key = "changed-remote-thread".into();
+            hydrated.sender_address = "changed@example.test".into();
+            expected.insert(
+                "body_text".into(),
+                rusqlite::types::Value::Text(hydrated.body_text.clone()),
+            );
+            expected.insert(
+                "body_html".into(),
+                rusqlite::types::Value::Text(hydrated.body_html.clone()),
+            );
+            expected.insert(
+                "preview".into(),
+                rusqlite::types::Value::Text(hydrated.preview.clone()),
+            );
+            assert!(super::store_provider_message(
+                &mut conn, &options, account, hydrated
+            )?);
+            super::ensure_routing_rows_for_inbound(&conn)?;
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_messages", "message_key", &key)?,
+                expected
+            );
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_threads", "thread_key", &thread)?,
+                thread_before
+            );
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_routing_state", "message_key", &key)?,
+                routing_before
+            );
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_messages", "message_key", &other_key)?,
+                other_before
+            );
+            let clock_after: i64 = conn.query_row(
+                "SELECT version FROM communication_projection_clock WHERE id=1",
+                [],
+                |row| row.get(0),
+            )?;
+            assert!(
+                clock_after > clock_before,
+                "body enrichment must invalidate the existing projection"
+            );
+            assert!(!super::store_provider_message(
+                &mut conn,
+                &options,
+                account,
+                ews_recovery_message("Later content must not replace recovered content")?
+            )?);
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_messages", "message_key", &key)?,
+                expected
+            );
+            assert_eq!(
+                conn.query_row(
+                    "SELECT version FROM communication_projection_clock WHERE id=1",
+                    [],
+                    |row| row.get::<_, i64>(0)
+                )?,
+                clock_after
+            );
+            drop(conn);
+            let conn = open_channel_db(&temp.path().join("channels.sqlite3"))?;
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_messages", "message_key", &key)?,
+                expected
+            );
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_routing_state", "message_key", &key)?,
+                routing_before
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM communication_messages", [], |row| row
+                    .get::<_, i64>(0))?,
+                2
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ews_resync_preserves_nonempty_content_and_other_provider_deduplication() -> anyhow::Result<()>
+    {
+        for (provider, stored_text, stored_html, incoming) in [
+            ("ews", "Existing plain text", "", "New text"),
+            ("owa", "", "<p>Existing HTML</p>", "New text"),
+            ("ews", " ", "", "New text"),
+            ("graph", "", "", "New text"),
+            ("activesync", "", "", "New text"),
+            ("ews", "", "", ""),
+        ] {
+            let temp = tempfile::tempdir()?;
+            let mut conn = open_channel_db(&temp.path().join("channels.sqlite3"))?;
+            let mut options = empty_options();
+            options.email = "agent@example.test".into();
+            options.provider = provider.into();
+            let account = "email:agent@example.test";
+            let mut old = ews_recovery_message(stored_text)?;
+            old.body_html = stored_html.into();
+            let key = super::message_key_from_remote(account, &old.folder_hint, &old.remote_id);
+            assert!(super::store_provider_message(
+                &mut conn, &options, account, old
+            )?);
+            let before = ews_recovery_row(&conn, "communication_messages", "message_key", &key)?;
+            assert!(
+                !super::store_provider_message(
+                    &mut conn,
+                    &options,
+                    account,
+                    ews_recovery_message(incoming)?
+                )?,
+                "{provider}/{stored_text}/{stored_html}"
+            );
+            assert_eq!(
+                ews_recovery_row(&conn, "communication_messages", "message_key", &key)?,
+                before
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ews_resync_preserves_custom_preview_while_hydrating_html() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let mut conn = open_channel_db(&temp.path().join("channels.sqlite3"))?;
+        let mut options = empty_options();
+        options.email = "agent@example.test".into();
+        options.provider = "ews".into();
+        let account = "email:agent@example.test";
+        let old = ews_recovery_message("")?;
+        let key = super::message_key_from_remote(account, &old.folder_hint, &old.remote_id);
+        assert!(super::store_provider_message(
+            &mut conn, &options, account, old
+        )?);
+        conn.execute(
+            "UPDATE communication_messages SET preview='Custom preview' WHERE message_key=?1",
+            [&key],
+        )?;
+        let mut expected = ews_recovery_row(&conn, "communication_messages", "message_key", &key)?;
+        let mut incoming = ews_recovery_message("")?;
+        incoming.body_html = "<p>Recovered HTML</p>".into();
+        incoming.body_text = super::ews_html_body_text(&incoming.body_html);
+        incoming.preview = incoming.body_text.clone();
+        expected.insert(
+            "body_html".into(),
+            rusqlite::types::Value::Text(incoming.body_html.clone()),
+        );
+        expected.insert(
+            "body_text".into(),
+            rusqlite::types::Value::Text(incoming.body_text.clone()),
+        );
+        assert!(super::store_provider_message(
+            &mut conn, &options, account, incoming
+        )?);
+        assert_eq!(
+            ews_recovery_row(&conn, "communication_messages", "message_key", &key)?,
+            expected
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ews_hydrates_full_reply_body_and_preserves_ids_and_headers() -> anyhow::Result<()> {
+        // Longer than a FindItem preview; XML entities and CDATA must decode once.
+        let reply = format!(
+            "  Thanks & agreed.\n{}<literal>\n",
+            "Full reply text. ".repeat(80)
+        );
+        let mut calls = 0;
+        let messages =
+            super::list_ews_folder("inbox", 1, Some("Project & next steps"), |op, _, body| {
+                calls += 1;
+                if op == "FindItem" {
+                    assert!(body.contains("<t:BaseShape>IdOnly</t:BaseShape>"));
+                    assert!(
+                        body.find("IndexedPageItemView").unwrap()
+                            < body.find("ParentFolderIds").unwrap()
+                    );
+                    assert!(body.contains("Project &amp; next steps"));
+                    return Ok(ews_find_fixture(&["item&1"]));
+                }
+                assert_eq!(op, "GetItem");
+                assert!(body.contains(r#"<t:ItemId Id="item&amp;1"/>"#));
+                assert!(
+                    !body.contains("ChangeKey"),
+                    "read the current version after discovery"
+                );
+                for field in [
+                    "item:Body",
+                    "item:InReplyTo",
+                    "message:References",
+                    "message:InternetMessageId",
+                ] {
+                    assert!(body.contains(field));
+                }
+                assert!(body.contains("<t:BodyType>Best</t:BodyType>"));
+                Ok(ews_envelope(
+                    "GetItem",
+                    &ews_get_fixture_item(
+                        "item&1",
+                        &format!(
+                            "<t:Body BodyType=\"Text\">{}</t:Body>",
+                            super::xml_escape(&reply),
+                        ),
+                    ),
+                ))
+            })?;
+        assert_eq!(calls, 2);
+        let mail = &messages[0];
+        assert_eq!(mail.body_text, reply);
+        assert!(mail.body_html.is_empty());
+        assert!(mail.preview.contains("Thanks & agreed."));
+        assert_eq!(mail.remote_id, "item&1");
+        assert_eq!(mail.thread_key, "conversation-1");
+        assert_eq!(mail.metadata["messageId"], "<reply@example.test>");
+        assert_eq!(mail.metadata["internetMessageId"], "<reply@example.test>");
+        assert_eq!(mail.metadata["inReplyTo"], "<parent@example.test>");
+        assert_eq!(
+            mail.metadata["references"],
+            "<root@example.test> <parent@example.test>"
+        );
+        assert_eq!(mail.recipient_addresses, ["agent@example.test"]);
+        assert_eq!(mail.cc_addresses, ["cc@example.test"]);
+        assert_eq!(mail.sender_address, "sender@example.test");
+        assert!(!mail.seen);
+        assert!(mail.has_attachments);
+        assert_eq!(mail.external_created_at, "2026-09-12T08:00:00Z");
+        Ok(())
+    }
+
+    #[test]
+    fn ews_html_reply_and_sent_timestamp_are_hydrated() -> anyhow::Result<()> {
+        let html =
+            "<html><body><p>Yes &amp; thanks.</p><div>Next steps<br/>Tomorrow</div></body></html>";
+        for body in [
+            format!(
+                "<t:Body BodyType=\"HTML\">{}</t:Body>",
+                super::xml_escape(html)
+            ),
+            format!("<t:Body BodyType=\"HTML\"><![CDATA[{html}]]></t:Body>"),
+        ] {
+            let messages = super::list_ews_folder("sentitems", 1, None, |op, _, _| {
+                Ok(if op == "FindItem" {
+                    ews_find_fixture(&["sent-1"])
+                } else {
+                    ews_envelope("GetItem", &ews_get_fixture_item("sent-1", &body))
+                })
+            })?;
+            let mail = &messages[0];
+            assert_eq!(mail.body_html, html);
+            assert_eq!(mail.body_text, "Yes & thanks. Next steps Tomorrow");
+            assert_eq!(mail.preview, "Yes & thanks. Next steps Tomorrow");
+            assert_eq!(mail.folder_hint, "sent");
+            assert_eq!(mail.remote_id, "sent-1");
+            assert_eq!(mail.external_created_at, "2026-09-12T07:59:00Z");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ews_html_hydration_preserves_literals_and_excludes_document_metadata() -> anyhow::Result<()>
+    {
+        let html = "<html><head><title>Mail title</title><style>p { color: red }</style></head><body><p>Please keep &lt;literal&gt; &amp; &#x1F642;</p><div>Agree<b>d</b>.</div>Next<br>line<script>tracking()</script></body></html>";
+        let messages = super::list_ews_folder("inbox", 1, None, |op, _, _| {
+            Ok(if op == "FindItem" {
+                ews_find_fixture(&["one"])
+            } else {
+                ews_envelope(
+                    "GetItem",
+                    &ews_get_fixture_item(
+                        "one",
+                        &format!(
+                            "<t:Body BodyType=\"HTML\">{}</t:Body>",
+                            super::xml_escape(html),
+                        ),
+                    ),
+                )
+            })
+        })?;
+        assert_eq!(messages[0].body_html, html);
+        assert_eq!(
+            messages[0].body_text,
+            "Please keep <literal> & 🙂 Agreed. Next line"
+        );
+        assert_eq!(
+            messages[0].preview,
+            "Please keep <literal> & 🙂 Agreed. Next line"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn ews_batches_are_bounded_and_matched_by_id_in_discovery_order() -> anyhow::Result<()> {
+        let ids = (0..45).map(|i| format!("id-{i}")).collect::<Vec<_>>();
+        let mut sizes = Vec::new();
+        let messages = super::list_ews_folder("inbox", ids.len(), None, |op, _, body| {
+            if op == "FindItem" {
+                return Ok(ews_find_fixture(
+                    &ids.iter().map(String::as_str).collect::<Vec<_>>(),
+                ));
+            }
+            let xml = format!(r#"<root xmlns:m="m" xmlns:t="t">{body}</root>"#);
+            let doc = roxmltree::Document::parse(&xml)?;
+            let batch = doc
+                .descendants()
+                .filter(|node| node.has_tag_name("ItemId"))
+                .map(|node| node.attribute("Id").unwrap())
+                .collect::<Vec<_>>();
+            sizes.push(batch.len());
+            Ok(ews_envelope(
+                "GetItem",
+                &batch
+                    .iter()
+                    .rev()
+                    .map(|id| ews_get_fixture_item(id, r#"<t:Body BodyType="Text">Reply</t:Body>"#))
+                    .collect::<String>(),
+            ))
+        })?;
+        assert_eq!(sizes, [20, 20, 5]);
+        assert_eq!(
+            messages
+                .iter()
+                .map(|mail| &mail.remote_id)
+                .collect::<Vec<_>>(),
+            ids.iter().collect::<Vec<_>>()
+        );
+        assert!(messages.iter().all(|mail| mail.body_text == "Reply"));
+        Ok(())
+    }
+
+    #[test]
+    fn ews_rejects_partial_or_invalid_hydration() {
+        let good = ews_get_fixture_item("one", r#"<t:Body BodyType="Text">Reply</t:Body>"#);
+        let second = ews_get_fixture_item("two", r#"<t:Body BodyType="Text">Reply two</t:Body>"#);
+        let error = r#"<m:GetItemResponseMessage ResponseClass="Error"><m:ResponseCode>ErrorItemNotFound</m:ResponseCode></m:GetItemResponseMessage>"#;
+        for bad in [
+            ews_envelope("GetItem", &format!("{good}{error}")),
+            ews_envelope("GetItem", &good),
+            ews_envelope("GetItem", &format!("{good}{good}")),
+            ews_envelope(
+                "GetItem",
+                &format!("{good}{}", second.replace("Id=\"two\"", "Id=\"unknown\"")),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!("{good}{}", ews_get_fixture_item("two", "")),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!(
+                    "{good}{}",
+                    second.replace(
+                        "BodyType=\"Text\"",
+                        "BodyType=\"Text\" IsTruncated=\"true\""
+                    )
+                ),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!(
+                    "{good}{}",
+                    second.replace("BodyType=\"Text\"", "BodyType=\"Unknown\"")
+                ),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!("{good}{}", second.replace("NoError", "ErrorServerBusy")),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!("{good}{}", second.replace("ResponseClass=\"Success\"", "")),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!(
+                    "{good}{}",
+                    second.replace("<m:ResponseCode>NoError</m:ResponseCode>", "")
+                ),
+            ),
+            ews_envelope(
+                "GetItem",
+                &format!(
+                    "{good}{}",
+                    second.replace("ResponseClass=\"Success\"", "ResponseClass=\"Warning\"")
+                ),
+            ),
+            ews_envelope("GetItem", ""),
+            "<malformed".to_string(),
+        ] {
+            let result = super::list_ews_folder("inbox", 2, None, |op, _, _| {
+                Ok(if op == "FindItem" {
+                    ews_find_fixture(&["one", "two"])
+                } else {
+                    bad.clone()
+                })
+            });
+            assert!(result.is_err(), "must reject invalid hydration: {bad}");
+        }
+    }
+
+    #[test]
+    fn ews_later_batch_transport_failure_returns_no_partial_poll() {
+        let ids = (0..45).map(|i| format!("id-{i}")).collect::<Vec<_>>();
+        let mut calls = 0;
+        let result = super::list_ews_folder("inbox", ids.len(), None, |op, _, _| {
+            calls += 1;
+            if op == "FindItem" {
+                return Ok(ews_find_fixture(
+                    &ids.iter().map(String::as_str).collect::<Vec<_>>(),
+                ));
+            }
+            if calls == 3 {
+                anyhow::bail!("synthetic timeout");
+            }
+            Ok(ews_envelope(
+                "GetItem",
+                &ids[..20]
+                    .iter()
+                    .map(|id| ews_get_fixture_item(id, r#"<t:Body BodyType="Text">Reply</t:Body>"#))
+                    .collect::<String>(),
+            ))
+        });
+        assert_eq!(
+            calls, 3,
+            "do not retry or fetch another batch after failure"
+        );
+        let error = format!("{:#}", result.unwrap_err());
+        assert!(error.contains("batch 2"));
+        assert!(error.contains("synthetic timeout"));
+    }
+
+    #[test]
+    fn ews_empty_folder_limits_and_explicit_empty_body() -> anyhow::Result<()> {
+        assert!(super::list_ews_folder("inbox", 0, None, |_, _, _| panic!("no request")).is_ok());
+        assert!(super::list_ews_folder(
+            "inbox",
+            super::EWS_MAX_FOLDER_ITEMS + 1,
+            None,
+            |_, _, _| panic!("no request")
+        )
+        .is_err());
+        let empty = super::list_ews_folder("inbox", 1, None, |op, _, _| {
+            assert_eq!(op, "FindItem");
+            Ok(ews_find_fixture(&[]))
+        })?;
+        assert!(empty.is_empty());
+        for bad in [
+            "<root/>".to_string(),
+            ews_find_fixture(&["one", "one"]),
+            ews_find_fixture(&["one", "two"]),
+            ews_find_fixture(&[""]),
+        ] {
+            assert!(super::list_ews_folder("inbox", 1, None, |op, _, _| {
+                assert_eq!(op, "FindItem");
+                Ok(bad.clone())
+            })
+            .is_err());
+        }
+        let empty_body = super::list_ews_folder("inbox", 1, None, |op, _, _| {
+            Ok(if op == "FindItem" {
+                ews_find_fixture(&["one"])
+            } else {
+                ews_envelope(
+                    "GetItem",
+                    &ews_get_fixture_item("one", r#"<t:Body BodyType="Text"/>"#),
+                )
+            })
+        })?;
+        assert!(empty_body[0].body_text.is_empty());
+        Ok(())
     }
 
     #[test]

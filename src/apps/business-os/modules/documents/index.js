@@ -224,12 +224,19 @@ export async function mount(ctx) {
     ctoxDocumentsModule: null,
     officeEngine: 'ctox_documents',
     documents: [],
+    documentsReadComplete: false,
+    documentsReadError: null,
+    documentsReadiness: null,
+    readinessCleanup: null,
     runbooks: [],
     knowledgeItems: [],
     knowledgeRunbooks: [],
     knowledgeTables: [],
     selectedId: '',
     requestedSelectedId: requestedDocumentId,
+    requestedSourceFocus: requestedDocumentId && ctx.args?.return_thread_id
+      ? { recordId: requestedDocumentId, returnThreadId: String(ctx.args.return_thread_id) }
+      : null,
     selectedVersion: null,
     requestedVersionId,
     requestedVersionDocumentId: requestedVersionId ? requestedDocumentId : '',
@@ -304,15 +311,21 @@ export async function mount(ctx) {
     enqueueDocumentOpenFile(state, payload.args?.openFile);
   }) || null;
   state.localSubscriptionCleanup = wireLocalRealtime(state);
+  state.readinessCleanup = wireDocumentReadiness(state);
   // Mount the workbench immediately. Seed/query work can legitimately wait
   // for WebRTC catch-up and must not leave the window-manager promise pending
   // after the visible app is already usable.
   renderLeft(state);
   renderRight(state);
   renderCenter(state);
-  Promise.resolve()
-    .then(() => ensureSeedRunbooks(ctx))
-    .then(() => Promise.all([refreshRunbooks(state), refreshDocuments(state), refreshOfficeEngineSettings(state)]))
+  Promise.all([
+    Promise.all([refreshDocuments(state), refreshOfficeEngineSettings(state)]).then(() => {
+      if (state.disposed) return;
+      renderRight(state);
+      renderCenter(state);
+    }),
+    Promise.resolve().then(() => ensureSeedRunbooks(ctx)).then(() => refreshRunbooks(state)),
+  ])
     .then(async () => {
       if (state.disposed) return;
       if (ctx.args?.openFile) await enqueueDocumentOpenFile(state, ctx.args.openFile);
@@ -320,6 +333,7 @@ export async function mount(ctx) {
       renderLeft(state);
       renderRight(state);
       renderCenter(state);
+      reportRequestedDocumentFocus(state);
     })
     .catch((error) => {
       if (!state.disposed) renderError(state, error?.message || String(error));
@@ -334,6 +348,7 @@ export async function mount(ctx) {
     state.contextMenu?.remove();
     state.contextMenu = null;
     state.localSubscriptionCleanup?.();
+    state.readinessCleanup?.();
     state.launchCleanup?.();
     state.paneCleanup?.();
     clearDocumentBlobByteCache(state);
@@ -427,11 +442,17 @@ function wireModule(state) {
   const refreshLeft = () => renderLeft(state);
   const handleAppLaunch = (event) => {
     if (event?.detail?.appId && event.detail.appId !== state.ctx.module?.id) return;
-    const documentId = documentIdFromLaunchArgs(event?.detail?.args);
-    const versionId = versionIdFromLaunchArgs(event?.detail?.args);
+    const args = event?.detail?.args || {};
+    const documentId = documentIdFromLaunchArgs(args);
+    const versionId = versionIdFromLaunchArgs(args);
     if (!documentId) return;
+    state.requestedSourceFocus = args.return_thread_id
+      ? { recordId: documentId, returnThreadId: String(args.return_thread_id) }
+      : null;
     if (state.documents.some((record) => record.id === documentId)) {
-      switchSelectedDocument(state, documentId, { versionId }).catch((error) => {
+      switchSelectedDocument(state, documentId, { versionId }).then(() => {
+        reportRequestedDocumentFocus(state);
+      }).catch((error) => {
         console.error('[documents] requested document could not be opened', error);
       });
       return;
@@ -742,6 +763,33 @@ function wireLocalRealtime(state) {
   };
 }
 
+function wireDocumentReadiness(state) {
+  const sync = state.ctx?.sync;
+  const read = sync?.collectionReadiness;
+  if (typeof read === 'function') {
+    try { state.documentsReadiness = read.call(sync, 'documents') || null; } catch {}
+  }
+  const subscribe = sync?.subscribeCollectionReadiness;
+  if (typeof subscribe !== 'function') return () => {};
+  try {
+    const unsubscribe = subscribe.call(sync, 'documents', (snapshot) => {
+      if (state.disposed) return;
+      state.documentsReadiness = snapshot || null;
+      renderLeft(state);
+      // The collection may not have existed when the local subscription was
+      // first wired. A readiness change is also a chance to read its new rows.
+      state.localSubscriptionCleanup?.();
+      state.localSubscriptionCleanup = wireLocalRealtime(state);
+      refreshDocumentsFromLocal(state, new Set(['documents']))
+        .catch((error) => console.warn('[documents] readiness refresh failed', error));
+    });
+    return typeof unsubscribe === 'function' ? unsubscribe : () => {};
+  } catch (error) {
+    console.warn('[documents] readiness subscription failed', error);
+    return () => {};
+  }
+}
+
 function documentCollection(ctx, collectionName) {
   return ctx?.db?.collection?.(collectionName) || null;
 }
@@ -753,7 +801,7 @@ async function refreshDocumentsFromLocal(state, changed = null, isActive = () =>
     (all || changed.has('document_runbooks')) ? refreshRunbooks(state) : null,
     (all || ['knowledge_items', 'knowledge_runbooks', 'knowledge_tables'].some((name) => changed.has(name)))
       ? refreshKnowledge(state, changed) : null,
-    (all || changed.has('documents')) ? refreshDocuments(state) : null,
+    (all || changed.has('documents')) ? refreshDocuments(state, { isActive }) : null,
   ]);
   if (!isActive()) return;
   let selectedVersionLoaded = false;
@@ -771,13 +819,56 @@ async function refreshDocumentsFromLocal(state, changed = null, isActive = () =>
   renderRight(state);
   renderDocumentStrip(state);
   if (selectedVersionLoaded) renderCenter(state);
+  reportRequestedDocumentFocus(state);
 }
 
-async function refreshDocuments(state) {
+function reportRequestedDocumentFocus(state) {
+  const request = state.requestedSourceFocus;
+  if (!request || state.disposed) return;
+  const recordExists = state.documents.some((record) => record.id === request.recordId);
+  const focused = recordExists && state.selectedId === request.recordId;
+  const ready = state.ctx.sync?.collectionReadiness?.('documents')?.ready === true;
+  if (!focused && (recordExists || !ready || request.reportedUnavailable)) return;
+  const root = state.ctx.host.querySelector('[data-documents-module]') || state.ctx.host;
+  let status = root.querySelector('[data-documents-source-focus-status]');
+  if (focused) status?.remove();
+  else {
+    if (!status) {
+      status = document.createElement('div');
+      status.dataset.documentsSourceFocusStatus = '';
+      status.className = 'ctox-callout';
+      status.setAttribute('role', 'status');
+      root.prepend(status);
+    }
+    status.textContent = 'Verknüpftes Dokument ist hier nicht verfügbar. Die Dokumentenübersicht bleibt geöffnet.';
+  }
+  if (focused) state.requestedSourceFocus = null;
+  else request.reportedUnavailable = true;
+  state.ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
+    bubbles: true,
+    detail: { module: 'documents', status: focused ? 'record_focused' : 'unavailable',
+      recordId: request.recordId, returnThreadId: request.returnThreadId },
+  }));
+}
+
+async function refreshDocuments(state, { isActive = () => !state.disposed } = {}) {
   const collection = documentCollection(state.ctx, 'documents');
-  const rawDocuments = collection
-    ? await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec()
-    : [];
+  if (!collection) {
+    state.documentsReadComplete = false;
+    state.documentsReadError = null;
+    if (isActive()) renderLeft(state);
+    return;
+  }
+  let rawDocuments = [];
+  try {
+    rawDocuments = await collection.find({ sort: [{ updated_at_ms: 'desc' }] }).exec();
+  } catch (error) {
+    state.documentsReadError = error?.message || String(error);
+    if (isActive()) renderLeft(state);
+    throw error;
+  }
+  state.documentsReadComplete = true;
+  state.documentsReadError = null;
   state.documents = rawDocuments
     .map((doc) => normalizeDocumentRecord(typeof doc.toJSON === 'function' ? doc.toJSON() : doc))
     .filter(isActiveDocumentRecord);
@@ -802,6 +893,7 @@ async function refreshDocuments(state) {
     state.mailMergeNavigation = null;
   }
   if (!state.selectedId && state.documents[0]) state.selectedId = state.documents[0].id;
+  if (isActive()) renderLeft(state);
 }
 
 async function refreshRunbooks(state) {
@@ -1335,6 +1427,28 @@ function documentListSignature(records = []) {
   ])));
 }
 
+function documentListState(state, records) {
+  if (records.length) return 'rows';
+  if (state.documents.length) return 'filtered';
+  if (state.documentsReadError) return 'error';
+  if (state.documentsReadiness?.state === 'offline-pending') return 'offline-pending';
+  if (!state.documentsReadComplete || state.documentsReadiness?.ready === false) return 'loading';
+  // Older shells may not expose readiness. A shell that does
+  // must affirm the first pull before zero rows can mean "no documents".
+  const sync = state.ctx?.sync;
+  const hasReadinessFacade = typeof sync?.collectionReadiness === 'function'
+    || typeof sync?.subscribeCollectionReadiness === 'function';
+  if (hasReadinessFacade && state.documentsReadiness?.ready !== true) return 'loading';
+  return 'empty';
+}
+
+function documentListFooter(state, listState, visibleCount, activeFilterCount) {
+  if (listState === 'loading') return state.lang === 'en' ? 'Loading documents' : 'Dokumente werden geladen';
+  if (listState === 'offline-pending') return state.lang === 'en' ? 'Connection pending' : 'Verbindung ausstehend';
+  if (listState === 'error') return state.lang === 'en' ? 'Document read failed' : 'Dokumente konnten nicht gelesen werden';
+  return `${visibleCount} ${state.lang === 'en' ? 'files' : 'Dateien'} · ${activeFilterCount ? (state.lang === 'en' ? 'Filtered' : 'Gefiltert') : (state.lang === 'en' ? 'All' : 'Alle')}`;
+}
+
 function applyDocumentListSelection(state) {
   const list = state.ctx?.host?.querySelector('[data-documents-list]');
   if (!list) return;
@@ -1424,6 +1538,7 @@ function renderLeft(state) {
   }
 
   const list = explorer.querySelector('[data-documents-list]');
+  const listState = documentListState(state, visible);
   if (list) {
     explorer.dataset.officeView = state.listView || 'list';
     populateDocumentList(state, list, visible);
@@ -1431,7 +1546,7 @@ function renderLeft(state) {
   }
   autoWirePaneGrammar(state.ctx.host);
   explorer.__ctoxPaneGrammar?.refreshDot();
-  explorer.__ctoxPaneGrammar?.setFooter(`${visible.length} ${state.lang === 'en' ? 'files' : 'Dateien'} · ${activeFilterCount ? (state.lang === 'en' ? 'Filtered' : 'Gefiltert') : (state.lang === 'en' ? 'All' : 'Alle')}`);
+  explorer.__ctoxPaneGrammar?.setFooter(documentListFooter(state, listState, visible.length, activeFilterCount));
   renderPaneVisibility(state);
 }
 
@@ -1458,7 +1573,8 @@ function clearDocumentFilters(state, { resetSort = false } = {}) {
 }
 
 function populateDocumentList(state, list, records = visibleDocuments(state)) {
-  const signature = documentListSignature(records);
+  const listState = documentListState(state, records);
+  const signature = `${documentListSignature(records)}:${listState}:${listState === 'error' ? state.documentsReadError : ''}`;
   if (list.dataset.ctoxRenderSig === signature) {
     applyDocumentListSelection(state);
     return;
@@ -1503,18 +1619,31 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
     }
     if (!records.length) {
       const empty = document.createElement('div');
-      // Shell V2 §7: empty states sit on the shared .ctox-empty step and carry
-      // exactly one filled primary action.
-      empty.className = 'ctox-empty documents-empty';
-      empty.innerHTML = state.documents.length
-        ? `
+      // A data-driven empty state is only true after the collection's first
+      // read and readiness signal. Filters still describe the local rows.
+      empty.className = listState === 'loading' || listState === 'offline-pending'
+        ? 'ctox-syncing documents-loading'
+        : listState === 'error' ? 'ctox-empty documents-error' : 'ctox-empty documents-empty';
+      if (listState === 'loading' || listState === 'offline-pending') {
+        empty.setAttribute('role', 'status');
+        empty.setAttribute('aria-live', 'polite');
+      }
+      if (listState === 'loading') {
+        empty.innerHTML = `<strong>${state.lang === 'en' ? 'Loading documents' : 'Dokumente werden geladen'}</strong><span>${state.lang === 'en' ? 'The document collection is still synchronizing.' : 'Die Dokumentsammlung wird noch synchronisiert.'}</span>`;
+      } else if (listState === 'offline-pending') {
+        empty.innerHTML = `<strong>${state.lang === 'en' ? 'Connection pending' : 'Verbindung ausstehend'}</strong><span>${state.lang === 'en' ? 'Documents will appear when synchronization resumes.' : 'Dokumente erscheinen, sobald die Synchronisierung fortgesetzt wird.'}</span>`;
+      } else if (listState === 'error') {
+        empty.innerHTML = `<strong>${state.lang === 'en' ? 'Document read failed' : 'Dokumente konnten nicht gelesen werden'}</strong><span>${escapeHtml(state.documentsReadError)}</span><div class="documents-empty-actions"><button class="ctox-button is-primary" type="button" data-documents-retry>${state.lang === 'en' ? 'Try again' : 'Erneut versuchen'}</button></div>`;
+      } else if (listState === 'filtered') {
+        empty.innerHTML = `
         <strong>${escapeHtml(state.t('noMatches', 'Keine Treffer'))}</strong>
         <span>${escapeHtml(state.t('adjustSearchFilter', 'Suche oder Filter anpassen.'))}</span>
         <div class="documents-empty-actions">
           <button class="ctox-button is-primary" type="button" data-documents-clear-filters>${escapeHtml(state.t('clearFilters', 'Filter zurücksetzen'))}</button>
         </div>
-      `
-        : `
+      `;
+      } else {
+        empty.innerHTML = `
         <strong>${escapeHtml(state.t('noDocuments', 'Keine Dokumente'))}</strong>
         <span>${escapeHtml(state.t('importPrompt', 'Ein leeres Word-Dokument erstellen oder DOCX beziehungsweise Markdown importieren.'))}</span>
         <div class="documents-empty-actions">
@@ -1522,8 +1651,18 @@ function populateDocumentList(state, list, records = visibleDocuments(state)) {
           <button class="ctox-button" type="button" data-documents-empty-import>${actionIcon(state, 'upload')} ${escapeHtml(state.t('importDocument', 'Dokument importieren'))}</button>
         </div>
       `;
+      }
       empty.querySelector('[data-documents-empty-import]')?.addEventListener('click', () => openImportDrawer(state));
       empty.querySelector('[data-documents-empty-new]')?.addEventListener('click', () => { void createBlankWordDocument(state); });
+      empty.querySelector('[data-documents-retry]')?.addEventListener('click', () => {
+        state.documentsReadError = null;
+        renderLeft(state);
+        refreshDocuments(state).then(() => {
+          if (state.disposed) return;
+          renderRight(state);
+          renderCenter(state);
+        }).catch((error) => console.warn('[documents] document list retry failed', error));
+      });
       empty.querySelector('[data-documents-clear-filters]')?.addEventListener('click', () => {
         clearDocumentFilters(state, { resetSort: true });
       });
@@ -1672,14 +1811,16 @@ async function switchSelectedDocument(state, documentId, options = {}, lifecycle
   bindDocumentBlobByteCache(state, documentId);
   renderSelection(state);
   const host = state.ctx.host.querySelector('[data-documents-editor]');
-  if (host) host.innerHTML = `<div class="ctox-empty documents-loading"><strong>${escapeHtml(state.t('loadingDocument', 'Lade Dokument'))}</strong><span>${escapeHtml(state.t('documentSwitchRunning', 'Dokumentwechsel läuft.'))}</span></div>`;
+  if (host) host.innerHTML = `<div class="ctox-empty documents-loading" role="status" aria-live="polite"><strong>${escapeHtml(state.t('loadingDocument', 'Lade Dokument'))}</strong><span>${state.lang === 'en' ? 'The saved version is being read locally or requested through synchronization.' : 'Die gespeicherte Version wird lokal gelesen oder über die Synchronisierung angefordert.'}</span></div>`;
   try {
     await loadVersion(state);
   } catch (error) {
     if (state.switchSerial !== switchSerial) return;
     state.selectedVersion = null;
     renderSelection(state);
-    renderLoadError(state, `${state.t('documentLoadFailed', 'Dokument konnte nicht geladen werden:')} ${error?.message || error}`);
+    renderLoadError(state, `${state.t('documentLoadFailed', 'Dokument konnte nicht geladen werden:')} ${error?.message || error}`, {
+      retry: () => switchSelectedDocument(state, documentId, options),
+    });
     return;
   }
   if (state.switchSerial !== switchSerial) return;
@@ -2294,6 +2435,9 @@ function mergeKnowledgeTableReferences(tables = []) {
   }
 
   return [...groups.entries()].map(([logicalId, parts]) => {
+    if (parts.every((part) => isCatalogKnowledgeReference(part))) {
+      return mergeKnowledgeCatalogReference(logicalId, parts);
+    }
     const sorted = [...parts].sort((left, right) => (
       (left.chunkIndex ?? Number.MAX_SAFE_INTEGER) - (right.chunkIndex ?? Number.MAX_SAFE_INTEGER)
       || left.id.localeCompare(right.id)
@@ -2413,6 +2557,146 @@ function mergeKnowledgeTableReferences(tables = []) {
   });
 }
 
+function isCatalogKnowledgeReference(part) {
+  if (hasEmbeddedKnowledgeRows(part?.table) || hasEmbeddedKnowledgeRows(part?.payload)) return false;
+  return isKnowledgeCatalogDocument(part?.table) || isKnowledgeCatalogDocument(part?.payload);
+}
+
+function isKnowledgeCatalogDocument(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  const nested = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const version = record.projection_version ?? nested?.projection_version;
+  const rowsSource = record.rows_source ?? nested?.rows_source;
+  const marked = version === 2 || version === '2' || rowsSource === 'rxdb.rows.fetch';
+  if (!marked) return false;
+  return !hasEmbeddedKnowledgeRows(record);
+}
+
+function hasEmbeddedKnowledgeRows(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  const nested = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const frame = record.dataframe && typeof record.dataframe === 'object' && !Array.isArray(record.dataframe)
+    ? record.dataframe
+    : null;
+  const nestedFrame = nested?.dataframe && typeof nested.dataframe === 'object' && !Array.isArray(nested.dataframe)
+    ? nested.dataframe
+    : null;
+  return [
+    record.rows,
+    record.records,
+    record.data,
+    frame?.rows,
+    frame?.records,
+    frame?.data,
+    nested?.rows,
+    nested?.records,
+    nested?.data,
+    nestedFrame?.rows,
+    nestedFrame?.records,
+    nestedFrame?.data,
+  ].some((value) => Array.isArray(value) && value.length > 0);
+}
+
+function catalogRowCount(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
+  const nested = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const value = record.row_count ?? nested?.row_count;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return null;
+  return number;
+}
+
+function mergeKnowledgeCatalogReference(logicalId, parts) {
+  const sorted = [...parts].sort((left, right) => left.id.localeCompare(right.id));
+  const first = sorted[0];
+  const rowCount = sorted
+    .map((part) => catalogRowCount(part.table) ?? catalogRowCount(part.payload))
+    .find((value) => value != null);
+  const columns = firstArray(
+    first.payload?.columns,
+    first.table?.columns,
+    first.payload?.schema?.columns,
+    first.table?.schema?.columns,
+  );
+  const tableId = String(first.payload?.table_id || first.table?.table_id || '').trim();
+  const domain = String(
+    first.payload?.domain
+    || first.table?.domain
+    || first.payload?.knowledge_domain
+    || first.table?.knowledge_domain
+    || '',
+  ).trim();
+  const projectionVersion = first.payload?.projection_version ?? first.table?.projection_version ?? 2;
+  const rowsSource = first.payload?.rows_source || first.table?.rows_source || 'rxdb.rows.fetch';
+  const mergedPayload = {
+    id: logicalId,
+    table_id: tableId,
+    logical_table_id: logicalId,
+    domain,
+    columns,
+    rows_source: rowsSource,
+    projection_version: projectionVersion,
+    rows_complete: true,
+    chunk_status: 'complete',
+    chunk_validation_errors: [],
+  };
+  if (rowCount != null) mergedPayload.row_count = rowCount;
+  return normalizeKnowledgeRecord({
+    id: logicalId,
+    table_id: tableId,
+    logical_table_id: logicalId,
+    domain,
+    kind: first.table?.kind || first.payload?.kind || 'dataframe',
+    title: String(first.table?.title || first.payload?.title || '').trim(),
+    summary: String(
+      first.table?.summary
+      || first.payload?.summary
+      || first.table?.description
+      || first.payload?.description
+      || '',
+    ).trim(),
+    columns,
+    rows_source: rowsSource,
+    projection_version: projectionVersion,
+    rows_complete: true,
+    chunk_status: 'complete',
+    chunk_validation_errors: [],
+    ...(rowCount != null ? { row_count: rowCount } : {}),
+    payload: mergedPayload,
+  });
+}
+
+function knowledgeTableLineage(table) {
+  if (isKnowledgeCatalogDocument(table)) {
+    return {
+      id: table.id,
+      table_id: String(table.table_id || table.payload?.table_id || '').trim(),
+      domain: String(table.domain || table.payload?.domain || table.knowledge_domain || table.payload?.knowledge_domain || '').trim(),
+      row_count: catalogRowCount(table),
+      columns: firstArray(
+        table.columns,
+        table.payload?.columns,
+        table.schema?.columns,
+        table.payload?.schema?.columns,
+      ),
+    };
+  }
+  return {
+    id: table.id,
+    chunk_status: table.chunk_status || table.payload?.chunk_status || 'complete',
+    rows_complete: table.rows_complete ?? table.payload?.rows_complete ?? true,
+    chunk_ids: table.chunk_ids || table.payload?.chunk_ids || [table.id],
+    chunk_lineage: table.chunk_lineage || table.payload?.chunk_lineage || table.lineage || table.payload?.lineage || [],
+    projected_row_count: table.projected_row_count ?? table.payload?.projected_row_count ?? null,
+  };
+}
+
 function consistentDeclaredValue(parts, field, errors, errorCode) {
   const values = [...new Set(parts
     .map((part) => part[field].present ? part[field].value : null)
@@ -2493,14 +2777,7 @@ function resolveKnowledgeContext(state, requestedId = '', query = '') {
     updated_at_ms: selected.updated_at_ms,
     linked_runbook_ids: relatedRunbooks.map((runbook) => runbook.id),
     table_ids: relatedTables.map((table) => table.id),
-    table_lineage: relatedTables.map((table) => ({
-      id: table.id,
-      chunk_status: table.chunk_status || table.payload?.chunk_status || 'complete',
-      rows_complete: table.rows_complete ?? table.payload?.rows_complete ?? true,
-      chunk_ids: table.chunk_ids || table.payload?.chunk_ids || [table.id],
-      chunk_lineage: table.chunk_lineage || table.payload?.chunk_lineage || table.lineage || table.payload?.lineage || [],
-      projected_row_count: table.projected_row_count ?? table.payload?.projected_row_count ?? null,
-    })),
+    table_lineage: relatedTables.map((table) => knowledgeTableLineage(table)),
     source_references: sourceReferences.slice(0, 200),
   };
 }
@@ -3353,7 +3630,7 @@ async function renderCenter(state) {
     return;
   }
   if (!version) {
-    host.innerHTML = `<div class="ctox-empty documents-loading"><strong>${escapeHtml(state.t('loadingDocument', 'Lade Dokument'))}</strong><span>${escapeHtml(state.t('versionLoading', 'Version wird gelesen.'))}</span></div>`;
+    host.innerHTML = `<div class="ctox-empty documents-loading" role="status" aria-live="polite"><strong>${escapeHtml(state.t('loadingDocument', 'Lade Dokument'))}</strong><span>${state.lang === 'en' ? 'The saved version is being read locally or requested through synchronization.' : 'Die gespeicherte Version wird lokal gelesen oder über die Synchronisierung angefordert.'}</span></div>`;
     loadSelectedVersion(state)
       .then((loadedVersion) => {
         if (state.renderSerial !== renderSerial) return;
@@ -3361,11 +3638,15 @@ async function renderCenter(state) {
           renderCenter(state);
           return;
         }
-        renderError(state, state.t('noSavedVersionFound', 'Zu diesem Dokument wurde keine gespeicherte Version gefunden. Bitte erneut importieren oder den Datensatz verwalten.'));
+        renderError(state, state.t('noSavedVersionFound', 'Zu diesem Dokument wurde keine gespeicherte Version gefunden. Bitte erneut importieren oder den Datensatz verwalten.'), {
+          retry: () => renderCenter(state),
+        });
       })
       .catch((error) => {
         if (state.renderSerial !== renderSerial) return;
-        renderError(state, `${state.t('loadVersionFailed', 'Dokumentversion konnte nicht geladen werden:')} ${error?.message || error}`);
+        renderError(state, `${state.t('loadVersionFailed', 'Dokumentversion konnte nicht geladen werden:')} ${error?.message || error}`, {
+          retry: () => renderCenter(state),
+        });
       });
     return;
   }
@@ -4449,10 +4730,14 @@ function clampNumber(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
-function renderError(state, message) {
+function renderError(state, message, { retry } = {}) {
   const host = state.ctx.host.querySelector('[data-documents-editor]');
   if (!host) return;
-  host.innerHTML = `<div class="ctox-empty documents-error"><strong>${escapeHtml(state.t('documentError', 'Dokumentfehler'))}</strong><span>${escapeHtml(message)}</span></div>`;
+  host.innerHTML = `<div class="ctox-empty documents-error"><strong>${escapeHtml(state.t('documentError', 'Dokumentfehler'))}</strong><span>${escapeHtml(message)}</span>${retry ? `<div class="documents-empty-actions"><button class="ctox-button is-primary" type="button" data-documents-retry-version>${state.lang === 'en' ? 'Try again' : 'Erneut versuchen'}</button></div>` : ''}</div>`;
+  host.querySelector('[data-documents-retry-version]')?.addEventListener('click', () => {
+    if (state.disposed) return;
+    Promise.resolve().then(retry).catch((error) => renderError(state, error?.message || String(error), { retry }));
+  });
 }
 
 function isSupportedDocumentFile(file) {
@@ -4617,6 +4902,9 @@ export const __documentsTestHooks = {
   knowledgeCandidates,
   mergeKnowledgeTableReferences,
   normalizeDocumentRecord,
+  documentListState,
+  refreshDocuments,
+  wireDocumentReadiness,
   normalizeKnowledgeRecord,
   resolveKnowledgeContext,
   groupDocumentRecords,

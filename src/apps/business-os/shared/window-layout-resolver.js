@@ -154,11 +154,12 @@ export function resolveWindowLayout({
   targetRects = [],
   pointerType = 'mouse',
   previousCandidate = null,
+  allowWorkspaceSnap = true,
 } = {}) {
   if (!sourceRect || !workRect) return null;
   const thresholds = POINTER_THRESHOLDS[pointerType] || POINTER_THRESHOLDS.mouse;
   const candidates = [
-    ...workspaceCandidates(sourceRect, workRect),
+    ...(allowWorkspaceSnap ? workspaceCandidates(sourceRect, workRect) : []),
     ...appCandidates(sourceRect, targetRects, workRect),
   ];
   const previousId = previousCandidate?.id || '';

@@ -1,15 +1,16 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20260913-shell-v2-pending-collection-changes-v375';
-import { CtoxResizer } from './shared/resizer.js?v=20260913-shell-v2-pending-collection-changes-v375';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20260913-shell-v2-pending-collection-changes-v375';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20260913-shell-v2-pending-collection-changes-v375';
-import { createAppActions } from './shared/app-actions.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { CtoxResizer } from './shared/resizer.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { createAppActions } from './shared/app-actions.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20260913-shell-v2-pending-collection-changes-v375';
+} from './shared/app-lifecycle.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -17,20 +18,21 @@ import {
   canSelfExecuteBusinessData,
   canUseBusinessPermission,
   canViewBusinessModuleSource,
-} from './shared/permissions.js?v=20260913-shell-v2-pending-collection-changes-v375';
+  roleMayReadCollection,
+} from './shared/permissions.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20260913-shell-v2-pending-collection-changes-v375';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20260913-shell-v2-pending-collection-changes-v375';
+} from './shared/branding.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20260913-shell-v2-pending-collection-changes-v375';
+} from './shared/presentation.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -41,9 +43,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20260913-shell-v2-pending-collection-changes-v375';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20260913-shell-v2-pending-collection-changes-v375';
-import { createDocumentsFacade } from './shared/documents.js?v=20260913-shell-v2-pending-collection-changes-v375';
+} from './shared/shell-permissions-ui.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { createDocumentsFacade } from './shared/documents.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -51,16 +53,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20260913-shell-v2-pending-collection-changes-v375';
+} from './shared/maintenance-state.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20260913-shell-v2-pending-collection-changes-v375';
+} from './shared/workspace-session.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20260913-shell-v2-pending-collection-changes-v375';
+} from './shared/taskbar-pins.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -68,9 +70,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20260913-shell-v2-pending-collection-changes-v375';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20260913-shell-v2-pending-collection-changes-v375';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20260913-shell-v2-pending-collection-changes-v375';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -78,8 +81,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20260913-shell-v2-pending-collection-changes-v375';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20260913-shell-v2-pending-collection-changes-v375';
+} from './shared/startup-deadlines.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261001-shell-v2-workjet-project-messages-v437';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -87,14 +90,17 @@ const LOGGED_OUT_KEY = 'ctox.businessOs.loggedOut';
 const ACCOUNT_PREFS_KEY = 'ctox.businessOs.accountPreferences';
 const PAIRING_CONFIG_KEY = 'ctox.businessOs.pairingConfig';
 const RXDB_BOOTSTRAP_VERSION_KEY = 'ctox.businessOs.rxdbBootstrapVersion';
-const RXDB_SCHEMA_REPAIR_KEY = 'ctox.businessOs.rxdbSchemaRepair';
 const MODULE_LAYOUT_KEY = 'ctox.businessOs.moduleLayout';
 const TASKBAR_PINS_KEY = 'ctox.businessOs.taskbarPins';
+const TASKBAR_PIN_HYDRATION_TIMEOUT_MS = 20_000;
+const TASKBAR_PIN_HYDRATION_RETRY_BASE_MS = 500;
+const TASKBAR_PIN_HYDRATION_RETRY_WINDOW_MS = 60_000;
+const TASKBAR_PIN_HYDRATION_ATTEMPT_DIAGNOSTICS_MAX = 8;
 const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20260913-shell-v2-pending-collection-changes-v375';
+const APP_BUILD = '20261001-shell-v2-workjet-project-messages-v437';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -239,6 +245,11 @@ function assertCriticalSyncCollectionsMatchBundle(rxdb) {
 }
 let moduleLayoutSaveTimer = null;
 let taskbarPinSaveTimer = null;
+let taskbarPinHydrationRetryTimer = null;
+let taskbarPinHydrationRetryCount = 0;
+let taskbarPinHydrationRetryStartedAtMs = 0;
+let taskbarPinHydrationGeneration = 0;
+let taskbarPinHydrationAttemptSequence = 0;
 let workspaceSessionSaveTimer = null;
 let desktopOpenIconObserver = null;
 let desktopOpenIconObserverTarget = null;
@@ -314,6 +325,11 @@ const state = {
   governance: null,
   moduleLayout: null,
   taskbarPins: [],
+  taskbarPinHydrationRetryCount: 0,
+  taskbarPinHydrationRetryStartedAtMs: 0,
+  taskbarPinHydrationLastError: null,
+  taskbarPinHydrationAttempts: [],
+  taskbarPinsKnown: false,
   taskbarPinsUpdatedAtMs: 0,
   schemaRegistrations: new Map(),
   schemaRegistrationQueue: Promise.resolve(),
@@ -646,7 +662,8 @@ async function ensureAdvancedStatusRequiredCollections(requiredCollections, opti
   if (!Array.isArray(requiredCollections) || !state.sync?.startCollection) return;
   const names = requiredCollections
     .filter((collection) => typeof collection === 'string' && collection.trim())
-    .filter((collection) => state.db?.raw?.[collection]);
+    .filter((collection) => state.db?.raw?.[collection]
+      && state.sync.mayReadCollection?.(collection) !== false);
   await Promise.all(names.map((collection) => state.sync.startCollection(collection).catch(() => null)));
   if (options.allowRestart !== true) return;
   for (const collection of names) {
@@ -696,6 +713,7 @@ if (new URLSearchParams(window.location.search).has('rxdbSmoke')) {
     createModuleContext,
     createModulePermissionFacade,
     storageKeys: businessOsStorageKeys,
+    appBuild: APP_BUILD,
     renderTabs,
     listLaunchTargets,
     openAppLifecycleDrawer,
@@ -864,8 +882,8 @@ function getRegisteredSvgIcon(id, size, strokeWidth) {
   // which may carry tooling prefixes (bench_contracts_... -> B).
   const normalized = String(id || '').replace(/^module:|^desktop-app:/, '');
   const moduleDef = state.modules?.find?.((mod) => mod.id === normalized);
-  const operatorIcon = operatorIconFor(normalized);
-  const rasterAsset = String(operatorIcon?.asset || moduleDef?.layout?.icon_asset || '').trim();
+  const selectedIcon = operatorIconFor(normalized) || grokShellIconFor(normalized);
+  const rasterAsset = String(selectedIcon?.asset || moduleDef?.layout?.icon_asset || '').trim();
   const rasterSrcSet = String(moduleDef?.layout?.icon_asset_srcset || '').trim();
   if (rasterAsset && !rasterAsset.includes('..') && !/^[a-z][a-z0-9+.-]*:/i.test(rasterAsset)) {
     const srcset = rasterSrcSet && !rasterSrcSet.includes('..') && !/[<>]/.test(rasterSrcSet)
@@ -1234,6 +1252,7 @@ const shellMessages = {
 
 const els = {
   status: document.querySelector('[data-status-text]'),
+  collectionFreshnessWarning: document.querySelector('[data-collection-freshness-warning]'),
   ctoxWarning: document.querySelector('[data-ctox-shell-warning]'),
   maintenanceBanner: document.querySelector('[data-maintenance-banner]'),
   recoveryWarning: document.querySelector('[data-recovery-warning]'),
@@ -1310,10 +1329,12 @@ async function bootstrap() {
   setStartupProgress(30, shellText('bootSession'));
   setStartupProgress(50, shellText('bootDatastore'));
   const syncConfig = await loadSyncConfig();
-  await purgeLegacySharedBusinessDb(syncConfig);
-  await purgeSupersededBusinessDbGenerations(syncConfig).catch((error) => {
-    // Never fatal: a browser that refuses the cleanup must still boot.
-    console.warn('[business-os] superseded replica cleanup failed', error);
+  await reportLegacySharedBusinessDb(syncConfig).catch((error) => {
+    console.warn('[business-os] legacy replica inspection failed', error);
+  });
+  await reportSupersededBusinessDbGenerations(syncConfig).catch((error) => {
+    // Diagnostics must not make an authenticated browser unbootable.
+    console.warn('[business-os] superseded replica inspection failed', error);
   });
   await resetBusinessDataPlaneForBuildIfNeeded(syncConfig);
   await openBusinessDataPlane(syncConfig);
@@ -1348,7 +1369,9 @@ async function bootstrap() {
   }
   state.governance = modules.governance || null;
   state.moduleLayout = normalizeModuleLayout(await loadModuleLayout(), state.modules);
-  state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules);
+  state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules, {
+    preserveKnownEmpty: state.taskbarPinsKnown === true,
+  });
   persistModuleLayout();
   renderTabs();
   const shellUi = await loadShellUiModules();
@@ -1460,7 +1483,7 @@ function businessDbName(syncConfig = state.syncConfig) {
     .join('_');
 }
 
-async function purgeLegacySharedBusinessDb(syncConfig) {
+async function reportLegacySharedBusinessDb(syncConfig) {
   const instanceId = String(syncConfig?.instance_id || syncConfig?.instanceId || 'default')
     .replace(/[^a-zA-Z0-9_-]+/g, '_')
     .slice(0, 80) || 'default';
@@ -1468,29 +1491,23 @@ async function purgeLegacySharedBusinessDb(syncConfig) {
     .replace(/[^a-zA-Z0-9_-]+/g, '_')
     .slice(0, 80) || 'local';
   const legacyName = [BUSINESS_DB_NAME, originId, instanceId].join('_');
-  const marker = `ctox.business-os.user-db-migration.v1:${legacyName}`;
-  if (localStorage.getItem(marker) === 'complete') return;
-  const { resetBusinessDb } = await loadBusinessDbModule();
-  let resetCompleted = true;
-  await resetBusinessDb({ name: legacyName }).catch((error) => {
-    console.warn('[business-os] legacy shared IndexedDB cleanup failed', error);
-    if (error?.code === 'recovery_export_required') {
-      resetCompleted = false;
-      return;
-    }
-    throw error;
-  });
-  if (resetCompleted) localStorage.setItem(marker, 'complete');
+  // This old replica may still contain the only copy of unacknowledged writes.
+  // Do not infer safety from a cached recovery-status marker or an export call.
+  if (typeof indexedDB?.databases !== 'function') return;
+  const entries = await indexedDB.databases();
+  if (entries.some((entry) => entry?.name === legacyName)) {
+    console.warn('[business-os] preserved legacy shared local replica for recovery', { name: legacyName });
+  }
 }
 
-// Advancing BUSINESS_DB_STORAGE_GENERATION deliberately opens a fresh replica
-// instead of migrating the old one. What it did NOT do was remove the replica
-// it walked away from, so every superseded generation stayed in IndexedDB
-// forever. Measured on a customer instance: 2059 MB of orphaned replicas, and a
-// tab that climbed to 3.2 GB of a 4 GB heap within 30 s and was killed by the
-// renderer before its first replication could finish — every click dead, no
-// error anywhere. A generation bump has to take its predecessor with it.
-async function purgeSupersededBusinessDbGenerations(syncConfig) {
+// A generation bump opens a new replica while the old primary and its recovery
+// journal may still hold writes that the server has not acknowledged. A
+// snapshot count is not a safe deletion gate: an old tab can write after the
+// count, and its versionchange handler can close the handle for deleteDatabase.
+// Preserve both databases until an explicit, verified recovery/retirement flow
+// exists. Old generations can consume substantial storage, so report them for
+// diagnosis instead of silently discarding potentially unique customer data.
+async function reportSupersededBusinessDbGenerations(syncConfig) {
   if (typeof indexedDB?.databases !== 'function') return;
   const currentName = businessDbName(syncConfig);
   const suffix = currentName.slice(
@@ -1512,27 +1529,12 @@ async function purgeSupersededBusinessDbGenerations(syncConfig) {
       && name.startsWith(prefix)
       && name.includes(suffix)
       && !name.includes(BUSINESS_DB_STORAGE_GENERATION)
+      && !name.endsWith('__recovery_v2')
     ));
   if (!superseded.length) return;
-  const removed = [];
-  for (const name of superseded) {
-    // Also take the paired recovery journal; it is scoped to the same replica.
-    for (const target of [name, `${name}__recovery_v2`]) {
-      const ok = await new Promise((resolve) => {
-        let settled = false;
-        const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
-        const request = indexedDB.deleteDatabase(target);
-        request.onsuccess = () => finish(true);
-        request.onerror = () => finish(false);
-        request.onblocked = () => finish(false);
-        setTimeout(() => finish(false), 8000);
-      });
-      if (ok) removed.push(target);
-    }
-  }
-  console.info('[business-os] removed superseded local replica generations', {
+  console.warn('[business-os] preserved superseded local replica generations for recovery', {
     current: currentName,
-    removed,
+    preserved: superseded,
   });
 }
 
@@ -1556,6 +1558,11 @@ async function openBusinessDataPlane(syncConfig) {
   try {
     state.syncConfig = syncConfig;
     const dbName = businessDbName(syncConfig);
+    // Pending edits and known-empty state are scoped to the database/session
+    // identity now opening. Never let a replacement race inherit them.
+    state.taskbarPins = [];
+    state.taskbarPinsKnown = false;
+    state.taskbarPinsUpdatedAtMs = 0;
 
     await openBusinessDbAndRegisterCoreCollections(dbName);
 
@@ -1601,6 +1608,10 @@ async function openBusinessDataPlane(syncConfig) {
       config: syncConfig,
       onDiagnostic: updateSyncDiagnostics,
       capabilityTokenProvider: commandBusModule.getBusinessOsCapabilityToken,
+      mayReadCollection: (collection) => roleMayReadCollection(
+        businessActorFromSession(state.session, state.governance).role,
+        collection,
+      ),
     });
 
     setStartupProgress(69, shellText('bootServices'));
@@ -1610,18 +1621,30 @@ async function openBusinessDataPlane(syncConfig) {
       session: () => state.session,
       config: syncConfig,
     });
-    // Register the mutation plane before restored app windows enqueue their
-    // module collections. This gives foreground actions a ready shared-room
-    // registration instead of placing their one-row command behind the whole
-    // restored workspace bootstrap.
-    await state.sync.startCollection('business_commands').catch((error) => {
-      console.warn('[business-os] command transport warmup deferred', error);
-    });
+    // Request command transport early, but do not put its WebRTC registration
+    // on the cached workspace's first-paint path. A foreground command
+    // re-acquires this bridge through prepareCommandSync before insertion.
+    startCommandTransportWarmup(state.sync);
     // Reconcile only after transport registration. An unresolved native read
     // must not become an empty layout or a fresh local write during startup.
-    void hydrateTaskbarPinsFromDesktopLayout().then(() => renderTabs()).catch((error) => {
-      console.warn('[business-os] taskbar pin hydration failed:', error);
-    });
+    // A replaced peer generation is a transport boundary, not authoritative
+    // absence; retry the same strict read briefly so late signaling converges.
+    clearTaskbarPinHydrationRetry({ resetAttempts: true });
+    const pinHydrationGeneration = taskbarPinHydrationGeneration;
+    void hydrateTaskbarPinsFromDesktopLayout(pinHydrationGeneration)
+      .then(() => {
+        if (taskbarPinHydrationGeneration === pinHydrationGeneration) renderTabs();
+      })
+      .catch((error) => {
+        if (taskbarPinHydrationGeneration !== pinHydrationGeneration) return;
+        state.taskbarPinHydrationLastError = String(error?.message || error);
+        console.warn('[business-os] taskbar pin hydration failed:', error);
+      })
+      .finally(() => {
+        if (taskbarPinHydrationGeneration === pinHydrationGeneration) {
+          scheduleTaskbarPinHydrationRetry();
+        }
+      });
     startShellCtoxHealthMonitor();
     startWorkspaceBrandingMonitor();
 
@@ -1645,6 +1668,14 @@ async function openBusinessDataPlane(syncConfig) {
     rejectDataPlaneReady(error);
     throw error;
   }
+}
+
+function startCommandTransportWarmup(sync) {
+  void Promise.resolve()
+    .then(() => sync.startCollection('business_commands'))
+    .catch((error) => {
+      console.warn('[business-os] command transport warmup deferred', error);
+    });
 }
 
 async function openBusinessDbAndRegisterCoreCollections(dbName) {
@@ -2353,6 +2384,13 @@ function wireShellActions() {
   document.querySelector('[data-open-settings]')?.addEventListener('click', () => {
     openSettingsDrawer();
   });
+  document.querySelector('[data-open-sync-diagnostics]')?.addEventListener('click', () => {
+    if (!state.session?.authenticated
+      || document.documentElement.dataset.authState === 'locked'
+      || document.body.dataset.authState === 'locked') return;
+    els.rightDrawer.classList.remove('account-popover');
+    openDrawer('right', renderSyncDiagnosticsDrawer());
+  });
   document.querySelector('[data-shell-ctox]')?.addEventListener('click', (event) => {
     event.preventDefault();
     openModule('ctox');
@@ -2495,7 +2533,16 @@ function isTrustedBusinessOsMessageSource(event) {
 // still emits `ctox-business-os-sync-diagnostics` for those views.
 function setupSyncToast() {
   document.querySelector('[data-sync-toast]')?.remove();
-  syncToastRefresh = () => {};
+  syncToastRefresh = renderCollectionFreshnessWarning;
+  renderCollectionFreshnessWarning();
+}
+
+function renderCollectionFreshnessWarning() {
+  renderFreshnessWarning(els.collectionFreshnessWarning, {
+    collections: Array.isArray(state.activeModule?.collections) ? state.activeModule.collections : [],
+    diagnostics: state.syncDiagnostics,
+    language: shellLang(),
+  });
 }
 
 function teardownModuleResizers() {
@@ -3692,6 +3739,7 @@ function shellText(key) {
 
 function updateSyncDiagnostics(snapshot) {
   state.syncDiagnostics = snapshot;
+  renderCollectionFreshnessWarning();
   if (hasWebRtcConnectedCollection(snapshot)) markBootTiming('firstWebRtcConnectedMs');
   updateModuleScriptPreloadAvailability(snapshot);
   window.ctoxBusinessOsSyncDiagnostics = snapshot;
@@ -4632,9 +4680,10 @@ function moduleAppearsAsWindowTarget(mod) {
 function desktopAppDescriptorForModule(mod) {
   const presentation = resolvePresentation(mod);
   const shell = resolveShellWindowContract(mod);
-  const operatorIcon = operatorIconFor(mod.id);
+  const selectedIcon = operatorIconFor(mod.id) || grokShellIconFor(mod.id);
   return {
     id: mod.id,
+    module: mod,
     title: moduleDisplayTitle(mod),
     glyph: taskbarMarkForModule(mod),
     category: workjetCategoryForModule(mod),
@@ -4648,7 +4697,7 @@ function desktopAppDescriptorForModule(mod) {
     shellGeometryContract: shell?.geometryContract || '',
     shellHeaderRows: Math.max(2, Number.parseInt(mod?.layout?.shell_header_rows, 10) || 2),
     shellIconRows: Math.max(2, Number.parseInt(mod?.layout?.shell_icon_rows, 10) || 2),
-    iconAsset: String(operatorIcon?.asset || mod?.layout?.icon_asset || '').trim(),
+    iconAsset: String(selectedIcon?.asset || mod?.layout?.icon_asset || '').trim(),
     iconSrcSet: String(mod?.layout?.icon_asset_srcset || '').trim(),
     framePalette: mod?.layout?.frame_palette || null,
   };
@@ -4733,6 +4782,7 @@ async function openDesktopApp(appId, options = {}) {
   const existing = findDesktopWindow(appId);
   if (existing) {
     restoreAndFocusWindow(existing);
+    setThreadReturnAction(existing, options.args);
     const launchDelivered = dispatchDesktopAppLaunch(existing, appId, options.args);
     if (options.args && !launchDelivered) {
       throw new Error(`Desktop app launch arguments could not be delivered: ${appId}`);
@@ -4755,6 +4805,7 @@ async function openDesktopApp(appId, options = {}) {
     iconSrcSet: entry.iconSrcSet,
     iconAnchorRect: () => desktopIconAnchorRect(entry.id),
   });
+  setThreadReturnAction(win, options.args);
   applyWorkjetCategory(win.element, entry.category || 'imported');
   let teardown = null;
   try {
@@ -4824,6 +4875,7 @@ async function openDesktopApp(appId, options = {}) {
       }
     });
   }
+  setThreadReturnAction(win, options.args);
   return win.id;
 }
 
@@ -4833,6 +4885,7 @@ async function openWindowedModule(mod, options = {}) {
   const existing = descriptor.multiInstance ? null : findDesktopWindow(mod.id);
   if (existing) {
     restoreAndFocusWindow(existing);
+    setThreadReturnAction(existing, options.args);
     const launchDelivered = dispatchDesktopAppLaunch(existing, mod.id, options.args);
     if (options.args?.openFile) {
       state.eventBus?.emitAsync?.('desktop-app:open-file', {
@@ -4864,6 +4917,7 @@ async function openWindowedModule(mod, options = {}) {
     iconAnchorRect: () => desktopIconAnchorRect(mod.id),
     ...windowHeaderOptionsForModule(mod),
   });
+  setThreadReturnAction(win, options.args);
   applyWorkjetCategory(win.element, descriptor.category);
   // Apply the declared presentation before the asynchronous module mount.
   // Shell controls are interactive as soon as the window exists; applying the
@@ -4923,6 +4977,7 @@ async function openWindowedModule(mod, options = {}) {
     }
     wireShellV2ModuleTitle(mod, win, content);
     state.windowManager?.refreshV2Chrome?.(win.id);
+    setThreadReturnAction(win, options.args);
     const windowResizers = [];
     cleanupWindowResizers = setupModuleResizers(mod, {
       scope: root,
@@ -5086,6 +5141,55 @@ function dispatchDesktopAppLaunch(win, appId, args = {}) {
   }));
   return true;
 }
+
+function setThreadReturnAction(win, args = {}) {
+  const actions = win?.element?.querySelector?.('[data-window-actions]');
+  if (!actions) return;
+  const existing = actions.querySelector('[data-thread-return]');
+  const threadId = String(args?.return_thread_id || '').trim();
+  const targetRecordId = String(args?.record || args?.record_id || args?.case_id
+    || args?.task_id || args?.command_id || args?.message_id || args?.thread_key || '').trim();
+  if (!threadId || threadId.length > 256) {
+    existing?.remove();
+    return;
+  }
+  if (existing?.dataset.threadReturn === threadId
+    && existing?.dataset.targetRecordId === targetRecordId) return;
+  existing?.remove();
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'shell-window-header-action';
+  button.dataset.threadReturn = threadId;
+  button.dataset.targetRecordId = targetRecordId;
+  button.dataset.windowHeaderAction = '';
+  button.textContent = '↩ Threads';
+  button.setAttribute('aria-label', 'Zurück zur Abstimmung in Threads');
+  button.addEventListener('click', () => {
+    window.location.hash = `#threads?thread_id=${encodeURIComponent(threadId)}`;
+  });
+  actions.prepend(button);
+}
+
+document.addEventListener('ctox-business-os-record-focus', (event) => {
+  const detail = event.detail || {};
+  if (!['record_focused', 'unavailable', 'forbidden'].includes(detail.status)) return;
+  const windowElement = event.target?.closest?.('.shell-window');
+  const returnButton = windowElement?.querySelector?.('[data-thread-return]');
+  if (!returnButton || windowElement?.dataset.ownerId !== `desktop-app:${detail.module}`
+    || returnButton.dataset.threadReturn !== detail.returnThreadId
+    || returnButton.dataset.targetRecordId !== detail.recordId) return;
+  returnButton.dataset.sourceFocusStatus = detail.status;
+  returnButton.title = detail.status === 'record_focused'
+    ? 'Datensatz in der Quell-App fokussiert · Zurück zu Threads'
+    : detail.status === 'forbidden'
+      ? 'Kein Zugriff auf den verknüpften Datensatz · Zurück zu Threads'
+      : 'Verknüpfter Datensatz nicht verfügbar · Zurück zu Threads';
+  if (detail.status !== 'record_focused'
+    || !performance.getEntriesByName('ctox.threads.source_navigation_started', 'mark').length) return;
+  performance.mark('ctox.threads.source_record_focused');
+  performance.measure('ctox.threads.source_record_focus',
+    'ctox.threads.source_navigation_started', 'ctox.threads.source_record_focused');
+});
 
 function openBusinessChat(detail = {}) {
   const moduleId = detail.module || detail.source_module || '';
@@ -5306,7 +5410,9 @@ function renderTabs() {
   const fragment = document.createDocumentFragment();
   const tabsTarget = { append: (node) => fragment.append(node) };
   state.moduleLayout = normalizeModuleLayout(state.moduleLayout || readModuleLayout(), state.modules);
-  state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+  state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules, {
+    preserveKnownEmpty: state.taskbarPinsKnown === true,
+  });
   const rendered = new Set();
   for (const id of state.taskbarPins) {
     const target = launchTargetForId(id);
@@ -5358,7 +5464,7 @@ function renderModuleTab(target, options = {}) {
     ? shellText('pinned')
     : (button.dataset.running ? shellText('running') : '');
   const svgHtml = getRegisteredSvgIcon(target.id, 16, 1.8);
-  const lifecycle = target.kind === 'module'
+  const lifecycle = target.module
     ? appLifecycleBadge(target.module, {
       session: state.session,
       governance: state.governance,
@@ -5408,7 +5514,7 @@ function renderModuleTab(target, options = {}) {
   button.querySelector('[data-app-lifecycle-badge]')?.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    if (target.kind === 'module') openAppLifecycleDrawer(target.module);
+    if (target.module) openAppLifecycleDrawer(target.module);
   });
   button.addEventListener('click', () => openLaunchTarget(target));
   return button;
@@ -5491,6 +5597,7 @@ function listLaunchTargets(kind = '') {
       glyph: app.glyph,
       category: workjetCategoryForTarget({ kind: 'app', app }),
       app,
+      module: app.module || null,
     }));
   const targetsById = new Map();
   for (const target of moduleTargets) {
@@ -5627,7 +5734,10 @@ function toggleTaskbarPin(targetId, shouldPin = !isTaskbarPinned(targetId)) {
   if (!launchTargetForId(targetId)) return;
   const pins = state.taskbarPins.filter((id) => id !== targetId);
   if (shouldPin) pins.push(targetId);
-  state.taskbarPins = normalizeTaskbarPins(pins, state.modules);
+  state.taskbarPins = normalizeTaskbarPins(pins, state.modules, {
+    preserveKnownEmpty: true,
+  });
+  state.taskbarPinsKnown = true;
   persistTaskbarPins();
   renderTabs();
 }
@@ -5638,7 +5748,10 @@ function moveTaskbarPinBefore(targetId, beforeTargetId) {
   const index = pins.indexOf(beforeTargetId);
   if (index >= 0) pins.splice(index, 0, targetId);
   else pins.push(targetId);
-  state.taskbarPins = normalizeTaskbarPins(pins, state.modules);
+  state.taskbarPins = normalizeTaskbarPins(pins, state.modules, {
+    preserveKnownEmpty: true,
+  });
+  state.taskbarPinsKnown = true;
   persistTaskbarPins();
   renderTabs();
 }
@@ -5652,10 +5765,14 @@ function draggedTaskbarPinId(event) {
 function readTaskbarPins() {
   const cached = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
   state.taskbarPinsUpdatedAtMs = cached.updatedAtMs;
-  return cached.pins.length ? cached.pins : null;
+  // A valid cache exists even when its selection is deliberately empty.
+  // Missing or malformed storage is unknown, not native/native-empty.
+  state.taskbarPinsKnown = cached.present === true;
+  return cached.pins;
 }
 
 function persistTaskbarPins() {
+  state.taskbarPinsKnown = true;
   state.taskbarPinsUpdatedAtMs = Date.now();
   writeScopedLocalStorage(
     TASKBAR_PINS_KEY,
@@ -5677,7 +5794,10 @@ function normalizeTaskbarPins(rawPins, modules, options = {}) {
     .map((id) => String(id || '').trim())
     .filter((id, index, arr) => id && valid.has(id) && arr.indexOf(id) === index);
   if (options.compactLegacyAllPins && looksLikeLegacyAllPins(pins, valid)) pins = [];
-  if (!pins.length) {
+  // Preserve only an explicitly supplied empty selection. Do not turn a
+  // non-empty native list whose ids are currently invalid into a user choice.
+  const suppliedEmpty = Array.isArray(rawPins) && rawPins.length === 0;
+  if (!pins.length && !(options.preserveKnownEmpty && suppliedEmpty)) {
     pins = DEFAULT_TASKBAR_PIN_IDS.filter((id) => valid.has(id));
     if (!pins.length) pins = listLaunchTargets('module').slice(0, 4).map((target) => target.id);
   }
@@ -5690,34 +5810,207 @@ function looksLikeLegacyAllPins(pins, valid) {
   return coverage >= 0.75;
 }
 
-async function hydrateTaskbarPinsFromDesktopLayout() {
-  const database = state.db;
-  const collection = database?.collection?.('desktop_layout');
-  if (!collection) {
-    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules);
+function clearTaskbarPinHydrationRetry({ resetAttempts = false } = {}) {
+  if (taskbarPinHydrationRetryTimer) {
+    window.clearTimeout(taskbarPinHydrationRetryTimer);
+    taskbarPinHydrationRetryTimer = null;
+  }
+  if (resetAttempts) {
+    // Fence in-flight authority reads as well as their timers. A late
+    // settlement belongs to the replaced startup/reconnect session.
+    taskbarPinHydrationGeneration += 1;
+    taskbarPinHydrationRetryCount = 0;
+    taskbarPinHydrationRetryStartedAtMs = 0;
+    state.taskbarPinHydrationRetryCount = 0;
+    state.taskbarPinHydrationRetryStartedAtMs = 0;
+    state.taskbarPinHydrationLastError = null;
+    state.taskbarPinHydrationAttempts = [];
+  }
+}
+
+function scheduleTaskbarPinHydrationRetry({ now = Date.now } = {}) {
+  if (!state.sync?.readCollectionNativeDocument || state.taskbarPinsKnown === true) return;
+  if (taskbarPinHydrationRetryCount === 0) {
+    taskbarPinHydrationRetryStartedAtMs = now();
+    state.taskbarPinHydrationRetryStartedAtMs = taskbarPinHydrationRetryStartedAtMs;
+  } else if (
+    now() - taskbarPinHydrationRetryStartedAtMs
+      >= TASKBAR_PIN_HYDRATION_RETRY_WINDOW_MS
+  ) {
     return;
   }
-  const doc = await collection.findOne('layout').exec();
-  if (state.db !== database) return; // Do not apply a late read to another session.
-  const layout = doc?.toJSON?.() || null;
-  const local = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
+  if (taskbarPinHydrationRetryTimer) return;
+  const attempt = taskbarPinHydrationRetryCount + 1;
+  const generation = taskbarPinHydrationGeneration;
+  taskbarPinHydrationRetryTimer = window.setTimeout(() => {
+    // Check both fences when the timer actually runs. A busy tab can deliver
+    // the callback after the retry window has already elapsed.
+    if (taskbarPinHydrationGeneration !== generation) return;
+    taskbarPinHydrationRetryTimer = null;
+    if (now() - taskbarPinHydrationRetryStartedAtMs
+      >= TASKBAR_PIN_HYDRATION_RETRY_WINDOW_MS) return;
+    taskbarPinHydrationRetryCount = attempt;
+    state.taskbarPinHydrationRetryCount = attempt;
+    state.taskbarPinHydrationLastError = null;
+    void hydrateTaskbarPinsFromDesktopLayout(generation)
+      .then(() => {
+        if (taskbarPinHydrationGeneration === generation) renderTabs();
+      })
+      .catch((error) => {
+        if (taskbarPinHydrationGeneration !== generation) return;
+        state.taskbarPinHydrationLastError = String(error?.message || error);
+        console.warn('[business-os] taskbar pin hydration retry failed:', error);
+      })
+      .finally(() => {
+        if (taskbarPinHydrationGeneration === generation) {
+          scheduleTaskbarPinHydrationRetry({ now });
+        }
+      });
+  }, Math.min(5000, TASKBAR_PIN_HYDRATION_RETRY_BASE_MS * attempt));
+}
+
+async function hydrateTaskbarPinsFromDesktopLayout(
+  hydrationGeneration = taskbarPinHydrationGeneration,
+  { now = Date.now } = {},
+) {
+  const database = state.db;
+  const sync = state.sync;
+  const storageKey = scopedStorageKey(TASKBAR_PINS_KEY);
+  if (!sync?.readCollectionNativeDocument || !database) {
+    state.taskbarPins = normalizeTaskbarPins(state.taskbarPins, state.modules, {
+      preserveKnownEmpty: state.taskbarPinsKnown === true,
+    });
+    return;
+  }
+
+  // Keep the last few actual native-read boundaries. This is intentionally
+  // separate from retry bookkeeping: a swallowed rejection must remain visible
+  // as a failed strict read, while a stale result is recorded as discarded.
+  const attemptId = ++taskbarPinHydrationAttemptSequence;
+  const attempt = {
+    schema: 'ctox.taskbarPinHydrationAttempt.v1',
+    id: attemptId,
+    generation: hydrationGeneration,
+    timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
+    outcome: 'pending',
+    startedAtMs: now(),
+  };
+  if (taskbarPinHydrationGeneration === hydrationGeneration) {
+    state.taskbarPinHydrationAttempts = [
+      ...(Array.isArray(state.taskbarPinHydrationAttempts)
+        ? state.taskbarPinHydrationAttempts
+        : []),
+      attempt,
+    ].slice(-TASKBAR_PIN_HYDRATION_ATTEMPT_DIAGNOSTICS_MAX);
+  }
+  const finishAttempt = (outcome, details = {}, endedAtMs = now()) => {
+    if (taskbarPinHydrationGeneration !== hydrationGeneration) return;
+    const attempts = Array.isArray(state.taskbarPinHydrationAttempts)
+      ? state.taskbarPinHydrationAttempts
+      : [];
+    const index = attempts.findIndex((entry) => entry?.id === attemptId);
+    if (index < 0) return;
+    attempts[index] = {
+      ...attempts[index],
+      ...details,
+      outcome,
+      endedAtMs,
+      durationMs: Math.max(0, endedAtMs - attempts[index].startedAtMs),
+    };
+  };
+
+  // The native wrapper owns collection lifecycle, query readiness and an
+  // opaque authority token. It rejects pending, stale and cancelled reads;
+  // it never translates them into a completed empty answer.
+  let authoritativeDocument;
+  let nativeEndedAtMs;
+  try {
+    authoritativeDocument = await sync.readCollectionNativeDocument('desktop_layout', 'layout', {
+      timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
+    });
+    nativeEndedAtMs = now();
+  } catch (error) {
+    nativeEndedAtMs = now();
+    finishAttempt('rejected', {
+      failureReason: String(error?.code || error?.name || 'unknown').slice(0, 80),
+      failureMessage: String(error?.message || error).slice(0, 240),
+    }, nativeEndedAtMs);
+    throw error;
+  }
+  const identity = {
+    generationStale: taskbarPinHydrationGeneration !== hydrationGeneration,
+    databaseStale: state.db !== database,
+    syncStale: state.sync !== sync,
+    storageKeyStale: scopedStorageKey(TASKBAR_PINS_KEY) !== storageKey,
+  };
+  if (identity.generationStale || identity.databaseStale || identity.syncStale
+    || identity.storageKeyStale) {
+    finishAttempt('stale_discarded', { ...identity }, nativeEndedAtMs);
+    return;
+  }
+
+  state.taskbarPinsKnown = true;
+  const layout = authoritativeDocument?.toJSON?.() || null;
+  const cache = decodeTaskbarPinCache(readScopedLocalStorage(TASKBAR_PINS_KEY));
+  const cachePresent = cache.present === true;
+  const pendingLocal = state.taskbarPinsKnown
+    && Number(state.taskbarPinsUpdatedAtMs || 0) > Number(cache.updatedAtMs || 0);
+  const localPins = pendingLocal ? state.taskbarPins : cache.pins;
+  const localUpdatedAtMs = pendingLocal
+    ? Number(state.taskbarPinsUpdatedAtMs || 0)
+    : Number(cache.updatedAtMs || 0);
+  const localPresent = cachePresent || pendingLocal;
   const resolved = resolveTaskbarPinState({
-    localPins: local.pins,
-    localUpdatedAtMs: local.updatedAtMs,
+    localPins,
+    localUpdatedAtMs,
+    localPresent,
     remotePins: layout?.taskbar_pins,
     remoteUpdatedAtMs: layout?.updated_at_ms,
   });
-  state.taskbarPins = state.modules.length
-    ? normalizeTaskbarPins(resolved.pins, state.modules, {
-        compactLegacyAllPins: resolved.source === 'remote',
-      })
+  const reconciledPins = resolved.source === 'local' && !localPresent
+    ? state.taskbarPins
     : resolved.pins;
-  state.taskbarPinsUpdatedAtMs = resolved.updatedAtMs || Date.now();
-  writeScopedLocalStorage(
-    TASKBAR_PINS_KEY,
-    encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
-  );
-  await syncTaskbarPinsToDesktopLayout();
+  state.taskbarPins = state.modules.length
+    ? normalizeTaskbarPins(reconciledPins, state.modules, {
+      compactLegacyAllPins: resolved.source === 'remote',
+      preserveKnownEmpty: true,
+    })
+    : reconciledPins;
+  // Confirmed absence is not a user edit. Preserve zero rather than inventing
+  // an initialization timestamp; remote and real pending values retain theirs.
+  state.taskbarPinsUpdatedAtMs = Number(resolved.updatedAtMs || 0);
+  finishAttempt('adopted', {
+    resultPresent: authoritativeDocument !== null,
+    remoteDocumentPresent: layout !== null,
+    remoteUpdatedAtMs: Number(layout?.updated_at_ms || 0),
+    remotePinCount: Array.isArray(layout?.taskbar_pins)
+      ? layout.taskbar_pins.length
+      : null,
+    resolvedSource: resolved.source,
+    knownAfterRead: state.taskbarPinsKnown === true,
+    adoptedPinCount: state.taskbarPins.length,
+    adoptedUpdatedAtMs: state.taskbarPinsUpdatedAtMs,
+  }, nativeEndedAtMs);
+  if (resolved.source === 'remote' || localUpdatedAtMs > 0) {
+    try {
+      writeScopedLocalStorage(
+        TASKBAR_PINS_KEY,
+        encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
+      );
+    } catch (error) {
+      // The pending in-memory edit remains eligible for authoritative
+      // write-back even when private mode or quota blocks the cache.
+      console.warn('[business-os] taskbar pin cache write failed:', error);
+    }
+  }
+  renderTabs();
+  // Only a real, strictly newer local selection may write back. The existing
+  // authoritative handle avoids a second ordinary/local query.
+  const shouldWriteBack = resolved.source === 'local'
+    && localUpdatedAtMs > Number(layout?.updated_at_ms || 0);
+  if (shouldWriteBack && authoritativeDocument) {
+    await syncTaskbarPinsToDesktopLayout({ authoritativeDocument });
+  }
 }
 
 async function withStartupTimeout(promise, timeoutMs, fallback, label) {
@@ -5737,19 +6030,44 @@ async function withStartupTimeout(promise, timeoutMs, fallback, label) {
   }
 }
 
-async function syncTaskbarPinsToDesktopLayout() {
+async function syncTaskbarPinsToDesktopLayout(options = {}) {
   const database = state.db;
+  const sync = state.sync;
+  const storageKey = scopedStorageKey(TASKBAR_PINS_KEY);
+  if (!database) return;
+  let existing = options.authoritativeDocument || null;
+  if (!existing) {
+    if (!sync?.readCollectionNativeDocument) return;
+    try {
+      existing = await sync.readCollectionNativeDocument('desktop_layout', 'layout', {
+        timeoutMs: TASKBAR_PIN_HYDRATION_TIMEOUT_MS,
+      });
+    } catch (error) {
+      // Keep the in-memory pending edit. Storage/cache remains best effort.
+      console.warn('[business-os] taskbar pin write-back read failed:', error);
+      return;
+    }
+  }
+  if (state.db !== database || state.sync !== sync
+    || scopedStorageKey(TASKBAR_PINS_KEY) !== storageKey) {
+    return;
+  }
   const collection = database?.collection?.('desktop_layout');
   if (!collection) return;
-  const existing = await collection.findOne('layout').exec();
-  if (state.db !== database) return;
   const existingLayout = existing?.toJSON?.() || null;
-  const remoteUpdatedAtMs = Number(existingLayout?.updated_at_ms || 0);
-  if (remoteUpdatedAtMs > Number(state.taskbarPinsUpdatedAtMs || 0)) {
+  const resolved = resolveTaskbarPinState({
+    localPins: state.taskbarPins,
+    localUpdatedAtMs: state.taskbarPinsUpdatedAtMs,
+    localPresent: state.taskbarPinsKnown === true,
+    remotePins: existingLayout?.taskbar_pins,
+    remoteUpdatedAtMs: existingLayout?.updated_at_ms,
+  });
+  if (resolved.source === 'remote') {
     state.taskbarPins = normalizeTaskbarPins(existingLayout.taskbar_pins, state.modules, {
       compactLegacyAllPins: true,
+      preserveKnownEmpty: true,
     });
-    state.taskbarPinsUpdatedAtMs = remoteUpdatedAtMs;
+    state.taskbarPinsUpdatedAtMs = Number(existingLayout?.updated_at_ms || 0);
     writeScopedLocalStorage(
       TASKBAR_PINS_KEY,
       encodeTaskbarPinCache(state.taskbarPins, state.taskbarPinsUpdatedAtMs),
@@ -5757,21 +6075,25 @@ async function syncTaskbarPinsToDesktopLayout() {
     renderTabs();
     return;
   }
+  // Only a genuine user edit can reach here with a timestamp. Confirmed
+  // absence and unchanged values must not invent one or create a layout.
+  if (!state.taskbarPinsKnown || Number(state.taskbarPinsUpdatedAtMs || 0) <= 0) return;
   const remotePins = Array.isArray(existingLayout?.taskbar_pins)
     ? existingLayout.taskbar_pins.map((id) => String(id || '').trim()).filter(Boolean)
-    : [];
+    : null;
   const localPins = Array.isArray(state.taskbarPins)
     ? state.taskbarPins.map((id) => String(id || '').trim()).filter(Boolean)
     : [];
   if (existing
-    && remoteUpdatedAtMs === Number(state.taskbarPinsUpdatedAtMs || 0)
+    && Number(existingLayout?.updated_at_ms || 0) === Number(state.taskbarPinsUpdatedAtMs || 0)
+    && Array.isArray(remotePins)
     && remotePins.length === localPins.length
     && remotePins.every((id, index) => id === localPins[index])) {
     return;
   }
   const patch = {
     taskbar_pins: state.taskbarPins,
-    updated_at_ms: state.taskbarPinsUpdatedAtMs || Date.now(),
+    updated_at_ms: Number(state.taskbarPinsUpdatedAtMs || 0),
   };
   if (existing) {
     await existing.incrementalPatch(patch);
@@ -6219,21 +6541,9 @@ function startModuleSync(mod) {
 
 async function recoverFromLocalRxDbSchemaDrift(error) {
   if (!isRxDbSchemaDriftError(error)) return false;
-  const repairToken = `${businessDbName()}:${RXDB_BOOTSTRAP_VERSION}`;
-  try {
-    if (sessionStorage.getItem(RXDB_SCHEMA_REPAIR_KEY) === repairToken) return false;
-    sessionStorage.setItem(RXDB_SCHEMA_REPAIR_KEY, repairToken);
-  } catch {}
-  console.warn('[business-os] local RxDB schema repair triggered; rebuilding browser cache', error);
-  setStatus('Lokale Datenverbindung wird neu aufgebaut');
-  try { await state.sync?.stop?.(); } catch (stopError) { console.warn('[business-os] sync stop before schema repair failed', stopError); }
-  try { await state.db?.close?.(); } catch (closeError) { console.warn('[business-os] db close before schema repair failed', closeError); }
-  try {
-    const { resetBusinessDb } = await loadBusinessDbModule();
-    await resetBusinessDb({ name: businessDbName() });
-  } catch (resetError) { console.warn('[business-os] RxDB schema repair reset failed', resetError); }
-  window.setTimeout(() => window.location.reload(), 250);
-  return true;
+  console.warn('[business-os] local RxDB schema drift; preserving local replica instead of resetting it', error);
+  setStatus('Lokale Datenbank benötigt eine sichere Wiederherstellung; Daten bleiben erhalten');
+  return false;
 }
 
 function isRxDbSchemaDriftError(error) {
@@ -6472,6 +6782,15 @@ function createModuleContext(mod, overrides = {}) {
     runtimeCapabilities: createRuntimeCapabilityFacade(mod),
     storageScope: createStorageScopeFacade(mod),
     sync: moduleSync,
+    readNativeCollectionDocument: mod.id === 'desktop' || mod.id === 'mail'
+      ? (collection, documentId, options = {}) => {
+          if (mod.id === 'mail' && collection !== 'communication_accounts') {
+            throw new Error('Mail can verify only its account records.');
+          }
+          return state.sync?.readCollectionNativeDocument(collection, documentId, options)
+            .then((document) => document ?? null);
+        }
+      : null,
     commandBus: createLiveCommandBusFacade(),
     actions: createAppActions({
       module: mod,
@@ -6751,6 +7070,9 @@ const BUSINESS_CHAT_DB_COLLECTIONS = [
   // the takeover line reads the selection event of the tracked task.
   'ctox_crew_members',
   'ctox_harness_events',
+  // Worker truth for the crew bar count and app presence: only queue tasks a
+  // worker really executes (active_task_ids) count as work.
+  'ctox_harness_status',
   'ctox_queue_tasks',
   'desktop_file_chunks',
   'desktop_files',
@@ -6874,6 +7196,7 @@ const SCOPED_SYSTEM_MODULE_DB_COLLECTIONS = Object.freeze({
     'user_notifications',
     'user_thread_links',
     'user_thread_messages',
+    'user_thread_states',
     'user_threads',
   ]),
   tickets: Object.freeze([
@@ -10684,12 +11007,14 @@ function isLocalBusinessOsSurface() {
 async function loadModules(options = {}) {
   const normalized = typeof options === 'number' ? { timeoutMs: options } : (options || {});
   const allowShellSeed = normalized.allowShellSeed !== false && allowsPackagedModuleCatalogSeed();
+  const startup = {};
   const catalog = await loadModuleCatalog(normalized.timeoutMs, {
     allowShellSeed,
+    startup,
   });
   const merged = await ensurePackagedModuleList(
     normalizeModuleList(catalog.modules),
-    { allowShellSeed }
+    { allowShellSeed, useEmbeddedMetadata: startup.usedProjectedCatalog === true }
   );
   // Remember the catalog-provided allowlist so desktop-app gating (listDesktopApps)
   // stays in sync with the tab list. Only overwrite when the synced catalog actually
@@ -10912,7 +11237,14 @@ async function loadModuleCatalog(timeoutMs = 60000, options = {}) {
     && moduleCatalogProjectionRevisionMs(injectedCatalog) >= moduleCatalogProjectionRevisionMs(cachedCatalog)
     ? injectedCatalog
     : cachedCatalog;
-  const shellCatalog = options.allowShellSeed === false ? null : await loadPackagedModuleCatalog();
+  if (projectedCatalog && options.startup) options.startup.usedProjectedCatalog = true;
+  // A warm local/native projection must render without waiting for static
+  // manifest and per-module asset fetches. Those are code metadata, not the
+  // authority for which apps this actor may see; the current build embeds the
+  // same packaged system catalog for the first paint.
+  const shellCatalog = options.allowShellSeed === false
+    ? null
+    : projectedCatalog ? loadEmbeddedPackagedModuleCatalog() : await loadPackagedModuleCatalog();
 
   if (projectedCatalog) {
     state.sync?.startCollection?.('business_module_catalog').catch((error) => {
@@ -10997,7 +11329,9 @@ function normalizeModuleList(modules) {
 }
 
 async function ensurePackagedModuleList(modules, options = {}) {
-  const shellCatalog = await loadPackagedModuleCatalog();
+  const shellCatalog = options.useEmbeddedMetadata
+    ? loadEmbeddedPackagedModuleCatalog()
+    : await loadPackagedModuleCatalog();
   const canonicalSystemIds = new Set(
     normalizeModuleList(shellCatalog?.modules).map((mod) => String(mod?.id || '').trim()),
   );
@@ -11129,6 +11463,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       ],
       "layout": {
         "shell": "full-workspace",
+        "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/desktop.png",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-desktop\"><defs><linearGradient id=\"grad-desktop\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#94a3b8\" /><stop offset=\"100%\" stop-color=\"#3b82f6\" /></linearGradient></defs><rect x=\"2\" y=\"3\" width=\"20\" height=\"14\" rx=\"3\" ry=\"3\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.12\" stroke=\"url(#grad-desktop)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M12 17v4M8 21h8\" stroke=\"url(#grad-desktop)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><rect x=\"5\" y=\"6\" width=\"6\" height=\"4\" rx=\"1\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect><rect x=\"13\" y=\"6\" width=\"6\" height=\"8\" rx=\"1\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect><rect x=\"5\" y=\"12\" width=\"6\" height=\"2\" rx=\"0.5\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect></svg>",
         "left": "desktop scopes",
         "center": "desktop surface",
@@ -11240,6 +11575,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       ],
       "layout": {
         "shell": "windowed",
+        "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/creator.png",
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-creator\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-creator\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#8b5cf6\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"4\" fill=\"url(#grad-creator)\" fill-opacity=\"0.12\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M12 7v10M7 12h10\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M16.5 5.5l2 2\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
@@ -11311,6 +11647,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       ],
       "layout": {
         "shell": "windowed",
+        "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/explorer.png",
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-explorer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-explorer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#06b6d4\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><path d=\"M3 7.5h7l2-2h9v13.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5Z\" fill=\"url(#grad-explorer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-explorer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M3 10h18\" stroke=\"url(#grad-explorer)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
@@ -11374,6 +11711,7 @@ const OFFLINE_FALLBACK_CATALOG = {
       ],
       "layout": {
         "shell": "windowed",
+        "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/file-viewer.png",
         "shell_contract": "v2",
         "shell_geometry_contract": "business-os-v2-global-1",
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-file-viewer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-file-viewer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#f59e0b\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><path d=\"M6 3h8l4 4v14H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z\" fill=\"url(#grad-file-viewer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M14 3v5h4\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M8 14s1.5-2 4-2 4 2 4 2-1.5 2-4 2-4-2-4-2Z\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"1.7\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"14\" r=\"1\" fill=\"url(#grad-file-viewer)\"></circle></svg>",
@@ -12671,6 +13009,18 @@ function getOfflineFallbackCatalog() {
   };
 }
 
+function loadEmbeddedPackagedModuleCatalog() {
+  const catalog = getOfflineFallbackCatalog();
+  const explicitlyAllowedIds = resolveModuleAllowlist();
+  return {
+    ...catalog,
+    modules: catalog.modules.filter((mod) => {
+      const id = String(mod?.id || '').trim();
+      return isSystemModule(mod) || explicitlyAllowedIds.has(id);
+    }),
+  };
+}
+
 async function loadPackagedModuleCatalog() {
   const exposeCompleteQaCatalog = allowsCompleteQaModuleCatalog();
   const canonicalSystemIds = await loadCanonicalSystemModuleIds();
@@ -13072,7 +13422,13 @@ async function workjetProjectControl(request = {}) {
   const ownerUserId = boundedWorkjetProjectText(actorContext(state.session).id, 'owner_user_id', 256);
   const requestSession = state.session;
   const requestDb = state.db;
-  const { projectBridge, workingCopyBridge } = await requireWorkjetProjectDataPlane();
+  // Reserve a delivery margin inside Workjet's 30-second desktop call.
+  const listDeadline = action === 'project.list'
+    ? Date.now() + WORKJET_PROJECT_CONTROL_TIMEOUT_MS - 1_000 : 0;
+  const acquisition = requireWorkjetProjectDataPlane();
+  const { projectBridge, workingCopyBridge } = listDeadline
+    ? await awaitWorkjetProjectListStep(acquisition, listDeadline, 'collections')
+    : await acquisition;
 
   if (action === 'project.worker.add' || action === 'project.chat.create') {
     const creatingChat = action === 'project.chat.create';
@@ -13122,7 +13478,14 @@ async function workjetProjectControl(request = {}) {
   if (action === 'project.list') {
     assertWorkjetProjectPayloadKeys(request, new Set(['action']));
     const commandId = `cmd_workjet_project_list_${newId()}`;
-    await state.commandBus.dispatch({
+    const assertCurrentIdentity = () => {
+      if (state.session !== requestSession || state.db !== requestDb
+        || actorContext(state.session).id !== ownerUserId) {
+        throw new Error('Workjet project session changed before the list was delivered.');
+      }
+    };
+    assertCurrentIdentity();
+    const receipt = await awaitWorkjetProjectListStep(state.commandBus.dispatch({
       id: commandId,
       command_id: commandId,
       module: 'ctox',
@@ -13133,14 +13496,40 @@ async function workjetProjectControl(request = {}) {
         source: 'workjet-project-control',
         actor: actorContext(state.session),
       },
-    }, { until: 'terminal', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
-    await waitForSyncBridgeReady(projectBridge, WORKJET_PROJECT_CONTROL_TIMEOUT_MS);
-    await waitForSyncBridgeReady(workingCopyBridge, WORKJET_PROJECT_CONTROL_TIMEOUT_MS);
-    const workingCopies = await listProjectedWorkjetWorkingCopies(ownerUserId);
+    }, {
+      until: 'terminal',
+      sync_queue_tasks: false,
+      timeoutMs: Math.max(1, listDeadline - Date.now()),
+    }), listDeadline, 'command');
+    assertCurrentIdentity();
+    if (receipt?.command_id !== commandId || receipt?.status !== 'completed'
+      || receipt?.ok !== true || receipt?.result?.ok !== true
+      || receipt?.result?.collection !== 'workjet_projects') {
+      throw new Error('Workjet project list returned an uncorrelated or unsuccessful receipt.');
+    }
+    const selector = { owner_user_id: { $eq: ownerUserId } };
+    const controller = new AbortController();
+    let projectDocs;
+    let copyDocs;
+    try {
+      [projectDocs, copyDocs] = await Promise.all([
+        readWorkjetProjectListRows(projectBridge, {
+          selector, limit: WORKJET_PROJECT_CONTROL_MAX_RESULTS,
+        }, commandId, listDeadline, controller.signal),
+        readWorkjetProjectListRows(workingCopyBridge, {
+          selector, limit: WORKJET_PROJECT_CONTROL_MAX_WORKING_COPIES,
+        }, commandId, listDeadline, controller.signal),
+      ]);
+    } finally {
+      controller.abort();
+    }
+    assertCurrentIdentity();
+    const workingCopies = await listProjectedWorkjetWorkingCopies(ownerUserId, copyDocs);
     const projects = await listProjectedWorkjetProjects(
       ownerUserId,
       WORKJET_PROJECT_CONTROL_MAX_RESULTS,
       workingCopies,
+      projectDocs,
     );
     return { action: 'project.list', projects };
   }
@@ -13236,18 +13625,79 @@ async function requireWorkjetProjectDataPlane() {
   }
   const collection = state.db?.collection?.('workjet_projects');
   if (!collection) throw new Error('workjet_projects collection is not registered.');
-  const commandBridge = await state.sync?.startCollection?.('business_commands');
-  await waitForSyncBridgeReady(commandBridge, 15_000);
-  const projectBridge = await state.sync?.startCollection?.('workjet_projects');
-  await waitForSyncBridgeReady(projectBridge, 15_000);
-  const workingCopyBridge = await state.sync?.startCollection?.('workjet_working_copies');
-  await waitForSyncBridgeReady(workingCopyBridge, 15_000);
+  // Command submission owns authenticated readiness, not a historical pull.
+  const [, projectBridge, workingCopyBridge] = await Promise.all([
+    state.sync?.startCollection?.('business_commands'),
+    state.sync?.startCollection?.('workjet_projects', { pin: false, forceDirect: true }),
+    state.sync?.startCollection?.('workjet_working_copies', { pin: false, forceDirect: true }),
+  ]);
   return { projectBridge, workingCopyBridge };
 }
 
-async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = []) {
+async function awaitWorkjetProjectListStep(operation, deadline, phase) {
+  let timer;
+  const timeout = () => Object.assign(
+    new Error(`Workjet project list did not finish ${phase} before its deadline.`),
+    { code: 'WORKJET_PROJECT_TIMEOUT', retryable: true },
+  );
+  try {
+    const value = await Promise.race([
+      operation,
+      new Promise((resolve, reject) => {
+        timer = setTimeout(() => reject(timeout()), Math.max(0, deadline - Date.now()));
+      }),
+    ]);
+    if (Date.now() >= deadline) throw timeout();
+    return value;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function readWorkjetProjectListRows(bridge, query, requireRevision, deadline, signal) {
+  const current = !bridge?.state && bridge?.ready
+    ? await awaitWorkjetProjectListStep(bridge.ready, deadline, 'bridge') : bridge;
+  const peer = current?.state;
+  if (!peer?.awaitQueryReady || peer.cancelled) {
+    throw new Error('Workjet project query readiness is unavailable.');
+  }
+  await awaitWorkjetProjectListStep(
+    peer.awaitQueryReady(Math.max(1, deadline - Date.now())), deadline, 'query readiness',
+  );
+  const generation = peer.collectionQueryGenerationToken?.(peer.activeRemotePeerId);
+  const loader = peer.collection?.demandLoader;
+  if (!generation || !loader) throw new Error('Workjet project query authority is unavailable.');
+  const primaryPath = peer.collection.schema?.primaryPath || 'id';
+  const rows = [];
+  const ids = new Set();
+  while (rows.length < query.limit) {
+    const limit = Math.min(200, query.limit - rows.length);
+    const page = await awaitWorkjetProjectListStep(peer.collection.find({
+      ...query, limit, skip: rows.length, sort: [{ [primaryPath]: 'asc' }], requireRevision, signal,
+    }).exec(), deadline, 'native projection');
+    if (peer.cancelled || peer.collection.demandLoader !== loader
+      || peer.collectionQueryGenerationToken?.(peer.activeRemotePeerId) !== generation) {
+      throw new Error('Workjet project query generation changed.');
+    }
+    if (!Array.isArray(page) || page.length > limit) {
+      throw new Error('Workjet project query exceeded its bounded window.');
+    }
+    for (const document of page) {
+      const id = (document?.toJSON?.() || document)?.[primaryPath];
+      if (typeof id !== 'string' || !id || ids.has(id)) {
+        throw new Error('Workjet project query returned an invalid or repeated identity.');
+      }
+      ids.add(id);
+    }
+    rows.push(...page);
+    if (page.length < limit) break;
+  }
+  return rows;
+}
+
+async function listProjectedWorkjetProjects(ownerUserId, limit, workingCopies = [], nativeDocs = null) {
   const collection = state.db?.collection?.('workjet_projects');
-  const docs = await collection.find({
+  const docs = nativeDocs ?? await collection.find({
     selector: { owner_user_id: { $eq: ownerUserId } },
     limit: Math.min(limit, WORKJET_PROJECT_CONTROL_MAX_RESULTS),
   }).exec();
@@ -13308,9 +13758,9 @@ async function waitForProjectedWorkjetProject(
   throw error;
 }
 
-async function listProjectedWorkjetWorkingCopies(ownerUserId) {
+async function listProjectedWorkjetWorkingCopies(ownerUserId, nativeDocs = null) {
   const collection = state.db?.collection?.('workjet_working_copies');
-  const docs = await collection.find({
+  const docs = nativeDocs ?? await collection.find({
     selector: { owner_user_id: { $eq: ownerUserId } },
     limit: WORKJET_PROJECT_CONTROL_MAX_WORKING_COPIES,
   }).exec();
@@ -14414,39 +14864,6 @@ function isManagedCollectionAuthorizationError(error) {
   );
 }
 
-function isLocalRxDbStartupError(error) {
-  const msg = String(error?.message || error || '');
-  return msg.includes('IndexedDB lock')
-    || msg.includes('IndexedDB open blocked')
-    || msg.includes('RxDB database creation timed out')
-    || msg.includes('RxDB database retry timed out')
-    || msg.includes('RxDB createRxDatabase timed out')
-    || msg.includes('RxDB database reset timed out');
-}
-
-async function resetLocalRxDbBeforeStartupRetry(error) {
-  if (!isLocalRxDbStartupError(error)) return false;
-  setStatus('Lokale Datenverbindung wird neu synchronisiert');
-  try { sessionStorage.removeItem(RXDB_SCHEMA_REPAIR_KEY); } catch {}
-  try { await state.sync?.stop?.(); } catch (stopError) { console.warn('[business-os] sync stop before startup retry reset failed', stopError); }
-  try { await state.db?.close?.(); } catch (closeError) { console.warn('[business-os] db close before startup retry reset failed', closeError); }
-  if (state.workspaceBrandingSubscription) {
-    try { state.workspaceBrandingSubscription.unsubscribe(); } catch (error) {}
-    state.workspaceBrandingSubscription = null;
-  }
-  state.workspaceBranding = applyWorkspaceBranding(null);
-  state.sync = null;
-  state.db = null;
-  try {
-    const { resetBusinessDb } = await loadBusinessDbModule();
-    await resetBusinessDb({ name: businessDbName() });
-    return true;
-  } catch (resetError) {
-    console.warn('[business-os] local RxDB startup retry reset failed', resetError);
-    return false;
-  }
-}
-
 function showStartupError(error) {
   // A fatal startup failure must also stop companions whose imports or schema work is pending.
   cancelBusinessCompanions();
@@ -14512,10 +14929,7 @@ function showStartupError(error) {
         window.ctoxBusinessOsDesktop.refreshManagedLaunch();
         return;
       }
-      retryBtn.textContent = isLocalRxDbStartupError(error)
-        ? 'Lokale Datenverbindung wird neu synchronisiert...'
-        : 'Wird neu geladen...';
-      await resetLocalRxDbBeforeStartupRetry(error);
+      retryBtn.textContent = 'Wird neu geladen...';
       window.location.reload();
     };
   }
@@ -14769,7 +15183,7 @@ function filterStartMenu(panel, query) {
 }
 
 function renderStartMenuLifecycleBadge(target) {
-  if (target?.kind !== 'module' || !target.module) return '';
+  if (!target?.module) return '';
   const lifecycle = appLifecycleBadge(target.module, {
     session: state.session,
     governance: state.governance,
@@ -14831,7 +15245,7 @@ function buildStartMenuItem(target) {
   el.querySelector('[data-module-lifecycle]')?.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    if (target.kind === 'module') openAppLifecycleDrawer(target.module);
+    if (target.module) openAppLifecycleDrawer(target.module);
   });
 
   el.querySelector('.start-menu-item-pin-btn').addEventListener('click', (e) => {
@@ -15644,8 +16058,20 @@ async function maybeShowRecordApprovalBanner() {
     `;
     const decide = async (decision) => {
       const note = decision === 'reject' ? (window.prompt('Begründung oder Änderungswunsch:') || '') : '';
+      if (decision === 'reject' && !note.trim()) return;
+      const actionButtons = [...banner.querySelectorAll('[data-record-approval-approve], [data-record-approval-reject]')];
+      actionButtons.forEach((button) => { button.disabled = true; });
+      let status = banner.querySelector('[data-record-approval-status]');
+      if (!status) {
+        status = document.createElement('span');
+        status.dataset.recordApprovalStatus = '';
+        status.setAttribute('role', 'status');
+        banner.querySelector('.ctox-record-approval-copy')?.append(status);
+      }
+      status.textContent = 'Entscheidung wird übermittelt…';
       try {
-        await state.commandBus?.dispatch?.({
+        if (!state.commandBus?.dispatch) throw new Error('Freigabe ist derzeit nicht verfügbar.');
+        const outcome = await state.commandBus.dispatch({
           command_type: decision === 'approve' ? 'threads.ctox_approval.approve' : 'threads.ctox_approval.reject',
           module: 'threads',
           record_id: pending.id,
@@ -15654,11 +16080,16 @@ async function maybeShowRecordApprovalBanner() {
             expected_updated_at_ms: Number(pending.updated_at_ms || 0),
             decision_note: note,
           },
-        });
+        }, { until: 'terminal' });
+        if (['failed', 'rejected', 'blocked'].includes(outcome?.status)) {
+          throw new Error(outcome?.error || 'Die Entscheidung wurde nicht übernommen.');
+        }
+        banner.remove();
       } catch (error) {
         console.warn('[record-approval] decision dispatch failed', error);
+        status.textContent = error?.message || 'Die Entscheidung konnte nicht übernommen werden.';
+        actionButtons.forEach((button) => { button.disabled = false; });
       }
-      banner.remove();
     };
     banner.querySelector('[data-record-approval-approve]')?.addEventListener('click', () => { decide('approve'); });
     banner.querySelector('[data-record-approval-reject]')?.addEventListener('click', () => { decide('reject'); });

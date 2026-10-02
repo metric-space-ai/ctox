@@ -69,6 +69,40 @@ const MAX_SUMMARY_RATIO: f64 = 0.8;
 #[cfg(test)]
 static TEMP_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// A deterministic completion rejection, distinct from a retryable store error.
+#[derive(Debug, Clone)]
+pub struct IncompleteTaskExecutionPlan {
+    pub work_key: String,
+    pub revision: i64,
+    pub completed: i64,
+    pub total: i64,
+}
+
+impl IncompleteTaskExecutionPlan {
+    pub fn from_progress(work_key: &str, progress: &serde_json::Value) -> Option<Self> {
+        let completed = progress["completed_steps"].as_i64()?;
+        let total = progress["total_steps"].as_i64()?;
+        (total > 0 && completed != total).then(|| Self {
+            work_key: work_key.to_string(),
+            revision: progress["revision"].as_i64().unwrap_or(0),
+            completed,
+            total,
+        })
+    }
+}
+
+impl std::fmt::Display for IncompleteTaskExecutionPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "task execution plan is incomplete ({}/{} steps completed); work_key={} revision={}",
+            self.completed, self.total, self.work_key, self.revision
+        )
+    }
+}
+
+impl std::error::Error for IncompleteTaskExecutionPlan {}
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SummaryKind {
@@ -1617,6 +1651,15 @@ impl LcmEngine {
         &self,
         input: TaskExecutionPlanUpdate<'_>,
     ) -> Result<serde_json::Value> {
+        self.record_task_execution_plan_guarded(input, |_| Ok(()))
+    }
+
+    /// Check execution authority under the same write lock as the update.
+    pub(crate) fn record_task_execution_plan_guarded(
+        &self,
+        input: TaskExecutionPlanUpdate<'_>,
+        authorize: impl FnOnce(&Connection) -> Result<()>,
+    ) -> Result<serde_json::Value> {
         let (steps, completed_steps) = validate_task_execution_steps(input.steps)?;
         let total_steps = i64::try_from(steps.len()).unwrap_or(i64::MAX);
         let signature = task_execution_plan_signature(&steps);
@@ -1627,6 +1670,7 @@ impl LcmEngine {
             rusqlite::TransactionBehavior::Immediate,
         )
         .context("failed to begin task execution plan transaction")?;
+        authorize(&tx)?;
         let latest = tx
             .query_row(
                 "SELECT revision, plan_signature, review_status, created_at_ms
@@ -1779,10 +1823,6 @@ impl LcmEngine {
         let latest = self
             .task_execution_progress(work_key)?
             .with_context(|| format!("task {work_key} has no durable execution plan"))?;
-        let completed = latest
-            .get("completed_steps")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0);
         let total = latest
             .get("total_steps")
             .and_then(serde_json::Value::as_i64)
@@ -1791,10 +1831,8 @@ impl LcmEngine {
             total > 0,
             "task execution plan must contain at least one step"
         );
-        anyhow::ensure!(
-            completed == total,
-            "task execution plan is incomplete ({completed}/{total} steps completed)"
-        );
+        // Review must also be able to reject an honestly incomplete or blocked
+        // result. Only the terminal-success transition requires every step.
         self.set_task_execution_review_status(work_key, "in_progress")
     }
 
@@ -1807,21 +1845,43 @@ impl LcmEngine {
             matches!(review_status, "in_progress" | "completed" | "failed"),
             "invalid task review status {review_status}"
         );
+        let progress = self
+            .task_execution_progress(work_key)?
+            .with_context(|| format!("task {work_key} has no durable execution plan"))?;
+        let completed = progress["completed_steps"].as_i64().unwrap_or(0);
+        let total = progress["total_steps"].as_i64().unwrap_or(0);
+        anyhow::ensure!(
+            total > 0,
+            "task execution plan must contain at least one step"
+        );
+        if review_status == "completed" {
+            if let Some(incomplete) =
+                IncompleteTaskExecutionPlan::from_progress(work_key, &progress)
+            {
+                return Err(incomplete.into());
+            }
+        }
         let (phase, percent) = if review_status == "completed" {
             ("completed", 100)
         } else {
-            ("review", 90)
+            (
+                "review",
+                (90.0 * completed as f64 / total as f64).round() as i64,
+            )
         };
         let changed = self.conn.execute(
             "UPDATE task_execution_plan_revisions
              SET review_status = ?2, phase = ?3, percent = ?4, updated_at_ms = ?5
              WHERE work_key = ?1
-               AND revision = (SELECT MAX(revision) FROM task_execution_plan_revisions WHERE work_key = ?1)",
-            params![work_key, review_status, phase, percent, epoch_millis_i64()],
+               AND revision = (SELECT MAX(revision) FROM task_execution_plan_revisions WHERE work_key = ?1)
+               AND revision = ?6
+               AND completed_steps = ?7 AND total_steps = ?8",
+            params![work_key, review_status, phase, percent, epoch_millis_i64(),
+                progress["revision"].as_i64().unwrap_or(0), completed, total],
         )?;
         anyhow::ensure!(
             changed == 1,
-            "task {work_key} has no durable execution plan"
+            "task {work_key} execution plan changed during review"
         );
         self.task_execution_progress(work_key)?
             .context("task execution progress vanished after review update")

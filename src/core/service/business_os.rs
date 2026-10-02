@@ -884,6 +884,18 @@ fn handle_business_os_turn(root: &Path, args: &[String]) -> anyhow::Result<()> {
 
 fn handle_business_os_rxdb(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
+        Some("init") => {
+            // main resolves --root before dispatch, but keeps its pair in args.
+            let has_global_root = matches!(
+                &args[1..],
+                [flag, value] if flag == "--root" && !value.is_empty() && !value.starts_with('-')
+            );
+            anyhow::ensure!(
+                args.len() == 1 || has_global_root,
+                "usage: ctox business-os rxdb init [--root <root>]"
+            );
+            print_json(&crate::business_os::initialize_business_os_rxdb(root)?)
+        }
         // Backlog OS-A4: sync/peer diagnosis for operators AND the harness.
         // Reads the native peer's heartbeat status file, so it works from a
         // separate CLI process while the daemon runs (performance metrics —
@@ -2121,11 +2133,15 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
         verify_selector.trim(),
         continuation_source,
     )?;
+    let login_started_epoch_s = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|value| value.as_secs() as i64)
+        .unwrap_or(0);
     let mut automation = crate::business_os::run_browser_session_automation(
         root,
         crate::business_os::BrowserSessionAutomationRequest {
             session_id: session_id.clone(),
-            dir: browser_dir,
+            dir: browser_dir.clone(),
             timeout_ms: Some(timeout_ms),
             source: automation_source,
             profile_owner: auth_assist
@@ -2141,7 +2157,7 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
             redact_secret_value_from_json(&mut automation, login_hint);
         }
     }
-    let login_result = automation
+    let mut login_result = automation
         .get("result")
         .cloned()
         .unwrap_or(serde_json::Value::Null);
@@ -2149,10 +2165,66 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
         .get("ok")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let login_ok = login_result
+    let mut login_ok = login_result
         .get("ok")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(automation_ok);
+    // Second factor by e-mail: when the provider sends a one-time code to a
+    // mailbox CTOX reads (D&B: no-reply@mail.dnb.com -> the crew mailbox),
+    // fetch it and finish the login in the same session instead of parking
+    // the research on a human (owner 22.09.2026: "der research agent soll
+    // moeglichst autonom arbeiten").
+    let mut email_otp = serde_json::Value::Null;
+    if automation_ok
+        && !login_ok
+        && login_result
+            .get("login_state")
+            .and_then(serde_json::Value::as_str)
+            == Some("mfa_required")
+    {
+        if let Some(recipe) = web_stack_email_otp_recipe(&source_id) {
+            email_otp = complete_web_stack_login_with_email_otp(
+                root,
+                &session_id,
+                browser_dir.clone(),
+                timeout_ms,
+                auth_assist
+                    .get("owner_user_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string),
+                resolved_credential.otp_recipient.as_deref(),
+                web_stack_otp_mailbox_granted(
+                    root,
+                    &source_id,
+                    resolved_credential.otp_recipient.as_deref(),
+                ),
+                &recipe,
+                login_started_epoch_s,
+                continuation_source,
+            );
+            if email_otp.get("ok").and_then(serde_json::Value::as_bool) == Some(true) {
+                login_ok = true;
+                if let Some(object) = login_result.as_object_mut() {
+                    object.insert("ok".to_string(), serde_json::Value::Bool(true));
+                    object.insert(
+                        "login_state".to_string(),
+                        serde_json::Value::String("authenticated".to_string()),
+                    );
+                    object.insert("mfa_required".to_string(), serde_json::Value::Bool(false));
+                    object.insert(
+                        "reason".to_string(),
+                        serde_json::Value::String("email-otp-completed".to_string()),
+                    );
+                    if let Some(post_auth) = email_otp.get("post_auth_result") {
+                        object.insert("post_auth_result".to_string(), post_auth.clone());
+                    }
+                }
+                if let Some(object) = automation.as_object_mut() {
+                    object.insert("result".to_string(), login_result.clone());
+                }
+            }
+        }
+    }
     let login_state = login_result
         .get("login_state")
         .and_then(serde_json::Value::as_str)
@@ -2193,6 +2265,7 @@ fn run_business_os_web_stack_auth_assist_login_with_continuation(
         "login_error_detected": login_error_detected,
         "verify_selector": verify_selector,
         "credential_selector": credential_selector,
+        "email_otp": email_otp,
         "secret_value_in_payload": false,
         "frame_data_in_payload": false,
         "browser_stream": "rxdb",
@@ -2238,6 +2311,12 @@ fn run_business_os_web_stack_source_capture_with_trust(
         .trim();
     anyhow::ensure!(!company.is_empty(), "source-capture company is empty");
     let country = flag_value(args, "--country").unwrap_or("DE").trim();
+    // One login and capture per provider at a time. Parallel research runs
+    // each logged into D&B with the same account: several e-mail codes arrived
+    // at once (no challenge identity, login_failed) and the shared browser
+    // profile was locked (tenant 25.09.2026, every D&B run failed from 12:19).
+    let _capture_lock =
+        acquire_source_capture_lock(root, &source_id, std::time::Duration::from_secs(300));
     let source = build_web_stack_authenticated_source_capture(&source_id, company, country)?;
     let credential_ref = optional_web_stack_credential_ref(flag_value(args, "--credential-ref"))?
         .or_else(|| {
@@ -2306,13 +2385,59 @@ fn run_business_os_web_stack_source_capture_with_trust(
         "country": country,
         "records": records,
         "record_count": records.len(),
-        "source_status": result.get("status").and_then(serde_json::Value::as_str).unwrap_or("failed"),
+        // Without a capture result the login itself stopped; name its state
+        // (e.g. mfa_required) and the e-mail code outcome instead of a bare
+        // "failed", so the research can see what blocks it (tenant 25.09.2026).
+        "source_status": result
+            .get("status")
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| combined.get("status").and_then(serde_json::Value::as_str))
+            .unwrap_or("failed"),
+        "login_status": combined.get("status").cloned().unwrap_or(serde_json::Value::Null),
+        "email_otp_status": combined.pointer("/email_otp/status").cloned().unwrap_or(serde_json::Value::Null),
+        "email_otp_detail": combined.pointer("/email_otp/detail").cloned().unwrap_or(serde_json::Value::Null),
         "source_url": result.get("source_url").and_then(serde_json::Value::as_str),
+        "query_completion": result.get("query_completion").cloned().unwrap_or(serde_json::Value::Null),
         "credential_ref": credential_ref,
         "secret_value_in_payload": false,
         "browser_stream": "rxdb",
         "authenticated_capture": combined,
     }))
+}
+
+/// Exclusive per-provider lock for authenticated captures across CTOX
+/// processes. Returns `None` when the wait expires; the capture then proceeds
+/// and reports what it finds rather than hanging a research turn.
+fn acquire_source_capture_lock(
+    root: &Path,
+    source_id: &str,
+    wait: std::time::Duration,
+) -> Option<std::fs::File> {
+    let dir = crate::paths::runtime_dir(root)
+        .join("browser")
+        .join("locks");
+    std::fs::create_dir_all(&dir).ok()?;
+    let name: String = source_id
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect();
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(dir.join(format!("source-capture-{name}.lock")))
+        .ok()?;
+    let deadline = std::time::Instant::now() + wait;
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+            Err(_) => return None,
+        }
+    }
 }
 
 fn enqueue_web_stack_source_capture_auth_assist(
@@ -2436,6 +2561,7 @@ fn run_business_os_web_stack_source_capture_with_browser_authorization(
         "record_count": records.len(),
         "source_status": source_status,
         "source_url": result.get("source_url").and_then(serde_json::Value::as_str),
+        "query_completion": result.get("query_completion").cloned().unwrap_or(serde_json::Value::Null),
         "credential_ref": credential_ref,
         "secret_value_in_payload": false,
         "browser_stream": "rxdb",
@@ -2562,7 +2688,9 @@ if (sourceId === "dnbhoovers.com") {{
     const phone = context.match(/(?:\+|00)\d[\d\s()\/-]{{7,}}\d/)?.[0];
     const city = context.match(/\bFolgen\s+([^,]{{2,80}}),/)?.[1];
     const revenue = context.match(/Umsatz\s+EUR:\s*([0-9.,]+\s*[BMK]?)/i)?.[1];
-    const employees = context.match(/Beschäftigte\s*\(Gesamt\):\s*([0-9.,]+\s*[KMB]?)/i)?.[1];
+    // "[KMB]?" also took the M of a following word ("15 M…"): only a
+    // standalone unit letter counts.
+    const employees = context.match(/Beschäftigte\s*\(Gesamt\):\s*([0-9.,]+(?:\s*[KMB]\b)?)/i)?.[1];
     const duns = context.match(/D-U-N-S:\s*([0-9-]+)/i)?.[1];
     const industry = phone
       ? context.match(new RegExp(`${{phone.replace(/[.*+?^${{}}()|[\]\\]/g, "\\$&")}}\\s+(.+?)\\s+(?:Private|Public|Nonprofit)`, "i"))?.[1]
@@ -2575,6 +2703,32 @@ if (sourceId === "dnbhoovers.com") {{
     push("mitarbeiter", employees, "high", "D&B Hoovers employee total", hit.url);
     push("firma_register", duns, "high", "D&B D-U-N-S", hit.url);
     push("konzernstruktur", structure, "medium", "D&B Hoovers organization role", hit.url);
+    // Branchencodes (WZ/NACE/NOGA) stehen nur auf der Firmenseite, nicht in der
+    // Trefferliste. Im selben angemeldeten Lauf die Firmenseite oeffnen; ohne
+    // eindeutigen Code den gefundenen Abschnitt als Rohtext mitgeben, damit die
+    // Recherche ihn selbst lesen kann (tenant 25.09.2026: CHT ohne WZ-Code).
+    try {{
+      await page.goto(hit.url, {{ waitUntil: "domcontentloaded", timeout: 20000 }});
+      for (let attempt = 0; attempt < 20; attempt += 1) {{
+        await page.waitForTimeout(750);
+        const size = await page.evaluate(() => String(document.body?.innerText || "").length).catch(() => 0);
+        if (size > 4000) break;
+      }}
+      if (hostAllowed(page.url()) && /\/company\//i.test(page.url())) {{
+        const detail = await page.evaluate(() => String(document.body?.innerText || "").replace(/[ \t]+/g, " "));
+        // The classification year is not a code: "WZ 2008" read as wz_code=2008
+        // for HAMM AG (25.09.2026). Label and value may sit on separate lines.
+        const codeRe = /\b(WZ\s*2008|WZ|NACE(?:\s*Rev\.?\s*2)?|ÖNACE(?:\s*2008)?|NOGA(?:\s*2008)?)\b[^0-9]{{0,80}}(?!(?:1993|2003|2008)\b)(\d{{2}}(?:\.\d{{1,2}}){{1,2}}|\d{{4,5}})\b/i;
+        const code = detail.match(codeRe);
+        if (code) {{
+          push("wz_code", code[2], "medium", `D&B Hoovers Firmenseite: ${{code[1]}} ${{code[2]}}`, page.url());
+        }}
+        const marker = detail.search(/\b(Branchencodes?|Industry Codes|NACE|WZ\s*2008|NOGA|ÖNACE|SIC|NAICS)\b/i);
+        if (marker >= 0) {{
+          push("branche_codes_rohtext", detail.slice(Math.max(0, marker - 40), marker + 600).replace(/\n+/g, " | "), "medium", "D&B Hoovers Firmenseite: Abschnitt Branchencodes (Rohtext)", page.url());
+        }}
+      }}
+    }} catch {{}}
   }}
 }} else if (sourceId === "leadfeeder.com") {{
   const companyName = normalized(company);
@@ -2635,155 +2789,192 @@ fn build_web_stack_rocketreach_source_capture(
 }
 
 const ROCKETREACH_BROWSER_RECORD_PARSER: &str = r#"const parseRocketReachRecords = (companyName, snapshots) => {
-  const clean = (value, max = 500) => String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
-  const normalize = (value) => clean(value, 3000)
-    .toLocaleLowerCase("de-DE")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/ß/g, "ss")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+  const clean = (value, max = 500) => typeof value === "string"
+    ? value.replace(/\s+/g, " ").trim().slice(0, max) : "";
+  const normalize = (value) => clean(value, 4000)
+    .toLocaleLowerCase("de-DE").normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "").replace(/ß/g, "ss")
+    .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
   const ignoredCompanyTokens = new Set([
     "ag", "se", "gmbh", "kg", "ohg", "gbr", "mbh", "inc", "ltd", "llc",
     "gesellschaft", "aktiengesellschaft", "holding", "group", "gruppe", "company",
   ]);
-  const companyTokens = normalize(companyName).split(/\s+/).filter((token) =>
-    token.length >= 3 && !ignoredCompanyTokens.has(token)
-  );
+  const companyTokens = [...new Set(normalize(companyName).split(/\s+/)
+    .filter((token) => token.length >= 2 && !ignoredCompanyTokens.has(token)))];
   const relevantCompanyText = (value) => {
-    const required = companyTokens.slice(0, Math.min(2, companyTokens.length));
-    const haystack = normalize(value);
-    return required.length > 0 && required.every((token) => haystack.includes(token));
+    const words = new Set(normalize(value).split(/\s+/));
+    return companyTokens.length > 0 && companyTokens.every((token) => words.has(token));
   };
   const providerUrl = (raw) => {
+    if (typeof raw !== "string" || raw.length > 2048) return null;
     try {
       const url = new URL(raw);
       const host = url.hostname.toLowerCase();
-      return host === "rocketreach.com" || host.endsWith(".rocketreach.com")
-        || host === "rocketreach.co" || host.endsWith(".rocketreach.co") ? url : null;
+      if (url.protocol !== "https:" || url.username || url.password
+          || (url.port && url.port !== "443")) return null;
+      if (!(host === "rocketreach.com" || host.endsWith(".rocketreach.com")
+          || host === "rocketreach.co" || host.endsWith(".rocketreach.co"))) return null;
+      url.hash = ""; url.search = "";
+      return url;
     } catch { return null; }
   };
   const companyProfileUrl = (raw) => {
     const url = providerUrl(raw);
-    if (!url) return null;
-    return /(?:\/company\/|\/companies\/|-profile_[a-z0-9])/i.test(url.pathname) ? url : null;
+    return url && /(?:\/company\/[^/]+|\/companies\/[^/]+|\/[^/]+-profile_[a-z0-9_-]+)\/?$/i.test(url.pathname)
+      ? url : null;
   };
   const personProfileUrl = (raw) => {
     const url = providerUrl(raw);
-    if (!url) return null;
-    return /(?:\/person\/|\/people\/|-email_[a-z0-9])/i.test(url.pathname) ? url : null;
+    return url && /(?:\/person\/[^/]+|\/people\/[^/]+|\/[^/]+-email_[a-z0-9_-]+)\/?$/i.test(url.pathname)
+      ? url : null;
   };
-  const validNamePart = (value) => /\p{L}/u.test(value)
-    && !/\d/u.test(value)
+  const list = (value) => Array.isArray(value) ? value : [];
+  const former = (value) => /\b(?:former|previous|formerly|past|ex|ehemalig\w*|früher\w*|until|bis)\b|\b(?:19|20)\d{2}\s*[-–—]\s*(?:19|20)\d{2}\b/i.test(clean(value));
+  const currentCompanyLine = (candidate, lines) => {
+    if (clean(candidate.company)) {
+      return relevantCompanyText(candidate.company) && !former(candidate.company)
+        ? clean(candidate.company, 4000) : "";
+    }
+    return lines.find((line) => relevantCompanyText(line) && !former(line)) || "";
+  };
+  const validNamePart = (value) => /\p{L}/u.test(value) && !/\d/u.test(value)
     && /^[\p{L}][\p{L}.'’\-]*$/u.test(value);
   const personName = (candidate) => {
-    const values = [candidate.name, candidate.heading, candidate.linkText, candidate.title];
-    for (const raw of values) {
-      const value = clean(raw)
-        .replace(/\s*[|·-]\s*RocketReach.*$/i, "")
-        .replace(/\s+(?:email|phone|contact)(?:\s+information)?\s*$/i, "")
-        .replace(/^(?:(?:dr|prof)\.?\s+)+/i, "");
+    for (const raw of [candidate.name, candidate.heading, candidate.linkText, candidate.title]) {
+      const observed = clean(raw).replace(/\s*[|·]\s*RocketReach.*$/i, "")
+        .replace(/\s+(?:email|phone|contact)(?:\s+information)?\s*$/i, "");
+      const prefix = observed.match(/^(?:(?:dr|prof)\.?\s+)+/i)?.[0].trim() || "";
+      const value = prefix ? observed.slice(prefix.length).trim() : observed;
       const parts = value.split(/\s+/).filter(Boolean);
       if (parts.length >= 2 && parts.length <= 6 && parts.every(validNamePart)
-          && !relevantCompanyText(value)) return parts;
+          && !relevantCompanyText(value)) {
+        const first = clean(candidate.first); const last = clean(candidate.last);
+        const structured = first && last && normalize(`${first} ${last}`) === normalize(value);
+        return { parts, observed, prefix,
+          first: structured ? first : parts[0],
+          last: structured ? last : parts.slice(1).join(" ") };
+      }
     }
-    return [];
+    return null;
   };
   const records = [];
-  const push = (field, value, confidence, note, rawUrl) => {
-    const url = providerUrl(rawUrl);
-    const cleanValue = clean(value);
-    if (!url || !cleanValue) return;
-    if (records.some((record) => record.field === field
-        && record.value === cleanValue && record.source_url === url.href)) return;
-    records.push({ field, value: cleanValue, confidence, source_url: url.href, note });
+  const push = (field, value, confidence, quote, rawUrl, personKey) => {
+    const url = providerUrl(rawUrl); const cleanValue = clean(value);
+    const sourceQuote = clean(quote, 4000);
+    if (!url || !cleanValue || !sourceQuote) return;
+    if (records.some((record) => record.field === field && record.value === cleanValue
+        && record.source_url === url.href && record.person_key === personKey)) return;
+    records.push({ field, value: cleanValue, confidence, source_url: url.href,
+      note: sourceQuote, source_quote: sourceQuote,
+      ...(personKey ? { person_key: personKey } : {}) });
   };
-  const safeSnapshots = (Array.isArray(snapshots) ? snapshots : []).filter((snapshot) =>
-    providerUrl(snapshot?.sourceUrl)
-  );
-  let companyEvidenceUrl = null;
-  let companyEvidenceName = "";
+  const safeSnapshots = list(snapshots).filter((snapshot) =>
+    snapshot && typeof snapshot === "object" && providerUrl(snapshot.sourceUrl)
+      && !/\b(?:log\s?in|sign\s?in|sign\s?up)\b/i.test(clean(snapshot.title)));
+  let companyEvidence = null;
   for (const snapshot of safeSnapshots) {
     const candidates = [
-      ...(snapshot.links || []).map((link) => ({
-        url: link.url,
-        text: `${link.text || ""} ${(link.contextLines || []).join(" ")}`,
-        name: link.text,
+      ...list(snapshot.links).filter((link) => link && typeof link === "object").map((link) => ({
+        url: link.url, name: clean(link.text),
+        text: [clean(link.text), ...list(link.contextLines).map((line) => clean(line))].join(" "),
       })),
-      { url: snapshot.sourceUrl, text: `${snapshot.title || ""} ${(snapshot.headings || []).join(" ")}`, name: (snapshot.headings || [])[0] },
+      { url: snapshot.sourceUrl, name: clean(list(snapshot.headings)[0]),
+        text: [clean(snapshot.title), ...list(snapshot.headings).map((line) => clean(line))].join(" ") },
     ];
-    const hit = candidates.find((candidate) => companyProfileUrl(candidate.url)
-      && relevantCompanyText(candidate.text));
-    if (!hit) continue;
-    companyEvidenceUrl = companyProfileUrl(hit.url).href;
-    companyEvidenceName = clean(hit.name) || companyName;
-    break;
+    companyEvidence = candidates.find((candidate) => companyProfileUrl(candidate.url)
+      && relevantCompanyText(candidate.name) && relevantCompanyText(candidate.text));
+    if (companyEvidence) break;
   }
-  if (!companyEvidenceUrl) return { records: [], companyMatched: false, protectedFieldCount: 0 };
-  push("firma_name", relevantCompanyText(companyEvidenceName) ? companyEvidenceName : companyName,
-    "high", "RocketReach company identity verified", companyEvidenceUrl);
-
+  if (!companyEvidence) return { records: [], companyMatched: false, protectedFieldCount: 0 };
+  push("firma_name", companyEvidence.name, "high", companyEvidence.text, companyEvidence.url);
   const people = [];
   for (const snapshot of safeSnapshots) {
-    for (const embedded of snapshot.embeddedPeople || []) {
-      people.push({ ...embedded, sourceUrl: embedded.sourceUrl || snapshot.sourceUrl });
-    }
-    for (const link of snapshot.links || []) {
-      const url = personProfileUrl(link.url);
-      const contextLines = (link.contextLines || []).map((line) => clean(line)).filter(Boolean);
-      if (!url || !relevantCompanyText(contextLines.join(" "))) continue;
-      people.push({ sourceUrl: url.href, linkText: link.text, contextLines });
-    }
-    if (personProfileUrl(snapshot.sourceUrl)) {
-      people.push({
-        sourceUrl: snapshot.sourceUrl,
-        heading: (snapshot.headings || [])[0],
-        title: snapshot.title,
-        contextLines: snapshot.bodyLines || [],
+    for (const embedded of list(snapshot.embeddedPeople)) {
+      if (embedded && typeof embedded === "object") people.push({
+        ...embedded, sourceUrl: embedded.sourceUrl || snapshot.sourceUrl,
       });
     }
+    for (const link of list(snapshot.links)) {
+      if (!link || typeof link !== "object") continue;
+      const url = personProfileUrl(link.url);
+      if (url) people.push({ sourceUrl: url.href, linkText: link.text,
+        contextLines: list(link.contextLines) });
+    }
+    if (personProfileUrl(snapshot.sourceUrl)) people.push({
+      sourceUrl: snapshot.sourceUrl, heading: list(snapshot.headings)[0],
+      title: snapshot.title, contextLines: list(snapshot.bodyLines),
+      // Body text also contains support/footer/related-person contacts. It is
+      // identity/context evidence, never a contact block for the heading owner.
+      unscopedBody: true,
+    });
   }
-  const seenPeople = new Set();
+  const personOwners = new Map();
+  const conflictedPeople = new Set();
   for (const candidate of people) {
     const sourceUrl = personProfileUrl(candidate.sourceUrl);
     if (!sourceUrl) continue;
-    const lines = (candidate.contextLines || []).map((line) => clean(line)).filter(Boolean);
-    const companyContext = clean(candidate.company || lines.join(" "), 4000);
-    if (!relevantCompanyText(companyContext)) continue;
-    const names = personName(candidate);
-    if (names.length < 2) continue;
-    const personKey = `${normalize(names.join(" "))}|${sourceUrl.href}`;
-    if (seenPeople.has(personKey)) continue;
-    seenPeople.add(personKey);
-    const context = lines.join(" ");
-    const email = clean(candidate.email || context.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i)?.[0]);
-    const phone = clean(candidate.phone || context.match(/(?:\+|00)\d[\d\s().\/-]{6,}\d/)?.[0]);
-    const ignoredPosition = /^(?:contact|contacts?|email|phone|telefon|mobile|mobil|location|standort|rocketreach|view profile|profil ansehen)$/i;
-    const position = clean(candidate.position || lines.find((line) =>
-      line.length >= 2 && line.length <= 160
-      && /\p{L}/u.test(line)
-      && !relevantCompanyText(line)
-      && normalize(line) !== normalize(names.join(" "))
-      && !ignoredPosition.test(line)
-      && !/@/.test(line)
-      && !/(?:\+|00)\d/.test(line)
-    ));
-    push("person_vorname", names[0], "high", "RocketReach authenticated person profile", sourceUrl.href);
-    push("person_nachname", names.slice(1).join(" "), "high", "RocketReach authenticated person profile", sourceUrl.href);
-    push("person_position", position, "medium", "RocketReach current company context", sourceUrl.href);
-    push("person_email", email, "high", "RocketReach authenticated contact field", sourceUrl.href);
-    push("person_telefon", phone, "high", "RocketReach authenticated contact field", sourceUrl.href);
+    const lines = list(candidate.contextLines).map((line) => clean(line)).filter(Boolean);
+    const companyContext = currentCompanyLine(candidate, lines);
+    const name = personName(candidate);
+    if (!companyContext || !name) continue;
+    const path = sourceUrl.pathname.replace(/\/$/, "");
+    const identity = path.match(/-email_([a-z0-9_-]+)$/i)?.[1]
+      || path.match(/\/(?:people|person)\/([^/]+)$/i)?.[1];
+    const personKey = identity ? "rocketreach-person-" + identity.toLowerCase() : "";
+    if (!personKey || conflictedPeople.has(personKey)) continue;
+    const owner = normalize(name.parts.join(" "));
+    if (personOwners.has(personKey) && personOwners.get(personKey) !== owner) {
+      conflictedPeople.add(personKey);
+      for (let i = records.length - 1; i >= 0; i--) {
+        if (records[i].person_key === personKey) records.splice(i, 1);
+      }
+      continue;
+    }
+    personOwners.set(personKey, owner);
+    const contactLines = candidate.unscopedBody ? [] : lines;
+    const email = clean(candidate.email) || contactLines.map((line) =>
+      line.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i)?.[0]).find(Boolean) || "";
+    const phone = clean(candidate.phone) || contactLines.map((line) =>
+      line.match(/(?:\+|00)\d[\d\s().\/-]{6,}\d/)?.[0]).find(Boolean) || "";
+    const ignoredPosition = /^(?:contacts?|email|phone|telefon|mobile|mobil|location|standort|rocketreach|view profile|profil ansehen)$/i;
+    const position = clean(candidate.position || contactLines.find((line) =>
+      line.length >= 2 && line.length <= 160 && /\p{L}/u.test(line)
+      && !relevantCompanyText(line) && !former(line)
+      && normalize(line) !== normalize(name.observed)
+      && !ignoredPosition.test(line) && !/@/.test(line) && !/(?:\+|00)\d/.test(line)));
+    const quote = (observedValue) => [name.observed, companyContext, observedValue]
+      .filter(Boolean).join(" · ");
+    const add = (field, value, confidence = "high") => push(
+      field, value, confidence, quote(value), sourceUrl.href, personKey);
+    add("person_vorname", name.first);
+    add("person_nachname", name.last);
+    add("person_titel", name.prefix);
+    if (!former(position)) add("person_position", position, "medium");
+    if (/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email)) add("person_email", email);
+    if (/^(?:\+|\(|\d)[\d\s().\/-]*\d$/.test(phone)
+        && phone.replace(/\D/g, "").length >= 6
+        && phone.replace(/\D/g, "").length <= 18) add("person_telefon", phone);
   }
-  const protectedFieldCount = records.filter((record) => record.field.startsWith("person_")).length;
-  return { records, companyMatched: true, protectedFieldCount };
+  return { records, companyMatched: true,
+    protectedFieldCount: records.filter((record) => record.field.startsWith("person_")).length };
 };"#;
 
 const ROCKETREACH_BROWSER_CAPTURE_TEMPLATE: &str = r#"const company = __COMPANY_JSON__;
 const country = __COUNTRY_JSON__;
 __RECORD_PARSER__
+// Leave time for the native capture to return its receipt within 60 seconds.
+const captureDeadline = Date.now() + 55000;
+const timeoutFor = (maximum) => {
+  const remaining = captureDeadline - Date.now();
+  if (remaining <= 0) throw new Error("RocketReach capture deadline exceeded");
+  return Math.min(maximum, remaining);
+};
 const hostAllowed = (raw) => {
   try {
-    const host = new URL(raw).hostname.toLowerCase();
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.username || url.password
+        || (url.port && url.port !== "443")) return false;
+    const host = url.hostname.toLowerCase();
     return host === "rocketreach.com" || host.endsWith(".rocketreach.com")
       || host === "rocketreach.co" || host.endsWith(".rocketreach.co");
   } catch { return false; }
@@ -2797,6 +2988,17 @@ const snapshotPage = async () => page.evaluate(() => {
   const clean = (value, max = 500) => String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
   const contextLines = (node) => {
     const container = node.closest("article, li, tr, [role='row'], [data-testid*='result'], [class*='result'], [class*='card']") || node.parentElement;
+    // A shared result list is not an owned contact card. Repeated links to
+    // one provider identity are fine; distinct people make its text ambiguous.
+    const owners = new Set(Array.from(container?.querySelectorAll("a[href]") || [])
+      .map((link) => {
+        try {
+          const path = new URL(link.href).pathname.replace(/\/$/, "");
+          return path.match(/-email_([a-z0-9_-]+)$/i)?.[1]?.toLowerCase()
+            || path.match(/\/(?:people|person)\/([^/]+)$/i)?.[1]?.toLowerCase() || "";
+        } catch { return ""; }
+      }).filter(Boolean));
+    if (owners.size > 1) return [];
     return String(container?.innerText || "").split(/\n+/).map((line) => clean(line)).filter(Boolean).slice(0, 24);
   };
   const links = Array.from(document.querySelectorAll("a[href]"))
@@ -2826,9 +3028,14 @@ const snapshotPage = async () => page.evaluate(() => {
     const first = pick(value, ["firstName", "first_name", "first"]);
     const last = pick(value, ["lastName", "last_name", "last"]);
     const name = pick(value, ["fullName", "full_name", "displayName", "name"]);
-    const companyValue = value.company && typeof value.company === "object"
-      ? pick(value.company, ["name", "companyName", "company_name"])
-      : pick(value, ["companyName", "company_name", "currentCompany", "current_company"]);
+    const currentCompany = value.currentCompany ?? value.current_company;
+    const companyValue = currentCompany != null
+      ? (typeof currentCompany === "object"
+        ? pick(currentCompany, ["name", "companyName", "company_name"])
+        : pick(value, ["currentCompany", "current_company"]))
+      : (value.company && typeof value.company === "object"
+        ? pick(value.company, ["name", "companyName", "company_name"])
+        : pick(value, ["company", "companyName", "company_name"]));
     const sourceUrl = pick(value, ["profileUrl", "profile_url", "url", "canonicalUrl", "canonical_url"]);
     const email = pick(value, ["email", "workEmail", "work_email", "professionalEmail", "professional_email"]);
     const phone = pick(value, ["phone", "phoneNumber", "phone_number", "mobilePhone", "mobile_phone"]);
@@ -2851,9 +3058,9 @@ const snapshotPage = async () => page.evaluate(() => {
 });
 const waitForResults = async () => {
   await Promise.race([
-    page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => null),
+    page.waitForLoadState("networkidle", { timeout: timeoutFor(12000) }).catch(() => null),
     page.locator('a[href*="-profile_"], a[href*="/company/"], a[href*="-email_"]').first()
-      .waitFor({ state: "visible", timeout: 12000 }).catch(() => null),
+      .waitFor({ state: "visible", timeout: timeoutFor(12000) }).catch(() => null),
   ]).catch(() => null);
 };
 const snapshots = [];
@@ -2862,12 +3069,13 @@ const searchSelectors = [
   'input[placeholder*="company" i]', 'input[type="search"]',
 ];
 for (const selector of searchSelectors) {
+  timeoutFor(3000);
   const field = page.locator(selector).first();
   if ((await field.count()) < 1 || !(await field.isVisible().catch(() => false))
       || !(await field.isEditable().catch(() => false))) continue;
   try {
-    await field.fill(company, { timeout: 3000 });
-    await field.press("Enter", { timeout: 3000 });
+    await field.fill(company, { timeout: timeoutFor(3000) });
+    await field.press("Enter", { timeout: timeoutFor(3000) });
     await waitForResults();
     break;
   } catch {}
@@ -2876,18 +3084,19 @@ snapshots.push(await snapshotPage());
 let parsed = parseRocketReachRecords(company, snapshots);
 if (!parsed.companyMatched) {
   const queryUrl = `https://rocketreach.co/search?query=${encodeURIComponent(company)}`;
-  await ctoxBrowser.goto(queryUrl, { timeoutMs: 30000 });
+  await ctoxBrowser.goto(queryUrl, { timeoutMs: timeoutFor(30000) });
   await waitForResults();
   if (!hostAllowed(page.url())) return { status: "wrong_origin", source_url: page.url(), country, records: [] };
   snapshots.push(await snapshotPage());
   parsed = parseRocketReachRecords(company, snapshots);
 }
-const companyLink = snapshots.flatMap((snapshot) => snapshot.links || []).find((link) =>
+const companyLink = snapshots.flatMap((snapshot) => (snapshot.links || [])
+  .map((link) => ({ snapshot, link }))).find(({ snapshot, link }) =>
   hostAllowed(link.url) && /(?:\/company\/|\/companies\/|-profile_[a-z0-9])/i.test(new URL(link.url).pathname)
   && parseRocketReachRecords(company, [{ ...snapshot, links: [link] }]).companyMatched
-);
+  )?.link;
 if (companyLink && page.url() !== companyLink.url) {
-  await ctoxBrowser.goto(companyLink.url, { timeoutMs: 30000 });
+  await ctoxBrowser.goto(companyLink.url, { timeoutMs: timeoutFor(30000) });
   await waitForResults();
   if (!hostAllowed(page.url())) return { status: "wrong_origin", source_url: page.url(), country, records: [] };
   snapshots.push(await snapshotPage());
@@ -2897,7 +3106,7 @@ const personUrls = [...new Set(snapshots.flatMap((snapshot) => snapshot.links ||
   .filter((url) => hostAllowed(url) && /(?:\/person\/|\/people\/|-email_[a-z0-9])/i.test(new URL(url).pathname))
 )].slice(0, 5);
 for (const personUrl of personUrls) {
-  await ctoxBrowser.goto(personUrl, { timeoutMs: 30000 });
+  await ctoxBrowser.goto(personUrl, { timeoutMs: timeoutFor(30000) });
   await waitForResults();
   if (!hostAllowed(page.url())) continue;
   snapshots.push(await snapshotPage());
@@ -3226,23 +3435,66 @@ pub(crate) fn run_business_os_web_stack_context_extract(
     }))
 }
 
+// Bound the custom script at both the CLI reader and the daemon boundary.
+// Other web-stack commands must never read stdin, including when it is a pipe.
+pub(crate) const AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES: usize = 1024 * 1024;
+
+fn read_web_stack_cli_source(args: &[String], reader: impl Read) -> anyhow::Result<Option<String>> {
+    if args.first().map(String::as_str) != Some("authenticated-automation") {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    reader
+        .take(AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .context("failed to read authenticated-automation source from stdin")?;
+    anyhow::ensure!(
+        bytes.len() <= AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES,
+        "authenticated-automation source exceeds 1 MiB"
+    );
+    let source =
+        String::from_utf8(bytes).context("authenticated-automation source must be UTF-8")?;
+    validate_web_stack_cli_source(args, Some(&source))?;
+    Ok(Some(source))
+}
+
+fn validate_web_stack_cli_source(args: &[String], source: Option<&str>) -> anyhow::Result<()> {
+    if args.first().map(String::as_str) == Some("authenticated-automation") {
+        let source = source.context("authenticated-automation requires forwarded script source")?;
+        anyhow::ensure!(
+            source.len() <= AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES,
+            "authenticated-automation source exceeds 1 MiB"
+        );
+        anyhow::ensure!(
+            !source.trim().is_empty(),
+            "authenticated-automation requires a non-empty browser automation source"
+        );
+    } else {
+        anyhow::ensure!(
+            source.is_none(),
+            "script source is only allowed for authenticated-automation"
+        );
+    }
+    Ok(())
+}
+
 pub(crate) fn run_business_os_web_stack_cli_json_local(
     root: &Path,
     args: &[String],
+    source: Option<&str>,
 ) -> anyhow::Result<serde_json::Value> {
+    validate_web_stack_cli_source(args, source)?;
     match args.first().map(String::as_str) {
         Some("person-research") => run_business_os_web_stack_person_research(root, args),
         Some("auth-assist-request") => run_business_os_web_stack_auth_assist_request(root, args),
         Some("auth-assist-signup") => run_business_os_web_stack_auth_assist_signup(root, args),
         Some("auth-assist-login") => run_business_os_web_stack_auth_assist_login(root, args),
         Some("source-capture") => run_business_os_web_stack_source_capture(root, args),
-        Some("authenticated-automation") => {
-            let mut source = String::new();
-            std::io::stdin()
-                .read_to_string(&mut source)
-                .context("failed to read authenticated-automation source from stdin")?;
-            run_business_os_web_stack_authenticated_automation(root, args, &source)
-        }
+        Some("authenticated-automation") => run_business_os_web_stack_authenticated_automation(
+            root,
+            args,
+            source.context("authenticated-automation requires forwarded script source")?,
+        ),
         Some("auth-assist-status") => {
             let session_id = flag_value(args, "--session-id").context(
                 "usage: ctox business-os web-stack auth-assist-status --session-id <id>",
@@ -3277,10 +3529,21 @@ pub(crate) fn run_business_os_web_stack_cli_json(
     root: &Path,
     args: &[String],
 ) -> anyhow::Result<serde_json::Value> {
-    if let Some(payload) = crate::service::run_business_os_web_stack_via_service(root, args)? {
+    run_business_os_web_stack_cli_json_with_reader(root, args, std::io::stdin())
+}
+
+pub(super) fn run_business_os_web_stack_cli_json_with_reader(
+    root: &Path,
+    args: &[String],
+    reader: impl Read,
+) -> anyhow::Result<serde_json::Value> {
+    let source = read_web_stack_cli_source(args, reader)?;
+    if let Some(payload) =
+        crate::service::run_business_os_web_stack_via_service(root, args, source.as_deref())?
+    {
         return Ok(payload);
     }
-    run_business_os_web_stack_cli_json_local(root, args)
+    run_business_os_web_stack_cli_json_local(root, args, source.as_deref())
 }
 
 fn run_business_os_web_stack_person_research(
@@ -3626,9 +3889,9 @@ pub(crate) fn repersist_augmented_person_research(
         let summary =
             ctox_web_stack::persist_person_research_workspace(&workspace, request, &snapshot)?;
         snapshot["workspace"] = summary;
-        // The pinned Web Stack writes scrape_runs.jsonl but omits it from its
-        // manifest. Keep this native augmentation next to the command evidence;
-        // the excluded historical src/tools/web-stack tree is not compiled.
+        // Expose the existing source-run sidecar even when the library manifest
+        // omits it. Keep this native augmentation next to the command evidence;
+        // the historical src/tools/web-stack tree is not compiled.
         let manifest_path = workspace.join("manifest.json");
         let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
         let files = manifest
@@ -3681,6 +3944,14 @@ fn business_os_web_stack_workspace(root: &Path, args: &[String]) -> Option<PathB
 }
 
 fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    handle_business_os_web_stack_with_reader(root, args, std::io::stdin())
+}
+
+pub(super) fn handle_business_os_web_stack_with_reader(
+    root: &Path,
+    args: &[String],
+    reader: impl Read,
+) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("person-research") => {
             let payload = run_business_os_web_stack_cli_json(root, args)?;
@@ -3703,11 +3974,7 @@ fn handle_business_os_web_stack(root: &Path, args: &[String]) -> anyhow::Result<
             print_json(&capture)
         }
         Some("authenticated-automation") => {
-            let mut source = String::new();
-            std::io::stdin()
-                .read_to_string(&mut source)
-                .context("failed to read authenticated-automation source from stdin")?;
-            let output = run_business_os_web_stack_authenticated_automation(root, args, &source)?;
+            let output = run_business_os_web_stack_cli_json_with_reader(root, args, reader)?;
             print_json(&output)
         }
         Some("auth-assist-status") => {
@@ -4116,7 +4383,7 @@ fn business_os_usage() -> String {
 }
 
 fn business_os_usage_base() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os customer-apps audit\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb status [--json]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os turn status\n  ctox business-os turn set [--url turns:host:5349] [--secret <coturn use-auth-secret>]\n  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app refresh-catalog\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack source-capture --source-id <dnbhoovers.com|leadfeeder.com|xing.com> --company <name> [--country <DE|AT|CH>] [--session-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
+    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os customer-apps audit\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb init\n  ctox business-os rxdb status [--json]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os turn status\n  ctox business-os turn set [--url turns:host:5349] [--secret <coturn use-auth-secret>]\n  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app refresh-catalog\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack source-capture --source-id <dnbhoovers.com|leadfeeder.com|xing.com> --company <name> [--country <DE|AT|CH>] [--session-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
 }
 
 fn exists_label(exists: bool) -> &'static str {
@@ -4977,6 +5244,15 @@ fn resolve_web_stack_auth_owner_user_id_with_env(
     env_owner_user_id: Option<&str>,
     accept_as_trusted_local: bool,
 ) -> anyhow::Result<Option<String>> {
+    if let Some(task) = channels::load_queue_task(root, requesting_task_id)? {
+        anyhow::ensure!(
+            !matches!(
+                task.route_status.as_str(),
+                "cancelled" | "handled" | "failed"
+            ),
+            "requesting queue task is terminal"
+        );
+    }
     let claimed_owner = flag_value(args, "--owner-user-id")
         .or(env_owner_user_id)
         .map(str::trim)
@@ -5007,7 +5283,23 @@ fn resolve_web_stack_auth_owner_user_id_with_env(
         return Ok(Some(verified));
     }
     if accept_as_trusted_local {
-        return Ok(claimed_owner.map(str::to_string));
+        // Legacy native auth-assist calls explicitly opt into local trust.
+        // The public authenticated-automation path never enables this branch.
+        if let Some(context) =
+            channels::inspect_business_command_for_task(root, requesting_task_id)?
+        {
+            let legacy_owner = context
+                .pointer("/command/payload/owner_user_id")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|owner| !owner.is_empty());
+            if let Some(owner) = legacy_owner {
+                return Ok(Some(owner.to_string()));
+            }
+        }
+        if let Some(claimed) = claimed_owner {
+            return Ok(Some(claimed.to_string()));
+        }
     }
     if let Some(claimed) = claimed_owner {
         eprintln!(
@@ -5015,7 +5307,69 @@ fn resolve_web_stack_auth_owner_user_id_with_env(
             requesting_task_id, claimed
         );
     }
+    // Company logins (D&B, Leadfeeder) are one shared account. A native
+    // research run or a queue task carries no requesting human, so every
+    // capture and the stored-credential login died with "auth assist owner
+    // unresolved" and D&B stayed dark for a day (thesen, 23./24.09.2026).
+    // The operator can name the owner such runs sign in as, in the runtime
+    // store; without that setting nothing changes.
+    if let Some(default_owner) = web_stack_default_auth_owner(root) {
+        eprintln!(
+            "[business-os] web-stack auth owner defaulted task={} owner={}",
+            requesting_task_id, default_owner
+        );
+        return Ok(Some(default_owner));
+    }
     Ok(None)
+}
+
+const WEB_STACK_DEFAULT_AUTH_OWNER_KEY: &str = "CTOX_WEB_STACK_DEFAULT_AUTH_OWNER";
+
+fn web_stack_default_auth_owner(root: &Path) -> Option<String> {
+    crate::inference::runtime_env::get_runtime_env_value(root, WEB_STACK_DEFAULT_AUTH_OWNER_KEY)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// Owner-granted exceptions to the owned-mailbox rule of the e-mail OTP
+/// lookup, one `source_id=mailbox` pair per entry (comma or newline
+/// separated). A pair lets the login of exactly that provider read its own
+/// one-time codes from exactly that mailbox, even though the mailbox is not
+/// owned by or shared with the login owner. Sender, recipient and the
+/// single-code rule still apply. tenant 25.09.2026: D&B sends its codes to a
+/// staff mailbox that predates mailbox ownership; the owner approved reading
+/// only D&B codes from it.
+const WEB_STACK_OTP_MAILBOX_GRANTS_KEY: &str = "CTOX_WEB_STACK_OTP_MAILBOX_GRANTS";
+
+fn web_stack_otp_source_key(source_id: &str) -> String {
+    let source = source_id.trim().to_ascii_lowercase();
+    source
+        .strip_prefix("app.")
+        .map(str::to_string)
+        .unwrap_or(source)
+}
+
+fn web_stack_otp_mailbox_granted_by(grants: &str, source_id: &str, mailbox: &str) -> bool {
+    let source = web_stack_otp_source_key(source_id);
+    let mailbox = mailbox.trim().to_ascii_lowercase();
+    if source.is_empty() || !mailbox.contains('@') {
+        return false;
+    }
+    grants
+        .split([',', '\n'])
+        .filter_map(|entry| entry.split_once('='))
+        .any(|(granted_source, granted_mailbox)| {
+            web_stack_otp_source_key(granted_source) == source
+                && granted_mailbox.trim().to_ascii_lowercase() == mailbox
+        })
+}
+
+fn web_stack_otp_mailbox_granted(root: &Path, source_id: &str, mailbox: Option<&str>) -> bool {
+    let Some(mailbox) = mailbox else {
+        return false;
+    };
+    crate::inference::runtime_env::get_runtime_env_value(root, WEB_STACK_OTP_MAILBOX_GRANTS_KEY)
+        .is_some_and(|grants| web_stack_otp_mailbox_granted_by(&grants, source_id, mailbox))
 }
 
 fn web_stack_auth_owner_from_command_session(
@@ -5082,34 +5436,29 @@ fn web_stack_auth_owner_from_command_session(
     Ok(Some(session_user_id.to_string()))
 }
 
-fn web_stack_auth_owner_from_command_context(context: &serde_json::Value) -> Option<String> {
-    let parsed_client_context = match context.pointer("/command/client_context") {
-        Some(serde_json::Value::String(value)) => {
-            serde_json::from_str(value).unwrap_or(serde_json::Value::Null)
-        }
-        Some(client_context) => client_context.clone(),
-        None => serde_json::Value::Null,
+fn web_stack_auth_owner_from_command_context(
+    root: &Path,
+    context: &serde_json::Value,
+) -> anyhow::Result<Option<String>> {
+    let Some(admitted_owner) = web_stack_auth_owner_from_native_authorization(context) else {
+        return Ok(None);
     };
-    let from_client_context = ["/owner_user_id", "/actor/id", "/user_id"]
-        .into_iter()
-        .find_map(|pointer| {
-            parsed_client_context
-                .pointer(pointer)
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        });
-    from_client_context
-        .or_else(|| web_stack_auth_owner_from_native_authorization(context))
-        .or_else(|| {
-            context
-                .pointer("/command/payload/owner_user_id")
-                .and_then(serde_json::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string)
-        })
+    let command_id = context
+        .pointer("/command/command_id")
+        .and_then(serde_json::Value::as_str)
+        .context("native authorization has no command identity")?;
+    let current = crate::business_os::store::revalidate_business_command_execution_authorization(
+        root, command_id,
+    )?;
+    let current_owner = current
+        .pointer("/actor/id")
+        .and_then(serde_json::Value::as_str)
+        .context("native authorization has no current actor")?;
+    anyhow::ensure!(
+        current_owner == admitted_owner,
+        "Business OS command authorization actor changed"
+    );
+    Ok(Some(admitted_owner))
 }
 
 fn web_stack_auth_owner_from_native_authorization(context: &serde_json::Value) -> Option<String> {
@@ -5145,11 +5494,10 @@ fn web_stack_auth_owner_from_task_link(
     if requesting_task_id.is_empty() {
         return Ok(None);
     }
-    Ok(
-        channels::inspect_business_command_for_task(root, requesting_task_id)?
-            .as_ref()
-            .and_then(web_stack_auth_owner_from_command_context),
-    )
+    match channels::inspect_business_command_for_task(root, requesting_task_id)? {
+        Some(context) => web_stack_auth_owner_from_command_context(root, &context),
+        None => Ok(None),
+    }
 }
 
 /// Queue tasks spawned by a Business OS command (person-research gap closure)
@@ -5176,9 +5524,17 @@ fn web_stack_auth_owner_from_task_metadata(
     else {
         return Ok(None);
     };
-    Ok(channels::inspect_business_command(root, command_id)?
-        .as_ref()
-        .and_then(web_stack_auth_owner_from_command_context))
+    anyhow::ensure!(
+        !matches!(
+            task.route_status.as_str(),
+            "cancelled" | "handled" | "failed"
+        ),
+        "requesting queue task is terminal"
+    );
+    match channels::inspect_business_command(root, command_id)? {
+        Some(context) => web_stack_auth_owner_from_command_context(root, &context),
+        None => Ok(None),
+    }
 }
 
 fn web_stack_auth_owner_from_command_authorization(
@@ -5189,11 +5545,10 @@ fn web_stack_auth_owner_from_command_authorization(
     if requesting_task_id.is_empty() {
         return Ok(None);
     }
-    Ok(
-        channels::inspect_business_command(root, requesting_task_id)?
-            .as_ref()
-            .and_then(web_stack_auth_owner_from_native_authorization),
-    )
+    match channels::inspect_business_command(root, requesting_task_id)? {
+        Some(context) => web_stack_auth_owner_from_command_context(root, &context),
+        None => Ok(None),
+    }
 }
 
 fn web_stack_auth_owner_from_chat(
@@ -5223,6 +5578,7 @@ struct ResolvedWebStackCredential {
     credential_value: String,
     login_hint: Option<String>,
     login_hint_from_secret: bool,
+    otp_recipient: Option<String>,
 }
 
 fn resolve_web_stack_credential(
@@ -5248,9 +5604,22 @@ fn resolve_web_stack_credential(
             .map(str::to_string)
     });
     let login_hint_from_secret = explicit_login_hint.is_none() && bundled_login_hint.is_some();
+    let otp_recipient = object
+        .and_then(|value| value.get("otp_recipient"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+    let login_hint = explicit_login_hint.or(bundled_login_hint);
     ResolvedWebStackCredential {
         credential_value: bundled_credential.unwrap_or_else(|| secret_value.to_string()),
-        login_hint: explicit_login_hint.or(bundled_login_hint),
+        otp_recipient: otp_recipient.or_else(|| {
+            login_hint
+                .as_deref()
+                .filter(|value| value.contains('@'))
+                .map(str::to_string)
+        }),
+        login_hint,
         login_hint_from_secret,
     }
 }
@@ -5294,6 +5663,635 @@ fn parse_local_ctox_secret_ref(value: &str) -> anyhow::Result<LocalCtoxSecretRef
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Picks the e-mail delivery option on a challenge page and presses the
+/// "send code" control when the provider offers one, then reports what the
+/// page shows (controls, fields) so a missing code mail can be diagnosed.
+const EMAIL_OTP_TRIGGER_SOURCE: &str = r#"
+const state = await page.evaluate(() => {
+  const visible = (el) => { const s = getComputedStyle(el); const r = el.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
+  const controls = Array.from(document.querySelectorAll('button, a, input[type="submit"], input[type="radio"], [role="button"]')).filter(visible);
+  const label = (el) => ((el.innerText || el.value || el.getAttribute('aria-label') || '') + ' ' + (el.id || '') + ' ' + (el.name || '')).trim();
+  const wantsEmail = /(e-?mail|mail|send code|send a code|code senden|code anfordern|per e-?mail)/i;
+  const isOtpField = Array.from(document.querySelectorAll('input')).some((el) => visible(el) && /(otp|code|verification|passcode)/i.test((el.name || '') + (el.id || '') + (el.placeholder || '') + (el.getAttribute('autocomplete') || '')));
+  const radio = controls.find((el) => el.tagName === 'INPUT' && el.type === 'radio' && wantsEmail.test(label(el)));
+  if (radio) radio.click();
+  // Okta renders "Send me an email" as <input type="submit">, not a button.
+  const pressable = (el) => el.tagName !== 'INPUT' || ['submit', 'button'].includes((el.type || '').toLowerCase());
+  const trigger = controls.find((el) => pressable(el) && wantsEmail.test(label(el)));
+  if (trigger) trigger.setAttribute('data-ctox-otp-trigger', '1');
+  return {
+    otp_field_present: isOtpField,
+    email_option_selected: !!radio,
+    trigger_label: trigger ? label(trigger).slice(0, 60) : null,
+    controls: controls.map((el) => label(el).slice(0, 40)).filter(Boolean).slice(0, 12),
+    text: (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').slice(0, 400),
+  };
+});
+if (state.trigger_label && !state.otp_field_present) {
+  await page.locator('[data-ctox-otp-trigger="1"]').first().click({ timeout: 5000 }).catch(() => null);
+  await page.waitForTimeout(3000);
+}
+// Okta sends a link and a code; the code field only appears after
+// "Enter a code from the email instead".
+const codeInstead = page.locator('a, button').filter({ hasText: /(enter a (verification )?code|code (from the email )?instead|code eingeben)/i }).first();
+if (await codeInstead.count()) {
+  await codeInstead.click({ timeout: 5000 }).catch(() => null);
+  await page.waitForTimeout(1500);
+}
+return { ...state, url: page.url(), title: await page.title() };
+"#;
+
+fn run_browser_session_automation_value(
+    root: &Path,
+    session_id: &str,
+    browser_dir: Option<PathBuf>,
+    timeout_ms: u64,
+    profile_owner: Option<String>,
+    source: String,
+) -> serde_json::Value {
+    match crate::business_os::run_browser_session_automation(
+        root,
+        crate::business_os::BrowserSessionAutomationRequest {
+            session_id: session_id.to_string(),
+            dir: browser_dir,
+            timeout_ms: Some(timeout_ms),
+            source,
+            profile_owner,
+        },
+    ) {
+        Ok(value) => value
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        Err(error) => serde_json::json!({ "error": error.to_string() }),
+    }
+}
+
+/// Providers that send their second factor by e-mail. The code is read from a
+/// mailbox CTOX already syncs (communication_messages); nothing is typed by a
+/// human and the code never leaves the host.
+struct WebStackEmailOtpRecipe {
+    sender_domains: &'static [&'static str],
+}
+
+fn web_stack_email_otp_recipe(source_id: &str) -> Option<WebStackEmailOtpRecipe> {
+    let sender_domains: &'static [&'static str] = match source_id.trim() {
+        // D&B signs in through Okta (sso.dnb.com); the code mail comes from Okta.
+        "dnbhoovers.com" | "app.dnbhoovers.com" => &[
+            "mail.dnb.com",
+            "dnb.com",
+            "hoovers.com",
+            "okta.com",
+            "okta-emea.com",
+        ],
+        "leadfeeder.com" | "app.leadfeeder.com" => &["leadfeeder.com", "dealfront.com"],
+        "xing.com" => &["xing.com"],
+        "linkedin.com" => &["linkedin.com"],
+        "rocketreach.com" | "rocketreach.co" => &["rocketreach.co", "rocketreach.com"],
+        _ => return None,
+    };
+    Some(WebStackEmailOtpRecipe { sender_domains })
+}
+
+/// Pull the one-time code out of a verification mail. Prefers a token that
+/// follows a code/PIN marker; falls back to "<code> is your …" and to a lone
+/// 6-digit number.
+fn extract_email_otp_code(subject: &str, body: &str) -> Option<String> {
+    let text = format!("{subject}\n{body}");
+    let has_digit = |value: &str| value.chars().any(|ch| ch.is_ascii_digit());
+    if let Ok(marker) = regex::Regex::new(
+        r"(?i)(?:code|pin|token|passcode|verifizierungscode|bestätigungscode|bestaetigungscode)\b[^A-Za-z0-9]{0,40}([A-Z0-9]{4,8})\b",
+    ) {
+        for captures in marker.captures_iter(&text) {
+            if let Some(candidate) = captures.get(1).map(|value| value.as_str()) {
+                if has_digit(candidate) {
+                    return Some(candidate.to_string());
+                }
+            }
+        }
+    }
+    if let Ok(leading) = regex::Regex::new(r"\b([A-Za-z0-9]{4,8}) is your\b") {
+        if let Some(candidate) = leading
+            .captures(&text)
+            .and_then(|captures| captures.get(1))
+            .map(|value| value.as_str())
+        {
+            if has_digit(candidate) {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    regex::Regex::new(r"\b(\d{6})\b")
+        .ok()?
+        .captures(&text)
+        .and_then(|captures| captures.get(1))
+        .map(|value| value.as_str().to_string())
+}
+
+fn email_otp_sender_matches(recipe: &WebStackEmailOtpRecipe, sender: &str) -> bool {
+    let sender = sender.trim().to_ascii_lowercase();
+    let sender_domain = sender.rsplit('@').next().unwrap_or("");
+    recipe
+        .sender_domains
+        .iter()
+        .any(|domain| sender_domain == *domain || sender_domain.ends_with(&format!(".{domain}")))
+}
+
+fn find_fresh_email_otp(
+    root: &Path,
+    recipe: &WebStackEmailOtpRecipe,
+    not_before_epoch_s: i64,
+    mailbox_address: &str,
+    profile_owner: &str,
+    mailbox_granted: bool,
+) -> Option<(String, String)> {
+    let conn = rusqlite::Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .ok()?;
+    find_fresh_email_otp_in_conn(
+        &conn,
+        recipe,
+        not_before_epoch_s,
+        mailbox_address,
+        profile_owner,
+        mailbox_granted,
+    )
+}
+
+fn find_fresh_email_otp_in_conn(
+    conn: &rusqlite::Connection,
+    recipe: &WebStackEmailOtpRecipe,
+    not_before_epoch_s: i64,
+    mailbox_address: &str,
+    profile_owner: &str,
+    mailbox_granted: bool,
+) -> Option<(String, String)> {
+    let mailbox_address = mailbox_address.trim().to_ascii_lowercase();
+    let profile_owner = profile_owner.trim();
+    if mailbox_address.is_empty() || !mailbox_address.contains('@') || profile_owner.is_empty() {
+        return None;
+    }
+    let account_key = format!("email:{mailbox_address}");
+    let mut statement = conn
+        .prepare(
+            "SELECT m.message_key, COALESCE(m.sender_address, ''), COALESCE(m.subject, ''),
+                    COALESCE(NULLIF(m.body_text, ''), m.preview, ''),
+                    m.recipient_addresses_json, a.profile_json
+             FROM communication_messages m
+             JOIN communication_accounts a ON a.account_key = m.account_key
+             WHERE m.channel = 'email' AND m.direction = 'inbound'
+               AND m.account_key = ?2 AND a.channel = 'email' AND lower(a.address) = ?3
+               AND CAST(strftime('%s', COALESCE(m.external_created_at, m.observed_at)) AS INTEGER) >= ?1
+             ORDER BY CAST(strftime('%s', COALESCE(m.external_created_at, m.observed_at)) AS INTEGER) DESC
+             LIMIT 40",
+        )
+        .ok()?;
+    let rows = statement
+        .query_map(
+            rusqlite::params![not_before_epoch_s, account_key, mailbox_address],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .ok()?;
+    let mut candidate = None;
+    for (message_key, sender, subject, body, recipient_json, profile_json) in rows.flatten() {
+        let profile: serde_json::Value = serde_json::from_str(&profile_json).ok()?;
+        let owner_matches = profile
+            .get("owner_user_id")
+            .or_else(|| profile.get("ownerUserId"))
+            .and_then(serde_json::Value::as_str)
+            == Some(profile_owner);
+        let shared_matches = profile
+            .get("shared_user_ids")
+            .or_else(|| profile.get("sharedUserIds"))
+            .or_else(|| profile.get("member_user_ids"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|users| {
+                users
+                    .iter()
+                    .any(|user| user.as_str() == Some(profile_owner))
+            });
+        // A tenant mailbox nobody owns (set up before mailbox ownership existed,
+        // e.g. the crew or a staff inbox CTOX syncs for the company) is the one
+        // the stored login itself names as its code recipient. It yields only
+        // this provider's codes (sender check below), so the research can
+        // finish the login on its own. Mailboxes owned by someone else stay
+        // closed unless owned, shared or explicitly granted.
+        let owner_field = profile
+            .get("owner_user_id")
+            .or_else(|| profile.get("ownerUserId"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        let has_shared_users = profile
+            .get("shared_user_ids")
+            .or_else(|| profile.get("sharedUserIds"))
+            .or_else(|| profile.get("member_user_ids"))
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|users| !users.is_empty());
+        let unowned_tenant_mailbox = owner_field.is_empty() && !has_shared_users;
+        if !owner_matches && !shared_matches && !mailbox_granted && !unowned_tenant_mailbox {
+            continue;
+        }
+        let recipients: Vec<String> = serde_json::from_str(&recipient_json).ok()?;
+        if !recipients
+            .iter()
+            .any(|recipient| recipient.trim().eq_ignore_ascii_case(&mailbox_address))
+            || !email_otp_sender_matches(recipe, &sender)
+        {
+            continue;
+        }
+        if let Some(code) = extract_email_otp_code(&subject, &body) {
+            if candidate.is_some() {
+                // Two simultaneous codes for one mailbox cannot be bound to
+                // this browser challenge from mail headers alone.
+                return None;
+            }
+            candidate = Some((code, message_key));
+        }
+    }
+    candidate
+}
+
+#[allow(clippy::too_many_arguments)]
+fn complete_web_stack_login_with_email_otp(
+    root: &Path,
+    session_id: &str,
+    browser_dir: Option<PathBuf>,
+    timeout_ms: u64,
+    profile_owner: Option<String>,
+    otp_recipient: Option<&str>,
+    mailbox_granted: bool,
+    recipe: &WebStackEmailOtpRecipe,
+    login_started_epoch_s: i64,
+    continuation_source: Option<&str>,
+) -> serde_json::Value {
+    let Some((profile_owner_id, mailbox_address)) = profile_owner
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .zip(otp_recipient.filter(|value| value.contains('@')))
+    else {
+        return serde_json::json!({
+            "ok": false,
+            "status": "otp_mailbox_unbound",
+            "detail": "automatic email OTP requires a bound owner and recipient mailbox",
+        });
+    };
+    // Many providers only send the code once the user picks "e-mail" or
+    // presses "send code" on the challenge page, so trigger it first and note
+    // what the page offered — a silent 150 s wait for a mail nobody sent looks
+    // exactly like a broken mailbox.
+    let trigger = run_browser_session_automation_value(
+        root,
+        session_id,
+        browser_dir.clone(),
+        timeout_ms.min(60_000),
+        profile_owner.clone(),
+        EMAIL_OTP_TRIGGER_SOURCE.to_string(),
+    );
+    // Only consider codes created after this login began. Clock skew may
+    // require manual completion; an older challenge must not win the lookup.
+    let not_before = login_started_epoch_s;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(150);
+    let mut polls = 0usize;
+    let mut found = None;
+    while std::time::Instant::now() < deadline {
+        polls += 1;
+        if let Ok(settings) = crate::inference::runtime_env::effective_operator_env_map(root) {
+            let _ = crate::communication::email_native::service_sync(root, &settings);
+        }
+        if let Some(hit) = find_fresh_email_otp(
+            root,
+            recipe,
+            not_before,
+            mailbox_address,
+            profile_owner_id,
+            mailbox_granted,
+        ) {
+            found = Some(hit);
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_secs(10));
+    }
+    let Some((code, message_key)) = found else {
+        return serde_json::json!({
+            "ok": false,
+            "status": "no_code_mail",
+            "polls": polls,
+            "challenge_page": trigger,
+            "detail": "no verification mail from the provider reached a synced mailbox within 150 s",
+        });
+    };
+    let mut source = format!("const otpCode = {};\n", serde_json::json!(code));
+    source.push_str(
+        r#"
+const marked = await page.evaluate(() => {
+  const visible = (el) => { const s = getComputedStyle(el); const r = el.getBoundingClientRect(); return s.display !== 'none' && s.visibility !== 'hidden' && r.width > 0 && r.height > 0; };
+  const inputs = Array.from(document.querySelectorAll('input')).filter((el) => visible(el) && !['hidden','checkbox','radio','submit','button','password','email'].includes((el.type || '').toLowerCase()));
+  const tokens = (el) => [el.name, el.id, el.placeholder, el.getAttribute('aria-label'), el.getAttribute('autocomplete'), el.getAttribute('inputmode')].filter(Boolean).join(' ').toLowerCase();
+  const split = inputs.filter((el) => Number(el.maxLength) === 1);
+  if (split.length >= 4) { split.forEach((el, i) => el.setAttribute('data-ctox-otp-i', String(i))); return { kind: 'split', count: split.length }; }
+  const scored = inputs.map((el) => { const t = tokens(el); let score = 0; if (/one-time-code/.test(t)) score += 100; if (/(otp|code|verification|verif|token|pin|passcode)/.test(t)) score += 60; if (Number(el.maxLength) >= 4 && Number(el.maxLength) <= 10) score += 20; if (/numeric/.test(t)) score += 10; return { el, score }; }).filter((x) => x.score > 0).sort((a, b) => b.score - a.score);
+  const pick = scored[0] ? scored[0].el : (inputs.length === 1 ? inputs[0] : null);
+  if (!pick) return { kind: 'none', count: inputs.length };
+  pick.setAttribute('data-ctox-otp', '1');
+  return { kind: 'single', count: 1 };
+});
+if (marked.kind === 'none') {
+  return { ok: false, otp_field_found: false, url: page.url(), title: await page.title() };
+}
+if (marked.kind === 'split') {
+  for (let i = 0; i < Math.min(marked.count, otpCode.length); i += 1) {
+    await page.locator('[data-ctox-otp-i="' + i + '"]').first().fill(otpCode[i]);
+  }
+} else {
+  await page.locator('[data-ctox-otp="1"]').first().fill(otpCode);
+}
+const submit = page.locator('button[type="submit"], input[type="submit"], button').filter({ hasText: /(verify|continue|submit|confirm|sign in|log in|weiter|bestätigen|anmelden|absenden|fortfahren)/i }).first();
+if (await submit.count()) { await submit.click({ timeout: 5000 }).catch(() => null); } else { await page.keyboard.press('Enter').catch(() => null); }
+await page.waitForLoadState('domcontentloaded', { timeout: 15000 }).catch(() => null);
+await page.waitForTimeout(4000);
+const stillMfa = await page.evaluate(() => {
+  const text = (document.body ? document.body.innerText : '').toLowerCase();
+  const field = document.querySelector('[data-ctox-otp], [data-ctox-otp-i]');
+  return !!field && /(verification code|one[- ]time|otp|bestätigungscode|verifizierung|passcode)/.test(text);
+});
+const errorShown = await page.evaluate(() => /(invalid code|incorrect code|code (has )?expired|ungültig|abgelaufen)/i.test(document.body ? document.body.innerText : ''));
+const otpOutcome = { ok: !stillMfa && !errorShown, otp_field_found: true, still_mfa: stillMfa, error_shown: errorShown, url: page.url(), title: await page.title() };
+"#,
+    );
+    if let Some(continuation) = continuation_source {
+        source.push_str(
+            "if (!otpOutcome.ok) return otpOutcome;\nconst postAuthResult = await (async () => {\n",
+        );
+        source.push_str(continuation);
+        source.push_str("\n})();\nreturn { ...otpOutcome, post_auth_result: postAuthResult };\n");
+    } else {
+        source.push_str("return otpOutcome;\n");
+    }
+    match crate::business_os::run_browser_session_automation(
+        root,
+        crate::business_os::BrowserSessionAutomationRequest {
+            session_id: session_id.to_string(),
+            dir: browser_dir,
+            timeout_ms: Some(timeout_ms),
+            source,
+            profile_owner,
+        },
+    ) {
+        Ok(mut value) => {
+            redact_secret_value_from_json(&mut value, &code);
+            let result = value
+                .get("result")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let ok = value.get("ok").and_then(serde_json::Value::as_bool) == Some(true)
+                && result.get("ok").and_then(serde_json::Value::as_bool) == Some(true);
+            let field = |name: &str| result.get(name).cloned().unwrap_or(serde_json::Value::Null);
+            serde_json::json!({
+                "ok": ok,
+                "status": if ok { "completed" } else { "code_rejected_or_no_field" },
+                "polls": polls,
+                "challenge_page": trigger,
+                "code_message_key": message_key,
+                "otp_field_found": field("otp_field_found"),
+                "still_mfa": field("still_mfa"),
+                "error_shown": field("error_shown"),
+                "url": field("url"),
+                "post_auth_result": field("post_auth_result"),
+                "code_value_in_payload": false,
+            })
+        }
+        Err(error) => serde_json::json!({
+            "ok": false,
+            "status": "otp_automation_failed",
+            "polls": polls,
+            "code_message_key": message_key,
+            "detail": error.to_string(),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod email_otp_tests {
+    use super::*;
+
+    #[test]
+    fn extracts_okta_email_factor_code() {
+        assert_eq!(
+            extract_email_otp_code(
+                "One-time verification code",
+                "Hi Lena, your verification code is 739104. Or click the link to sign in."
+            )
+            .as_deref(),
+            Some("739104")
+        );
+    }
+
+    #[test]
+    fn extracts_codes_from_provider_verification_mails() {
+        assert_eq!(
+            extract_email_otp_code(
+                "One-time verification code",
+                "Your verification code is 482913."
+            )
+            .as_deref(),
+            Some("482913")
+        );
+        assert_eq!(
+            extract_email_otp_code("vSR358 is your Bright Data access code", "").as_deref(),
+            Some("vSR358")
+        );
+        assert_eq!(
+            extract_email_otp_code("Ihr Bestätigungscode", "Bestätigungscode: 7Q4K2P").as_deref(),
+            Some("7Q4K2P")
+        );
+        assert_eq!(
+            extract_email_otp_code("Welcome to D&B Hoovers!", "Hello there"),
+            None
+        );
+    }
+
+    #[test]
+    fn otp_recipe_only_trusts_the_providers_sender_domains() {
+        let recipe = web_stack_email_otp_recipe("dnbhoovers.com").expect("dnb recipe");
+        assert!(email_otp_sender_matches(&recipe, "no-reply@mail.dnb.com"));
+        assert!(email_otp_sender_matches(&recipe, "No-Reply@HOOVERS.com"));
+        assert!(email_otp_sender_matches(&recipe, "noreply@okta.com"));
+        assert!(!email_otp_sender_matches(
+            &recipe,
+            "attacker@dnb.com.evil.example"
+        ));
+        assert!(!email_otp_sender_matches(&recipe, "noreply@brightdata.com"));
+        assert!(web_stack_email_otp_recipe("northdata.de").is_none());
+    }
+
+    #[test]
+    fn otp_lookup_stays_in_the_bound_mailbox_and_owner() {
+        let conn = rusqlite::Connection::open_in_memory().expect("in-memory mail fixture");
+        conn.execute_batch(
+            "CREATE TABLE communication_accounts (
+                account_key TEXT PRIMARY KEY, channel TEXT, address TEXT, profile_json TEXT
+             );
+             CREATE TABLE communication_messages (
+                message_key TEXT PRIMARY KEY, channel TEXT, account_key TEXT, direction TEXT,
+                sender_address TEXT, subject TEXT, body_text TEXT, preview TEXT,
+                recipient_addresses_json TEXT, external_created_at TEXT, observed_at TEXT
+             );",
+        )
+        .expect("fixture tables");
+        for (key, address, owner) in [
+            ("email:alice@example.com", "alice@example.com", "alice"),
+            ("email:bob@example.com", "bob@example.com", "bob"),
+        ] {
+            conn.execute(
+                "INSERT INTO communication_accounts VALUES (?1, 'email', ?2, ?3)",
+                rusqlite::params![
+                    key,
+                    address,
+                    serde_json::json!({"owner_user_id": owner, "shared_user_ids": []}).to_string()
+                ],
+            )
+            .expect("account");
+        }
+        let insert_code = |key: &str, account: &str, recipient: &str, code: &str| {
+            conn.execute(
+                "INSERT INTO communication_messages VALUES (
+                    ?1, 'email', ?2, 'inbound', 'no-reply@mail.dnb.com',
+                    'Verification code', ?3, '', ?4, '2026-09-24T03:00:00Z',
+                    '2026-09-24T03:00:00Z'
+                 )",
+                rusqlite::params![
+                    key,
+                    account,
+                    format!("Your verification code is {code}."),
+                    serde_json::json!([recipient]).to_string(),
+                ],
+            )
+            .expect("message");
+        };
+        insert_code(
+            "alice-code",
+            "email:alice@example.com",
+            "alice@example.com",
+            "111111",
+        );
+        insert_code(
+            "bob-code",
+            "email:bob@example.com",
+            "bob@example.com",
+            "222222",
+        );
+        insert_code(
+            "wrong-recipient",
+            "email:alice@example.com",
+            "bob@example.com",
+            "333333",
+        );
+        let recipe = web_stack_email_otp_recipe("dnbhoovers.com").expect("recipe");
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice", false),
+            Some(("111111".to_string(), "alice-code".to_string()))
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "bob@example.com", "alice", false),
+            None,
+            "Alice cannot select Bob's code from another account"
+        );
+        insert_code(
+            "alice-second",
+            "email:alice@example.com",
+            "alice@example.com",
+            "444444",
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "alice@example.com", "alice", false),
+            None,
+            "two concurrent codes in one mailbox have no challenge identity"
+        );
+        conn.execute(
+            "INSERT INTO communication_accounts VALUES ('email:lena@example.com', 'email', 'lena@example.com', '{}')",
+            [],
+        )
+        .expect("unowned account");
+        insert_code(
+            "lena-code",
+            "email:lena@example.com",
+            "lena@example.com",
+            "555555",
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "lena@example.com", "alice", false),
+            Some(("555555".to_string(), "lena-code".to_string())),
+            "an unowned tenant mailbox named by the login yields the provider code"
+        );
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "lena@example.com", "alice", true),
+            Some(("555555".to_string(), "lena-code".to_string())),
+            "the owner-granted mailbox yields the provider code"
+        );
+        conn.execute(
+            "INSERT INTO communication_messages VALUES (
+                'lena-phish', 'email', 'email:lena@example.com', 'inbound', 'alerts@evil.example',
+                'Verification code', 'Your verification code is 999999.', '', '[\"lena@example.com\"]',
+                '2026-09-24T03:05:00Z', '2026-09-24T03:05:00Z'
+             )",
+            [],
+        )
+        .expect("foreign sender");
+        assert_eq!(
+            find_fresh_email_otp_in_conn(&conn, &recipe, 0, "lena@example.com", "alice", false),
+            Some(("555555".to_string(), "lena-code".to_string())),
+            "a code from a foreign sender in the tenant mailbox is never taken"
+        );
+    }
+
+    #[test]
+    fn otp_mailbox_grant_names_exactly_one_provider_and_mailbox() {
+        let grants = "dnbhoovers.com=Lena@Example.com, leadfeeder.com=crew@example.com";
+        assert!(web_stack_otp_mailbox_granted_by(
+            grants,
+            "dnbhoovers.com",
+            "lena@example.com"
+        ));
+        assert!(web_stack_otp_mailbox_granted_by(
+            grants,
+            "app.dnbhoovers.com",
+            "LENA@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            grants,
+            "xing.com",
+            "lena@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            grants,
+            "dnbhoovers.com",
+            "crew@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            "",
+            "dnbhoovers.com",
+            "lena@example.com"
+        ));
+        assert!(!web_stack_otp_mailbox_granted_by(
+            grants,
+            "dnbhoovers.com",
+            "not-a-mailbox"
+        ));
+    }
+}
+
 fn build_web_stack_auth_assist_login_source_with_continuation(
     target_url: &str,
     source_id: &str,
@@ -5409,7 +6407,8 @@ const browserCandidateFieldsInFrame = async (frame, kind, relaxed) => frame.eval
     if (kind === "credential") {
       let score = type === "password" ? 100 : 0;
       if (/(password|passwort|passwd|pwd|kennwort|secret)/.test(tokens)) score += 80;
-      if (/(otp|totp|mfa|2fa|code|verification|confirm)/.test(tokens)) score -= 70;
+      // Same trap as above: `credentials.passcode` is Okta's password field.
+      if (type !== "password" && /(\botp\b|\btotp\b|\bmfa\b|\b2fa\b|\bcode\b|verification|confirm)/.test(tokens)) score -= 70;
       return score;
     }
     let score = 0;
@@ -5727,6 +6726,11 @@ const pageSignals = async () => {
         { term: "sicherheitscode", pattern: /sicherheitscode/ },
         { term: "verifizierungscode", pattern: /verifizierungscode/ },
         { term: "zweifaktor", pattern: /zweifaktor|zwei[-\s]?faktor|zweistufig/ },
+        // Okta's e-mail factor (D&B): "Send a verification email to … by
+        // clicking on 'Send me an email'" — it has no code field yet, so
+        // without these terms the page read as signed in.
+        { term: "verification-email", pattern: /verification\s+e-?mail|send\s+me\s+an\s+e-?mail|verify\s+with\s+(your\s+)?e-?mail|enter\s+(a|the)\s+(verification\s+)?code/ },
+        { term: "bestaetigungsmail", pattern: /bestätigungs-?e-?mail|bestaetigungs-?e-?mail|code\s+per\s+e-?mail/ },
       ]);
       const errorTerms = matchingTerms([
         { term: "invalid", pattern: /\binvalid\b/ },
@@ -5751,9 +6755,14 @@ const pageSignals = async () => {
         { term: "inloggegevens-onjuist", pattern: /inloggegevens\s+(onjuist|ongeldig)/ },
         { term: "nieprawidlowe-dane", pattern: /nieprawidlowe\s+dane|bledne\s+haslo/ },
       ]);
+      // A password field is never a one-time-code field: Okta names its
+      // password input `credentials.passcode`, whose "code" made every D&B
+      // sign-in look like a second factor, so the stored password was never
+      // typed (gemessen 22.09.2026). Match whole words, not substrings.
       const otpFieldCount = Array.from(document.querySelectorAll("input, textarea"))
         .filter(visible)
-        .filter((element) => /(otp|totp|mfa|2fa|code|verification|verifizierung|sicherheitscode|one[-\s]?time)/.test(tokensFor(element)))
+        .filter((element) => String(element.getAttribute("type") || "").toLowerCase() !== "password")
+        .filter((element) => /(\botp\b|\btotp\b|\bmfa\b|\b2fa\b|\bcode\b|one[-\s]?time|verification|verifizierung|sicherheitscode)/.test(tokensFor(element)))
         .length;
       const errorNodes = Array.from(document.querySelectorAll([
         "[role='alert']",
@@ -5877,9 +6886,48 @@ const before = await gotoTargetWithRetry();
 await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => null);
 const consentTransition = await dismissConsent();
 const beforeSignals = await pageSignals();
-const preAuthenticatedVerifyFound = configuredVerifySelector
+// "Elsewhere" means another page, not the same login page with a token in the
+// query: D&B Hoovers answers /login with /login?F1084…=_ and a username-only
+// first step. Comparing whole URLs read that as a landing, found no password
+// field (the password step comes later) and reported `already-authenticated`,
+// so the stored credential was never submitted.
+const samePage = (left, right) => {
+  try {
+    const a = new URL(left);
+    const b = new URL(right);
+    return a.origin === b.origin && a.pathname.replace(/\/+$/, "") === b.pathname.replace(/\/+$/, "");
+  } catch {
+    return left === right;
+  }
+};
+const verifySelectorVisible = configuredVerifySelector
   ? await page.locator(configuredVerifySelector).first().isVisible().catch(() => false)
   : false;
+// A verify selector only proves a session once we have left the login page.
+// D&B's selector matches a search link on /login itself, and D&B first shows a
+// token interstitial (/login?F…=_) before drawing its username step, so no
+// field check at that moment is reliable. A live session redirects away from
+// the login URL; while we are still on it, go through the login path.
+// D&B is opened at its app root and redirects to /login?F…=_, so "same page as
+// the target" alone misses it: a login-looking path is never a live session.
+const looksLikeLoginPath = (value) => {
+  try {
+    return /(^|\/)(log-?in|sign-?in|sign\/in|auth|sso)(\/|$)/i.test(new URL(value).pathname);
+  } catch {
+    return false;
+  }
+};
+const stillOnLoginPage = samePage(page.url(), targetUrl) || looksLikeLoginPath(page.url());
+if (verifySelectorVisible && stillOnLoginPage) {
+  // Give a late-rendering form a bounded chance before the fill step.
+  const deadline = Date.now() + 8000;
+  while (Date.now() < deadline) {
+    const fields = await browserCandidateFields("login").catch(() => []);
+    if (fields.some((field) => field.source === "heuristic")) break;
+    await page.waitForTimeout(500).catch(() => null);
+  }
+}
+const preAuthenticatedVerifyFound = verifySelectorVisible && !stillOnLoginPage;
 // A stored session sends us straight past the login form: Leadfeeder answers
 // /login with its dashboard, XING with an in-app page. The verify selector is
 // the only thing that used to notice, and once its markup drifts the run walks
@@ -5887,10 +6935,36 @@ const preAuthenticatedVerifyFound = configuredVerifySelector
 // signed in, and reports `credential-field-not-found` on a working session.
 // Landing somewhere other than the login URL with no credential field and no
 // error is the same evidence, and it does not rot when a class name changes.
+// D&B Hoovers serves its signed-in dashboard at the same app root it is opened
+// with ("Willkommen, Lena! ... Suchen & eine Liste erstellen" at
+// https://app.dnbhoovers.com/). Requiring a landing *elsewhere* read that live
+// session as "not signed in", found no login field and reported
+// credential-field-not-found / login_failed on every capture from 12:19 on
+// 25.09.2026, while the session from the 12:02 e-mail code was still valid.
+// Staying on the target URL counts as signed in when the page shows no login
+// or credential field and no sign-in entry point.
+const signInEntryVisible = async () => page.evaluate(() => Array.from(
+  document.querySelectorAll("a, button, [role='button'], input[type='submit']"),
+).some((element) => {
+  if (!element.offsetParent) return false;
+  const label = String(element.innerText || element.value || element.getAttribute("aria-label") || "").trim();
+  return /^(log ?in|sign ?in|anmelden|einloggen|login)$/i.test(label);
+})).catch(() => true);
 const preAuthenticatedByLanding = await (async () => {
   if (preAuthenticatedVerifyFound) return false;
-  const landedElsewhere = beforeSignals.url && beforeSignals.url !== targetUrl;
-  if (!landedElsewhere) return false;
+  const landedElsewhere = beforeSignals.url && !samePage(beforeSignals.url, targetUrl);
+  if (!landedElsewhere) {
+    if (!beforeSignals.url || looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;
+    const signalsHere = beforeSignals.auth_signals || emptyAuthSignals();
+    if (signalsHere.mfa_required === true || signalsHere.login_error_detected === true) return false;
+    const formHere = beforeSignals.form_state || {};
+    if (Number(formHere.visible_password_fields || 0) > 0 || Number(formHere.visible_email_fields || 0) > 0) return false;
+    const loginHere = await browserCandidateFields("login").catch(() => []);
+    const credentialHere = await browserCandidateFields("credential").catch(() => []);
+    if (loginHere.length || credentialHere.length) return false;
+    return !(await signInEntryVisible());
+  }
+  if (looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;
   const signals = beforeSignals.auth_signals || emptyAuthSignals();
   if (signals.mfa_required === true || signals.login_error_detected === true) return false;
   if (Number(beforeSignals.form_state?.visible_password_fields || 0) > 0) return false;
@@ -6711,6 +7785,48 @@ mod tests {
     }
 
     #[test]
+    fn rxdb_init_accepts_global_root_argument_and_default_root() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        handle_business_os_rxdb(
+            root.path(),
+            &[
+                "init".to_string(),
+                "--root".to_string(),
+                root.path().display().to_string(),
+            ],
+        )?;
+        assert!(root.path().join("runtime").is_dir());
+        handle_business_os_rxdb(root.path(), &["init".to_string()])?;
+        Ok(())
+    }
+
+    #[test]
+    fn rxdb_init_rejects_invalid_options_before_creating_runtime() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().display().to_string();
+        for suffix in [
+            vec!["--root"],
+            vec!["--root", ""],
+            vec!["--root", "--json"],
+            vec!["--unknown"],
+            vec!["unexpected"],
+            vec!["--root", &path, "--root", &path],
+            vec!["--root", &path, "--json"],
+        ] {
+            let args = std::iter::once("init")
+                .chain(suffix)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let error = handle_business_os_rxdb(root.path(), &args)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("usage:"), "{args:?}: {error}");
+            assert!(!root.path().join("runtime").exists(), "{args:?}");
+        }
+        Ok(())
+    }
+
+    #[test]
     fn business_os_usage_documents_atomic_authenticated_automation() {
         let usage = business_os_usage();
         assert!(
@@ -6911,7 +8027,7 @@ mod tests {
                 false,
             )?
             .as_deref(),
-            Some("task-owner")
+            None
         );
         assert_eq!(
             resolve_web_stack_auth_owner_user_id_with_env(root.path(), &[], task_id, None, true)?
@@ -6937,6 +8053,208 @@ mod tests {
                 true,
             )?,
             None
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn web_stack_generated_research_control_task_revalidates_persisted_native_owner(
+    ) -> anyhow::Result<()> {
+        for command_type in [
+            "outbound.research_source.generate_adapter",
+            "outbound.research_source.test",
+        ] {
+            let root = tempfile::tempdir()?;
+            let owner = "adapter-owner@example.test";
+            let command_id = "cmd_generated_adapter_owner";
+            let (capability_token, _) =
+                crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                    root.path(),
+                    owner,
+                    "Adapter fixture owner",
+                    "admin",
+                    chrono::Utc::now().timestamp_millis(),
+                )?;
+            let accepted = crate::business_os::store::accept_rxdb_business_command_with_origin(
+                root.path(),
+                serde_json::json!({
+                    "id": command_id, "command_id": command_id,
+                    "module":"outbound", "command_type":command_type,
+                    "record_id":"adapter_fixture", "status":"pending_sync",
+                    "payload": {
+                        "adapter_id":"adapter_fixture", "campaign_id":"fixture-campaign",
+                        "source_id":"research.fixture.example",
+                        "test_input":{"company":"Fixture Research GmbH", "country":"AT"},
+                        "adapter":{
+                            "id":"adapter_fixture", "campaign_id":"fixture-campaign",
+                            "source_id":"research.fixture.example", "label":"Fixture provider",
+                            "url":"https://research.fixture.example/", "adapter_kind":"custom_url",
+                            "target_key":"research-fixture-example", "requires_credential":false
+                        }
+                    },
+                    "client_context":{"capability_token":capability_token,
+                        "actor":{"id":"forged"}, "owner_user_id":"forged"}
+                }),
+                crate::business_os::store::CommandOrigin::ReplicatedPeer,
+            )?;
+            assert_eq!(accepted["status"], "completed", "{accepted}");
+            assert_eq!(
+                accepted
+                    .pointer("/result/adapter/status")
+                    .and_then(serde_json::Value::as_str),
+                Some("generation_queued")
+            );
+            let task_id = accepted
+                .pointer("/result/adapter/payload/scrape_registry_effect/generation_task/task_id")
+                .and_then(serde_json::Value::as_str)
+                .context("actual generated task")?;
+            let task = channels::load_queue_task(root.path(), task_id)?
+                .context("persisted generated task")?;
+            assert_eq!(task.metadata["business_os_command_id"], command_id);
+            assert!(task.prompt.contains("Fixture Research GmbH"));
+            assert!(task.prompt.contains("\"country\":\"AT\""));
+            let canonical = channels::business_command_projection(root.path(), command_id)?;
+            assert_eq!(
+                canonical
+                    .pointer("/native_authorization/permission")
+                    .and_then(serde_json::Value::as_str),
+                Some("data.write")
+            );
+            assert_eq!(
+                canonical
+                    .pointer("/native_authorization/actor/id")
+                    .and_then(serde_json::Value::as_str),
+                Some(owner)
+            );
+            assert_eq!(
+                canonical
+                    .pointer("/payload/test_input/company")
+                    .and_then(serde_json::Value::as_str),
+                Some("Fixture Research GmbH")
+            );
+            assert_eq!(
+                canonical
+                    .pointer("/payload/test_input/country")
+                    .and_then(serde_json::Value::as_str),
+                Some("AT")
+            );
+            let claimed_args = vec!["--owner-user-id".into(), "forged".into()];
+            assert_eq!(
+                resolve_web_stack_auth_owner_user_id_with_env(
+                    root.path(),
+                    &claimed_args,
+                    task_id,
+                    Some("forged-env"),
+                    false,
+                )?
+                .as_deref(),
+                Some(owner)
+            );
+            let conn = crate::business_os::store::open_store(root.path())?;
+            conn.execute(
+                "UPDATE business_users SET active=0 WHERE user_id=?1",
+                rusqlite::params![owner],
+            )?;
+            let error = resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &claimed_args,
+                task_id,
+                Some("forged-env"),
+                false,
+            )
+            .expect_err("deactivated admitted actor must not regain access through claims");
+            assert!(error.to_string().contains("no longer active"), "{error:#}");
+            conn.execute(
+                "UPDATE business_users SET active=1 WHERE user_id=?1",
+                rusqlite::params![owner],
+            )?;
+            assert_eq!(
+                resolve_web_stack_auth_owner_user_id_with_env(
+                    root.path(),
+                    &claimed_args,
+                    task_id,
+                    Some("forged-env"),
+                    false,
+                )?
+                .as_deref(),
+                Some(owner),
+            );
+            // Exercise the supported queue cancel command, not a raw state edit.
+            crate::mission::queue::handle_queue_command(
+                root.path(),
+                &[
+                    "cancel".into(),
+                    "--message-key".into(),
+                    task_id.into(),
+                    "--reason".into(),
+                    "fixture cancellation".into(),
+                ],
+            )?;
+            assert_eq!(
+                channels::load_queue_task(root.path(), task_id)?
+                    .context("cancelled generated task")?
+                    .route_status,
+                "cancelled"
+            );
+            let error = resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &claimed_args,
+                task_id,
+                Some("forged-env"),
+                false,
+            )
+            .expect_err("cancelled requesting task must not regain actor authority");
+            assert!(
+                error
+                    .to_string()
+                    .contains("requesting queue task is terminal"),
+                "{error:#}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn web_stack_auth_owner_falls_back_to_the_configured_default_owner() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                "queue:system::x",
+                None,
+                false
+            )?,
+            None
+        );
+        crate::inference::runtime_env::set_runtime_env_value(
+            root.path(),
+            WEB_STACK_DEFAULT_AUTH_OWNER_KEY,
+            "crew@thesen-ag.com",
+        )?;
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                "queue:system::x",
+                None,
+                false
+            )?
+            .as_deref(),
+            Some("crew@thesen-ag.com")
+        );
+        let claim = vec!["--owner-user-id".to_string(), "someone-else".to_string()];
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &claim,
+                "queue:system::x",
+                None,
+                false
+            )?
+            .as_deref(),
+            Some("crew@thesen-ag.com")
         );
         Ok(())
     }
@@ -6986,6 +8304,54 @@ mod tests {
             .as_deref(),
             Some("michael.welsch@metric-space.ai")
         );
+
+        // Admission already consumed the command's one direct QueueTask spawn.
+        // This adapter fixture descends from that task; keep the metadata-only
+        // command reference and forged owner assertions on the child.
+        let parent = channels::load_queue_task_for_business_os_command(root.path(), command_id)?
+            .context("queue task created by command admission")?;
+        let generated = channels::create_queue_task(
+            root.path(),
+            channels::QueueTaskCreateRequest {
+                title: "Generated adapter fixture".into(),
+                prompt: "Fixture only".into(),
+                thread_key: "fixture/adapter".into(),
+                workspace_root: None,
+                priority: "low".into(),
+                suggested_skill: None,
+                parent_message_key: Some(parent.message_key.clone()),
+                extra_metadata: Some(serde_json::json!({"business_os_command_id":command_id,
+                "owner_user_id":"forged", "actor":{"id":"forged"}})),
+            },
+        )?;
+        assert_eq!(generated.metadata["parent_message_key"], parent.message_key);
+        assert_eq!(generated.metadata["business_os_command_id"], command_id);
+        assert_eq!(generated.metadata["owner_user_id"], "forged");
+        assert_eq!(
+            resolve_web_stack_auth_owner_user_id_with_env(
+                root.path(),
+                &[],
+                &generated.message_key,
+                Some("forged"),
+                false,
+            )?
+            .as_deref(),
+            Some("michael.welsch@metric-space.ai")
+        );
+        let mut context = channels::inspect_business_command(root.path(), command_id)?
+            .context("command context")?;
+        context["command"]["client_context"] =
+            serde_json::json!({"owner_user_id":"forged", "actor":{"id":"forged"}});
+        context["command"]["payload"]["owner_user_id"] = serde_json::json!("forged");
+        assert_eq!(
+            web_stack_auth_owner_from_command_context(root.path(), &context)?.as_deref(),
+            Some("michael.welsch@metric-space.ai")
+        );
+        context["command"]
+            .as_object_mut()
+            .unwrap()
+            .remove("native_authorization");
+        assert!(web_stack_auth_owner_from_command_context(root.path(), &context)?.is_none());
 
         crate::business_os::store::upsert_projection_record(
             root.path(),
@@ -7317,6 +8683,30 @@ mod tests {
         assert!(source.contains("waitForLoginEntryTransition"));
         assert!(source.contains("waitForCredentialTransition"));
         assert!(source.contains("browserCandidateFields(\"credential\")"));
+        // A login page that only gained a query token (D&B: /login?F…=_) is not a
+        // landing elsewhere; otherwise a username-first step reads as signed in.
+        assert!(source.contains("!samePage(beforeSignals.url, targetUrl)"));
+        // D&B keeps its signed-in dashboard on the app root: staying on the
+        // target URL without any login field or sign-in entry is a session.
+        assert!(source.contains("const signInEntryVisible = async () =>"));
+        assert!(source.contains("if (!landedElsewhere) {"));
+        assert!(!source.contains("beforeSignals.url !== targetUrl"));
+        // A verify selector that also matches on the login page (D&B: a search
+        // link) must not count while the login form is still shown.
+        assert!(source.contains(
+            "const preAuthenticatedVerifyFound = verifySelectorVisible && !stillOnLoginPage;"
+        ));
+        // D&B opens at the app root and lands on /login?F…=_: a login-looking
+        // path must never count as an existing session.
+        assert!(source.contains(
+            "if (looksLikeLoginPath(beforeSignals.url) || looksLikeLoginPath(page.url())) return false;"
+        ));
+        // Okta's password field is named `credentials.passcode`; counting it
+        // as a one-time-code field turned every D&B sign-in into "MFA".
+        assert!(source.contains("!== \"password\""));
+        assert!(!source.contains(
+            "/(otp|totp|mfa|2fa|code|verification|verifizierung|sicherheitscode|one[-\\s]?time)/"
+        ));
         assert!(source.contains("gotoTargetWithRetry"));
         assert!(source.contains("attempt <= 2"));
         assert!(source.contains("same-origin-link"));
@@ -7352,6 +8742,7 @@ mod tests {
         );
         assert_eq!(bundled.credential_value, "secret-value");
         assert_eq!(bundled.login_hint.as_deref(), Some("user@example.test"));
+        assert_eq!(bundled.otp_recipient.as_deref(), Some("user@example.test"));
         assert!(bundled.login_hint_from_secret);
 
         let explicit = resolve_web_stack_credential(
@@ -7362,11 +8753,25 @@ mod tests {
             explicit.login_hint.as_deref(),
             Some("operator@example.test")
         );
+        assert_eq!(
+            explicit.otp_recipient.as_deref(),
+            Some("operator@example.test")
+        );
         assert!(!explicit.login_hint_from_secret);
+
+        let separate_mailbox = resolve_web_stack_credential(
+            r#"{"username":"provider-user","password":"secret-value","otp_recipient":"crew@example.test"}"#,
+            None,
+        );
+        assert_eq!(
+            separate_mailbox.otp_recipient.as_deref(),
+            Some("crew@example.test")
+        );
 
         let legacy = resolve_web_stack_credential("legacy-password", None);
         assert_eq!(legacy.credential_value, "legacy-password");
         assert_eq!(legacy.login_hint, None);
+        assert_eq!(legacy.otp_recipient, None);
         assert!(!legacy.login_hint_from_secret);
     }
 
@@ -7418,6 +8823,12 @@ mod tests {
             build_web_stack_authenticated_source_capture("dnbhoovers.com", "Example AG", "DE")?;
         assert!(dnb.contains("app.dnbhoovers.com"));
         assert!(dnb.contains("D&B Hoovers exact company result"));
+        // The classification year "WZ 2008" must never be read as the code, and
+        // the rendered script carries plain regex braces (format escapes gone).
+        assert!(dnb.contains("(?!(?:1993|2003|2008)\\b)"));
+        assert!(dnb.contains("[^0-9]{0,80}"));
+        assert!(dnb.contains("SIC|NAICS)\\b/i"));
+        assert!(dnb.contains("(?:\\s*[KMB]\\b)?"));
 
         let leadfeeder =
             build_web_stack_authenticated_source_capture("leadfeeder.com", "Example AG", "DE")?;
@@ -7565,6 +8976,29 @@ mod tests {
             .is_some_and(|url| url.starts_with("https://rocketreach.co/")
                 || url.starts_with("https://rocketreach.com/"))));
 
+        for record in records {
+            let quote = record
+                .get("source_quote")
+                .and_then(serde_json::Value::as_str)
+                .expect("RocketReach records need an observed value quote");
+            let value = record
+                .get("value")
+                .and_then(serde_json::Value::as_str)
+                .expect("RocketReach field value");
+            assert!(quote.contains(value), "quote does not name {value}");
+            if record
+                .get("field")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|field| field.starts_with("person_"))
+            {
+                assert_eq!(
+                    record.get("person_key").and_then(serde_json::Value::as_str),
+                    Some("rocketreach-person-bexample"),
+                );
+                assert!(quote.contains("Example Manufacturing AG"));
+            }
+        }
+
         let wrong_company = parse_rocketreach_records_for_test(
             "Example Manufacturing AG",
             serde_json::json!([{
@@ -7615,6 +9049,44 @@ mod tests {
     }
 
     #[test]
+    fn authenticated_automation_stdin_is_bounded_and_command_specific() {
+        struct NoRead;
+        impl std::io::Read for NoRead {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                panic!("unrelated commands must not read stdin");
+            }
+        }
+        assert!(
+            read_web_stack_cli_source(&["auth-assist-status".into()], NoRead)
+                .unwrap()
+                .is_none()
+        );
+        let args = vec!["authenticated-automation".into()];
+        let source = "return { text: 'Grüße\n世界' };";
+        assert_eq!(
+            read_web_stack_cli_source(&args, source.as_bytes())
+                .unwrap()
+                .as_deref(),
+            Some(source)
+        );
+        let at_limit = vec![b'x'; AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES];
+        assert_eq!(
+            read_web_stack_cli_source(&args, at_limit.as_slice())
+                .unwrap()
+                .unwrap()
+                .len(),
+            at_limit.len()
+        );
+        let over_limit = vec![b'x'; AUTHENTICATED_AUTOMATION_SOURCE_MAX_BYTES + 1];
+        assert!(read_web_stack_cli_source(&args, over_limit.as_slice())
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds 1 MiB"));
+        assert!(read_web_stack_cli_source(&args, &[0xff][..]).is_err());
+        assert!(read_web_stack_cli_source(&args, b" \n".as_slice()).is_err());
+    }
+
+    #[test]
     fn web_stack_source_capture_command_is_registered() {
         let root = tempfile::tempdir().expect("temp root");
         let args = vec![
@@ -7624,7 +9096,7 @@ mod tests {
             "--company".to_string(),
             "Example AG".to_string(),
         ];
-        let error = run_business_os_web_stack_cli_json_local(root.path(), &args)
+        let error = run_business_os_web_stack_cli_json_local(root.path(), &args, None)
             .expect_err("unsupported source must be rejected")
             .to_string();
 
@@ -8787,4 +10259,40 @@ fn allowed_domains_from_url(target_url: &str) -> Vec<String> {
         .and_then(|url| url.host_str().map(str::to_string))
         .map(|host| vec![host])
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod source_capture_lock_tests {
+    #[test]
+    fn a_second_capture_for_the_same_provider_waits_for_the_first() {
+        let root = tempfile::tempdir().expect("root");
+        let first = super::acquire_source_capture_lock(
+            root.path(),
+            "dnbhoovers.com",
+            std::time::Duration::from_secs(1),
+        )
+        .expect("first lock");
+        let blocked = super::acquire_source_capture_lock(
+            root.path(),
+            "dnbhoovers.com",
+            std::time::Duration::from_millis(600),
+        );
+        assert!(
+            blocked.is_none(),
+            "the provider stays locked while the first capture runs"
+        );
+        let other = super::acquire_source_capture_lock(
+            root.path(),
+            "leadfeeder.com",
+            std::time::Duration::from_millis(600),
+        );
+        assert!(other.is_some(), "another provider is not blocked");
+        drop(first);
+        assert!(super::acquire_source_capture_lock(
+            root.path(),
+            "dnbhoovers.com",
+            std::time::Duration::from_secs(1),
+        )
+        .is_some());
+    }
 }

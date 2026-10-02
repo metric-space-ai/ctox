@@ -234,7 +234,7 @@ test('crew identities and SVG bodies are stable per work stream', () => {
   assert.deepEqual(__businessChatTestInternals.crewIdentity(chat), identity);
   assert.ok(['round', 'blob', 'square', 'triangle'].includes(identity.shape));
   assert.match(__businessChatTestInternals.crewCreatureHtml(chat, 'running', 'window'), /ctox-crew-creature is-running/);
-  assert.match(__businessChatTestInternals.crewCreatureHtml(chat, 'running', 'window'), /<svg viewBox="0 0 64 64"/);
+  assert.match(__businessChatTestInternals.crewCreatureHtml(chat, 'running', 'window'), /<svg class="ctox-crew-figure" viewBox="0 0 64 64"/);
 });
 
 test('crew pool members read and learn from projection stamps, then settle', () => {
@@ -339,21 +339,33 @@ test('CTOX normalized camel-case telemetry drives map creature turns and progres
   assert.match(creature, /--ctox-progress-angle:216deg/);
 });
 
-test('crew motion is triggered only by durable turns, finite, and reduced-motion safe', () => {
-  assert.match(businessChatSource, /function syncCrewProceduralMotion/);
-  assert.match(businessChatSource, /now - state\.lastFrameAt < 33/);
-  assert.match(businessChatSource, /\.slice\(0, 36\)/);
-  assert.match(businessChatSource, /document\.visibilityState === 'hidden'/);
-  assert.match(businessChatSource, /total > \(previousTotal \?\? total\)/);
-  assert.match(businessChatSource, /!freshInitialEvent && !modeChanged/);
-  assert.match(businessChatSource, /nowMs - updatedAt <= 8000/);
-  assert.match(businessChatSource, /duration = mode === 'review' \? 2200 : kind === 'thinking' \? 1800 : 1400/);
-  assert.doesNotMatch(businessChatSource, /frequencyB: .*Math\.SQRT2/);
-  assert.match(businessChatSource, /\.ctox-crew-creature\.is-working[\s\S]*?animation: none/);
-  assert.match(businessChatSource, /\.ctox-crew-creature\.is-review[\s\S]*?animation: none/);
-  assert.match(businessChatSource, /\.ctox-crew-creature\.is-failed[\s\S]*?animation: ctoxCrewOops 860ms[^;]* 1 both/);
+test('crew motion: continuous state poses, impulses only from durable turns, reduced-motion safe', async () => {
+  const motionSource = readFileSync(new URL('./crew-motion.js', import.meta.url), 'utf8');
+  const { __crewMotionInternals } = await import('./crew-motion.js');
+  const { basePose, IMPULSES } = __crewMotionInternals;
+  // The chat delegates to the one page-wide engine instead of running its own loop.
+  assert.match(businessChatSource, /import \{ syncCrewMotion \} from '\.\/crew-motion\.js\?v=/);
+  assert.doesNotMatch(businessChatSource, /__ctoxCrewProceduralMotion/);
+  // Impulses come only from a durable turn increase (or a fresh first event) and only while working/reviewing.
+  assert.match(motionSource, /turns > actor\.turns && \(mode === 'working' \|\| mode === 'review'\)/);
+  assert.match(motionSource, /FRESH_EVENT_MS = 8000/);
+  for (const spec of Object.values(IMPULSES)) assert.ok(spec.duration > 0 && spec.duration <= 1600, 'impulses are finite');
+  // Resting creatures breathe but never hop; working ones stay near the ground between turns.
+  const genes = { tempo: 1.2, amplitude: 1.2, irregularity: 0.85, phase: 0.3 };
+  for (let t = 0; t < 30; t += 0.05) {
+    const sleeping = basePose('sleeping', t, genes);
+    assert.ok(sleeping.y >= 0 && sleeping.y <= 1 && Math.abs(sleeping.r) <= 1.5 && Math.abs(sleeping.x) < 0.001, `sleeping pose at ${t}`);
+    const working = basePose('working', t, genes);
+    assert.ok(working.y <= 0 && working.y >= -2.2 && Math.abs(working.r) <= 5, `working pose at ${t}`);
+  }
+  // Only visible creatures in a visible tab are animated; reduced motion clears everything.
+  assert.match(motionSource, /new IntersectionObserver/);
+  assert.match(motionSource, /document\.hidden/);
+  assert.match(motionSource, /prefers-reduced-motion: reduce/);
+  assert.match(motionSource, /if \(reduced\) for \(const actor of actors\.values\(\)\) clearStyles\(actor\)/);
+  // No CSS keyframe loops on creatures any more; failure and idle states are driven by the engine.
+  assert.doesNotMatch(businessChatSource, /\.ctox-crew-creature\.is-(idle|queued|scheduled|success|blocked|working|review|failed)[^}]*animation:/);
   assert.match(businessChatSource, /\.ctox-crew-creature,\n\s+\.ctox-crew-creature \*/);
-  assert.doesNotMatch(businessChatSource, /\.ctox-crew-creature\.is-(idle|queued|scheduled|success|blocked)[^}]*animation:/);
 });
 
 test('routine status updates cannot restart dock or window entry animations', () => {
@@ -481,6 +493,66 @@ test('business chat task submission returns the real queue id after rendering pe
   } finally {
     globalThis.document = previousDocument;
     globalThis.location = previousLocation;
+  }
+});
+
+test('business chat paints pending feedback before command dispatch and clears its paint handles', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const previousLocation = globalThis.location;
+  const frames = new Map();
+  let nextFrame = 0;
+  globalThis.window = {
+    requestAnimationFrame(callback) { frames.set(++nextFrame, callback); return nextFrame; },
+    cancelAnimationFrame(handle) { frames.delete(handle); },
+    setTimeout, clearTimeout,
+  };
+  globalThis.document = { documentElement: { lang: 'de' } };
+  globalThis.location = { href: 'https://customer.example.test/#desktop' };
+  let dispatched = false;
+  const chat = { id: 'chat-paint', title: 'CTOX', messages: [], contextMeta: {} };
+  try {
+    const submission = __businessChatTestInternals.submitChatMessage({
+      state: { ownerUserId: 'user-1', chats: [] }, chat,
+      text: 'Pending paint', db: null, sync: null,
+      meta: { command_id: 'cmd-paint' },
+      onPending: () => __businessChatTestInternals.waitForPendingChatPaint(),
+      commandBus: { async dispatch(command) {
+        dispatched = true;
+        return { status: 'queued', command_id: command.id, task_id: 'queue-paint' };
+      } },
+    });
+    assert.equal(dispatched, false);
+    assert.equal(chat.messages[0].text, 'Pending paint');
+    for (let index = 0; index < 2; index++) {
+      const [handle, callback] = frames.entries().next().value;
+      frames.delete(handle);
+      callback();
+      assert.equal(dispatched, false);
+    }
+    assert.equal((await submission).task_id, 'queue-paint');
+    assert.equal(dispatched, true);
+    assert.equal(frames.size, 0);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+    globalThis.location = previousLocation;
+  }
+});
+
+test('business chat does not strand submissions when animation frames are suspended', async () => {
+  const previousWindow = globalThis.window;
+  const frames = new Map();
+  globalThis.window = {
+    requestAnimationFrame(callback) { frames.set(1, callback); return 1; },
+    cancelAnimationFrame(handle) { frames.delete(handle); },
+    setTimeout, clearTimeout,
+  };
+  try {
+    await __businessChatTestInternals.waitForPendingChatPaint();
+    assert.equal(frames.size, 0);
+  } finally {
+    globalThis.window = previousWindow;
   }
 });
 
@@ -1761,6 +1833,56 @@ test('disposed crew presence releases observers and ignores queued callbacks and
     assert.equal(timers.size, 0, 'a late completion must not rearm timers');
   } finally {
     finishRead?.([]);
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
+test('crew presence retains its snapshot across cancelled reads and recovers on readiness', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const previousWarn = console.warn;
+  const warnings = [];
+  const reloads = [];
+  const task = { id: 'task-1', status: 'running', module: 'tickets', crew_member_id: 'member-1' };
+  let rows = [task];
+  let failure = null;
+  const state = { crewMembers: [{ id: 'member-1', name: 'Lumi' }] };
+  globalThis.window = { setTimeout: (callback) => callback, clearTimeout() {} };
+  globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+  console.warn = (...args) => warnings.push(args);
+  let dispose;
+  try {
+    dispose = __businessChatTestInternals.wireCrewAppPresence({
+      state,
+      db: { raw: { ctox_queue_tasks: { find: () => ({ exec: async () => {
+        if (failure) throw failure;
+        return rows;
+      } }) } } },
+      syncFacade: { subscribeCollectionReadiness: (_name, callback) => { reloads.push(callback); } },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(state.crewWorkload.get('member-1'), 1);
+    for (const error of [
+      Object.assign(new Error('retired peer'), { code: 'QUERY_CANCELLED' }),
+      new Error('QUERY_CANCELLED: peer-peer-close'),
+    ]) {
+      failure = error;
+      await reloads[0]();
+      assert.equal(state.crewWorkload.get('member-1'), 1, 'cancelled reads cannot claim an empty queue');
+      assert.equal(warnings.length, 0, 'normal peer retirement is not a browser warning');
+    }
+    failure = new Error('queue store unavailable');
+    await reloads[0]();
+    assert.equal(warnings.length, 1, 'unexpected read failures remain visible');
+    assert.equal(state.crewWorkload.get('member-1'), 1);
+    failure = null;
+    rows = [];
+    await reloads[0]();
+    assert.equal(state.crewWorkload.size, 0, 'a successful empty snapshot clears presence');
+  } finally {
+    dispose?.();
+    console.warn = previousWarn;
     globalThis.window = previousWindow;
     globalThis.document = previousDocument;
   }
@@ -3550,4 +3672,74 @@ test('completed tracking keeps syncing until an actual answer arrives', () => {
   assert.equal(hooks.hasTrackedMessagesNeedingSync(state), true, 'receipts and plan updates are not the final answer');
   chat.messages.push({ role: 'ctox', kind: 'reply', text: '12 minus 5 ergibt 7.', commandId: 'cmd-final', taskId: 'queue-final', status: 'completed' });
   assert.equal(hooks.hasTrackedMessagesNeedingSync(state), false);
+});
+
+// The crew bar tells at a glance how much each member is doing (Owner
+// 28.09.2026: the bar must answer "who of my crew does what").
+test('crew workload counts each member\'s running tasks from the queue', async () => {
+  const { crewWorkloadFromTasks } = await import('./business-chat.js');
+  const load = crewWorkloadFromTasks([
+    { status: 'running', crew_member_id: 'crew-lumi' },
+    { status: 'review', crew_member_id: 'crew-lumi' },
+    { status: 'leased', crew_member_id: 'crew-pico' },
+    { status: 'handled', crew_member_id: 'crew-pico' },
+    { status: 'failed', crew_member_id: 'crew-milo' },
+    { status: 'running', crew_member_id: '' },
+    { status: 'running' },
+  ]);
+  assert.equal(load.get('crew-lumi'), 2);
+  assert.equal(load.get('crew-pico'), 1);
+  assert.equal(load.has('crew-milo'), false, 'finished or failed work is not workload');
+  assert.equal(load.size, 2, 'unassigned work belongs to nobody\'s seat');
+});
+
+// thesen 28.09.2026: six queue rows stood "running" with fresh leases and
+// 21–134 attempts while no worker was active. Only work a worker really
+// executes (ctox_harness_status.active_task_ids) counts for the bar and the
+// app presence; without that truth the queue status is used.
+test('crew workload and app presence count only work a worker really executes', async () => {
+  const { crewWorkloadFromTasks, crewAppPresenceFromTasks, crewLiveKeys } = await import('./business-chat.js');
+  const tasks = [
+    { message_key: 'queue:system::a', status: 'running', crew_member_id: 'crew-lumi', module: 'outbound' },
+    { message_key: 'queue:system::b', status: 'running', crew_member_id: 'crew-lumi', module: 'outbound' },
+    { message_key: 'queue:system::c', status: 'leased', crew_member_id: 'crew-pico', module: 'tickets' },
+  ];
+  const members = [{ id: 'crew-lumi', name: 'Lumi' }, { id: 'crew-pico', name: 'Pico' }];
+  assert.equal(crewLiveKeys(null), null, 'unknown truth');
+  assert.equal(crewWorkloadFromTasks(tasks, crewLiveKeys(null)).get('crew-lumi'), 2, 'without worker truth the queue counts');
+  const live = crewLiveKeys({ service_running: true, active_task_ids: ['queue:system::a'] });
+  const load = crewWorkloadFromTasks(tasks, live);
+  assert.equal(load.get('crew-lumi'), 1);
+  assert.equal(load.has('crew-pico'), false, 'leased without a worker is not work');
+  const presence = crewAppPresenceFromTasks(tasks, members, live);
+  assert.equal(presence.get('outbound')?.length, 1);
+  assert.equal(presence.has('tickets'), false);
+  assert.equal(crewWorkloadFromTasks(tasks, crewLiveKeys({ service_running: false, active_task_ids: ['queue:system::a'] })).size, 0, 'a stopped service runs nothing');
+});
+
+// Owner 28.09.2026: clicking Lumi in the crew bar opened a chat with "Crew".
+// A member seat opens a conversation with that member; the owner's choice
+// reaches the router with the first task, follow-ups stay by continuity.
+test('a member seat opens and reuses a conversation with that member', async () => {
+  const { memberChatOpenDetail, latestOpenMemberChatToday, chatAddressedMemberId } = await import('./business-chat.js');
+  const lumi = { id: 'crew-lumi', name: 'Lumi', shape: 'triangle', color: '#e97255' };
+  const detail = memberChatOpenDetail(lumi);
+  assert.equal(detail.member_chat, true);
+  assert.equal(detail.crew_member_id, 'crew-lumi');
+  assert.equal(detail.crew_identity.name, 'Lumi');
+  assert.equal('title' in detail, false, 'reopening must not rename an existing conversation');
+  const now = Date.now();
+  const state = { chats: [
+    { id: 'old', crew_member_id: 'crew-lumi', open: true, createdAt: now - 3 * 86_400_000, messages: [] },
+    { id: 'pico', crew_member_id: 'crew-pico', open: true, createdAt: now, messages: [] },
+    { id: 'closed', crew_member_id: 'crew-lumi', open: false, createdAt: now, messages: [] },
+    { id: 'today', crew_member_id: 'crew-lumi', open: true, createdAt: now - 1000, messages: [] },
+  ] };
+  assert.equal(latestOpenMemberChatToday(state, 'crew-lumi')?.id, 'today', 'today, open, this member');
+  assert.equal(latestOpenMemberChatToday(state, 'crew-nori'), null);
+  assert.equal(latestOpenMemberChatToday(state, ''), null);
+  assert.equal(chatAddressedMemberId({ crew_member_id: 'crew-lumi', messages: [] }), 'crew-lumi', 'first task names the member');
+  assert.equal(chatAddressedMemberId({ crew_member_id: 'crew-lumi', lastTrackingId: 'cmd_1', messages: [] }), '', 'follow-ups stay by continuity');
+  assert.equal(chatAddressedMemberId({ crew_member_id: 'crew-lumi', messages: [{ role: 'user', text: 'x', commandId: 'cmd_1' }] }), '');
+  assert.equal(chatAddressedMemberId({ messages: [] }), '', 'a chat with the whole crew names nobody');
 });

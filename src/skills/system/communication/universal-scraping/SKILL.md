@@ -187,6 +187,46 @@ Do not report a reusable template as promoted until:
 - it has evidence across more than one target or a strong explicit override reason
 - the promoted template metadata exists in the registry
 
+## Authenticated targets (credentials live in the secret store)
+
+A target whose config carries `credential_ref: ctox-secret://credentials/<NAME>`
+is meant to be scraped **from a signed-in session**, and the sign-in is your
+job, not the owner's.
+
+- Check that the referenced secret exists and when it was last updated
+  (`ctox secret list`). Never read, print, log or embed the value; scripts fetch
+  it at runtime themselves (`ctox secret get --scope credentials --name <NAME>`
+  through `CTOX_BIN`), so it never reaches an artifact.
+- Sign in through the CTOX browser session for that target, verify the session
+  (an element only a signed-in page shows), then derive the extractor as usual.
+  The command for that is
+  `ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref ctox-secret://credentials/<NAME> --target-url <login-url> --task-id <your task id> --timeout-ms 240000`:
+  CTOX fills the stored credential itself and completes an e-mail one-time code
+  from the connected mailbox (D&B/Okta). A run that returns
+  `authorization_required` with a `reauthorization` block is exactly this case:
+  take `source_id`, `credential_ref` and `login_url` from that block, sign in,
+  then rerun `ctox scrape execute`. Only if the automatic sign-in fails hand it
+  to the owner with `auth-assist-request`.
+- When the sign-in stops at the e-mail code, the result names it in
+  `email_otp.status` (`source-capture`: `email_otp_status`/`email_otp_detail`).
+  `no_code_mail` means the provider's mail did not reach a synced mailbox in
+  time: run the sign-in once more before anything else, because the provider
+  often sends the code only on the second challenge. `otp_mailbox_unbound`
+  means the stored login names no code mailbox; that, and a code mailbox owned
+  by another person, are the only cases for `auth-assist-request`, and the
+  request must quote the status.
+- To give up on a queue task, `ctox channel ack --status failed` needs
+  `--reason "<exact cause>"`; without a reason the ack is refused.
+- An API-key target (name ends in `_TOKEN` or `_API_KEY`) holds one raw value,
+  not a user/password pair. The script reads it and sends it as the API's
+  credential (for example `Authorization: Bearer <value>`).
+- If the sign-in fails, the run's `failure_mode` is `blocked` and the detail
+  names the exact cause (MFA, captcha, lockout, rejected key with HTTP status).
+  A silent "temporarily unreachable" hides a credential problem and wastes the
+  next run.
+- Never park an authenticated target as "waiting for the owner" without having
+  attempted the sign-in in this turn.
+
 ## Guardrails
 
 - Do not mutate the skill folder with target-specific scripts.
