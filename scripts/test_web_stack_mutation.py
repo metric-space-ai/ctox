@@ -14,6 +14,50 @@ from unittest.mock import patch
 import web_stack_mutation as mutation
 
 
+class BrowserPreparationTests(unittest.TestCase):
+    def setUp(self):
+        self.reference = Path("/isolated-browser-reference")
+        self.report = {
+            "ok": True, "tool": "ctox_browser_prepare",
+            "doctor": {"reference_dir": str(self.reference), "automation_ready": True,
+                       "runner_dependency_installed": True, "runner_browser_installed": True,
+                       "smoke": {"ran": True, "ok": True}},
+        }
+
+    def check(self):
+        return mutation.require_browser_preparation(json.dumps(self.report), self.reference)
+
+    def test_actual_ready_report_with_passing_smoke_is_accepted(self):
+        self.assertEqual(self.check()["smoke"], {"ran": True, "ok": True})
+
+    def test_successful_cli_report_with_incomplete_prerequisites_is_rejected(self):
+        for field in ("automation_ready", "runner_dependency_installed", "runner_browser_installed"):
+            for value in (False, None, "true", 1):
+                with self.subTest(field=field, value=value):
+                    report = json.loads(json.dumps(self.report))
+                    report["doctor"][field] = value
+                    with self.assertRaisesRegex(mutation.BindingError, "prerequisites"):
+                        mutation.require_browser_preparation(json.dumps(report), self.reference)
+
+    def test_skipped_or_failed_smoke_is_not_a_positive_control(self):
+        for smoke in (None, {"ran": False, "ok": True}, {"ran": True, "ok": False},
+                      {"ran": True}, {"ran": 1, "ok": True}):
+            with self.subTest(smoke=smoke):
+                self.report["doctor"]["smoke"] = smoke
+                with self.assertRaisesRegex(mutation.BindingError, "passing browser smoke"):
+                    self.check()
+
+    def test_other_reference_cannot_prove_the_isolated_fixture(self):
+        self.report["doctor"]["reference_dir"] = "/another-browser-reference"
+        with self.assertRaisesRegex(mutation.BindingError, "different reference"):
+            self.check()
+
+    def test_malformed_or_unrelated_success_reply_is_refused(self):
+        for reply in ("not JSON", "[]", '{"ok":true}', '{"ok":true,"tool":"other","doctor":{}}'):
+            with self.subTest(reply=reply), self.assertRaises(mutation.BindingError):
+                mutation.require_browser_preparation(reply, self.reference)
+
+
 class ProbeTests(unittest.TestCase):
     def test_metadata_target_is_reused_and_mac_system_disk_is_rejected(self):
         with patch.object(mutation.sys, "platform", "darwin"):

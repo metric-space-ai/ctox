@@ -101,6 +101,32 @@ def mutated_bytes(original):
             + text[opening.end():]).encode("utf-8")
 
 
+def require_browser_preparation(stdout, reference_dir):
+    """A successful CLI report is not proof that its browser smoke ran."""
+    try:
+        payload = json.loads(stdout)
+    except (ValueError, TypeError) as error:
+        raise BindingError("browser preparation did not produce a JSON report") from error
+    if (not isinstance(payload, dict) or payload.get("ok") is not True
+            or payload.get("tool") != "ctox_browser_prepare"):
+        raise BindingError("browser preparation did not report its actual CLI result")
+    doctor = payload.get("doctor")
+    if (not isinstance(doctor, dict) or doctor.get("automation_ready") is not True
+            or doctor.get("runner_dependency_installed") is not True
+            or doctor.get("runner_browser_installed") is not True):
+        raise BindingError("browser preparation prerequisites are incomplete")
+    reported_reference = doctor.get("reference_dir")
+    if (not isinstance(reported_reference, str) or not reported_reference
+            or Path(reported_reference).resolve() != Path(reference_dir).resolve()):
+        raise BindingError("browser preparation inspected a different reference directory")
+    smoke = doctor.get("smoke")
+    if (not isinstance(smoke, dict) or smoke.get("ran") is not True
+            or smoke.get("ok") is not True):
+        raise BindingError("browser preparation requires an actually passing browser smoke")
+    return {"reference_dir": reported_reference, "automation_ready": True,
+            "smoke": {"ran": True, "ok": True}}
+
+
 def require_probe(stdout, code, negative):
     try:
         probes = json.loads(stdout)["probes"]
@@ -366,9 +392,12 @@ def run_mutation(root, binding, sidecar_build_receipt=None):
             return executables[0]
 
         executable = build("build-initial")
-        code, _ = execute("browser-prepare", [executable, "web", "browser-prepare", "--install-reference", "--install-browser"], 180)
+        code, prepared = execute("browser-prepare", [executable, "web", "browser-prepare", "--install-reference", "--install-browser"], 180)
         if code:
             raise BindingError("isolated browser preparation failed")
+        record["browser_preparation"] = require_browser_preparation(
+            prepared, directory / "ctox/runtime/browser/interactive-reference")
+        save()
         def probe(label, negative):
             code, output = execute(label, [executable, "web", "unlock", "baseline", "incolumitas", "--record"], 180)
             record[label] = require_probe(output, code, negative); save()
