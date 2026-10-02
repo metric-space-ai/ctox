@@ -21,6 +21,13 @@ Use an actually advertised model ID. A Desktop worker label or missing static
 catalogue entry does not establish account eligibility or provider availability.
 This correction neither adds a GPT model alias nor selects a fallback provider.
 
+For an identified root, use `ctox coding-agent models --root <root>` and
+`ctox coding-agent turn --module <id> --prompt <text> --preset <id> --root <root>`.
+The global root is selected by main. Coding handlers accept its one validated
+argument pair without reselecting the root; missing or duplicate pairs and
+unknown options fail. Only valid catalogue inspection skips the CLI ledger;
+turns retain their existing lifecycle and policy checks.
+
 ## Queue instruction boundary
 
 Native queue admission preserves the complete selected `payload.instruction`

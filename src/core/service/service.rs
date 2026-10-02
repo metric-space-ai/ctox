@@ -4939,6 +4939,10 @@ mod coding_model_cli_ipc_tests {
                     status: 200,
                     payload: response.clone(),
                 },
+                ServiceIpcResponse::Json {
+                    status: 200,
+                    payload: response.clone(),
+                },
             ],
         );
         assert_eq!(
@@ -4946,6 +4950,15 @@ mod coding_model_cli_ipc_tests {
                 .unwrap(),
             response
         );
+        crate::coding_agents::handle_cli(
+            root.path(),
+            &[
+                "models".to_owned(),
+                "--root".to_owned(),
+                root.path().display().to_string(),
+            ],
+        )
+        .unwrap();
         assert!(
             crate::coding_agents::pi_sidecar::resolve_coding_model_preset_for_cli(other.path(), id)
                 .is_err()

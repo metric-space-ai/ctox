@@ -20,6 +20,13 @@ use std::path::Path;
 /// per turn, killed on drop.
 pub(crate) mod pi_sidecar;
 
+/// main has already resolved the global root, but retains its pair in argv.
+pub(crate) fn coding_models_cli_args_are_valid(args: &[String]) -> bool {
+    matches!(args, [command] if command == "models")
+        || matches!(args, [command, flag, value] if command == "models"
+            && flag == "--root" && !value.is_empty() && !value.starts_with('-'))
+}
+
 pub(crate) fn handle_cli(root: &Path, args: &[String]) -> anyhow::Result<()> {
     let outcome = execute_cli(root, args)?;
     println!("{}", serde_json::to_string_pretty(&outcome)?);
@@ -40,7 +47,10 @@ fn execute_cli(root: &Path, args: &[String]) -> anyhow::Result<Value> {
         Some("turn") => run_coding_turn_cli(root, &args[1..]),
         Some("smoke") => run_coding_smoke_cli(root, &args[1..]),
         Some("models") => {
-            anyhow::ensure!(args.len() == 1, "usage: ctox coding-agent models");
+            anyhow::ensure!(
+                coding_models_cli_args_are_valid(args),
+                "usage: ctox coding-agent models [--root <root>]"
+            );
             pi_sidecar::coding_model_capabilities_for_cli(root)
         }
         Some("route") => {
@@ -93,9 +103,21 @@ fn run_coding_turn_cli(root: &Path, args: &[String]) -> anyhow::Result<Value> {
     let mut faux = false;
     let mut model: Option<Value> = None;
     let mut preset_id: Option<String> = None;
+    let mut has_global_root = false;
     let mut idx = 0;
     while idx < args.len() {
         match args[idx].as_str() {
+            "--root" => {
+                anyhow::ensure!(!has_global_root, "--root may only be supplied once");
+                let value = args.get(idx + 1).context("--root value is required")?;
+                anyhow::ensure!(
+                    !value.is_empty() && !value.starts_with('-'),
+                    "--root value is required"
+                );
+                // Root selection belongs to main; never select a different root here.
+                has_global_root = true;
+                idx += 2;
+            }
             "--module" | "-m" => {
                 module = args
                     .get(idx + 1)
@@ -201,6 +223,69 @@ mod tests {
         .collect::<Vec<_>>();
         let error = execute_cli(root.path(), &args).unwrap_err().to_string();
         assert!(error.contains("preset is unavailable"));
+        assert!(!root.path().join("coding-agents").exists());
+    }
+
+    #[test]
+    fn coding_models_global_root_pair_rejects_malformed_options() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().display().to_string();
+        for suffix in [
+            vec!["--root"],
+            vec!["--root", ""],
+            vec!["--root", "--json"],
+            vec!["--root", &path, "--root", &path],
+            vec!["--root", &path, "--unknown"],
+            vec!["--unknown"],
+        ] {
+            let args = std::iter::once("models")
+                .chain(suffix)
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            assert!(!coding_models_cli_args_are_valid(&args));
+            assert!(execute_cli(root.path(), &args)
+                .unwrap_err()
+                .to_string()
+                .contains("usage:"));
+            assert!(!root.path().join("runtime").exists());
+        }
+    }
+
+    #[test]
+    fn operator_turn_accepts_one_global_root_before_preset_validation() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().display().to_string();
+        let base = [
+            "turn",
+            "--module",
+            "widget",
+            "--prompt",
+            "test",
+            "--preset",
+            "browser-forged",
+        ];
+        let mut args = base.into_iter().map(str::to_owned).collect::<Vec<_>>();
+        args.extend(["--root".to_owned(), path.clone()]);
+        assert!(execute_cli(root.path(), &args)
+            .unwrap_err()
+            .to_string()
+            .contains("preset is unavailable"));
+        for suffix in [
+            vec!["--root"],
+            vec!["--root", ""],
+            vec!["--root", "--unknown"],
+            vec!["--root", &path, "--root", &path],
+        ] {
+            let args = base
+                .into_iter()
+                .chain(suffix)
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            assert!(execute_cli(root.path(), &args)
+                .unwrap_err()
+                .to_string()
+                .contains("--root"));
+        }
         assert!(!root.path().join("coding-agents").exists());
     }
 }
