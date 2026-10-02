@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
+import * as esbuild from 'esbuild';
 import { collections as conversationCollections } from '../../conversations/schema.js';
 // Gleicher Query-String wie in ../schema.js — sonst erzeugt Node eine zweite
 // Modulinstanz und die Referenzgleichheits-Pruefung unten schlaegt fehl.
@@ -23,13 +23,19 @@ import {
 } from '../mail-group-model.mjs';
 
 const moduleRoot = new URL('../', import.meta.url);
-const bundledModule = await build({
+assert.equal(esbuild.version, '0.28.0', 'Mail regression requires pinned real esbuild 0.28.0; a re-export shim does not verify browser bundling');
+const bundledModule = await esbuild.build({
   entryPoints: [fileURLToPath(new URL('../index.js', import.meta.url))],
   bundle: true,
   format: 'esm',
   platform: 'browser',
   write: false,
+  metafile: true,
 });
+assert.ok(
+  Object.keys(bundledModule.metafile?.inputs || {}).some(path => path.endsWith('/mail/lib/mail-body-renderer.mjs')),
+  'The Mail bundle must include its actual body renderer dependency',
+);
 const [{ text: bundledSource }] = bundledModule.outputFiles;
 const { __mailTestHooks: hooks } = await import(
   `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
