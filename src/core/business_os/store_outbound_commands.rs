@@ -1213,7 +1213,7 @@ fn outbound_handle_research_source_registry_read(
                 .as_object()
                 .and_then(|map| map.values().find_map(|v| v.as_array().cloned()))
         })
-        .unwrap_or_default();
+        .context("scrape registry returned no target list")?;
     let gesucht = command
         .payload
         .get("target_keys")
@@ -1225,8 +1225,10 @@ fn outbound_handle_research_source_registry_read(
                 .map(str::to_string)
                 .collect::<std::collections::BTreeSet<_>>()
         });
-    let laeufe = outbound_registry_last_runs(root).unwrap_or_default();
-    let kontozustaende = outbound_registry_account_states(root);
+    let laeufe = outbound_registry_last_runs(root)
+        .context("scrape registry run records could not be read")?;
+    let kontozustaende = outbound_registry_account_states(root)
+        .context("scrape registry provider account states could not be read")?;
     let mut eintraege = Vec::new();
     for ziel in ziele {
         let key = ziel
@@ -1276,23 +1278,28 @@ fn outbound_handle_research_source_registry_read(
 /// Provider account state per scrape target (capabilities/scrape/
 /// account_state.rs). While a provider refuses the paying account, calls are
 /// answered without contacting it; the app shows why, which run caused it,
-/// the last probe and when the next automatic probe is due. The table exists
-/// only after a first detection, so a missing table means "no state".
-fn outbound_registry_account_states(root: &Path) -> BTreeMap<String, Value> {
+/// the last probe and when another requested call may probe automatically.
+/// Legacy stores can lack the optional state table. An unreadable store or
+/// malformed row is an error, never evidence that no account is inactive.
+fn outbound_registry_account_states(root: &Path) -> anyhow::Result<BTreeMap<String, Value>> {
     let mut out = BTreeMap::new();
-    let Ok(conn) = Connection::open_with_flags(
+    let conn = Connection::open_with_flags(
         crate::paths::core_db(root),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ) else {
-        return out;
-    };
-    let Ok(mut statement) = conn.prepare(
+    )?;
+    let has_table: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scrape_account_state')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_table {
+        return Ok(out);
+    }
+    let mut statement = conn.prepare(
         "SELECT target_id, reason, causal_run_id, last_probe_run_id, failed_probes,
                 next_probe_at_ms, probe_lease_owner, probe_lease_until_ms, updated_at_ms
          FROM scrape_account_state",
-    ) else {
-        return out;
-    };
+    )?;
     let now = chrono::Utc::now().timestamp_millis();
     let rows = statement.query_map([], |row| {
         let next_probe_at_ms: i64 = row.get(5)?;
@@ -1314,12 +1321,11 @@ fn outbound_registry_account_states(root: &Path) -> BTreeMap<String, Value> {
             }),
         ))
     });
-    if let Ok(rows) = rows {
-        for (target_id, state) in rows.flatten() {
-            out.insert(target_id, state);
-        }
+    for row in rows? {
+        let (target_id, state) = row?;
+        out.insert(target_id, state);
     }
-    out
+    Ok(out)
 }
 
 /// Last run and last successful run per scrape target. The app list showed
@@ -13507,12 +13513,16 @@ mod registry_last_run_detail_tests {
     fn registry_projects_the_provider_account_state() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         assert!(
-            outbound_registry_account_states(temp.path()).is_empty(),
-            "no database, no state"
+            outbound_registry_account_states(temp.path()).is_err(),
+            "an unreadable database is not an empty account state"
         );
         let db = crate::paths::core_db(temp.path());
         std::fs::create_dir_all(db.parent().expect("core db parent"))?;
         let conn = Connection::open(&db)?;
+        assert!(
+            outbound_registry_account_states(temp.path())?.is_empty(),
+            "a readable legacy database can legitimately lack the optional state table"
+        );
         conn.execute_batch(
             "CREATE TABLE scrape_account_state (
                 target_id TEXT PRIMARY KEY, generation INTEGER NOT NULL, reason TEXT NOT NULL,
@@ -13526,7 +13536,7 @@ mod registry_last_run_detail_tests {
                 1790600000000, NULL, 0, 1790514000000);",
         )?;
         drop(conn);
-        let states = outbound_registry_account_states(temp.path());
+        let states = outbound_registry_account_states(temp.path())?;
         let state = states.get("t-li").expect("account state");
         assert_eq!(state["status"], "provider_account_inactive");
         assert_eq!(state["causal_run_id"], "run-causal");
@@ -13537,6 +13547,52 @@ mod registry_last_run_detail_tests {
         assert!(
             state.get("credential_version").is_none(),
             "no credential details"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn registry_read_rejects_unreadable_run_or_account_projection() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        scrape::dispatch_capturing(root, &["list-targets".to_string()])?;
+        let command = BusinessCommand {
+            id: Some("cmd-registry-read-integrity".to_string()),
+            module: "outbound-lead-generation".to_string(),
+            command_type: "outbound.research_source.registry_read".to_string(),
+            record_id: None,
+            payload: serde_json::json!({}),
+            client_context: serde_json::json!({}),
+            origin: CommandOrigin::TrustedLocal,
+        };
+        assert_eq!(
+            outbound_handle_research_source_registry_read(root, &command)?["ok"],
+            true
+        );
+        let conn = Connection::open(crate::paths::core_db(root))?;
+        conn.execute_batch(
+            "INSERT INTO scrape_account_state VALUES
+               ('t-invalid', 1, 'Customer is not active', 'run-causal', 'run-causal',
+                NULL, NULL, 'not-a-number', 0, NULL, 0, 0);",
+        )?;
+        assert!(outbound_registry_account_states(root).is_err());
+        let account_error = outbound_handle_research_source_registry_read(root, &command)
+            .expect_err("a malformed account row must not become a successful empty registry");
+        assert!(
+            format!("{account_error:#}").contains("provider account states could not be read"),
+            "{account_error:#}"
+        );
+        conn.execute_batch(
+            "DELETE FROM scrape_account_state;
+             DROP TABLE scrape_run;
+             CREATE TABLE scrape_run (run_id TEXT PRIMARY KEY, target_id TEXT, started_at TEXT);",
+        )?;
+        assert!(outbound_registry_last_runs(root).is_err());
+        let run_error = outbound_handle_research_source_registry_read(root, &command)
+            .expect_err("an unreadable run projection must not become a successful empty registry");
+        assert!(
+            format!("{run_error:#}").contains("run records could not be read"),
+            "{run_error:#}"
         );
         Ok(())
     }

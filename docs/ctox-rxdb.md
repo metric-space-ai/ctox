@@ -151,6 +151,24 @@ These changes do not alter country/field/source selection, access grants,
 record binding or the WebRTC data boundary. A completed command remains distinct
 from all-provider success; inspect actual source outcomes and admissible evidence.
 
+The Outbound source-registry command reads current run and provider-account
+state from the native store. Unreadable run projections, malformed account
+rows, and invalid registry responses fail the command; they do not produce
+a successful empty list. A readable legacy store without the optional account
+state table legitimately has no recorded account state. Browser loading and
+error states must reflect the actual command result and preserve the last
+confirmed view while a refresh fails.
+
+An explicit inactive-account refusal is neither an expired browser session
+nor a script defect. The durable per-target state suppresses repeated provider
+calls without creating new scrape runs, retaining the causal and last probe
+run IDs. Credential-version changes, an authorized source-test request, or
+the 6-hour then 24-hour backoff permit one generation-bound probe lease.
+Backoff means eligibility on the next requested call, not a scheduled probe.
+Early operator probes require signed native `data.write` authorization;
+worker command sessions cannot grant that exception. A successful probe only
+clears the generation it owns, so a late result cannot erase a newer refusal.
+
 ### Command projection identity
 
 Terminal and outbox projections retain the actor ID from the accepted native
