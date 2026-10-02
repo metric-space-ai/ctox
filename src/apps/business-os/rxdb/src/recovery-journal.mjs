@@ -4,12 +4,15 @@ import {
   sha256Json,
 } from './recovery-crypto.mjs';
 
-const JOURNAL_VERSION = 3;
+const JOURNAL_VERSION = 4;
 const BATCH_STORE = 'batches';
 const BATCH_STATE_COLLECTION_INDEX = 'stateCollection';
+const BATCH_STATE_INDEX = 'state';
+const BATCH_DOCUMENT_ID_INDEX = 'documentIds';
 const CONFLICT_STORE = 'conflicts';
 const META_STORE = 'meta';
 const ACKED_RETENTION_MS = 24 * 60 * 60 * 1000;
+const GC_SCAN_INTERVAL_MS = 60 * 60 * 1000;
 const PREVIEW_TTL_MS = 10 * 60 * 1000;
 const previews = new Map();
 
@@ -35,6 +38,7 @@ export class CtoxRecoveryJournal {
     this.instanceId = instanceId;
     this.quotaCoordinator = quotaCoordinator;
     this.replayers = new Map();
+    this.lastGcAtMs = 0;
   }
 
   registerCollection(collection, { schemaHash = '', applyBatch, resolveConflict = null, applyMaster = null } = {}) {
@@ -80,25 +84,38 @@ export class CtoxRecoveryJournal {
   }
 
   async markMasterAcknowledged(collection, documents = {}) {
-    const batches = await this.listBatches('pending', collection);
-    for (const batch of batches) {
-      if (batch.collection !== collection) continue;
-      const acked = new Set(batch.ackedIds || []);
-      for (const id of batch.documentIds || []) {
-        const master = documents[id];
-        const local = batch.committedDocs?.[id];
-        if (master && local && masterAcknowledgesLocal(master, local, collection)) acked.add(id);
-      }
-      const complete = (batch.documentIds || []).every((id) => acked.has(id));
-      await updateRecord(this.db, BATCH_STORE, batch.batchId, (current) => ({
-        ...current,
-        ackedIds: [...acked],
-        state: complete ? 'master_acked' : 'pending',
-        masterAckedAtMs: complete ? Date.now() : 0,
-      }));
+    const ids = Object.keys(documents).filter((id) => documents[id]);
+    if (!ids.length) return;
+    // v4's multi-entry index returns batch keys without cloning every pending
+    // payload for each native write. Re-read each candidate inside its write
+    // transaction so a concurrent acknowledgement cannot be overwritten.
+    const batchIds = await getBatchIdsByDocumentIds(this.db, ids);
+    let changed = false;
+    for (const batchId of batchIds) {
+      const updated = await updateRecord(this.db, BATCH_STORE, batchId, (current) => {
+        if (current.state !== 'pending' || current.collection !== collection) return null;
+        const acked = new Set(current.ackedIds || []);
+        const previousCount = acked.size;
+        for (const id of current.documentIds || []) {
+          if (acked.has(id)) continue;
+          const master = documents[id];
+          const local = current.committedDocs?.[id];
+          if (master && local && masterAcknowledgesLocal(master, local, collection)) acked.add(id);
+        }
+        const complete = (current.documentIds || []).every((id) => acked.has(id));
+        if (acked.size === previousCount && !complete) return null;
+        return {
+          ...current,
+          ackedIds: [...acked],
+          state: complete ? 'master_acked' : 'pending',
+          masterAckedAtMs: complete ? Date.now() : 0,
+        };
+      });
+      if (updated) changed = true;
     }
-    await this.gc();
-    await this.publishStatus();
+    const pruned = changed || Date.now() - this.lastGcAtMs >= GC_SCAN_INTERVAL_MS
+      ? await this.gc() : 0;
+    if (changed || pruned) await this.publishStatus();
   }
 
   // SYNC-40: force-acknowledge local writes the native peer terminally REJECTED
@@ -111,23 +128,30 @@ export class CtoxRecoveryJournal {
   async markReconciled(collection, ids = []) {
     const idSet = new Set((Array.isArray(ids) ? ids : []).map((id) => String(id)));
     if (!idSet.size) return;
-    const batches = await this.listBatches('pending', collection);
-    for (const batch of batches) {
-      if (batch.collection !== collection) continue;
-      const relevant = (batch.documentIds || []).filter((id) => idSet.has(String(id)));
-      if (!relevant.length) continue;
-      const acked = new Set(batch.ackedIds || []);
-      for (const id of relevant) acked.add(id);
-      const complete = (batch.documentIds || []).every((id) => acked.has(id));
-      await updateRecord(this.db, BATCH_STORE, batch.batchId, (current) => ({
-        ...current,
-        ackedIds: [...acked],
-        state: complete ? 'master_acked' : 'pending',
-        masterAckedAtMs: complete ? Date.now() : (current.masterAckedAtMs || 0),
-      }));
+    const batchIds = await getBatchIdsByDocumentIds(this.db, [...idSet]);
+    let changed = false;
+    for (const batchId of batchIds) {
+      const updated = await updateRecord(this.db, BATCH_STORE, batchId, (current) => {
+        if (current.state !== 'pending' || current.collection !== collection) return null;
+        const acked = new Set(current.ackedIds || []);
+        const previousCount = acked.size;
+        for (const id of current.documentIds || []) {
+          if (idSet.has(String(id))) acked.add(id);
+        }
+        const complete = (current.documentIds || []).every((id) => acked.has(id));
+        if (acked.size === previousCount && !complete) return null;
+        return {
+          ...current,
+          ackedIds: [...acked],
+          state: complete ? 'master_acked' : 'pending',
+          masterAckedAtMs: complete ? Date.now() : (current.masterAckedAtMs || 0),
+        };
+      });
+      if (updated) changed = true;
     }
-    await this.gc();
-    await this.publishStatus();
+    const pruned = changed || Date.now() - this.lastGcAtMs >= GC_SCAN_INTERVAL_MS
+      ? await this.gc() : 0;
+    if (changed || pruned) await this.publishStatus();
   }
 
   async replayRegisteredCollections(collection = null) {
@@ -266,7 +290,7 @@ export class CtoxRecoveryJournal {
       databaseName: this.databaseName,
       instanceId: this.instanceId,
       pendingBatches: batches.length,
-      pendingWrites: batches.reduce((sum, batch) => sum + (batch.documentIds?.length || 0), 0),
+      pendingWrites: countOutstandingWrites(batches),
       pendingBytes: bytes,
       oldestPendingAtMs: batches.reduce((oldest, batch) => Math.min(oldest, batch.createdAtMs || oldest), Number.MAX_SAFE_INTEGER) === Number.MAX_SAFE_INTEGER
         ? 0
@@ -296,7 +320,7 @@ export class CtoxRecoveryJournal {
     return {
       filename: `ctox-recovery-${this.instanceId}-${new Date().toISOString().replace(/[:.]/g, '-')}.ctox-recovery`,
       blob: new Blob([text], { type: 'application/vnd.ctox.recovery+json' }),
-      pendingWrites: content.pendingBatches.reduce((sum, batch) => sum + (batch.documentIds?.length || 0), 0),
+      pendingWrites: countOutstandingWrites(content.pendingBatches),
     };
   }
 
@@ -327,7 +351,7 @@ export class CtoxRecoveryJournal {
     return {
       previewId,
       pendingBatches: content.pendingBatches?.length || 0,
-      pendingWrites: (content.pendingBatches || []).reduce((sum, batch) => sum + (batch.documentIds?.length || 0), 0),
+      pendingWrites: countOutstandingWrites(content.pendingBatches || []),
       conflicts: content.conflicts?.length || 0,
       schemaMismatches,
       createdAtMs: content.createdAtMs,
@@ -357,19 +381,25 @@ export class CtoxRecoveryJournal {
   async listBatches(state = null, collection = null) {
     const rows = (state && collection
       ? await getAllRecordsByIndex(this.db, BATCH_STORE, BATCH_STATE_COLLECTION_INDEX, [state, collection])
-      : await getAllRecords(this.db, BATCH_STORE))
+      : state
+        ? await getAllRecordsByIndex(this.db, BATCH_STORE, BATCH_STATE_INDEX, state)
+        : await getAllRecords(this.db, BATCH_STORE))
       .sort((left, right) => Number(left.sequence || 0) - Number(right.sequence || 0));
     return rows.filter((row) => (!state || row.state === state) && (!collection || row.collection === collection));
   }
 
   async gc(now = Date.now()) {
     const rows = await this.listBatches('master_acked');
+    let pruned = 0;
     for (const row of rows) {
       if (now - Number(row.masterAckedAtMs || 0) >= ACKED_RETENTION_MS) {
         await deleteRecord(this.db, BATCH_STORE, row.batchId);
+        pruned += 1;
       }
     }
-    await this.gcConflicts(now);
+    pruned += await this.gcConflicts(now);
+    this.lastGcAtMs = Date.now();
+    return pruned;
   }
 
   // SYNC-53: resolved conflict records hold full local+master+base documents
@@ -448,6 +478,12 @@ function openJournalDatabase(name) {
         : db.createObjectStore(BATCH_STORE, { keyPath: 'batchId' });
       if (!batches.indexNames.contains(BATCH_STATE_COLLECTION_INDEX)) {
         batches.createIndex(BATCH_STATE_COLLECTION_INDEX, ['state', 'collection'], { unique: false });
+      }
+      if (!batches.indexNames.contains(BATCH_STATE_INDEX)) {
+        batches.createIndex(BATCH_STATE_INDEX, 'state', { unique: false });
+      }
+      if (!batches.indexNames.contains(BATCH_DOCUMENT_ID_INDEX)) {
+        batches.createIndex(BATCH_DOCUMENT_ID_INDEX, 'documentIds', { unique: false, multiEntry: true });
       }
       if (!db.objectStoreNames.contains(CONFLICT_STORE)) db.createObjectStore(CONFLICT_STORE, { keyPath: 'conflictId' });
       if (!db.objectStoreNames.contains(META_STORE)) db.createObjectStore(META_STORE, { keyPath: 'key' });
@@ -528,6 +564,14 @@ function getAllRecordsByIndex(db, storeName, indexName, key) {
   return transact(db, storeName, 'readonly', (store) => requestResult(store.index(indexName).getAll(key)));
 }
 
+function getBatchIdsByDocumentIds(db, ids) {
+  return transact(db, BATCH_STORE, 'readonly', async (store) => {
+    const index = store.index(BATCH_DOCUMENT_ID_INDEX);
+    const matches = await Promise.all([...new Set(ids)].map((id) => requestResult(index.getAllKeys(id))));
+    return [...new Set(matches.flat())];
+  });
+}
+
 function deleteRecord(db, storeName, key) {
   return transact(db, storeName, 'readwrite', (store) => requestResult(store.delete(key)));
 }
@@ -536,9 +580,18 @@ async function updateRecord(db, storeName, key, update) {
   return transact(db, storeName, 'readwrite', async (store) => {
     const current = await requestResult(store.get(key));
     if (!current) return false;
-    await requestResult(store.put(update(current)));
+    const next = update(current);
+    if (next == null) return false;
+    await requestResult(store.put(next));
     return true;
   });
+}
+
+function countOutstandingWrites(batches) {
+  return batches.reduce((count, batch) => {
+    const acked = new Set(batch.ackedIds || []);
+    return count + (batch.documentIds || []).filter((id) => !acked.has(id)).length;
+  }, 0);
 }
 
 function documentId(doc = {}, primaryPath = 'id') {
@@ -644,6 +697,7 @@ export const recoveryJournalTestInternals = Object.freeze({
   ACKED_RETENTION_MS,
   PREVIEW_TTL_MS,
   masterAcknowledgesLocal,
+  countOutstandingWrites,
   previews,
   sweepExpiredPreviews,
 });

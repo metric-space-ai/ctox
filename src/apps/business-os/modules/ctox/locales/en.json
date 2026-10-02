@@ -145,6 +145,7 @@
   "restingAfterFailure": "recovering after a failure",
   "noCrewMember": "no crew member",
   "noCrewMemberShort": "unassigned",
+  "crewTaskCount": "{count} tasks",
   "close": "Close",
   "memberName": "Name",
   "soul": "Soul",

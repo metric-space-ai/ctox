@@ -11,6 +11,13 @@ function definition(name) {
   assert.ok(end > begin, `missing end of ${name}`);
   return source.slice(begin, end + 2);
 }
+function synchronousDefinition(name) {
+  const begin = source.indexOf(`function ${name}(`);
+  assert.ok(begin >= 0, `missing ${name}`);
+  const end = source.indexOf('\n}\n', begin);
+  assert.ok(end > begin, `missing end of ${name}`);
+  return source.slice(begin, end + 2);
+}
 function deferred() {
   let resolve;
   const promise = new Promise(done => { resolve = done; });
@@ -67,4 +74,26 @@ test('a ready geometry cache completes without waiting for its timeout', async (
   await f.run();
   assert.equal(f.timers.size, 0);
   assert.equal(f.events.filter(event => typeof event === 'string' && event.includes('timed out')).length, 0);
+});
+
+test('command transport warmup cannot block the cached workspace first paint', async () => {
+  const openDataPlane = definition('openBusinessDataPlane');
+  assert.match(openDataPlane, /startCommandTransportWarmup\(state\.sync\)/);
+  assert.doesNotMatch(openDataPlane, /await state\.sync\.startCollection\('business_commands'\)/);
+
+  const pending = deferred();
+  const warnings = [];
+  let starts = 0;
+  const startWarmup = vm.runInNewContext(
+    `${synchronousDefinition('startCommandTransportWarmup')}\nstartCommandTransportWarmup`,
+    { console: { warn: (...args) => warnings.push(args) } },
+  );
+  const returned = startWarmup({ startCollection: () => { starts += 1; return pending.promise; } });
+  assert.equal(returned, undefined);
+  await Promise.resolve();
+  assert.equal(starts, 1);
+  assert.equal(warnings.length, 0);
+  pending.resolve();
+  await Promise.resolve();
+  assert.equal(warnings.length, 0);
 });

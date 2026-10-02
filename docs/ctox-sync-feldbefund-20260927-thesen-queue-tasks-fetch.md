@@ -1,5 +1,19 @@
 # Sync-Feldbefund 27.09.2026: thesen — Abruf `ctox_queue_tasks` antwortet nicht
 
+> **KORREKTUR 28.09.2026 06:13 UTC — kein thesen-Serverdefekt.** Mit einem frischen Headless-Chrome
+> (eigener Kontext, ein Tab) über den SSH-Tunnel auf `ctox business-os serve` lädt die Crew-App auf
+> thesen 98 Aufgaben in 28 s. Die Abrufe `ctox_queue_tasks` a0577fea… liefern `fetch:ok docs: 120, ms: 7827`.
+> Der beobachtete Stillstand betraf nur das eingebettete Browser-Panel dieser Sitzung.
+> - Das Panel teilt sein Profil mit anderen Sitzungen. Ein thesen-Tab einer anderen Sitzung hielt den
+>   Web-Lock `ctox-rxdb-sync:…:11b37of` (Leader `b4386db7…`, `clientId F71FE67A…`).
+> - Das Panel lief deshalb als Follower (`multiTab.role=follower`, `queryReady=false`) und bekam für
+>   `ctox_queue_tasks` sofort ein leeres Fenster (0 Dokumente, 0 ms). Auf dem Broker-Kanal stand in 25 s
+>   kein Anspruch, der Leader sendete aber `replicated-change` auch für `ctox_queue_tasks`.
+>
+> Offene Frage an das Refactoring bleibt: Warum bekommt ein Follower-Tab für eine demand-only-Collection
+> dauerhaft ein leeres Fenster, statt selbst abzurufen oder den Leader zu fragen? Die Serverlast-Zahlen
+> unten bleiben als Messung stehen.
+
 Beobachtet von der Crew-UX-Kampagne bei der Browser-Abnahme von Shell v410 auf
 thesen.ctox.dev. Übergabe an das Sync-Refactoring. Die Kampagne ändert daran nichts.
 

@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260927-transfer-git-index-v411';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261002-transfer-git-index-v438';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

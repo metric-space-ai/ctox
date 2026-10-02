@@ -297,6 +297,24 @@ fn raise_open_file_limit() {
 #[cfg(not(unix))]
 fn raise_open_file_limit() {}
 
+/// glibc gives every thread that contends for the heap its own 64 MiB arena
+/// (up to 8 per core) and keeps freed chunks in them. The service's tokio and
+/// worker threads build large transient buffers (sync pulls, query fetches),
+/// so freed memory piled up as resident arenas: on the customer tenant
+/// (30.09.2026, 6 cores) ctox-real reached 6.86 GB after 43 minutes, and
+/// `malloc_trim(0)` returned 4.36 GB of it (2.50 GB left). Bounding the arena
+/// count must happen before the first threads start.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn limit_glibc_malloc_arenas() {
+    // SAFETY: mallopt only adjusts allocator tuning; called before threads spawn.
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 4);
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn limit_glibc_malloc_arenas() {}
+
 /// Select one process-wide Rustls provider before any background subsystem can
 /// build a TLS client. CTOX enables both provider features through independent
 /// integrations, so Rustls cannot infer the provider reliably at first use.
@@ -310,6 +328,7 @@ fn main() -> anyhow::Result<()> {
     // `ctox-linux-sandbox`; arg0_dispatch performs that dispatch before the
     // regular CTOX startup path runs.
     let _arg0_dispatch = ctox_arg0::arg0_dispatch();
+    limit_glibc_malloc_arenas();
     install_process_rustls_crypto_provider();
     raise_open_file_limit();
     let args: Vec<String> = std::env::args().skip(1).collect();

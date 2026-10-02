@@ -88,6 +88,17 @@ const ctx = {
   locale: params.get("lang") || "de",
   args: {},
   session: { user: { id: "fixture-admin", role: "admin" } },
+  // The shell's drawer API: the task detail opens in the left module pane.
+  openLeftDrawer(content) {
+    const pane = document.querySelector(".shell-window-module-pane--left");
+    pane.replaceChildren(content);
+    pane.dataset.fixtureDrawer = "open";
+  },
+  closeDrawers() {
+    const pane = document.querySelector(".shell-window-module-pane--left");
+    pane.replaceChildren();
+    delete pane.dataset.fixtureDrawer;
+  },
   db: { collection: (name) => (mode === "missing" ? null : collection(name)) },
   sync: {
     mode: "webrtc",

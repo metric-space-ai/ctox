@@ -6,6 +6,7 @@ import {
   crewGenome,
   normalizeCrewAppearance,
   renderCrewCreature,
+  renderCrewReference,
   CREW_CREATURE_BASE_CSS,
   CREW_CREATURE_CSS,
 } from './crew-renderer.js';
@@ -166,4 +167,30 @@ test('creature CSS carries no keyframe loops and standalone hosts keep reduced-m
   assert.ok(CREW_CREATURE_CSS.startsWith(CREW_CREATURE_BASE_CSS));
   assert.match(CREW_CREATURE_CSS, /prefers-reduced-motion: reduce/);
   assert.match(CREW_CREATURE_CSS, /animation: none !important/);
+});
+
+// Owner 28.09.2026: identity and presence are two things. Wherever a member is
+// only named, it appears as its PORTRAIT — the same figure and face as its
+// body, still and framed, eyes showing the state — never a letter and never a
+// second living body (no motion hooks, no ground).
+test('renderCrewReference is the member\'s still portrait: same figure, no body', () => {
+  const lumi = { id: 'crew-lumi', name: 'Lumi', shape: 'triangle', color: '#e97255' };
+  const html = renderCrewReference({ appearance: lumi, size: 26, mode: 'working' });
+  assert.match(html, /^<span class="ctox-crew-ref" data-crew-ref="crew-lumi" data-crew-ref-mode="working" style="--crew-color:#e97255;[^"]*--crew-ref-size:26px" title="Lumi" aria-hidden="true"><svg class="ctox-crew-portrait"/);
+  assert.ok(html.includes(crewGenome(lumi).path), 'the portrait draws the very body path of the member');
+  for (const forbidden of ['ctox-crew-creature', 'ctox-crew-ground', 'ctox-crew-figure', 'data-crew-mode', 'data-crew-motion', 'data-crew-key']) {
+    assert.ok(!html.includes(forbidden), `a portrait is no living body: no ${forbidden}`);
+  }
+  assert.match(renderCrewReference({ appearance: lumi, mode: 'failed' }), /ctox-crew-eyes-x/, 'failed work shows X eyes');
+  assert.match(renderCrewReference({ appearance: lumi, mode: 'sleeping' }), /ctox-crew-eyes-sleeping/, 'waiting work shows closed eyes');
+  assert.match(renderCrewReference({ appearance: lumi, mode: 'bogus' }), /data-crew-ref-mode="idle"/);
+  const ghost = renderCrewReference({ appearance: null });
+  assert.match(ghost, /class="ctox-crew-ref is-neutral" data-crew-ref=""/);
+  assert.match(ghost, /class="ctox-crew-body"/, 'no member: the ghost\'s portrait with a face, never an empty ring');
+  assert.match(ghost, /class="ctox-crew-eyes/);
+  assert.equal(renderCrewReference({ appearance: lumi }), renderCrewReference({ appearance: lumi }), 'deterministic');
+  assert.match(renderCrewReference({ appearance: { name: '<b>x</b>', color: 'red' } }), /title="&lt;b&gt;x&lt;\/b&gt;"/, 'escaped');
+  assert.match(renderCrewReference({ appearance: lumi, size: 400 }), /--crew-ref-size:64px/, 'size is clamped');
+  assert.match(CREW_CREATURE_BASE_CSS, /\.ctox-crew-ref \{/);
+  assert.match(CREW_CREATURE_BASE_CSS, /\.ctox-crew-creature\[data-crew-away\]/, 'a seat whose member stands elsewhere shows the still portrait');
 });

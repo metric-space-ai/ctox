@@ -227,7 +227,7 @@ lead and your research command. Never edit collections directly, never report re
 text only.
 
 Call it with `payload` as **one JSON string** that encodes the payload object. MiniMax drops
-large object arguments on the way to the tool (production 26.09.2026: 5 of 6 replayed calls arrived
+large object arguments on the way to the tool (tenant 26.09.2026: 5 of 6 replayed calls arrived
 as `{}`); a string arrives intact, the server decodes it and names the exact position of any JSON
 error. The payload object inside that string:
 
@@ -272,6 +272,7 @@ Build the writeback in this order: (1) collect the terminal status per field, (2
 - A **non-verified** field (`no_match`, `unsupported`, `action_required`) must NOT carry a populated `value`. State the reason instead.
 - Person fields describe the priority contact(s) you actually found: when you report persons in `person_records`, set the matching `person_*` fields `verified` with their `person_key` instead of `no_match`. `no_match` on a person field means you found no such person at all.
 - Person fields carry a `person_key`; `result.fields` holds structured objects only, never free text.
+- **Status per person.** With several persons, put each person's field status into `result.person_field_status`: `{"<person_key>": {"person_email": {"status": "verified|no_match|action_required|unsupported", "value": ..., "sources": [...], "reason": "..."}}}`. The lead-level `field_status` holds one entry per field, so a second person's status overwrote the first. The server stores these per person, shows them on the contact, and drops only a malformed entry, not the others.
 - **Send large results in parts.** A tool call is limited by the model's output size: a 50 KB writeback (all 32 fields with sources) breaks off and the turn ends without a receipt (Sasol, 11.09.2026, twice). Send at most about 10 fields per `execute_writeback` call; the server merges the parts, a field missing from one part keeps the status an earlier part gave it, and the response lists `open_fields` still to send. Do not re-send fields that are already stored.
 - Never dispatch read commands (`outbound.task.readback`, `outbound.lead.read`, `outbound.queue_task.read`, `outbound.lead.show` or anything similar) to check your own result, and never enqueue Business OS actions (`business_os.execute_action`, `business_os.propose_action`) for the writeback — they are not the writeback and are rejected outside the task contract. Every dispatched command becomes its own queue task and its own agent turn — twelve such reads once blocked a whole campaign for three hours.
 - Done means `business_os.execute_writeback` returned status `accepted` or `completed`. Report the counts (verified / no_match / action_required / unsupported) and the persons found in one short chat message.

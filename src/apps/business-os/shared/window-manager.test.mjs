@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
 
 import {
   clampNormalWindowPosition,
@@ -10,6 +12,42 @@ import {
   shellV2FrameSampleAt,
   shellV2MorphFrameData,
 } from './window-manager.js';
+
+test('free menu action persists restored geometry before a later reopen', () => {
+  const source = readFileSync(new URL('./window-manager.js', import.meta.url), 'utf8');
+  const actionSource = source.match(/  function applyLayoutControl\(win, action\) \{[\s\S]*?(?=\n  function updateLayoutControlState)/)?.[0];
+  assert.ok(actionSource, 'exercise the actual menu handler');
+  for (const previous of ['maximized', 'left', 'right', 'top', 'bottom']) {
+    const menu = { hidden: false };
+    const win = {
+      id: 'window-test', ownerId: 'module:test',
+      state: previous === 'maximized' ? 'maximized' : 'normal',
+      snapZone: previous === 'maximized' ? '' : previous,
+      geometry: { width: 1200, height: 720 },
+      element: {
+        querySelector: () => menu,
+        classList: { contains: () => previous !== 'maximized' },
+      },
+    };
+    const freeGeometry = { x: 120, y: 80, width: 640, height: 480 };
+    let saved = null;
+    const events = [];
+    const apply = runInNewContext(`${actionSource}; applyLayoutControl`, {
+      restoreSize: (entry) => {
+        entry.state = 'normal';
+        entry.snapZone = '';
+        entry.geometry = { ...freeGeometry };
+      },
+      persistFor: (entry) => { saved = { state: entry.state, snapZone: entry.snapZone, ...entry.geometry }; },
+      bus: { emit: (name) => events.push(name) },
+      updateLayoutControlState: () => {},
+    });
+    apply(win, 'free');
+    assert.deepEqual(saved, { state: 'normal', snapZone: '', ...freeGeometry }, previous);
+    assert.deepEqual(events, ['window:restored'], previous);
+    assert.equal(menu.hidden, true);
+  }
+});
 
 test('derives the shell-v2 frame palette from raster pixels, not a category colour', () => {
   const rgba = new Uint8ClampedArray([
@@ -173,6 +211,9 @@ test('uses the rendered launcher glyph, never the 128px source canvas, for shell
   assert.equal(shellV2RenderedIconSizeFromAnchor({ width: 56, height: 56 }), 56);
   assert.equal(shellV2RenderedIconSizeFromAnchor({ width: 128, height: 120 }), null);
   assert.equal(shellV2RenderedIconSizeFromAnchor({ width: 0, height: 0 }), null);
+  // 30.09.2026: a 631 px square anchor turned the window icon into an overlay.
+  assert.equal(shellV2RenderedIconSizeFromAnchor({ width: 631, height: 631 }), null);
+  assert.equal(shellV2RenderedIconSizeFromAnchor({ width: 12, height: 12 }), null);
 });
 
 test('samples local accents from the nearest painted frame edge and its icon joint', () => {

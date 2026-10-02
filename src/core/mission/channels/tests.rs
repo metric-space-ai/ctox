@@ -2912,6 +2912,35 @@ fn founder_outbound_body_rejects_address_headers_in_body() {
 }
 
 #[test]
+fn reviewed_reply_removes_only_its_exact_leading_subject_header() -> Result<()> {
+    let subject = "Re: Import falsch gelandet";
+    let body = outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Import falsch gelandet\r\n\r\nDanke, ich prüfe den Import.",
+        subject,
+    )?;
+    assert_eq!(body, "Danke, ich prüfe den Import.");
+    ensure_founder_outbound_body_text_clean(&body)?;
+
+    let wrong_subject = outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Anderer Vorgang\n\nDanke, ich prüfe den Import.",
+        subject,
+    )?;
+    assert!(ensure_founder_outbound_body_text_clean(&wrong_subject).is_err());
+
+    let addressed = outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Import falsch gelandet\nTo: someone@example.test\n\nDanke.",
+        subject,
+    )?;
+    assert!(ensure_founder_outbound_body_text_clean(&addressed).is_err());
+    assert!(outbound_review::reviewed_reply_body_only(
+        "Subject: Re: Import falsch gelandet\n\n",
+        subject,
+    )
+    .is_err());
+    Ok(())
+}
+
+#[test]
 fn founder_outbound_body_rejects_internal_send_status_report() {
     let error = ensure_founder_outbound_body_clean(&ChannelSendRequest {
         channel: "email".to_string(),
@@ -6630,6 +6659,93 @@ fn business_command_audit_does_not_recreate_retained_outbox_rows() {
 }
 
 #[test]
+fn business_command_intake_failure_retains_first_and_last_durable_errors() {
+    for claimed in [false, true] {
+        let root = business_command_test_root("ctox-business-command-intake-error-history");
+        let claim = business_command_claim("command-intake-errors", "sha256:intake-errors");
+        if claimed {
+            claim_business_control_command(&root, claim.clone()).expect("claim control command");
+        }
+        let first_error = "native business command store execution failed: title is required";
+        let first = record_business_command_intake_failure(&root, claim.clone(), first_error, 3)
+            .expect("persist original rejection");
+        assert_eq!(first["attempt"], 1);
+        assert_eq!(first["exhausted"], false);
+        assert_eq!(first["canonical_failure_created"], false);
+
+        // Each invocation reopens the database: no process-local retry state
+        // may be needed to retain the handler failure after a restart.
+        let last_error = "canonical command replay remained nonterminal";
+        let second = record_business_command_intake_failure(&root, claim.clone(), last_error, 3)
+            .expect("persist first replay observation");
+        assert_eq!(second["attempt"], 2);
+        assert_eq!(second["canonical_failure_created"], false);
+        let terminal = record_business_command_intake_failure(&root, claim.clone(), last_error, 3)
+            .expect("exhaust persisted retry budget");
+        assert_eq!(terminal["attempt"], 3);
+        assert_eq!(terminal["canonical_failure_created"], true);
+        let projection = &terminal["failure_document"];
+        assert_eq!(projection["status"], "failed");
+        assert_eq!(projection["result"]["first_intake_error"], first_error);
+        assert_eq!(projection["result"]["last_intake_error"], last_error);
+        assert_eq!(
+            projection["error_message"],
+            format!("{last_error}; first intake failure: {first_error}")
+        );
+
+        let conn = open_channel_db(&resolve_db_path(&root, None)).expect("reopen core db");
+        let errors: Vec<String> = conn
+            .prepare(
+                "SELECT error_message FROM business_command_intake_failures
+                 WHERE command_id = ?1 ORDER BY attempt",
+            )
+            .expect("prepare retry history")
+            .query_map(params![claim.command_id], |row| row.get(0))
+            .expect("read retry history")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect retry history");
+        assert_eq!(errors, [first_error, last_error, last_error]);
+        drop(conn);
+
+        let replay = record_business_command_intake_failure(
+            &root,
+            claim.clone(),
+            "later projection delivery failure",
+            3,
+        )
+        .expect("observe terminal command again");
+        assert_eq!(replay["canonical_failure_created"], false);
+        assert_eq!(replay["failure_document"], *projection);
+        let _ = fs::remove_dir_all(root);
+    }
+}
+
+#[test]
+fn business_command_intake_failure_keeps_unchanged_error_without_duplicate_text() {
+    let root = business_command_test_root("ctox-business-command-intake-same-error");
+    let claim = business_command_claim("command-intake-same-error", "sha256:same-error");
+    for attempt in 1..=2 {
+        let outcome =
+            record_business_command_intake_failure(&root, claim.clone(), "database is locked", 2)
+                .expect("persist repeated failure");
+        assert_eq!(outcome["attempt"], attempt);
+        if attempt == 2 {
+            let projection = &outcome["failure_document"];
+            assert_eq!(projection["error_message"], "database is locked");
+            assert_eq!(
+                projection["result"]["first_intake_error"],
+                "database is locked"
+            );
+            assert_eq!(
+                projection["result"]["last_intake_error"],
+                "database is locked"
+            );
+        }
+    }
+    let _ = fs::remove_dir_all(root);
+}
+
+#[test]
 fn business_command_audit_resolves_only_proven_transient_intake_failures() {
     let root = business_command_test_root("ctox-business-command-transient-intake-reconcile");
     let original = business_command_claim("command-transient-intake", "sha256:original");
@@ -7430,7 +7546,7 @@ fn projection_outbox_retries_with_backoff_then_dead_letters() {
 
 #[test]
 fn queue_task_update_keeps_its_place_unless_priority_changes() {
-    // production 26.09.2026: a review-feedback note recomputed sort_at, and a
+    // tenant 26.09.2026: a review-feedback note recomputed sort_at, and a
     // research task queued at 07:49 waited for hours behind later work.
     let root = std::env::temp_dir().join(format!(
         "ctox-queue-sort-keep-test-{}",

@@ -45,6 +45,7 @@ mod rxdb_peer_demand_files;
 mod rxdb_peer_desktop_files;
 mod rxdb_peer_domain_recovery;
 mod rxdb_peer_intake;
+mod rxdb_peer_intake_reader;
 mod rxdb_peer_intake_state;
 mod rxdb_peer_knowledge_rows;
 mod rxdb_peer_projections;

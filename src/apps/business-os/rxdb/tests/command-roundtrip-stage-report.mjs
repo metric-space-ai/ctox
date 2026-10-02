@@ -29,7 +29,9 @@ const MARK_NAMES = [
 const STAGE_DEFS = [
   ['browser_insert', 'browser_dispatch_started', 'browser_local_inserted'],
   ['push', 'browser_local_inserted', 'browser_push_confirmed'],
-  ['push_to_native_intake', 'browser_push_confirmed', 'native_dispatch_entered'],
+  // Native intake can precede the Browser's flush acknowledgement. These
+  // two spans overlap; local insertion is the causal predecessor of intake.
+  ['local_to_native_intake', 'browser_local_inserted', 'native_dispatch_entered'],
   ['native_processing', 'native_dispatch_entered', 'native_handler_completed'],
   ['projection_commit', 'native_handler_completed', 'native_rxdb_projection_committed'],
   ['commit_to_browser_observed', 'native_rxdb_projection_committed', 'browser_terminal_observed'],
@@ -38,7 +40,7 @@ const STAGE_DEFS = [
 
 const SUM_STAGES = STAGE_DEFS
   .map(([name]) => name)
-  .filter((name) => name !== 'total');
+  .filter((name) => name !== 'total' && name !== 'push');
 
 const NATIVE_MARKS = [
   'native_dispatch_entered',
@@ -61,21 +63,24 @@ export function commandRoundtripStagesFromMarks(marks = {}) {
 }
 
 export function estimateNativeClockOffsetMs(marks) {
-  const push = Number(marks.browser_push_confirmed);
+  const inserted = Number(marks.browser_local_inserted);
   const intake = Number(marks.native_dispatch_entered);
   const committed = Number(marks.native_rxdb_projection_committed);
   const observed = Number(marks.browser_terminal_observed);
-  if (![push, intake, committed, observed].every(Number.isFinite)) return 0;
+  if (![inserted, intake, committed, observed].every(Number.isFinite)) return null;
   // D = native_clock - browser_clock.
-  // After subtracting D from native marks, the two cross-clock stages stay >= 0
-  // when the feasible interval is non-empty.
+  // Native intake follows local insertion, but may precede the asynchronous
+  // Browser push acknowledgement. Only causal marks bound clock offset.
   const low = committed - observed;
-  const high = intake - push;
+  const high = intake - inserted;
   if (low <= high) return (low + high) / 2;
-  return high;
+  return null;
 }
 
 export function correctMarksToBrowserClock(marks, offsetMs = estimateNativeClockOffsetMs(marks)) {
+  if (!Number.isFinite(offsetMs)) {
+    throw new Error('Browser/native clock offset has no causally feasible interval');
+  }
   const corrected = { ...marks };
   for (const name of NATIVE_MARKS) {
     const value = Number(marks[name]);
@@ -119,7 +124,12 @@ export function buildRoundtripStageReport(samples, { maxStageSumDeltaMs = 50 } =
       issues.push({ command_id: commandId, kind: 'incomplete', missing });
       continue;
     }
-    const { marks: correctedMarks, clock_offset_ms: clockOffsetMs } = correctMarksToBrowserClock(rawMarks);
+    const clockOffsetMs = estimateNativeClockOffsetMs(rawMarks);
+    if (clockOffsetMs === null) {
+      issues.push({ command_id: commandId, kind: 'clock_offset_infeasible' });
+      continue;
+    }
+    const { marks: correctedMarks } = correctMarksToBrowserClock(rawMarks, clockOffsetMs);
     const rawStages = commandRoundtripStagesFromMarks(rawMarks);
     const stages = commandRoundtripStagesFromMarks(correctedMarks);
     const negatives = Object.entries(stages)
@@ -157,7 +167,7 @@ export function buildRoundtripStageReport(samples, { maxStageSumDeltaMs = 50 } =
     };
   }
   return {
-    schema: 'ctox.command_roundtrip.stage_report.v1',
+    schema: 'ctox.command_roundtrip.stage_report.v2',
     sample_count: samples.length,
     complete_count: rows.length,
     issues,

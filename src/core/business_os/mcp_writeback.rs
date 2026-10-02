@@ -35,7 +35,7 @@ fn bound_payload(parent_id: &str, contract: &Value, arguments: &Value) -> anyhow
         .cloned()
         .context("writeback payload is required")?;
     // The tool declares payload as a JSON string: MiniMax drops large object
-    // arguments (production 26.09.2026, 5 of 6 replayed calls arrived as "{}"),
+    // arguments (tenant 26.09.2026, 5 of 6 replayed calls arrived as "{}"),
     // a string arrives intact. An object is still accepted.
     if let Some(text) = payload.as_str() {
         payload = decode_payload_text(text)?;

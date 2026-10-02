@@ -322,7 +322,7 @@ mailQa: try {
         if (command.command_type === 'ctox.mailserver.save_user') {
           const username = command.payload.username;
           if (!mailserver.users.some((user) => user.username === username)) mailserver.users.push({ username });
-          upsert('communication_accounts', {
+          const account = {
             account_key: `email:${username}`,
             channel: 'email',
             address: username,
@@ -335,7 +335,9 @@ mailQa: try {
             },
             created_at: new Date(now).toISOString(),
             updated_at: new Date(now).toISOString(),
-          });
+          };
+          window.__mailNativeAccounts.set(account.account_key, structuredClone(account));
+          upsert('communication_accounts', account);
           return { id: command.id, status: 'completed', result: { username } };
         }
         if (command.command_type === 'ctox.mailserver.delete_user') {
@@ -344,6 +346,7 @@ mailQa: try {
           if (userIndex >= 0) mailserver.users.splice(userIndex, 1);
           const accountIndex = rows.communication_accounts.findIndex((account) => account.account_key === `email:${username}`);
           if (accountIndex >= 0) rows.communication_accounts.splice(accountIndex, 1);
+          window.__mailNativeAccounts.delete(`email:${username}`);
           notify('communication_accounts');
           return { id: command.id, status: 'completed', result: { username } };
         }
@@ -426,10 +429,12 @@ mailQa: try {
   // A provider can reuse a thread ID in another mailbox. The newer message
   // must never replace Alice's row or leak into her opened conversation.
   await page.evaluate(() => {
-    window.__mailRows.communication_accounts.push({
+    const bobAccount = {
       account_key: 'email:bob@example.test', channel: 'email', address: 'bob@example.test',
       provider: 'ctox-mailserver', profile_json: { owner_user_id: 'bob' },
-    });
+    };
+    window.__mailRows.communication_accounts.push(bobAccount);
+    window.__mailNativeAccounts.set(bobAccount.account_key, structuredClone(bobAccount));
     window.__mailRows.communication_messages.push({
       message_key: 'bob-shared-thread', thread_key: 'thread-1', channel: 'email',
       account_key: 'email:bob@example.test', direction: 'outbound', folder_hint: 'sent',
@@ -455,6 +460,7 @@ mailQa: try {
   await page.locator('[data-mail-left-pane] [data-pg-tray-toggle]').click();
   await page.evaluate(() => {
     window.__mailRows.communication_accounts = window.__mailRows.communication_accounts.filter((account) => account.account_key !== 'email:bob@example.test');
+    window.__mailNativeAccounts.delete('email:bob@example.test');
     window.__mailRows.communication_messages = window.__mailRows.communication_messages.filter((message) => message.message_key !== 'bob-shared-thread');
     window.__mailNotify('communication_accounts');
     window.__mailNotify('communication_messages');
@@ -589,12 +595,27 @@ mailQa: try {
   assert.equal(await editorFrame.locator('.ctox-frame-tools').count(), 0);
   await page.locator('[data-mail-editor-open-panel="blocks"]').click();
   await editorFrame.getByText('Baustein in die E-Mail ziehen', { exact: true }).waitFor({ state: 'visible' });
-  const blockCountBeforeDrag = await editorFrame.locator('.email-block').count();
   const buttonBlock = editorFrame.locator('.ctox-frame-block-item')
     .filter({ hasText: 'Button' })
     .locator('[draggable="true"]');
-  await buttonBlock.dragTo(editorFrame.locator('.email-block').last());
-  await editorFrame.locator('.email-block').nth(blockCountBeforeDrag).waitFor({ state: 'attached' });
+  const dropBlock = editorFrame.locator('.email-block').last();
+  const insertedButton = editorFrame.locator('[contenteditable="true"]').filter({ hasText: /^\s*Button\s*$/ });
+  assert.equal(await insertedButton.count(), 0, 'Campaign canvas must not have a Button before drag');
+  // Hover waits for the slide-in palette to stop moving before measuring it.
+  await buttonBlock.hover();
+  const sourceBox = await buttonBlock.boundingBox();
+  const targetBox = await dropBlock.boundingBox();
+  assert.ok(sourceBox && targetBox, 'Button and email canvas must be visible for drag');
+  const sourceX = sourceBox.x + sourceBox.width / 2;
+  const sourceY = sourceBox.y + sourceBox.height / 2;
+  await page.mouse.move(sourceX, sourceY);
+  await page.mouse.down();
+  await page.mouse.move(sourceX + 16, sourceY + 16, { steps: 4 });
+  await editorFrame.locator('[data-dragging="true"]').waitFor({ state: 'attached', timeout: 3_000 });
+  await page.mouse.move(targetBox.x + targetBox.width / 2, targetBox.y + 6, { steps: 18 });
+  await editorFrame.locator('[data-direction]:not([data-direction="none"])').waitFor({ state: 'attached', timeout: 3_000 });
+  await page.mouse.up();
+  await insertedButton.waitFor({ state: 'visible' });
   await page.locator('[data-mail-editor-open-panel="design"]').click();
   await editorFrame.getByRole('tab', { name: 'Element', exact: true }).waitFor({ state: 'visible' });
   assert.equal(await editorFrame.locator('#easy-email-rich-text-bar').isVisible(), false);
@@ -738,7 +759,11 @@ mailQa: try {
   await page.locator('[data-mail-close-mailbox-admin]').click();
 
   await page.setViewportSize({ width: 700, height: 820 });
-  await page.locator('[data-mail-close-detail]').click();
+  // Account changes may already have closed the inspector. Use the mobile
+  // back control only when the inspector still owns the view.
+  if (await page.locator('[data-mail-root]').evaluate((node) => node.classList.contains('is-inspector-open'))) {
+    await page.locator('[data-mail-close-detail]').click();
+  }
   await page.locator('[data-mail-open-nav]').click();
   await page.locator('.mail-sidebar').waitFor({ state: 'visible' });
   await page.locator('[data-mail-settings]').click();
@@ -978,7 +1003,8 @@ mailQa: try {
     if (state.editorFrames) {
       const frame = page.frameLocator('[data-mail-easy-email-host] iframe');
       console.error('[mail QA] editor contenteditables', JSON.stringify(await frame.locator('[contenteditable="true"]').allTextContents()));
-      console.error('[mail QA] editor body', (await frame.locator('body').textContent())?.slice(0, 500));
+      console.error('[mail QA] editor blocks', await frame.locator('.email-block').count());
+      console.error('[mail QA] editor body', (await frame.locator('body').first().textContent())?.slice(0, 500));
     }
   } catch (diagnosticError) {
     console.error('[mail QA] state capture failed', diagnosticError);

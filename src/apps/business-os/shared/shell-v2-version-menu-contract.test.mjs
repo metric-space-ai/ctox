@@ -32,20 +32,23 @@ assert.match(appSource, /maintenanceRemountModuleId = mod\.id/);
 assert.match(appSource, /if \(wasActive\) resumeMaintenanceInterruptedModuleMount\(\)/);
 assert.match(appSource, /mod\.id === 'desktop' && state\.maintenance\?\.active[\s\S]*?assertMaintenanceWriteAllowed\('desktop'\)/);
 // The clock widget paints once while mounting, but its second-tick must not run
-// behind a desktop that never finished: `ensureIcons` can reject during
-// maintenance. The timer therefore lives in `startClockTimer`, which is called
-// after the persistence step. Comparing the raw `setInterval` position instead
-// measured where the closure is *written*, not when it runs.
+// behind a desktop whose local first paint failed. Icon repair is now detached
+// from mount; its failure is handled there rather than rejecting mount. The
+// timer must start after first paint and remain covered by mount cleanup.
 assert.match(
   desktopSource,
   /startClockTimer = \(\) => \{\s*const clockInterval = setInterval\(updateClock, 1000\);/,
   'the desktop clock timer is created inside startClockTimer',
 );
 assert.ok(
-  desktopSource.indexOf('await ensureIcons(iconsCollection, launcher);')
-    < desktopSource.indexOf('startClockTimer?.();'),
-  'desktop timers start only after maintenance-sensitive icon persistence succeeds',
+  desktopSource.indexOf('await renderIcons();')
+    < desktopSource.indexOf('startClockTimer?.();')
+    && desktopSource.indexOf('startClockTimer?.();')
+      < desktopSource.indexOf('const reconciliationTimer = setTimeout('),
+  'desktop timers start only after local first paint and before detached icon repair',
 );
+assert.match(desktopSource, /cleanups\.push\(\(\) => clearInterval\(clockInterval\)\)/);
+assert.match(desktopSource, /cleanups\.push\(\(\) => clearTimeout\(reconciliationTimer\)\)/);
 assert.doesNotMatch(appSource, /<div><span>Knowledge<\/span>/);
 assert.doesNotMatch(appSource, /<p>Knowledge wirklich auf Version/);
 

@@ -204,6 +204,95 @@ async function assertCompanionsStartDuringStalledModuleLaunch() {
     await browser.close();
   }
 }
+
+async function assertWarmSecondOpenUsesPersistedCatalog() {
+  const browser = await launchChromium();
+  const context = await browser.newContext();
+  const session = {
+    ok: true,
+    authenticated: true,
+    auth_required: false,
+    source: 'fixture',
+    user: { id: 'warm-catalog-user', display_name: 'Warm Catalog User', role: 'admin' },
+    reason: null,
+  };
+  const config = {
+    ok: true,
+    app_hosting: 'local',
+    sync_mode: 'p2p-first',
+    instance_id: 'warm-catalog-fixture',
+    peer_id: 'browser-warm-catalog',
+    peer_role: 'browser',
+    sync_room: 'ctox-business-os:warm-catalog-fixture:fixture',
+    signaling_urls: ['ws://127.0.0.1:9/ctox-business-os'],
+    ice_servers: [],
+  };
+  await context.route('**/api/business-os/launch-context', (route) => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify({ session, config, designTemplates: [] }),
+  }));
+  await context.route(/^http:\/\/127\.0\.0\.1:\d+\/api\/(?!business-os\/launch-context)/, (route) => route.abort());
+  await context.route(/^ws:\/\//, (route) => route.abort());
+  let slowPackagedRequests = 0;
+  let slowPackaged = false;
+  await context.route(/\/(?:system-apps\.json|modules\/registry\.json)\?v=/, async (route) => {
+    if (!slowPackaged) return route.continue();
+    slowPackagedRequests += 1;
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 7000));
+    return route.abort();
+  });
+
+  try {
+    const first = await context.newPage();
+    await first.goto(`http://127.0.0.1:${server.address().port}/business-os/index.html`);
+    await first.waitForFunction(() => Boolean(
+      window.CTOX_BUSINESS_OS_APP?.db?.collection?.('business_module_catalog')
+    ), null, { timeout: 10_000 });
+    await first.evaluate(async () => {
+      const collection = window.CTOX_BUSINESS_OS_APP.db.collection('business_module_catalog');
+      await collection.upsert({
+        id: 'module-catalog',
+        ok: true,
+        modules: [{
+          id: 'desktop',
+          title: 'Desktop',
+          entry: 'modules/desktop/index.html',
+          collections: ['business_commands', 'desktop_icons', 'desktop_layout'],
+          core: true,
+          install_scope: 'core',
+        }],
+        templates: [],
+        governance: {},
+        updated_at_ms: Date.now(),
+      });
+    });
+    await first.close();
+
+    slowPackaged = true;
+    const second = await context.newPage();
+    const pageErrors = [];
+    second.on('pageerror', (error) => pageErrors.push(error.message));
+    const startedAt = Date.now();
+    await second.goto(`http://127.0.0.1:${server.address().port}/business-os/index.html`);
+    await second.waitForSelector('[data-desktop-root]', { state: 'visible', timeout: 5000 });
+    const firstPaintMs = Date.now() - startedAt;
+    const persistedCatalog = await second.evaluate(async () => {
+      const doc = await window.CTOX_BUSINESS_OS_APP.db
+        .collection('business_module_catalog').findOne('module-catalog').exec();
+      return doc?.toJSON?.() || null;
+    });
+    assert.ok(firstPaintMs < 5000, `cached Desktop first paint took ${firstPaintMs}ms`);
+    assert.equal(persistedCatalog?.modules?.[0]?.id, 'desktop');
+    assert.equal(slowPackagedRequests, 0, 'warm catalog first paint must not request packaged manifest');
+    assert.deepEqual(pageErrors, []);
+    console.log(`warm-second-open firstPaintMs=${firstPaintMs} cachedModules=${persistedCatalog.modules.length} slowPackagedRequests=${slowPackagedRequests}`);
+    await second.close();
+  } finally {
+    await context.close();
+    await browser.close();
+  }
+}
 function contentType(path) {
   return ({
     '.css': 'text/css; charset=utf-8',
@@ -223,6 +312,7 @@ function send(response, status, body, type) {
 try {
   await assertLaunchContextDeadline();
   await assertCompanionsStartDuringStalledModuleLaunch();
+  await assertWarmSecondOpenUsesPersistedCatalog();
 } finally {
   await new Promise((resolveServer) => server.close(resolveServer));
 }

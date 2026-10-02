@@ -402,17 +402,8 @@ export function renderCrewCreature({
   const telemetry = activity;
   const motionSeed = crewHash(`${animationKey}:${placement}`);
   const motion = genome ? genome.motion : { tempo: 0.9, amplitude: 0.7, irregularity: 0.2, phase: 0 };
-  const colorVars = genome
-    ? `--crew-color:${escapeAttr(crew.color)};--crew-fill:${genome.tone.fill};--crew-shade:${genome.tone.shade};--crew-cheek:${genome.tone.cheek}`
-    : `--crew-color:${escapeAttr(crew.color)}`;
-  const figure = genome
-    ? `${genome.tuft ? `<path class="ctox-crew-tuft" d="${genome.tuft}" />` : ''}`
-      + `<g class="ctox-crew-body"><path d="${genome.path}" /></g>`
-      + `<ellipse class="ctox-crew-shine" cx="${genome.shine.cx}" cy="${genome.shine.cy}" rx="${genome.shine.rx}" ry="${genome.shine.ry}" />`
-      + (genome.cheeks ? `<g class="ctox-crew-cheeks"><ellipse cx="${genome.cheeks.left[0]}" cy="${genome.cheeks.left[1]}" rx="3.1" ry="1.9" /><ellipse cx="${genome.cheeks.right[0]}" cy="${genome.cheeks.right[1]}" rx="3.1" ry="1.9" /></g>` : '')
-      + `<g class="ctox-crew-eyes is-${escapeAttr(mode)}" style="stroke-width:${eyeStroke(genome.eyes, mode)}">${eyesMarkup(genome.eyes, mode)}</g>`
-    : `<g class="ctox-crew-body"><path d="${NEUTRAL_BODY}" /></g>`
-      + `<g class="ctox-crew-eyes is-${escapeAttr(mode)}" style="stroke-width:${eyeStroke(NEUTRAL_EYES, mode)}">${eyesMarkup(NEUTRAL_EYES, mode)}</g>`;
+  const colorVars = crewColorVars(crew, genome);
+  const figure = crewFigureMarkup(genome, mode);
   return `
     <span class="ctox-crew-creature is-${escapeAttr(taskState)} is-${escapeAttr(mode)} is-${escapeAttr(crew.shape)} is-${escapeAttr(placement)}${member ? '' : ' is-neutral'}" data-crew-mode="${escapeAttr(mode)}" data-crew-identity="${escapeAttr(JSON.stringify(crew))}" data-crew-seed="${motionSeed}" data-crew-key="${escapeAttr(`${animationKey}:${placement}`)}" data-crew-motion="${motion.tempo},${motion.amplitude},${motion.irregularity},${motion.phase}" data-activity-turns="${escapeAttr(telemetry.total)}" data-activity-kind="${escapeAttr(telemetry.lastKind)}" data-activity-updated-at="${escapeAttr(telemetry.updatedAt)}" style="${colorVars};--ctox-progress-angle:${progressAngle}deg" aria-hidden="true">
       <span class="ctox-crew-ground"></span>
@@ -421,8 +412,81 @@ export function renderCrewCreature({
   `;
 }
 
+/**
+ * The member's PORTRAIT (Owner 28.09.2026: "jedes Lumi darf es nur einmal
+ * geben!" / "nicht zu Ende gedacht"). Identity and presence are two things:
+ * - identity: a member looks like itself everywhere — same body, same face;
+ * - presence: its living BODY (ground shadow, motion) exists once per screen,
+ *   where the member is (crew bar seat, CTOX map or crew home).
+ * Everywhere a member is only named — task and ticket rows, chat chips and
+ * windows, app icons, crew strip — it appears as this portrait: the same
+ * figure, still, in a round frame of its colour. The eyes show the state of
+ * the thing it is named for (working, waiting, failed …). Without a member
+ * it is the ghost's portrait, never an empty ring.
+ */
+export function renderCrewReference({ appearance, size = 18, mode = 'idle', title = '' } = {}) {
+  const member = isMemberAppearance(appearance);
+  const crew = normalizeCrewAppearance(appearance);
+  const genome = member ? crewGenome(crew) : null;
+  const px = Math.max(10, Math.min(64, Number(size) || 18));
+  const face = PORTRAIT_MODES.has(mode) ? mode : 'idle';
+  const label = title || (member ? crew.name : '');
+  return `<span class="ctox-crew-ref${member ? '' : ' is-neutral'}" data-crew-ref="${escapeAttr(member ? (crew.id || crew.name) : '')}" data-crew-ref-mode="${escapeAttr(face)}" style="${crewColorVars(crew, genome)};--crew-ref-size:${px}px"${label ? ` title="${escapeAttr(label)}"` : ''} aria-hidden="true"><svg class="ctox-crew-portrait" viewBox="-7 -3 78 78" focusable="false">${crewFigureMarkup(genome, face)}</svg></span>`;
+}
+
+const PORTRAIT_MODES = new Set(['idle', 'waiting', 'working', 'review', 'reading', 'learning', 'sleeping', 'failed']);
+
+function crewColorVars(crew, genome) {
+  return genome
+    ? `--crew-color:${escapeAttr(crew.color)};--crew-fill:${genome.tone.fill};--crew-shade:${genome.tone.shade};--crew-cheek:${genome.tone.cheek}`
+    : `--crew-color:${escapeAttr(crew.color)}`;
+}
+
+// The member's figure — body, extras and face — shared by the living body and
+// its portrait, so a member looks the same wherever it appears.
+function crewFigureMarkup(genome, mode) {
+  return genome
+    ? `${genome.tuft ? `<path class="ctox-crew-tuft" d="${genome.tuft}" />` : ''}`
+      + `<g class="ctox-crew-body"><path d="${genome.path}" /></g>`
+      + `<ellipse class="ctox-crew-shine" cx="${genome.shine.cx}" cy="${genome.shine.cy}" rx="${genome.shine.rx}" ry="${genome.shine.ry}" />`
+      + (genome.cheeks ? `<g class="ctox-crew-cheeks"><ellipse cx="${genome.cheeks.left[0]}" cy="${genome.cheeks.left[1]}" rx="3.1" ry="1.9" /><ellipse cx="${genome.cheeks.right[0]}" cy="${genome.cheeks.right[1]}" rx="3.1" ry="1.9" /></g>` : '')
+      + `<g class="ctox-crew-eyes is-${escapeAttr(mode)}" style="stroke-width:${eyeStroke(genome.eyes, mode)}">${eyesMarkup(genome.eyes, mode)}</g>`
+    : `<g class="ctox-crew-body"><path d="${NEUTRAL_BODY}" /></g>`
+      + `<g class="ctox-crew-eyes is-${escapeAttr(mode)}" style="stroke-width:${eyeStroke(NEUTRAL_EYES, mode)}">${eyesMarkup(NEUTRAL_EYES, mode)}</g>`;
+}
+
 /** The one stylesheet for creatures. Hosts only size the wrapper. */
 export const CREW_CREATURE_BASE_CSS = `
+    .ctox-crew-ref {
+      display: inline-grid;
+      place-items: center;
+      flex: none;
+      box-sizing: border-box;
+      width: var(--crew-ref-size, 18px);
+      height: var(--crew-ref-size, 18px);
+      border-radius: 50%;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--crew-color) 18%, var(--elev-float-2, #1f232a));
+      box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--crew-color) 72%, transparent);
+      user-select: none;
+    }
+    .ctox-crew-ref > .ctox-crew-portrait {
+      display: block;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+    .ctox-crew-ref.is-neutral {
+      background: color-mix(in srgb, var(--crew-color) 10%, transparent);
+      box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--crew-color) 45%, transparent);
+    }
+    .ctox-crew-ref.is-neutral .ctox-crew-body {
+      fill: color-mix(in srgb, var(--crew-color) 26%, transparent);
+      stroke: color-mix(in srgb, var(--crew-color) 88%, white 12%);
+      stroke-width: 2.4;
+      stroke-dasharray: 5 4;
+    }
+    .ctox-crew-ref.is-neutral .ctox-crew-eyes { stroke: color-mix(in srgb, var(--crew-color) 70%, white 30%); }
     .ctox-crew-creature {
       position: relative;
       display: inline-grid;
@@ -500,6 +564,18 @@ export const CREW_CREATURE_BASE_CSS = `
     }
     .ctox-crew-creature.is-neutral .ctox-crew-eyes { stroke: color-mix(in srgb, var(--crew-color) 70%, white 30%); }
     .ctox-crew-creature.is-neutral .ctox-crew-ground { opacity: 0.4; }
+    /* The member's body stands elsewhere on this screen (CTOX map / home):
+       its crew-bar seat shows the still portrait instead of a second body. */
+    .ctox-crew-creature[data-crew-away] {
+      border-radius: 50%;
+      background: color-mix(in srgb, var(--crew-color) 18%, var(--elev-float-2, #1f232a));
+      box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--crew-color) 72%, transparent);
+    }
+    .ctox-crew-creature[data-crew-away] > .ctox-crew-ground { display: none; }
+    .ctox-crew-creature[data-crew-away] > .ctox-crew-figure {
+      transform: scale(0.8) translateY(4%) !important;
+      transform-origin: 50% 50%;
+    }
     .ctox-crew-creature.is-window {
       width: 38px;
       height: 38px;
