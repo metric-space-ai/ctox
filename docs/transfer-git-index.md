@@ -56,6 +56,26 @@ selection and `CTOX_STATE_ROOT` state-directory override for isolated instances.
 The core transfer metadata, downloaded objects and native query/admission
 databases all follow that same state directory. Use the same selections for
 every command and daemon restart; an installed launcher may override them.
+The native peer's catalog also needs the matching Business OS runtime files.
+Materialize these into an exclusively owned isolated bundle root through an
+admitted job, using the full source commit from the identified binary manifest:
+
+```sh
+python3 src/scripts/transfer-runtime-bundle.py --repository SOURCE_CHECKOUT \
+  --revision BINARY_SOURCE_COMMIT --bundle-root ISOLATED_BUNDLE_ROOT
+```
+
+The root must already exist with no `src` entry. The helper exports only regular
+tracked files under `src/apps/business-os` from that immutable commit, verifies
+their Git object hashes, and records source-tree, size and SHA-256 evidence in
+`src/transfer-runtime-manifest.json`. Uncommitted files, local configuration and
+runtime state are not copied. Existing identity/state outside `src` is retained;
+the asset tree and manifest appear together after materialization. A repeated
+invocation refuses to overwrite the installed tree. This prepares an isolated
+source payload; it does not activate a managed shell slot, install a binary,
+start a peer or establish network acceptance. Managed shell releases retain
+their existing main-only build and signed activation discipline.
+
 Create the isolated bundle/source directory before invoking commands. On a fresh
 A instance, run `ctox sync init` with those selections before starting its peer,
 reading its public identity or publishing files. This explicitly provisions the
