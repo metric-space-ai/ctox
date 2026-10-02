@@ -20,6 +20,19 @@ fence, not tenant startup latency, Windows memory behavior or installed OOM
 resolution. Those require retained-profile browser measurements on the exact
 delivered source and independent installed acceptance.
 
+The Shell's bounded performance trace separates asset imports, local database
+open/preflight, cache migration, core schema registration, catalog, first module
+mount and restored windows from WebRTC readiness milestones. Heap values are
+browser-exposed samples; the observed maximum is not process RSS or a certified
+memory peak. Missing metrics remain unknown. No URLs, record payloads, actor
+credentials or error bodies enter the trace. Long-task counters and at most 64
+phase records bound retention; the existing Shell diagnostics expose them.
+`firstModuleMountedMs` is a mount milestone, not proof of usable interaction.
+
+Legacy/superseded replica inventory runs after initial module/restore handling,
+outside the critical startup wait. It still preserves all old primaries and
+recovery journals; slow metadata enumeration is not a deletion authorization.
+
 ### Fresh native schema initialization
 
 Before dispatching native Business OS commands into a fresh root, run

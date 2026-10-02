@@ -1335,13 +1335,6 @@ async function bootstrap() {
   setStartupProgress(30, shellText('bootSession'));
   setStartupProgress(50, shellText('bootDatastore'));
   const syncConfig = await traceShellPhase('sync-config', loadSyncConfig);
-  await traceShellPhase('legacy-db-inventory', () => reportLegacySharedBusinessDb(syncConfig)).catch((error) => {
-    console.warn('[business-os] legacy replica inspection failed', error);
-  });
-  await traceShellPhase('superseded-db-inventory', () => reportSupersededBusinessDbGenerations(syncConfig)).catch((error) => {
-    // Diagnostics must not make an authenticated browser unbootable.
-    console.warn('[business-os] superseded replica inspection failed', error);
-  });
   await traceShellPhase('build-guard', () => resetBusinessDataPlaneForBuildIfNeeded(syncConfig));
   await traceShellPhase('data-plane-open', () => openBusinessDataPlane(syncConfig));
   if (await completeWorkjetPairingRedirect()) return;
@@ -1460,6 +1453,9 @@ async function bootstrap() {
     // would strand every later catalog notification in the deferred queue.
     state.initialModuleOpened = true;
     flushDeferredCatalogRefresh();
+    // Metadata-only recovery diagnostics preserve all replicas, but must not
+    // hold database opening or the first usable app behind enumeration.
+    void reportPreservedLocalReplicas(syncConfig);
   }
   // Phase 2: no critical-sync warmup choreography here anymore — replication
   // starts lazily inside RxDB when a collection is first subscribed/read.
@@ -1488,6 +1484,15 @@ function businessDbName(syncConfig = state.syncConfig) {
   return [BUSINESS_DB_NAME, BUSINESS_DB_STORAGE_GENERATION, originId, instanceId, userId, smokeDbId]
     .filter(Boolean)
     .join('_');
+}
+
+async function reportPreservedLocalReplicas(syncConfig) {
+  await traceShellPhase('legacy-db-inventory', async () => await reportLegacySharedBusinessDb(syncConfig)).catch((error) => {
+    console.warn('[business-os] legacy replica inspection failed', error);
+  });
+  await traceShellPhase('superseded-db-inventory', async () => await reportSupersededBusinessDbGenerations(syncConfig)).catch((error) => {
+    console.warn('[business-os] superseded replica inspection failed', error);
+  });
 }
 
 async function reportLegacySharedBusinessDb(syncConfig) {
