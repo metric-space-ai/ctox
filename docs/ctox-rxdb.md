@@ -1,5 +1,25 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Browser live-query single-flight
+
+Each `RxQuery.$` subscription keeps at most one executing snapshot and one
+coalesced follow-up. Storage changes during a slow read no longer start a new
+materialization on every debounce tick. The first available snapshot still
+paints before the follow-up; ordinary writes must not starve initial rendering.
+Primary-key and unbounded delta subscriptions retain their existing delta path.
+
+Replacing a control-plane demand loader still clears the visible result and
+fences its old authority generation. Replacement and unsubscribe abort only
+that subscription's read, never an imperative consumer or the caller's signal.
+A storage adapter that cannot cancel an in-progress read must finish it before
+the next snapshot starts; its late result cannot publish after unsubscribe.
+Strict revision tokens and permission checks remain on the existing loader.
+
+The deferred-storage regression proves the concurrency bound and generation
+fence, not tenant startup latency, Windows memory behavior or installed OOM
+resolution. Those require retained-profile browser measurements on the exact
+delivered source and independent installed acceptance.
+
 ### Fresh native schema initialization
 
 Before dispatching native Business OS commands into a fresh root, run
