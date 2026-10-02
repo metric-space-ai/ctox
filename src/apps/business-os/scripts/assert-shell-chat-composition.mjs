@@ -79,8 +79,34 @@ try {
     JSON.stringify(layoutOptions) === JSON.stringify(['free', 'maximize', 'minimize', 'left', 'right', 'top', 'bottom']),
     `the layout menu must expose the seven requested actions: ${JSON.stringify(layoutOptions)}`,
   );
-  await page.locator('.shell-window [data-window-layout-menu] [data-window-layout-control="minimize"]').click();
+  const layoutMenu = page.locator('.shell-window [data-window-layout-menu]');
+  expect(await layoutMenu.locator('[data-window-layout-control] svg').count() === 7,
+    'each of the seven layout choices must show its own icon');
+  await topAppTab.click();
+  const outsideClickClosed = !(await layoutMenu.isVisible()) && await layoutTrigger.getAttribute('aria-expanded') === 'false';
+  expect(outsideClickClosed,
+    'clicking outside the window must close the layout menu');
+  await layoutTrigger.focus();
+  await layoutTrigger.press('Enter');
+  const enterOpened = await layoutMenu.isVisible() && await layoutTrigger.getAttribute('aria-expanded') === 'true';
+  expect(enterOpened,
+    'Enter on the window icon must open the layout menu');
+  await layoutMenu.locator('[data-window-layout-control="free"]').focus();
+  await page.keyboard.press('Escape');
+  const escapeClosed = !(await layoutMenu.isVisible()) && await layoutTrigger.getAttribute('aria-expanded') === 'false';
+  expect(escapeClosed,
+    'Escape from a layout choice must close the menu');
+  const focusReturned = await layoutTrigger.evaluate((node) => document.activeElement === node);
+  expect(focusReturned,
+    'Escape must return keyboard focus to the window icon');
+  observations.push({ phase: 'layout-keyboard-open-dismiss', outsideClickClosed,
+    enterOpened, escapeClosed, focusReturned });
+  await layoutTrigger.press('Enter');
+  await layoutMenu.locator('[data-window-layout-control="minimize"]').focus();
+  await page.keyboard.press('Enter');
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell-window')).display === 'none');
+  observations.push({ phase: 'layout-keyboard-minimize',
+    ...await page.evaluate(() => window.shellHarness.collect()) });
   await topAppTab.click();
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell-window')).display !== 'none');
   await page.waitForSelector('[data-top-app-tab][data-state="focused"]');
@@ -210,6 +236,33 @@ try {
   observations.push({ phase: 'layout-snap-bottom', ...bottomSnap });
   expect(bottomSnap.snapZone === 'bottom', `the bottom menu action must snap bottom, got ${bottomSnap.snapZone}`);
   await chooseLayout(page, 'free');
+
+  // Resize through the actual focusable corner, rather than counting a harness
+  // style assignment as a user resize. Start with room for both 16px steps.
+  await page.evaluate(() => window.shellHarness.setSize(640, 480));
+  await dragWindowToLayerPoint(page, work, { left: work.left + 40, top: work.top + 40 });
+  const beforeKeyboardResize = await page.evaluate(() => window.shellHarness.collect());
+  const resizeCorner = page.locator('.shell-window [data-window-resize="se"]');
+  expect(await resizeCorner.count() === 1 && await resizeCorner.isVisible(),
+    'the free window must expose its actual southeast resize corner');
+  await resizeCorner.focus();
+  await resizeCorner.press('ArrowRight');
+  await resizeCorner.press('ArrowDown');
+  const keyboardResized = await page.evaluate(() => window.shellHarness.collect());
+  const expectedResized = { ...beforeKeyboardResize.window,
+    width: beforeKeyboardResize.window.width + 16, height: beforeKeyboardResize.window.height + 16 };
+  expect(closeRect(keyboardResized.window, expectedResized),
+    `corner keyboard resize must grow both dimensions without moving: ${JSON.stringify({ before: beforeKeyboardResize.window, expected: expectedResized, after: keyboardResized.window })}`);
+  expect(keyboardResized.snapZone === null && keyboardResized.windowState === 'normal',
+    'resizing a free window must not choose a fixed layout');
+  observations.push({ phase: 'free-keyboard-resize', before: beforeKeyboardResize.window,
+    expected: expectedResized, ...keyboardResized });
+  await reloadHarness(page, url);
+  const reopenedResized = await page.evaluate(() => window.shellHarness.collect());
+  expect(closeRect(reopenedResized.window, keyboardResized.window)
+    && reopenedResized.snapZone === null && reopenedResized.windowState === 'normal',
+  'the user-resized free window must retain its geometry and free state after reload');
+  observations.push({ phase: 'reopened-free-resized', ...reopenedResized });
 
   // Reopening must use the last explicit menu selection, including returning
   // to free geometry. The harness supplies the real manager persistence port.
