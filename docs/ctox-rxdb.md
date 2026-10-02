@@ -151,6 +151,12 @@ person key still coalesce; unkeyed legacy row-ID matching remains supported.
 Partial keyed contact updates preserve an existing observed full name when no
 structured first/last name is supplied. This preservation does not create a
 name, source receipt or verified field; explicit structured names still win.
+Historical lead evidence is retained, but completion counts only evidence for
+the current incoming value and, for person fields, the same person key.
+The existing native quantity and personal-email quote checks also apply to
+this completion count; a source for another person, an outdated value or a
+quote naming another address cannot certify the new result. Sellify alone
+continues to count as unverified.
 
 Sellify lookups require a readable collection and use one read-only SQLite
 transaction for ID, exact-field, fuzzy-field, and campaign-group probes.

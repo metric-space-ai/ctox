@@ -792,7 +792,8 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
     let unverified_field_keys = researched_field_keys
         .iter()
         .filter(|field_key| {
-            independent_research_evidence_count(&evidence, field_key)
+            let field = &outcome["fields"][field_key.as_str()];
+            matching_research_evidence_count(&evidence, field_key, field, !has_person_records)
                 < required_independent_sources(field_key)
         })
         .cloned()
@@ -1679,6 +1680,58 @@ pub(super) fn independent_research_evidence_count(evidence: &[Value], field_key:
         .filter_map(research_evidence_source_key)
         .collect::<HashSet<_>>();
     crm_aware_provider_count(providers.len(), providers.iter().map(String::as_str))
+}
+
+/// Historical evidence stays in the lead, but cannot certify a different
+/// current value or another person's field. Apply the same quantity/e-mail
+/// quote checks as the native field-status writeback before counting providers.
+fn matching_research_evidence_count(
+    evidence: &[Value],
+    field_key: &str,
+    field: &Value,
+    allow_unbound_person: bool,
+) -> usize {
+    let Some(value) = field.get("value") else {
+        return 0;
+    };
+    let scalar_text = |value: &Value| match value {
+        Value::String(text) => text.trim().to_lowercase(),
+        _ => value.to_string(),
+    };
+    let wanted = scalar_text(value);
+    let person_key = field
+        .get("person_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty());
+    if field_key.starts_with("person_") && person_key.is_none() && !allow_unbound_person {
+        return 0;
+    }
+    let matching = evidence
+        .iter()
+        .filter(|entry| {
+            if entry.get("value").map(&scalar_text).as_deref() != Some(wanted.as_str()) {
+                return false;
+            }
+            if field_key.starts_with("person_") {
+                let evidence_key = entry
+                    .get("person_key")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|key| !key.is_empty());
+                if evidence_key != person_key {
+                    return false;
+                }
+            }
+            let quote = entry
+                .get("quote")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            super::person_research_gap_closure::quote_backs_value(field_key, &wanted, quote)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    independent_research_evidence_count(&matching, field_key)
 }
 
 /// Sellify counts as one source but proves nothing alone — not even for a
@@ -3371,6 +3424,135 @@ mod tests {
                 "person_nachname",
                 "person_xing"
             ])
+        );
+    }
+
+    #[test]
+    fn historical_evidence_never_certifies_another_person_or_current_value() {
+        let baseline = serde_json::json!({
+            "id": "lead-evidence-binding",
+            "contacts": [
+                {"id": "contact-a", "person_key": "person-a", "name": "Ada Lovelace"},
+                {"id": "contact-b", "person_key": "person-b", "name": "Grace Hopper"}
+            ],
+            "data": {"firma_ort": "Berlin"},
+            "evidence": []
+        });
+        let cases = [
+            ("firma_ort", "Bielefeld", "Berlin", None, "Berlin", false),
+            (
+                "firma_ort",
+                "Bielefeld",
+                "Bielefeld",
+                None,
+                "Bielefeld",
+                true,
+            ),
+            (
+                "person_email",
+                "team@example.test",
+                "team@example.test",
+                Some("person-a"),
+                "team@example.test",
+                false,
+            ),
+            (
+                "person_email",
+                "team@example.test",
+                "team@example.test",
+                Some("person-b"),
+                "other@example.test",
+                false,
+            ),
+            (
+                "person_email",
+                "team@example.test",
+                "team@example.test",
+                Some("person-b"),
+                "Contact: team(at)example.test",
+                true,
+            ),
+            ("mitarbeiter", "30", "30", None, "31 employees", false),
+            ("mitarbeiter", "30", "30", None, "30 employees", true),
+        ];
+        for (field_key, current, historical, evidence_key, quote, verified) in cases {
+            let mut existing = baseline.clone();
+            existing["evidence"] = serde_json::json!([{
+                "field_key": field_key, "value": historical,
+                "person_key": evidence_key, "quote": quote,
+                "source_id": "company-website", "source_url": "https://example.test/contact"
+            }]);
+            let mut field = serde_json::json!({"value": current});
+            if field_key.starts_with("person_") {
+                field["person_key"] = serde_json::json!("person-b");
+            }
+            let mut fields = serde_json::Map::new();
+            fields.insert(field_key.to_string(), field);
+            let outcome = serde_json::json!({"fields": fields});
+            let patch = outbound_lead_generation_research_outcome_patch(&existing, &outcome, 2_000);
+            assert_eq!(
+                patch["evidence"], existing["evidence"],
+                "historical evidence retained"
+            );
+            assert_eq!(patch["contacts"][0]["name"], "Ada Lovelace");
+            assert_eq!(patch["contacts"][1]["name"], "Grace Hopper");
+            assert_eq!(
+                patch["payload"]["verified_field_keys"],
+                if verified {
+                    serde_json::json!([field_key])
+                } else {
+                    serde_json::json!([])
+                },
+                "{field_key}: evidence person {evidence_key:?}, quote {quote}"
+            );
+            assert_eq!(
+                patch["research_status"],
+                if verified {
+                    "completed"
+                } else {
+                    "needs_review"
+                }
+            );
+        }
+
+        // An external address quote can count, but Sellify alone still cannot.
+        let field = serde_json::json!({"value": "team@example.test", "person_key": "person-b"});
+        let only_crm = serde_json::json!([{
+            "field_key": "person_email", "value": "team@example.test", "person_key": "person-b",
+            "quote": "team@example.test", "source_id": "sellify",
+            "source_url": "sellify://person/8235"
+        }]);
+        assert_eq!(
+            matching_research_evidence_count(
+                only_crm.as_array().unwrap(),
+                "person_email",
+                &field,
+                false
+            ),
+            0
+        );
+        let unbound = serde_json::json!([{
+            "field_key": "person_email", "value": "team@example.test",
+            "quote": "team@example.test", "source_url": "https://example.test/contact"
+        }]);
+        let unbound_field = serde_json::json!({"value": "team@example.test"});
+        assert_eq!(
+            matching_research_evidence_count(
+                unbound.as_array().unwrap(),
+                "person_email",
+                &unbound_field,
+                false
+            ),
+            0
+        );
+        assert_eq!(
+            matching_research_evidence_count(
+                unbound.as_array().unwrap(),
+                "person_email",
+                &unbound_field,
+                true
+            ),
+            1
         );
     }
 

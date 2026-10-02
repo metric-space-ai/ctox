@@ -2625,7 +2625,7 @@ fn numbers_in(text: &str) -> Vec<(f64, std::ops::Range<usize>)> {
 /// A quote backs a value only when it states it: figures by number
 /// ([`quantity_quote_backs`]), a personal e-mail address by the address
 /// itself ([`email_quote_backs`]).
-fn quote_backs_value(field: &str, value: &str, quote: &str) -> bool {
+pub(super) fn quote_backs_value(field: &str, value: &str, quote: &str) -> bool {
     quantity_quote_backs(field, value, quote) && email_quote_backs(field, value, quote)
 }
 
