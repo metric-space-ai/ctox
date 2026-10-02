@@ -237,6 +237,40 @@ and fingerprint, and `live=true`. The agent validates with
 `business_os.validate_app` and can run
 `business_os.smoke_app` / `business_os.e2e_app` for browser behavior.
 
+Module coding uses the existing action tools, not generic task delegation.
+An authorized actor sees `ctox.coding.models` (`apps.view`) and
+`ctox.coding.turn` (`apps.modify`) in `business_os.list_module_actions`.
+Propose/execute `ctox.coding.models` with `payload: {}` for the exact module;
+the execution response carries the durable native result in `coding_result`.
+This avoids granting collection-wide command reads just to select a preset.
+The existing daemon IPC dispatch owns both actions when its socket is present;
+connection/protocol errors fail closed. Only an advertised opaque preset may
+be selected. Propose/execute
+`ctox.coding.turn` with `payload: {prompt, preset_id}`. Native admission binds
+`module_id` from the action scope; conflicting module IDs, raw model/URL/header
+objects, faux mode and record scope are rejected. The existing native handler
+re-resolves the preset and runs one bounded embedded-pi leaf turn. No account,
+listener, permission or source root is synthesized by this bridge.
+
+Managed tokens still need the corresponding tool allowlist and module scope.
+Source inspection separately requires `business_os.list_app_files` /
+`business_os.read_app_file` and `apps.source.view` for that module. In the managed
+MCP control plane, only the tenant Owner/Admin can issue a token via
+`POST /api/instances/<tenant-id>/managed-mcp`. The existing
+`issue_app_development_token` action supplies source tools but its fixed tool
+list does not include the coding action tools. For this route, use the existing
+`rotate_token` action with explicit scopes: `allowedModules: [module_id]`,
+`allowedCollections: ["__ctox_no_access__"]`, reads/writes enabled, approvals and
+external effects disabled, and only the needed metadata/source tools plus
+`business_os.list_module_actions`, `business_os.propose_action`,
+`business_os.execute_action`. Keep a short expiry and revoke after acceptance.
+The native actor separately needs the exact module app permissions; an assigned
+Founder can hold these capabilities without a global Admin grant.
+`allowedTools` rejection cannot be bypassed with the operator CLI
+or by copying another runtime's credentials. Local CLI execution additionally
+requires an actually prepared source root and its authorized native account;
+a retained binary alone supplies neither.
+
 `business_os.create_app` and `business_os.modify_app` remain delegated app-work
 actions. They enqueue CTOX app work and return `command_id`, `task_id`,
 `app_directory`, and a `development_contract` containing the source root,

@@ -277,6 +277,8 @@ pub struct BusinessOsActionExecution {
     pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub task_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coding_result: Option<Value>,
     pub confirmation_required: bool,
     pub client_context: Value,
 }
@@ -4670,6 +4672,22 @@ pub fn list_module_actions(
 ) -> anyhow::Result<BusinessOsMcpList<BusinessOsActionDescriptor>> {
     let module = get_module(root, context, module_id)?;
     let mut actions = vec![generic_delegate_action(&module.id)];
+    for (action_id, permission) in [
+        ("ctox.coding.models", BusinessOsPermission::AppsView),
+        ("ctox.coding.turn", BusinessOsPermission::AppsModify),
+    ] {
+        if trusted_mcp_actor_policy_decision(
+            root,
+            context,
+            permission,
+            BusinessOsScopeType::Module,
+            Some(&module.id),
+        )?
+        .allowed
+        {
+            actions.push(module_coding_action_descriptor(&module.id, action_id));
+        }
+    }
     actions.extend(match module.id.as_str() {
         "tickets" => vec![
             action_descriptor(
@@ -4844,6 +4862,13 @@ pub fn propose_action(
             .cloned()
             .unwrap_or_else(|| serde_json::json!({})),
     );
+    if matches!(action_id, "ctox.coding.models" | "ctox.coding.turn") {
+        anyhow::ensure!(
+            record_id.is_none(),
+            "coding actions are module-scoped, not record-scoped"
+        );
+        payload = module_coding_action_payload(module_id, action_id, payload)?;
+    }
     if action.action_id == "web_stack.person_research" {
         validate_person_research_action_arguments(arguments, &payload)?;
         let scoped_record_id = record_id
@@ -4885,6 +4910,8 @@ pub fn propose_action(
                 "proposal_only": true,
                 "writeback_contract": if action.action_id == "web_stack.person_research" {
                     "person_research/native"
+                } else if action.action_id.starts_with("ctox.coding.") {
+                    "coding/module"
                 } else {
                     "external_sql"
                 }
@@ -5010,7 +5037,10 @@ pub fn execute_action(
     action_id: &str,
     arguments: &Value,
 ) -> anyhow::Result<BusinessOsActionExecution> {
-    let policy_arguments = arguments_with_module_id(arguments, module_id);
+    let mut policy_arguments = arguments_with_module_id(arguments, module_id);
+    // Bind authorization to the action selected by this typed API, never to
+    // an action_id supplied inside an argument object by the caller.
+    policy_arguments["action_id"] = Value::String(action_id.to_string());
     enforce_business_os_mcp_policy(
         root,
         context,
@@ -5040,6 +5070,8 @@ pub fn execute_action(
     }
     let writeback_contract = if action_id == "web_stack.person_research" {
         "person_research/native"
+    } else if action_id.starts_with("ctox.coding.") {
+        "coding/module"
     } else if is_native_mcp_control_action(module_id, action_id) {
         "external_sql"
     } else {
@@ -5082,18 +5114,22 @@ pub fn execute_action(
         } else {
             native_mcp_control_command_id(context, module_id, action_id, &proposal.payload)
         };
-        let outcome = store::accept_rxdb_business_command(
-            root,
-            serde_json::json!({
-                "id": command_id,
-                "command_id": command_id,
-                "module": module_id,
-                "command_type": proposal.command_type,
-                "record_id": proposal.record_id,
-                "payload": proposal.payload,
-                "client_context": client_context,
-            }),
-        )?;
+        let document = serde_json::json!({
+            "id": command_id,
+            "command_id": command_id,
+            "module": module_id,
+            "command_type": proposal.command_type,
+            "record_id": proposal.record_id,
+            "payload": proposal.payload,
+            "client_context": client_context,
+        });
+        let outcome = if matches!(action_id, "ctox.coding.models" | "ctox.coding.turn") {
+            // Presets and account readiness belong to the running daemon, not
+            // the short-lived MCP connector. A present socket fails closed.
+            crate::service::dispatch_business_command(root, document)?
+        } else {
+            store::accept_rxdb_business_command(root, document)?
+        };
         let status = outcome
             .get("status")
             .and_then(Value::as_str)
@@ -5110,7 +5146,8 @@ pub fn execute_action(
             .filter(|value| !value.trim().is_empty())
             .map(str::to_string);
         return Ok(BusinessOsActionExecution {
-            ok: outcome.get("ok").and_then(Value::as_bool).unwrap_or(true),
+            ok: outcome.get("ok").and_then(Value::as_bool).unwrap_or(true)
+                && (!action_id.starts_with("ctox.coding.") || status != "failed"),
             action: proposal.action,
             module_id: module_id.to_string(),
             record_id: proposal.record_id,
@@ -5119,6 +5156,10 @@ pub fn execute_action(
             status,
             task_id,
             task_status,
+            coding_result: action_id
+                .starts_with("ctox.coding.")
+                .then(|| outcome.get("result").cloned())
+                .flatten(),
             confirmation_required: proposal.confirmation_required,
             client_context,
         });
@@ -5158,6 +5199,7 @@ pub fn execute_action(
                 status,
                 task_id,
                 task_status,
+                coding_result: None,
                 confirmation_required: proposal.confirmation_required,
                 client_context,
             });
@@ -5190,6 +5232,7 @@ pub fn execute_action(
         status: accepted.status.to_string(),
         task_id: accepted.task_id,
         task_status: accepted.task_status,
+        coding_result: None,
         confirmation_required: proposal.confirmation_required,
         client_context,
     })
@@ -5199,7 +5242,11 @@ fn is_native_mcp_control_action(module_id: &str, action_id: &str) -> bool {
     !module_id.trim().is_empty()
         && matches!(
             action_id,
-            "external_sql.sync.refresh" | "external_sql.write" | "web_stack.person_research"
+            "external_sql.sync.refresh"
+                | "external_sql.write"
+                | "web_stack.person_research"
+                | "ctox.coding.models"
+                | "ctox.coding.turn"
         )
 }
 
@@ -6001,6 +6048,20 @@ fn business_os_mcp_policy_decision(
         )?)),
         "business_os.execute_action" => {
             let module_id = required_arg(arguments, "module_id")?;
+            let permission = match arguments.get("action_id").and_then(Value::as_str) {
+                Some("ctox.coding.models") => Some(BusinessOsPermission::AppsView),
+                Some("ctox.coding.turn") => Some(BusinessOsPermission::AppsModify),
+                _ => None,
+            };
+            if let Some(permission) = permission {
+                return Ok(Some(trusted_mcp_actor_policy_decision(
+                    root,
+                    context,
+                    permission,
+                    BusinessOsScopeType::Module,
+                    Some(&module_id),
+                )?));
+            }
             Ok(Some(business_os_mcp_module_data_decision(
                 root,
                 context,
@@ -7629,6 +7690,83 @@ fn required_object(name: &'static str) -> (&'static str, Value, bool) {
     )
 }
 
+fn module_coding_action_payload(
+    module_id: &str,
+    action_id: &str,
+    payload: Value,
+) -> anyhow::Result<Value> {
+    let object = payload
+        .as_object()
+        .context("coding payload must be an object")?;
+    let is_turn = action_id == "ctox.coding.turn";
+    for key in object.keys() {
+        anyhow::ensure!(
+            key == "module_id" || (is_turn && matches!(key.as_str(), "prompt" | "preset_id")),
+            "unsupported coding payload field: {key}"
+        );
+    }
+    if let Some(claimed) = object.get("module_id") {
+        anyhow::ensure!(
+            claimed.as_str() == Some(module_id),
+            "coding module scope mismatch"
+        );
+    }
+    let mut bound = serde_json::json!({"module_id": module_id});
+    if is_turn {
+        let prompt = object
+            .get("prompt")
+            .and_then(Value::as_str)
+            .context("coding prompt is required")?;
+        anyhow::ensure!(
+            !prompt.trim().is_empty() && prompt.len() <= 32_768,
+            "coding prompt must be nonempty and at most 32768 bytes"
+        );
+        let preset_id = object
+            .get("preset_id")
+            .and_then(Value::as_str)
+            .context("an advertised coding preset_id is required")?;
+        anyhow::ensure!(
+            !preset_id.trim().is_empty() && preset_id.len() <= 512,
+            "invalid coding preset_id"
+        );
+        bound["prompt"] = Value::String(prompt.to_string());
+        bound["preset_id"] = Value::String(preset_id.to_string());
+    }
+    Ok(bound)
+}
+
+fn module_coding_action_descriptor(module_id: &str, action_id: &str) -> BusinessOsActionDescriptor {
+    let is_turn = action_id == "ctox.coding.turn";
+    let mut descriptor = action_descriptor(
+        action_id,
+        module_id,
+        if is_turn {
+            "Run bounded module coding turn"
+        } else {
+            "Read native coding presets"
+        },
+        if is_turn {
+            "Run the existing embedded pi leaf turn for this module using an explicitly advertised native preset."
+        } else {
+            "Read the selected native root's nonsecret model presets and readiness through a durable command."
+        },
+        if is_turn { "write" } else { "read" },
+        false,
+        false,
+    );
+    let payload = if is_turn {
+        serde_json::json!({"type":"object","properties":{
+            "prompt":{"type":"string","minLength":1,"maxLength":32768},
+            "preset_id":{"type":"string","minLength":1,"maxLength":512}
+        },"required":["prompt","preset_id"],"additionalProperties":false})
+    } else {
+        serde_json::json!({"type":"object","additionalProperties":false})
+    };
+    descriptor.input_schema = serde_json::json!({"type":"object","properties":{"payload":payload},
+        "required":["payload"],"additionalProperties":false});
+    descriptor
+}
+
 fn generic_delegate_action(module_id: &str) -> BusinessOsActionDescriptor {
     let mut descriptor = action_descriptor(
         "ctox.delegate_task",
@@ -8295,6 +8433,7 @@ fn is_sensitive_mcp_key(key: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use tempfile::tempdir;
 
     #[test]
@@ -13046,6 +13185,177 @@ mod tests {
                 .and_then(Value::as_bool),
             Some(true)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn module_coding_actions_propose_exact_native_scope_without_delegation() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "spreadsheets", "Tables", &["spreadsheets"])?;
+        seed_default_mcp_admin(root)?;
+        let actions = list_module_actions(
+            root,
+            &test_context("business_os.list_module_actions"),
+            "spreadsheets",
+        )?;
+        assert!(actions
+            .items
+            .iter()
+            .any(|action| action.action_id == "ctox.coding.models"));
+        assert!(actions
+            .items
+            .iter()
+            .any(|action| action.action_id == "ctox.coding.turn"));
+        let context = test_context("business_os.propose_action");
+        let models = propose_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.models",
+            &json!({"payload":{}}),
+        )?;
+        assert_eq!(models.command_type, "ctox.coding.models");
+        assert_eq!(models.payload, json!({"module_id":"spreadsheets"}));
+        let turn = propose_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.turn",
+            &json!({"payload":{
+                "prompt":"Repair the existing snapshot boundary.","preset_id":"opaque-native-preset"
+            }}),
+        )?;
+        assert_eq!(turn.command_type, "ctox.coding.turn");
+        assert_eq!(turn.payload["module_id"], "spreadsheets");
+        assert_eq!(turn.payload["preset_id"], "opaque-native-preset");
+        assert!(turn.payload.get("input").is_none());
+        assert!(!turn.would_execute && !models.would_execute);
+        assert_eq!(turn.client_context["writeback_contract"], "coding/module");
+        Ok(())
+    }
+
+    #[test]
+    fn module_coding_actions_return_the_durable_native_result() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "spreadsheets", "Tables", &["spreadsheets"])?;
+        seed_default_mcp_admin(root)?;
+        let context = test_context("business_os.execute_action");
+        let models = execute_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.models",
+            &json!({"payload":{}}),
+        )?;
+        assert!(models.ok);
+        assert_eq!(models.status, "completed");
+        let result = models.coding_result.context("native preset result")?;
+        assert_eq!(result["schema"], "ctox.coding.models.v1");
+        let stored = store::pull_business_command_status_record(root, &models.command_id)?
+            .context("persisted coding model command")?;
+        assert_eq!(stored["status"], "completed");
+        assert_eq!(stored["result"], result);
+
+        // An unadvertised preset fails before any provider or sidecar starts.
+        let failed = execute_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.turn",
+            &json!({"payload":{"prompt":"fix","preset_id":"unadvertised-preset"}}),
+        )?;
+        assert!(!failed.ok);
+        assert_eq!(failed.status, "failed");
+        assert!(failed.coding_result.is_some());
+        let stored = store::pull_business_command_status_record(root, &failed.command_id)?
+            .context("persisted failed coding turn")?;
+        assert_eq!(stored["status"], "failed");
+        Ok(())
+    }
+
+    #[test]
+    fn module_coding_actions_reject_scope_and_route_injection() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "spreadsheets", "Tables", &["spreadsheets"])?;
+        seed_default_mcp_admin(root)?;
+        let context = test_context("business_os.propose_action");
+        for payload in [
+            json!({"prompt":"fix","preset_id":"ctox","module_id":"mail"}),
+            json!({"prompt":"fix","preset_id":"ctox","model":{"id":"forged"}}),
+            json!({"prompt":"fix","preset_id":"ctox","baseUrl":"https://foreign.invalid"}),
+            json!({"prompt":"fix","preset_id":"ctox","faux":true}),
+            json!({"prompt":"fix"}),
+            json!({"prompt":" ","preset_id":"ctox"}),
+            json!({"prompt":"x".repeat(32_769),"preset_id":"ctox"}),
+        ] {
+            assert!(propose_action(
+                root,
+                &context,
+                "spreadsheets",
+                "ctox.coding.turn",
+                &json!({"payload":payload})
+            )
+            .is_err());
+        }
+        assert!(propose_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.models",
+            &json!({"payload":{"preset_id":"ctox"}})
+        )
+        .is_err());
+        assert!(propose_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.turn",
+            &json!({"record_id":"lead","payload":{"prompt":"fix","preset_id":"ctox"}})
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn module_coding_actions_require_native_app_permission_before_admission() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_module(root, "spreadsheets", "Tables", &["spreadsheets"])?;
+        seed_business_user(root, "chatgpt:test-user", "user")?;
+        let context = test_context("business_os.execute_action");
+        for action_id in ["ctox.coding.models", "ctox.coding.turn"] {
+            let decision = business_os_mcp_policy_decision(
+                root,
+                &context,
+                "business_os.execute_action",
+                &json!({
+                    "module_id":"spreadsheets","action_id":action_id
+                }),
+            )?
+            .context("coding permission decision")?;
+            assert!(!decision.allowed);
+        }
+        // The actual action argument wins over an injected weaker policy ID.
+        let error = execute_action(
+            root,
+            &context,
+            "spreadsheets",
+            "ctox.coding.turn",
+            &json!({
+                "action_id":"ctox.coding.models",
+                "payload":{"prompt":"fix","preset_id":"ctox"}
+            }),
+        )
+        .unwrap_err();
+        let policy_error = error
+            .downcast_ref::<BusinessOsMcpError>()
+            .context("native app policy error")?;
+        assert_eq!(policy_error.code, BusinessOsMcpErrorCode::PermissionDenied);
+        assert_eq!(policy_error.field.as_deref(), Some("business_os_policy"));
         Ok(())
     }
 
