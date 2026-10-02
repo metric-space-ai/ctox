@@ -173,6 +173,87 @@ existing browser controller and command policy. Recovery does not authenticate
 a session, pass review/validation, reopen terminal commands, or weaken the
 owned, expiring lease requirement for ordinary worker commands.
 
+### Outbound research source receipts
+
+The native person-research command retains a `sellify_lookup_runs` receipt in
+its final result and workspace envelope, including actual lookup success,
+`completed_empty`, or failure. Returned CRM record count and contributed field
+count are separate: an existing CRM match can contribute no requested fields.
+A failed lookup has an unknown (`null`) record count and a bounded error code,
+not a false empty result or raw database error. The enclosing command/workspace
+binds the receipt to the research; it is not a synthetic scrape run.
+
+The native person-research worker saves the Lead result before publishing a
+completed command. A rejected Lead writeback produces a failed command with
+operation `person_research_writeback`, retaining the previous Lead values.
+A successful result is projected once, so completion does not duplicate
+evidence or launch a second contact-validation sweep. This ordering is a
+delivery barrier, not a cross-database atomicity claim; command publication
+failures still use the existing recovery path.
+
+Lead-level person fields cannot inherit the first existing contact when their
+`person_key` is absent, empty or malformed. Those fields remain unapplied and
+are listed in `payload.unbound_person_field_keys`, outside the researched-field
+list. Existing imported names and contact details remain unchanged. Initial
+legacy discovery from an empty contact list and explicit keyed updates remain
+supported; this does not certify the source quality of those values.
+Contact deduplication also preserves two distinct nonempty person keys even
+when imported contacts share a local row ID. Duplicate rows with the same
+person key still coalesce; unkeyed legacy row-ID matching remains supported.
+Partial keyed contact updates preserve an existing observed full name when no
+structured first/last name is supplied. This preservation does not create a
+name, source receipt or verified field; explicit structured names still win.
+Historical lead evidence is retained, but completion counts only evidence for
+the current incoming value and, for person fields, the same person key.
+The shared native quantity and personal-email quote checks also apply to this
+completion count. They additionally require personal first/last names and
+titles to occur as whole words, with Unicode case and equivalent whitespace,
+hyphen, apostrophe and title punctuation handled. A valid URL beside a made-up
+name is insufficient. These checks apply to both field-status writeback and
+completion; a source for another person, an outdated value or a
+quote naming another address cannot certify the new result. Sellify alone
+continues to count as unverified. Distinct source quotes are retained so a
+later correct quote is not discarded behind an older unusable quote; multiple
+quotes from the same provider still count as one independent source.
+
+Sellify lookups require a readable collection and use one read-only SQLite
+transaction for ID, exact-field, fuzzy-field, and campaign-group probes.
+Before opening that snapshot, best-effort index preparation on an existing
+store preserves the indexed exact lookup and grouped campaign search; it
+never creates an absent store. Missing, non-file,
+corrupt, or unprojected storage fails the lookup instead of producing
+`completed_empty`; a readable collection with no matching records is genuinely
+empty. Optional projection readers elsewhere retain their existing behavior.
+
+Final persistence runs after all native source augmentation and summary, even
+with `auto_browser_capture=false`. Successful persistence leaves `envelope.json`
+equal to the returned payload, including workspace metadata and recovered-error
+removal. The native wrapper exposes the existing `scrape_runs.jsonl` in the
+manifest. Final envelope and manifest replacements are individually atomic;
+the workspace as a whole is not a transactional snapshot. Persistence errors
+remain explicit in `workspace_error` and must not count as durable acceptance.
+These changes do not alter country/field/source selection, access grants,
+authorization record scope or the WebRTC data boundary. A completed command remains distinct
+from all-provider success; inspect actual source outcomes and admissible evidence.
+
+The Outbound source-registry command reads current run and provider-account
+state from the native store. Unreadable run projections, malformed account
+rows, and invalid registry responses fail the command; they do not produce
+a successful empty list. A readable legacy store without the optional account
+state table legitimately has no recorded account state. Browser loading and
+error states must reflect the actual command result and preserve the last
+confirmed view while a refresh fails.
+
+An explicit inactive-account refusal is neither an expired browser session
+nor a script defect. The durable per-target state suppresses repeated provider
+calls without creating new scrape runs, retaining the causal and last probe
+run IDs. Credential-version changes, an authorized source-test request, or
+the 6-hour then 24-hour backoff permit one generation-bound probe lease.
+Backoff means eligibility on the next requested call, not a scheduled probe.
+Early operator probes require signed native `data.write` authorization;
+worker command sessions cannot grant that exception. A successful probe only
+clears the generation it owns, so a late result cannot erase a newer refusal.
+
 ### Command projection identity
 
 Terminal and outbox projections retain the actor ID from the accepted native
