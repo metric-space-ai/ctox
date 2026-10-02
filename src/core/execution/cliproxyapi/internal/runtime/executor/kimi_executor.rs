@@ -378,6 +378,11 @@ impl KimiExecutor {
             &request.payload,
             stream,
         );
+        body = super::helps::normalize_codex_tool_integer_types_for_executor(
+            &body,
+            &request.headers,
+            "kimi",
+        );
         body = set_json_value(
             &body,
             "model",

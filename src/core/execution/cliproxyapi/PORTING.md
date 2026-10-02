@@ -102,6 +102,25 @@ the accepted pin:
   patch floor. Stored device profiles still require an exact software match,
   so a newer unmeasured patch falls back to the baseline. The measured TLS
   fingerprint labeled 2.1.220 is unchanged.
+- Cache control is copied only when `type` is exactly `ephemeral`. OpenAI tool
+  results hoist part-level cache control onto the `tool_result` block, and
+  fall back to message-level control when the part-level object is not valid.
+- JSON Schema `pattern` values and `patternProperties` keys that use `\p{`,
+  `\P{`, or `\0` are removed from schema keyword locations. The same walk
+  leaves `pattern` keys inside `default` and `enum` data alone. Claude to
+  OpenAI schema normalization also turns boolean subschemas into `{}` except
+  `additionalProperties` and a literal `false`.
+- Codex request preparation collapses a pure constant `oneOf` or `anyOf` of
+  at least eight branches into an enum, including namespaced tools, and strips
+  those unsupported patterns. Fields outside `tools`, and tools that do not
+  change, keep their original bytes. That pass does not rewrite numeric types.
+- Codex clients sending tool schemas to a non-Codex executor get `number`
+  rewritten to `integer` on the reserved client fields (`exec_command`,
+  `write_stdin`, `sleep`, `wait`, `wait_agent`, `tool_search`, and
+  `test_sync_tool`, including `functions__` and `collab__` prefixes). Codex
+  and Codex WebSocket targets, other tool names, and non-Codex user agents
+  keep the original bytes. OpenAI-compat, AI Studio, Gemini, Vertex, and Kimi
+  preparation apply that rule. Claude and Antigravity preparation do not yet.
 
 Track B ledger path
 `src/core/execution/cliproxyapi_integration/provider-integration.json` is cited

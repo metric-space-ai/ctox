@@ -195,6 +195,11 @@ impl OpenAiCompatExecutor {
             &request.payload,
             stream,
         );
+        translated = super::helps::normalize_codex_tool_integer_types_for_executor(
+            &translated,
+            &request.headers,
+            "openai-compat",
+        );
         translated = apply_model_suffix_effort(&translated, &request.model);
         translated =
             self.apply_payload_overrides(&translated, requested_model(request), to.as_str());

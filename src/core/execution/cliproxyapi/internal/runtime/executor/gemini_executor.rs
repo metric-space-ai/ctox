@@ -181,6 +181,11 @@ impl GeminiExecutor {
             &request.payload,
             stream,
         );
+        body = super::helps::normalize_codex_tool_integer_types_for_executor(
+            &body,
+            &request.headers,
+            "gemini",
+        );
         let mut json = parse_object(&body)?;
         json.remove("session_id");
         if to.as_str() == "interactions" {

@@ -159,6 +159,11 @@ impl GeminiVertexExecutor {
             &request.payload,
             stream,
         );
+        body = super::helps::normalize_codex_tool_integer_types_for_executor(
+            &body,
+            &request.headers,
+            "vertex",
+        );
         body = fix_gemini_image_aspect_ratio(&model, &body);
         let mut value: Value = serde_json::from_slice(&body)
             .map_err(|error| plugin_error(VertexExecutorError::InvalidJson(error.to_string())))?;

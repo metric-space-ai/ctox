@@ -12,7 +12,9 @@ use crate::internal::signature::{
 };
 use crate::internal::thinking::convert_budget_to_level;
 use crate::internal::translator::common::claude_message_system_reminder_text;
-use crate::internal::util::is_claude_code_attribution_system_text;
+use crate::internal::util::{
+    is_claude_code_attribution_system_text, strip_unsupported_schema_patterns,
+};
 
 const CODEX_NAME_LIMIT: usize = 64;
 
@@ -397,6 +399,11 @@ fn truncate_utf8(value: &str, limit: usize) -> String {
 }
 
 fn normalize_schema(value: &mut Value) {
+    strip_unsupported_schema_patterns(value);
+    normalize_schema_shape(value);
+}
+
+fn normalize_schema_shape(value: &mut Value) {
     match value {
         Value::Object(object) => {
             if object.get("type").and_then(Value::as_str) == Some("object")
@@ -405,11 +412,12 @@ fn normalize_schema(value: &mut Value) {
                 object.insert("properties".into(), json!({}));
             }
             object.remove("$schema");
+            object.remove("$id");
             for child in object.values_mut() {
-                normalize_schema(child);
+                normalize_schema_shape(child);
             }
         }
-        Value::Array(values) => values.iter_mut().for_each(normalize_schema),
+        Value::Array(values) => values.iter_mut().for_each(normalize_schema_shape),
         _ => {}
     }
 }

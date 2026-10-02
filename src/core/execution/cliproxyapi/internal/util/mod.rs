@@ -46,7 +46,10 @@ pub use claude_attribution::{
     is_claude_code_attribution_system_text, strip_claude_code_attribution_system,
 };
 pub use claude_model::{is_claude_model, is_claude_thinking_model};
-pub use claude_schema::normalize_claude_tool_input_schema;
+pub use claude_schema::{
+    has_unsupported_unicode_property_escape, normalize_claude_tool_input_schema,
+    strip_unsupported_schema_patterns, SCHEMA_MAP_KEYWORDS, SCHEMA_VALUE_KEYWORDS,
+};
 pub use claude_tool_id::{
     gemini_claude_tool_use_id, is_gemini_claude_tool_use_id, sanitize_claude_function_name,
     sanitize_claude_tool_id,
