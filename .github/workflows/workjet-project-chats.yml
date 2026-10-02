@@ -94,6 +94,9 @@ jobs:
       - name: Format touched native modules
         run: |
           rustfmt --check --edition 2021 --config skip_children=true \
+            src/core/business_os/guest_commands.rs \
+            src/core/business_os/guest_commands/tests.rs \
+            src/core/business_os/guest_command_tests.rs \
             src/core/business_os/guest_runtime.rs \
             src/core/business_os/guest_runtime/x11.rs \
             src/core/business_os/guest_runtime/qmp.rs \
@@ -118,6 +121,7 @@ jobs:
       - name: Native project-chat and project-store regressions
         run: |
           cargo test --locked --bin ctox -- \
+            business_os::guest_commands business_os::command_plane::guest_command_tests \
             business_os::guest_runtime business_os::project_chats business_os::store_workjet_projects \
             business_os::domain_effect business_os::command_plane::domain_effect_tests \
             mission::channels::tests::business_command \
