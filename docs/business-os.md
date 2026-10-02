@@ -263,8 +263,11 @@ list does not include the coding action tools. For this route, use the existing
 `allowedCollections: ["__ctox_no_access__"]`, reads/writes enabled, approvals and
 external effects disabled, and only the needed metadata/source tools plus
 `business_os.list_module_actions`, `business_os.propose_action`,
-`business_os.execute_action`. Keep a short expiry and revoke after acceptance.
-The native actor separately needs the exact module app permissions; an assigned
+`business_os.execute_action`. Verify that the deployed control plane accepts,
+retains and enforces `allowedModules` before issuing: an older schema may strip
+that unknown field, producing an unrestricted module scope. Such deployments
+need the module-scope control-plane update first. Keep a short expiry and revoke
+after acceptance. The native actor separately needs the exact module app permissions; an assigned
 Founder can hold these capabilities without a global Admin grant.
 `allowedTools` rejection cannot be bypassed with the operator CLI
 or by copying another runtime's credentials. Local CLI execution additionally
