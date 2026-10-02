@@ -4888,6 +4888,9 @@ mod coding_model_cli_ipc_tests {
                         Err(error) => panic!("socket accept failed: {error}"),
                     }
                 };
+                // macOS can inherit the listener's nonblocking flag on accept.
+                // Match the blocking production listener, retaining the deadline.
+                stream.set_nonblocking(false).unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(5)))
                     .unwrap();
