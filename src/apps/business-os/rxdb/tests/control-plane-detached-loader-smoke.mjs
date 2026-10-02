@@ -48,6 +48,15 @@ await database.addCollections(Object.fromEntries(
 const assert = (condition, message) => {
   if (!condition) throw new Error(message);
 };
+const assertRejects = async (read, predicate, message) => {
+  try {
+    await read();
+  } catch (error) {
+    assert(predicate(error), `${message}: unexpected error ${error}`);
+    return;
+  }
+  throw new Error(`${message}: read incorrectly resolved`);
+};
 const waitFor = async (predicate) => {
   const deadline = Date.now() + 1000;
   while (!predicate()) {
@@ -90,6 +99,44 @@ for (const name of ['business_commands', 'ctox_queue_tasks']) {
   collectionSubscription.unsubscribe();
   querySubscription.unsubscribe();
 }
+
+// A strict read must distinguish an unavailable authority from an authorized
+// response confirming absence. Use the real collection/query implementation;
+// loader doubles arrange the lifecycle races without a network or raw reads.
+for (const name of ['business_commands', 'ctox_queue_tasks']) {
+  const collection = database.collection(name);
+  for (const single of [false, true]) {
+    const read = () => collection[single ? 'findOne' : 'find']({
+      selector: { id: rows.get(name).id }, requireRevision: 'strict-probe',
+    }).exec();
+    collection.setDemandLoader(null);
+    await assertRejects(read, (error) => error?.code === 'QUERY_GENERATION_REQUIRED',
+      `${name}: strict ${single ? 'findOne' : 'find'} without a loader`);
+
+    for (const replace of [false, true]) {
+      let resolveOld;
+      collection.setDemandLoader({
+        resolveQuery: () => new Promise((resolve) => { resolveOld = resolve; }),
+      });
+      const pending = read();
+      assert(typeof resolveOld === 'function', `${name}: strict read did not reach old loader`);
+      collection.setDemandLoader(replace ? { resolveQuery: async () => [rows.get(name)] } : null);
+      resolveOld([rows.get(name)]);
+      await assertRejects(() => pending,
+        (error) => error?.code === 'QUERY_CANCELLED' && error?.generationChanged === true && error?.retryable === false,
+        `${name}: strict old-loader response after ${replace ? 'replacement' : 'detach'}`);
+    }
+
+    collection.setDemandLoader({ resolveQuery: async () => [] });
+    const absent = await read();
+    assert(single ? absent === null : absent.length === 0, `${name}: authorized absence must remain successful`);
+    collection.setDemandLoader({ resolveQuery: async () => [rows.get(name)] });
+    const present = await read();
+    assert((single ? present : present[0])?.id === rows.get(name).id, `${name}: stable strict read lost authorized row`);
+  }
+  collection.setDemandLoader(null);
+}
+assert(directReads === 0, 'strict control-plane reads must never fall back to raw storage');
 
 // A fetch started under an earlier bridge may complete after detach. Its
 // result cannot become the initial value of either live subscription.

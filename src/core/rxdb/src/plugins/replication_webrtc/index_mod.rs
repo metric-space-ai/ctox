@@ -4969,6 +4969,45 @@ mod tests {
             serde_json::json!("does_not_exist")
         );
 
+        // An unknown write must not look like an empty conflict list: the
+        // browser would otherwise advance its push checkpoint without storing
+        // this document on the native master.
+        handler.inject_message(
+            "browser-1",
+            WebRTCMessage {
+                id: "req-ghost-write".to_string(),
+                method: "masterWrite".to_string(),
+                params: vec![serde_json::json!([{
+                    "newDocumentState": { "id": "ghost-doc", "_deleted": false },
+                    "assumedMasterState": null
+                }])],
+                collection: Some("does_not_exist".to_string()),
+            },
+        );
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            if handler
+                .sent_responses()
+                .iter()
+                .any(|response| response.id == "req-ghost-write")
+            {
+                break;
+            }
+        }
+        let responses = handler.sent_responses();
+        let ghost_write = responses
+            .iter()
+            .find(|response| response.id == "req-ghost-write")
+            .expect("ghost write answer present");
+        assert_eq!(ghost_write.collection.as_deref(), Some("does_not_exist"));
+        assert_eq!(ghost_write.result["type"], serde_json::json!("ctoxError"));
+        assert_eq!(
+            ghost_write.result["code"],
+            serde_json::json!("RC_WEBRTC_PEER")
+        );
+        assert!(!ghost_write.result.is_array(), "unknown write must not ACK");
+
         pool.cancel().await;
     }
     /// REGRESSION (52a1bf45): a request in flight when its peer disconnects

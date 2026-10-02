@@ -9,9 +9,9 @@
 // the transport exposes — that's the exact dispatch path the JS peer uses
 // for incoming chunk messages.
 
-import {
-  createDemandLoadingTransport,
-} from '../dist/ctox-rxdb-js.mjs';
+const { createDemandLoadingTransport } = await import(process.argv.includes('--source')
+  ? '../src/demand-loading-transport.mjs'
+  : '../dist/ctox-rxdb-js.mjs');
 import { deflateRawSync } from 'node:zlib';
 
 const transport = createDemandLoadingTransport({ getPeerId: () => 'peer-1' });
@@ -211,6 +211,32 @@ assert(retrySent.length === 2, `timed out query.fetch must retry once (got ${ret
 assert(retrySent[0].timeoutMs >= 30000, `retry test query.fetch must use a demand-fetch timeout, got ${retrySent[0].timeoutMs}`);
 assert(retrySent[1].params?.[0]?.requestId === 'q-timeout|retry-1', 'retry uses a fresh request id');
 assert(retryResult.documents[0]?.id === 'retried', 'retry result materialised');
+
+// Repeated 45-second ACK timeouts must not consume the 24 peer-reconnect
+// retries (20 minutes including backoff). Preserve the one recovery attempt
+// above, then propagate the real error and release the stream slot.
+const exhaustedTransport = createDemandLoadingTransport({ getPeerId: () => 'peer-exhausted' });
+const ackTimeout = new Error('Timed out waiting for WebRTC response rxdb.query.fetch');
+let exhaustedAttempts = 0;
+exhaustedTransport.attach({
+  connections: new Map([
+    ['peer-exhausted', { channel: { readyState: 'open' }, peer: { connectionState: 'connected' } }],
+  ]),
+  async request(peerId, method, params, timeoutMs) {
+    exhaustedAttempts += 1;
+    assert(timeoutMs === 45000, 'ACK deadline must remain unchanged');
+    // Fail quickly on the old implementation rather than waiting 75 real
+    // seconds for its retry backoff in this deterministic fixture.
+    if (exhaustedAttempts > 2) throw new Error('ACK retry budget exceeded');
+    throw ackTimeout;
+  },
+});
+const exhaustedError = await exhaustedTransport.requestQueryFetch({ ...envelope, requestId: 'q-exhausted' }).catch(error => error);
+assert(exhaustedError === ackTimeout, 'ACK retry exhaustion must propagate the real timeout');
+assert(exhaustedAttempts === 2, 'ACK timeouts get one recovery attempt');
+await new Promise(resolve => setImmediate(resolve));
+assert(exhaustedTransport.pendingQueryCount() === 0, 'ACK retry exhaustion must remove collectors');
+assert(exhaustedTransport.diagnostics().activeQueryStreams === 0, 'ACK retry exhaustion must release its stream slot');
 
 // The native token bucket deliberately rejects an excessive short burst with
 // a retryable RATE_LIMITED response. Apps must wait for refill and retry

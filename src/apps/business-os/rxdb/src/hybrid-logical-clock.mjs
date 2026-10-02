@@ -3,14 +3,44 @@ let cachedNodeId = null;
 let nativeClockOffsetMs = 0;
 let nativeClockObservedAtMs = null;
 let clockSkewDetected = false;
+let nativeClockSource = null;
 const CLOCK_SKEW_LIMIT_MS = 5 * 60 * 1000;
+const MAX_NATIVE_CLOCK_SAMPLE_RTT_MS = 10_000;
+const MAX_CLOCK_SAMPLE_WALL_DRIFT_MS = 2_000;
 
-export function setHybridLogicalClockTimeAnchor(nativeTimeMs, observedAtMs = Date.now()) {
+export function setHybridLogicalClockTimeAnchor(nativeTimeMs, observedAtMs = Date.now(), source = null) {
   if (!Number.isFinite(nativeTimeMs) || !Number.isFinite(observedAtMs)) return hybridLogicalClockStatus();
   nativeClockOffsetMs = Math.trunc(nativeTimeMs) - Math.trunc(observedAtMs);
   nativeClockObservedAtMs = Math.trunc(observedAtMs);
   clockSkewDetected = Math.abs(nativeClockOffsetMs) > CLOCK_SKEW_LIMIT_MS;
+  nativeClockSource = source;
   return hybridLogicalClockStatus();
+}
+
+export function clearHybridLogicalClockTimeAnchor(source = null) {
+  if (source !== null && source !== nativeClockSource) return hybridLogicalClockStatus();
+  nativeClockOffsetMs = 0;
+  nativeClockObservedAtMs = null;
+  clockSkewDetected = false;
+  nativeClockSource = null;
+  return hybridLogicalClockStatus();
+}
+
+// A protocol timestamp is only a clock sample for the round trip that produced
+// it. Collection catch-up can reuse the same protocol payload minutes later.
+export function setHybridLogicalClockTimeAnchorFromRoundTrip(nativeTimeMs, startedAtMs, receivedAtMs, elapsedMs, source = null) {
+  const wallElapsedMs = receivedAtMs - startedAtMs;
+  if (!Number.isFinite(nativeTimeMs) || !Number.isFinite(startedAtMs)
+    || !Number.isFinite(receivedAtMs) || !Number.isFinite(elapsedMs)
+    || elapsedMs < 0 || elapsedMs > MAX_NATIVE_CLOCK_SAMPLE_RTT_MS
+    || wallElapsedMs < 0
+    || Math.abs(wallElapsedMs - elapsedMs) > MAX_CLOCK_SAMPLE_WALL_DRIFT_MS) {
+    // A new authenticated connection must not inherit another peer's offset
+    // merely because its own clock probe was too slow to trust.
+    if (source !== null && source !== nativeClockSource) clearHybridLogicalClockTimeAnchor();
+    return hybridLogicalClockStatus();
+  }
+  return setHybridLogicalClockTimeAnchor(nativeTimeMs, startedAtMs + elapsedMs / 2, source);
 }
 
 export function correctedHybridLogicalClockNowMs(nowMs = Date.now()) {

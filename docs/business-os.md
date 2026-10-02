@@ -1,5 +1,50 @@
 # CTOX Business OS
 
+## Operator coding presets and daemon readiness
+
+`ctox coding-agent models` reads the public `ctox.coding.models.v1`
+document through the existing private service socket for the selected root.
+It includes opaque preset IDs and `subscription_listener_ready`; it does not
+return tokens or configure accounts. This inspection skips the short-lived
+CLI database ledger. A present but unreachable, rejected or incompatible
+daemon is an error, not permission to invent a local model route.
+
+`ctox coding-agent turn --preset <id>` resolves that exact daemon-published
+preset immediately before the existing bounded embedded-pi turn. The
+daemon's process-local subscription readiness remains authoritative. An
+offline root retains its existing local capability rules; no subscription
+listener or account is synthesized. Business OS commands retain their native
+policy checks and daemon-local resolver. The IPC addition reads metadata only:
+it cannot forward an arbitrary turn, raw model, header or credential.
+
+Use an actually advertised model ID. A Desktop worker label or missing static
+catalogue entry does not establish account eligibility or provider availability.
+This correction neither adds a GPT model alias nor selects a fallback provider.
+
+For an identified root, use `ctox coding-agent models --root <root>` and
+`ctox coding-agent turn --module <id> --prompt <text> --preset <id> --root <root>`.
+The global root is selected by main. Coding handlers accept its one validated
+argument pair without reselecting the root; missing or duplicate pairs and
+unknown options fail. Only valid catalogue inspection skips the CLI ledger;
+turns retain their existing lifecycle and policy checks.
+
+## Queue instruction boundary
+
+Native queue admission preserves the complete selected `payload.instruction`
+or fallback `payload.prompt` up to 8,000 Unicode characters after trimming.
+An instruction above that boundary returns
+`business_command_instruction_too_large` before attachment materialization,
+workspace creation or queue admission. The error includes only the size and
+limit, never the instruction content. Queue retry-prompt reconstruction uses
+the same boundary; it does not rebuild a shortened executable instruction.
+The dedicated CV-print parsing prompt keeps its separate existing contract.
+
+Callers must split larger requests into bounded commands or put structured
+data in suitably bounded payload chunks. The JSON/context preview remains a
+bounded preview; this instruction guard does not claim that every oversized
+data payload is fully present in a worker prompt. Existing queued tasks and
+production records are not rewritten by this change.
+
 This document describes the architecture, data-flow, and operational commands of **Business OS**, the browser-based client surface for CTOX.
 
 The Business OS is built as a native CTOX surface, served directly from the active CTOX daemon instance, rather than a separate external SaaS stack.
@@ -40,7 +85,7 @@ flowchart LR
   CTOX -. "join room" .-> Signaling
 ```
 
-1. **Signaling Pairing**: Both the browser client and the Rust daemon connect outbound to a configured signaling server (e.g. `wss://signaling.ctox.dev`, configured via `CTOX_BUSINESS_OS_SIGNALING_URLS` or persisted in `runtime/business-os-signaling-urls.json`) and join a deterministic pairing room (`ctox-business-os:...`) secured by a room password.
+1. **Signaling Pairing**: Both the browser client and the Rust daemon connect outbound to a configured signaling server (e.g. `wss://signaling.ctox.dev`, configured durably in `runtime/business-os-signaling-urls.json`; `CTOX_BUSINESS_OS_SIGNALING_URLS` overrides it for the current process only and is never written back) and join a deterministic pairing room (`ctox-business-os:...`) secured by a room password.
 2. **P2P Channel**: Once paired, a direct WebRTC channel carries all data sync.
 3. **Rust Core Authority**: The Rust daemon remains the authority for command execution and state-machine transitions. The browser writes command documents to RxDB; the daemon peer consumes, validates, and applies them to the authoritative SQLite database, and replicates the resulting projections back to the client.
 

@@ -86,6 +86,7 @@ export {
 export {
   compareHybridLogicalClocks,
   correctedHybridLogicalClockNowMs,
+  clearHybridLogicalClockTimeAnchor,
   formatHybridLogicalClock,
   hybridLogicalClockNodeId,
   hybridLogicalClockStatus,
@@ -93,6 +94,7 @@ export {
   nextHybridLogicalClock,
   parseHybridLogicalClock,
   setHybridLogicalClockTimeAnchor,
+  setHybridLogicalClockTimeAnchorFromRoundTrip,
 } from './hybrid-logical-clock.mjs';
 
 export { CtoxEventEmitter, waitForEvent } from './event-target.mjs';

@@ -153,8 +153,15 @@ export function shellV2RenderedIconSizeFromAnchor(anchor) {
   const height = Number(anchor?.height);
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
   if (Math.abs(width - height) > 1) return null;
+  // A launcher glyph is 56-64 CSS px. An anchor measured from a large element
+  // (seen 30.09.2026: 631 px) turned the window icon into a full-window
+  // overlay that hid the app; out-of-range anchors keep the 80 px default.
+  if (width < SHELL_V2_MIN_RENDERED_ICON_PX || width > SHELL_V2_MAX_RENDERED_ICON_PX) return null;
   return width;
 }
+
+const SHELL_V2_MIN_RENDERED_ICON_PX = 24;
+const SHELL_V2_MAX_RENDERED_ICON_PX = 128;
 
 function rgbToHex([r, g, b]) {
   return `#${[r, g, b].map((value) => Math.max(0, Math.min(255, Math.round(value))).toString(16).padStart(2, '0')).join('')}`;
@@ -1358,7 +1365,11 @@ export function createWindowManager({
     const menu = win.element.querySelector('[data-window-layout-menu]');
     if (menu) menu.hidden = true;
     if (action === 'free') {
-      if (win.state === 'maximized' || win.element.classList.contains('is-snapped')) restoreSize(win);
+      if (win.state === 'maximized' || win.element.classList.contains('is-snapped')) {
+        restoreSize(win);
+        bus.emit('window:restored', { id: win.id, ownerId: win.ownerId });
+        persistFor(win);
+      }
     } else if (action === 'maximize') {
       if (win.state !== 'maximized') toggleMaximize(win.id);
     } else if (action === 'minimize') {

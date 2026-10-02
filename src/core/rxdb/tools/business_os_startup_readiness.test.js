@@ -1,0 +1,131 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { startupReadiness, startupDiagnostics } = require('./business_os_startup_readiness.js');
+const version = 'business-os-advanced-status-v1';
+function state() {
+  return {
+    activeModule: 'desktop', loading: false, shellVisible: true, moduleCount: 21,
+    expectedTextFound: true, windows: [{ ownerId: 'desktop-app:ctox', visible: true,
+      moduleId: 'ctox', mountComplete: true, loadFailed: false, recovery: false, loading: false }],
+    advancedStatus: { version, ok: true, checks: {
+      authenticated: true, shellLoaded: true, activeModuleLoaded: true,
+      workspaceNotLoading: true, dataPlaneWebrtc: true, rxdbRuntimeAppLocal: true,
+      moduleCatalogAvailable: true, requiredCollectionsConnected: true,
+      requiredCollectionsInitialSyncComplete: true, requiredCollectionsStreamingReady: true,
+      requiredCollectionsCheckpointEpochAdvertised: true, noCheckpointProtocolErrors: true,
+      noSchemaProtocolErrors: true, noReplicationIoErrors: true, noFailedCollections: true,
+      noStalledReconnect: true, frameTransportRealtimeHealthy: true, noAutomaticRepairRunning: true,
+    }, shell: { bootTimings: { shellVisibleMs: 829 } } },
+  };
+}
+
+test('current desktop window satisfies requested app without obsolete status text', () => {
+  const result = startupReadiness(state(), 'ctox', version);
+  assert.equal(result.shellVisible, true); assert.equal(result.moduleReady, true);
+  assert.equal(result.connected, true); assert.equal(result.ready, true);
+  assert.equal(result.bootTimingMs, 829);
+});
+
+test('early shell visibility cannot substitute for complete sync readiness', () => {
+  for (const check of ['requiredCollectionsConnected', 'requiredCollectionsInitialSyncComplete',
+    'requiredCollectionsStreamingReady', 'requiredCollectionsCheckpointEpochAdvertised', 'frameTransportRealtimeHealthy']) {
+    const observed = state();
+    observed.advancedStatus.checks[check] = false;
+    observed.advancedStatus.ok = false;
+    const result = startupReadiness(observed, 'ctox', version);
+    assert.equal(result.shellVisible, true, check);
+    assert.equal(result.ready, false, check);
+    // Even an inconsistent aggregate cannot hide the individual failed check.
+    observed.advancedStatus.ok = true;
+    assert.equal(startupReadiness(observed, 'ctox', version).ready, false, check);
+    delete observed.advancedStatus.checks[check];
+    assert.equal(startupReadiness(observed, 'ctox', version).ready, false, check);
+  }
+});
+
+test('a visible requested window must complete its own mount without loading or recovery', () => {
+  for (const flags of [
+    { mountComplete: false, loading: true },
+    // Production finally marks the mount complete even after a caught error.
+    { mountComplete: true, loadFailed: true, recovery: true },
+    { mountComplete: true, loadFailed: false, recovery: true },
+    { mountComplete: true, loading: true },
+    { moduleId: 'other' },
+    { mountComplete: undefined },
+    { loadFailed: undefined },
+  ]) {
+    const observed = state(); Object.assign(observed.windows[0], flags);
+    const result = startupReadiness(observed, 'ctox', version);
+    assert.equal(result.shellVisible, true);
+    assert.equal(result.healthy, true, 'global Desktop health alone is insufficient');
+    assert.equal(result.moduleReady, false);
+    assert.equal(result.ready, false);
+  }
+  assert.equal(startupReadiness(state(), 'ctox', version).ready, true);
+});
+
+test('wrong or hidden app, shell, status, timing and explicit expected text remain failures', () => {
+  const variants = [
+    s => { s.windows[0].ownerId = 'desktop-app:other'; },
+    s => { s.windows[0].visible = false; },
+    s => { s.windows = []; },
+    s => { s.shellVisible = false; },
+    s => { s.loading = true; },
+    s => { s.moduleCount = 0; },
+    s => { s.expectedTextFound = false; },
+    s => { s.advancedStatus.version = 'unknown'; },
+    s => { s.advancedStatus.ok = false; },
+    s => { s.advancedStatus.shell.bootTimings.shellVisibleMs = null; },
+    s => { s.advancedStatus.shell.bootTimings.shellVisibleMs = -1; },
+    s => { delete s.advancedStatus; },
+  ];
+  for (const mutate of variants) {
+    const observed = state(); mutate(observed);
+    assert.equal(startupReadiness(observed, 'ctox', version).ready, false);
+  }
+  const legacy = state(); legacy.activeModule = 'ctox'; legacy.windows = [];
+  assert.equal(startupReadiness(legacy, 'ctox', version).ready, true);
+});
+
+test('failure diagnostics preserve checks and timing without launch/session configuration', () => {
+  const observed = state();
+  observed.config = { capability_token: 'do-not-export', password: 'do-not-export' };
+  observed.textSample = 'do-not-export';
+  observed.advancedStatus.config = observed.config;
+  observed.advancedStatus.sync = {
+    requiredCollections: ['business_module_catalog', 'desktop_file_chunks'],
+    missingRequiredCollections: ['desktop_file_chunks', { credential: 'do-not-export' }],
+    requiredCollectionEvidence: {
+      business_module_catalog: { hasCollection: true, hasData: true },
+      desktop_file_chunks: { hasCollection: false, hasData: false, error: 'do-not-export' },
+      other: { credential: 'do-not-export' },
+    },
+    collectionTotal: 21,
+    initialSync: {
+      missingInitialReplication: ['desktop_file_chunks'],
+      missingStreamingReady: ['desktop_file_chunks'],
+      missingCheckpointEpoch: ['desktop_file_chunks', 'wss://do-not-export'],
+      session: observed.config,
+    },
+    config: observed.config, session: observed.config,
+    syncRoom: 'do-not-export', signalingUrls: ['wss://do-not-export'],
+  };
+  const diagnostic = startupDiagnostics(observed);
+  assert.equal(JSON.stringify(diagnostic).includes('do-not-export'), false);
+  assert.deepEqual(diagnostic.advancedStatus.checks, observed.advancedStatus.checks);
+  assert.equal(diagnostic.advancedStatus.bootTimings.shellVisibleMs, 829);
+  assert.deepEqual(diagnostic.advancedStatus.sync, {
+    requiredCollections: ['business_module_catalog', 'desktop_file_chunks'],
+    missingRequiredCollections: ['desktop_file_chunks'], collectionTotal: 21,
+    requiredCollectionEvidence: {
+      business_module_catalog: { hasCollection: true, hasData: true, readFailed: false },
+      desktop_file_chunks: { hasCollection: false, hasData: false, readFailed: true },
+    },
+    initialSync: {
+      missingInitialReplication: ['desktop_file_chunks'],
+      missingStreamingReady: ['desktop_file_chunks'],
+      missingCheckpointEpoch: ['desktop_file_chunks'],
+    },
+  });
+});

@@ -57,12 +57,15 @@ pub(super) use super::rxdb_peer_desktop_files::{
 use super::rxdb_peer_intake::consume_business_commands_loop;
 pub(super) use super::rxdb_peer_intake::{
     accept_pending_business_command, business_command_poll_sleep_secs,
-    business_commands_source_change, business_commands_source_stamp, business_commands_table_stamp,
+    business_commands_source_change, business_commands_source_stamp,
     consume_pending_business_commands, enrich_native_command_lifecycle,
-    pending_business_command_documents, pending_business_command_documents_sync,
-    refresh_business_commands_source_stamp, schedule_business_command_intake_retry,
-    transient_business_command_retry_document, wait_for_business_command_wake,
-    BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET,
+    pending_business_command_documents, refresh_business_commands_source_stamp,
+    schedule_business_command_intake_retry, transient_business_command_retry_document,
+    wait_for_business_command_wake, BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET,
+};
+#[cfg(test)]
+pub(super) use super::rxdb_peer_intake::{
+    business_commands_table_stamp, pending_business_command_documents_sync,
 };
 pub(super) use super::rxdb_peer_projections::{
     bulk_upsert_business_record_projection_documents, find_projection_documents_by_id,
@@ -2251,6 +2254,34 @@ where
             .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
         Ok(output)
     })
+}
+
+/// Register the canonical native schemas without starting sync or seeding records.
+pub fn initialize_business_os_rxdb(root: &Path) -> anyhow::Result<Value> {
+    with_business_os_database(
+        root,
+        "failed to create Business OS schema initialization runtime",
+        true,
+        TemporaryDatabaseLockScope::TemporaryOnly,
+        |_peer, database| async move {
+            let collections = business_os_collections()
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>();
+            for name in &collections {
+                anyhow::ensure!(
+                    database.collection(name).is_some(),
+                    "canonical Business OS RxDB collection `{name}` did not register"
+                );
+            }
+            Ok(json!({
+                "database": store::rxdb_store_path(root).display().to_string(),
+                "collections": collections,
+                "records_seeded": 0,
+                "starts_peer": false,
+            }))
+        },
+    )
 }
 
 pub fn sync_desktop_file_from_path(root: &Path, path: &Path) -> anyhow::Result<()> {
@@ -10042,6 +10073,72 @@ pub(in crate::business_os) mod tests {
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[test]
+    fn initialize_rxdb_registers_empty_canonical_schemas_idempotently() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let first = initialize_business_os_rxdb(root.path())?;
+        let second = initialize_business_os_rxdb(root.path())?;
+        assert_eq!(first, second);
+        assert_eq!(first["starts_peer"], false);
+        assert_eq!(first["records_seeded"], 0);
+        let connection = Connection::open(store::rxdb_store_path(root.path()))?;
+        for (name, schema) in business_os_schema_contract() {
+            let version = schema["version"]
+                .as_u64()
+                .expect("canonical schema version");
+            let table = format!("ctox_business_os__{name}__v{version}");
+            let count: i64 = connection.query_row(
+                &format!("SELECT COUNT(*) FROM {}", sqlite_quote_identifier(&table)),
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(count, 0, "schema initialization seeded {name}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn initialize_rxdb_refuses_skipped_optional_schema_instead_of_claiming_success(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        {
+            let _guard = TEMPORARY_RXDB_DATABASE_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            runtime.block_on(async {
+                let database = open_database(store::rxdb_store_path(root.path())).await?;
+                let mut creators = collection_creators();
+                let mut creator = creators
+                    .remove("user_threads")
+                    .expect("canonical user_threads");
+                let mut schema = serde_json::to_value(&creator.schema)?;
+                schema["properties"]["incompatible_fixture_only"] = json!({"type": "string"});
+                creator.schema = schema_from_json(schema);
+                let (_, failed) = database
+                    .add_collections_tolerant(HashMap::from([(
+                        "user_threads".to_string(),
+                        creator,
+                    )]))
+                    .await?;
+                anyhow::ensure!(failed.is_empty(), "negative fixture registration failed");
+                database.close().await?;
+                Ok::<_, anyhow::Error>(())
+            })?;
+        }
+        let error = initialize_business_os_rxdb(root.path())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("user_threads") && error.contains("did not register"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn projection_union_types_preserve_values_and_use_valid_repair_defaults() {
         for (declared, accepted, rejected) in [
             (
@@ -14448,8 +14545,14 @@ pub(in crate::business_os) mod tests {
         });
         let (collections, failures) = database.add_collections_tolerant(creators).await?;
         assert!(failures.is_empty(), "{failures:?}");
-        assert_eq!(collections.len(), 4);
-        for name in ["ctox_harness_events", "ctox_harness_status", "ctox_runs"] {
+        assert_eq!(collections.len(), 6);
+        for name in [
+            "ctox_harness_events",
+            "ctox_harness_status",
+            "ctox_runs",
+            "ctox_crew_members",
+            "ctox_crew_learnings",
+        ] {
             assert!(names.iter().any(|entry| entry == name), "missing {name}");
         }
         let conn = store::open_store(root.path())?;
@@ -14457,7 +14560,8 @@ pub(in crate::business_os) mod tests {
             store::ensure_legacy_collection_grants(root.path(), &names)?;
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM business_permission_grants
-                 WHERE scope_id LIKE 'ctox_harness_%' OR scope_id = 'ctox_runs'",
+                 WHERE scope_id LIKE 'ctox_harness_%'
+                    OR scope_id IN ('ctox_runs', 'ctox_crew_members', 'ctox_crew_learnings')",
                 [],
                 |row| row.get(0),
             )?;
@@ -16185,6 +16289,17 @@ pub(in crate::business_os) mod tests {
         )
         .expect("create runbook item");
 
+        let source = super::super::server::knowledge_index_payload(root.path())
+            .expect("load authoritative procedural knowledge catalog");
+        let source_markdown = |collection: &str, id: &str| {
+            source[collection]
+                .as_array()
+                .expect("source catalog collection")
+                .iter()
+                .find(|document| document["id"].as_str() == Some(id))
+                .and_then(|document| document["markdown"].as_str())
+                .expect("source catalog markdown")
+        };
         let synced = sync_business_record_projections(root.path())
             .expect("sync procedural knowledge projections");
         assert!(synced >= 3);
@@ -16208,14 +16323,14 @@ pub(in crate::business_os) mod tests {
             Some("skillbook")
         );
         let skillbook_markdown = skillbook
-            .pointer("/payload/markdown")
+            .get("markdown")
             .and_then(Value::as_str)
             .expect("projected skillbook markdown");
         assert!(skillbook_markdown.contains("## Mission"));
         assert!(skillbook_markdown.contains("Fail closed when evidence is missing."));
         assert_eq!(
-            skillbook.get("markdown").and_then(Value::as_str),
-            Some(skillbook_markdown)
+            skillbook_markdown,
+            source_markdown("items", "skillbook:projection.skillbook.v1")
         );
 
         let runbook_json: String = conn
@@ -16235,14 +16350,14 @@ pub(in crate::business_os) mod tests {
             Some("projection.skillbook.v1")
         );
         let runbook_markdown = runbook
-            .pointer("/payload/markdown")
+            .get("markdown")
             .and_then(Value::as_str)
             .expect("projected runbook markdown");
         assert!(runbook_markdown.contains("## VERIFY · Verify source receipt"));
         assert!(runbook_markdown.contains("verify its receipt and hash"));
         assert_eq!(
-            runbook.get("markdown").and_then(Value::as_str),
-            Some(runbook_markdown)
+            runbook_markdown,
+            source_markdown("runbooks", "runbook:projection.runbook.v1")
         );
     }
 
@@ -20453,9 +20568,35 @@ pub(in crate::business_os) mod tests {
                     .expect("insert invalid ticket command");
             }
 
-            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
-                .await
-                .expect("consume invalid ticket commands");
+            let mut accept_failures = HashMap::new();
+            // Intake failures become canonical terminal outcomes after the
+            // persisted retry budget; retain the exact terminal/error guards.
+            for attempt in 1..=BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                consume_pending_business_commands(root.path(), &database, &mut accept_failures)
+                    .await
+                    .expect("consume invalid ticket commands");
+                for id in ["cmd_ticket_unsupported", "cmd_ticket_missing_title"] {
+                    let current = commands
+                        .find_one(Some(MangoQuery {
+                            selector: Some(json!({ "id": { "$eq": id } })),
+                            ..Default::default()
+                        }))
+                        .expect("intake lifecycle query")
+                        .exec(false)
+                        .await
+                        .expect("intake lifecycle document");
+                    let expected = if attempt < BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                        "pending_sync"
+                    } else {
+                        "failed"
+                    };
+                    assert_eq!(
+                        current.get("status").and_then(Value::as_str),
+                        Some(expected),
+                        "command {id} at persisted intake attempt {attempt}"
+                    );
+                }
+            }
 
             let unsupported = commands
                 .find_one(Some(MangoQuery {
@@ -20472,7 +20613,7 @@ pub(in crate::business_os) mod tests {
             );
             assert!(
                 unsupported
-                    .get("error")
+                    .get("error_message")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .contains("unsupported Business OS ticket command"),
@@ -20494,7 +20635,7 @@ pub(in crate::business_os) mod tests {
             );
             assert!(
                 missing_title
-                    .get("error")
+                    .get("error_message")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .contains("title is required"),
@@ -20651,6 +20792,7 @@ pub(in crate::business_os) mod tests {
                 .add_collections(collection_creators())
                 .await
                 .expect("register collections");
+            let capability_token = issue_test_capability(root.path(), "knowledge-user", "admin");
             let commands = database
                 .collection("business_commands")
                 .expect("business_commands collection");
@@ -20664,7 +20806,11 @@ pub(in crate::business_os) mod tests {
                     "status": "pending_sync",
                     "inbound_channel": "business_os.outbound",
                     "payload": { "title": "Knowledge help", "args": ["help"] },
-                    "client_context": { "source_module": "outbound" },
+                    "client_context": {
+                        "source_module": "outbound",
+                        "capability_token": capability_token,
+                        "actor": { "id": "knowledge-user", "role": "admin", "is_admin": true }
+                    },
                     "updated_at_ms": now_ms() as u64
                 }))
                 .await
@@ -21378,9 +21524,33 @@ pub(in crate::business_os) mod tests {
                 }))
                 .await
                 .expect("insert module save command");
-            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
-                .await
-                .expect("consume module save command");
+            let mut accept_failures = HashMap::new();
+            for attempt in 1..=BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                consume_pending_business_commands(root.path(), &database, &mut accept_failures)
+                    .await
+                    .expect("consume module save command");
+                for id in ["cmd_gov_module_save"] {
+                    let current = commands
+                        .find_one(Some(MangoQuery {
+                            selector: Some(json!({ "id": { "$eq": id } })),
+                            ..Default::default()
+                        }))
+                        .expect("intake lifecycle query")
+                        .exec(false)
+                        .await
+                        .expect("intake lifecycle document");
+                    let expected = if attempt < BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                        "pending_sync"
+                    } else {
+                        "failed"
+                    };
+                    assert_eq!(
+                        current.get("status").and_then(Value::as_str),
+                        Some(expected),
+                        "command {id} at persisted intake attempt {attempt}"
+                    );
+                }
+            }
             let failed_module_save = commands
                 .find_one(Some(MangoQuery {
                     selector: Some(json!({ "id": { "$eq": "cmd_gov_module_save" } })),

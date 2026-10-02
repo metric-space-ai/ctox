@@ -225,6 +225,8 @@ pub fn coding_model_capabilities(root: &Path) -> Value {
     }
     serde_json::json!({
         "schema": "ctox.coding.models.v1",
+        "subscription_listener_ready": crate::execution::cliproxyapi_host::instance_codex_proxy_status(root).phase
+            == crate::execution::cliproxyapi_host::InstanceCodexProxyPhase::Ready,
         "default": {
             "mode": "inherit_ctox",
             "provider": "ctox-gateway",
@@ -238,9 +240,35 @@ pub fn coding_model_capabilities(root: &Path) -> Value {
 /// sends only the opaque preset ID; provider URLs, routing headers and model
 /// objects are never accepted from the browser command payload.
 pub fn resolve_coding_model_preset(root: &Path, preset_id: &str) -> anyhow::Result<Option<Value>> {
+    resolve_coding_model_preset_from_capabilities(&coding_model_capabilities(root), preset_id)
+}
+
+/// The operator CLI reads the daemon's public topology rather than guessing
+/// readiness from its own short-lived process. Offline roots keep local rules.
+pub(crate) fn coding_model_capabilities_for_cli(root: &Path) -> anyhow::Result<Value> {
+    #[cfg(unix)]
+    if let Some(capabilities) = crate::service::coding_model_capabilities_via_service(root)? {
+        return Ok(capabilities);
+    }
+    Ok(coding_model_capabilities(root))
+}
+
+pub(crate) fn resolve_coding_model_preset_for_cli(
+    root: &Path,
+    preset_id: &str,
+) -> anyhow::Result<Option<Value>> {
+    resolve_coding_model_preset_from_capabilities(
+        &coding_model_capabilities_for_cli(root)?,
+        preset_id,
+    )
+}
+
+fn resolve_coding_model_preset_from_capabilities(
+    capabilities: &Value,
+    preset_id: &str,
+) -> anyhow::Result<Option<Value>> {
     let preset_id = preset_id.trim();
     anyhow::ensure!(!preset_id.is_empty(), "coding model preset_id is required");
-    let capabilities = coding_model_capabilities(root);
     let presets = capabilities
         .get("presets")
         .and_then(Value::as_array)
@@ -256,9 +284,9 @@ pub fn resolve_coding_model_preset(root: &Path, preset_id: &str) -> anyhow::Resu
         "coding model preset is ambiguous"
     );
     match preset.get("model") {
-        None | Some(Value::Null) => Ok(None),
+        Some(Value::Null) if preset_id == "ctox" => Ok(None),
         Some(model @ Value::Object(_)) => Ok(Some(model.clone())),
-        Some(_) => anyhow::bail!("coding model preset is malformed"),
+        None | Some(_) => anyhow::bail!("coding model preset is malformed"),
     }
 }
 

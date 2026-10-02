@@ -39,6 +39,14 @@ test('visible text and accessibility attributes are audited', () => {
   );
 });
 
+test('HTML asset URLs do not inherit a preceding accessibility label', () => {
+  const source = `<aside aria-label="Native"></aside>
+<script type="module" src="shared/shell-release-status.js?v=crew-native-sync-dock-v424"></script>`;
+  const findings = auditSourceText(source, 'src/apps/business-os/index.html');
+
+  assert.deepEqual(findings.map(({ term, kind }) => [term, kind]), [['Native', 'user-facing-literal']]);
+});
+
 test('implementation tokens and technical predicates are not product-copy findings', () => {
   assert.deepEqual(
     auditSourceText("const protocol='WebRTC'; const id='ctox-rxdb-js'; const ready = message.includes('RxDB Error-Code: DB6');", 'src/apps/business-os/modules/example/index.js'),

@@ -19,6 +19,45 @@
 
 import { createCommandBus } from '../../shared/command-bus.js';
 
+import { createQueryDemandLoader, createSidecarWithMemoryBackend } from '../src/index.mjs';
+import { replicationWebRtcTestInternals } from '../src/replication-webrtc.mjs';
+
+// Join the real peer-close -> removePeer -> demand-loader cancellation path
+// to the real command tracker, without opening a network connection.
+async function peerCancelledCommandRead(id, reason) {
+  const loader = createQueryDemandLoader({
+    collectionName: 'business_commands', schemaVersion: 1,
+    storageCollection: {
+      databaseName: 'command-peer-cancel',
+      async findDocumentsById() { return {}; },
+      async queryDocuments() { return []; },
+      async bulkWrite() {},
+    },
+    sidecar: createSidecarWithMemoryBackend({ databaseName: 'cancel-' + id }),
+    requestQueryFetch: () => new Promise(() => {}),
+    queryGeneration: () => 'old-connection',
+    readPermissionDigest: () => 'actor',
+  });
+  const pending = loader.resolveQuery({ selector: { id }, requireRevision: 'native-receipt' });
+  const observed = pending.catch(error => {
+    assert(error.code === 'QUERY_CANCELLED' && error.message === 'QUERY_CANCELLED: ' + reason,
+      'real peer cancellation must retain its exact reason');
+    throw error;
+  });
+  await Promise.resolve();
+  const State = replicationWebRtcTestInternals.getReplicationStateClass();
+  const state = Object.assign(Object.create(State.prototype), {
+    peerStates$: { getValue: () => new Map([['native', {}]]), next() {} },
+    checkpointValidityKeyForPeer: () => null,
+    pullCheckpointsByPeer: new Map(), pushCheckpointsByPeer: new Map(),
+    publishTransportStatus() {}, demandStatus: {}, active$: { next() {} },
+    demandLoader: loader,
+  });
+  state.onSharedEvent('peer-close', { peerId: 'native', reason: reason.slice('peer-'.length) });
+  return observed;
+}
+
+
 globalThis.CTOX_BUSINESS_OS_SESSION = {
   capability_token: 'projection-smoke-capability-token',
   capability_expires_at_ms: Date.now() + 60 * 60 * 1000,
@@ -427,6 +466,108 @@ for (const arrival of ['before', 'during', 'absent', 'deleted', 'wrong-id', 'fai
   assert(readinessCalls === (['before', 'failed'].includes(arrival) ? 0 : 1),
     `reconnect ${arrival}: already observed outcomes do not reopen the bridge`);
   assert(localReads <= 2, 'reconnect: bounded cache reads');
+}
+
+// A native schema reconfiguration closes the current peer while an accepted
+// command is being tracked. Keep the same id and finite deadline; never dispatch
+// again, fabricate success from local intent, or swallow other cancellations.
+for (const closeReason of ['peer-peer-close', 'peer-capability-authority-changed']) {
+for (const scenario of ['completed', 'failed', 'never-arrives', 'explicit-cancel', 'other-peer-cancel']) {
+  const id = 'cmd-' + closeReason + '-' + scenario;
+  let queries = 0;
+  let unsubscribed = 0;
+  const local = { id, status: 'pending_sync', replication_phase: 'local_only' };
+  const closed = Object.assign(new Error(scenario === 'explicit-cancel'
+    ? 'QUERY_CANCELLED: user-cancelled' : scenario === 'other-peer-cancel'
+      ? 'QUERY_CANCELLED: peer-unknown-reason' : 'QUERY_CANCELLED: ' + closeReason), { code: 'QUERY_CANCELLED' });
+  const commands = {
+    storageCollection: { async findDocumentsById(ids) {
+      assert(ids.length === 1 && ids[0] === id, 'peer-close: exact local id only');
+      return { [id]: local };
+    } },
+    async insert() { throw new Error('tracking must never redispatch'); },
+    findOne(selector) {
+      const selectedId = typeof selector === 'string' ? selector : selector.selector.id;
+      assert(selectedId === id, 'peer-close: exact remote id only');
+      return {
+        $: { subscribe() { return { unsubscribe() { unsubscribed++; } }; } },
+        async exec() {
+          queries++;
+          if (['explicit-cancel', 'other-peer-cancel'].includes(scenario)) throw closed;
+          if (queries === 1 || scenario === 'never-arrives') return peerCancelledCommandRead(id, closeReason);
+          return {
+            id, status: scenario, replication_phase: 'native_observed',
+            execution_phase: 'terminal', terminal_status: scenario,
+            ...(scenario === 'failed' ? { error_code: 'permission_denied', error_message: 'native rejected' } : {}),
+          };
+        },
+      };
+    },
+  };
+  const bus = createCommandBus({ db: { raw: { business_commands: commands } } });
+  let receipt;
+  let failure;
+  try { receipt = await bus.waitForTerminal(id, { timeoutMs: ['completed', 'failed'].includes(scenario) ? 5000 : 1000 }); }
+  catch (error) { failure = error; }
+  if (scenario === 'completed') {
+    assert(!failure && receipt?.status === 'completed', 'peer-close: authoritative later result survives reconnect ' + JSON.stringify({ closeReason, queries, code: failure?.code, message: failure?.message }));
+  } else if (scenario === 'failed') {
+    assert(!receipt && failure?.code === 'permission_denied', 'peer-close: native denial is retained ' + JSON.stringify({ code: failure?.code, message: failure?.message, receipt, queries }));
+  } else if (scenario === 'never-arrives') {
+    assert(!receipt && failure?.code === 'projection_delayed', 'peer-close: missing receipt keeps original deadline');
+    assert(queries > 1 && queries < 10, 'peer-close: bounded exact-id revalidation');
+  } else {
+    assert(!receipt && failure === closed && queries === 1, 'peer-close: unrelated cancellation is not hidden');
+  }
+  assert(unsubscribed >= 1, 'peer-close: watcher is released');
+}
+}
+
+// During peer replacement strict reads have no generation. Wait for the
+// existing exact-ID revalidation; never convert that missing authority into a
+// local-cache read or extend the caller's deadline.
+for (const scenario of ['completed', 'failed', 'never-arrives']) {
+  const id = 'cmd-generation-gap-' + scenario;
+  let queries = 0;
+  let localReads = 0;
+  let unsubscribed = 0;
+  const commands = {
+    storageCollection: { async findDocumentsById() {
+      // The existing pre-readiness lookup precedes any strict read. Only a
+      // subsequent cache lookup could bypass the generation failure.
+      if (queries === 0) return {};
+      localReads++;
+      throw new Error('missing generation must not fall back to local storage');
+    } },
+    async insert() { throw new Error('tracking must never redispatch'); },
+    findOne(selector) {
+      assert((typeof selector === 'string' ? selector : selector.selector.id) === id,
+        'generation gap: exact command ID');
+      return {
+        $: { subscribe() { return { unsubscribe() { unsubscribed++; } }; } },
+        async exec() {
+          queries++;
+          if (queries <= 2 || scenario === 'never-arrives') {
+            throw new Error('QUERY_GENERATION_REQUIRED: strict demand read has no bridge generation');
+          }
+          assert(Boolean(selector.requireRevision), 'recovered result requires an authoritative revision');
+          return { id, status: scenario, replication_phase: 'native_observed',
+            execution_phase: 'terminal', terminal_status: scenario,
+            ...(scenario === 'failed' ? { error_code: 'permission_denied', error_message: 'native rejected' } : {}) };
+        },
+      };
+    },
+  };
+  const bus = createCommandBus({ db: { raw: { business_commands: commands } } });
+  let receipt;
+  let failure;
+  try { receipt = await bus.waitForTerminal(id, { timeoutMs: scenario === 'never-arrives' ? 1000 : 5000 }); }
+  catch (error) { failure = error; }
+  if (scenario === 'completed') assert(!failure && receipt?.status === 'completed', 'generation recovers before receipt');
+  else assert(!receipt && failure?.code === (scenario === 'failed' ? 'permission_denied' : 'projection_delayed'),
+    'generation gap preserves denial or original deadline');
+  assert(localReads === 0, 'strict generation guard is never bypassed with cached data');
+  assert(queries > 1 && queries < 10 && unsubscribed >= 1, 'bounded revalidation and watcher cleanup');
 }
 
 console.log('ctox-rxdb command-bus projection smoke OK');

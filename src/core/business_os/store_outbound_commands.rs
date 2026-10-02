@@ -1285,7 +1285,21 @@ fn outbound_registry_last_runs(
         crate::paths::core_db(root),
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
     )?;
+    // failure_mode and detail travel with the run: without them the app
+    // could not tell "account inactive at the provider" (Bright Data "Customer
+    // is not active", 77 of 80 LinkedIn runs on 27.09.2026) from a network
+    // hiccup or a missing credential.
     let run = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(String, Value)> {
+        let result = row
+            .get::<_, Option<String>>(5)?
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .unwrap_or(Value::Null);
+        let text = |key: &str| {
+            result
+                .get(key)
+                .and_then(Value::as_str)
+                .map(|value| value.chars().take(300).collect::<String>())
+        };
         Ok((
             row.get::<_, String>(0)?,
             serde_json::json!({
@@ -1293,12 +1307,14 @@ fn outbound_registry_last_runs(
                 "status": row.get::<_, String>(2)?,
                 "started_at": row.get::<_, Option<String>>(3)?,
                 "finished_at": row.get::<_, Option<String>>(4)?,
+                "failure_mode": text("failure_mode"),
+                "detail": text("detail"),
             }),
         ))
     };
     let mut out: BTreeMap<String, (Value, Option<Value>)> = BTreeMap::new();
     let mut last = conn.prepare(
-        "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at FROM scrape_run r
+        "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at, r.result_json FROM scrape_run r
          WHERE r.started_at = (SELECT MAX(started_at) FROM scrape_run WHERE target_id = r.target_id)",
     )?;
     for entry in last.query_map([], run)? {
@@ -1306,7 +1322,7 @@ fn outbound_registry_last_runs(
         out.insert(target_id, (value, None));
     }
     let mut ok = conn.prepare(
-        "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at FROM scrape_run r
+        "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at, r.result_json FROM scrape_run r
          WHERE r.status IN ('succeeded', 'completed_empty')
            AND r.started_at = (SELECT MAX(started_at) FROM scrape_run
                                WHERE target_id = r.target_id AND status IN ('succeeded', 'completed_empty'))",
@@ -2744,19 +2760,31 @@ fn outbound_apply_research_adapter_scrape_effect(
     // A test observes the active registry revision. Registering the bundled
     // template here can silently replace a tenant's specialized script.
     let registration = if command_type == "outbound.research_source.test" {
-        scrape::registered_target_summary(root, &target_key).map(|target| {
+        scrape::registered_target_summary(root, &target_key).and_then(|target| {
+            // First use still needs a native target/workspace before generation.
+            // Existing targets must remain untouched by a source test.
+            if target.is_none() {
+                return outbound_register_research_scrape_target(
+                    root,
+                    adapter_payload,
+                    record,
+                    adapter_id,
+                    source_id,
+                    &target_key,
+                );
+            }
             let script_revision_no = target
                 .as_ref()
                 .and_then(|value| value.get("latest_script_revision_no"))
                 .and_then(Value::as_i64);
-            serde_json::json!({
+            Ok(serde_json::json!({
                 "ok": true,
                 "target_key": target_key,
                 "registered_from": "existing_registry",
                 "script_registered": script_revision_no.is_some(),
                 "script_revision_no": script_revision_no,
                 "script_sha256": target.as_ref().and_then(|value| value.get("latest_script_sha256")),
-            })
+            }))
         })
     } else {
         outbound_register_research_scrape_target(
@@ -6534,9 +6562,15 @@ mod tests {
             "outbound_lead_generation_adapters",
             "outbound_lead_generation_research_policies",
         ] {
-            let version = schemas[collection]["version"]
-                .as_u64()
-                .context("reconciliation collection schema version")?;
+            // Sources and policies are app-owned v0 schemas, deliberately not
+            // part of the native core contract. Adapters remain core-owned.
+            let version = match collection {
+                "outbound_lead_generation_sources"
+                | "outbound_lead_generation_research_policies" => 0,
+                _ => schemas[collection]["version"]
+                    .as_u64()
+                    .context("reconciliation collection schema version")?,
+            };
             conn.execute_batch(&format!(
                 "CREATE TABLE ctox_business_os__{collection}__v{version} (
                     id TEXT PRIMARY KEY NOT NULL,
@@ -6547,6 +6581,18 @@ mod tests {
                 );"
             ))?;
         }
+        let tables = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(
+            tables,
+            [
+                "ctox_business_os__outbound_lead_generation_adapters__v2",
+                "ctox_business_os__outbound_lead_generation_research_policies__v0",
+                "ctox_business_os__outbound_lead_generation_sources__v0",
+            ]
+        );
         Ok(())
     }
 
@@ -6698,15 +6744,6 @@ mod tests {
         let root = temp.path();
         create_adapter_reconciliation_rxdb_fixture(root)?;
         let conn = open_store(root)?;
-        for collection in [
-            "outbound_lead_generation_sources",
-            "outbound_lead_generation_adapters",
-            "outbound_lead_generation_research_policies",
-        ] {
-            super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
-                root, collection,
-            )?;
-        }
         let now = 1_000;
         let source = serde_json::json!({
             "id": "example.com",
@@ -6843,14 +6880,6 @@ mod tests {
         let root = temp.path();
         create_adapter_reconciliation_rxdb_fixture(root)?;
         let conn = open_store(root)?;
-        for collection in [
-            "outbound_lead_generation_sources",
-            "outbound_lead_generation_adapters",
-        ] {
-            super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
-                root, collection,
-            )?;
-        }
         let now = 1_000;
         let source = |id: &str| {
             let target_key = id.replace('.', "-");
@@ -7635,6 +7664,7 @@ mod tests {
         let mut record = adapter.clone();
         record["id"] = serde_json::json!("adapter_novel");
         record["payload"] = serde_json::json!({});
+        assert!(scrape::registered_target_summary(root, "novel-example")?.is_none());
         let first = outbound_apply_research_adapter_scrape_effect(
             root,
             &command,
@@ -7664,10 +7694,16 @@ mod tests {
                 .and_then(Value::as_str),
             Some("novel-example")
         );
+        let registered_target = scrape::registered_target_summary(root, "novel-example")?
+            .context("first use registered the generation target")?;
+        assert!(registered_target["latest_script_revision_no"].is_null());
+        let mut stale_adapter = adapter.clone();
+        stale_adapter["target_manifest"]["start_url"] = serde_json::json!("https://stale.example/");
+        stale_adapter["target_manifest"]["config"] = serde_json::json!({"stale": true});
         let second = outbound_apply_research_adapter_scrape_effect(
             root,
             &command,
-            &adapter,
+            &stale_adapter,
             "adapter_novel",
             "novel.example",
             &mut record,
@@ -7676,6 +7712,12 @@ mod tests {
         assert_eq!(
             first["generation_task"]["task_id"],
             second["generation_task"]["task_id"]
+        );
+        assert_eq!(
+            scrape::registered_target_summary(root, "novel-example")?
+                .context("target retained after repeated first use")?,
+            registered_target,
+            "a repeated source test must not replace the registered manifest"
         );
         // Stand in for the bounded harness's generated artifact; register through
         // the same native scrape command that the existing daemon relay dispatches.
@@ -7703,7 +7745,7 @@ mod tests {
             &mut record,
         )
         .context("registered execution")?;
-        assert_eq!(result["registered_from"], "runtime_sqlite");
+        assert_eq!(result["registered_from"], "existing_registry");
         assert!(result.get("generation_task").is_none());
         assert_eq!(result["test"]["status"], "succeeded");
         assert_eq!(result["test"]["records_found"], 1);
@@ -13055,4 +13097,44 @@ pub(super) fn outbound_mark_source_authenticated(
         }
     }
     Ok(touched)
+}
+
+#[cfg(test)]
+mod registry_last_run_detail_tests {
+    use super::*;
+
+    // A production incident had 77 of 80 LinkedIn runs end with Bright Data
+    // "Customer is not active"; the app only saw "temporary unreachable".
+    #[test]
+    fn last_run_carries_failure_mode_and_detail() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let db = crate::paths::core_db(temp.path());
+        std::fs::create_dir_all(db.parent().expect("db parent"))?;
+        let conn = Connection::open(&db)?;
+        conn.execute_batch(
+            "CREATE TABLE scrape_run (run_id TEXT, target_id TEXT, status TEXT,
+                started_at TEXT, finished_at TEXT, result_json TEXT);",
+        )?;
+        conn.execute(
+            "INSERT INTO scrape_run VALUES ('run-ok', 't-li', 'succeeded', '2026-09-26T13:22', '2026-09-26T13:23', '{}')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO scrape_run VALUES ('run-fail', 't-li', 'temporary_unreachable', '2026-09-27T11:02', '2026-09-27T11:02',
+             '{\"failure_mode\":\"temporary_unreachable\",\"detail\":\"Bright Data antwortete mit HTTP 400: Customer is not active\"}')",
+            [],
+        )?;
+        drop(conn);
+        let runs = outbound_registry_last_runs(temp.path())?;
+        let (last, ok) = runs.get("t-li").expect("target runs");
+        assert_eq!(last["run_id"], "run-fail");
+        assert_eq!(last["failure_mode"], "temporary_unreachable");
+        assert_eq!(
+            last["detail"],
+            "Bright Data antwortete mit HTTP 400: Customer is not active"
+        );
+        assert_eq!(ok.as_ref().expect("last success")["run_id"], "run-ok");
+        assert!(ok.as_ref().expect("last success")["detail"].is_null());
+        Ok(())
+    }
 }
