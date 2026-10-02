@@ -153,8 +153,12 @@ structured first/last name is supplied. This preservation does not create a
 name, source receipt or verified field; explicit structured names still win.
 Historical lead evidence is retained, but completion counts only evidence for
 the current incoming value and, for person fields, the same person key.
-The existing native quantity and personal-email quote checks also apply to
-this completion count; a source for another person, an outdated value or a
+The shared native quantity and personal-email quote checks also apply to this
+completion count. They additionally require personal first/last names and
+titles to occur as whole words, with Unicode case and equivalent whitespace,
+hyphen, apostrophe and title punctuation handled. A valid URL beside a made-up
+name is insufficient. These checks apply to both field-status writeback and
+completion; a source for another person, an outdated value or a
 quote naming another address cannot certify the new result. Sellify alone
 continues to count as unverified. Distinct source quotes are retained so a
 later correct quote is not discarded behind an older unusable quote; multiple
