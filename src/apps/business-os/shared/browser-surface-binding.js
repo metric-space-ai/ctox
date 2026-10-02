@@ -13,7 +13,7 @@ function currentRequest(request, surface) {
 }
 
 function nativeBinding(response) {
-  if (response?.ok === false) return null;
+  if (response?.ok !== true) return null;
   const binding = response?.binding;
   if (!binding || !['session_id', 'tab_id', 'runtime_generation', 'active_tab_id']
     .every(key => nonempty(binding[key]))) return null;
@@ -56,12 +56,21 @@ export function browserInputAcknowledgement(response, events, frameBinding, requ
     return { acceptedSeqs: [], complete: false };
   }
   const acceptedSeqs = [];
+  const resultsByIndex = new Map();
+  for (const result of response.results) {
+    const index = result?.index;
+    // Missing/duplicate/out-of-range indices cannot prove which submitted
+    // event was delivered. Never manufacture positional acknowledgements.
+    if (!Number.isSafeInteger(index) || index < 0 || index >= events.length
+      || resultsByIndex.has(index)) return { acceptedSeqs: [], complete: false };
+    resultsByIndex.set(index, result);
+  }
   let complete = response.results.length === events.length;
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
     const valid = event?.session_id === binding.session_id && event?.tab_id === binding.tab_id
       && Number.isSafeInteger(event?.seq) && event.seq >= 0
-      && response.results[index]?.ok === true;
+      && resultsByIndex.get(index)?.ok === true;
     if (valid) acceptedSeqs.push(event.seq);
     else complete = false;
   }

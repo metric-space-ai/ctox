@@ -27,6 +27,13 @@ hydration without a snapshot still executes the bounded query. Disposal releases
 the pending snapshot. Existing ownership/deletion filters, merge semantics and
 local drafts/history remain unchanged; this is not a native acceptance signal.
 
+Shared Browser surface validators require explicit native `ok:true` before
+confirming an image or input result. Input acknowledgements use each native
+result's submitted-event `index`, not its position in the result array. Missing,
+duplicate, noninteger or out-of-range indices prove no acknowledgement; valid
+partial results confirm only their matching successful events. These helpers
+still require Browser-module integration and real click/type/scroll acceptance.
+
 The deferred-storage regression proves the concurrency bound and generation
 fence, not tenant startup latency, Windows memory behavior or installed OOM
 resolution. Those require retained-profile browser measurements on the exact
