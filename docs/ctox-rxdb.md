@@ -148,6 +148,9 @@ supported; this does not certify the source quality of those values.
 Contact deduplication also preserves two distinct nonempty person keys even
 when imported contacts share a local row ID. Duplicate rows with the same
 person key still coalesce; unkeyed legacy row-ID matching remains supported.
+Partial keyed contact updates preserve an existing observed full name when no
+structured first/last name is supplied. This preservation does not create a
+name, source receipt or verified field; explicit structured names still win.
 
 Sellify lookups require a readable collection and use one read-only SQLite
 transaction for ID, exact-field, fuzzy-field, and campaign-group probes.

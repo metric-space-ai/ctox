@@ -1786,7 +1786,14 @@ fn normalize_researched_contact_with_context(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim();
-    let name = format!("{first_name} {last_name}").trim().to_string();
+    let structured_name = format!("{first_name} {last_name}").trim().to_string();
+    // Imported contacts may carry only an observed full name. A keyed
+    // phone/position update must not turn that existing identity into "".
+    let name = if structured_name.is_empty() {
+        contact_string(&contact, &["name"])
+    } else {
+        structured_name
+    };
     let email = contact_string(&contact, &["person_email", "email"]);
     let phone = contact_string(&contact, &["person_telefon", "phone"]);
     let position = contact_string(&contact, &["person_position", "position"]);
@@ -3891,6 +3898,58 @@ mod tests {
         assert!(!contacts_match(&one, &two));
         let same = serde_json::json!({"person_key": "norman-quandt", "person_vorname": "N.", "person_nachname": "Quandt"});
         assert!(contacts_match(&one, &same));
+    }
+
+    #[test]
+    fn partial_contact_updates_preserve_the_existing_observed_full_name() {
+        for crm_known in [false, true] {
+            for (field, stored_field, value) in [
+                ("person_telefon", "phone", "+49 1234567"),
+                ("person_position", "position", "Managing Director"),
+                ("person_email", "email", "grace.hopper@company.test"),
+                (
+                    "person_linkedin",
+                    "person_linkedin",
+                    "https://www.linkedin.com/in/grace-hopper",
+                ),
+            ] {
+                let existing = serde_json::json!({"id": "lead-partial", "contacts": [{
+                    "id": "existing-contact", "person_key": "grace-hopper",
+                    "name": "Grace Hopper", "source": "sellify", "crm_known": crm_known
+                }]});
+                let mut outcome = serde_json::json!({"fields": {}});
+                outcome["fields"][field] = serde_json::json!({
+                    "value": value, "person_key": "grace-hopper"
+                });
+                let patch = outbound_lead_generation_research_outcome_patch(&existing, &outcome, 1);
+                let contacts = patch["contacts"].as_array().unwrap();
+                assert_eq!(contacts.len(), 1, "partial update of {field}");
+                assert_eq!(contacts[0]["id"], "existing-contact");
+                assert_eq!(contacts[0]["person_key"], "grace-hopper");
+                assert_eq!(contacts[0]["name"], "Grace Hopper");
+                assert_eq!(contacts[0][stored_field], value);
+                assert_eq!(contacts[0]["source"], "sellify");
+                assert_eq!(
+                    patch["payload"]["verified_field_keys"],
+                    serde_json::json!([])
+                );
+            }
+        }
+        // Full-name preservation neither invents a person from title/gender
+        // alone nor overrides explicitly supplied structured name parts.
+        assert!(normalize_researched_contact_with_context(
+            serde_json::json!({"person_titel": "Dr.", "person_geschlecht": "female"}),
+            &[]
+        )
+        .is_none());
+        let explicit = normalize_researched_contact_with_context(
+            serde_json::json!({
+                "name": "Old Name", "person_vorname": "Ada", "person_nachname": "Lovelace"
+            }),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(explicit["name"], "Ada Lovelace");
     }
 
     #[test]
