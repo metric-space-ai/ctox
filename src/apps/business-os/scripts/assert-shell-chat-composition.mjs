@@ -12,6 +12,7 @@ const outputDir = process.env.SHELL_CHAT_COMPOSITION_OUTPUT_DIR
   || path.join(repoRoot, 'output/playwright', `shell-chat-composition-${timestampForPath()}`);
 const reportPath = path.join(outputDir, 'shell-chat-composition.json');
 const screenshotPath = path.join(outputDir, 'shell-chat-composition-expanded.png');
+const fixtureMinimum = { width: 640, height: 480 };
 fs.mkdirSync(outputDir, { recursive: true });
 
 const { chromium } = require(resolvePlaywrightModule());
@@ -135,7 +136,8 @@ try {
   await page.waitForFunction(() => document.body.hasAttribute('data-shell-chat-dock-expanded'));
   await chooseLayout(page, 'maximize');
   const maximized = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'expanded-maximized', ...maximized });
+  observations.push({ phase: 'expanded-maximized', ...maximized,
+    expectedWindow: expectFixedLayout(maximized, await page.evaluate(() => window.shellHarness.workArea()), 'maximize') });
   await chooseLayout(page, 'maximize');
   const maximizedAgain = await page.evaluate(() => window.shellHarness.collect());
   expect(maximizedAgain.windowState === 'maximized' && closeRect(maximizedAgain.window, maximized.window),
@@ -151,7 +153,8 @@ try {
 
   await chooseLayout(page, 'bottom');
   const snapped = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'expanded-bottom-snap', ...snapped });
+  observations.push({ phase: 'expanded-bottom-snap', ...snapped,
+    expectedWindow: expectFixedLayout(snapped, await page.evaluate(() => window.shellHarness.workArea()), 'bottom') });
   expect(snapped.window.bottom >= snapped.viewport.height - 10, `bottom-snapped window must reach the work-area bottom under the floating chat dock (no reserved inset): ${JSON.stringify({ windowBottom: snapped.window.bottom, viewportHeight: snapped.viewport.height })}`);
   expect(snapped.window.height >= 199, `bottom snap must preserve the minimum window height, got ${snapped.window.height}`);
 
@@ -195,7 +198,8 @@ try {
   expect(leftEdge.snapZone === null, `dragging to the left work edge must remain free, got ${leftEdge.snapZone}`);
   await chooseLayout(page, 'left');
   const leftSnap = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'layout-snap-left', ...leftSnap });
+  observations.push({ phase: 'layout-snap-left', ...leftSnap,
+    expectedWindow: expectFixedLayout(leftSnap, work, 'left') });
   expect(leftSnap.snapZone === 'left', `the left menu action must snap left, got ${leftSnap.snapZone}`);
 
   await chooseLayout(page, 'free');
@@ -207,7 +211,8 @@ try {
   expect(rightEdge.snapZone === null, `dragging to the right work edge must remain free, got ${rightEdge.snapZone}`);
   await chooseLayout(page, 'right');
   const rightSnap = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'layout-snap-right', ...rightSnap });
+  observations.push({ phase: 'layout-snap-right', ...rightSnap,
+    expectedWindow: expectFixedLayout(rightSnap, work, 'right') });
   expect(rightSnap.snapZone === 'right', `the right menu action must snap right, got ${rightSnap.snapZone}`);
 
   await chooseLayout(page, 'free');
@@ -218,7 +223,8 @@ try {
   expect(topEdge.snapZone === null, `dragging to the top work edge must remain free, got ${topEdge.snapZone}`);
   await chooseLayout(page, 'top');
   const topSnap = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'layout-snap-top', ...topSnap });
+  observations.push({ phase: 'layout-snap-top', ...topSnap,
+    expectedWindow: expectFixedLayout(topSnap, work, 'top') });
   expect(topSnap.snapZone === 'top', `the top menu action must snap top, got ${topSnap.snapZone}`);
   await chooseLayout(page, 'free');
 
@@ -233,7 +239,8 @@ try {
   expect(bottomEdge.snapZone === null, `dragging to the bottom work edge must remain free, got ${bottomEdge.snapZone}`);
   await chooseLayout(page, 'bottom');
   const bottomSnap = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'layout-snap-bottom', ...bottomSnap });
+  observations.push({ phase: 'layout-snap-bottom', ...bottomSnap,
+    expectedWindow: expectFixedLayout(bottomSnap, work, 'bottom') });
   expect(bottomSnap.snapZone === 'bottom', `the bottom menu action must snap bottom, got ${bottomSnap.snapZone}`);
   await chooseLayout(page, 'free');
 
@@ -271,7 +278,8 @@ try {
     const beforeReopen = await page.evaluate(() => window.shellHarness.collect());
     await reloadHarness(page, url);
     const reopened = await page.evaluate(() => window.shellHarness.collect());
-    observations.push({ phase: `reopened-${action}`, ...reopened });
+    observations.push({ phase: `reopened-${action}`, ...reopened,
+      expectedWindow: expectFixedLayout(reopened, await page.evaluate(() => window.shellHarness.workArea()), action) });
     expect(closeRect(reopened.window, beforeReopen.window), `${action} geometry must survive reopening`);
     expect(reopened.snapZone === beforeReopen.snapZone, `${action} snap selection must survive reopening`);
     expect(reopened.windowState === beforeReopen.windowState, `${action} window state must survive reopening`);
@@ -314,6 +322,28 @@ function expect(condition, message) {
 
 function closeRect(actual, expected, tolerance = 1) {
   return ['x', 'y', 'width', 'height'].every((key) => Math.abs(actual[key] - expected[key]) <= tolerance);
+}
+
+function expectFixedLayout(observation, work, action) {
+  // Independent fixture oracle: a fixed layout fills the work area or anchors
+  // a half-size pane to its selected edge, respecting this app's declared min.
+  // Do not ask the manager for its target rectangle: that would verify itself.
+  expect(work.width >= fixtureMinimum.width && work.height >= fixtureMinimum.height,
+    'fixed-layout fixture must have enough work area for its declared minimum');
+  const expected = { x: work.originLeft + work.left, y: work.originTop + work.top,
+    width: work.width, height: work.height };
+  if (action === 'left' || action === 'right') {
+    expected.width = Math.max(fixtureMinimum.width, work.width / 2);
+    if (action === 'right') expected.x += work.width - expected.width;
+  } else if (action === 'top' || action === 'bottom') {
+    expected.height = Math.max(fixtureMinimum.height, work.height / 2);
+    if (action === 'bottom') expected.y += work.height - expected.height;
+  } else if (action !== 'maximize') {
+    throw new Error(`No fixed-layout fixture oracle for ${action}`);
+  }
+  expect(closeRect(observation.window, expected, 2),
+    `${action} must apply real anchored bounds, not only a state marker: ${JSON.stringify({ expected, actual: observation.window })}`);
+  return expected;
 }
 
 async function chooseLayout(page, action) {
@@ -520,7 +550,7 @@ function harnessHtml() {
     controller.start();
     ['window:opened','window:closed','window:minimized','window:restored'].forEach((name) => eventBus.on(name, () => controller.refresh()));
     const handle = wm.create({
-      ownerId:'module:test', title:'Testfenster', x:80, y:60, width:1000, height:610, minWidth:640, minHeight:480,
+      ownerId:'module:test', title:'Testfenster', x:80, y:60, width:1000, height:610, minWidth:${fixtureMinimum.width}, minHeight:${fixtureMinimum.height},
       content:'<div class="harness-window-content"><button type="button" data-window-action>Freigabe ausführen</button></div>',
     });
     let windowClicks = 0;
