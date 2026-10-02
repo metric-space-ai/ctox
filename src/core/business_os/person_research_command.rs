@@ -2596,6 +2596,14 @@ mod tests {
                      BEGIN SELECT RAISE(ABORT, 'writeback fixture rejection'); END;",
                 )?;
             }
+            // Seed the actual durable control claim without dispatching a
+            // worker or provider. Completion must cross the same canonical
+            // command barrier as production, not just a copied RxDB row.
+            let claim = crate::mission::channels::claim_business_control_command(
+                root,
+                store::business_command_core_claim("cmd-writeback-barrier", &command)?,
+            )?;
+            assert_eq!(claim.disposition, "new");
             let outcome = serde_json::json!({
                 "fields": {"firma_name": {"value": "Researched company", "candidates": []}},
                 "evidence": [{"field": "firma_name", "source_id": "impressum",
@@ -2623,6 +2631,15 @@ mod tests {
             )?
             .expect("command outcome is durable");
             assert_eq!(lead["contacts"][0]["id"], "retained-contact");
+            assert_eq!(published["execution_phase"], "terminal");
+            assert_eq!(
+                published["terminal_status"],
+                if failure == "none" {
+                    "completed"
+                } else {
+                    "failed"
+                }
+            );
             if failure != "none" {
                 assert_eq!(lead_status, "failed");
                 assert!(error
