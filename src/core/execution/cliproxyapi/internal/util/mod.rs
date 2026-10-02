@@ -42,11 +42,14 @@ mod header_helpers_test;
 #[cfg(test)]
 mod provider_test;
 
-pub use claude_attribution::is_claude_code_attribution_system_text;
-pub use claude_model::is_claude_thinking_model;
+pub use claude_attribution::{
+    is_claude_code_attribution_system_text, strip_claude_code_attribution_system,
+};
+pub use claude_model::{is_claude_model, is_claude_thinking_model};
 pub use claude_schema::normalize_claude_tool_input_schema;
 pub use claude_tool_id::{
-    gemini_claude_tool_use_id, is_gemini_claude_tool_use_id, sanitize_claude_tool_id,
+    gemini_claude_tool_use_id, is_gemini_claude_tool_use_id, sanitize_claude_function_name,
+    sanitize_claude_tool_id,
 };
 pub use claude_tool_result::{
     convert_claude_tool_result_content, ClaudeToolResult, ClaudeToolResultImage,
@@ -60,7 +63,7 @@ pub use gemini_schema::{
     clean_json_schema_for_antigravity, clean_json_schema_for_antigravity_response,
     clean_json_schema_for_gemini,
 };
-pub use gjson::get_gjson_bytes_no_copy;
+pub use gjson::{get_gjson_bytes_no_copy, parse_gjson_bytes_no_copy};
 pub use header_helpers::{
     apply_custom_headers, apply_custom_headers_from_attrs, canonical_header_name,
     extract_custom_headers, HeaderRequest,

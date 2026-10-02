@@ -269,7 +269,7 @@ pub fn prepare_claude_upstream_body_with_identity(
     let body = normalize_claude_sampling_for_upstream(&body);
     let body = ensure_claude_model_max_tokens(&body, model);
     let body = if model.is_some_and(|model| model.provider_type.eq_ignore_ascii_case("claude")) {
-        sanitize_claude_messages_for_claude_upstream(&body).0
+        sanitize_claude_messages_for_claude_upstream(&body, false).0
     } else {
         body
     };
@@ -299,7 +299,7 @@ pub fn prepare_claude_upstream_body_with_identity(
     // verified client did not carry the measured billing block, install the
     // deterministic Claude Code fallback before hashing the final body.
     let body = if oauth {
-        let fallback = claude_cch_fallback_billing_header(&body, "2.1.220", "cli", "");
+        let fallback = claude_cch_fallback_billing_header(&body, "2.1.280", "cli", "");
         finalize_anthropic_messages_body_cch(&body, &fallback)
     } else {
         sign_anthropic_messages_body(&body)
@@ -1433,7 +1433,7 @@ mod payload_tests {
         let (body, _, _) = prepare_claude_upstream_body_with_identity(input, None, "secret", true);
         let root = value(&body);
         let billing = root["system"][0]["text"].as_str().unwrap();
-        assert!(billing.starts_with("x-anthropic-billing-header: cc_version=2.1.220."));
+        assert!(billing.starts_with("x-anthropic-billing-header: cc_version=2.1.280."));
         assert!(billing.contains("cc_entrypoint=cli; cch="));
         assert!(!billing.contains("cch=00000;"));
         assert_eq!(sign_anthropic_messages_body(&body), body);
@@ -1833,8 +1833,8 @@ mod tests {
         assert!(lower.contains("anthropic-beta: claude-code-20250219"));
         assert!(lower.contains("x-app: cli"));
         assert!(lower.contains("x-claude-code-session-id: "));
-        assert!(lower.contains("user-agent: claude-cli/2.1.220 (external, cli)"));
-        assert!(lower.contains("x-stainless-package-version: 0.94.0"));
+        assert!(lower.contains("user-agent: claude-cli/2.1.280 (external, cli)"));
+        assert!(lower.contains("x-stainless-package-version: 0.112.1"));
         assert!(lower.contains("x-stainless-runtime-version: v26.3.0"));
         assert!(lower.contains("x-stainless-os: macos"));
         assert!(lower.contains("x-stainless-arch: arm64"));

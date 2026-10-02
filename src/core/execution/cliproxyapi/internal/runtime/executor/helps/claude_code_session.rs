@@ -66,7 +66,9 @@ pub fn claude_code_prompt_cache(
     })
 }
 
-pub(crate) fn header_value_case_insensitive(headers: Option<&HeaderMap>, name: &str) -> String {
+/// Returns the first non-empty header value matching `name`, case-insensitively.
+#[must_use]
+pub fn header_value_case_insensitive(headers: Option<&HeaderMap>, name: &str) -> String {
     let Some(headers) = headers else {
         return String::new();
     };
@@ -78,6 +80,22 @@ pub(crate) fn header_value_case_insensitive(headers: Option<&HeaderMap>, name: &
         .find(|value| !value.is_empty())
         .unwrap_or_default()
         .to_owned()
+}
+
+/// Returns every non-empty header value matching `name`, case-insensitively.
+#[must_use]
+pub fn header_values_case_insensitive(headers: Option<&HeaderMap>, name: &str) -> Vec<String> {
+    let Some(headers) = headers else {
+        return Vec::new();
+    };
+    headers
+        .iter()
+        .filter(|(key, _)| key.eq_ignore_ascii_case(name))
+        .flat_map(|(_, values)| values)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .collect()
 }
 
 fn extract_claude_code_session_id_from_payload(payload: &[u8]) -> String {

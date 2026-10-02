@@ -2,7 +2,7 @@
 // Port-Status: ported
 // License: MIT (upstream); modifications AGPL-3.0-only
 
-use super::claude_model::is_claude_thinking_model;
+use super::claude_model::{is_claude_model, is_claude_thinking_model};
 
 #[test]
 fn pinned_claude_thinking_model_cases_match_upstream() {
@@ -30,4 +30,17 @@ fn pinned_claude_thinking_model_cases_match_upstream() {
 fn heuristic_is_substring_based_like_upstream() {
     assert!(is_claude_thinking_model("preCLAUDE-mid-unthinking-post"));
     assert!(!is_claude_thinking_model("claud-thinking"));
+}
+
+#[test]
+fn claude_model_heuristic_matches_upstream() {
+    for (model, expected) in [
+        ("claude-sonnet-4-6", true),
+        ("claude-opus-4-6-thinking", true),
+        ("Claude-Sonnet-4-5", true),
+        ("gemini-3-pro-preview", false),
+        ("", false),
+    ] {
+        assert_eq!(is_claude_model(model), expected, "model={model}");
+    }
 }
