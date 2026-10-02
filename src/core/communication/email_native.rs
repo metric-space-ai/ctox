@@ -1822,32 +1822,34 @@ fn collect_mail_bodies(parsed: &ParsedMail<'_>) -> Result<(String, String, Vec<V
 // Delay HTML-to-text conversion until all MIME alternatives have been read;
 // an HTML part listed first must not displace the author's text/plain part.
 fn collect_mail_body_parts(parsed: &ParsedMail<'_>) -> Result<(String, String, Vec<Value>)> {
-    if parsed.subparts.is_empty() {
-        let mimetype = parsed.ctype.mimetype.to_lowercase();
-        let disposition = parsed.get_content_disposition();
-        let has_attachment = matches!(disposition.disposition, DispositionType::Attachment);
-        let attachments = if has_attachment {
-            let fallback_name = format!("attachment.{}", extension_for_content_type(&mimetype));
-            let name = disposition
-                .params
-                .get("filename")
-                .or_else(|| parsed.ctype.params.get("name"))
-                .map(String::as_str)
-                .unwrap_or(&fallback_name)
-                .to_string();
-            let size_bytes = parsed.get_body_raw().map(|bytes| bytes.len()).unwrap_or(0);
+    let mimetype = parsed.ctype.mimetype.to_lowercase();
+    let disposition = parsed.get_content_disposition();
+    // Attachment disposition applies to the entire MIME subtree. Descending
+    // into an attached multipart message would substitute its alternatives
+    // for the actual mail body and lose the enclosing attachment metadata.
+    if matches!(disposition.disposition, DispositionType::Attachment) {
+        let fallback_name = format!("attachment.{}", extension_for_content_type(&mimetype));
+        let name = disposition
+            .params
+            .get("filename")
+            .or_else(|| parsed.ctype.params.get("name"))
+            .map(String::as_str)
+            .unwrap_or(&fallback_name)
+            .to_string();
+        let size_bytes = parsed.get_body_raw().map(|bytes| bytes.len()).unwrap_or(0);
+        return Ok((
+            String::new(),
+            String::new(),
             vec![json!({
                 "name": name,
-                "contentType": mimetype.clone(),
+                "contentType": mimetype,
                 "sizeBytes": size_bytes,
                 "source": "mime",
-            })]
-        } else {
-            Vec::new()
-        };
-        if has_attachment {
-            return Ok((String::new(), String::new(), attachments));
-        }
+            })],
+        ));
+    }
+    if parsed.subparts.is_empty() {
+        let attachments = Vec::new();
         let body = parsed.get_body().unwrap_or_default();
         if mimetype == "text/html" {
             return Ok((String::new(), body, attachments));
@@ -5699,6 +5701,21 @@ mod tests {
             super::strip_html("<p>Keep &lt;literal&gt; &amp; 🙂</p><div>Next<br>line</div><script>tracking()</script>"),
             "Keep <literal> & 🙂\n\nNext\nline"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn mime_multipart_attachment_cannot_replace_the_message_body() -> anyhow::Result<()> {
+        let raw = b"MIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=outer\r\n\r\n--outer\r\nContent-Type: multipart/alternative; boundary=attached\r\nContent-Disposition: attachment; filename=forwarded.mime\r\n\r\n--attached\r\nContent-Type: text/plain\r\n\r\nAttached plain text\r\n--attached\r\nContent-Type: text/html\r\n\r\n<p>Attached rich text</p>\r\n--attached--\r\n--outer\r\nContent-Type: text/plain\r\n\r\nActual mail body\r\n--outer--\r\n";
+        let parsed = mailparse::parse_mail(raw)?;
+        assert_eq!(parsed.subparts[0].subparts.len(), 2);
+        let (text, rich, attachments) = super::collect_mail_bodies(&parsed)?;
+        assert_eq!(text.trim(), "Actual mail body");
+        assert!(rich.is_empty());
+        assert_eq!(attachments.len(), 1);
+        assert_eq!(attachments[0]["name"], "forwarded.mime");
+        assert_eq!(attachments[0]["contentType"], "multipart/alternative");
+        assert!(attachments[0]["sizeBytes"].as_u64().unwrap_or(0) > 0);
         Ok(())
     }
 
