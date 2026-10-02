@@ -6,6 +6,122 @@ use std::fs;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
+#[test]
+fn queue_turn_fence_observes_cancel_and_preserves_other_worker() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let create = |name: &str| {
+        create_queue_task(
+            root.path(),
+            QueueTaskCreateRequest {
+                title: name.into(),
+                prompt: name.into(),
+                thread_key: format!("queue/cancel/{name}"),
+                workspace_root: None,
+                priority: "normal".into(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+    };
+    let target = create("target")?;
+    let other = create("unrelated")?;
+    let fence = |key: &str, worker: &str| QueueTurnLeaseFence {
+        root: root.path().to_owned(),
+        message_keys: vec![key.to_owned()],
+        worker_id: worker.into(),
+    };
+    for (task, worker) in [(&target, "worker-target"), (&other, "worker-other")] {
+        lease_queue_task(root.path(), &task.message_key, "ctox-service")?;
+        assert_eq!(
+            record_queue_lease_worker(
+                root.path(),
+                std::slice::from_ref(&task.message_key),
+                "ctox-service",
+                worker
+            )?,
+            1
+        );
+    }
+    let target_fence = fence(&target.message_key, "worker-target");
+    let other_fence = fence(&other.message_key, "worker-other");
+    let reader = target_fence.open_reader()?;
+    assert!(target_fence.still_owned(&reader)?);
+    assert!(other_fence.still_owned(&reader)?);
+    update_queue_task(
+        root.path(),
+        QueueTaskUpdateRequest {
+            message_key: target.message_key.clone(),
+            route_status: Some("cancelled".into()),
+            status_note: Some("operator cancellation".into()),
+            ..Default::default()
+        },
+    )?;
+    // The same open reader observes the committed cancellation, without a
+    // retained WAL snapshot, and cannot revive the cancelled row.
+    assert!(!target_fence.still_owned(&reader)?);
+    assert!(other_fence.still_owned(&reader)?);
+    assert_eq!(
+        record_queue_lease_worker(
+            root.path(),
+            std::slice::from_ref(&target.message_key),
+            "ctox-service",
+            "worker-target"
+        )?,
+        0
+    );
+    assert!(!fence(&other.message_key, "stale-worker").still_owned(&reader)?);
+    assert!(!fence("queue:system::missing", "worker-target").still_owned(&reader)?);
+    assert!(fence(&other.message_key, "").open_reader().is_err());
+    assert!(reader
+        .execute("DELETE FROM communication_routing_state", [])
+        .is_err());
+    Ok(())
+}
+
+#[test]
+fn queue_turn_fence_cannot_interrupt_a_released_new_worker() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let task = create_queue_task(
+        root.path(),
+        QueueTaskCreateRequest {
+            title: "re-leased task".into(),
+            prompt: "re-leased task".into(),
+            thread_key: "queue/cancel/re-lease".into(),
+            workspace_root: None,
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: None,
+        },
+    )?;
+    let keys = vec![task.message_key.clone()];
+    lease_queue_task(root.path(), &task.message_key, "ctox-service")?;
+    record_queue_lease_worker(root.path(), &keys, "ctox-service", "old-worker")?;
+    let old = QueueTurnLeaseFence {
+        root: root.path().to_owned(),
+        message_keys: keys.clone(),
+        worker_id: "old-worker".into(),
+    };
+    let reader = old.open_reader()?;
+    assert!(old.still_owned(&reader)?);
+    let conn = open_channel_db(&resolve_db_path(root.path(), None))?;
+    conn.execute("UPDATE communication_routing_state SET lease_expires_at='2000-01-01T00:00:00Z' WHERE message_key=?1",
+        [&task.message_key])?;
+    drop(conn);
+    let sweep = release_stale_queue_task_leases(root.path(), "ctox-service", &HashSet::new())?;
+    assert_eq!(sweep.released, keys);
+    lease_queue_task(root.path(), &task.message_key, "ctox-service")?;
+    record_queue_lease_worker(root.path(), &keys, "ctox-service", "new-worker")?;
+    assert!(!old.still_owned(&reader)?);
+    let new = QueueTurnLeaseFence {
+        worker_id: "new-worker".into(),
+        ..old
+    };
+    assert!(new.still_owned(&reader)?);
+    Ok(())
+}
+
 fn unique_test_db_path(prefix: &str) -> PathBuf {
     std::env::temp_dir().join(format!(
         "{prefix}-{}.db",

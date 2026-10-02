@@ -4163,6 +4163,47 @@ pub fn renew_message_leases(
 /// write is deliberately constrained to rows still leased by the expected
 /// owner, so a stale worker can never stamp a lease that was already
 /// reclaimed and re-leased by someone else.
+/// Exact native lease identity supplied to a service-owned harness turn.
+/// A cancelled, missing or re-leased row revokes the old turn's authority.
+#[derive(Debug, Clone)]
+pub(crate) struct QueueTurnLeaseFence {
+    pub(crate) root: PathBuf,
+    pub(crate) message_keys: Vec<String>,
+    pub(crate) worker_id: String,
+}
+
+impl QueueTurnLeaseFence {
+    pub(crate) fn open_reader(&self) -> Result<Connection> {
+        anyhow::ensure!(
+            !self.message_keys.is_empty() && !self.worker_id.trim().is_empty(),
+            "queue turn cancelled: missing native lease identity"
+        );
+        let conn = Connection::open_with_flags(
+            resolve_db_path(&self.root, None),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        // Keep one read-only connection per bounded turn, without schema
+        // repair, write transactions or a long-lived WAL read transaction.
+        conn.busy_timeout(std::time::Duration::from_millis(100))?;
+        Ok(conn)
+    }
+
+    pub(crate) fn still_owned(&self, conn: &Connection) -> Result<bool> {
+        for key in &self.message_keys {
+            let owned: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM communication_routing_state
+                 WHERE message_key=?1 AND route_status='leased' AND lease_worker_id=?2)",
+                params![key, self.worker_id],
+                |row| row.get(0),
+            )?;
+            if !owned {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
 pub fn record_queue_lease_worker(
     root: &Path,
     message_keys: &[String],
