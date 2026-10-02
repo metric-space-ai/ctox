@@ -490,6 +490,155 @@ test('file opening validates requested provenance before same-hash deduplication
   assert.deepEqual(collectionCalls, []);
 });
 
+async function snapshotReportInput(overrides = {}) {
+  const file = new File(['PK snapshot fixture'], 'outbound-snapshot.xlsx', {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()));
+  const fileSha256 = Array.from(hash, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return {
+    file,
+    source_kind: 'research_generated',
+    open_purpose: 'snapshot_report',
+    report_snapshot: {
+      source_module: 'outbound',
+      source_collection: 'leads',
+      source_record_ids: ['saved-lead-1'],
+      captured_at_ms: 1790970000000,
+      file_sha256: fileSha256,
+    },
+    ...overrides,
+  };
+}
+
+// Exercise openFile through the real persistence bridge. No editor/native
+// conversion is simulated here; installed SaveACK/reopen remains acceptance.
+function snapshotReportState(initialRecords = []) {
+  const rows = new Map([
+    ['spreadsheets', initialRecords.map((row) => ({ ...row }))],
+    ['spreadsheet_versions', []],
+    ['spreadsheet_blob_chunks', []],
+    ['desktop_files', []],
+  ]);
+  const writes = [];
+  const acknowledged = [];
+  const collections = new Map(Array.from(rows, ([name, records]) => [name, {
+    find: () => ({ exec: async () => records.map((row) => ({ toJSON: () => ({ ...row }) })) }),
+    findOne: (query) => ({ exec: async () => {
+      const id = typeof query === 'string' ? query : query.selector.id;
+      const row = records.find((candidate) => candidate.id === id);
+      return row ? { toJSON: () => ({ ...row }) } : null;
+    } }),
+    async insert(row) {
+      writes.push({ name, row });
+      records.push({ ...row });
+      return { toJSON: () => ({ ...row }) };
+    },
+    async bulkUpsert(documents) {
+      writes.push({ name, documents });
+      records.push(...documents);
+      return documents.map((row) => ({ toJSON: () => ({ ...row, _meta: { lwt: Date.now() } }) }));
+    },
+  }]));
+  const state = {
+    spreadsheets: initialRecords.map((row) => ({ ...row })),
+    selectedId: initialRecords[0]?.id || '',
+    selectedVersion: null,
+    active: false,
+    disposed: true,
+    t: (_key, fallback) => fallback,
+    ctx: {
+      host: { isConnected: false, querySelector: () => null },
+      db: { collection: (name) => collections.get(name) },
+      commandBus: { dispatch: async () => { throw new Error('opening a snapshot must not dispatch research'); } },
+      sync: { async leaseCollection() { return {
+        bridge: { state: {
+          async waitForOpenPeerId() { return 'native'; },
+          async pushDocumentsToPeer(_peer, documents) { acknowledged.push(...documents); return true; },
+        } },
+        async release() {},
+      }; } },
+    },
+  };
+  return { state, rows, writes, acknowledged };
+}
+
+test('explicit saved-state XLSX report persists its exact bytes and non-evidence origin', async () => {
+  const input = await snapshotReportInput();
+  const fixture = snapshotReportState();
+  const opened = await hooks.openSpreadsheetFile(fixture.state, input);
+  assert.ok(opened?.id);
+  assert.equal(fixture.rows.get('spreadsheets').length, 1);
+  assert.equal(fixture.rows.get('spreadsheet_versions').length, 1);
+  for (const record of [opened, fixture.rows.get('spreadsheet_versions')[0]]) {
+    assert.equal(record.source_kind, 'research_generated');
+    assert.equal(record.ingestion_kind, 'research_generated');
+    assert.deepEqual(record.knowledge_lineage.report_snapshot, input.report_snapshot);
+    assert.equal(record.knowledge_lineage.open_purpose, 'snapshot_report');
+    assert.equal(record.knowledge_lineage.evidence_eligible, false);
+  }
+  assert.equal(opened.source_sha256, input.report_snapshot.file_sha256);
+  assert.ok(fixture.acknowledged.length > 0, 'source bytes acknowledged before publishing references');
+  const reopened = await hooks.openSpreadsheetFile(fixture.state, input);
+  assert.equal(reopened.id, opened.id);
+  assert.equal(fixture.rows.get('spreadsheets').length, 1, 'same file and report origin reuse the record');
+  assert.deepEqual(reopened.knowledge_lineage.report_snapshot, input.report_snapshot);
+  assert.equal(reopened.knowledge_lineage.evidence_eligible, false);
+});
+
+test('same XLSX bytes cannot reuse an ordinary import or a different report origin', async () => {
+  const input = await snapshotReportInput();
+  const fixture = snapshotReportState([{
+    id: 'ordinary-upload', filename: input.file.name, status: 'Imported',
+    source_kind: 'user_import', ingestion_kind: 'user_import',
+    source_sha256: input.report_snapshot.file_sha256,
+  }]);
+  const report = await hooks.openSpreadsheetFile(fixture.state, input);
+  assert.notEqual(report.id, 'ordinary-upload');
+  const otherInput = { ...input, report_snapshot: { ...input.report_snapshot, source_record_ids: ['saved-lead-2'] } };
+  const otherReport = await hooks.openSpreadsheetFile(fixture.state, otherInput);
+  assert.notEqual(otherReport.id, report.id);
+  const upload = await hooks.openSpreadsheetFile(fixture.state, { file: input.file });
+  assert.equal(upload.id, 'ordinary-upload', 'ordinary import must not inherit research report origin');
+  assert.equal(fixture.rows.get('spreadsheets').length, 3);
+});
+
+test('snapshot reports reject missing or mismatched descriptors before persistence', async () => {
+  const input = await snapshotReportInput();
+  for (const report_snapshot of [
+    undefined,
+    { ...input.report_snapshot, file_sha256: '' },
+    { ...input.report_snapshot, file_sha256: '0'.repeat(64) },
+    { ...input.report_snapshot, source_record_ids: [] },
+    { ...input.report_snapshot, captured_at_ms: -1 },
+  ]) {
+    const fixture = snapshotReportState();
+    await assert.rejects(hooks.openSpreadsheetFile(fixture.state, { ...input, report_snapshot }));
+    assert.deepEqual(fixture.writes, []);
+    assert.deepEqual(fixture.acknowledged, []);
+  }
+});
+
+test('snapshot purpose cannot turn an unresolved source file into an import', async () => {
+  const fixture = snapshotReportState();
+  const input = await snapshotReportInput({ sourceFileId: 'missing-source-file' });
+  await assert.rejects(hooks.openSpreadsheetFile(fixture.state, input), /could not be resolved/i);
+  assert.deepEqual(fixture.writes, []);
+});
+
+test('report provenance assertions cannot authorize the evidence opening path', async () => {
+  const input = await snapshotReportInput();
+  const fixture = snapshotReportState();
+  await assert.rejects(hooks.openSpreadsheetFile(fixture.state, {
+    ...input,
+    open_purpose: 'evidence',
+    evidence_eligible: true,
+    provenance_verified: true,
+    knowledge_lineage: { evidence_eligible: true, report_snapshot: input.report_snapshot },
+  }), (error) => error.code === 'SPREADSHEET_LINEAGE_REQUIRED');
+  assert.deepEqual(fixture.writes, []);
+});
+
 test('file-open deduplication reuses the imported spreadsheet with the same source hash', () => {
   const records = [
     { id: 'sheet_other', source_sha256: 'aaaa' },
