@@ -298,7 +298,7 @@ class RunnerTests(unittest.TestCase):
         self.asset = None
         self.sandbox = None
 
-    def run_fake(self, negative="failed", wrong_package=False, changed_root=False, final_error=False, wrong_pdf=False, timeout_stage=None, cleanup_denied=False):
+    def run_fake(self, negative="failed", wrong_package=False, changed_root=False, final_error=False, wrong_pdf=False, timeout_stage=None, cleanup_denied=False, preparation="ready"):
         def copy(checkout, revision, destination, deadline):
             destination.mkdir()
             if destination.name == "ctox":
@@ -336,6 +336,20 @@ class RunnerTests(unittest.TestCase):
                 for artifact in ({"reason": "compiler-artifact", "package_id": "copied"},
                                  {"reason": "compiler-artifact", "package_id": "root", "target": {"name": "ctox"}, "executable": str(executable)}):
                     kwargs["stdout"].write(json.dumps(artifact) + "\n")
+            elif label == "browser-prepare":
+                report = {
+                    "ok": True, "tool": "ctox_browser_prepare",
+                    "doctor": {"reference_dir": str(root / "runtime/browser/interactive-reference"),
+                               "automation_ready": True, "runner_dependency_installed": True,
+                               "runner_browser_installed": True, "smoke": {"ran": True, "ok": True}},
+                }
+                if preparation == "missing-browser":
+                    report["doctor"]["runner_browser_installed"] = False
+                elif preparation == "skipped-smoke":
+                    report["doctor"]["smoke"] = {"ran": False, "ok": True}
+                elif preparation == "wrong-reference":
+                    report["doctor"]["reference_dir"] = str(root / "another-reference")
+                json.dump(report, kwargs["stdout"])
             elif label.endswith("positive") or label == "mutated-negative":
                 self.probes.append(label)
                 if label == "mutated-negative" and negative == "interrupted":
@@ -384,6 +398,21 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual((self.canonical.parent / "assets/stealth_init.js").read_bytes(), self.original)
         receipt = json.loads((self.sandbox / "result.json").read_text())
         return result, error, receipt
+
+    def test_incomplete_browser_preparation_cannot_start_mutation_probes(self):
+        for preparation in ("missing-browser", "skipped-smoke", "wrong-reference"):
+            with self.subTest(preparation=preparation):
+                self.probes.clear()
+                self.commands.clear()
+                _, error, receipt = self.run_fake(preparation=preparation)
+                self.assertIsInstance(error, mutation.BindingError)
+                self.assertFalse(receipt["passed"])
+                self.assertNotIn("browser_preparation", receipt)
+                self.assertEqual(self.probes, [])
+                self.assertNotIn("build-mutated", receipt)
+                self.assertNotIn("build-restored", receipt)
+                self.assertTrue(receipt["asset_restored"])
+                self.assertTrue(receipt["manifest_restored"])
 
     def test_timeout_remains_primary_when_cleanup_signal_is_denied(self):
         _, error, receipt = self.run_fake(timeout_stage="build-initial", cleanup_denied=True)
