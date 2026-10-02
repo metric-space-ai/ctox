@@ -26,15 +26,11 @@
 //     no `src`/`srcset`/`loading`/`background` etc.
 //   * URLs: only http(s) and mailto; everything else becomes a plain text
 //     replacement so it cannot be executed or tracked. No auto-loading of
-//     remote images (we keep the option open via `data-mail-allow-images`
-//     on the container, see `mountMailBody`).
-//   * Tracking-pixel `<img>` elements are dropped entirely. The user can
-//     still reveal images by clicking "Bilder anzeigen" once per body.
+//     remote images. Images are represented by their alternative text.
 //
-// The pure helpers (`selectMessageBody`, `sanitizeBodyHtml`,
-// `isSafeHttpUrl`, `extractSafeUrl`) do not touch the DOM and are exercised
-// by the unit suite. `mountMailBody` is the only DOM-touching entry point
-// and is exercised by the browser regression suite.
+// Body selection and URL validation are pure helpers. HTML parsing and
+// allowlisted copying use the supplied ownerDocument. Browser acceptance
+// must also verify parser behavior and the absence of resource requests.
 
 // Strict allowlist. Order does not matter; the sanitizer does not rely on it.
 const ALLOWED_TAGS = new Set([
@@ -245,15 +241,22 @@ function sanitizeAttributes(source, tagName) {
 // recognize get reduced to their text content (recursively sanitized) but
 // never re-emit the dangerous tag. There are no live event handlers and no
 // remote fetches in this code path.
-function appendSanitized(source, target, allowImages) {
+function appendSanitized(source, target) {
   if (!source || !target) return;
   const ownerDocument = target.ownerDocument || target;
-  for (const node of Array.from(source.childNodes || [])) {
-    if (node.nodeType === Node.TEXT_NODE) {
-      appendSafeText(target, String(node.nodeValue || ''));
+  const stack = [{ nodes: Array.from(source.childNodes || []), index: 0, target }];
+  while (stack.length) {
+    const frame = stack[stack.length - 1];
+    if (frame.index >= frame.nodes.length) {
+      stack.pop();
       continue;
     }
-    if (node.nodeType !== Node.ELEMENT_NODE) continue;
+    const node = frame.nodes[frame.index++];
+    if (node.nodeType === 3) {
+      appendSafeText(frame.target, String(node.nodeValue || ''));
+      continue;
+    }
+    if (node.nodeType !== 1) continue;
     const tag = String(node.tagName || '').toLowerCase();
     if (FORBIDDEN_TAGS.has(tag)) {
       // Drop the subtree wholesale — scripts, styles, iframes, forms, etc.
@@ -262,21 +265,13 @@ function appendSanitized(source, target, allowImages) {
       continue;
     }
     if (tag === 'img') {
-      if (!allowImages) {
-        const alt = String(node.getAttribute('alt') || '').trim();
-        appendSafeText(target, alt ? `[Bild blockiert] ${alt}` : '[Bild blockiert]');
-        continue;
-      }
-      // Even with image display on we never auto-fetch remote content. We
-      // expose the alt text so the operator knows what would have loaded.
       const alt = String(node.getAttribute('alt') || '').trim();
-      appendSafeText(target, alt ? `[Bild: ${alt}]` : '[Bild]');
+      appendSafeText(frame.target, alt ? `[Bild blockiert] ${alt}` : '[Bild blockiert]');
       continue;
     }
     if (!ALLOWED_TAGS.has(tag)) {
-      // Unknown layout primitive: keep its text content (already sanitized)
-      // but never carry the original tag across the boundary.
-      appendSanitized(node, target, allowImages);
+      // Preserve safe children without emitting the unknown element.
+      stack.push({ nodes: Array.from(node.childNodes || []), index: 0, target: frame.target });
       continue;
     }
     const clone = ownerDocument.createElement(tag);
@@ -287,27 +282,19 @@ function appendSanitized(source, target, allowImages) {
       clone.setAttribute('target', '_blank');
       clone.setAttribute('referrerpolicy', 'no-referrer');
     }
-    if (tag === 'a' && !attrs.href) {
-      // Anchors without a usable href lose their anchor identity.
-      appendPlainTextNodes(clone, String(node.textContent || ''));
-      target.appendChild(clone);
-      continue;
-    }
-    appendSanitized(node, clone, allowImages);
-    target.appendChild(clone);
+    frame.target.appendChild(clone);
+    stack.push({ nodes: Array.from(node.childNodes || []), index: 0, target: clone });
   }
 }
 
 // Public entry point: render a mail body into the supplied container. The
 // container is wiped before we append so the caller can call this on every
-// re-render. `allowImages` defaults to false; the host may set
-// `container.dataset.mailAllowImages = '1'` ahead of time to enable it.
-export function mountMailBody(container, message, options = {}) {
+// re-render. Remote images remain blocked for every body.
+export function mountMailBody(container, message) {
   if (!container || !container.ownerDocument) return null;
   const doc = container.ownerDocument;
   const selection = selectMessageBody(message);
-  const allowImages = options.allowImages === true
-    || container.dataset.mailAllowImages === '1';
+
   while (container.firstChild) container.removeChild(container.firstChild);
   container.dataset.mailBodyKind = selection.kind;
   if (selection.kind === 'empty') {
@@ -333,7 +320,7 @@ export function mountMailBody(container, message, options = {}) {
   }
   const wrapper = doc.createElement('div');
   wrapper.className = 'mail-body-html';
-  appendSanitized(sanitized.body, wrapper, allowImages);
+  appendSanitized(sanitized.body, wrapper);
   container.appendChild(wrapper);
   return selection;
 }

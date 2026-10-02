@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mountMailBody, selectMessageBody, extractSafeUrl, __mailBodyTestHooks } from '../lib/mail-body-renderer.mjs';
 
-function documentFixture() {
+function documentFixture(parsedBody) {
   const doc = {
     createElement(tagName) {
       const node = {
@@ -13,6 +13,7 @@ function documentFixture() {
         removeChild(child) { this.childNodes.splice(this.childNodes.indexOf(child), 1); },
         setAttribute(name, value) { this.attributes[name] = value; },
       };
+      if (tagName === 'template') node.content = parsedBody;
       return node;
     },
     createTextNode(value) { return { text: value }; },
@@ -51,4 +52,54 @@ test('unsafe link schemes and control characters cannot become clickable links',
   }
   assert.equal(extractSafeUrl('https://account.google.com/'), 'https://account.google.com/');
   assert.equal(extractSafeUrl('mailto:team@example.test'), 'mailto:team@example.test');
+});
+
+function parsedElement(tagName, attributes = {}, childNodes = []) {
+  return {
+    nodeType: 1, tagName, childNodes,
+    attributes: Object.entries(attributes).map(([name, value]) => ({ name, value })),
+    getAttribute(name) { return attributes[name] ?? null; },
+  };
+}
+
+function parsedText(nodeValue) { return { nodeType: 3, nodeValue }; }
+
+test('HTML copying preserves safe content and drops active subtrees, attributes and image sources', () => {
+  // This fixture exercises copying after parsing. Real browser parser and
+  // network behavior still require the tenant browser acceptance run.
+  const parsedBody = { childNodes: [
+    parsedElement('custom-layout', {}, [
+      parsedElement('p', { style: 'background:url(https://tracker.test/)', onclick: 'attack()' }, [parsedText('Paragraph')]),
+      parsedElement('script', {}, [parsedText('secret-script-content')]),
+      parsedElement('a', { href: 'javascript:attack()' }, [
+        parsedElement('script', {}, [parsedText('hidden-anchor-script')]),
+        parsedText('Unsafe link'),
+      ]),
+      parsedElement('a', { href: 'https://accounts.google.com/', onclick: 'attack()' }, [parsedText('Google account')]),
+      parsedElement('img', { src: 'https://tracker.test/pixel', srcset: 'https://tracker.test/pixel2', alt: 'Logo' }),
+    ]),
+  ] };
+  const doc = documentFixture(parsedBody);
+  const host = doc.createElement('div');
+  mountMailBody(host, { body_html: '<fixture>' });
+  const nodes = host.childNodes[0].childNodes;
+  assert.deepEqual(nodes.filter(node => node.tagName).map(node => node.tagName), ['p', 'a', 'a']);
+  assert.deepEqual(nodes[0].attributes, {});
+  assert.deepEqual(nodes[1].attributes, {});
+  assert.deepEqual(nodes[1].childNodes, [{ text: 'Unsafe link' }]);
+  assert.deepEqual(nodes[2].attributes, {
+    href: 'https://accounts.google.com/', rel: 'noopener noreferrer nofollow',
+    target: '_blank', referrerpolicy: 'no-referrer',
+  });
+  assert.deepEqual(nodes[3], { text: '[Bild blockiert] Logo' });
+});
+
+test('deeply nested HTML cannot overflow the JavaScript call stack', () => {
+  let body = parsedText('Deep message');
+  for (let depth = 0; depth < 20000; depth++) body = parsedElement('custom-layout', {}, [body]);
+  const doc = documentFixture({ childNodes: [body] });
+  const host = doc.createElement('div');
+  const result = mountMailBody(host, { body_html: '<nested-fixture>' });
+  assert.equal(result.kind, 'html');
+  assert.deepEqual(host.childNodes[0].childNodes, [{ text: 'Deep message' }]);
 });
