@@ -26,12 +26,17 @@ fn queue_turn_fence_observes_cancel_and_preserves_other_worker() -> Result<()> {
     };
     let target = create("target")?;
     let other = create("unrelated")?;
+    let sibling = create("same-worker-sibling")?;
     let fence = |key: &str, worker: &str| QueueTurnLeaseFence {
         root: root.path().to_owned(),
         message_keys: vec![key.to_owned()],
         worker_id: worker.into(),
     };
-    for (task, worker) in [(&target, "worker-target"), (&other, "worker-other")] {
+    for (task, worker) in [
+        (&target, "worker-target"),
+        (&other, "worker-other"),
+        (&sibling, "worker-target"),
+    ] {
         lease_queue_task(root.path(), &task.message_key, "ctox-service")?;
         assert_eq!(
             record_queue_lease_worker(
@@ -48,6 +53,22 @@ fn queue_turn_fence_observes_cancel_and_preserves_other_worker() -> Result<()> {
     let reader = target_fence.open_reader()?;
     assert!(target_fence.still_owned(&reader)?);
     assert!(other_fence.still_owned(&reader)?);
+    let batch_fence = QueueTurnLeaseFence {
+        message_keys: vec![target.message_key.clone(), other.message_key.clone()],
+        // A combined turn cannot adopt a task leased by a different worker.
+        ..target_fence.clone()
+    };
+    assert!(!batch_fence.still_owned(&reader)?);
+    let missing_member = QueueTurnLeaseFence {
+        message_keys: vec![target.message_key.clone(), "queue:system::missing".into()],
+        ..target_fence.clone()
+    };
+    assert!(!missing_member.still_owned(&reader)?);
+    let owned_batch = QueueTurnLeaseFence {
+        message_keys: vec![target.message_key.clone(), sibling.message_key.clone()],
+        ..target_fence.clone()
+    };
+    assert!(owned_batch.still_owned(&reader)?);
     update_queue_task(
         root.path(),
         QueueTaskUpdateRequest {
@@ -60,6 +81,8 @@ fn queue_turn_fence_observes_cancel_and_preserves_other_worker() -> Result<()> {
     // The same open reader observes the committed cancellation, without a
     // retained WAL snapshot, and cannot revive the cancelled row.
     assert!(!target_fence.still_owned(&reader)?);
+    assert!(!owned_batch.still_owned(&reader)?);
+    assert!(fence(&sibling.message_key, "worker-target").still_owned(&reader)?);
     assert!(other_fence.still_owned(&reader)?);
     assert_eq!(
         record_queue_lease_worker(
