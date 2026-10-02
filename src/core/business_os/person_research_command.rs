@@ -4035,10 +4035,17 @@ mod tests {
                     patch["payload"]["researched_field_keys"],
                     serde_json::json!([])
                 );
-                assert_eq!(
-                    patch["payload"]["unbound_person_field_keys"],
-                    serde_json::json!(["person_email", "person_vorname"])
-                );
+                // This diagnostic lists the rejected keys; JSON object insertion
+                // order is not part of the routing contract. Require every key
+                // exactly once without assuming serde_json's map ordering.
+                let mut rejected = patch["payload"]["unbound_person_field_keys"]
+                    .as_array()
+                    .expect("unbound fields are a list")
+                    .iter()
+                    .map(|key| key.as_str().expect("unbound field key is text"))
+                    .collect::<Vec<_>>();
+                rejected.sort_unstable();
+                assert_eq!(rejected, ["person_email", "person_vorname"]);
                 assert_eq!(patch["research_status"], "needs_review");
             }
             let keyed = serde_json::json!({"fields": {
