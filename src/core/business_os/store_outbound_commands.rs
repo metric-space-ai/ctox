@@ -13563,7 +13563,7 @@ mod registry_last_run_detail_tests {
             record_id: None,
             payload: serde_json::json!({}),
             client_context: serde_json::json!({}),
-            origin: CommandOrigin::TrustedLocal,
+            origin: super::super::store::CommandOrigin::TrustedLocal,
         };
         assert_eq!(
             outbound_handle_research_source_registry_read(root, &command)?["ok"],
