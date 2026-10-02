@@ -2256,6 +2256,34 @@ where
     })
 }
 
+/// Register the canonical native schemas without starting sync or seeding records.
+pub fn initialize_business_os_rxdb(root: &Path) -> anyhow::Result<Value> {
+    with_business_os_database(
+        root,
+        "failed to create Business OS schema initialization runtime",
+        true,
+        TemporaryDatabaseLockScope::TemporaryOnly,
+        |_peer, database| async move {
+            let collections = business_os_collections()
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>();
+            for name in &collections {
+                anyhow::ensure!(
+                    database.collection(name).is_some(),
+                    "canonical Business OS RxDB collection `{name}` did not register"
+                );
+            }
+            Ok(json!({
+                "database": store::rxdb_store_path(root).display().to_string(),
+                "collections": collections,
+                "records_seeded": 0,
+                "starts_peer": false,
+            }))
+        },
+    )
+}
+
 pub fn sync_desktop_file_from_path(root: &Path, path: &Path) -> anyhow::Result<()> {
     sync_desktop_file_from_path_with_policy(root, path, None)
 }
@@ -10043,6 +10071,72 @@ pub(in crate::business_os) mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn initialize_rxdb_registers_empty_canonical_schemas_idempotently() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let first = initialize_business_os_rxdb(root.path())?;
+        let second = initialize_business_os_rxdb(root.path())?;
+        assert_eq!(first, second);
+        assert_eq!(first["starts_peer"], false);
+        assert_eq!(first["records_seeded"], 0);
+        let connection = Connection::open(store::rxdb_store_path(root.path()))?;
+        for (name, schema) in business_os_schema_contract() {
+            let version = schema["version"]
+                .as_u64()
+                .expect("canonical schema version");
+            let table = format!("ctox_business_os__{name}__v{version}");
+            let count: i64 = connection.query_row(
+                &format!("SELECT COUNT(*) FROM {}", sqlite_quote_identifier(&table)),
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(count, 0, "schema initialization seeded {name}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn initialize_rxdb_refuses_skipped_optional_schema_instead_of_claiming_success(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        {
+            let _guard = TEMPORARY_RXDB_DATABASE_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            runtime.block_on(async {
+                let database = open_database(&store::rxdb_store_path(root.path())).await?;
+                let mut creators = collection_creators();
+                let mut creator = creators
+                    .remove("user_threads")
+                    .expect("canonical user_threads");
+                let mut schema = serde_json::to_value(&creator.schema)?;
+                schema["properties"]["incompatible_fixture_only"] = json!({"type": "string"});
+                creator.schema = schema_from_json(schema);
+                let (_, failed) = database
+                    .add_collections_tolerant(HashMap::from([(
+                        "user_threads".to_string(),
+                        creator,
+                    )]))
+                    .await?;
+                anyhow::ensure!(failed.is_empty(), "negative fixture registration failed");
+                database.close().await?;
+                Ok::<_, anyhow::Error>(())
+            })?;
+        }
+        let error = initialize_business_os_rxdb(root.path())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("user_threads") && error.contains("did not register"),
+            "{error}"
+        );
+        Ok(())
+    }
 
     #[test]
     fn projection_union_types_preserve_values_and_use_valid_repair_defaults() {
