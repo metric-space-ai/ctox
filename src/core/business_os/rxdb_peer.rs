@@ -10109,7 +10109,7 @@ pub(in crate::business_os) mod tests {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             runtime.block_on(async {
-                let database = open_database(&store::rxdb_store_path(root.path())).await?;
+                let database = open_database(store::rxdb_store_path(root.path())).await?;
                 let mut creators = collection_creators();
                 let mut creator = creators
                     .remove("user_threads")
