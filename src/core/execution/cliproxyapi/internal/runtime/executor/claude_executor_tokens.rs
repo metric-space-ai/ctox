@@ -138,7 +138,7 @@ pub fn prepare_claude_first_party_token_count_body(
     if cloaked && !oauth_alias_secret.is_empty() {
         body = remap_claude_oauth_tool_names_with_secret(&body, oauth_alias_secret).0;
     }
-    body = sanitize_claude_messages_for_claude_upstream(&body).0;
+    body = sanitize_claude_messages_for_claude_upstream(&body, false).0;
     body = prepare_claude_first_party_count_tokens_body(&body);
     Ok(ClaudeFirstPartyTokenCountBody {
         body,

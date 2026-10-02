@@ -662,7 +662,7 @@ async fn provider_count_tokens_preserves_strong_native_session_and_profile() {
         ("X-App".to_owned(), vec!["cli".to_owned()]),
         (
             "User-Agent".to_owned(),
-            vec!["claude-cli/2.1.220 (external, cli)".to_owned()],
+            vec!["claude-cli/2.1.280 (external, cli)".to_owned()],
         ),
         (
             "Anthropic-Beta".to_owned(),
@@ -674,7 +674,7 @@ async fn provider_count_tokens_preserves_strong_native_session_and_profile() {
         ),
         (
             "X-Stainless-Package-Version".to_owned(),
-            vec!["0.94.0".to_owned()],
+            vec!["0.112.1".to_owned()],
         ),
         (
             "X-Stainless-Runtime-Version".to_owned(),
@@ -690,7 +690,7 @@ async fn provider_count_tokens_preserves_strong_native_session_and_profile() {
         let requests = transport.requests.lock().unwrap();
         let captured = requests.last().unwrap();
         assert_eq!(captured.session_id, session_id);
-        assert_eq!(captured.user_agent, "claude-cli/2.1.220 (external, cli)");
+        assert_eq!(captured.user_agent, "claude-cli/2.1.280 (external, cli)");
         assert_eq!(captured.authorization, "Bearer access-token");
         let body: serde_json::Value = serde_json::from_slice(&captured.body).unwrap();
         assert_eq!(body["system"], "native caller system");
@@ -710,7 +710,7 @@ async fn provider_count_tokens_preserves_strong_native_session_and_profile() {
         ("X-App".to_owned(), vec!["cli".to_owned()]),
         (
             "User-Agent".to_owned(),
-            vec!["claude-cli/2.1.220 (external, cli)".to_owned()],
+            vec!["claude-cli/2.1.280 (external, cli)".to_owned()],
         ),
         (
             "Anthropic-Beta".to_owned(),

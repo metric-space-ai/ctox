@@ -2455,7 +2455,7 @@ mod tests {
         let requests = count_transport.count_requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
         assert!(!requests[0].1.is_empty());
-        assert_eq!(requests[0].2, "claude-cli/2.1.220 (external, cli)");
+        assert_eq!(requests[0].2, "claude-cli/2.1.280 (external, cli)");
         assert!(requests[0]
             .3
             .iter()

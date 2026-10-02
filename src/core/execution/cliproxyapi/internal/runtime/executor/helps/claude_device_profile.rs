@@ -14,8 +14,8 @@ use super::user_id_cache::{ClaudeIdentityKvStore, ClaudeIdentityStoreError};
 use crate::internal::home::hash_key_part;
 use crate::sdk::api::handlers::header_filter::HeaderMap;
 
-pub const DEFAULT_CLAUDE_FINGERPRINT_USER_AGENT: &str = "claude-cli/2.1.220 (external, cli)";
-pub const DEFAULT_CLAUDE_FINGERPRINT_PACKAGE_VERSION: &str = "0.94.0";
+pub const DEFAULT_CLAUDE_FINGERPRINT_USER_AGENT: &str = "claude-cli/2.1.280 (external, cli)";
+pub const DEFAULT_CLAUDE_FINGERPRINT_PACKAGE_VERSION: &str = "0.112.1";
 pub const DEFAULT_CLAUDE_FINGERPRINT_RUNTIME_VERSION: &str = "v26.3.0";
 pub const DEFAULT_CLAUDE_FINGERPRINT_OS: &str = "MacOS";
 pub const DEFAULT_CLAUDE_FINGERPRINT_ARCH: &str = "arm64";
@@ -336,7 +336,7 @@ pub fn apply_claude_device_profile_headers(headers: &mut HeaderMap, profile: &Cl
 pub fn default_claude_version(defaults: &ClaudeHeaderDefaults) -> String {
     parse_claude_cli_version(&default_claude_device_profile(defaults).user_agent)
         .map(|version| format!("{}.{}.{}", version.major, version.minor, version.patch))
-        .unwrap_or_else(|| "2.1.220".to_owned())
+        .unwrap_or_else(|| "2.1.280".to_owned())
 }
 
 pub fn apply_claude_default_device_profile_headers(
@@ -433,16 +433,22 @@ fn should_upgrade_claude_device_profile(
     }
 }
 
+/// The baseline is a floor for patch releases. Claude Code auto-updates, so a
+/// newer patch in the same major/minor line stays a native client.
 fn plausible_claude_cli_version(candidate: ClaudeCliVersion, baseline: ClaudeCliVersion) -> bool {
-    candidate == baseline
+    candidate.major == baseline.major
+        && candidate.minor == baseline.minor
+        && candidate.patch >= baseline.patch
 }
 
 fn meets_claude_device_profile_baseline(
     candidate: &ClaudeDeviceProfile,
     baseline: &ClaudeDeviceProfile,
 ) -> bool {
-    matches!((candidate.version, baseline.version), (Some(candidate_version), Some(baseline_version)) if plausible_claude_cli_version(candidate_version, baseline_version))
-        && candidate.package_version == baseline.package_version
+    matches!(
+        (candidate.version, baseline.version),
+        (Some(candidate_version), Some(baseline_version)) if candidate_version == baseline_version
+    ) && candidate.package_version == baseline.package_version
         && candidate.runtime_version == baseline.runtime_version
 }
 

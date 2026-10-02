@@ -49,7 +49,7 @@ impl ClaudeCloakPolicy {
             strict_mode: false,
             sensitive_words: Vec::new(),
             client_user_agent: String::new(),
-            billing_version: "2.1.220".to_owned(),
+            billing_version: "2.1.280".to_owned(),
             entrypoint: "cli".to_owned(),
             workload: String::new(),
             oauth_mode: true,

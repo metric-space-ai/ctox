@@ -104,8 +104,8 @@ pub use claude_builtin_tools::{augment_claude_builtin_tool_registry, is_claude_s
 pub use claude_client_detection::{detect_claude_code_request, ClaudeCodeRequestDetection};
 pub use claude_code_session::{
     claude_code_execution_scope, claude_code_prompt_cache, extract_claude_code_agent_id,
-    extract_claude_code_session_id, CLAUDE_CODE_AGENT_HEADER, CLAUDE_CODE_MAIN_AGENT_ID,
-    CLAUDE_CODE_SESSION_HEADER,
+    extract_claude_code_session_id, header_value_case_insensitive, header_values_case_insensitive,
+    CLAUDE_CODE_AGENT_HEADER, CLAUDE_CODE_MAIN_AGENT_ID, CLAUDE_CODE_SESSION_HEADER,
 };
 pub use claude_credential_identity::{
     apply_claude_credential_metadata, claude_agent_session_uuid,

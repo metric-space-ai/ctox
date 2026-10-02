@@ -13,7 +13,7 @@ use serde_json::Value;
 /// signature; callers may only use this after OpenAI has returned the token on
 /// a successfully authenticated TLS connection.
 /// ref: internal/auth/codex/jwt_parser.go:13-30
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
 pub struct JwtClaims {
     #[serde(default)]
     pub at_hash: String,
@@ -87,7 +87,21 @@ impl JwtClaims {
     pub fn account_id(&self) -> &str {
         &self.codex_auth_info.chatgpt_account_id
     }
+
+    /// ChatGPT plan from the access-token claims. Missing or blank claims use
+    /// `free`, which is the upstream default when the claim is absent.
+    #[must_use]
+    pub fn plan_type(&self) -> &str {
+        let plan = self.codex_auth_info.chatgpt_plan_type.trim();
+        if plan.is_empty() {
+            DEFAULT_PLAN_TYPE
+        } else {
+            plan
+        }
+    }
 }
+
+pub const DEFAULT_PLAN_TYPE: &str = "free";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JwtParseError {
@@ -156,6 +170,7 @@ mod tests {
         let parsed = parse_jwt_token(&format!("header.{payload}.signature")).unwrap();
         assert_eq!(parsed.account_id(), "acct-123");
         assert_eq!(parsed.user_email(), "operator@example.com");
+        assert_eq!(parsed.plan_type(), "plus");
 
         let secret = "not-a-token-do-not-leak";
         let error = parse_jwt_token(secret).unwrap_err();
@@ -207,5 +222,26 @@ mod tests {
             .codex_auth_info
             .chatgpt_subscription_last_checked
             .is_some());
+    }
+
+    #[test]
+    fn plan_type_defaults_blank_claims_to_free() {
+        assert_eq!(JwtClaims::default().plan_type(), DEFAULT_PLAN_TYPE);
+        let whitespace = JwtClaims {
+            codex_auth_info: CodexAuthInfo {
+                chatgpt_plan_type: "   ".to_owned(),
+                ..CodexAuthInfo::default()
+            },
+            ..JwtClaims::default()
+        };
+        assert_eq!(whitespace.plan_type(), "free");
+        let pro = JwtClaims {
+            codex_auth_info: CodexAuthInfo {
+                chatgpt_plan_type: "pro".to_owned(),
+                ..CodexAuthInfo::default()
+            },
+            ..JwtClaims::default()
+        };
+        assert_eq!(pro.plan_type(), "pro");
     }
 }

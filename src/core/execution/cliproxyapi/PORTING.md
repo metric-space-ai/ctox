@@ -12,7 +12,9 @@
   reduce or inherit Track A's percentage
 - Historical accepted-pin capability ledger: **1,000 / 1,000 points**; this is
   explicitly not a project-completion percentage
-- Current gate: none; Accepted Pin released, no open upstream candidate
+- Current gate: open candidate `e2bff0107bb307337aaa19018ccddd55f64253d5`
+  (tag `v8.0.11`, verified 2026-10-02). The accepted pin is still
+  `a88197f845c979132c8978ea223c6af05cc81536`. This candidate is not promoted.
 - Scaffolds: not counted
 - Owner of shared registry/module graph: CTOX integration lane
 
@@ -44,6 +46,76 @@ some CTOX integration work. It remains immutable forensic evidence and is not
 used as the current completion metric for either lane. New upstream work must
 not add Business OS, secret-store or Pi integration points to Track A; those
 changes update Track B only.
+
+## Open candidate v8.0.11 (not promoted)
+
+Verified on 2026-10-02 against `https://github.com/router-for-me/CLIProxyAPI.git`:
+tag `v8.0.11` and `refs/heads/main` both resolved to
+`e2bff0107bb307337aaa19018ccddd55f64253d5`. `v8.0.11` was the newest tag. Do
+not move this candidate if `main` later advances.
+
+`scripts/prepare_upstream_candidate.sh` built a fail-closed review for the
+delta from `a88197f` (v7.2.116). Conservation held: 1,354 files, 510 added,
+837 modified, 7 deleted, 0 renamed. Of the modified Go files, 242 differ only
+by the module path `github.com/router-for-me/CLIProxyAPI/v7` to `/v8`. The
+other 581 modified Go files, plus 492 added Go files, still need a semantic
+port. This section awards zero points. The accepted pin, source anchors, and
+`upstream-lock.json` stay on `a88197f` until the promotion gates pass.
+
+Slices whose Rust behavior was updated in this candidate, with anchors left on
+the accepted pin:
+
+- Responses stream error chunks are nested `error` objects. Status 408 reports
+  code `request_timeout` and type `server_error`, so a cut Codex stream stays
+  retryable. `response.failed` is a separate terminal chunk. The handler
+  framer that chooses between those events is not revalidated yet.
+- Config API-key classification uses kind and source. The secret attribute may
+  be absent; the key stays in the injected secret store.
+- Claude server tool types include `advisor_` and `agent_toolset_`.
+- `is_claude_model` is the upstream case-insensitive substring check.
+- Claude function names are sanitized to `^[A-Za-z0-9_-]{1,64}`.
+- OpenAI chat passthrough drops chunks after `[DONE]` for one translation.
+- Codex JWT `plan_type` defaults blank claims to `free`.
+- Discovery default service type is `_ai-gateway._tcp`.
+- Token sums reject a negative component or int64 overflow. The previous Rust
+  `checked_sum` already rejected overflow of a non-negative total; it now
+  rejects any negative operand, matching `nonNegativeSum`.
+- Vertex-compatible credentials accept `disable-cooling` and `request-retry`
+  without collapsing unset into false or zero.
+- Home auth dispatch carries parent session, node kind, retry round, excluded
+  auth ids, and a pinned auth id. Unset fields stay omitted.
+- `parse_gjson_bytes_no_copy` borrows the original document.
+- SSE event frames include their blank-line terminator.
+- JSON string writes can keep `<`, `>`, and `&` unescaped.
+- Claude Code attribution blocks can be stripped from `system` while other
+  system text stays.
+- Header lookup exports the case-insensitive single-value and all-values forms.
+- Claude Messages sanitizing can keep opaque thinking signatures when the
+  caller asks to preserve empty thinking blocks. Callers that do not pass that
+  flag keep the previous drop behavior.
+- SDK config accepts `client.codex.optimize-multi-agent-v2` and
+  `client.codex.enable-apply-patch`. The provider-config mirror still wins
+  when it is set. Runtime-only OAuth, response-steering, and orphan-delegation
+  fields are present and not read from YAML.
+- The Claude Code device-profile baseline is `claude-cli/2.1.280` /
+  `@anthropic-ai/sdk` `0.112.1`. Native detection treats that version as a
+  patch floor. Stored device profiles still require an exact software match,
+  so a newer unmeasured patch falls back to the baseline. The measured TLS
+  fingerprint labeled 2.1.220 is unchanged.
+
+Track B ledger path
+`src/core/execution/cliproxyapi_integration/provider-integration.json` is cited
+by this file, the dashboard template, and
+`scripts/build_dashboard.sh` / `scripts/build_ctox_integration_impact.sh`, but
+that file is not on this branch. The last copy is commit `3ab0f4b1` (2026-08-09),
+which is not an ancestor of `5a8db7e2`. Its receipts point at ignored
+`runtime/cliproxyapi-track-b-receipts/` and
+`runtime/cliproxyapi-strict-receipts/` objects that are not in this checkout.
+The ledger was not restored: copying August "verified" rows without those
+hashed receipts would present evidence this tree cannot check. Dashboard and
+integration gates stay closed until the ledger and receipts are recovered.
+`docs/architecture.md`, cited by `AGENTS.md`, was removed from the public repo
+in `bb4fa6fc5` and is not required by these gates.
 
 ## Frozen historical 1,000-point semantic ledger
 
