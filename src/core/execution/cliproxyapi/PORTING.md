@@ -145,7 +145,12 @@ the accepted pin:
   `responsesStreamErrorText` sanitizing inside the framer is still the
   handler redaction that runs before the frame is repaired.
 - Kimi reorders interleaved Responses tool outputs before chat translation.
-  The Responses `apply_patch` bridge is not ported.
+  OpenAI Responses requests run `NormalizeApplyPatchResponsesRequest` first:
+  a winning custom `apply_patch` declaration becomes a function, explicit
+  custom patch history becomes function calls, and a Chat function of the
+  same name wins over the translated custom tool. The response-event bridge
+  (`ApplyPatchResponsesBridge` / `ApplyPatchResponsesState`) is not ported.
+  xAI and Meta still need that bridge on their live response paths.
 - API-key model-compatibility helpers integer-normalize before the host
   processor. The six `Convert*WithCompat` translators are not ported, and
   the update-intent flag stays false.

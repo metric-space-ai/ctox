@@ -13,6 +13,7 @@ use super::kimi_executor::{
     KimiClock, KimiDeviceProfile, KimiExecutor, KimiExecutorConfig, KimiExecutorError,
 };
 use crate::internal::cache::KimiThinkingReplayCache;
+use crate::internal::client::codex::apply_patch::wrap_input;
 use crate::sdk::pluginapi::{
     ExecutorRequest, ExecutorResponse, ExecutorStreamChunk, ExecutorStreamResponse, HostHttpClient,
     HttpRequest, HttpResponse, HttpStreamResponse, PluginExecutionError, PluginFuture,
@@ -334,6 +335,61 @@ async fn openai_response_reorders_interleaved_tool_outputs_before_chat_post() {
     assert_eq!(input[3]["type"], "function_call_output");
     assert_eq!(input[3]["call_id"], "view_image:32");
     assert_eq!(input[4]["role"], "developer");
+}
+
+#[tokio::test]
+async fn openai_response_converts_apply_patch_before_reordering_tool_outputs() {
+    let delegate = Arc::new(RecordingClaude::default());
+    let executor = executor(delegate);
+    let http = Arc::new(RecordingHttp::default());
+    let patch = "*** Begin Patch\n*** End Patch\n";
+    let payload = serde_json::to_vec(&json!({
+        "model": "kimi-k3",
+        "tools": [{"type": "custom", "name": "apply_patch", "description": "Edit files."}],
+        "input": [
+            {"type": "custom_tool_call", "call_id": "old", "name": "apply_patch", "input": patch},
+            {"type": "custom_tool_call_output", "call_id": "old", "output": "ok"},
+            {"type": "function_call", "call_id": "view_image:31", "name": "view_image", "arguments": "{}"},
+            {"type": "message", "role": "developer", "content": "keep following instructions"},
+            {"type": "function_call_output", "call_id": "view_image:31", "output": "ok31"}
+        ]
+    }))
+    .unwrap();
+    let request = ExecutorRequest {
+        auth_provider: "kimi".into(),
+        model: "kimi-k3".into(),
+        source_format: "openai-response".into(),
+        format: "openai-response".into(),
+        payload: payload.clone(),
+        original_request: payload,
+        auth_metadata: BTreeMap::from([("access_token".into(), json!("oauth-token"))]),
+        http_client: Some(http.clone()),
+        ..ExecutorRequest::default()
+    };
+    executor.execute(request).await.unwrap();
+    let upstream = http.requests.lock().unwrap().last().unwrap().clone();
+    let body: Value = serde_json::from_slice(&upstream.body).unwrap();
+    let input = body["input"].as_array().expect("responses input survives");
+    assert_eq!(input[0]["type"], "function_call");
+    assert_eq!(input[0]["name"], "apply_patch");
+    assert_eq!(input[0]["arguments"], wrap_input(patch));
+    assert!(input[0].get("input").is_none());
+    assert_eq!(input[1]["type"], "function_call_output");
+    assert_eq!(input[1]["call_id"], "old");
+    assert_eq!(input[2]["type"], "function_call");
+    assert_eq!(input[2]["call_id"], "view_image:31");
+    assert_eq!(input[3]["type"], "function_call_output");
+    assert_eq!(input[3]["call_id"], "view_image:31");
+    assert_eq!(input[4]["role"], "developer");
+    assert_eq!(body["tools"][0]["type"], "function");
+    assert_eq!(
+        body["tools"][0]["parameters"]["properties"]["input"]["type"],
+        "string"
+    );
+    let description = body["tools"][0]["description"].as_str().unwrap();
+    assert!(description.contains("Edit files."));
+    assert!(description.contains("*** Begin Patch"));
+    assert!(!description.contains("FREEFORM"));
 }
 
 fn normalize(body: &[u8]) -> Value {

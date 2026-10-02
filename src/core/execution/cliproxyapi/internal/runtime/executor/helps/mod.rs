@@ -2,6 +2,7 @@
 // License: AGPL-3.0-only
 
 mod antigravity_grounding_urls;
+mod apply_patch_responses;
 mod cache_helpers;
 mod claude_builtin_tools;
 mod claude_client_detection;
@@ -103,6 +104,7 @@ pub use antigravity_grounding_urls::{
     is_antigravity_vertex_search_redirect, resolve_antigravity_grounding_urls,
     GroundingRedirectError, GroundingRedirectResponse, GroundingRedirectTransport,
 };
+pub use apply_patch_responses::normalize_apply_patch_responses_request;
 pub use cache_helpers::{codex_prompt_cache_key, CodexCache, CodexPromptCacheStore};
 pub use claude_builtin_tools::{augment_claude_builtin_tool_registry, is_claude_server_tool_type};
 pub use claude_client_detection::{detect_claude_code_request, ClaudeCodeRequestDetection};

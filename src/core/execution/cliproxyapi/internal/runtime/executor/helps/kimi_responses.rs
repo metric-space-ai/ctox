@@ -4,8 +4,8 @@
 
 //! Reorders Kimi Responses input so parallel tool outputs stay contiguous.
 //!
-//! `NormalizeApplyPatchResponsesRequest` is not called. The Responses
-//! apply_patch bridge is still an unported translator gap.
+//! The executor calls `normalize_apply_patch_responses_request` before this
+//! reorder. The response-event bridge is still unported.
 
 use std::collections::HashMap;
 

@@ -1,5 +1,6 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
+mod apply_patch_responses;
 mod bytes;
 mod cache_control;
 mod claude_system;
@@ -8,6 +9,7 @@ mod interactions_usage;
 mod json;
 mod sse;
 
+pub use apply_patch_responses::normalize_apply_patch_responses_request;
 pub use bytes::{
     append_sse_event, claude_input_tokens_json, gemini_token_count_json, join_raw_array,
     new_raw_array_items, set_raw_array_items, set_string_without_html_escape, sse_event_data,

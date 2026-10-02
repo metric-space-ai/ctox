@@ -375,6 +375,10 @@ impl KimiExecutor {
             .source_format
             .eq_ignore_ascii_case("openai-response")
         {
+            payload = super::helps::normalize_apply_patch_responses_request(&payload, None)
+                .map_err(|message| {
+                    plugin_error(KimiExecutorError::InvalidJson(message.to_owned()))
+                })?;
             payload = super::helps::normalize_kimi_responses_input(&payload);
         }
         let mut body = self.registry.translate_request(
