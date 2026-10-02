@@ -1,4 +1,5 @@
 import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261001-shell-v2-workjet-project-messages-v437';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import { CtoxResizer } from './shared/resizer.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20261001-shell-v2-workjet-project-messages-v437';
 import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261001-shell-v2-workjet-project-messages-v437';
@@ -292,11 +293,16 @@ const SHELL_COL_MIN = {
 
 const SHELL_COL_SIDE_MAX = 620;
 
+const shellPerformanceTrace = createShellPerformanceTrace();
+globalThis.addEventListener?.('pagehide', () => shellPerformanceTrace.stop(), { once: true });
+const traceShellPhase = (name, action) => shellPerformanceTrace.measure(name, action);
+
 const state = {
   bootTimings: {
     startedAt: new Date().toISOString(),
     startedAtMs: performance.now(),
     shellVisibleMs: null,
+    firstModuleMountedMs: null,
     firstWebRtcConnectedMs: null,
     firstAdvancedStatusHealthyMs: null,
   },
@@ -1289,12 +1295,12 @@ bootstrap().catch(async (error) => {
 });
 
 async function bootstrap() {
-  await loadLaunchContext();
+  await traceShellPhase('launch-context', loadLaunchContext);
   resetDataPlaneReady('bootstrap');
   if (!globalThis.crypto?.subtle) {
     throw new Error('WebCrypto is missing (Insecure Origin on Safari 127.0.0.1). Please use http://localhost:8765/');
   }
-  const { installBusinessDialogFallbacks } = await loadShellDialogsModule();
+  const { installBusinessDialogFallbacks } = await traceShellPhase('dialog-assets', loadShellDialogsModule);
   installBusinessDialogFallbacks();
   const prefs = readAccountPrefs();
   applyShellTheme(prefs.theme || 'dark', { persist: false });
@@ -1306,7 +1312,7 @@ async function bootstrap() {
   // Resolve the session before showing any "loading" UI. An unauthenticated
   // request must never see the workspace startup loader — that falsely implies
   // the system is loading data when nothing past the auth gate runs.
-  const session = await loadSession();
+  const session = await traceShellPhase('session', loadSession);
   state.session = session;
   renderAccountButton(session);
   if (!session.authenticated) {
@@ -1328,53 +1334,53 @@ async function bootstrap() {
   setStartupProgress(10, shellText('bootConfig'));
   setStartupProgress(30, shellText('bootSession'));
   setStartupProgress(50, shellText('bootDatastore'));
-  const syncConfig = await loadSyncConfig();
-  await reportLegacySharedBusinessDb(syncConfig).catch((error) => {
+  const syncConfig = await traceShellPhase('sync-config', loadSyncConfig);
+  await traceShellPhase('legacy-db-inventory', () => reportLegacySharedBusinessDb(syncConfig)).catch((error) => {
     console.warn('[business-os] legacy replica inspection failed', error);
   });
-  await reportSupersededBusinessDbGenerations(syncConfig).catch((error) => {
+  await traceShellPhase('superseded-db-inventory', () => reportSupersededBusinessDbGenerations(syncConfig)).catch((error) => {
     // Diagnostics must not make an authenticated browser unbootable.
     console.warn('[business-os] superseded replica inspection failed', error);
   });
-  await resetBusinessDataPlaneForBuildIfNeeded(syncConfig);
-  await openBusinessDataPlane(syncConfig);
+  await traceShellPhase('build-guard', () => resetBusinessDataPlaneForBuildIfNeeded(syncConfig));
+  await traceShellPhase('data-plane-open', () => openBusinessDataPlane(syncConfig));
   if (await completeWorkjetPairingRedirect()) return;
 
   setStartupProgress(70, shellText('bootWorkspace'));
   let modules;
   try {
     setStartupProgress(85, shellText('bootApps'));
-    modules = await loadModules();
+    modules = await traceShellPhase('module-catalog', loadModules);
   } catch (error) {
     if (!isModuleCatalogSyncError(error)) throw error;
     console.warn('[business-os] module catalog sync stalled; extending its WebRTC wait', error);
     setStartupProgress(82, shellText('bootCatalog'));
     try {
-      modules = await loadModules({ timeoutMs: 180000, allowShellSeed: false });
+      modules = await traceShellPhase('module-catalog-retry', () => loadModules({ timeoutMs: 180000, allowShellSeed: false }));
     } catch (retryError) {
       if (!isModuleCatalogSyncError(retryError)) throw retryError;
       console.warn('[business-os] module catalog still unavailable; restarting only its WebRTC bridge', retryError);
       setStartupProgress(80, shellText('bootCatalog'));
       await state.sync?.restartCollection?.('business_module_catalog');
-      modules = await loadModules({ timeoutMs: 180000, allowShellSeed: false });
+      modules = await traceShellPhase('module-catalog-restarted', () => loadModules({ timeoutMs: 180000, allowShellSeed: false }));
     }
   }
-  modules = await waitForRequestedHashModule(modules);
+  modules = await traceShellPhase('requested-app-catalog', () => waitForRequestedHashModule(modules));
   state.modules = modules.modules || [];
   state.moduleCatalogFingerprint = modules.catalogFingerprint || state.moduleCatalogFingerprint;
   try {
-    await registerCustomModuleIcons();
+    await traceShellPhase('custom-icon-assets', registerCustomModuleIcons);
   } catch (error) {
     console.warn('[business-os] custom module icon registration failed:', error);
   }
   state.governance = modules.governance || null;
-  state.moduleLayout = normalizeModuleLayout(await loadModuleLayout(), state.modules);
+  state.moduleLayout = normalizeModuleLayout(await traceShellPhase('module-layout-read', loadModuleLayout), state.modules);
   state.taskbarPins = normalizeTaskbarPins(readTaskbarPins(), state.modules, {
     preserveKnownEmpty: state.taskbarPinsKnown === true,
   });
   persistModuleLayout();
   renderTabs();
-  const shellUi = await loadShellUiModules();
+  const shellUi = await traceShellPhase('shell-ui-assets', loadShellUiModules);
   state.eventBus = shellUi.createEventBus();
   state.contextMenu = shellUi.createContextMenu({
     host: document.body,
@@ -1435,8 +1441,9 @@ async function bootstrap() {
     // before the first module and restore loop so one slow/restored window
     // cannot delay chat/reporter readiness.
     scheduleBusinessCompanions();
-    await openModule(explicitModule || workspaceSession?.activeModuleId || initialModuleRefAfterLogin());
-    await restoreWorkspaceSession(workspaceSession, { preferredAppId: explicitModule });
+    await traceShellPhase('first-module-mount', () => openModule(explicitModule || workspaceSession?.activeModuleId || initialModuleRefAfterLogin()));
+    markBootTiming('firstModuleMountedMs');
+    await traceShellPhase('restored-windows', () => restoreWorkspaceSession(workspaceSession, { preferredAppId: explicitModule }));
     markBootTiming('shellVisibleMs');
     setWorkspaceStatus();
   } catch (error) {
@@ -1683,7 +1690,7 @@ async function openBusinessDbAndRegisterCoreCollections(dbName) {
   const maxAttempts = 3;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     setStartupProgress(54, shellText('bootDbOpen'));
-    state.db = await createBusinessDb({ name: dbName });
+    state.db = await traceShellPhase(`local-db-open-${attempt}`, () => createBusinessDb({ name: dbName, trace: traceShellPhase }));
     assertCriticalSyncCollectionsMatchBundle(state.db?.rxdb);
 
     try {
@@ -1694,7 +1701,7 @@ async function openBusinessDbAndRegisterCoreCollections(dbName) {
       // second registration against the same store. On large workspaces this
       // caused the startup/reload loop that left the shell without db/sync.
       // Await the single registration operation to completion instead.
-      await registerCoreCollections();
+      await traceShellPhase(`core-schema-registration-${attempt}`, registerCoreCollections);
       return;
     } catch (error) {
       // A settled InvalidStateError means the connection really was closed by
@@ -3770,8 +3777,10 @@ function serializeBootTimings() {
   return {
     startedAt: state.bootTimings.startedAt,
     shellVisibleMs: state.bootTimings.shellVisibleMs,
+    firstModuleMountedMs: state.bootTimings.firstModuleMountedMs,
     firstWebRtcConnectedMs: state.bootTimings.firstWebRtcConnectedMs,
     firstAdvancedStatusHealthyMs: state.bootTimings.firstAdvancedStatusHealthyMs,
+    performanceTrace: shellPerformanceTrace.snapshot(),
   };
 }
 
