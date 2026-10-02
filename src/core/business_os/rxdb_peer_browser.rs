@@ -471,6 +471,12 @@ async fn handle_browser_live_webrtc_request_inner(
     if session.owner_user_id != profile_owner {
         return Err("browser live runtime belongs to another user".to_string());
     }
+    let tab_id = session_doc
+        .get("current_tab_id")
+        .and_then(Value::as_str)
+        .unwrap_or("browser_tab_default");
+    let expected_generation = browser_live_optional_binding(&request, "runtime_generation")?;
+    let expected_tab_id = browser_live_optional_binding(&request, "active_tab_id")?;
     mark_browser_direct_live_session(session_id);
     if matches!(operation, "navigate" | "reload" | "back" | "forward") {
         let target_url = if operation == "navigate" {
@@ -493,7 +499,13 @@ async fn handle_browser_live_webrtc_request_inner(
             json!({ "timeoutMs": 30_000 })
         };
         let result = manager
-            .request(&session, operation, op_params)
+            .request_for_surface(
+                &session,
+                operation,
+                op_params,
+                expected_generation,
+                expected_tab_id,
+            )
             .await
             .map_err(|error| format!("browser live navigation failed: {error:#}"))?;
         let nav = result.get("nav").cloned().unwrap_or(Value::Null);
@@ -572,36 +584,35 @@ async fn handle_browser_live_webrtc_request_inner(
         )
         .await
         .map_err(|error| format!("browser live session projection failed: {error:#}"))?;
-        return Ok(result);
+        return Ok(bind_browser_live_response(
+            result,
+            session_id,
+            tab_id,
+            session.runtime_generation(),
+        ));
     }
-    let events = request
-        .get("events")
-        .and_then(Value::as_array)
-        .map(|events| {
-            events
-                .iter()
-                .take(64)
-                .map(browser_runtime_input_event)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let max_seq = request
-        .get("events")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|event| event.get("seq").and_then(Value::as_u64))
-        .max()
-        .unwrap_or(0);
+    let events = browser_live_input_events(&request, session_id, tab_id)?;
     if operation == "input" {
         let response = manager
-            .request(&session, "input", json!({ "events": events }))
+            .request_for_surface(
+                &session,
+                "input",
+                json!({ "events": events }),
+                expected_generation,
+                expected_tab_id,
+            )
             .await
             .map_err(|error| format!("browser live input request failed: {error:#}"))?;
+        let max_seq = browser_live_applied_input_seq(&request, &response);
         if max_seq > 0 {
             session.record_input_seq(max_seq);
         }
-        return Ok(response);
+        return Ok(bind_browser_live_response(
+            response,
+            session_id,
+            tab_id,
+            session.runtime_generation(),
+        ));
     }
     // Read the automation script this session is actually running. Operators
     // asked to switch between the live view and the script inside the app,
@@ -629,7 +640,7 @@ async fn handle_browser_live_webrtc_request_inner(
         return Err(format!("unsupported browser live operation: {operation}"));
     }
     let response = manager
-        .request(
+        .request_for_surface(
             &session,
             "live",
             json!({
@@ -641,13 +652,106 @@ async fn handle_browser_live_webrtc_request_inner(
                     .and_then(Value::as_u64)
                     .unwrap_or(0),
             }),
+            expected_generation,
+            expected_tab_id,
         )
         .await
         .map_err(|error| format!("browser live runtime request failed: {error:#}"))?;
+    let max_seq = browser_live_applied_input_seq(&request, &response);
     if max_seq > 0 {
         session.record_input_seq(max_seq);
     }
-    Ok(response)
+    Ok(bind_browser_live_response(
+        response,
+        session_id,
+        tab_id,
+        session.runtime_generation(),
+    ))
+}
+
+fn browser_live_optional_binding(request: &Value, field: &str) -> Result<Option<String>, String> {
+    let Some(value) = request.get(field) else {
+        return Ok(None);
+    };
+    value
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .map(|value| Some(value.to_string()))
+        .ok_or_else(|| format!("browser live {field} must be a nonempty string"))
+}
+
+fn browser_live_input_events(
+    request: &Value,
+    session_id: &str,
+    tab_id: &str,
+) -> Result<Vec<Value>, String> {
+    let Some(events) = request.get("events") else {
+        return Ok(Vec::new());
+    };
+    let events = events
+        .as_array()
+        .ok_or_else(|| "browser live events must be an array".to_string())?;
+    if events.len() > 64 {
+        return Err("browser live input batch exceeds 64 events".to_string());
+    }
+    for event in events {
+        if !event.is_object() {
+            return Err("browser live input event must be an object".to_string());
+        }
+        for (field, expected) in [("session_id", session_id), ("tab_id", tab_id)] {
+            if event
+                .get(field)
+                .is_some_and(|value| value.as_str() != Some(expected))
+            {
+                return Err(format!(
+                    "browser live input {field} does not match requested surface"
+                ));
+            }
+        }
+    }
+    Ok(events.iter().map(browser_runtime_input_event).collect())
+}
+
+fn browser_live_applied_input_seq(request: &Value, response: &Value) -> u64 {
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        return 0;
+    }
+    let events = request.get("events").and_then(Value::as_array);
+    response
+        .get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|result| result.get("ok").and_then(Value::as_bool) == Some(true))
+        .filter_map(|result| result.get("index").and_then(Value::as_u64))
+        .filter_map(|index| usize::try_from(index).ok())
+        .filter_map(|index| events?.get(index)?.get("seq")?.as_u64())
+        .max()
+        .unwrap_or(0)
+}
+
+fn bind_browser_live_response(
+    mut response: Value,
+    session_id: &str,
+    tab_id: &str,
+    runtime_generation: &str,
+) -> Value {
+    let active_tab_id = response
+        .pointer("/nav/active_tab_id")
+        .cloned()
+        .unwrap_or(Value::Null);
+    if let Some(response) = response.as_object_mut() {
+        response.insert(
+            "binding".to_string(),
+            json!({
+                "session_id": session_id,
+                "tab_id": tab_id,
+                "runtime_generation": runtime_generation,
+                "active_tab_id": active_tab_id,
+            }),
+        );
+    }
+    response
 }
 
 async fn start_browser_live_webrtc_session(
@@ -794,11 +898,19 @@ async fn start_browser_live_webrtc_session(
         "tab_id": tab_id,
         "lease_id": lease_id,
         "lease_expires_at_ms": now + 120_000,
+        "binding": {
+            "session_id": session_id,
+            "tab_id": tab_id,
+            "runtime_generation": session.runtime_generation(),
+            "active_tab_id": nav.get("active_tab_id").cloned().unwrap_or(Value::Null),
+        },
         "nav": {
             "url": final_url,
             "title": title,
             "can_go_back": can_go_back,
-            "can_go_forward": can_go_forward
+            "can_go_forward": can_go_forward,
+            "active_tab_id": nav.get("active_tab_id").cloned().unwrap_or(Value::Null),
+            "tabs": nav.get("tabs").cloned().unwrap_or_else(|| json!([]))
         }
     }))
 }
@@ -3691,6 +3803,86 @@ mod tests {
     use rusqlite::{params, Connection};
     use rxdb::rx_database::RxCollectionCreator;
     use std::collections::HashMap;
+
+    #[test]
+    fn browser_live_inputs_reject_foreign_surface_and_oversized_batches() {
+        for (field, foreign) in [("session_id", "xing-session"), ("tab_id", "xing-tab")] {
+            let mut event =
+                json!({"session_id": "dnb-session", "tab_id": "dnb-tab", "type": "mouseDown"});
+            event[field] = json!(foreign);
+            assert!(browser_live_input_events(
+                &json!({"events": [event]}),
+                "dnb-session",
+                "dnb-tab"
+            )
+            .is_err());
+        }
+        assert!(browser_live_input_events(&json!({"events": [{"session_id": "dnb-session", "tab_id": "dnb-tab", "type": "mouseDown", "x": 42}]}), "dnb-session", "dnb-tab").is_ok());
+        assert!(browser_live_input_events(
+            &json!({"events": [{"type": "keyDown"}]}),
+            "dnb-session",
+            "dnb-tab"
+        )
+        .is_ok());
+        assert!(browser_live_input_events(
+            &json!({"events": vec![json!({"type": "mouseMove"}); 65]}),
+            "dnb-session",
+            "dnb-tab"
+        )
+        .is_err());
+        assert!(browser_live_optional_binding(
+            &json!({"runtime_generation": ""}),
+            "runtime_generation"
+        )
+        .is_err());
+        assert!(
+            browser_live_optional_binding(&json!({}), "runtime_generation")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn browser_live_response_carries_native_identity_without_relabeling_navigation() {
+        let response = bind_browser_live_response(
+            json!({"ok": true, "nav": {"url": "https://example.com/", "active_tab_id": "runner-tab"}, "screenshot": {"base64": "fixture"}}),
+            "session",
+            "logical-tab",
+            "generation",
+        );
+        assert_eq!(
+            response["binding"],
+            json!({"session_id": "session", "tab_id": "logical-tab", "runtime_generation": "generation", "active_tab_id": "runner-tab"})
+        );
+        assert_eq!(response["nav"]["active_tab_id"], "runner-tab");
+        assert_eq!(response["screenshot"]["base64"], "fixture");
+    }
+
+    #[test]
+    fn browser_live_input_watermark_excludes_failed_or_unprocessed_events() {
+        let request = json!({"events": [{"seq": 1}, {"seq": 2}, {"seq": 3}]});
+        assert_eq!(
+            browser_live_applied_input_seq(
+                &request,
+                &json!({"ok": true, "results": [{"index": 0, "ok": true}, {"index": 1, "ok": false}]})
+            ),
+            1
+        );
+        assert_eq!(
+            browser_live_applied_input_seq(
+                &request,
+                &json!({"ok": false, "results": [{"index": 2, "ok": true}]})
+            ),
+            0
+        );
+        assert_eq!(
+            browser_live_applied_input_seq(
+                &request,
+                &json!({"ok": true, "results": [{"index": 99, "ok": true}]})
+            ),
+            0
+        );
+    }
 
     #[test]
     fn browser_runtime_command_trace_is_single_line_and_identifies_start() {
