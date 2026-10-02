@@ -156,7 +156,9 @@ the current incoming value and, for person fields, the same person key.
 The existing native quantity and personal-email quote checks also apply to
 this completion count; a source for another person, an outdated value or a
 quote naming another address cannot certify the new result. Sellify alone
-continues to count as unverified.
+continues to count as unverified. Distinct source quotes are retained so a
+later correct quote is not discarded behind an older unusable quote; multiple
+quotes from the same provider still count as one independent source.
 
 Sellify lookups require a readable collection and use one read-only SQLite
 transaction for ID, exact-field, fuzzy-field, and campaign-group probes.

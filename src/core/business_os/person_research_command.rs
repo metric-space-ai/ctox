@@ -1618,6 +1618,11 @@ fn deduplicate_research_evidence(entries: Vec<Value>) -> Vec<Value> {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
+                entry
+                    .get("quote")
+                    .or_else(|| entry.get("note"))
+                    .map(Value::to_string)
+                    .unwrap_or_default(),
             ]
             .join("|")
             .to_ascii_lowercase();
@@ -3551,6 +3556,36 @@ mod tests {
                 "person_email",
                 &unbound_field,
                 true
+            ),
+            1
+        );
+
+        // A later, correct quote for the same provider/value/person is not
+        // discarded merely because an old unusable quote already exists.
+        let mut existing = baseline;
+        existing["evidence"] = serde_json::json!([{
+            "field_key": "person_email", "value": "team@example.test",
+            "person_key": "person-b", "quote": "other@example.test",
+            "source_id": "company-website", "source_url": "https://example.test/contact"
+        }]);
+        let outcome = serde_json::json!({"fields": {"person_email": {
+            "value": "team@example.test", "person_key": "person-b", "candidates": [{
+                "value": "team@example.test", "person_key": "person-b",
+                "quote": "Contact: team(at)example.test",
+                "source_id": "company-website", "source_url": "https://example.test/contact"
+            }]
+        }}});
+        let patch = outbound_lead_generation_research_outcome_patch(&existing, &outcome, 2_000);
+        assert_eq!(patch["evidence"].as_array().unwrap().len(), 2);
+        assert_eq!(patch["evidence"][0], existing["evidence"][0]);
+        assert_eq!(
+            patch["payload"]["verified_field_keys"],
+            serde_json::json!(["person_email"])
+        );
+        assert_eq!(
+            independent_research_evidence_count(
+                patch["evidence"].as_array().unwrap(),
+                "person_email"
             ),
             1
         );
