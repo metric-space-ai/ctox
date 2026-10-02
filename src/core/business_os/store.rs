@@ -11643,6 +11643,56 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
     Ok(Some((id, record)))
 }
 
+/// Required lookup surface: missing/unreadable storage is not an empty query.
+/// Keep every probe on the same read transaction instead of checking readiness
+/// and then reopening through optional helpers which may silently return empty.
+pub(super) fn required_rxdb_collection_read_connection(
+    root: &Path,
+    collection: &str,
+    lookup_fields: &[&str],
+) -> anyhow::Result<(Connection, String)> {
+    anyhow::ensure!(
+        is_safe_rxdb_collection_name(collection),
+        "invalid collection name"
+    );
+    let path = rxdb_store_path(root);
+    // Preserve main's best-effort expression-index preparation without opening
+    // or creating missing stores. Data probes below still share one required
+    // read-only transaction, even if index preparation is unavailable.
+    for field in lookup_fields {
+        anyhow::ensure!(
+            !field.is_empty()
+                && field
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_'),
+            "invalid RxDB lookup field"
+        );
+    }
+    if !lookup_fields.is_empty() && path.is_file() {
+        if let Ok(index_conn) =
+            Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        {
+            if index_conn
+                .busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
+                .is_ok()
+            {
+                if let Some(table) = rxdb_collection_table_name(&path, &index_conn, collection) {
+                    for field in lookup_fields {
+                        ensure_rxdb_string_field_lookup_index(&path, &index_conn, &table, field);
+                    }
+                }
+            }
+        }
+    }
+    let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .context("required lookup store is unavailable")?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    conn.execute_batch("BEGIN")?;
+    let table = rxdb_collection_table_name(&path, &conn, collection)
+        .context("required lookup collection is unavailable")?;
+    Ok((conn, table))
+}
+
 /// Exact-match lookup over one JSON field of an RxDB collection table.
 ///
 /// The JSON path is a literal and `deleted` leads the predicate so SQLite can
@@ -11652,7 +11702,7 @@ pub(super) fn find_rxdb_collection_record_by_string_field(
 /// index: each Sellify lookup parsed every row, e.g. 92,875 campaign rows
 /// (118 MB) per campaign import on tenant (26.09.2026). The caller must have
 /// validated `field` as `[A-Za-z0-9_]+`.
-fn rxdb_string_field_lookup_sql(table: &str, field: &str) -> String {
+pub(super) fn rxdb_string_field_lookup_sql(table: &str, field: &str) -> String {
     format!(
         "SELECT id, data
          FROM {table}
@@ -11922,7 +11972,7 @@ pub(super) fn group_rxdb_collection_string_field_contains(
     Ok((groups, scanned))
 }
 
-fn rxdb_string_field_group_sql(table: &str, field: &str) -> String {
+pub(super) fn rxdb_string_field_group_sql(table: &str, field: &str) -> String {
     format!(
         "SELECT json_extract(data, '$.{field}') AS grouped_value, COUNT(*)
          FROM {table}

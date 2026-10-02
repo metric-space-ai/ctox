@@ -318,19 +318,12 @@ fn spawn_worker(root: PathBuf, command: BusinessCommand) -> anyhow::Result<bool>
                             } else {
                                 "completed"
                             };
-                            let lead_result = outcome.clone();
-                            (
-                                store::write_rxdb_control_command_outcome(
-                                    &root,
-                                    &worker_command,
-                                    "completed",
-                                    gap_task.as_ref().map(|task| task.message_key.as_str()),
-                                    Some("completed"),
-                                    outcome,
-                                ),
+                            persist_completed_person_research_outcome(
+                                &root,
+                                &worker_command,
                                 lead_status,
-                                None,
-                                Some(lead_result),
+                                gap_task.as_ref().map(|task| task.message_key.as_str()),
+                                outcome,
                             )
                         }
                         Err(error) => {
@@ -382,7 +375,9 @@ fn spawn_worker(root: PathBuf, command: BusinessCommand) -> anyhow::Result<bool>
                 eprintln!(
                     "[business-os] person research `{worker_command_id}` outcome failed: {error:#}"
                 );
-            } else {
+            } else if lead_result.is_none() {
+                // Successful results were saved before publishing completion.
+                // Only failure lifecycle metadata remains to be projected here.
                 log_lead_projection_error(
                     &worker_command_id,
                     project_outbound_lead_generation_lead_state(
@@ -390,7 +385,7 @@ fn spawn_worker(root: PathBuf, command: BusinessCommand) -> anyhow::Result<bool>
                         &worker_command,
                         lead_status,
                         lead_error.as_deref(),
-                        lead_result.as_ref(),
+                        None,
                     ),
                 );
             }
@@ -399,6 +394,70 @@ fn spawn_worker(root: PathBuf, command: BusinessCommand) -> anyhow::Result<bool>
         return Err(error.into());
     }
     Ok(true)
+}
+
+// A completed command is a barrier for readers: its lead result must already
+// be durable. Logging a rejected projection after completion hides a lost
+// research result. This is ordered delivery, not a cross-database transaction.
+fn persist_completed_person_research_outcome(
+    root: &Path,
+    command: &BusinessCommand,
+    lead_status: &'static str,
+    thread_key: Option<&str>,
+    outcome: Value,
+) -> (
+    anyhow::Result<Value>,
+    &'static str,
+    Option<String>,
+    Option<Value>,
+) {
+    let writeback = if command.module.trim() == "outbound-lead-generation"
+        && command
+            .record_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+        && outbound_lead_generation_writeback_record_id(command).is_none()
+    {
+        Err(anyhow::anyhow!(
+            "missing or mismatched bounded lead writeback contract"
+        ))
+    } else {
+        project_outbound_lead_generation_lead_state(
+            root,
+            command,
+            lead_status,
+            None,
+            Some(&outcome),
+        )
+    };
+    if let Err(error) = writeback {
+        let message = error.to_string();
+        return (
+            store::write_rxdb_failed_control_command_outcome(
+                root,
+                command,
+                "person_research_writeback",
+                error,
+            ),
+            "failed",
+            Some(message),
+            None,
+        );
+    }
+    let lead_result = outcome.clone();
+    (
+        store::write_rxdb_control_command_outcome(
+            root,
+            command,
+            "completed",
+            thread_key,
+            Some("completed"),
+            outcome,
+        ),
+        lead_status,
+        None,
+        Some(lead_result),
+    )
 }
 
 fn project_outbound_lead_generation_lead_state(
@@ -533,7 +592,9 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
     // own `person_key` names, field by field, not to whichever contact
     // happens to be first. Carbosulf, 23.09.2026: Jacob's `person_vorname`
     // "Hans-Robert" landed on the first contact, Thomas Schauzu, who became
-    // "Hans-Robert Schauzu". Fields without a key keep the old target.
+    // "Hans-Robert Schauzu". Unbound legacy fields may seed the first
+    // contact only when there are no existing contacts; they cannot inherit
+    // an existing contact's identity.
     let mut person_contacts: Vec<(Option<String>, Value)> = Vec::new();
     let person_records = outcome
         .get("person_records")
@@ -554,6 +615,7 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             .unwrap_or_default(),
     );
     let mut researched_field_keys = Vec::new();
+    let mut unbound_person_field_keys = Vec::new();
 
     for (field_key, field) in outcome
         .get("fields")
@@ -567,6 +629,19 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
         else {
             continue;
         };
+        if field_key.starts_with("person_")
+            && !has_person_records
+            && !contacts.is_empty()
+            && field
+                .get("person_key")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .is_none()
+        {
+            unbound_person_field_keys.push(field_key.clone());
+            continue;
+        }
         researched_field_keys.push(field_key.clone());
         let value = &restore_german_spelling(value, field);
         if field_key.starts_with("person_") && !has_person_records {
@@ -717,7 +792,8 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
     let unverified_field_keys = researched_field_keys
         .iter()
         .filter(|field_key| {
-            independent_research_evidence_count(&evidence, field_key)
+            let field = &outcome["fields"][field_key.as_str()];
+            matching_research_evidence_count(&evidence, field_key, field, !has_person_records)
                 < required_independent_sources(field_key)
         })
         .cloned()
@@ -740,6 +816,7 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             "researched_field_keys": researched_field_keys,
             "verified_field_keys": verified_field_keys,
             "unverified_field_keys": unverified_field_keys,
+            "unbound_person_field_keys": unbound_person_field_keys,
             "research_finished_at_ms": now,
             "research_tool": outcome.get("tool").cloned().unwrap_or(Value::Null),
             "research_instructions_len": outcome.get("research_instructions_len").cloned().unwrap_or(Value::Null),
@@ -775,8 +852,13 @@ fn deduplicate_contacts(contacts: &mut Vec<Value>) {
         let id = identity(&contact, "id");
         let person_key = identity(&contact, "person_key");
         let duplicate_of = kept.iter().position(|existing| {
-            (id.is_some() && identity(existing, "id") == id)
-                || (person_key.is_some() && identity(existing, "person_key") == person_key)
+            let existing_key = identity(existing, "person_key");
+            // An imported/reused row id cannot override two distinct person
+            // identities. Match by key when both contacts carry one.
+            if person_key.is_some() && existing_key.is_some() {
+                return existing_key == person_key;
+            }
+            id.is_some() && identity(existing, "id") == id
         });
         if let Some(index) = duplicate_of {
             // The later row may carry a field the first one lacked.
@@ -1030,7 +1112,7 @@ fn researched_alias_has_canonical_value(
 
 /// The contact a keyed person field belongs to: the one carrying that
 /// `person_key` (or Sellify person id), else a new contact with that key.
-/// Without a key the first contact stays the target, as before.
+/// Without a key, construct an empty discovery record; never inherit a contact.
 fn contact_for_person_key(contacts: &[Value], key: Option<&str>) -> Value {
     match key {
         Some(key) => contacts
@@ -1047,11 +1129,7 @@ fn contact_for_person_key(contacts: &[Value], key: Option<&str>) -> Value {
             })
             .cloned()
             .unwrap_or_else(|| serde_json::json!({ "person_key": key })),
-        None => contacts
-            .first()
-            .filter(|value| value.is_object())
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({})),
+        None => serde_json::json!({}),
     }
 }
 
@@ -1540,6 +1618,11 @@ fn deduplicate_research_evidence(entries: Vec<Value>) -> Vec<Value> {
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .to_string(),
+                entry
+                    .get("quote")
+                    .or_else(|| entry.get("note"))
+                    .map(Value::to_string)
+                    .unwrap_or_default(),
             ]
             .join("|")
             .to_ascii_lowercase();
@@ -1602,6 +1685,58 @@ pub(super) fn independent_research_evidence_count(evidence: &[Value], field_key:
         .filter_map(research_evidence_source_key)
         .collect::<HashSet<_>>();
     crm_aware_provider_count(providers.len(), providers.iter().map(String::as_str))
+}
+
+/// Historical evidence stays in the lead, but cannot certify a different
+/// current value or another person's field. Apply the same quantity/e-mail
+/// quote checks as the native field-status writeback before counting providers.
+fn matching_research_evidence_count(
+    evidence: &[Value],
+    field_key: &str,
+    field: &Value,
+    allow_unbound_person: bool,
+) -> usize {
+    let Some(value) = field.get("value") else {
+        return 0;
+    };
+    let scalar_text = |value: &Value| match value {
+        Value::String(text) => text.trim().to_lowercase(),
+        _ => value.to_string(),
+    };
+    let wanted = scalar_text(value);
+    let person_key = field
+        .get("person_key")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|key| !key.is_empty());
+    if field_key.starts_with("person_") && person_key.is_none() && !allow_unbound_person {
+        return 0;
+    }
+    let matching = evidence
+        .iter()
+        .filter(|entry| {
+            if entry.get("value").map(&scalar_text).as_deref() != Some(wanted.as_str()) {
+                return false;
+            }
+            if field_key.starts_with("person_") {
+                let evidence_key = entry
+                    .get("person_key")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|key| !key.is_empty());
+                if evidence_key != person_key {
+                    return false;
+                }
+            }
+            let quote = entry
+                .get("quote")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            super::person_research_gap_closure::quote_backs_value(field_key, &wanted, quote)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    independent_research_evidence_count(&matching, field_key)
 }
 
 /// Sellify counts as one source but proves nothing alone — not even for a
@@ -1709,7 +1844,14 @@ fn normalize_researched_contact_with_context(
         .and_then(Value::as_str)
         .unwrap_or_default()
         .trim();
-    let name = format!("{first_name} {last_name}").trim().to_string();
+    let structured_name = format!("{first_name} {last_name}").trim().to_string();
+    // Imported contacts may carry only an observed full name. A keyed
+    // phone/position update must not turn that existing identity into "".
+    let name = if structured_name.is_empty() {
+        contact_string(&contact, &["name"])
+    } else {
+        structured_name
+    };
     let email = contact_string(&contact, &["person_email", "email"]);
     let phone = contact_string(&contact, &["person_telefon", "phone"]);
     let position = contact_string(&contact, &["person_position", "position"]);
@@ -2112,10 +2254,10 @@ fn execute(
     match merge_sellify_baseline_evidence(root, &mut result, company) {
         Ok(added) if added > 0 => {}
         Ok(_) => {}
-        Err(error) => {
+        Err(_error) => {
             eprintln!(
                 "[person-research] sellify baseline evidence merge failed for `{company}`: \
-                 {error:#}"
+                 see sellify_lookup_runs outcome"
             );
         }
     }
@@ -2219,10 +2361,6 @@ fn execute(
         }
         result["browser_assist_tasks"] = Value::Array(remaining_tasks);
         result["authenticated_source_capture_runs"] = Value::Array(capture_runs);
-        crate::service::business_os::repersist_augmented_person_research(
-            &research_request,
-            &mut result,
-        );
     }
     let populated = result
         .get("fields")
@@ -2307,16 +2445,60 @@ fn merge_sellify_baseline_evidence(
         lookup_payload["fuzzy_selectors"] =
             serde_json::json!([{ "field": "name", "value": probe }]);
     }
-    let lookup = super::store_outbound_commands::outbound_sellify_lookup(root, &lookup_payload)?;
-    let Some(record) = lookup
-        .get("records")
-        .and_then(Value::as_array)
-        .and_then(|records| records.first())
-        .cloned()
-    else {
-        return Ok(0);
+    let started_at_ms = now_ms();
+    let lookup = super::store_outbound_commands::outbound_sellify_lookup(root, &lookup_payload)
+        .and_then(|lookup| {
+            anyhow::ensure!(
+                lookup.get("ok").and_then(Value::as_bool) == Some(true),
+                "Sellify lookup did not report success"
+            );
+            let records = lookup
+                .get("records")
+                .and_then(Value::as_array)
+                .context("Sellify lookup is missing its records array")?;
+            Ok(records.clone())
+        });
+    let mut receipt = serde_json::json!({
+        "source_id": "sellify",
+        "via": "sellify_crm",
+        "collection": "sellify_companies",
+        "company": company,
+        "country": payload.get("country"),
+        "query": lookup_payload,
+        "started_at_ms": started_at_ms,
+        "completed_at_ms": now_ms(),
+        "classification": "failed",
+        "returned_record_count": Value::Null,
+        "selected_record_id": Value::Null,
+        "evidence_count": 0,
+    });
+    let outcome = match lookup {
+        Ok(records) => {
+            receipt["returned_record_count"] = serde_json::json!(records.len());
+            receipt["classification"] = serde_json::json!(if records.is_empty() {
+                "completed_empty"
+            } else {
+                "succeeded"
+            });
+            // Preserve existing first-candidate selection. A successful lookup
+            // with no requested field contribution is not an empty lookup.
+            let added = records.first().map_or(0, |record| {
+                receipt["selected_record_id"] = record.get("id").cloned().unwrap_or(Value::Null);
+                inject_sellify_candidates(payload, record)
+            });
+            receipt["evidence_count"] = serde_json::json!(added);
+            Ok(added)
+        }
+        Err(error) => {
+            // Do not copy raw database/provider errors into replicated evidence.
+            receipt["error_code"] = serde_json::json!("sellify_lookup_failed");
+            Err(error)
+        }
     };
-    Ok(inject_sellify_candidates(payload, &record))
+    // One baseline lookup per execution. This receipt belongs to the enclosing
+    // command/workspace, not a fabricated scrape run or independent smoke test.
+    payload["sellify_lookup_runs"] = serde_json::json!([receipt]);
+    outcome
 }
 
 /// Legal-form-free core of a company name, used as a containment probe for
@@ -2444,6 +2626,363 @@ fn inject_sellify_candidates(payload: &mut Value, record: &Value) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completed_research_requires_durable_lead_writeback() -> anyhow::Result<()> {
+        for failure in ["none", "sqlite", "contract"] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path();
+            for collection in ["outbound_lead_generation_leads", "business_commands"] {
+                super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                    root, collection,
+                )?;
+            }
+            let mut command = BusinessCommand {
+                id: Some("cmd-writeback-barrier".to_string()),
+                module: "outbound-lead-generation".to_string(),
+                command_type: "web_stack.person_research".to_string(),
+                record_id: Some("lead-writeback-barrier".to_string()),
+                payload: serde_json::json!({
+                    "writeback_contract": {
+                        "collection": "outbound_lead_generation_leads",
+                        "record_ids": ["lead-writeback-barrier"]
+                    }
+                }),
+                client_context: Value::Null,
+                origin: store::CommandOrigin::TrustedLocal,
+            };
+            store::upsert_rxdb_collection_record(
+                root,
+                "outbound_lead_generation_leads",
+                "lead-writeback-barrier",
+                1,
+                serde_json::json!({
+                    "id": "lead-writeback-barrier", "research_status": "running",
+                    "data": {"firma_name": "Imported company"},
+                    "contacts": [{"id": "retained-contact", "person_vorname": "Grace"}]
+                }),
+            )?;
+            if failure == "contract" {
+                command.payload["writeback_contract"]["record_ids"] =
+                    serde_json::json!(["another-lead"]);
+            }
+            if failure == "sqlite" {
+                let conn = rusqlite::Connection::open(store::rxdb_store_path(root))?;
+                conn.execute_batch(
+                    "CREATE TRIGGER reject_lead_result_insert
+                     BEFORE INSERT ON ctox_business_os__outbound_lead_generation_leads__v0
+                     WHEN NEW.id = 'lead-writeback-barrier'
+                     BEGIN SELECT RAISE(ABORT, 'writeback fixture rejection'); END;
+                     CREATE TRIGGER reject_lead_result_update
+                     BEFORE UPDATE ON ctox_business_os__outbound_lead_generation_leads__v0
+                     WHEN NEW.id = 'lead-writeback-barrier'
+                     BEGIN SELECT RAISE(ABORT, 'writeback fixture rejection'); END;",
+                )?;
+            }
+            // Seed the actual durable control claim without dispatching a
+            // worker or provider. Completion must cross the same canonical
+            // command barrier as production, not just a copied RxDB row.
+            let claim = crate::mission::channels::claim_business_control_command(
+                root,
+                store::business_command_core_claim("cmd-writeback-barrier", &command)?,
+            )?;
+            assert_eq!(claim.disposition, "new");
+            let outcome = serde_json::json!({
+                "fields": {"firma_name": {"value": "Researched company", "candidates": []}},
+                "evidence": [{"field": "firma_name", "source_id": "impressum",
+                    "source_url": "https://company.test/impressum",
+                    "quote": "Researched company"}]
+            });
+            let (persisted, lead_status, error, result) = persist_completed_person_research_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                outcome.clone(),
+            );
+            persisted?;
+            let lead = store::load_rxdb_collection_record(
+                root,
+                "outbound_lead_generation_leads",
+                "lead-writeback-barrier",
+            )?
+            .expect("lead remains readable");
+            let published = store::load_rxdb_collection_record(
+                root,
+                "business_commands",
+                "cmd-writeback-barrier",
+            )?
+            .expect("command outcome is durable");
+            assert_eq!(lead["contacts"][0]["id"], "retained-contact");
+            assert_eq!(published["execution_phase"], "terminal");
+            assert_eq!(
+                published["terminal_status"],
+                if failure == "none" {
+                    "completed"
+                } else {
+                    "failed"
+                }
+            );
+            if failure != "none" {
+                assert_eq!(lead_status, "failed");
+                assert!(error
+                    .as_deref()
+                    .is_some_and(|error| !error.trim().is_empty()));
+                assert!(result.is_none());
+                assert_eq!(lead["data"]["firma_name"], "Imported company");
+                assert_eq!(lead["research_status"], "running");
+                assert_eq!(published["status"], "failed");
+                assert_eq!(
+                    published["result"]["operation"],
+                    "person_research_writeback"
+                );
+                assert!(published["result"]["error_chain"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|reason| reason.contains(if failure == "sqlite" {
+                        "writeback fixture rejection"
+                    } else {
+                        "bounded lead writeback contract"
+                    })));
+                assert_eq!(published["result"]["ok"], false);
+            } else {
+                assert_eq!(lead_status, "completed");
+                assert!(error.is_none());
+                assert_eq!(result, Some(outcome));
+                assert_eq!(lead["research_status"], "completed");
+                assert_eq!(lead["data"]["firma_name"], "Researched company");
+                assert_eq!(
+                    lead["evidence"].as_array().unwrap().len(),
+                    1,
+                    "completion must not project the same evidence twice"
+                );
+                assert_eq!(published["status"], "completed");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_lookup_receipts_distinguish_actual_success_empty_and_failure() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root,
+            "sellify_companies",
+        )?;
+        let mut result = serde_json::json!({
+            "country": "DE", "fields": {"firma_name": {"value": null, "candidates": []}},
+            "plan": []
+        });
+        assert_eq!(
+            merge_sellify_baseline_evidence(root, &mut result, "Example GmbH")?,
+            0
+        );
+        let empty = &result["sellify_lookup_runs"][0];
+        assert_eq!(empty["classification"], "completed_empty");
+        assert_eq!(empty["returned_record_count"], 0);
+        assert_eq!(empty["evidence_count"], 0);
+        assert_eq!(empty["company"], "Example GmbH");
+        assert_eq!(empty["country"], "DE");
+        assert_eq!(empty["query"]["selectors"][0]["value"], "Example GmbH");
+        assert!(empty["completed_at_ms"].as_i64().is_some());
+        assert_eq!(result["plan"], serde_json::json!([]));
+
+        store::upsert_rxdb_collection_record(
+            root,
+            "sellify_companies",
+            "crm-42",
+            1,
+            serde_json::json!({"id": "crm-42", "name": "Example GmbH", "contact_id": "42"}),
+        )?;
+        assert_eq!(
+            merge_sellify_baseline_evidence(root, &mut result, "Example GmbH")?,
+            1
+        );
+        let success = &result["sellify_lookup_runs"][0];
+        assert_eq!(success["classification"], "succeeded");
+        assert_eq!(success["returned_record_count"], 1);
+        assert_eq!(success["selected_record_id"], "crm-42");
+        assert_eq!(success["evidence_count"], 1);
+        assert_eq!(result["fields"]["firma_name"]["source_id"], "sellify");
+
+        // A matching record with no newly admitted field remains a successful
+        // lookup, not completed_empty. Existing candidate dedupe is unchanged.
+        assert_eq!(
+            merge_sellify_baseline_evidence(root, &mut result, "Example GmbH")?,
+            0
+        );
+        assert_eq!(
+            result["sellify_lookup_runs"][0]["classification"],
+            "succeeded"
+        );
+        assert_eq!(result["sellify_lookup_runs"][0]["returned_record_count"], 1);
+        assert_eq!(result["sellify_lookup_runs"][0]["evidence_count"], 0);
+
+        // Actual native SQLite open failure, not a mocked top-level ok flag.
+        let broken = tempfile::tempdir()?;
+        std::fs::create_dir_all(store::rxdb_store_path(broken.path()))?;
+        let mut failure = serde_json::json!({"country": "AT", "fields": {}, "plan": []});
+        assert!(
+            merge_sellify_baseline_evidence(broken.path(), &mut failure, "Example AG").is_err()
+        );
+        let receipt = &failure["sellify_lookup_runs"][0];
+        assert_eq!(receipt["classification"], "failed");
+        assert!(receipt["returned_record_count"].is_null());
+        assert_eq!(receipt["evidence_count"], 0);
+        assert_eq!(receipt["error_code"], "sellify_lookup_failed");
+        assert!(receipt.get("error").is_none());
+        assert_eq!(failure["plan"], serde_json::json!([]));
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_lookup_requires_readable_projection_for_all_selector_modes() -> anyhow::Result<()> {
+        for state in ["missing", "directory", "no_collection", "corrupt", "empty"] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path();
+            let path = store::rxdb_store_path(root);
+            match state {
+                "missing" => {}
+                "directory" => std::fs::create_dir_all(&path)?,
+                "no_collection" => {
+                    std::fs::create_dir_all(path.parent().unwrap())?;
+                    drop(rusqlite::Connection::open(&path)?);
+                }
+                "corrupt" => {
+                    std::fs::create_dir_all(path.parent().unwrap())?;
+                    std::fs::write(&path, b"not a SQLite database")?;
+                }
+                "empty" => {
+                    super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                        root,
+                        "sellify_companies",
+                    )?
+                }
+                _ => unreachable!(),
+            }
+            for selectors in [
+                serde_json::json!({"ids": ["crm-missing"]}),
+                serde_json::json!({"selectors": [{"field": "name", "value": "Missing GmbH"}]}),
+                serde_json::json!({"fuzzy_selectors": [{"field": "name", "value": "Missing"}]}),
+            ] {
+                let mut request = selectors;
+                request["entity"] = serde_json::json!("company");
+                let outcome =
+                    super::super::store_outbound_commands::outbound_sellify_lookup(root, &request);
+                if state == "empty" {
+                    let outcome = outcome?;
+                    assert_eq!(outcome["ok"], true);
+                    assert_eq!(outcome["records"], serde_json::json!([]));
+                } else {
+                    assert!(
+                        outcome.is_err(),
+                        "unavailable projection became empty: {state}"
+                    );
+                }
+                if state == "missing" {
+                    assert!(!path.exists(), "read-only lookup created a database");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_lookup_keeps_selector_dedupe_limits_and_literal_fuzzy_matching() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root,
+            "sellify_companies",
+        )?;
+        for (id, name) in [("crm-1", "Acme%_AG"), ("crm-2", "AcmeZZAG")] {
+            store::upsert_rxdb_collection_record(
+                root,
+                "sellify_companies",
+                id,
+                1,
+                serde_json::json!({"id": id, "name": name}),
+            )?;
+        }
+        let matched = super::super::store_outbound_commands::outbound_sellify_lookup(
+            root,
+            &serde_json::json!({
+                "entity": "company", "ids": ["crm-1"],
+                "selectors": [{"field": "name", "value": "Acme%_AG"}],
+                "fuzzy_selectors": [{"field": "name", "value": "Acme%_"}],
+            }),
+        )?;
+        assert_eq!(matched["records"].as_array().unwrap().len(), 1);
+        assert_eq!(matched["records"][0]["id"], "crm-1");
+        let fuzzy = super::super::store_outbound_commands::outbound_sellify_lookup(
+            root,
+            &serde_json::json!({
+                "entity": "company", "fuzzy_selectors": [{"field": "name", "value": "Acme%_"}],
+            }),
+        )?;
+        assert_eq!(fuzzy["records"].as_array().unwrap().len(), 1);
+        assert_eq!(fuzzy["records"][0]["id"], "crm-1");
+        let limited = super::super::store_outbound_commands::outbound_sellify_lookup(
+            root,
+            &serde_json::json!({
+                "entity": "company", "ids": ["crm-1", "crm-2"], "limit": 1, "fields": ["name"],
+            }),
+        )?;
+        assert_eq!(
+            limited["records"],
+            serde_json::json!([{"id": "crm-1", "name": "Acme%_AG"}])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn research_without_browser_capture_persists_actual_sellify_outcomes() -> anyhow::Result<()> {
+        for broken in [false, true] {
+            let temp = tempfile::tempdir()?;
+            let root = temp.path();
+            if broken {
+                std::fs::create_dir_all(store::rxdb_store_path(root))?;
+            } else {
+                super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                    root,
+                    "sellify_companies",
+                )?;
+            }
+            // HaveData deliberately avoids external research in this native
+            // regression. The ordinary execute path still does its real CRM
+            // lookup, summary and final persistence with capture disabled.
+            let result = execute(
+                root,
+                "research-evidence-no-browser",
+                &serde_json::json!({
+                    "company": "Example GmbH", "country": "DE", "mode": "have_data",
+                    "auto_browser_capture": false,
+                }),
+                &Value::Null,
+            )?;
+            assert!(result.get("workspace_error").is_none());
+            assert_eq!(
+                result["sellify_lookup_runs"][0]["classification"],
+                if broken { "failed" } else { "completed_empty" }
+            );
+            assert!(result["summary"].is_string());
+            assert!(result.get("authenticated_source_capture_runs").is_none());
+            let workspace = Path::new(result["workspace"]["path"].as_str().unwrap());
+            let saved: Value =
+                serde_json::from_slice(&std::fs::read(workspace.join("envelope.json"))?)?;
+            assert_eq!(saved, result);
+            let manifest: Value =
+                serde_json::from_slice(&std::fs::read(workspace.join("manifest.json"))?)?;
+            assert_eq!(manifest["files"]["scrape_runs"], "scrape_runs.jsonl");
+            assert!(workspace.join("scrape_runs.jsonl").is_file());
+        }
+        Ok(())
+    }
 
     #[test]
     fn sellify_candidates_fill_missing_fields_and_stay_visible_on_filled_ones() {
@@ -2894,6 +3433,165 @@ mod tests {
     }
 
     #[test]
+    fn historical_evidence_never_certifies_another_person_or_current_value() {
+        let baseline = serde_json::json!({
+            "id": "lead-evidence-binding",
+            "contacts": [
+                {"id": "contact-a", "person_key": "person-a", "name": "Ada Lovelace"},
+                {"id": "contact-b", "person_key": "person-b", "name": "Grace Hopper"}
+            ],
+            "data": {"firma_ort": "Berlin"},
+            "evidence": []
+        });
+        let cases = [
+            ("firma_ort", "Bielefeld", "Berlin", None, "Berlin", false),
+            (
+                "firma_ort",
+                "Bielefeld",
+                "Bielefeld",
+                None,
+                "Bielefeld",
+                true,
+            ),
+            (
+                "person_email",
+                "team@example.test",
+                "team@example.test",
+                Some("person-a"),
+                "team@example.test",
+                false,
+            ),
+            (
+                "person_email",
+                "team@example.test",
+                "team@example.test",
+                Some("person-b"),
+                "other@example.test",
+                false,
+            ),
+            (
+                "person_email",
+                "team@example.test",
+                "team@example.test",
+                Some("person-b"),
+                "Contact: team(at)example.test",
+                true,
+            ),
+            ("mitarbeiter", "30", "30", None, "31 employees", false),
+            ("mitarbeiter", "30", "30", None, "30 employees", true),
+        ];
+        for (field_key, current, historical, evidence_key, quote, verified) in cases {
+            let mut existing = baseline.clone();
+            existing["evidence"] = serde_json::json!([{
+                "field_key": field_key, "value": historical,
+                "person_key": evidence_key, "quote": quote,
+                "source_id": "company-website", "source_url": "https://example.test/contact"
+            }]);
+            let mut field = serde_json::json!({"value": current});
+            if field_key.starts_with("person_") {
+                field["person_key"] = serde_json::json!("person-b");
+            }
+            let mut fields = serde_json::Map::new();
+            fields.insert(field_key.to_string(), field);
+            let outcome = serde_json::json!({"fields": fields});
+            let patch = outbound_lead_generation_research_outcome_patch(&existing, &outcome, 2_000);
+            assert_eq!(
+                patch["evidence"], existing["evidence"],
+                "historical evidence retained"
+            );
+            assert_eq!(patch["contacts"][0]["name"], "Ada Lovelace");
+            assert_eq!(patch["contacts"][1]["name"], "Grace Hopper");
+            assert_eq!(
+                patch["payload"]["verified_field_keys"],
+                if verified {
+                    serde_json::json!([field_key])
+                } else {
+                    serde_json::json!([])
+                },
+                "{field_key}: evidence person {evidence_key:?}, quote {quote}"
+            );
+            assert_eq!(
+                patch["research_status"],
+                if verified {
+                    "completed"
+                } else {
+                    "needs_review"
+                }
+            );
+        }
+
+        // An external address quote can count, but Sellify alone still cannot.
+        let field = serde_json::json!({"value": "team@example.test", "person_key": "person-b"});
+        let only_crm = serde_json::json!([{
+            "field_key": "person_email", "value": "team@example.test", "person_key": "person-b",
+            "quote": "team@example.test", "source_id": "sellify",
+            "source_url": "sellify://person/8235"
+        }]);
+        assert_eq!(
+            matching_research_evidence_count(
+                only_crm.as_array().unwrap(),
+                "person_email",
+                &field,
+                false
+            ),
+            0
+        );
+        let unbound = serde_json::json!([{
+            "field_key": "person_email", "value": "team@example.test",
+            "quote": "team@example.test", "source_url": "https://example.test/contact"
+        }]);
+        let unbound_field = serde_json::json!({"value": "team@example.test"});
+        assert_eq!(
+            matching_research_evidence_count(
+                unbound.as_array().unwrap(),
+                "person_email",
+                &unbound_field,
+                false
+            ),
+            0
+        );
+        assert_eq!(
+            matching_research_evidence_count(
+                unbound.as_array().unwrap(),
+                "person_email",
+                &unbound_field,
+                true
+            ),
+            1
+        );
+
+        // A later, correct quote for the same provider/value/person is not
+        // discarded merely because an old unusable quote already exists.
+        let mut existing = baseline;
+        existing["evidence"] = serde_json::json!([{
+            "field_key": "person_email", "value": "team@example.test",
+            "person_key": "person-b", "quote": "other@example.test",
+            "source_id": "company-website", "source_url": "https://example.test/contact"
+        }]);
+        let outcome = serde_json::json!({"fields": {"person_email": {
+            "value": "team@example.test", "person_key": "person-b", "candidates": [{
+                "value": "team@example.test", "person_key": "person-b",
+                "quote": "Contact: team(at)example.test",
+                "source_id": "company-website", "source_url": "https://example.test/contact"
+            }]
+        }}});
+        let patch = outbound_lead_generation_research_outcome_patch(&existing, &outcome, 2_000);
+        assert_eq!(patch["evidence"].as_array().unwrap().len(), 2);
+        assert_eq!(patch["evidence"][0], existing["evidence"][0]);
+        assert_eq!(
+            patch["payload"]["verified_field_keys"],
+            serde_json::json!(["person_email"])
+        );
+        assert_eq!(
+            independent_research_evidence_count(
+                patch["evidence"].as_array().unwrap(),
+                "person_email"
+            ),
+            1
+        );
+    }
+
+    #[test]
     fn a_domain_is_stored_as_a_bare_host() {
         let d = |value: &str| normalize_domain(&serde_json::json!(value));
         assert_eq!(d("www.aeroxon.de"), serde_json::json!("aeroxon.de"));
@@ -3304,6 +4002,84 @@ mod tests {
     }
 
     #[test]
+    fn unbound_person_fields_never_inherit_an_existing_contact() {
+        let people = serde_json::json!([
+            {"id": "a", "person_key": "grace-hopper", "person_vorname": "Grace", "person_nachname": "Hopper", "name": "Grace Hopper"},
+            {"id": "b", "person_key": "ada-lovelace", "person_vorname": "Ada", "person_nachname": "Lovelace", "name": "Ada Lovelace"}
+        ]);
+        for count in [1, 2] {
+            let existing = serde_json::json!({
+                "id": "lead-unbound",
+                "contacts": people.as_array().unwrap()[..count].to_vec()
+            });
+            for key in [
+                None,
+                Some(Value::Null),
+                Some(serde_json::json!("")),
+                Some(serde_json::json!("  ")),
+                Some(serde_json::json!(42)),
+                Some(serde_json::json!(false)),
+            ] {
+                let mut result = serde_json::json!({"fields": {
+                    "person_vorname": {"value": "Foreign"},
+                    "person_email": {"value": "foreign@company.test"}
+                }});
+                if let Some(key) = key {
+                    for field in ["person_vorname", "person_email"] {
+                        result["fields"][field]["person_key"] = key.clone();
+                    }
+                }
+                let patch = outbound_lead_generation_research_outcome_patch(&existing, &result, 1);
+                assert_eq!(patch["contacts"], existing["contacts"]);
+                assert_eq!(
+                    patch["payload"]["researched_field_keys"],
+                    serde_json::json!([])
+                );
+                // This diagnostic lists the rejected keys; JSON object insertion
+                // order is not part of the routing contract. Require every key
+                // exactly once without assuming serde_json's map ordering.
+                let mut rejected = patch["payload"]["unbound_person_field_keys"]
+                    .as_array()
+                    .expect("unbound fields are a list")
+                    .iter()
+                    .map(|key| key.as_str().expect("unbound field key is text"))
+                    .collect::<Vec<_>>();
+                rejected.sort_unstable();
+                assert_eq!(rejected, ["person_email", "person_vorname"]);
+                assert_eq!(patch["research_status"], "needs_review");
+            }
+            let keyed = serde_json::json!({"fields": {
+                "person_position": {"value": "Admiral", "person_key": "grace-hopper"}
+            }});
+            let patch = outbound_lead_generation_research_outcome_patch(&existing, &keyed, 1);
+            assert_eq!(patch["contacts"][0]["person_position"], "Admiral");
+            assert_eq!(patch["contacts"][0]["person_vorname"], "Grace");
+            if count == 2 {
+                assert!(patch["contacts"][1].get("person_position").is_none());
+            }
+        }
+        // Initial legacy discovery still constructs a new person; it never
+        // borrows an existing person's id, name or email.
+        let initial = serde_json::json!({"fields": {
+            "person_vorname": {"value": "Norman"},
+            "person_nachname": {"value": "Quandt"},
+            "person_email": {"value": "norman.quandt@bnt-chemicals.de"}
+        }});
+        let patch = outbound_lead_generation_research_outcome_patch(
+            &serde_json::json!({"id": "new-lead", "contacts": []}),
+            &initial,
+            1,
+        );
+        assert_eq!(patch["contacts"].as_array().unwrap().len(), 1);
+        assert_eq!(patch["contacts"][0]["person_vorname"], "Norman");
+        assert_eq!(patch["contacts"][0]["person_nachname"], "Quandt");
+        assert_eq!(
+            patch["payload"]["unbound_person_field_keys"],
+            serde_json::json!([])
+        );
+    }
+
+    #[test]
     fn person_fields_with_two_keys_are_routed_field_by_field() {
         let existing = serde_json::json!({
             "id": "lead-d",
@@ -3346,6 +4122,104 @@ mod tests {
         assert!(!contacts_match(&one, &two));
         let same = serde_json::json!({"person_key": "norman-quandt", "person_vorname": "N.", "person_nachname": "Quandt"});
         assert!(contacts_match(&one, &same));
+    }
+
+    #[test]
+    fn partial_contact_updates_preserve_the_existing_observed_full_name() {
+        for crm_known in [false, true] {
+            for (field, stored_field, value) in [
+                ("person_telefon", "phone", "+49 1234567"),
+                ("person_position", "position", "Managing Director"),
+                ("person_email", "email", "grace.hopper@company.test"),
+                (
+                    "person_linkedin",
+                    "person_linkedin",
+                    "https://www.linkedin.com/in/grace-hopper",
+                ),
+            ] {
+                let existing = serde_json::json!({"id": "lead-partial", "contacts": [{
+                    "id": "existing-contact", "person_key": "grace-hopper",
+                    "name": "Grace Hopper", "source": "sellify", "crm_known": crm_known
+                }]});
+                let mut outcome = serde_json::json!({"fields": {}});
+                outcome["fields"][field] = serde_json::json!({
+                    "value": value, "person_key": "grace-hopper"
+                });
+                let patch = outbound_lead_generation_research_outcome_patch(&existing, &outcome, 1);
+                let contacts = patch["contacts"].as_array().unwrap();
+                assert_eq!(contacts.len(), 1, "partial update of {field}");
+                assert_eq!(contacts[0]["id"], "existing-contact");
+                assert_eq!(contacts[0]["person_key"], "grace-hopper");
+                assert_eq!(contacts[0]["name"], "Grace Hopper");
+                assert_eq!(contacts[0][stored_field], value);
+                assert_eq!(contacts[0]["source"], "sellify");
+                assert_eq!(
+                    patch["payload"]["verified_field_keys"],
+                    serde_json::json!([])
+                );
+            }
+        }
+        // Full-name preservation neither invents a person from title/gender
+        // alone nor overrides explicitly supplied structured name parts.
+        assert!(normalize_researched_contact_with_context(
+            serde_json::json!({"person_titel": "Dr.", "person_geschlecht": "female"}),
+            &[]
+        )
+        .is_none());
+        let explicit = normalize_researched_contact_with_context(
+            serde_json::json!({
+                "name": "Old Name", "person_vorname": "Ada", "person_nachname": "Lovelace"
+            }),
+            &[],
+        )
+        .unwrap();
+        assert_eq!(explicit["name"], "Ada Lovelace");
+    }
+
+    #[test]
+    fn deduplication_never_merges_distinct_person_keys_over_a_shared_row_id() {
+        let first = serde_json::json!({"id": "imported-row", "person_key": "grace-hopper", "name": "Grace Hopper", "email": "info@company.test"});
+        let second = serde_json::json!({"id": "imported-row", "person_key": "ada-lovelace", "name": "Ada Lovelace", "email": "info@company.test"});
+        let mut contacts = vec![first.clone(), second.clone()];
+        deduplicate_contacts(&mut contacts);
+        assert_eq!(contacts, vec![first.clone(), second.clone()]);
+
+        // Imported ids can predate stable person keys. The real projection
+        // must preserve both identities after a keyed update as well.
+        let patch = outbound_lead_generation_research_outcome_patch(
+            &serde_json::json!({"id": "lead-shared-row", "contacts": contacts}),
+            &serde_json::json!({"fields": {
+                "person_position": {"value": "Admiral", "person_key": "grace-hopper"}
+            }}),
+            1,
+        );
+        let projected = patch["contacts"].as_array().unwrap();
+        assert_eq!(projected.len(), 2);
+        assert_eq!(projected[0]["name"], "Grace Hopper");
+        assert_eq!(projected[0]["person_position"], "Admiral");
+        assert_eq!(projected[1], second);
+
+        // Same keyed identity still coalesces even with different row ids.
+        let mut same_person = vec![
+            first.clone(),
+            serde_json::json!({
+                "id": "new-provider-row", "person_key": "grace-hopper", "phone": "+49 1234567"
+            }),
+        ];
+        deduplicate_contacts(&mut same_person);
+        assert_eq!(same_person.len(), 1);
+        assert_eq!(same_person[0]["person_key"], "grace-hopper");
+        assert_eq!(same_person[0]["phone"], "+49 1234567");
+
+        // Legacy unkeyed duplicate ids retain their existing behaviour.
+        let mut legacy = vec![
+            serde_json::json!({"id": "legacy", "name": "Grace Hopper"}),
+            serde_json::json!({"id": "legacy", "email": "grace@company.test"}),
+        ];
+        deduplicate_contacts(&mut legacy);
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0]["name"], "Grace Hopper");
+        assert_eq!(legacy[0]["email"], "grace@company.test");
     }
 
     #[test]
