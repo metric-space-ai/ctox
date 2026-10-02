@@ -4995,6 +4995,38 @@ mod coding_model_cli_ipc_tests {
             server.join().unwrap();
         }
     }
+
+    #[test]
+    fn cli_rejects_named_preset_without_explicit_model() {
+        for absent in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let mut payload = published();
+            if absent {
+                payload["presets"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("model");
+            } else {
+                payload["presets"][0]["model"] = Value::Null;
+            }
+            let server = serve(
+                root.path(),
+                vec![ServiceIpcResponse::Json {
+                    status: 200,
+                    payload,
+                }],
+            );
+            let error = crate::coding_agents::pi_sidecar::resolve_coding_model_preset_for_cli(
+                root.path(),
+                "codex-subscription-advertised-fixture",
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("preset is malformed"));
+            assert!(!root.path().join("coding-agents").exists());
+            server.join().unwrap();
+        }
+    }
 }
 
 #[cfg(test)]

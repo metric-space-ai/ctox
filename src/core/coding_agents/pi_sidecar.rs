@@ -284,9 +284,9 @@ fn resolve_coding_model_preset_from_capabilities(
         "coding model preset is ambiguous"
     );
     match preset.get("model") {
-        None | Some(Value::Null) => Ok(None),
+        Some(Value::Null) if preset_id == "ctox" => Ok(None),
         Some(model @ Value::Object(_)) => Ok(Some(model.clone())),
-        Some(_) => anyhow::bail!("coding model preset is malformed"),
+        None | Some(_) => anyhow::bail!("coding model preset is malformed"),
     }
 }
 
