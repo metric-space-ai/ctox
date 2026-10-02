@@ -720,8 +720,13 @@ async function refreshOnce(options = {}) {
 }
 
 async function hydrateSelectedThread(threadId) {
+  const request = {};
+  state.detailRequest = request;
   if (!threadId) return;
   const mountCtx = state.ctx;
+  const generation = state.searchScanGeneration;
+  const isCurrent = () => state.ctx === mountCtx && state.selectedId === threadId
+    && state.detailRequest === request && state.searchScanGeneration === generation;
   const me = currentUserId();
   const [messages, links, approvals, notifications] = await Promise.all([
     loadPersonalPages('user_thread_messages', { thread_id: threadId }),
@@ -729,7 +734,7 @@ async function hydrateSelectedThread(threadId) {
     loadPersonalPages('ctox_task_approval_requests', { thread_id: threadId }),
     me ? loadPersonalPages('user_notifications', { thread_id: threadId, user_id: me }) : Promise.resolve([]),
   ]);
-  if (state.ctx !== mountCtx || state.selectedId !== threadId) return;
+  if (!isCurrent()) return;
   state.data = {
     ...state.data,
     messages,
@@ -746,9 +751,10 @@ async function hydrateSelectedThread(threadId) {
   };
   const commandIds = linkedCommandIds(selectedBase);
   const commands = await loadRecordsByIds('business_commands', commandIds);
+  if (!isCurrent()) return;
   const taskIds = linkedTaskIds(selectedBase, commands);
   const queue = await loadRecordsByIds('ctox_queue_tasks', taskIds);
-  if (state.ctx !== mountCtx || state.selectedId !== threadId) return;
+  if (!isCurrent()) return;
   state.data = { ...state.data, commands, queue };
   state.detailCompleteThreadId = threadId;
   render();
