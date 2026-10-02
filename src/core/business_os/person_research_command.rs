@@ -592,7 +592,9 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
     // own `person_key` names, field by field, not to whichever contact
     // happens to be first. Carbosulf, 23.09.2026: Jacob's `person_vorname`
     // "Hans-Robert" landed on the first contact, Thomas Schauzu, who became
-    // "Hans-Robert Schauzu". Fields without a key keep the old target.
+    // "Hans-Robert Schauzu". Unbound legacy fields may seed the first
+    // contact only when there are no existing contacts; they cannot inherit
+    // an existing contact's identity.
     let mut person_contacts: Vec<(Option<String>, Value)> = Vec::new();
     let person_records = outcome
         .get("person_records")
@@ -613,6 +615,7 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             .unwrap_or_default(),
     );
     let mut researched_field_keys = Vec::new();
+    let mut unbound_person_field_keys = Vec::new();
 
     for (field_key, field) in outcome
         .get("fields")
@@ -626,6 +629,19 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
         else {
             continue;
         };
+        if field_key.starts_with("person_")
+            && !has_person_records
+            && !contacts.is_empty()
+            && field
+                .get("person_key")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .is_none()
+        {
+            unbound_person_field_keys.push(field_key.clone());
+            continue;
+        }
         researched_field_keys.push(field_key.clone());
         let value = &restore_german_spelling(value, field);
         if field_key.starts_with("person_") && !has_person_records {
@@ -799,6 +815,7 @@ pub(super) fn outbound_lead_generation_research_outcome_patch(
             "researched_field_keys": researched_field_keys,
             "verified_field_keys": verified_field_keys,
             "unverified_field_keys": unverified_field_keys,
+            "unbound_person_field_keys": unbound_person_field_keys,
             "research_finished_at_ms": now,
             "research_tool": outcome.get("tool").cloned().unwrap_or(Value::Null),
             "research_instructions_len": outcome.get("research_instructions_len").cloned().unwrap_or(Value::Null),
@@ -1106,11 +1123,7 @@ fn contact_for_person_key(contacts: &[Value], key: Option<&str>) -> Value {
             })
             .cloned()
             .unwrap_or_else(|| serde_json::json!({ "person_key": key })),
-        None => contacts
-            .first()
-            .filter(|value| value.is_object())
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!({})),
+        None => serde_json::json!({}),
     }
 }
 
@@ -3757,6 +3770,77 @@ mod tests {
             .expect("Jacob stays");
         assert_eq!(jacob["person_position"], "Geschäftsführer");
         assert_eq!(contacts.len(), 2);
+    }
+
+    #[test]
+    fn unbound_person_fields_never_inherit_an_existing_contact() {
+        let people = serde_json::json!([
+            {"id": "a", "person_key": "grace-hopper", "person_vorname": "Grace", "person_nachname": "Hopper", "name": "Grace Hopper"},
+            {"id": "b", "person_key": "ada-lovelace", "person_vorname": "Ada", "person_nachname": "Lovelace", "name": "Ada Lovelace"}
+        ]);
+        for count in [1, 2] {
+            let existing = serde_json::json!({
+                "id": "lead-unbound",
+                "contacts": people.as_array().unwrap()[..count].to_vec()
+            });
+            for key in [
+                None,
+                Some(Value::Null),
+                Some(serde_json::json!("")),
+                Some(serde_json::json!("  ")),
+                Some(serde_json::json!(42)),
+                Some(serde_json::json!(false)),
+            ] {
+                let mut result = serde_json::json!({"fields": {
+                    "person_vorname": {"value": "Foreign"},
+                    "person_email": {"value": "foreign@company.test"}
+                }});
+                if let Some(key) = key {
+                    for field in ["person_vorname", "person_email"] {
+                        result["fields"][field]["person_key"] = key.clone();
+                    }
+                }
+                let patch = outbound_lead_generation_research_outcome_patch(&existing, &result, 1);
+                assert_eq!(patch["contacts"], existing["contacts"]);
+                assert_eq!(
+                    patch["payload"]["researched_field_keys"],
+                    serde_json::json!([])
+                );
+                assert_eq!(
+                    patch["payload"]["unbound_person_field_keys"],
+                    serde_json::json!(["person_email", "person_vorname"])
+                );
+                assert_eq!(patch["research_status"], "needs_review");
+            }
+            let keyed = serde_json::json!({"fields": {
+                "person_position": {"value": "Admiral", "person_key": "grace-hopper"}
+            }});
+            let patch = outbound_lead_generation_research_outcome_patch(&existing, &keyed, 1);
+            assert_eq!(patch["contacts"][0]["person_position"], "Admiral");
+            assert_eq!(patch["contacts"][0]["person_vorname"], "Grace");
+            if count == 2 {
+                assert!(patch["contacts"][1].get("person_position").is_none());
+            }
+        }
+        // Initial legacy discovery still constructs a new person; it never
+        // borrows an existing person's id, name or email.
+        let initial = serde_json::json!({"fields": {
+            "person_vorname": {"value": "Norman"},
+            "person_nachname": {"value": "Quandt"},
+            "person_email": {"value": "norman.quandt@bnt-chemicals.de"}
+        }});
+        let patch = outbound_lead_generation_research_outcome_patch(
+            &serde_json::json!({"id": "new-lead", "contacts": []}),
+            &initial,
+            1,
+        );
+        assert_eq!(patch["contacts"].as_array().unwrap().len(), 1);
+        assert_eq!(patch["contacts"][0]["person_vorname"], "Norman");
+        assert_eq!(patch["contacts"][0]["person_nachname"], "Quandt");
+        assert_eq!(
+            patch["payload"]["unbound_person_field_keys"],
+            serde_json::json!([])
+        );
     }
 
     #[test]

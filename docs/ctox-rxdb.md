@@ -139,6 +139,13 @@ evidence or launch a second contact-validation sweep. This ordering is a
 delivery barrier, not a cross-database atomicity claim; command publication
 failures still use the existing recovery path.
 
+Lead-level person fields cannot inherit the first existing contact when their
+`person_key` is absent, empty or malformed. Those fields remain unapplied and
+are listed in `payload.unbound_person_field_keys`, outside the researched-field
+list. Existing imported names and contact details remain unchanged. Initial
+legacy discovery from an empty contact list and explicit keyed updates remain
+supported; this does not certify the source quality of those values.
+
 Sellify lookups require a readable collection and use one read-only SQLite
 transaction for ID, exact-field, fuzzy-field, and campaign-group probes.
 Before opening that snapshot, best-effort index preparation on an existing
@@ -156,7 +163,7 @@ manifest. Final envelope and manifest replacements are individually atomic;
 the workspace as a whole is not a transactional snapshot. Persistence errors
 remain explicit in `workspace_error` and must not count as durable acceptance.
 These changes do not alter country/field/source selection, access grants,
-record binding or the WebRTC data boundary. A completed command remains distinct
+authorization record scope or the WebRTC data boundary. A completed command remains distinct
 from all-provider success; inspect actual source outcomes and admissible evidence.
 
 The Outbound source-registry command reads current run and provider-account
