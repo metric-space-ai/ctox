@@ -1599,17 +1599,18 @@ fn mark_outbound_lead_running_attached(
     task_id: &str,
     now: i64,
 ) -> anyhow::Result<()> {
-    if command.get("module").and_then(Value::as_str) != Some("outbound-lead-generation")
-        || command.get("command_type").and_then(Value::as_str) != Some("business_os.chat.task")
-    {
-        return Ok(());
-    }
-    let Some(record_id) = command
-        .get("record_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty() && !value.starts_with("campaign:"))
-    else {
+    let Some(record_id) = outbound_research_projection_record_id(
+        command
+            .get("module")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        command
+            .get("command_type")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        command.get("record_id").and_then(Value::as_str),
+        command.get("payload").unwrap_or(&Value::Null),
+    ) else {
         return Ok(());
     };
     let Some(table) = attached_rxdb_collection_table(conn, "outbound_lead_generation_leads")?
@@ -6762,6 +6763,36 @@ fn record_command_inner(
     })
 }
 
+/// Only an explicit, record-bound research writeback owns a lead's research state.
+/// A record_id also scopes CRM-note reviews and other chat tasks; it is not
+/// evidence that those tasks started research.
+fn outbound_research_projection_record_id<'a>(
+    module: &str,
+    command_type: &str,
+    record_id: Option<&'a str>,
+    payload: &Value,
+) -> Option<&'a str> {
+    if module != "outbound-lead-generation" || command_type != "business_os.chat.task" {
+        return None;
+    }
+    let record_id = record_id.map(str::trim).filter(|id| !id.is_empty())?;
+    let contract = payload.get("writeback_contract")?;
+    if !super::mcp_channel::supports_command_writeback(contract) {
+        return None;
+    }
+    contract
+        .get("record_ids")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|id| id.trim() == record_id)
+        .then_some(record_id)
+}
+
+#[cfg(test)]
+#[path = "store_outbound_research_projection_tests.rs"]
+mod outbound_research_projection_tests;
+
 /// A lead whose research has been accepted says "Wartet", and it says so
 /// because the daemon wrote it, not because a browser tab got around to it.
 ///
@@ -6777,15 +6808,14 @@ fn project_outbound_lead_queued(
     command_id: &str,
     task_id: Option<&str>,
 ) -> anyhow::Result<()> {
-    if command.module != "outbound-lead-generation"
-        || command.command_type != "business_os.chat.task"
-    {
+    let Some(record_id) = outbound_research_projection_record_id(
+        &command.module,
+        &command.command_type,
+        command.record_id.as_deref(),
+        &command.payload,
+    ) else {
         return Ok(());
-    }
-    let record_id = command.record_id.as_deref().unwrap_or_default().trim();
-    if record_id.is_empty() {
-        return Ok(());
-    }
+    };
     let Some(mut lead) =
         load_rxdb_collection_record(root, "outbound_lead_generation_leads", record_id)?
     else {
@@ -11241,16 +11271,18 @@ pub fn pull_mcp_app_collection_record(
                     |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
                 )
                 .optional()?;
-            if let Some((raw, deleted)) = row {
-                return Ok(Some(mcp_rxdb_document(record_id, &raw, deleted)?));
-            }
+            // Presence of the native collection owns absence too. A purged
+            // tombstone must not expose an older live business_records shadow.
+            return row
+                .map(|(raw, deleted)| mcp_rxdb_document(record_id, &raw, deleted))
+                .transpose();
         }
     }
     pull_collection_record(root, collection, record_id)
 }
 
-/// RxDB owns each ID it contains. Merge shadow-only IDs by write time before
-/// applying the limit so a recent fallback cannot disappear behind older rows.
+/// A present native collection owns the complete MCP result, including absence.
+/// Legacy shadow reads are allowed only when no native collection table exists.
 pub fn pull_mcp_app_collection_records(
     root: &Path,
     collection: &str,
@@ -11303,47 +11335,38 @@ pub fn pull_mcp_app_collection_records(
             ));
         }
     }
-    let shadow_only = with_store_connection(root, |conn| {
-        let mut statement = conn.prepare(
-            "SELECT record_id, deleted, updated_at_ms, payload_json
+    let shadow_only = if rxdb.is_none() {
+        with_store_connection(root, |conn| {
+            let mut statement = conn.prepare(
+                "SELECT record_id, deleted, updated_at_ms, payload_json
                  FROM business_records WHERE collection = ?1
                  ORDER BY updated_at_ms DESC, record_id DESC",
-        )?;
-        let mut rows = statement.query([collection])?;
-        let mut fallback = Vec::new();
-        while fallback.len() < limit {
-            let Some(row) = rows.next()? else { break };
-            let id: String = row.get(0)?;
-            if let Some((rxdb_conn, table)) = rxdb.as_ref() {
-                let exists = rxdb_conn
-                    .query_row(
-                        &format!("SELECT 1 FROM {table} WHERE id = ?1"),
-                        [&id],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .optional()?
-                    .is_some();
-                if exists {
-                    continue;
-                }
+            )?;
+            let mut rows = statement.query([collection])?;
+            let mut fallback = Vec::new();
+            while fallback.len() < limit {
+                let Some(row) = rows.next()? else { break };
+                let id: String = row.get(0)?;
+                let deleted: i64 = row.get(1)?;
+                let updated_at_ms: i64 = row.get(2)?;
+                let raw: String = row.get(3)?;
+                let mut document: Value = serde_json::from_str(&raw)
+                    .with_context(|| format!("parse shadow document `{collection}/{id}`"))?;
+                let object = document.as_object_mut().with_context(|| {
+                    format!("shadow document `{collection}/{id}` is not an object")
+                })?;
+                object
+                    .entry("id".to_string())
+                    .or_insert_with(|| Value::String(id.clone()));
+                object.insert("_deleted".to_string(), Value::Bool(deleted != 0));
+                object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
+                fallback.push((updated_at_ms as f64, id, document));
             }
-            let deleted: i64 = row.get(1)?;
-            let updated_at_ms: i64 = row.get(2)?;
-            let raw: String = row.get(3)?;
-            let mut document: Value = serde_json::from_str(&raw)
-                .with_context(|| format!("parse shadow document `{collection}/{id}`"))?;
-            let object = document
-                .as_object_mut()
-                .with_context(|| format!("shadow document `{collection}/{id}` is not an object"))?;
-            object
-                .entry("id".to_string())
-                .or_insert_with(|| Value::String(id.clone()));
-            object.insert("_deleted".to_string(), Value::Bool(deleted != 0));
-            object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
-            fallback.push((updated_at_ms as f64, id, document));
-        }
-        Ok(fallback)
-    })?;
+            Ok(fallback)
+        })?
+    } else {
+        Vec::new()
+    };
     documents.extend(shadow_only);
     documents.sort_by(|left, right| {
         right

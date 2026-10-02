@@ -881,6 +881,8 @@ pub struct PreparedChatPrompt {
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ServiceIpcRequest {
     Status,
+    /// Public coding topology only; never forwards a turn, model or credential.
+    CodingModelCapabilities,
     ChatSubmit {
         prompt: String,
         #[serde(default)]
@@ -3424,6 +3426,26 @@ pub fn dispatch_business_command(
     crate::business_os::store::accept_rxdb_business_command(root, document)
 }
 
+/// Read public coding metadata from the daemon owning subscription readiness.
+/// A present but unavailable/incompatible socket fails closed, without falling
+/// back to process-local readiness or a caller-supplied raw model.
+#[cfg(unix)]
+pub(crate) fn coding_model_capabilities_via_service(root: &Path) -> Result<Option<Value>> {
+    if !service_socket_path(root).exists() {
+        return Ok(None);
+    }
+    match send_service_ipc_request(root, ServiceIpcRequest::CodingModelCapabilities)? {
+        ServiceIpcResponse::Json {
+            status: 200,
+            payload,
+        } if payload.get("schema").and_then(Value::as_str) == Some("ctox.coding.models.v1") => {
+            Ok(Some(payload))
+        }
+        ServiceIpcResponse::Error { message } => anyhow::bail!(message),
+        _ => anyhow::bail!("daemon coding model capabilities are unavailable or incompatible"),
+    }
+}
+
 /// Route browser-backed Business OS web-stack work to the running daemon.
 /// Returns `None` when no daemon is available so offline CLI use can retain
 /// the existing in-process behavior.
@@ -4028,6 +4050,10 @@ fn handle_service_ipc_request(
             let (status, payload) = resolve_scrape_api_payload(root, &path)?;
             Ok(ServiceIpcResponse::Json { status, payload })
         }
+        ServiceIpcRequest::CodingModelCapabilities => Ok(ServiceIpcResponse::Json {
+            status: 200,
+            payload: crate::coding_agents::pi_sidecar::coding_model_capabilities(root),
+        }),
         ServiceIpcRequest::KnowledgeData { argv } => {
             // Dispatch the knowledge subcommand inside the daemon process so
             // the SQLite write is committed by the long-lived daemon's
@@ -4772,6 +4798,7 @@ fn service_ipc_timeout(request: &ServiceIpcRequest) -> Duration {
         // the server's write then hit EPIPE ("failed to flush service socket
         // response", ctox#21). 5s comfortably covers the bounded queue reads.
         ServiceIpcRequest::Status => Duration::from_secs(5),
+        ServiceIpcRequest::CodingModelCapabilities => Duration::from_secs(5),
         ServiceIpcRequest::ScrapeApi { .. } => Duration::from_millis(750),
         ServiceIpcRequest::ChatSubmit { .. } => Duration::from_secs(10),
         ServiceIpcRequest::Stop => Duration::from_secs(2),
@@ -4834,6 +4861,188 @@ fn web_stack_ipc_timeout(argv: &[String]) -> Duration {
     });
     let slack_ms = if waits_for_email_otp { 210_000 } else { 15_000 };
     Duration::from_millis(timeout_ms.saturating_add(slack_ms))
+}
+
+#[cfg(all(test, unix))]
+mod coding_model_cli_ipc_tests {
+    use super::*;
+
+    fn serve(root: &Path, responses: Vec<ServiceIpcResponse>) -> std::thread::JoinHandle<()> {
+        std::fs::create_dir_all(root.join("runtime")).unwrap();
+        let socket = service_socket_path(root);
+        let listener = UnixListener::bind(&socket).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        std::thread::spawn(move || {
+            for response in responses {
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "CLI did not request daemon metadata"
+                            );
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(error) => panic!("socket accept failed: {error}"),
+                    }
+                };
+                // macOS can inherit the listener's nonblocking flag on accept.
+                // Match the blocking production listener, retaining the deadline.
+                stream.set_nonblocking(false).unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut line = String::new();
+                BufReader::new(stream.try_clone().unwrap())
+                    .read_line(&mut line)
+                    .unwrap();
+                assert!(matches!(
+                    serde_json::from_str::<ServiceIpcRequest>(&line).unwrap(),
+                    ServiceIpcRequest::CodingModelCapabilities
+                ));
+                writeln!(stream, "{}", serde_json::to_string(&response).unwrap()).unwrap();
+            }
+            drop(listener);
+            std::fs::remove_file(socket).unwrap();
+        })
+    }
+
+    fn published() -> Value {
+        serde_json::json!({
+            "schema":"ctox.coding.models.v1", "subscription_listener_ready":true,
+            "presets":[{"id":"codex-subscription-advertised-fixture", "model":{
+                "id":"advertised-fixture", "provider":"ctox-gateway",
+                "headers":{"X-CTOX-Provider":"codex"}
+            }}]
+        })
+    }
+
+    #[test]
+    fn cli_resolves_only_the_same_root_daemon_published_preset() {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let id = "codex-subscription-advertised-fixture";
+        assert!(
+            crate::coding_agents::pi_sidecar::resolve_coding_model_preset(root.path(), id).is_err()
+        );
+        let response = published();
+        let server = serve(
+            root.path(),
+            vec![
+                ServiceIpcResponse::Json {
+                    status: 200,
+                    payload: response.clone(),
+                },
+                ServiceIpcResponse::Json {
+                    status: 200,
+                    payload: response.clone(),
+                },
+                ServiceIpcResponse::Json {
+                    status: 200,
+                    payload: response.clone(),
+                },
+            ],
+        );
+        assert_eq!(
+            crate::coding_agents::pi_sidecar::coding_model_capabilities_for_cli(root.path())
+                .unwrap(),
+            response
+        );
+        crate::coding_agents::handle_cli(
+            root.path(),
+            &[
+                "models".to_owned(),
+                "--root".to_owned(),
+                root.path().display().to_string(),
+            ],
+        )
+        .unwrap();
+        assert!(
+            crate::coding_agents::pi_sidecar::resolve_coding_model_preset_for_cli(other.path(), id)
+                .is_err()
+        );
+        let model =
+            crate::coding_agents::pi_sidecar::resolve_coding_model_preset_for_cli(root.path(), id)
+                .unwrap()
+                .unwrap();
+        assert_eq!(model["id"], "advertised-fixture");
+        assert_eq!(model["headers"]["X-CTOX-Provider"], "codex");
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn cli_does_not_fallback_after_daemon_metadata_rejection() {
+        let root = tempfile::tempdir().unwrap();
+        let server = serve(
+            root.path(),
+            vec![ServiceIpcResponse::Error {
+                message: "coding metadata denied".into(),
+            }],
+        );
+        let error = crate::coding_agents::pi_sidecar::resolve_coding_model_preset_for_cli(
+            root.path(),
+            "ctox",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("coding metadata denied"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn cli_rejects_wrong_daemon_metadata_schema_or_status() {
+        for (status, schema) in [(200, "wrong.schema"), (503, "ctox.coding.models.v1")] {
+            let root = tempfile::tempdir().unwrap();
+            let server = serve(
+                root.path(),
+                vec![ServiceIpcResponse::Json {
+                    status,
+                    payload: serde_json::json!({"schema":schema,"presets":[]}),
+                }],
+            );
+            assert!(
+                crate::coding_agents::pi_sidecar::coding_model_capabilities_for_cli(root.path())
+                    .unwrap_err()
+                    .to_string()
+                    .contains("unavailable or incompatible")
+            );
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn cli_rejects_named_preset_without_explicit_model() {
+        for absent in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let mut payload = published();
+            if absent {
+                payload["presets"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("model");
+            } else {
+                payload["presets"][0]["model"] = Value::Null;
+            }
+            let server = serve(
+                root.path(),
+                vec![ServiceIpcResponse::Json {
+                    status: 200,
+                    payload,
+                }],
+            );
+            let error = crate::coding_agents::pi_sidecar::resolve_coding_model_preset_for_cli(
+                root.path(),
+                "codex-subscription-advertised-fixture",
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains("preset is malformed"));
+            assert!(!root.path().join("coding-agents").exists());
+            server.join().unwrap();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -11949,12 +12158,12 @@ fn review_execution_plan_evidence(root: &Path, job: &QueuedPrompt) -> Vec<String
         Ok(Some(progress)) => progress,
         Ok(None) => {
             return vec![format!(
-                "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} | result=no durable execution plan recorded for this attempt"
+                "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} scope=latest_work_key | result=no durable execution plan recorded for this work_key"
             )]
         }
         Err(error) => {
             return vec![format!(
-                "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} | result=unreadable: {error}"
+                "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} scope=latest_work_key | result=unreadable: {error}"
             )]
         }
     };
@@ -11976,8 +12185,12 @@ fn review_execution_plan_evidence(root: &Path, job: &QueuedPrompt) -> Vec<String
         })
         .unwrap_or_default();
     vec![format!(
-        "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} | result=durable update_plan record revision={} completed={}/{} steps=[{}]. This table is the authoritative plan record; planned_steps/planned_goals belong to mission planning and are not written by update_plan.",
+        "source=harness | method=db_query | target=task_execution_plan_revisions work_key={work_key} scope=latest_work_key | result=durable update_plan record task_id={:?} command_id={:?} revision={} phase={} review_status={} completed={}/{} steps=[{}]. This is the latest durable revision for this work_key, not an attempt-filtered query. This table is the authoritative plan record; planned_steps/planned_goals belong to mission planning and are not written by update_plan. Completed plan steps do not establish review approval or requested side effects.",
+        progress.get("task_id").and_then(Value::as_str).unwrap_or(""),
+        progress.get("command_id").and_then(Value::as_str).unwrap_or(""),
         progress.get("revision").and_then(Value::as_i64).unwrap_or(0),
+        progress.get("phase").and_then(Value::as_str).unwrap_or("unknown"),
+        progress.pointer("/review/status").and_then(Value::as_str).unwrap_or("unknown"),
         progress.get("completed_steps").and_then(Value::as_i64).unwrap_or(0),
         progress.get("total_steps").and_then(Value::as_i64).unwrap_or(0),
         steps,
@@ -35374,6 +35587,271 @@ Business OS command:
         )
         .iter()
         .any(|line| line.contains("Vermerke beurteilen=completed")));
+        Ok(())
+    }
+
+    #[test]
+    fn review_evidence_preserves_failed_incomplete_plan_after_reopen() -> anyhow::Result<()> {
+        let (root, job, _) = incomplete_plan_queue_fixture("review-plan-failed-latest")?;
+        let work_key = worker_attempt_work_key(&job);
+        let db_path = crate::paths::core_db(&root);
+        {
+            let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+            engine.prepare_task_execution_review(&work_key)?;
+            engine.set_task_execution_review_status(&work_key, "failed")?;
+        }
+        // The collector opens the persisted store again; worker prose and the
+        // completed prefix must not turn a rejected 1/2 plan into approval.
+        let evidence = collect_review_evidence_summaries(
+            &root,
+            &job,
+            7410,
+            &[],
+            &CommandWritebackProbe::NotRequired,
+        );
+        let plan = evidence
+            .iter()
+            .find(|line| line.contains("target=task_execution_plan_revisions"))
+            .expect("the actual reviewer collector must include the durable plan");
+        assert!(plan.contains("scope=latest_work_key"), "{plan}");
+        assert!(
+            plan.contains(&format!("task_id={:?}", job.leased_message_keys[0])),
+            "{plan}"
+        );
+        assert!(
+            plan.contains("command_id=\"review-plan-failed-latest\""),
+            "{plan}"
+        );
+        assert!(
+            plan.contains("phase=review review_status=failed completed=1/2"),
+            "{plan}"
+        );
+        assert!(
+            plan.contains("Verify remaining fields=in_progress"),
+            "{plan}"
+        );
+        assert!(
+            accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)?.is_some()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn review_evidence_uses_retry_revision_instead_of_previous_completed_plan() -> anyhow::Result<()>
+    {
+        let name = "review-plan-retry-latest";
+        let (root, job, attempt_id) = incomplete_plan_queue_fixture(name)?;
+        let work_key = worker_attempt_work_key(&job);
+        let db_path = crate::paths::core_db(&root);
+        {
+            let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+            engine.record_task_execution_plan(lcm::TaskExecutionPlanUpdate {
+                work_key: &work_key,
+                task_id: &job.leased_message_keys[0],
+                command_id: name,
+                attempt_id: &attempt_id,
+                explanation: None,
+                steps: &[
+                    lcm::TaskExecutionPlanStepInput {
+                        label: "Save research chunk".into(),
+                        status: "completed".into(),
+                    },
+                    lcm::TaskExecutionPlanStepInput {
+                        label: "Verify remaining fields".into(),
+                        status: "completed".into(),
+                    },
+                ],
+            })?;
+            engine.prepare_task_execution_review(&work_key)?;
+            let completed = engine.set_task_execution_review_status(&work_key, "completed")?;
+            assert_eq!(completed["percent"], 100);
+            engine.record_task_execution_plan(lcm::TaskExecutionPlanUpdate {
+                work_key: &work_key,
+                task_id: &job.leased_message_keys[0],
+                command_id: name,
+                attempt_id: &format!("{attempt_id}-retry"),
+                explanation: Some("A new retry has its own unfinished work"),
+                steps: &[lcm::TaskExecutionPlanStepInput {
+                    label: "Inspect the new retry".into(),
+                    status: "in_progress".into(),
+                }],
+            })?;
+        }
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+        let latest = engine.task_execution_progress(&work_key)?.unwrap();
+        assert_eq!(latest["revision"], 2);
+        assert_eq!(latest["percent"], 0);
+        drop(engine);
+        let evidence = review_execution_plan_evidence(&root, &job);
+        let plan = &evidence[0];
+        assert!(
+            plan.contains("revision=2 phase=working review_status=pending completed=0/1"),
+            "{plan}"
+        );
+        assert!(plan.contains("Inspect the new retry=in_progress"), "{plan}");
+        assert!(!plan.contains("Save research chunk=completed"), "{plan}");
+        assert!(plan.contains("not an attempt-filtered query"), "{plan}");
+        assert!(
+            accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None)?.is_some()
+        );
+        let conn = rusqlite::Connection::open(&db_path)?;
+        let revisions: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM task_execution_plan_revisions WHERE work_key=?1",
+            [&work_key],
+            |row| row.get(0),
+        )?;
+        assert_eq!(
+            revisions, 2,
+            "the previous completed revision must remain durable evidence"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn review_evidence_completed_plan_survives_writeback_ack_recovery() -> anyhow::Result<()> {
+        let name = "review-plan-complete-ack-recovery";
+        let (root, job, attempt_id) = incomplete_plan_queue_fixture(name)?;
+        let db_path = crate::paths::core_db(&root);
+        let work_key = worker_attempt_work_key(&job);
+        let task_id = &job.leased_message_keys[0];
+        let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+        engine.record_task_execution_plan(lcm::TaskExecutionPlanUpdate {
+            work_key: &work_key,
+            task_id,
+            command_id: name,
+            attempt_id: &attempt_id,
+            explanation: Some("Both required steps are saved before review"),
+            steps: &[
+                lcm::TaskExecutionPlanStepInput {
+                    label: "Save research chunk".into(),
+                    status: "completed".into(),
+                },
+                lcm::TaskExecutionPlanStepInput {
+                    label: "Verify remaining fields".into(),
+                    status: "completed".into(),
+                },
+            ],
+        })?;
+        engine.prepare_task_execution_review(&work_key)?;
+        let evidence = collect_review_evidence_summaries(
+            &root,
+            &job,
+            7410,
+            &[],
+            &CommandWritebackProbe::NotRequired,
+        );
+        let plan = evidence
+            .iter()
+            .find(|line| line.contains("target=task_execution_plan_revisions"))
+            .expect("the actual reviewer collector includes the persisted completed plan");
+        assert!(plan.contains(&format!("task_id={task_id:?}")), "{plan}");
+        assert!(plan.contains(&format!("command_id={name:?}")), "{plan}");
+        assert!(
+            plan.contains("review_status=in_progress completed=2/2"),
+            "{plan}"
+        );
+        assert!(plan.contains("Verify remaining fields=completed"), "{plan}");
+        assert!(
+            accepted_queue_plan_failure(&root, &job, &CompletionReviewDisposition::None,)?
+                .is_none()
+        );
+
+        // The review verdict is an explicit fixture, not inferred from the
+        // completed plan or supplied by a model. Exercise native completion.
+        channels::record_business_command_review(
+            &root,
+            task_id,
+            "passed",
+            "passed",
+            &json!({"fixture":true, "durable_plan_evidence":plan}),
+        )?;
+        engine.set_task_execution_review_status(&work_key, "completed")?;
+        let progress_before = engine.task_execution_progress(&work_key)?.unwrap();
+        let writeback_calls = std::cell::Cell::new(0usize);
+        let first = apply_business_command_writebacks_for_attempt(
+            &root,
+            &db_path,
+            &attempt_id,
+            &job.leased_message_keys,
+            || {
+                writeback_calls.set(writeback_calls.get() + 1);
+                Ok(
+                    crate::business_os::store::complete_business_command_from_queue_reply(
+                        &root,
+                        task_id,
+                        "Saved partial research result",
+                    )?
+                    .is_some() as usize,
+                )
+            },
+        )?;
+        assert_eq!(first, 1);
+        assert_eq!(route_status_for(&root, task_id), "handled");
+        let terminal_before: (String, Option<String>) = channels::open_channel_db(&db_path)?
+            .query_row(
+                "SELECT updated_at, acked_at FROM communication_routing_state WHERE message_key=?1",
+                [task_id.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+        assert!(terminal_before.1.is_some());
+        assert!(
+            engine
+                .worker_attempt(&attempt_id)?
+                .unwrap()
+                .queue_effects_applied_at
+                .is_none(),
+            "simulate a crash after the command writeback ack but before its attempt marker"
+        );
+        drop(engine);
+
+        let reopened = LcmEngine::open(&db_path, LcmConfig::default())?;
+        let resumed = reopened.recoverable_worker_attempt(&work_key)?.unwrap();
+        assert_eq!(resumed.attempt_id, attempt_id, "reuse the saved attempt");
+        let replayed = apply_business_command_writebacks_for_attempt(
+            &root,
+            &db_path,
+            &attempt_id,
+            &job.leased_message_keys,
+            || {
+                writeback_calls.set(writeback_calls.get() + 1);
+                Ok(
+                    crate::business_os::store::complete_business_command_from_queue_reply(
+                        &root,
+                        task_id,
+                        "Saved partial research result",
+                    )?
+                    .is_some() as usize,
+                )
+            },
+        )?;
+        assert_eq!(replayed, 0);
+        assert_eq!(writeback_calls.get(), 1, "no second native writeback");
+        assert!(reopened
+            .worker_attempt(&attempt_id)?
+            .unwrap()
+            .queue_effects_applied_at
+            .is_some());
+        assert_eq!(
+            reopened.task_execution_progress(&work_key)?.unwrap(),
+            progress_before,
+            "recovery must preserve the approved durable plan"
+        );
+        let conn = channels::open_channel_db(&db_path)?;
+        let terminal_after: (String, Option<String>) = conn.query_row(
+            "SELECT updated_at, acked_at FROM communication_routing_state WHERE message_key=?1",
+            [task_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(
+            terminal_after, terminal_before,
+            "no terminal timestamp rewrite"
+        );
+        let completions: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM business_command_transitions WHERE command_id=?1 AND reason='command-specific writeback completed after review and validation'",
+            [name], |row| row.get(0),
+        )?;
+        assert_eq!(completions, 1);
+        assert!(channels::lease_queue_task(&root, task_id, CHANNEL_ROUTER_LEASE_OWNER).is_err());
         Ok(())
     }
 
