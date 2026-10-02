@@ -20,15 +20,16 @@ const failures = [];
 const observations = [];
 const consoleEvents = [];
 const server = createServer((request, response) => serveRequest(request, response));
-const port = await listen(server);
-const url = `http://127.0.0.1:${port}/`;
-const browser = await chromium.launch({
-  headless: process.env.SHELL_CHAT_COMPOSITION_HEADLESS !== '0',
-  executablePath: existingChromeExecutable(chromium),
-  args: ['--disable-gpu'],
-});
+let browser;
 
 try {
+  const port = await listen(server);
+  const url = `http://127.0.0.1:${port}/`;
+  browser = await chromium.launch({
+    headless: process.env.SHELL_CHAT_COMPOSITION_HEADLESS !== '0',
+    executablePath: existingChromeExecutable(chromium),
+    args: ['--disable-gpu'],
+  });
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   page.on('console', (message) => consoleEvents.push({ type: message.type(), text: message.text() }));
@@ -312,8 +313,8 @@ try {
     console.log(JSON.stringify({ ok: true, reportPath, screenshotPath, phases: observations.length }, null, 2));
   }
 } finally {
-  await browser.close().catch(() => {});
-  await new Promise((resolve) => server.close(resolve));
+  if (browser) await browser.close().catch(() => {});
+  if (server.listening) await new Promise((resolve) => server.close(resolve));
 }
 
 function expect(condition, message) {
