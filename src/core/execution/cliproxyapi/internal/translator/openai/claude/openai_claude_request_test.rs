@@ -742,3 +742,55 @@ fn base64_url_encode(bytes: &[u8]) -> String {
     }
     output
 }
+
+#[test]
+fn tool_schema_strips_bad_patterns_and_normalizes_boolean_subschemas() {
+    let output = convert(
+        r#"{
+            "model":"claude-3-opus",
+            "messages":[{"role":"user","content":"hello"}],
+            "tools":[{
+                "name":"patch_tool",
+                "description":"Applies a JSON patch",
+                "input_schema":{
+                    "type":"object",
+                    "properties":{
+                        "patch":{"type":"array","items":true},
+                        "anything":true,
+                        "disabled":false,
+                        "enabled_flag":{"type":"boolean","default":true,"enum":[true,false]},
+                        "either":{"anyOf":[true,{"type":"string"}]},
+                        "field":{"type":"string","pattern":"\\p{L}+"},
+                        "asset_id":{"type":"string","pattern":"^[0-9a-f]{32}$"},
+                        "regex_config":{"type":"object","default":{"pattern":"\\p{L}+"},"enum":[{"pattern":"\\p{N}+"}]},
+                        "nested_obj":{"type":"object","properties":{"foo":{"type":"string"}},"additionalProperties":true}
+                    },
+                    "additionalProperties":false,
+                    "$defs":{"wildcard":true},
+                    "patternProperties":{"^\\p{L}+$":{"type":"string"},"^[a-z]+$":{"type":"number"}}
+                }
+            }]
+        }"#,
+    );
+    let parameters = &output["tools"][0]["function"]["parameters"];
+    assert_eq!(parameters["properties"]["patch"]["items"], serde_json::json!({}));
+    assert_eq!(parameters["properties"]["anything"], serde_json::json!({}));
+    assert_eq!(parameters["properties"]["disabled"], false);
+    assert_eq!(parameters["properties"]["enabled_flag"]["default"], true);
+    assert_eq!(parameters["properties"]["enabled_flag"]["enum"][0], true);
+    assert_eq!(parameters["properties"]["either"]["anyOf"][0], serde_json::json!({}));
+    assert!(parameters["properties"]["field"].get("pattern").is_none());
+    assert_eq!(parameters["properties"]["asset_id"]["pattern"], "^[0-9a-f]{32}$");
+    assert_eq!(
+        parameters["properties"]["regex_config"]["default"]["pattern"],
+        r"\p{L}+"
+    );
+    assert_eq!(parameters["additionalProperties"], false);
+    assert_eq!(
+        parameters["properties"]["nested_obj"]["additionalProperties"],
+        true
+    );
+    assert_eq!(parameters["$defs"]["wildcard"], serde_json::json!({}));
+    assert!(parameters["patternProperties"].get(r"^\p{L}+$").is_none());
+    assert_eq!(parameters["patternProperties"]["^[a-z]+$"]["type"], "number");
+}

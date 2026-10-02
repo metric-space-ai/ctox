@@ -16,6 +16,7 @@ mod cloak_obfuscate;
 mod cloak_utils;
 mod codex_input_ids;
 mod codex_multi_agent_v2;
+mod codex_tool_schema;
 mod derived_session;
 mod home_refresh;
 mod json_retry_helpers;
@@ -62,6 +63,8 @@ mod claude_mcp_alias_test;
 mod claude_upstream_test;
 #[cfg(test)]
 mod codex_input_ids_test;
+#[cfg(test)]
+mod codex_tool_schema_test;
 #[cfg(test)]
 mod derived_session_test;
 #[cfg(test)]
@@ -134,6 +137,10 @@ pub use cloak_utils::{
     is_valid_user_id, should_cloak,
 };
 pub use codex_input_ids::sanitize_codex_input_item_ids;
+pub use codex_tool_schema::{
+    is_codex_target_executor, is_codex_user_agent, normalize_codex_tool_integer_types,
+    normalize_codex_tool_integer_types_for_executor, normalize_codex_tool_schemas,
+};
 pub use codex_multi_agent_v2::{
     optimize_codex_multi_agent_v2_request, restore_codex_multi_agent_v2_response,
     rewrite_codex_multi_agent_v2_input, rewrite_codex_spawn_agent_description,

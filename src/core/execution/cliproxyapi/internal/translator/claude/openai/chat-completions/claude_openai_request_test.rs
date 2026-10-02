@@ -162,3 +162,24 @@ fn developer_message_cache_control_applies_to_last_block() {
     assert!(output["system"][0].get("cache_control").is_none());
     assert_eq!(output["system"][1]["cache_control"]["type"], "ephemeral");
 }
+
+#[test]
+fn tool_result_cache_control_uses_part_level_then_message_level() {
+    let output = convert(json!({
+        "messages":[
+            {"role":"assistant","tool_calls":[
+                {"id":"call_1","type":"function","function":{"name":"a","arguments":"{}"}},
+                {"id":"call_2","type":"function","function":{"name":"b","arguments":"{}"}}
+            ]},
+            {"role":"tool","tool_call_id":"call_1","content":[
+                {"type":"text","text":"4","cache_control":{"type":"ephemeral"}}
+            ],"cache_control":{"type":"ephemeral","ttl":"1h"}},
+            {"role":"tool","tool_call_id":"call_2","content":"two","cache_control":{"type":"persistent"}}
+        ]
+    }));
+    let blocks = output["messages"][1]["content"].as_array().unwrap();
+    assert_eq!(blocks[0]["cache_control"]["type"], "ephemeral");
+    assert!(blocks[0]["cache_control"].get("ttl").is_none());
+    assert!(blocks[0]["content"][0].get("cache_control").is_none());
+    assert!(blocks[1].get("cache_control").is_none());
+}

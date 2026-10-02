@@ -110,6 +110,7 @@ pub fn prepare_codex_responses_body(
         ensure_image_generation_tool(object, policy);
     }
     let body = serde_json::to_vec(&value).map_err(|_| CodexRequestError::InvalidJson)?;
+    let body = super::helps::normalize_codex_tool_schemas(&body);
     Ok(super::helps::sanitize_codex_input_item_ids(&body))
 }
 
@@ -128,6 +129,7 @@ pub fn prepare_codex_compact_body(body: &[u8], model: &str) -> Result<Vec<u8>, C
         object.insert("instructions".to_owned(), Value::String(String::new()));
     }
     let body = serde_json::to_vec(&value).map_err(|_| CodexRequestError::InvalidJson)?;
+    let body = super::helps::normalize_codex_tool_schemas(&body);
     Ok(super::helps::sanitize_codex_input_item_ids(&body))
 }
 

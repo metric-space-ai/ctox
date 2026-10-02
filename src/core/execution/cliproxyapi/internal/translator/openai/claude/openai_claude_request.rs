@@ -36,6 +36,9 @@ use crate::internal::translator::common::{
     claude_message_system_reminder_text, join_raw_array, new_raw_array_items, set_raw_array_items,
 };
 use crate::internal::util::claude_attribution::is_claude_code_attribution_system_text;
+use crate::internal::util::{
+    strip_unsupported_schema_patterns, SCHEMA_MAP_KEYWORDS, SCHEMA_VALUE_KEYWORDS,
+};
 
 /// Produces an OpenAI Chat Completions JSON request body from an Anthropic
 /// Messages request, mirroring the upstream `ConvertClaudeRequestToOpenAI`
@@ -562,26 +565,52 @@ fn get_thinking_text_value(part: &Value) -> String {
 }
 
 fn normalize_in_place(value: &mut Value) {
+    strip_unsupported_schema_patterns(value);
+    normalize_object_schema_properties(value);
+}
+
+fn normalize_object_schema_properties(value: &mut Value) {
     match value {
+        Value::Bool(true) => *value = Value::Object(Map::new()),
+        Value::Bool(false) | Value::Null | Value::Number(_) | Value::String(_) => {}
+        Value::Array(items) => {
+            for child in items {
+                normalize_object_schema_properties(child);
+            }
+        }
         Value::Object(map) => {
-            let is_object = map
-                .get("type")
-                .and_then(Value::as_str)
-                .map(|kind| kind == "object")
-                .unwrap_or(false);
+            let is_object = map.get("type").and_then(Value::as_str) == Some("object");
             if is_object && !map.contains_key("properties") {
                 map.insert("properties".into(), Value::Object(Map::new()));
             }
-            for (_, child) in map.iter_mut() {
-                normalize_in_place(child);
+            if let Some(Value::Object(pattern_props)) = map.get_mut("patternProperties") {
+                for child in pattern_props.values_mut() {
+                    normalize_object_schema_properties(child);
+                }
+            }
+            for key in SCHEMA_MAP_KEYWORDS {
+                if *key == "patternProperties" {
+                    continue;
+                }
+                if let Some(Value::Object(children)) = map.get_mut(*key) {
+                    for child in children.values_mut() {
+                        normalize_object_schema_properties(child);
+                    }
+                }
+            }
+            for key in SCHEMA_VALUE_KEYWORDS {
+                let Some(child) = map.get_mut(*key) else {
+                    continue;
+                };
+                if *key != "additionalProperties" && child.as_bool() == Some(true) {
+                    *child = Value::Object(Map::new());
+                    continue;
+                }
+                if child.is_object() || child.is_array() {
+                    normalize_object_schema_properties(child);
+                }
             }
         }
-        Value::Array(items) => {
-            for child in items.iter_mut() {
-                normalize_in_place(child);
-            }
-        }
-        _ => {}
     }
 }
 

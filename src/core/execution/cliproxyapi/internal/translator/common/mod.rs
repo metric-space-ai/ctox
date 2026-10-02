@@ -12,7 +12,9 @@ pub use bytes::{
     append_sse_event, claude_input_tokens_json, gemini_token_count_json, join_raw_array,
     new_raw_array_items, set_raw_array_items, set_string_without_html_escape, sse_event_data,
 };
-pub use cache_control::{attach_cache_control, attach_message_cache_control};
+pub use cache_control::{
+    attach_cache_control, attach_message_cache_control, attach_tool_message_cache_control,
+};
 pub use claude_system::claude_message_system_reminder_text;
 pub use file_data::normalize_openai_file_data;
 pub use interactions_usage::interactions_usage;

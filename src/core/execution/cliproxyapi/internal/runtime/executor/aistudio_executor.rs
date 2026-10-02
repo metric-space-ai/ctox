@@ -123,6 +123,11 @@ impl AiStudioExecutor {
             &request.payload,
             stream,
         );
+        payload = super::helps::normalize_codex_tool_integer_types_for_executor(
+            &payload,
+            &request.headers,
+            "aistudio",
+        );
         payload = fix_gemini_image_aspect_ratio(&model, &payload);
         let mut json: Value = serde_json::from_slice(&payload)
             .map_err(|error| plugin_error(AiStudioExecutorError::InvalidJson(error.to_string())))?;
