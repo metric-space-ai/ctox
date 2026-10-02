@@ -32,8 +32,11 @@ strings. Supplied input-event `session_id`/`tab_id` must match the requested
 session and its durable tab. Batches larger than 64 are refused, never truncated.
 
 The native queue budget is three seconds for input, five for live frames and
-thirty for navigation. It is checked after acquiring the handle and again after
-the tab lookup. An expired queued operation is refused before delivery. This
+thirty for navigation. Runner operations first acquire an asynchronous per-session
+permit; live callers stop waiting when their budget expires. The permit stays
+with the blocking IO until it completes even if its caller disappears. The
+budget is checked again after acquiring the handle and after the tab lookup.
+An expired queued operation is refused before delivery. This
 does not cancel an operation already executing or prove exactly-once input
 delivery after a lost response. The registry's liveness sweep uses a nonblocking
 handle probe: a busy runner is neither declared dead nor waited on during lookup
@@ -49,7 +52,14 @@ bindings and failed input must not leave the UI claiming that control is ready.
 The regression cases cover foreign event sessions/tabs, oversized batches,
 old runner generation, wrong active tab, missing/failed navigation replies,
 expired queued input, busy-handle liveness and failed-input watermarks.
-These are source regressions, not an installed-browser acceptance result.
+An additional handler regression uses native-issued signatures, actual actor
+and lease authorization and a real isolated CTOX DB. It refuses foreign event
+bindings, another signed owner, a wrong lease and malformed generation before
+runner access, preserving the session row. Its valid-identity control reaches a
+deliberately absent runner; it does not execute browser input. An async-lock
+regression verifies queue expiry and that timeout cannot release the operation
+already holding the permit. These are source regressions, not an installed-browser
+acceptance result.
 
 Required final verification: native typecheck and targeted tests, existing
 RxDB native/browser checks for the composed source, then an owned isolated

@@ -40,6 +40,7 @@ const AUTOMATION_COUNT_MASK: usize = AUTOMATION_STOPPING - 1;
 /// every access happens inside `spawn_blocking`.
 pub struct LiveBrowserSession {
     handle: Mutex<PersistentBrowserHandle>,
+    request_lock: Arc<tokio::sync::Mutex<()>>,
     profile_key: String,
     runtime_generation: String,
     pub viewport_w: u64,
@@ -293,6 +294,15 @@ fn try_inspect_browser_liveness<T>(
             anyhow::bail!("browser runtime handle poisoned")
         }
     }
+}
+
+async fn acquire_browser_request_permit(
+    request_lock: Arc<tokio::sync::Mutex<()>>,
+    budget: Duration,
+) -> Result<tokio::sync::OwnedMutexGuard<()>> {
+    tokio::time::timeout(budget, request_lock.lock_owned())
+        .await
+        .map_err(|_| anyhow::anyhow!("browser surface request expired before delivery"))
 }
 
 fn validate_browser_surface_queue_age(elapsed: Duration, budget: Duration) -> Result<()> {
@@ -723,6 +733,7 @@ impl BrowserRuntimeManager {
         let runner_pid = handle.process_id();
         let session = Arc::new(LiveBrowserSession {
             handle: Mutex::new(handle),
+            request_lock: Arc::new(tokio::sync::Mutex::new(())),
             profile_key,
             runtime_generation: uuid::Uuid::new_v4().to_string(),
             viewport_w,
@@ -755,8 +766,11 @@ impl BrowserRuntimeManager {
     ) -> Result<Value> {
         let session = Arc::clone(session);
         let op = op.to_string();
+        let permit = Arc::clone(&session.request_lock).lock_owned().await;
         let activity = BrowserAutomationGuard::begin(Arc::clone(&session), op != "screenshot")?;
         tokio::task::spawn_blocking(move || {
+            // Keep serialization even if the async caller abandons this IO.
+            let _permit = permit;
             let _activity = activity;
             let mut handle = session
                 .handle
@@ -778,16 +792,26 @@ impl BrowserRuntimeManager {
         params: Value,
         timeout: Duration,
     ) -> Result<Value> {
+        let queued_at = Instant::now();
         let session = Arc::clone(session);
         let op = op.to_string();
+        let permit =
+            acquire_browser_request_permit(Arc::clone(&session.request_lock), timeout).await?;
         let activity = BrowserAutomationGuard::begin(Arc::clone(&session), true)?;
         tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let _activity = activity;
             let mut handle = session
                 .handle
                 .lock()
                 .map_err(|_| anyhow::anyhow!("browser runtime handle poisoned"))?;
-            handle.request_with_timeout(&op, params, timeout)
+            let remaining = timeout
+                .checked_sub(queued_at.elapsed())
+                .filter(|remaining| !remaining.is_zero())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("browser surface request expired before delivery")
+                })?;
+            handle.request_with_timeout(&op, params, remaining)
         })
         .await
         .context("browser runtime timed request worker panicked")?
@@ -811,8 +835,11 @@ impl BrowserRuntimeManager {
         });
         let session = Arc::clone(session);
         let op = op.to_string();
+        let permit =
+            acquire_browser_request_permit(Arc::clone(&session.request_lock), budget).await?;
         let activity = BrowserAutomationGuard::begin(Arc::clone(&session), op != "screenshot")?;
         tokio::task::spawn_blocking(move || {
+            let _permit = permit;
             let _activity = activity;
             let mut handle = session
                 .handle
@@ -979,6 +1006,35 @@ mod tests {
             try_inspect_browser_liveness(&handle, |running| Ok(*running)).unwrap(),
             Some(false)
         );
+    }
+
+    #[tokio::test]
+    async fn browser_request_wait_expires_without_taking_over_busy_operation() {
+        let request_lock = Arc::new(tokio::sync::Mutex::new(()));
+        let held = Arc::clone(&request_lock).lock_owned().await;
+        let error =
+            acquire_browser_request_permit(Arc::clone(&request_lock), Duration::from_millis(5))
+                .await
+                .expect_err("busy request must expire while asynchronously queued");
+        assert_eq!(
+            error.to_string(),
+            "browser surface request expired before delivery"
+        );
+        assert!(
+            request_lock.try_lock().is_err(),
+            "timeout must not release the existing operation"
+        );
+        drop(held);
+        let admitted =
+            acquire_browser_request_permit(Arc::clone(&request_lock), Duration::from_secs(1))
+                .await
+                .expect("idle request can acquire actual serialization lock");
+        assert!(
+            request_lock.try_lock().is_err(),
+            "permit owns the lock until operation completion"
+        );
+        drop(admitted);
+        assert!(request_lock.try_lock().is_ok());
     }
 
     #[test]

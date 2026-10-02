@@ -464,6 +464,14 @@ async fn handle_browser_live_webrtc_request_inner(
     {
         return Err("browser live controller lease is missing or expired".to_string());
     }
+    let tab_id = session_doc
+        .get("current_tab_id")
+        .and_then(Value::as_str)
+        .unwrap_or("browser_tab_default");
+    let expected_generation = browser_live_optional_binding(&request, "runtime_generation")?;
+    let expected_tab_id = browser_live_optional_binding(&request, "active_tab_id")?;
+    // Authorize and validate the entire batch before accessing any live runner.
+    let events = browser_live_input_events(&request, session_id, tab_id)?;
     let manager = browser_runtime_manager();
     let session = manager
         .get(session_id)
@@ -471,12 +479,6 @@ async fn handle_browser_live_webrtc_request_inner(
     if session.owner_user_id != profile_owner {
         return Err("browser live runtime belongs to another user".to_string());
     }
-    let tab_id = session_doc
-        .get("current_tab_id")
-        .and_then(Value::as_str)
-        .unwrap_or("browser_tab_default");
-    let expected_generation = browser_live_optional_binding(&request, "runtime_generation")?;
-    let expected_tab_id = browser_live_optional_binding(&request, "active_tab_id")?;
     mark_browser_direct_live_session(session_id);
     if matches!(operation, "navigate" | "reload" | "back" | "forward") {
         let target_url = if operation == "navigate" {
@@ -592,7 +594,6 @@ async fn handle_browser_live_webrtc_request_inner(
             session.runtime_generation(),
         ));
     }
-    let events = browser_live_input_events(&request, session_id, tab_id)?;
     if operation == "input" {
         let response = manager
             .request_for_surface(
@@ -3831,6 +3832,162 @@ mod tests {
             &json!({"nav": {"url": "https://example.com/"}})
         )
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn browser_live_signed_handler_rejects_foreign_input_before_runner_lookup() {
+        let root = tempfile::tempdir().expect("isolated browser authorization root");
+        let database = open_test_database(root.path().join("browser-live-authorization.sqlite3"))
+            .await
+            .expect("open real isolated native database");
+        database
+            .add_collections(HashMap::from([(
+                "browser_sessions".to_string(),
+                RxCollectionCreator {
+                    schema: business_os_schema("browser_sessions", "id"),
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )]))
+            .await
+            .expect("register actual browser session collection");
+        let now = now_ms() as i64;
+        let (foreign_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            "browser-test-bob",
+            "Browser test Bob",
+            "chef",
+            now,
+        )
+        .expect("native signed foreign owner fixture");
+        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            "browser-test-alice",
+            "Browser test Alice",
+            "chef",
+            now,
+        )
+        .expect("native signed session owner fixture");
+        assert!(store::webrtc_capability_allows_collection_permission(
+            root.path(),
+            &token,
+            "browser_sessions",
+            BusinessOsPermission::DataRead,
+        ));
+        assert!(store::webrtc_capability_allows_collection_permission(
+            root.path(),
+            &token,
+            "browser_sessions",
+            BusinessOsPermission::DataWrite,
+        ));
+        assert_eq!(
+            store::verify_webrtc_capability_actor(root.path(), &foreign_token)
+                .expect("foreign token valid, not merely a bad signature")
+                .0,
+            "browser-test-bob"
+        );
+        let now = now_ms() as i64;
+        let session_id = format!("browser_signed_guard_{}", uuid::Uuid::new_v4());
+        let tab_id = "browser-logical-tab";
+        let access = BrowserSessionAccess {
+            tenant_id: Some("browser-test-tenant".to_string()),
+            owner_user_id: Some("browser-test-alice".to_string()),
+            controller_user_id: Some("browser-test-alice".to_string()),
+            controller_lease_id: Some("browser-test-lease".to_string()),
+            controller_lease_expires_at_ms: Some(now as u64 + 120_000),
+        };
+        upsert_browser_session(
+            &database,
+            &session_id,
+            tab_id,
+            "active",
+            "active",
+            "https://example.test/",
+            "Browser test",
+            1280,
+            720,
+            None,
+            0,
+            "browser.session.start",
+            now as u64,
+            None,
+            Some(&access),
+            None,
+        )
+        .await
+        .expect("owned session with actual controller lease");
+        let before = find_browser_document(&database, "browser_sessions", &session_id)
+            .await
+            .expect("initial persisted session");
+        let valid = json!({
+            "op": "input", "session_id": session_id, "lease_id": "browser-test-lease",
+            "events": [{"session_id": session_id, "tab_id": tab_id, "seq": 1,
+                        "type": "mouseDown", "x": 42, "y": 84}]
+        });
+        for (field, other) in [("session_id", "another-session"), ("tab_id", "another-tab")] {
+            let mut request = valid.clone();
+            request["events"][0][field] = json!(other);
+            let error = handle_browser_live_webrtc_request_inner(
+                root.path(),
+                &database,
+                &token,
+                vec![request],
+            )
+            .await
+            .expect_err("foreign surface must be refused before a missing runtime");
+            assert_eq!(
+                error,
+                format!("browser live input {field} does not match requested surface")
+            );
+        }
+        let error = handle_browser_live_webrtc_request_inner(
+            root.path(),
+            &database,
+            &foreign_token,
+            vec![valid.clone()],
+        )
+        .await
+        .expect_err("signed foreign owner must be refused");
+        assert_eq!(error, "browser live session belongs to another user");
+        let mut wrong_lease = valid.clone();
+        wrong_lease["lease_id"] = json!("wrong-lease");
+        assert_eq!(
+            handle_browser_live_webrtc_request_inner(
+                root.path(),
+                &database,
+                &token,
+                vec![wrong_lease],
+            )
+            .await
+            .expect_err("wrong lease must be refused"),
+            "browser live controller lease is missing or expired"
+        );
+        let mut malformed_generation = valid.clone();
+        malformed_generation["runtime_generation"] = json!("");
+        assert_eq!(
+            handle_browser_live_webrtc_request_inner(
+                root.path(),
+                &database,
+                &token,
+                vec![malformed_generation],
+            )
+            .await
+            .expect_err("empty generation must be refused before runtime access"),
+            "browser live runtime_generation must be a nonempty string"
+        );
+        assert_eq!(
+            handle_browser_live_webrtc_request_inner(root.path(), &database, &token, vec![valid],)
+                .await
+                .expect_err("valid identity reaches the deliberately absent runner"),
+            "browser live runtime is not running"
+        );
+        assert_eq!(
+            find_browser_document(&database, "browser_sessions", &session_id)
+                .await
+                .expect("persisted session after refusals"),
+            before,
+            "refused requests must not mutate persisted session or input watermark"
+        );
     }
 
     #[test]
