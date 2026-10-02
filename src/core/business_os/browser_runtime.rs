@@ -303,6 +303,14 @@ fn validate_browser_surface_queue_age(elapsed: Duration, budget: Duration) -> Re
     Ok(())
 }
 
+fn validate_browser_session_owner(actual_owner: &str, requested_owner: &str) -> Result<()> {
+    anyhow::ensure!(
+        actual_owner == requested_owner,
+        "browser runtime belongs to another user"
+    );
+    Ok(())
+}
+
 fn validate_browser_surface_generation(
     runtime_generation: &str,
     expected_generation: Option<&str>,
@@ -550,6 +558,7 @@ impl BrowserRuntimeManager {
         user_requested_start: bool,
     ) -> Result<Arc<LiveBrowserSession>> {
         if let Some(session) = self.get(session_id) {
+            validate_browser_session_owner(&session.owner_user_id, profile_owner)?;
             return Ok(session);
         }
         // Chromium permits only one live process per persistent profile. Session
@@ -558,6 +567,7 @@ impl BrowserRuntimeManager {
         // the same tenant/user profile again.
         let _spawn_guard = self.spawn_lock.lock().await;
         if let Some(session) = self.get(session_id) {
+            validate_browser_session_owner(&session.owner_user_id, profile_owner)?;
             return Ok(session);
         }
         let profile_key = browser_profile_key(profile_owner, session_id, private_profile);
@@ -977,6 +987,13 @@ mod tests {
         assert!(validate_browser_surface_queue_age(Duration::from_millis(2999), budget).is_ok());
         assert!(validate_browser_surface_queue_age(budget, budget).is_err());
         assert!(validate_browser_surface_queue_age(Duration::from_secs(30), budget).is_err());
+    }
+
+    #[test]
+    fn reused_browser_runtime_requires_its_actual_owner() {
+        assert!(validate_browser_session_owner("alice", "alice").is_ok());
+        assert!(validate_browser_session_owner("alice", "bob").is_err());
+        assert!(validate_browser_session_owner("alice", "ctox").is_err());
     }
 
     #[test]

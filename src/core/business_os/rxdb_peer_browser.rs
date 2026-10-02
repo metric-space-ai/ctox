@@ -508,6 +508,7 @@ async fn handle_browser_live_webrtc_request_inner(
             )
             .await
             .map_err(|error| format!("browser live navigation failed: {error:#}"))?;
+        ensure_browser_live_navigation_succeeded(&result)?;
         let nav = result.get("nav").cloned().unwrap_or(Value::Null);
         let final_url = nav
             .get("url")
@@ -667,6 +668,19 @@ async fn handle_browser_live_webrtc_request_inner(
         tab_id,
         session.runtime_generation(),
     ))
+}
+
+fn ensure_browser_live_navigation_succeeded(response: &Value) -> Result<(), String> {
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(format!(
+            "browser navigation failed: {}",
+            response
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("runner did not confirm navigation")
+        ));
+    }
+    Ok(())
 }
 
 fn browser_live_optional_binding(request: &Value, field: &str) -> Result<Option<String>, String> {
@@ -834,6 +848,7 @@ async fn start_browser_live_webrtc_session(
         )
         .await
         .map_err(|error| format!("browser direct navigation failed: {error:#}"))?;
+    ensure_browser_live_navigation_succeeded(&navigation)?;
     let nav = navigation.get("nav").cloned().unwrap_or(Value::Null);
     let final_url = nav
         .get("url")
@@ -3803,6 +3818,20 @@ mod tests {
     use rusqlite::{params, Connection};
     use rxdb::rx_database::RxCollectionCreator;
     use std::collections::HashMap;
+
+    #[test]
+    fn failed_browser_navigation_cannot_be_projected_as_active_success() {
+        assert!(ensure_browser_live_navigation_succeeded(&json!({"ok": true})).is_ok());
+        assert!(ensure_browser_live_navigation_succeeded(
+            &json!({"ok": false, "error": "blocked egress"})
+        )
+        .unwrap_err()
+        .contains("blocked egress"));
+        assert!(ensure_browser_live_navigation_succeeded(
+            &json!({"nav": {"url": "https://example.com/"}})
+        )
+        .is_err());
+    }
 
     #[test]
     fn browser_live_inputs_reject_foreign_surface_and_oversized_batches() {
