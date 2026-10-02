@@ -189,4 +189,5 @@ for (const locale of ['de', 'en']) {
 }
 
 await import('./search-rescan.test.mjs');
+await import('./detail-generation.test.mjs');
 console.log('threads module smoke ok');
