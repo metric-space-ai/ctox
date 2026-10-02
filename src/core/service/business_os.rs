@@ -885,7 +885,15 @@ fn handle_business_os_turn(root: &Path, args: &[String]) -> anyhow::Result<()> {
 fn handle_business_os_rxdb(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("init") => {
-            anyhow::ensure!(args.len() == 1, "usage: ctox business-os rxdb init");
+            // main resolves --root before dispatch, but keeps its pair in args.
+            let has_global_root = matches!(
+                &args[1..],
+                [flag, value] if flag == "--root" && !value.is_empty() && !value.starts_with('-')
+            );
+            anyhow::ensure!(
+                args.len() == 1 || has_global_root,
+                "usage: ctox business-os rxdb init [--root <root>]"
+            );
             print_json(&crate::business_os::initialize_business_os_rxdb(root)?)
         }
         // Backlog OS-A4: sync/peer diagnosis for operators AND the harness.
@@ -7611,6 +7619,48 @@ pub(super) fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rxdb_init_accepts_global_root_argument_and_default_root() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        handle_business_os_rxdb(
+            root.path(),
+            &[
+                "init".to_string(),
+                "--root".to_string(),
+                root.path().display().to_string(),
+            ],
+        )?;
+        assert!(root.path().join("runtime").is_dir());
+        handle_business_os_rxdb(root.path(), &["init".to_string()])?;
+        Ok(())
+    }
+
+    #[test]
+    fn rxdb_init_rejects_invalid_options_before_creating_runtime() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().display().to_string();
+        for suffix in [
+            vec!["--root"],
+            vec!["--root", ""],
+            vec!["--root", "--json"],
+            vec!["--unknown"],
+            vec!["unexpected"],
+            vec!["--root", &path, "--root", &path],
+            vec!["--root", &path, "--json"],
+        ] {
+            let args = std::iter::once("init")
+                .chain(suffix)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let error = handle_business_os_rxdb(root.path(), &args)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("usage:"), "{args:?}: {error}");
+            assert!(!root.path().join("runtime").exists(), "{args:?}");
+        }
+        Ok(())
+    }
 
     #[test]
     fn business_os_usage_documents_atomic_authenticated_automation() {
