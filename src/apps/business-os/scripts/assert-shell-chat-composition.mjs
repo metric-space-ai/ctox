@@ -74,7 +74,8 @@ try {
     && closeBox.width > 0 && closeBox.height > 0
     && triggerBox.x + triggerBox.width <= closeBox.x + 1,
   'the visible layout trigger must sit left of Close');
-  expect(await layoutTrigger.locator('svg').count() === 1, 'the layout trigger must show a window icon');
+  expect(await layoutTrigger.locator('.shell-window-layout-glyph--free').count() === 1,
+    'the layout trigger must show its actual framed window glyph');
   await layoutTrigger.click();
   const layoutOptions = await page.locator('.shell-window [data-window-layout-menu] [data-window-layout-control]')
     .evaluateAll((nodes) => nodes.map((node) => node.dataset.windowLayoutControl));
@@ -83,8 +84,23 @@ try {
     `the layout menu must expose the seven requested actions: ${JSON.stringify(layoutOptions)}`,
   );
   const layoutMenu = page.locator('.shell-window [data-window-layout-menu]');
-  expect(await layoutMenu.locator('[data-window-layout-control] svg').count() === 7,
-    'each of the seven layout choices must show its own icon');
+  const glyphs = await layoutMenu.locator('[data-window-layout-control]').evaluateAll(nodes => nodes.map(node => {
+    const glyph = node.querySelector('.shell-window-layout-glyph');
+    const rect = glyph?.getBoundingClientRect();
+    const style = glyph && getComputedStyle(glyph);
+    const detail = glyph && getComputedStyle(glyph, '::after');
+    return { action: node.dataset.windowLayoutControl,
+      correctVariant: Boolean(glyph?.classList.contains('shell-window-layout-glyph--' + node.dataset.windowLayoutControl)),
+      width: rect?.width, height: rect?.height, frameWidth: Number.parseFloat(style?.borderTopWidth),
+      frameStyle: style?.borderTopStyle, frameColor: style?.borderTopColor,
+      detailContent: detail?.content, detailWidth: Number.parseFloat(detail?.width), detailHeight: Number.parseFloat(detail?.height) };
+  }));
+  expect(glyphs.length === 7 && glyphs.every(glyph => glyph.correctVariant
+    && glyph.width > 0 && glyph.height > 0 && glyph.frameWidth > 0 && glyph.frameStyle !== 'none'
+    && !['transparent', 'rgba(0, 0, 0, 0)'].includes(glyph.frameColor)
+    && glyph.detailContent !== 'none' && glyph.detailWidth > 0 && glyph.detailHeight > 0),
+  'each of the seven choices must render its own nonempty framed window glyph and layout detail');
+  observations.push({ phase: 'layout-visible-glyphs', glyphs });
   await topAppTab.click();
   const outsideClickClosed = !(await layoutMenu.isVisible()) && await layoutTrigger.getAttribute('aria-expanded') === 'false';
   expect(outsideClickClosed,
@@ -185,7 +201,7 @@ try {
   const freedFromBottom = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'layout-free-after-bottom', ...freedFromBottom });
   expect(freedFromBottom.snapZone === null, 'free layout must release the bottom snap');
-  await page.evaluate(() => window.shellHarness.setSize(420, 300));
+  await page.evaluate(({ width, height }) => window.shellHarness.setSize(width, height), fixtureMinimum);
   const work = await page.evaluate(() => window.shellHarness.workArea());
   const inset = 40;
 
@@ -205,7 +221,7 @@ try {
   expect(leftSnap.snapZone === 'left', `the left menu action must snap left, got ${leftSnap.snapZone}`);
 
   await chooseLayout(page, 'free');
-  await page.evaluate(() => window.shellHarness.setSize(420, 300));
+  await page.evaluate(({ width, height }) => window.shellHarness.setSize(width, height), fixtureMinimum);
   const rightStart = await page.evaluate(() => window.shellHarness.collect());
   await dragWindowToLayerPoint(page, work, { left: work.left + work.width - rightStart.window.width - 2, top: work.top + inset });
   const rightEdge = await page.evaluate(() => window.shellHarness.collect());
@@ -218,7 +234,7 @@ try {
   expect(rightSnap.snapZone === 'right', `the right menu action must snap right, got ${rightSnap.snapZone}`);
 
   await chooseLayout(page, 'free');
-  await page.evaluate(() => window.shellHarness.setSize(420, 300));
+  await page.evaluate(({ width, height }) => window.shellHarness.setSize(width, height), fixtureMinimum);
   await dragWindowToLayerPoint(page, work, { left: work.left + 120, top: work.top + 2 });
   const topEdge = await page.evaluate(() => window.shellHarness.collect());
   observations.push({ phase: 'drag-free-top-edge', ...topEdge });
@@ -230,7 +246,7 @@ try {
   expect(topSnap.snapZone === 'top', `the top menu action must snap top, got ${topSnap.snapZone}`);
   await chooseLayout(page, 'free');
 
-  await page.evaluate(() => window.shellHarness.setSize(420, 300));
+  await page.evaluate(({ width, height }) => window.shellHarness.setSize(width, height), fixtureMinimum);
   const bottomStart = await page.evaluate(() => window.shellHarness.collect());
   await dragWindowToLayerPoint(page, work, {
     left: work.left + 120,
