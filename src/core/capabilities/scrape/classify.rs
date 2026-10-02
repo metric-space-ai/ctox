@@ -57,7 +57,7 @@ pub(super) fn classify_outcome(
     if explicit_failure == "provider_account_inactive"
         || (matches!(
             explicit_failure,
-            "temporary_unreachable" | "blocked" | "authorization_required"
+            "temporary_unreachable" | "blocked" | "auth_required" | "authorization_required"
         ) && super::account_state::is_provider_account_inactive(detail))
     {
         return Classification {

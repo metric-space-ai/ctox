@@ -342,7 +342,7 @@ pub(crate) struct AccountProbeGrant {
 
 impl AccountProbeGrant {
     /// `authorization` is the `ctox-business-command-authorization-v1`
-    /// record of the command (allowed, actor.trusted, actor.id).
+    /// record of the command (allowed data.write, actor.trusted, actor.id).
     pub(crate) fn from_command_authorization(
         command_id: &str,
         authorization: &Value,
@@ -355,6 +355,7 @@ impl AccountProbeGrant {
             && authorization.get("contract").and_then(Value::as_str)
                 == Some("ctox-business-command-authorization-v1")
             && authorization.get("allowed").and_then(Value::as_bool) == Some(true)
+            && authorization.get("permission").and_then(Value::as_str) == Some("data.write")
             && actor.get("trusted").and_then(Value::as_bool) == Some(true);
         valid.then(|| Self {
             command_id: command_id.to_string(),
@@ -363,8 +364,9 @@ impl AccountProbeGrant {
     }
 }
 
-/// A probe needs a grant and never runs inside a worker command session,
-/// whatever the arguments say.
+/// An early operator probe needs a grant and cannot be authorized inside a
+/// worker command session. Ordinary credential-change/backoff probes are
+/// governed separately by the durable account state.
 pub(super) fn account_probe_authorized(
     grant: Option<&AccountProbeGrant>,
     session_owner_user_id: Option<&str>,

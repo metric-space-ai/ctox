@@ -36,6 +36,8 @@ pub(super) fn is_provider_account_inactive(detail: &str) -> bool {
         "account has been suspended",
         "account is disabled",
         "subscription expired",
+        "subscription is expired",
+        "subscription inactive",
         "subscription is inactive",
     ]
     .iter()
@@ -389,6 +391,8 @@ mod tests {
             "Bright Data antwortete mit HTTP 400: Customer is not active"
         ));
         assert!(is_provider_account_inactive("Account has been suspended"));
+        assert!(is_provider_account_inactive("Subscription is expired"));
+        assert!(is_provider_account_inactive("Subscription inactive"));
         assert!(!is_provider_account_inactive("connection reset by peer"));
         assert!(!is_provider_account_inactive(
             "weder LinkedIn-Profil-URL noch Vor- und Nachname im Auftrag"

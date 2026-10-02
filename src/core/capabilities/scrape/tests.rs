@@ -2357,6 +2357,31 @@ capture_supported: false,
         &auth_classification
     )
     .is_some());
+    let inactive_payload = json!({
+        "records": [],
+        "failure_mode": "authorization_required",
+        "detail": "Subscription is expired"
+    });
+    let inactive_execution = CommandExecution {
+        exit_code: Some(1),
+        timed_out: false,
+        stdout_text: String::new(),
+        stderr_text: String::new(),
+    };
+    let inactive_classification =
+        classify_outcome(&inactive_payload, &probe, &inactive_execution, 0, 1);
+    assert_eq!(
+        inactive_classification.status,
+        ScrapeRunStatus::ProviderAccountInactive
+    );
+    assert!(!inactive_classification.should_queue_repair);
+    assert!(session_expiry_reauthorization(
+        &registered,
+        &probe,
+        &inactive_payload,
+        &inactive_classification
+    )
+    .is_none());
     // An unrecognized explicit adapter diagnostic is not evidence of expiry,
     // even when the generic classifier reports an empty record set.
     let invalid_input =
@@ -2443,6 +2468,54 @@ fn session_expiry_reauthorization_ignores_public_targets() {
         session_expiry_reauthorization(&registered, &probe, &payload, &classification).is_none()
     );
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn provider_account_errors_do_not_schedule_script_repair_or_reauthentication() {
+    let probe = ProbeResult {
+        reachable: true,
+        status_code: Some(200),
+        final_url: "https://api.example.com".to_string(),
+        human_verification: false,
+        error: None,
+    };
+    let execution = CommandExecution {
+        exit_code: Some(1),
+        timed_out: false,
+        stdout_text: String::new(),
+        stderr_text: String::new(),
+    };
+    for mode in [
+        "temporary_unreachable",
+        "blocked",
+        "auth_required",
+        "authorization_required",
+    ] {
+        let classification = classify_outcome(
+            &json!({"failure_mode":mode,
+            "detail":"Subscription is expired","records":[]}),
+            &probe,
+            &execution,
+            0,
+            1,
+        );
+        assert_eq!(
+            classification.status,
+            ScrapeRunStatus::ProviderAccountInactive,
+            "{mode}"
+        );
+        assert!(!classification.should_queue_repair, "{mode}");
+    }
+    let ordinary_login = classify_outcome(
+        &json!({"failure_mode":"auth_required",
+        "detail":"Please sign in to continue","records":[]}),
+        &probe,
+        &execution,
+        0,
+        1,
+    );
+    assert_eq!(ordinary_login.status, ScrapeRunStatus::Blocked);
+    assert!(ordinary_login.should_queue_repair);
 }
 
 #[test]
@@ -3088,7 +3161,7 @@ CTOX_ACCOUNT_FIXTURE
             "contract": "ctox-business-command-authorization-v1",
             "actor": {"id": "user-owner", "role": "admin", "trusted": trusted},
             "allowed": allowed,
-            "permission": "data_write",
+            "permission": "data.write",
         })
     }
 
@@ -3254,7 +3327,7 @@ CTOX_ACCOUNT_FIXTURE
     }
 
     #[test]
-    fn a_worker_session_never_probes_even_with_a_grant() {
+    fn a_worker_session_never_authorizes_an_early_probe_even_with_a_grant() {
         let grant = AccountProbeGrant::from_command_authorization(
             "cmd-source-test",
             &operator_authorization(true, true),
@@ -3291,6 +3364,11 @@ CTOX_ACCOUNT_FIXTURE
         let mut foreign = operator_authorization(true, true);
         foreign["contract"] = json!("something-else");
         assert!(AccountProbeGrant::from_command_authorization("cmd", &foreign).is_none());
+        let mut read_only = operator_authorization(true, true);
+        read_only["permission"] = json!("data.read");
+        assert!(AccountProbeGrant::from_command_authorization("cmd", &read_only).is_none());
+        read_only.as_object_mut().unwrap().remove("permission");
+        assert!(AccountProbeGrant::from_command_authorization("cmd", &read_only).is_none());
     }
 
     #[test]
