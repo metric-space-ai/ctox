@@ -16,6 +16,7 @@ mod model_execution;
 pub mod openai;
 pub mod openai_responses_stream_error;
 pub mod request_body;
+pub mod responses_sse_framer;
 mod stream_forwarder;
 
 pub use core::{

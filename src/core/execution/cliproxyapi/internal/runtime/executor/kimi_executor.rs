@@ -370,12 +370,19 @@ impl KimiExecutor {
         let from = Format::from(request.source_format.as_str());
         let to = Format::from("openai");
         let base_model = parse_suffix(&request.model).model_name;
+        let mut payload = request.payload.clone();
+        if request
+            .source_format
+            .eq_ignore_ascii_case("openai-response")
+        {
+            payload = super::helps::normalize_kimi_responses_input(&payload);
+        }
         let mut body = self.registry.translate_request(
             &TranslationContext::default(),
             &from,
             &to,
             &base_model,
-            &request.payload,
+            &payload,
             stream,
         );
         body = super::helps::normalize_codex_tool_integer_types_for_executor(

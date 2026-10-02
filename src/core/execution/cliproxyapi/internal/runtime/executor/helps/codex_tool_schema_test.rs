@@ -123,7 +123,9 @@ fn migrated_enum_preserves_large_integer_digits() {
     let parsed: Value = serde_json::from_slice(&output).unwrap();
     let id = &parsed["tools"][0]["parameters"]["properties"]["id"];
     assert!(id.get("oneOf").is_none());
-    assert!(output.windows(large.len()).any(|window| window == large.as_bytes()));
+    assert!(output
+        .windows(large.len())
+        .any(|window| window == large.as_bytes()));
     assert_eq!(id["enum"].as_array().unwrap().len(), 8);
     assert_eq!(id["type"], "integer");
 }
@@ -176,16 +178,24 @@ fn unsupported_patterns_are_removed_only_from_schema_locations() {
     assert!(parameters["properties"]["file_paths"]["items"]
         .get("pattern")
         .is_none());
-    assert_eq!(parameters["properties"]["file_paths"]["items"]["minLength"], 1);
+    assert_eq!(
+        parameters["properties"]["file_paths"]["items"]["minLength"],
+        1
+    );
     assert_eq!(
         parameters["properties"]["asset_id"]["pattern"],
         "^[0-9a-f]{32}$"
     );
-    assert_eq!(parameters["properties"]["hex_nul"]["pattern"], r"^[^\x00]*$");
+    assert_eq!(
+        parameters["properties"]["hex_nul"]["pattern"],
+        r"^[^\x00]*$"
+    );
     assert!(parameters["properties"]["unicode_escape"]
         .get("pattern")
         .is_none());
-    assert!(parameters["properties"]["real_schema"].get("pattern").is_none());
+    assert!(parameters["properties"]["real_schema"]
+        .get("pattern")
+        .is_none());
     assert_eq!(
         parameters["properties"]["regex_config"]["default"]["pattern"],
         r"\p{L}+"
@@ -195,7 +205,10 @@ fn unsupported_patterns_are_removed_only_from_schema_locations() {
         r"\p{N}+"
     );
     assert!(parameters["patternProperties"].get(r"^\p{L}+$").is_none());
-    assert_eq!(parameters["patternProperties"]["^[a-z]+$"]["type"], "number");
+    assert_eq!(
+        parameters["patternProperties"]["^[a-z]+$"]["type"],
+        "number"
+    );
     assert!(parameters["$defs"]["custom_type"].get("pattern").is_none());
     assert!(parameters["additionalProperties"].get("pattern").is_none());
     assert_eq!(parameters["properties"]["asset_id"]["type"], "string");
@@ -220,10 +233,7 @@ fn malformed_or_unchanged_payloads_keep_their_bytes() {
             "{input}"
         );
     }
-    assert_eq!(
-        normalize_codex_tool_schemas(&[0xff, 0xfe]),
-        [0xff, 0xfe]
-    );
+    assert_eq!(normalize_codex_tool_schemas(&[0xff, 0xfe]), [0xff, 0xfe]);
 }
 
 fn codex_headers(user_agent: &str) -> BTreeMap<String, Vec<String>> {
@@ -275,7 +285,10 @@ fn integer_types_follow_codex_client_and_skip_codex_targets() {
 
     let output = integer_normalize(input, "codex-tui/0.154.0 (Mac OS; arm64)");
     let tools = output["tools"].as_array().unwrap();
-    assert_eq!(tools[0]["parameters"]["properties"]["cmd"]["type"], "string");
+    assert_eq!(
+        tools[0]["parameters"]["properties"]["cmd"]["type"],
+        "string"
+    );
     assert_eq!(
         tools[0]["parameters"]["properties"]["yield_time_ms"]["type"],
         "integer"
@@ -300,7 +313,10 @@ fn integer_types_follow_codex_client_and_skip_codex_targets() {
         tools[4]["parameters"]["properties"]["max_tokens"]["type"],
         "integer"
     );
-    assert_eq!(tools[5]["parameters"]["properties"]["limit"]["type"], "integer");
+    assert_eq!(
+        tools[5]["parameters"]["properties"]["limit"]["type"],
+        "integer"
+    );
     assert_eq!(
         tools[6]["parameters"]["properties"]["participants"]["type"],
         "integer"
@@ -326,7 +342,8 @@ fn integer_types_follow_codex_client_and_skip_codex_targets() {
         "integer"
     );
     assert_eq!(
-        tools[12]["functionDeclarations"][0]["parametersJsonSchema"]["properties"]["yield_time_ms"]["type"],
+        tools[12]["functionDeclarations"][0]["parametersJsonSchema"]["properties"]["yield_time_ms"]
+            ["type"],
         "integer"
     );
     assert_eq!(
@@ -368,5 +385,28 @@ fn integer_types_follow_codex_client_and_skip_codex_targets() {
             br#"{"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"yield_time_ms":{"type":"number"}}}}]}"#,
         ),
         br#"{"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"yield_time_ms":{"type":"number"}}}}]}"#,
+    );
+}
+
+#[test]
+fn antigravity_request_tools_use_the_same_integer_rules() {
+    let input = r#"{"request":{"tools":[{"functionDeclarations":[{"name":"exec_command","parametersJsonSchema":{"type":"object","properties":{"yield_time_ms":{"type":"number"}}}}]}]}}"#;
+    let output = integer_normalize(input, "Codex Desktop/1.0");
+    assert_eq!(
+        output["request"]["tools"][0]["functionDeclarations"][0]["parametersJsonSchema"]
+            ["properties"]["yield_time_ms"]["type"],
+        "integer"
+    );
+    assert_eq!(
+        normalize_codex_tool_integer_types(input.as_bytes(), &BTreeMap::new()),
+        input.as_bytes()
+    );
+    assert_eq!(
+        normalize_codex_tool_integer_types_for_executor(
+            input.as_bytes(),
+            &codex_headers("Codex Desktop/1.0"),
+            "codex"
+        ),
+        input.as_bytes()
     );
 }

@@ -20,6 +20,7 @@ mod codex_tool_schema;
 mod derived_session;
 mod home_refresh;
 mod json_retry_helpers;
+mod kimi_responses;
 mod logging_helpers;
 mod model_capabilities;
 mod openai_compat_tool_results;
@@ -137,14 +138,18 @@ pub use cloak_utils::{
     is_valid_user_id, should_cloak,
 };
 pub use codex_input_ids::sanitize_codex_input_item_ids;
-pub use codex_tool_schema::{
-    is_codex_target_executor, is_codex_user_agent, normalize_codex_tool_integer_types,
-    normalize_codex_tool_integer_types_for_executor, normalize_codex_tool_schemas,
-};
 pub use codex_multi_agent_v2::{
     optimize_codex_multi_agent_v2_request, restore_codex_multi_agent_v2_response,
     rewrite_codex_multi_agent_v2_input, rewrite_codex_spawn_agent_description,
-    translate_request_with_codex_multi_agent_v2, CodexMultiAgentV2Processor,
+    translate_request_pair_with_api_key_model_compatibility_and_update_intent,
+    translate_request_with_api_key_model_compatibility_and_update_intent_for_executor,
+    translate_request_with_api_key_model_compatibility_for_executor,
+    translate_request_with_codex_multi_agent_v2,
+    translate_request_with_codex_multi_agent_v2_for_executor, CodexMultiAgentV2Processor,
+};
+pub use codex_tool_schema::{
+    is_codex_target_executor, is_codex_user_agent, normalize_codex_tool_integer_types,
+    normalize_codex_tool_integer_types_for_executor, normalize_codex_tool_schemas,
 };
 pub use derived_session::{
     derived_antigravity_session_id, derived_session_id, derived_session_uuid, provider_session_uuid,
@@ -157,6 +162,7 @@ pub use home_refresh::{
 pub use json_retry_helpers::{
     delete_json_field, parse_retry_delay, RetryDelayError, MAX_RETRY_ERROR_BODY_BYTES,
 };
+pub use kimi_responses::normalize_kimi_responses_input;
 pub use logging_helpers::{
     append_api_response_chunk, append_api_websocket_response, credits_used, mark_credits_used,
     record_api_request, record_api_response_error, record_api_response_metadata,

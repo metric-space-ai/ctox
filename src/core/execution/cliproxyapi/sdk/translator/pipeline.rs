@@ -13,6 +13,12 @@ pub struct RequestEnvelope {
     pub body: Vec<u8>,
 }
 
+/// Translates a request while preserving request-scoped metadata.
+///
+/// Upstream: `sdk/translator/types.go` `RequestEnvelopeTransform`.
+pub type RequestEnvelopeTransform =
+    Arc<dyn Fn(&TranslationContext, RequestEnvelope) -> RequestEnvelope + Send + Sync>;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResponseEnvelope {
     pub format: Format,

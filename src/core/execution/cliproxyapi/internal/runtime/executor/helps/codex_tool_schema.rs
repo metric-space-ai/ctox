@@ -63,6 +63,11 @@ pub fn is_codex_target_executor(target_executor: &str) -> bool {
 ///
 /// Empty bodies, non-Codex user agents, and payloads with no matching field
 /// keep their original bytes. Only changed tool objects are re-encoded.
+///
+/// Upstream walks top-level `tools` and `input`. Antigravity's translated
+/// envelope stores the same declarations at `request.tools`, which that
+/// top-level walk never sees. The same element rules are applied there so the
+/// body this executor sends carries integer types.
 #[must_use]
 pub fn normalize_codex_tool_integer_types(
     body: &[u8],
@@ -80,8 +85,13 @@ pub fn normalize_codex_tool_integer_types(
         current = updated;
         changed = true;
     }
+    if let Some(updated) = replace_top_level_array(&current, "input", splice_input_additional_tools)
+    {
+        current = updated;
+        changed = true;
+    }
     if let Some(updated) =
-        replace_top_level_array(&current, "input", splice_input_additional_tools)
+        replace_nested_object_array(&current, "request", "tools", splice_integer_tool_list)
     {
         current = updated;
         changed = true;
@@ -128,9 +138,26 @@ fn replace_top_level_array(
 ) -> Option<String> {
     let (start, end) = first_object_field_span(document, field)?;
     let updated = transform(&document[start..end])?;
+    splice_span(document, start, end, &updated)
+}
+
+fn replace_nested_object_array(
+    document: &str,
+    object_field: &str,
+    array_field: &str,
+    transform: fn(&str) -> Option<String>,
+) -> Option<String> {
+    let (start, end) = first_object_field_span(document, object_field)?;
+    let nested = &document[start..end];
+    let (nested_start, nested_end) = first_object_field_span(nested, array_field)?;
+    let updated = transform(&nested[nested_start..nested_end])?;
+    splice_span(document, start + nested_start, start + nested_end, &updated)
+}
+
+fn splice_span(document: &str, start: usize, end: usize, updated: &str) -> Option<String> {
     let mut out = String::with_capacity(document.len() - (end - start) + updated.len());
     out.push_str(&document[..start]);
-    out.push_str(&updated);
+    out.push_str(updated);
     out.push_str(&document[end..]);
     Some(out)
 }
@@ -656,7 +683,7 @@ fn replace_object_field(object_json: &str, field: &str, new_value: &str) -> Opti
     Some(out)
 }
 
-fn first_object_field_span(document: &str, name: &str) -> Option<(usize, usize)> {
+pub(crate) fn first_object_field_span(document: &str, name: &str) -> Option<(usize, usize)> {
     let bytes = document.as_bytes();
     let mut index = skip_ws(bytes, 0);
     if bytes.get(index) != Some(&b'{') {

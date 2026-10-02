@@ -19,7 +19,7 @@ mod registry_summary_test;
 
 pub use format::Format;
 pub use formats::*;
-pub use pipeline::{Pipeline, RequestEnvelope, ResponseEnvelope};
+pub use pipeline::{Pipeline, RequestEnvelope, RequestEnvelopeTransform, ResponseEnvelope};
 pub use plugin_hooks::PluginHooks;
 pub use registry::Registry;
 pub use types::{

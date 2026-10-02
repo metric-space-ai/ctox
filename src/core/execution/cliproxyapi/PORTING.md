@@ -119,8 +119,22 @@ the accepted pin:
   `write_stdin`, `sleep`, `wait`, `wait_agent`, `tool_search`, and
   `test_sync_tool`, including `functions__` and `collab__` prefixes). Codex
   and Codex WebSocket targets, other tool names, and non-Codex user agents
-  keep the original bytes. OpenAI-compat, AI Studio, Gemini, Vertex, and Kimi
-  preparation apply that rule. Claude and Antigravity preparation do not yet.
+  keep the original bytes. OpenAI-compat, AI Studio, Gemini, Vertex, Kimi,
+  Claude, and Antigravity preparation apply that rule. Antigravity also walks
+  `request.tools`, which upstream's top-level walk does not see. Codex
+  Responses clients still do not integer-normalize their own target.
+- Non-Codex Responses clients receive nested `event: error` stream failures.
+  A Codex user agent or official Originator still receives
+  `event: response.failed`. Private-event filtering and completed-payload
+  repair are not ported.
+- Kimi reorders interleaved Responses tool outputs before chat translation.
+  The Responses `apply_patch` bridge is not ported.
+- API-key model-compatibility helpers integer-normalize before the host
+  processor. The six `Convert*WithCompat` translators are not ported, and
+  the update-intent flag stays false.
+- Plugin Responses usage keeps top-level token counts when a service tier is
+  present without `response.usage`. Devin, Meta, and other providers that
+  have no Rust executor remain gaps.
 
 Track B ledger path
 `src/core/execution/cliproxyapi_integration/provider-integration.json` is cited

@@ -32,7 +32,8 @@ use super::claude_executor_request::{
 use super::claude_executor_tokens::prepare_claude_first_party_token_count_body;
 use super::helps::{
     apply_claude_credential_metadata, claude_agent_session_uuid_for_request,
-    detect_claude_code_request, ClaudeCodeRequestDetection, ClaudeCredentialIdentityError,
+    detect_claude_code_request, normalize_codex_tool_integer_types_for_executor,
+    ClaudeCodeRequestDetection, ClaudeCredentialIdentityError,
     ClaudeDeviceProfileCache as ClaudeHelperDeviceProfileCache, ClaudeHeaderDefaults,
     ClaudeIdentityKvStore, ClaudeIdentityStoreError, SessionIdCache, SessionIdCacheError,
 };
@@ -303,6 +304,19 @@ pub(super) fn claude_header_defaults(
         arch: value("claude_header_arch"),
         stabilize_device_profile: None,
     }
+}
+
+/// Reserved Codex client fields become integers before OAuth tool-name remap.
+/// Remap changes the tool name and would hide `exec_command` from the matcher.
+/// A missing request context has no client headers, so the body stays unchanged.
+fn normalize_claude_codex_integer_schemas(
+    body: &[u8],
+    context: Option<&ClaudeExecutionRequestContext>,
+) -> Vec<u8> {
+    let Some(context) = context else {
+        return body.to_vec();
+    };
+    normalize_codex_tool_integer_types_for_executor(&body, &context.headers, "claude")
 }
 
 /// Bounded Claude subscription execution path with exactly one unauthorized
@@ -615,6 +629,7 @@ impl ClaudeSubscriptionMessagesExecutor {
             &body,
             &session_id,
         )?;
+        let body = normalize_claude_codex_integer_schemas(&body, context);
         let (body, betas, reverse_map) = prepare_claude_upstream_body_with_identity(
             &body,
             model_info.as_ref(),
@@ -780,6 +795,7 @@ impl ClaudeSubscriptionMessagesExecutor {
             &body,
             &session_id,
         )?;
+        let body = normalize_claude_codex_integer_schemas(&body, context);
         let (body, betas, reverse_map) = prepare_claude_upstream_body_with_identity(
             &body,
             model_info.as_ref(),
