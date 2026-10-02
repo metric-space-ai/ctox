@@ -35,6 +35,14 @@ const { __mailTestHooks: hooks } = await import(
   `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
 );
 
+test('mail counts stay unknown until complete reads and replication readiness', () => {
+  assert.equal(hooks.mailCountsKnown({ loading: true, mailReadComplete: false }), false);
+  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: true, readiness: { ready: false } }), false);
+  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: false, readiness: { ready: true } }), false);
+  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: true, readiness: { ready: true }, mailReadError: 'denied' }), false);
+  assert.equal(hooks.mailCountsKnown({ loading: false, mailReadComplete: true, readiness: { ready: true } }), true);
+});
+
 test('mail reuses canonical communication and outbound schemas', () => {
   assert.deepEqual(Object.keys(mailCollections).sort(), [
     'business_commands',
