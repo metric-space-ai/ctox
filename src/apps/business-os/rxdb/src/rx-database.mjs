@@ -591,11 +591,16 @@ class CtoxRxQuery {
         const primaryId = this.single
           ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath)
           : '';
-        // Storage deltas have no query-window permission stamp. Lifecycle
-        // subscriptions must re-execute through the demand loader.
+        // Storage deltas have neither the loader's window boundary nor its
+        // permission stamp. A syntactically unbounded find() is still a
+        // 200-row window when a loader/complete eager replica serves it.
+        // Check dynamically: a loader may attach after subscription starts.
         const controlPlaneRead = isControlPlaneStatusCollection(this.collection.name);
-        const canApplyPrimaryDelta = !controlPlaneRead && Boolean(primaryId);
-        const canApplyQueryDelta = !controlPlaneRead && !this.single && canApplyUnboundedQueryDelta(this.query);
+        const canApplyPrimaryDelta = () => !controlPlaneRead && Boolean(primaryId)
+          && !this.collection.demandLoader && !this.query.requireRevision;
+        const canApplyQueryDelta = () => !controlPlaneRead && !this.single
+          && !this.collection.demandLoader && !this.query.requireRevision
+          && canApplyUnboundedQueryDelta(this.query);
         let pendingSuccess = {};
         const queryDocumentsById = new Map();
         const emitQueryDocuments = () => {
@@ -631,19 +636,19 @@ class CtoxRxQuery {
           const abortFromCaller = () => controller.abort(this.signal.reason);
           this.signal?.addEventListener('abort', abortFromCaller, { once: true });
           const generation = ++queryEmissionGeneration;
-          if (initialized && !canApplyPrimaryDelta && !canApplyQueryDelta) {
+          if (initialized && !canApplyPrimaryDelta() && !canApplyQueryDelta()) {
             this.collection.recordComplexLiveQueryReexec(this.query);
           }
           this.exec({ signal: controller.signal })
             .then((value) => {
               if (!active || generation !== queryEmissionGeneration) return;
               initialized = true;
-              if (pendingPrimaryDoc !== undefined && canApplyPrimaryDelta) {
+              if (pendingPrimaryDoc !== undefined && canApplyPrimaryDelta()) {
                 listener(wrapPrimaryDeltaDocument(this.collection, pendingPrimaryDoc));
                 pendingPrimaryDoc = undefined;
                 return;
               }
-              if (canApplyQueryDelta && Array.isArray(value)) {
+              if (canApplyQueryDelta() && Array.isArray(value)) {
                 queryDocumentsById.clear();
                 for (const doc of value) {
                   const id = documentIdFromDoc(doc);
@@ -668,14 +673,22 @@ class CtoxRxQuery {
         };
         const flushPrimaryDelta = () => {
           pendingTimer = null;
-          if (!active || !initialized || !canApplyPrimaryDelta || pendingPrimaryDoc === undefined) return;
+          if (!active || !initialized) return;
+          if (!canApplyPrimaryDelta()) { pendingPrimaryDoc = undefined; flushEmit(); return; }
+          if (pendingPrimaryDoc === undefined) return;
           const next = pendingPrimaryDoc;
           pendingPrimaryDoc = undefined;
           listener(wrapPrimaryDeltaDocument(this.collection, next));
         };
         const flushQueryDelta = () => {
           pendingTimer = null;
-          if (!active || !initialized || !canApplyQueryDelta) return;
+          if (!active || !initialized) return;
+          if (!canApplyQueryDelta()) {
+            pendingSuccess = {};
+            queryDocumentsById.clear();
+            flushEmit();
+            return;
+          }
           const success = pendingSuccess;
           pendingSuccess = {};
           applyQuerySuccess(success);
@@ -683,7 +696,7 @@ class CtoxRxQuery {
           emitQueryDocuments();
         };
         const emit = (event) => {
-          if (canApplyPrimaryDelta) {
+          if (canApplyPrimaryDelta()) {
             const success = successPayloadFromChangeEvent(event);
             if (!Object.prototype.hasOwnProperty.call(success, primaryId)) return;
             pendingPrimaryDoc = success[primaryId] || null;
@@ -692,7 +705,7 @@ class CtoxRxQuery {
             pendingTimer = setTimeout(flushPrimaryDelta, 50);
             return;
           }
-          if (canApplyQueryDelta) {
+          if (canApplyQueryDelta()) {
             pendingSuccess = {
               ...pendingSuccess,
               ...successPayloadFromChangeEvent(event),
@@ -702,6 +715,9 @@ class CtoxRxQuery {
             pendingTimer = setTimeout(flushQueryDelta, 50);
             return;
           }
+          pendingPrimaryDoc = undefined;
+          pendingSuccess = {};
+          queryDocumentsById.clear();
           if (queryInFlight) {
             reexecRequested = true;
             return;

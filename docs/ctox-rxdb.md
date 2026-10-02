@@ -6,7 +6,12 @@ Each `RxQuery.$` subscription keeps at most one executing snapshot and one
 coalesced follow-up. Storage changes during a slow read no longer start a new
 materialization on every debounce tick. The first available snapshot still
 paints before the follow-up; ordinary writes must not starve initial rendering.
-Primary-key and unbounded delta subscriptions retain their existing delta path.
+Only genuinely unbounded local queries without a demand loader/revision token
+retain their delta path. Loader-backed ordinary, eager and strict subscriptions
+re-execute their actual window: appending raw eager-pull deltas had expanded a
+200-row live chat query to all871 fixture rows. A loader attached after subscribe
+also establishes this boundary. Primary-key deltas cannot replace strict native
+authority either. Re-execution is bounded by the same single-flight mechanism.
 
 Replacing a control-plane demand loader still clears the visible result and
 fences its old authority generation. Replacement and unsubscribe abort only
