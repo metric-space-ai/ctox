@@ -242,8 +242,9 @@ function sanitizeAttributes(source, tagName) {
 // never re-emit the dangerous tag. There are no live event handlers and no
 // remote fetches in this code path.
 function appendSanitized(source, target) {
-  if (!source || !target) return;
+  if (!source || !target) return false;
   const ownerDocument = target.ownerDocument || target;
+  let hasVisibleContent = false;
   const stack = [{ nodes: Array.from(source.childNodes || []), index: 0, target }];
   while (stack.length) {
     const frame = stack[stack.length - 1];
@@ -253,7 +254,9 @@ function appendSanitized(source, target) {
     }
     const node = frame.nodes[frame.index++];
     if (node.nodeType === 3) {
-      appendSafeText(frame.target, String(node.nodeValue || ''));
+      const text = String(node.nodeValue || '');
+      appendSafeText(frame.target, text);
+      hasVisibleContent ||= Boolean(text.trim());
       continue;
     }
     if (node.nodeType !== 1) continue;
@@ -267,6 +270,7 @@ function appendSanitized(source, target) {
     if (tag === 'img') {
       const alt = String(node.getAttribute('alt') || '').trim();
       appendSafeText(frame.target, alt ? `[Bild blockiert] ${alt}` : '[Bild blockiert]');
+      hasVisibleContent = true;
       continue;
     }
     if (!ALLOWED_TAGS.has(tag)) {
@@ -285,6 +289,7 @@ function appendSanitized(source, target) {
     frame.target.appendChild(clone);
     stack.push({ nodes: Array.from(node.childNodes || []), index: 0, target: clone });
   }
+  return hasVisibleContent;
 }
 
 // Public entry point: render a mail body into the supplied container. The
@@ -311,16 +316,17 @@ export function mountMailBody(container, message) {
     return selection;
   }
   const sanitized = sanitizeBodyHtml(selection.html, doc);
-  if (!sanitized) {
-    const wrapper = doc.createElement('div');
+  const wrapper = doc.createElement('div');
+  const hasHtmlContent = sanitized && appendSanitized(sanitized.body, wrapper);
+  if (!sanitized || (!hasHtmlContent && selection.text.trim())) {
+    while (wrapper.firstChild) wrapper.removeChild(wrapper.firstChild);
     wrapper.className = 'mail-body-text';
     appendPlainTextNodes(wrapper, selection.text || '');
     container.appendChild(wrapper);
+    container.dataset.mailBodyKind = 'text';
     return { kind: 'text', value: selection.text || '', html: '', text: selection.text || '' };
   }
-  const wrapper = doc.createElement('div');
   wrapper.className = 'mail-body-html';
-  appendSanitized(sanitized.body, wrapper);
   container.appendChild(wrapper);
   return selection;
 }

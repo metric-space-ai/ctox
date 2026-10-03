@@ -64,6 +64,31 @@ function parsedElement(tagName, attributes = {}, childNodes = []) {
 
 function parsedText(nodeValue) { return { nodeType: 3, nodeValue }; }
 
+test('full text remains visible when HTML is unavailable or has no safe visible content', () => {
+  const variants = [
+    undefined,
+    { childNodes: [
+      parsedElement('script', {}, [parsedText('hidden script')]),
+      parsedElement('style', {}, [parsedText('hidden CSS')]),
+      parsedElement('p', {}, [parsedText('   ')]),
+    ] },
+  ];
+  for (const parsedBody of variants) {
+    const doc = documentFixture(parsedBody);
+    const host = doc.createElement('div');
+    const body = 'Hallo Michael,\n\nVollständige Antwort mit 🙂\n> Originalnachricht';
+    const result = mountMailBody(host, { body_html: '<metadata-only>', body_text: body, preview: 'Short preview' });
+    assert.equal(result.kind, 'text');
+    assert.equal(result.value, body);
+    assert.equal(host.dataset.mailBodyKind, 'text');
+    const wrapper = host.childNodes[0];
+    assert.equal(wrapper.className, 'mail-body-text');
+    assert.deepEqual(wrapper.childNodes.filter(node => node.text).map(node => node.text),
+      ['Hallo Michael,', 'Vollständige Antwort mit 🙂', '> Originalnachricht']);
+    assert.equal(wrapper.childNodes.filter(node => node.tagName === 'br').length, 3);
+  }
+});
+
 test('HTML copying preserves safe content and drops active subtrees, attributes and image sources', () => {
   // This fixture exercises copying after parsing. Real browser parser and
   // network behavior still require the tenant browser acceptance run.
