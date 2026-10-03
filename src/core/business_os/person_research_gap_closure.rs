@@ -1421,6 +1421,81 @@ fn research_field_is_answered(status: &Value) -> bool {
     )
 }
 
+/// The asynchronous native e-mail pass may resolve the final outstanding
+/// field after the research writeback has already set `needs_review`. Only a
+/// writeback that recorded its complete requested scope and zero rejections
+/// may be promoted; older leads without that receipt remain for review.
+pub(super) fn complete_after_native_email_validation(lead: &mut Value) -> bool {
+    if lead.get("research_status").and_then(Value::as_str) != Some("needs_review")
+        || lead
+            .pointer("/payload/native_research_terminal_status")
+            .and_then(Value::as_str)
+            != Some("needs_review")
+        || lead
+            .pointer("/payload/native_research_rejections_count")
+            .and_then(Value::as_u64)
+            != Some(0)
+    {
+        return false;
+    }
+    let Some(requested) = lead
+        .pointer("/payload/native_research_requested_fields")
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    if requested.is_empty() || requested.iter().any(|field| field.as_str().is_none()) {
+        return false;
+    }
+    let requested = requested
+        .iter()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    if requested.contains(&"person_email_validation")
+        && !super::contact_email_validation::emails_needing_validation(lead, 1).is_empty()
+    {
+        return false;
+    }
+    let unanswered = requested
+        .iter()
+        .any(|field| match open_persons_for_field(lead, field) {
+            Some(open) => !open.is_empty(),
+            None => !lead["field_status"]
+                .get(*field)
+                .is_some_and(research_field_is_answered),
+        });
+    let needs_review = unanswered
+        || lead["person_field_status"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .flat_map(|(_, fields)| fields.as_object().into_iter().flatten())
+            .any(|(field, status)| {
+                requested.contains(&field.as_str())
+                    && matches!(
+                        status.get("status").and_then(Value::as_str),
+                        Some("no_match" | "action_required")
+                    )
+            })
+        || lead["field_status"]
+            .as_object()
+            .into_iter()
+            .flatten()
+            .any(|(field, status)| {
+                requested.contains(&field.as_str())
+                    && matches!(
+                        status.get("status").and_then(Value::as_str),
+                        Some("no_match" | "action_required")
+                    )
+            });
+    if needs_review {
+        return false;
+    }
+    lead["research_status"] = Value::String("completed".to_string());
+    lead["payload"]["native_research_terminal_status"] = Value::String("completed".to_string());
+    true
+}
+
 fn is_filler_field_status(status: &Value) -> bool {
     let unsupported = status
         .get("status")
@@ -1656,6 +1731,11 @@ pub(super) fn handle_research_writeback(
     add_field_status_evidence(&mut projection_result, &request.field_status)?;
     let now = super::person_research_command::now_ms();
     let previous_keys = previous_research_keys(&lead);
+    let previous_person_statuses = lead
+        .get("person_field_status")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let previous_contacts = lead.get("contacts").cloned().unwrap_or(Value::Null);
     let patch = outbound_lead_generation_research_outcome_patch(&lead, &projection_result, now);
     merge_json_object_values(&mut lead, &patch);
     union_research_keys(&mut lead, &previous_keys);
@@ -1681,6 +1761,17 @@ pub(super) fn handle_research_writeback(
             .map(|(workspace, contract)| (workspace.as_path(), contract)),
     ));
     project_person_field_status(&mut lead);
+    super::contact_email_validation::invalidate_changed_email_addresses(
+        &mut lead,
+        &previous_contacts,
+    );
+    // The worker can still report the old "daemon will check this" placeholder
+    // after experte.de has already returned. Restore only a native verdict for
+    // the same person and unchanged address before computing open fields.
+    super::contact_email_validation::restore_native_email_verdicts(
+        &mut lead,
+        &previous_person_statuses,
+    );
     // A field is answered only when the lead now carries a verified value or a
     // documented `no_match`. Everything else stays open — including a field the
     // evidence gate downgraded from `verified` because it carried a single
@@ -1765,6 +1856,8 @@ pub(super) fn handle_research_writeback(
     lead["research_status"] = Value::String(terminal_lead_status.to_string());
     lead["payload"]["native_research_terminal_status"] =
         Value::String(terminal_lead_status.to_string());
+    lead["payload"]["native_research_requested_fields"] = serde_json::json!(requested_fields);
+    lead["payload"]["native_research_rejections_count"] = Value::from(rejections.len() as u64);
     lead["payload"]["research_finished_at_ms"] = Value::Number(now.into());
     lead["research_error"] = Value::Null;
     lead["research_updated_at_ms"] = Value::Number(now.into());
@@ -2531,9 +2624,33 @@ fn numbers_in(text: &str) -> Vec<(f64, std::ops::Range<usize>)> {
 /// size class never proves an exact value.
 /// A quote backs a value only when it states it: figures by number
 /// ([`quantity_quote_backs`]), a personal e-mail address by the address
-/// itself ([`email_quote_backs`]).
-fn quote_backs_value(field: &str, value: &str, quote: &str) -> bool {
-    quantity_quote_backs(field, value, quote) && email_quote_backs(field, value, quote)
+/// itself ([`email_quote_backs`]), and names/titles as whole words.
+pub(super) fn quote_backs_value(field: &str, value: &str, quote: &str) -> bool {
+    quantity_quote_backs(field, value, quote)
+        && email_quote_backs(field, value, quote)
+        && person_name_quote_backs(field, value, quote)
+}
+
+/// A claimed name or title needs to occur in the cited text, not merely in
+/// an invented value next to a valid source URL. Token boundaries reject
+/// "NotAda" and "Lovelacee"; Unicode case, whitespace, hyphens, apostrophes
+/// and title punctuation do not distinguish the same observed name.
+fn person_name_quote_backs(field: &str, value: &str, quote: &str) -> bool {
+    if !matches!(field, "person_vorname" | "person_nachname" | "person_titel") {
+        return true;
+    }
+    let words = |text: &str| {
+        text.to_lowercase()
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let wanted = words(value);
+    !wanted.is_empty()
+        && words(quote)
+            .windows(wanted.len())
+            .any(|observed| observed == wanted.as_slice())
 }
 
 /// BNT, 23.09.2026: `person_email` robert.suesse@bnt-chemicals.de was
@@ -4272,6 +4389,94 @@ mod tests {
         );
     }
 
+    #[test]
+    fn person_names_and_titles_require_the_value_in_the_own_quote() {
+        let invalid = [
+            ("person_vorname", "Ada", "Grace Hopper"),
+            ("person_vorname", "Ada", "NotAda Lovelace"),
+            ("person_vorname", "Ada", "Adam Lovelace"),
+            ("person_nachname", "Lovelace", "Ada Lovelacee"),
+            ("person_titel", "Dr.", "Managing director"),
+        ];
+        for (field, value, quote) in invalid {
+            let requested = vec![field.to_string()];
+            let mut fields = serde_json::Map::new();
+            fields.insert(field.to_string(), serde_json::json!({
+                "status": "verified", "value": value,
+                "sources": [{"url": "https://firma.test/team", "quote": quote, "person_key": "A"}]
+            }));
+            let incoming = serde_json::json!({"A": fields});
+            let mut lead =
+                serde_json::json!({"contacts": [{"person_key": "A", "name": "Ada Lovelace"}]});
+            let rejections = apply_person_field_status(
+                &mut lead,
+                &incoming,
+                &BTreeMap::new(),
+                &requested,
+                &no_crm(),
+                None,
+            );
+            assert!(
+                rejections
+                    .iter()
+                    .any(|line| line.contains("verified ohne gueltigen Beleg")),
+                "{field} {value}: {rejections:?}"
+            );
+            assert!(lead.get("person_field_status").is_none(), "{field} {quote}");
+            assert_eq!(lead["contacts"][0]["name"], "Ada Lovelace");
+        }
+
+        // The existing single-external-source rule is sufficient. Title
+        // punctuation and equivalent compound-name punctuation remain usable.
+        for (field, value, quote) in [
+            ("person_vorname", "Ada", "Prof. Dr. Ada Lovelace"),
+            ("person_nachname", "Lovelace", "Prof. Dr. Ada Lovelace"),
+            ("person_titel", "Prof. Dr.", "Prof Dr Ada Lovelace"),
+            (
+                "person_vorname",
+                "Giselher Jürgen",
+                "Giselher Jürgen Bezler",
+            ),
+            ("person_vorname", "Jean-Luc", "Jean Luc Picard"),
+            ("person_nachname", "O'Neill", "Dr. Sara O’Neill"),
+        ] {
+            let requested = vec![field.to_string()];
+            let mut fields = serde_json::Map::new();
+            fields.insert(field.to_string(), serde_json::json!({
+                "status": "verified", "value": value,
+                "sources": [{"url": "https://firma.test/team", "quote": quote, "person_key": "A"}]
+            }));
+            let incoming = serde_json::json!({"A": fields});
+            let mut lead = serde_json::json!({"contacts": [{"person_key": "A"}]});
+            let rejections = apply_person_field_status(
+                &mut lead,
+                &incoming,
+                &BTreeMap::new(),
+                &requested,
+                &no_crm(),
+                None,
+            );
+            assert!(rejections.is_empty(), "{field} {value}: {rejections:?}");
+            project_person_field_status(&mut lead);
+            assert_eq!(
+                lead["person_field_status"]["A"][field]["status"],
+                "verified"
+            );
+            assert_eq!(lead["person_field_status"]["A"][field]["value"], value);
+            assert_eq!(
+                lead["person_field_status"]["A"][field]["sources"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                lead["contacts"][0]["field_status"][field]["status"],
+                "verified"
+            );
+        }
+    }
+
     // Codex counterexample: key A, verified a@…, the source names b@… and B.
     #[test]
     fn a_person_status_needs_its_own_key_and_a_quote_naming_the_value() {
@@ -5859,8 +6064,9 @@ mod tests {
             "Grit.Hartmann@bnt-chemicals.de",
             "grit.hartmann [at] bnt-chemicals [dot] de"
         ));
-        // Other fields are not affected.
-        assert!(quote_backs_value("person_vorname", "Robert", bnt));
+        // The same absent name must not verify Robert either.
+        assert!(!quote_backs_value("person_vorname", "Robert", bnt));
+        assert!(quote_backs_value("person_vorname", "Norman", bnt));
     }
 
     #[test]

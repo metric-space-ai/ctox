@@ -1,5 +1,70 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Browser live-query single-flight
+
+Each `RxQuery.$` subscription keeps at most one executing snapshot and one
+coalesced follow-up. Storage changes during a slow read no longer start a new
+materialization on every debounce tick. The first available snapshot still
+paints before the follow-up; ordinary writes must not starve initial rendering.
+Only genuinely unbounded local queries without a demand loader/revision token
+retain their delta path. Loader-backed ordinary, eager and strict subscriptions
+re-execute their actual window: appending raw eager-pull deltas had expanded a
+200-row live chat query to all871 fixture rows. A loader attached after subscribe
+also establishes this boundary. Primary-key deltas cannot replace strict native
+authority either. Re-execution is bounded by the same single-flight mechanism.
+
+Replacing a control-plane demand loader still clears the visible result and
+fences its old authority generation. Replacement and unsubscribe abort only
+that subscription's read, never an imperative consumer or the caller's signal.
+A storage adapter that cannot cancel an in-progress read must finish it before
+the next snapshot starts; its late result cannot publish after unsubscribe.
+Strict revision tokens and permission checks remain on the existing loader.
+
+The global Shell chat consumes its bounded live-query snapshot directly;
+receiving that snapshot does not start another storage/demand read. During a
+pending merge it retains only the newest window (at most200 rows). Explicit
+hydration without a snapshot still executes the bounded query. Disposal releases
+the pending snapshot. Existing ownership/deletion filters, merge semantics and
+local drafts/history remain unchanged; this is not a native acceptance signal.
+
+Shared Browser surface validators require explicit native `ok:true` before
+confirming an image or input result. Input acknowledgements use each native
+result's submitted-event `index`, not its position in the result array. Missing,
+duplicate, noninteger or out-of-range indices prove no acknowledgement; valid
+partial results confirm only their matching successful events. These helpers
+still require Browser-module integration and real click/type/scroll acceptance.
+
+The deferred-storage regression proves the concurrency bound and generation
+fence, not tenant startup latency, Windows memory behavior or installed OOM
+resolution. Those require retained-profile browser measurements on the exact
+delivered source and independent installed acceptance.
+
+The Shell's bounded performance trace separates asset imports, local database
+open/preflight, cache migration, core schema registration, catalog, first module
+mount and restored windows from WebRTC readiness milestones. Heap values are
+browser-exposed samples; the observed maximum is not process RSS or a certified
+memory peak. Missing metrics remain unknown. No URLs, record payloads, actor
+credentials or error bodies enter the trace. Long-task counters and at most 64
+phase records bound retention; the existing Shell diagnostics expose them.
+`firstModuleMountedMs` is a mount milestone, not proof of usable interaction.
+
+Legacy/superseded replica inventory runs after initial module/restore handling,
+outside the critical startup wait. It still preserves all old primaries and
+recovery journals; slow metadata enumeration is not a deletion authorization.
+
+### Fresh native schema initialization
+
+Before dispatching native Business OS commands into a fresh root, run
+`ctox business-os rxdb init --root <source-root>`. This registers the compiled
+canonical native schemas and verifies every collection handle, including
+optional collections. It creates no domain records or Business OS app, starts
+no peer, and makes no WebRTC readiness claim. Repeating it preserves existing
+records. Schema drift that skips an optional collection fails initialization;
+this command does not silently repair or erase incompatible data.
+
+A fixture that already has empty canonical tables proves command behavior
+after initialization; it does not prove fresh-root bootstrap.
+
 ### Workjet project list readiness
 
 Project control starts its three collection bridges concurrently. The command
@@ -108,6 +173,87 @@ existing browser controller and command policy. Recovery does not authenticate
 a session, pass review/validation, reopen terminal commands, or weaken the
 owned, expiring lease requirement for ordinary worker commands.
 
+### Outbound research source receipts
+
+The native person-research command retains a `sellify_lookup_runs` receipt in
+its final result and workspace envelope, including actual lookup success,
+`completed_empty`, or failure. Returned CRM record count and contributed field
+count are separate: an existing CRM match can contribute no requested fields.
+A failed lookup has an unknown (`null`) record count and a bounded error code,
+not a false empty result or raw database error. The enclosing command/workspace
+binds the receipt to the research; it is not a synthetic scrape run.
+
+The native person-research worker saves the Lead result before publishing a
+completed command. A rejected Lead writeback produces a failed command with
+operation `person_research_writeback`, retaining the previous Lead values.
+A successful result is projected once, so completion does not duplicate
+evidence or launch a second contact-validation sweep. This ordering is a
+delivery barrier, not a cross-database atomicity claim; command publication
+failures still use the existing recovery path.
+
+Lead-level person fields cannot inherit the first existing contact when their
+`person_key` is absent, empty or malformed. Those fields remain unapplied and
+are listed in `payload.unbound_person_field_keys`, outside the researched-field
+list. Existing imported names and contact details remain unchanged. Initial
+legacy discovery from an empty contact list and explicit keyed updates remain
+supported; this does not certify the source quality of those values.
+Contact deduplication also preserves two distinct nonempty person keys even
+when imported contacts share a local row ID. Duplicate rows with the same
+person key still coalesce; unkeyed legacy row-ID matching remains supported.
+Partial keyed contact updates preserve an existing observed full name when no
+structured first/last name is supplied. This preservation does not create a
+name, source receipt or verified field; explicit structured names still win.
+Historical lead evidence is retained, but completion counts only evidence for
+the current incoming value and, for person fields, the same person key.
+The shared native quantity and personal-email quote checks also apply to this
+completion count. They additionally require personal first/last names and
+titles to occur as whole words, with Unicode case and equivalent whitespace,
+hyphen, apostrophe and title punctuation handled. A valid URL beside a made-up
+name is insufficient. These checks apply to both field-status writeback and
+completion; a source for another person, an outdated value or a
+quote naming another address cannot certify the new result. Sellify alone
+continues to count as unverified. Distinct source quotes are retained so a
+later correct quote is not discarded behind an older unusable quote; multiple
+quotes from the same provider still count as one independent source.
+
+Sellify lookups require a readable collection and use one read-only SQLite
+transaction for ID, exact-field, fuzzy-field, and campaign-group probes.
+Before opening that snapshot, best-effort index preparation on an existing
+store preserves the indexed exact lookup and grouped campaign search; it
+never creates an absent store. Missing, non-file,
+corrupt, or unprojected storage fails the lookup instead of producing
+`completed_empty`; a readable collection with no matching records is genuinely
+empty. Optional projection readers elsewhere retain their existing behavior.
+
+Final persistence runs after all native source augmentation and summary, even
+with `auto_browser_capture=false`. Successful persistence leaves `envelope.json`
+equal to the returned payload, including workspace metadata and recovered-error
+removal. The native wrapper exposes the existing `scrape_runs.jsonl` in the
+manifest. Final envelope and manifest replacements are individually atomic;
+the workspace as a whole is not a transactional snapshot. Persistence errors
+remain explicit in `workspace_error` and must not count as durable acceptance.
+These changes do not alter country/field/source selection, access grants,
+authorization record scope or the WebRTC data boundary. A completed command remains distinct
+from all-provider success; inspect actual source outcomes and admissible evidence.
+
+The Outbound source-registry command reads current run and provider-account
+state from the native store. Unreadable run projections, malformed account
+rows, and invalid registry responses fail the command; they do not produce
+a successful empty list. A readable legacy store without the optional account
+state table legitimately has no recorded account state. Browser loading and
+error states must reflect the actual command result and preserve the last
+confirmed view while a refresh fails.
+
+An explicit inactive-account refusal is neither an expired browser session
+nor a script defect. The durable per-target state suppresses repeated provider
+calls without creating new scrape runs, retaining the causal and last probe
+run IDs. Credential-version changes, an authorized source-test request, or
+the 6-hour then 24-hour backoff permit one generation-bound probe lease.
+Backoff means eligibility on the next requested call, not a scheduled probe.
+Early operator probes require signed native `data.write` authorization;
+worker command sessions cannot grant that exception. A successful probe only
+clears the generation it owns, so a late result cannot erase a newer refusal.
+
 ### Command projection identity
 
 Terminal and outbox projections retain the actor ID from the accepted native
@@ -123,6 +269,17 @@ A projection that lacks matching native admission identity does not manufacture
 an actor from incoming metadata. The regression covers terminal state, outbox
 delivery to both stores, credential retention/redaction, forged projection
 identity and unchanged core intent/hash.
+
+### MCP app collection read authority
+
+Once a native RxDB collection table exists, MCP single-record and list reads
+use only that table. Native absence, including a physically purged tombstone
+or an empty table, cannot be replaced by an older `business_records` shadow.
+Present native tombstones retain their deletion flags and native ordering.
+Legacy shadow reads remain available when no native table exists for that
+collection; their write-time ordering and limits remain unchanged. This is a
+read boundary, not a record repair or a claim that the installed browser has
+converged. It does not change native table selection or actor permissions.
 
 ### Outbound MCP research record identity
 
@@ -403,6 +560,15 @@ relationship; no cross-WAL atomicity is implied.
 Workspace branding (`business_workspace_branding`) is treated as Business OS
 collection data under the same boundary: update through the Business OS command
 path, replicate through CTOX Sync Engine/WebRTC, never through HTTP.
+
+Native lead research projections require an explicit `business_os.chat.task`
+from `outbound-lead-generation` with a supported `business_command` writeback
+contract targeting `outbound.lead.research_writeback` in
+`outbound_lead_generation_leads`, and the lead's ID in `record_ids`.
+A chat task's `record_id` alone does not establish research intent: CRM-note
+reviews and unrelated tasks must preserve the lead's status, command/task IDs,
+research error, timestamp and revision. The same scope applies when a lease
+promotes a queued lead to running; its existing command ownership still applies.
 
 HTTP is **delivery and bootstrap only**: static shell assets, launch context,
 packed `ctox_config`, `/.well-known/ctox-business-os.json` status. In managed

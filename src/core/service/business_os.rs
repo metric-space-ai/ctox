@@ -884,6 +884,18 @@ fn handle_business_os_turn(root: &Path, args: &[String]) -> anyhow::Result<()> {
 
 fn handle_business_os_rxdb(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
+        Some("init") => {
+            // main resolves --root before dispatch, but keeps its pair in args.
+            let has_global_root = matches!(
+                &args[1..],
+                [flag, value] if flag == "--root" && !value.is_empty() && !value.starts_with('-')
+            );
+            anyhow::ensure!(
+                args.len() == 1 || has_global_root,
+                "usage: ctox business-os rxdb init [--root <root>]"
+            );
+            print_json(&crate::business_os::initialize_business_os_rxdb(root)?)
+        }
         // Backlog OS-A4: sync/peer diagnosis for operators AND the harness.
         // Reads the native peer's heartbeat status file, so it works from a
         // separate CLI process while the daemon runs (performance metrics —
@@ -2385,6 +2397,7 @@ fn run_business_os_web_stack_source_capture_with_trust(
         "email_otp_status": combined.pointer("/email_otp/status").cloned().unwrap_or(serde_json::Value::Null),
         "email_otp_detail": combined.pointer("/email_otp/detail").cloned().unwrap_or(serde_json::Value::Null),
         "source_url": result.get("source_url").and_then(serde_json::Value::as_str),
+        "query_completion": result.get("query_completion").cloned().unwrap_or(serde_json::Value::Null),
         "credential_ref": credential_ref,
         "secret_value_in_payload": false,
         "browser_stream": "rxdb",
@@ -2548,6 +2561,7 @@ fn run_business_os_web_stack_source_capture_with_browser_authorization(
         "record_count": records.len(),
         "source_status": source_status,
         "source_url": result.get("source_url").and_then(serde_json::Value::as_str),
+        "query_completion": result.get("query_completion").cloned().unwrap_or(serde_json::Value::Null),
         "credential_ref": credential_ref,
         "secret_value_in_payload": false,
         "browser_stream": "rxdb",
@@ -2775,155 +2789,192 @@ fn build_web_stack_rocketreach_source_capture(
 }
 
 const ROCKETREACH_BROWSER_RECORD_PARSER: &str = r#"const parseRocketReachRecords = (companyName, snapshots) => {
-  const clean = (value, max = 500) => String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
-  const normalize = (value) => clean(value, 3000)
-    .toLocaleLowerCase("de-DE")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/ß/g, "ss")
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
+  const clean = (value, max = 500) => typeof value === "string"
+    ? value.replace(/\s+/g, " ").trim().slice(0, max) : "";
+  const normalize = (value) => clean(value, 4000)
+    .toLocaleLowerCase("de-DE").normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "").replace(/ß/g, "ss")
+    .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
   const ignoredCompanyTokens = new Set([
     "ag", "se", "gmbh", "kg", "ohg", "gbr", "mbh", "inc", "ltd", "llc",
     "gesellschaft", "aktiengesellschaft", "holding", "group", "gruppe", "company",
   ]);
-  const companyTokens = normalize(companyName).split(/\s+/).filter((token) =>
-    token.length >= 3 && !ignoredCompanyTokens.has(token)
-  );
+  const companyTokens = [...new Set(normalize(companyName).split(/\s+/)
+    .filter((token) => token.length >= 2 && !ignoredCompanyTokens.has(token)))];
   const relevantCompanyText = (value) => {
-    const required = companyTokens.slice(0, Math.min(2, companyTokens.length));
-    const haystack = normalize(value);
-    return required.length > 0 && required.every((token) => haystack.includes(token));
+    const words = new Set(normalize(value).split(/\s+/));
+    return companyTokens.length > 0 && companyTokens.every((token) => words.has(token));
   };
   const providerUrl = (raw) => {
+    if (typeof raw !== "string" || raw.length > 2048) return null;
     try {
       const url = new URL(raw);
       const host = url.hostname.toLowerCase();
-      return host === "rocketreach.com" || host.endsWith(".rocketreach.com")
-        || host === "rocketreach.co" || host.endsWith(".rocketreach.co") ? url : null;
+      if (url.protocol !== "https:" || url.username || url.password
+          || (url.port && url.port !== "443")) return null;
+      if (!(host === "rocketreach.com" || host.endsWith(".rocketreach.com")
+          || host === "rocketreach.co" || host.endsWith(".rocketreach.co"))) return null;
+      url.hash = ""; url.search = "";
+      return url;
     } catch { return null; }
   };
   const companyProfileUrl = (raw) => {
     const url = providerUrl(raw);
-    if (!url) return null;
-    return /(?:\/company\/|\/companies\/|-profile_[a-z0-9])/i.test(url.pathname) ? url : null;
+    return url && /(?:\/company\/[^/]+|\/companies\/[^/]+|\/[^/]+-profile_[a-z0-9_-]+)\/?$/i.test(url.pathname)
+      ? url : null;
   };
   const personProfileUrl = (raw) => {
     const url = providerUrl(raw);
-    if (!url) return null;
-    return /(?:\/person\/|\/people\/|-email_[a-z0-9])/i.test(url.pathname) ? url : null;
+    return url && /(?:\/person\/[^/]+|\/people\/[^/]+|\/[^/]+-email_[a-z0-9_-]+)\/?$/i.test(url.pathname)
+      ? url : null;
   };
-  const validNamePart = (value) => /\p{L}/u.test(value)
-    && !/\d/u.test(value)
+  const list = (value) => Array.isArray(value) ? value : [];
+  const former = (value) => /\b(?:former|previous|formerly|past|ex|ehemalig\w*|früher\w*|until|bis)\b|\b(?:19|20)\d{2}\s*[-–—]\s*(?:19|20)\d{2}\b/i.test(clean(value));
+  const currentCompanyLine = (candidate, lines) => {
+    if (clean(candidate.company)) {
+      return relevantCompanyText(candidate.company) && !former(candidate.company)
+        ? clean(candidate.company, 4000) : "";
+    }
+    return lines.find((line) => relevantCompanyText(line) && !former(line)) || "";
+  };
+  const validNamePart = (value) => /\p{L}/u.test(value) && !/\d/u.test(value)
     && /^[\p{L}][\p{L}.'’\-]*$/u.test(value);
   const personName = (candidate) => {
-    const values = [candidate.name, candidate.heading, candidate.linkText, candidate.title];
-    for (const raw of values) {
-      const value = clean(raw)
-        .replace(/\s*[|·-]\s*RocketReach.*$/i, "")
-        .replace(/\s+(?:email|phone|contact)(?:\s+information)?\s*$/i, "")
-        .replace(/^(?:(?:dr|prof)\.?\s+)+/i, "");
+    for (const raw of [candidate.name, candidate.heading, candidate.linkText, candidate.title]) {
+      const observed = clean(raw).replace(/\s*[|·]\s*RocketReach.*$/i, "")
+        .replace(/\s+(?:email|phone|contact)(?:\s+information)?\s*$/i, "");
+      const prefix = observed.match(/^(?:(?:dr|prof)\.?\s+)+/i)?.[0].trim() || "";
+      const value = prefix ? observed.slice(prefix.length).trim() : observed;
       const parts = value.split(/\s+/).filter(Boolean);
       if (parts.length >= 2 && parts.length <= 6 && parts.every(validNamePart)
-          && !relevantCompanyText(value)) return parts;
+          && !relevantCompanyText(value)) {
+        const first = clean(candidate.first); const last = clean(candidate.last);
+        const structured = first && last && normalize(`${first} ${last}`) === normalize(value);
+        return { parts, observed, prefix,
+          first: structured ? first : parts[0],
+          last: structured ? last : parts.slice(1).join(" ") };
+      }
     }
-    return [];
+    return null;
   };
   const records = [];
-  const push = (field, value, confidence, note, rawUrl) => {
-    const url = providerUrl(rawUrl);
-    const cleanValue = clean(value);
-    if (!url || !cleanValue) return;
-    if (records.some((record) => record.field === field
-        && record.value === cleanValue && record.source_url === url.href)) return;
-    records.push({ field, value: cleanValue, confidence, source_url: url.href, note });
+  const push = (field, value, confidence, quote, rawUrl, personKey) => {
+    const url = providerUrl(rawUrl); const cleanValue = clean(value);
+    const sourceQuote = clean(quote, 4000);
+    if (!url || !cleanValue || !sourceQuote) return;
+    if (records.some((record) => record.field === field && record.value === cleanValue
+        && record.source_url === url.href && record.person_key === personKey)) return;
+    records.push({ field, value: cleanValue, confidence, source_url: url.href,
+      note: sourceQuote, source_quote: sourceQuote,
+      ...(personKey ? { person_key: personKey } : {}) });
   };
-  const safeSnapshots = (Array.isArray(snapshots) ? snapshots : []).filter((snapshot) =>
-    providerUrl(snapshot?.sourceUrl)
-  );
-  let companyEvidenceUrl = null;
-  let companyEvidenceName = "";
+  const safeSnapshots = list(snapshots).filter((snapshot) =>
+    snapshot && typeof snapshot === "object" && providerUrl(snapshot.sourceUrl)
+      && !/\b(?:log\s?in|sign\s?in|sign\s?up)\b/i.test(clean(snapshot.title)));
+  let companyEvidence = null;
   for (const snapshot of safeSnapshots) {
     const candidates = [
-      ...(snapshot.links || []).map((link) => ({
-        url: link.url,
-        text: `${link.text || ""} ${(link.contextLines || []).join(" ")}`,
-        name: link.text,
+      ...list(snapshot.links).filter((link) => link && typeof link === "object").map((link) => ({
+        url: link.url, name: clean(link.text),
+        text: [clean(link.text), ...list(link.contextLines).map((line) => clean(line))].join(" "),
       })),
-      { url: snapshot.sourceUrl, text: `${snapshot.title || ""} ${(snapshot.headings || []).join(" ")}`, name: (snapshot.headings || [])[0] },
+      { url: snapshot.sourceUrl, name: clean(list(snapshot.headings)[0]),
+        text: [clean(snapshot.title), ...list(snapshot.headings).map((line) => clean(line))].join(" ") },
     ];
-    const hit = candidates.find((candidate) => companyProfileUrl(candidate.url)
-      && relevantCompanyText(candidate.text));
-    if (!hit) continue;
-    companyEvidenceUrl = companyProfileUrl(hit.url).href;
-    companyEvidenceName = clean(hit.name) || companyName;
-    break;
+    companyEvidence = candidates.find((candidate) => companyProfileUrl(candidate.url)
+      && relevantCompanyText(candidate.name) && relevantCompanyText(candidate.text));
+    if (companyEvidence) break;
   }
-  if (!companyEvidenceUrl) return { records: [], companyMatched: false, protectedFieldCount: 0 };
-  push("firma_name", relevantCompanyText(companyEvidenceName) ? companyEvidenceName : companyName,
-    "high", "RocketReach company identity verified", companyEvidenceUrl);
-
+  if (!companyEvidence) return { records: [], companyMatched: false, protectedFieldCount: 0 };
+  push("firma_name", companyEvidence.name, "high", companyEvidence.text, companyEvidence.url);
   const people = [];
   for (const snapshot of safeSnapshots) {
-    for (const embedded of snapshot.embeddedPeople || []) {
-      people.push({ ...embedded, sourceUrl: embedded.sourceUrl || snapshot.sourceUrl });
-    }
-    for (const link of snapshot.links || []) {
-      const url = personProfileUrl(link.url);
-      const contextLines = (link.contextLines || []).map((line) => clean(line)).filter(Boolean);
-      if (!url || !relevantCompanyText(contextLines.join(" "))) continue;
-      people.push({ sourceUrl: url.href, linkText: link.text, contextLines });
-    }
-    if (personProfileUrl(snapshot.sourceUrl)) {
-      people.push({
-        sourceUrl: snapshot.sourceUrl,
-        heading: (snapshot.headings || [])[0],
-        title: snapshot.title,
-        contextLines: snapshot.bodyLines || [],
+    for (const embedded of list(snapshot.embeddedPeople)) {
+      if (embedded && typeof embedded === "object") people.push({
+        ...embedded, sourceUrl: embedded.sourceUrl || snapshot.sourceUrl,
       });
     }
+    for (const link of list(snapshot.links)) {
+      if (!link || typeof link !== "object") continue;
+      const url = personProfileUrl(link.url);
+      if (url) people.push({ sourceUrl: url.href, linkText: link.text,
+        contextLines: list(link.contextLines) });
+    }
+    if (personProfileUrl(snapshot.sourceUrl)) people.push({
+      sourceUrl: snapshot.sourceUrl, heading: list(snapshot.headings)[0],
+      title: snapshot.title, contextLines: list(snapshot.bodyLines),
+      // Body text also contains support/footer/related-person contacts. It is
+      // identity/context evidence, never a contact block for the heading owner.
+      unscopedBody: true,
+    });
   }
-  const seenPeople = new Set();
+  const personOwners = new Map();
+  const conflictedPeople = new Set();
   for (const candidate of people) {
     const sourceUrl = personProfileUrl(candidate.sourceUrl);
     if (!sourceUrl) continue;
-    const lines = (candidate.contextLines || []).map((line) => clean(line)).filter(Boolean);
-    const companyContext = clean(candidate.company || lines.join(" "), 4000);
-    if (!relevantCompanyText(companyContext)) continue;
-    const names = personName(candidate);
-    if (names.length < 2) continue;
-    const personKey = `${normalize(names.join(" "))}|${sourceUrl.href}`;
-    if (seenPeople.has(personKey)) continue;
-    seenPeople.add(personKey);
-    const context = lines.join(" ");
-    const email = clean(candidate.email || context.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i)?.[0]);
-    const phone = clean(candidate.phone || context.match(/(?:\+|00)\d[\d\s().\/-]{6,}\d/)?.[0]);
-    const ignoredPosition = /^(?:contact|contacts?|email|phone|telefon|mobile|mobil|location|standort|rocketreach|view profile|profil ansehen)$/i;
-    const position = clean(candidate.position || lines.find((line) =>
-      line.length >= 2 && line.length <= 160
-      && /\p{L}/u.test(line)
-      && !relevantCompanyText(line)
-      && normalize(line) !== normalize(names.join(" "))
-      && !ignoredPosition.test(line)
-      && !/@/.test(line)
-      && !/(?:\+|00)\d/.test(line)
-    ));
-    push("person_vorname", names[0], "high", "RocketReach authenticated person profile", sourceUrl.href);
-    push("person_nachname", names.slice(1).join(" "), "high", "RocketReach authenticated person profile", sourceUrl.href);
-    push("person_position", position, "medium", "RocketReach current company context", sourceUrl.href);
-    push("person_email", email, "high", "RocketReach authenticated contact field", sourceUrl.href);
-    push("person_telefon", phone, "high", "RocketReach authenticated contact field", sourceUrl.href);
+    const lines = list(candidate.contextLines).map((line) => clean(line)).filter(Boolean);
+    const companyContext = currentCompanyLine(candidate, lines);
+    const name = personName(candidate);
+    if (!companyContext || !name) continue;
+    const path = sourceUrl.pathname.replace(/\/$/, "");
+    const identity = path.match(/-email_([a-z0-9_-]+)$/i)?.[1]
+      || path.match(/\/(?:people|person)\/([^/]+)$/i)?.[1];
+    const personKey = identity ? "rocketreach-person-" + identity.toLowerCase() : "";
+    if (!personKey || conflictedPeople.has(personKey)) continue;
+    const owner = normalize(name.parts.join(" "));
+    if (personOwners.has(personKey) && personOwners.get(personKey) !== owner) {
+      conflictedPeople.add(personKey);
+      for (let i = records.length - 1; i >= 0; i--) {
+        if (records[i].person_key === personKey) records.splice(i, 1);
+      }
+      continue;
+    }
+    personOwners.set(personKey, owner);
+    const contactLines = candidate.unscopedBody ? [] : lines;
+    const email = clean(candidate.email) || contactLines.map((line) =>
+      line.match(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i)?.[0]).find(Boolean) || "";
+    const phone = clean(candidate.phone) || contactLines.map((line) =>
+      line.match(/(?:\+|00)\d[\d\s().\/-]{6,}\d/)?.[0]).find(Boolean) || "";
+    const ignoredPosition = /^(?:contacts?|email|phone|telefon|mobile|mobil|location|standort|rocketreach|view profile|profil ansehen)$/i;
+    const position = clean(candidate.position || contactLines.find((line) =>
+      line.length >= 2 && line.length <= 160 && /\p{L}/u.test(line)
+      && !relevantCompanyText(line) && !former(line)
+      && normalize(line) !== normalize(name.observed)
+      && !ignoredPosition.test(line) && !/@/.test(line) && !/(?:\+|00)\d/.test(line)));
+    const quote = (observedValue) => [name.observed, companyContext, observedValue]
+      .filter(Boolean).join(" · ");
+    const add = (field, value, confidence = "high") => push(
+      field, value, confidence, quote(value), sourceUrl.href, personKey);
+    add("person_vorname", name.first);
+    add("person_nachname", name.last);
+    add("person_titel", name.prefix);
+    if (!former(position)) add("person_position", position, "medium");
+    if (/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email)) add("person_email", email);
+    if (/^(?:\+|\(|\d)[\d\s().\/-]*\d$/.test(phone)
+        && phone.replace(/\D/g, "").length >= 6
+        && phone.replace(/\D/g, "").length <= 18) add("person_telefon", phone);
   }
-  const protectedFieldCount = records.filter((record) => record.field.startsWith("person_")).length;
-  return { records, companyMatched: true, protectedFieldCount };
+  return { records, companyMatched: true,
+    protectedFieldCount: records.filter((record) => record.field.startsWith("person_")).length };
 };"#;
 
 const ROCKETREACH_BROWSER_CAPTURE_TEMPLATE: &str = r#"const company = __COMPANY_JSON__;
 const country = __COUNTRY_JSON__;
 __RECORD_PARSER__
+// Leave time for the native capture to return its receipt within 60 seconds.
+const captureDeadline = Date.now() + 55000;
+const timeoutFor = (maximum) => {
+  const remaining = captureDeadline - Date.now();
+  if (remaining <= 0) throw new Error("RocketReach capture deadline exceeded");
+  return Math.min(maximum, remaining);
+};
 const hostAllowed = (raw) => {
   try {
-    const host = new URL(raw).hostname.toLowerCase();
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.username || url.password
+        || (url.port && url.port !== "443")) return false;
+    const host = url.hostname.toLowerCase();
     return host === "rocketreach.com" || host.endsWith(".rocketreach.com")
       || host === "rocketreach.co" || host.endsWith(".rocketreach.co");
   } catch { return false; }
@@ -2937,6 +2988,17 @@ const snapshotPage = async () => page.evaluate(() => {
   const clean = (value, max = 500) => String(value || "").replace(/\s+/g, " ").trim().slice(0, max);
   const contextLines = (node) => {
     const container = node.closest("article, li, tr, [role='row'], [data-testid*='result'], [class*='result'], [class*='card']") || node.parentElement;
+    // A shared result list is not an owned contact card. Repeated links to
+    // one provider identity are fine; distinct people make its text ambiguous.
+    const owners = new Set(Array.from(container?.querySelectorAll("a[href]") || [])
+      .map((link) => {
+        try {
+          const path = new URL(link.href).pathname.replace(/\/$/, "");
+          return path.match(/-email_([a-z0-9_-]+)$/i)?.[1]?.toLowerCase()
+            || path.match(/\/(?:people|person)\/([^/]+)$/i)?.[1]?.toLowerCase() || "";
+        } catch { return ""; }
+      }).filter(Boolean));
+    if (owners.size > 1) return [];
     return String(container?.innerText || "").split(/\n+/).map((line) => clean(line)).filter(Boolean).slice(0, 24);
   };
   const links = Array.from(document.querySelectorAll("a[href]"))
@@ -2966,9 +3028,14 @@ const snapshotPage = async () => page.evaluate(() => {
     const first = pick(value, ["firstName", "first_name", "first"]);
     const last = pick(value, ["lastName", "last_name", "last"]);
     const name = pick(value, ["fullName", "full_name", "displayName", "name"]);
-    const companyValue = value.company && typeof value.company === "object"
-      ? pick(value.company, ["name", "companyName", "company_name"])
-      : pick(value, ["companyName", "company_name", "currentCompany", "current_company"]);
+    const currentCompany = value.currentCompany ?? value.current_company;
+    const companyValue = currentCompany != null
+      ? (typeof currentCompany === "object"
+        ? pick(currentCompany, ["name", "companyName", "company_name"])
+        : pick(value, ["currentCompany", "current_company"]))
+      : (value.company && typeof value.company === "object"
+        ? pick(value.company, ["name", "companyName", "company_name"])
+        : pick(value, ["company", "companyName", "company_name"]));
     const sourceUrl = pick(value, ["profileUrl", "profile_url", "url", "canonicalUrl", "canonical_url"]);
     const email = pick(value, ["email", "workEmail", "work_email", "professionalEmail", "professional_email"]);
     const phone = pick(value, ["phone", "phoneNumber", "phone_number", "mobilePhone", "mobile_phone"]);
@@ -2991,9 +3058,9 @@ const snapshotPage = async () => page.evaluate(() => {
 });
 const waitForResults = async () => {
   await Promise.race([
-    page.waitForLoadState("networkidle", { timeout: 12000 }).catch(() => null),
+    page.waitForLoadState("networkidle", { timeout: timeoutFor(12000) }).catch(() => null),
     page.locator('a[href*="-profile_"], a[href*="/company/"], a[href*="-email_"]').first()
-      .waitFor({ state: "visible", timeout: 12000 }).catch(() => null),
+      .waitFor({ state: "visible", timeout: timeoutFor(12000) }).catch(() => null),
   ]).catch(() => null);
 };
 const snapshots = [];
@@ -3002,12 +3069,13 @@ const searchSelectors = [
   'input[placeholder*="company" i]', 'input[type="search"]',
 ];
 for (const selector of searchSelectors) {
+  timeoutFor(3000);
   const field = page.locator(selector).first();
   if ((await field.count()) < 1 || !(await field.isVisible().catch(() => false))
       || !(await field.isEditable().catch(() => false))) continue;
   try {
-    await field.fill(company, { timeout: 3000 });
-    await field.press("Enter", { timeout: 3000 });
+    await field.fill(company, { timeout: timeoutFor(3000) });
+    await field.press("Enter", { timeout: timeoutFor(3000) });
     await waitForResults();
     break;
   } catch {}
@@ -3016,18 +3084,19 @@ snapshots.push(await snapshotPage());
 let parsed = parseRocketReachRecords(company, snapshots);
 if (!parsed.companyMatched) {
   const queryUrl = `https://rocketreach.co/search?query=${encodeURIComponent(company)}`;
-  await ctoxBrowser.goto(queryUrl, { timeoutMs: 30000 });
+  await ctoxBrowser.goto(queryUrl, { timeoutMs: timeoutFor(30000) });
   await waitForResults();
   if (!hostAllowed(page.url())) return { status: "wrong_origin", source_url: page.url(), country, records: [] };
   snapshots.push(await snapshotPage());
   parsed = parseRocketReachRecords(company, snapshots);
 }
-const companyLink = snapshots.flatMap((snapshot) => snapshot.links || []).find((link) =>
+const companyLink = snapshots.flatMap((snapshot) => (snapshot.links || [])
+  .map((link) => ({ snapshot, link }))).find(({ snapshot, link }) =>
   hostAllowed(link.url) && /(?:\/company\/|\/companies\/|-profile_[a-z0-9])/i.test(new URL(link.url).pathname)
   && parseRocketReachRecords(company, [{ ...snapshot, links: [link] }]).companyMatched
-);
+  )?.link;
 if (companyLink && page.url() !== companyLink.url) {
-  await ctoxBrowser.goto(companyLink.url, { timeoutMs: 30000 });
+  await ctoxBrowser.goto(companyLink.url, { timeoutMs: timeoutFor(30000) });
   await waitForResults();
   if (!hostAllowed(page.url())) return { status: "wrong_origin", source_url: page.url(), country, records: [] };
   snapshots.push(await snapshotPage());
@@ -3037,7 +3106,7 @@ const personUrls = [...new Set(snapshots.flatMap((snapshot) => snapshot.links ||
   .filter((url) => hostAllowed(url) && /(?:\/person\/|\/people\/|-email_[a-z0-9])/i.test(new URL(url).pathname))
 )].slice(0, 5);
 for (const personUrl of personUrls) {
-  await ctoxBrowser.goto(personUrl, { timeoutMs: 30000 });
+  await ctoxBrowser.goto(personUrl, { timeoutMs: timeoutFor(30000) });
   await waitForResults();
   if (!hostAllowed(page.url())) continue;
   snapshots.push(await snapshotPage());
@@ -3812,17 +3881,54 @@ pub(crate) fn repersist_augmented_person_research(
             serde_json::Value::String("person-research workspace path is unavailable".to_string());
         return;
     };
-    match ctox_web_stack::persist_person_research_workspace(&workspace, request, payload) {
-        Ok(summary) => {
-            payload["workspace"] = summary;
-            if let Some(object) = payload.as_object_mut() {
-                object.remove("workspace_error");
-            }
-        }
+    let mut snapshot = payload.clone();
+    if let Some(object) = snapshot.as_object_mut() {
+        object.remove("workspace_error");
+    }
+    let persisted = (|| -> anyhow::Result<()> {
+        let summary =
+            ctox_web_stack::persist_person_research_workspace(&workspace, request, &snapshot)?;
+        snapshot["workspace"] = summary;
+        // Expose the existing source-run sidecar even when the library manifest
+        // omits it. Keep this native augmentation next to the command evidence;
+        // the historical src/tools/web-stack tree is not compiled.
+        let manifest_path = workspace.join("manifest.json");
+        let mut manifest: serde_json::Value = serde_json::from_slice(&fs::read(&manifest_path)?)?;
+        let files = manifest
+            .get_mut("files")
+            .and_then(serde_json::Value::as_object_mut)
+            .context("person-research manifest is missing its files object")?;
+        files.insert("scrape_runs".into(), serde_json::json!("scrape_runs.jsonl"));
+        write_person_research_evidence_file(&manifest_path, &manifest)?;
+        // Persist after attaching the actual workspace summary and clearing a
+        // recovered error. The returned successful payload must equal the final
+        // envelope, including Sellify/runtime/capture outcomes and summary.
+        write_person_research_evidence_file(&workspace.join("envelope.json"), &snapshot)?;
+        Ok(())
+    })();
+    match persisted {
+        Ok(()) => *payload = snapshot,
         Err(error) => {
             payload["workspace_error"] = serde_json::Value::String(error.to_string());
         }
     }
+}
+
+fn write_person_research_evidence_file(
+    path: &Path,
+    value: &serde_json::Value,
+) -> anyhow::Result<()> {
+    use std::io::Write;
+    let parent = path
+        .parent()
+        .context("research evidence needs a parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&serde_json::to_vec_pretty(value)?)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path)?;
+    #[cfg(unix)]
+    fs::File::open(parent)?.sync_all()?;
+    Ok(())
 }
 
 fn business_os_web_stack_workspace(root: &Path, args: &[String]) -> Option<PathBuf> {
@@ -4277,7 +4383,7 @@ fn business_os_usage() -> String {
 }
 
 fn business_os_usage_base() -> &'static str {
-    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os customer-apps audit\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb status [--json]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os turn status\n  ctox business-os turn set [--url turns:host:5349] [--secret <coturn use-auth-secret>]\n  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app refresh-catalog\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack source-capture --source-id <dnbhoovers.com|leadfeeder.com|xing.com> --company <name> [--country <DE|AT|CH>] [--session-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
+    "usage:\n  ctox business-os status\n  ctox business-os serve [--addr 127.0.0.1:8765]\n  ctox business-os customer-apps audit\n  ctox business-os mcp status\n  ctox business-os mcp tools\n  ctox business-os mcp policy\n  ctox business-os mcp policy keys\n  ctox business-os mcp policy set [--enabled true|false] [--allow-reads true|false] [--allow-writes true|false] [--allow-approvals true|false] [--allow-external-effects true|false] [--rate-limit-per-minute <n>] [--audit-retention-days <n>] [--allow-actor <id>]... [--allow-workspace <id>]... [--allow-module <id>]... [--allow-collection <name>]... [--deny-tool business_os.<tool>]... [--clear-deny-tools]\n  ctox business-os mcp call <tool-name> [--args <json>]\n  ctox business-os mcp audit [--limit <n>] [--format json|jsonl] [--output <path>] [--prune]\n  ctox business-os mcp serve [--addr 127.0.0.1:8788]\n  ctox business-os mcp connect --url wss://mcp.ctox.dev/connect/<instance-id> [--token <token>] [--once] [--max-reconnect-delay-ms <n>] [--heartbeat-interval-ms <n>] [--max-connection-age-ms <n>]\n  ctox business-os mcp gateway-status --url https://mcp.ctox.dev/status/<instance-id> [--token <token>]\n  ctox business-os peer status\n  ctox business-os peer rotate\n  ctox business-os peer start\n  ctox business-os desktop invite [--display-name <name>] [--ttl-hours <n> | --expires-at <rfc3339>] [--format json|link] [--output <path>]\n  ctox business-os rxdb init\n  ctox business-os rxdb status [--json]\n  ctox business-os rxdb repair-optional-drift --collection <name> [--dry-run] [--force]\n  ctox business-os turn status\n  ctox business-os turn set [--url turns:host:5349] [--secret <coturn use-auth-secret>]\n  ctox business-os app create --instruction <text> [--module-id <id>]\n  ctox business-os app modify <module-id> --instruction <text>\n  ctox business-os app validate <module-id> [--installed|--source] [--workspace <path>] [--json] [--skip-tests] [--skip-node-check]\n  ctox business-os app refresh-catalog\n  ctox business-os app finalize <module-id> --task-id <queue-task-id> [--installed|--source] [--reason <text>]\n  ctox business-os app bench run --suite core-five --model minimax-m3 --context 256k [--run-id <id>] [--actor <user-id>] [--no-clean]\n  ctox business-os repair queue-projections (--dry-run | --apply)\n  ctox business-os backup restore-drill [--module <module-id>]\n  ctox business-os backup prune-drills [--dry-run]\n  ctox business-os commands process <command-id>\n  ctox business-os commands dispatch (--input <path> | --json <json> | <json>)\n  ctox business-os web-stack person-research --company <name> --country <DE|AT|CH> --mode <new_record|update_firm|update_person|update_inventory_general|have_data> [--field <field-key>]... [--include-private <source-id>]... [--auto-auth-assist] [--task-id <id>] [--workspace <path>] [--no-workspace]\n  ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--task-id <id>]\n  ctox business-os web-stack source-capture --source-id <dnbhoovers.com|leadfeeder.com|xing.com> --company <name> [--country <DE|AT|CH>] [--session-id <id>] [--timeout-ms <n>] [--dir <path>]\n  ctox business-os web-stack auth-assist-status --session-id <id>\n  ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]\n  ctox business-os web-stack context-extract --session-id <id> [--source-id <id>] [--capture-script <id>] [--task-id <id>]\n  ctox business-os web-stack redaction-audit --canary <value> [--canary <value>]... [--path <path>]...\n  ctox business-os web-stack browser-doctor [--dir <path>]\n  ctox business-os files sync <path>\n  ctox business-os files sync-workspace <path>\n  ctox business-os modules list\n  ctox business-os modules enable <module>\n  ctox business-os modules disable <module> [--force-remove-skills]\n  ctox business-os skills list\n  ctox business-os skills enable <skill>\n  ctox business-os skills disable <skill> [--force-remove]"
 }
 
 fn exists_label(exists: bool) -> &'static str {
@@ -7608,6 +7714,118 @@ pub(super) fn now_ms() -> u64 {
 mod tests {
     use super::*;
 
+    fn research_evidence_request(workspace: PathBuf) -> ctox_web_stack::PersonResearchRequest {
+        ctox_web_stack::PersonResearchRequest {
+            company: "Example GmbH".into(),
+            country: ctox_web_stack::sources::Country::De,
+            mode: ctox_web_stack::sources::ResearchMode::UpdateFirm,
+            fields: Vec::new(),
+            include_private: Vec::new(),
+            person_priorities: Vec::new(),
+            known_person_records: Vec::new(),
+            workspace: Some(workspace),
+            persist_workspace: true,
+        }
+    }
+
+    #[test]
+    fn augmented_research_envelope_matches_returned_payload_and_manifest() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let workspace = temp.path().join("research");
+        let request = research_evidence_request(workspace.clone());
+        let mut payload = serde_json::json!({
+            "company": "Example GmbH", "country": "DE", "mode": "update_firm",
+            "fields": {"firma_name": {"value": "Example GmbH"}},
+            "plan": [{"source_id": "runtime-source"}],
+            "scrape_runs": [{"source_id": "runtime-source", "run_id": "fixture-run", "classification": "completed_empty"}],
+            "sellify_lookup_runs": [{"source_id": "sellify", "classification": "failed", "returned_record_count": null}],
+            "authenticated_source_capture_runs": [{"source_id": "fixture-private", "status": "failed"}],
+            "summary": "Final augmented summary",
+            "workspace_error": "previous attempt failed"
+        });
+        repersist_augmented_person_research(&request, &mut payload);
+        assert!(payload.get("workspace_error").is_none());
+        let saved: serde_json::Value =
+            serde_json::from_slice(&fs::read(workspace.join("envelope.json"))?)?;
+        assert_eq!(saved, payload);
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(workspace.join("manifest.json"))?)?;
+        assert_eq!(manifest["files"]["scrape_runs"], "scrape_runs.jsonl");
+        for key in ["plan", "fields"] {
+            let saved: serde_json::Value = serde_json::from_slice(&fs::read(
+                workspace.join(manifest["files"][key].as_str().unwrap()),
+            )?)?;
+            assert_eq!(saved, payload[key]);
+        }
+        let runs = fs::read_to_string(workspace.join("scrape_runs.jsonl"))?
+            .lines()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(serde_json::json!(runs), payload["scrape_runs"]);
+        Ok(())
+    }
+
+    #[test]
+    fn augmented_research_persistence_failure_is_not_reported_as_success() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let workspace = temp.path().join("not-a-directory");
+        fs::write(&workspace, b"keep existing file")?;
+        let request = research_evidence_request(workspace.clone());
+        let mut payload = serde_json::json!({"summary": "final", "sellify_lookup_runs": []});
+        repersist_augmented_person_research(&request, &mut payload);
+        assert!(payload["workspace_error"].is_string());
+        assert!(payload.get("workspace").is_none());
+        assert_eq!(fs::read(&workspace)?, b"keep existing file");
+        let mut disabled = request;
+        disabled.persist_workspace = false;
+        let before = payload.clone();
+        repersist_augmented_person_research(&disabled, &mut payload);
+        assert_eq!(payload, before);
+        Ok(())
+    }
+
+    #[test]
+    fn rxdb_init_accepts_global_root_argument_and_default_root() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        handle_business_os_rxdb(
+            root.path(),
+            &[
+                "init".to_string(),
+                "--root".to_string(),
+                root.path().display().to_string(),
+            ],
+        )?;
+        assert!(root.path().join("runtime").is_dir());
+        handle_business_os_rxdb(root.path(), &["init".to_string()])?;
+        Ok(())
+    }
+
+    #[test]
+    fn rxdb_init_rejects_invalid_options_before_creating_runtime() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().display().to_string();
+        for suffix in [
+            vec!["--root"],
+            vec!["--root", ""],
+            vec!["--root", "--json"],
+            vec!["--unknown"],
+            vec!["unexpected"],
+            vec!["--root", &path, "--root", &path],
+            vec!["--root", &path, "--json"],
+        ] {
+            let args = std::iter::once("init")
+                .chain(suffix)
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            let error = handle_business_os_rxdb(root.path(), &args)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("usage:"), "{args:?}: {error}");
+            assert!(!root.path().join("runtime").exists(), "{args:?}");
+        }
+        Ok(())
+    }
+
     #[test]
     fn business_os_usage_documents_atomic_authenticated_automation() {
         let usage = business_os_usage();
@@ -8667,7 +8885,11 @@ mod tests {
         for expected in [
             "rocketreach.com",
             "rocketreach.co",
-            "RocketReach company identity verified",
+            // Check executable company/person guards, not an obsolete note.
+            "if (!companyEvidence) return { records: [], companyMatched: false, protectedFieldCount: 0 };",
+            "companyProfileUrl(candidate.url)",
+            "relevantCompanyText(candidate.name) && relevantCompanyText(candidate.text)",
+            "if (!companyContext || !name) continue;",
             "person_vorname",
             "person_nachname",
             "person_position",
@@ -8683,7 +8905,12 @@ mod tests {
         }
         assert!(!source.contains("ROCKETREACH_BROWSER_LOGIN"));
         assert!(!source.contains("credentialValue"));
-        assert!(!source.contains("password"));
+        // URL validators reject embedded credentials; their password
+        // property is a veto, not a secret read or login form instruction.
+        let credential_url_veto = "url.protocol !== \"https:\" || url.username || url.password";
+        assert_eq!(source.matches(credential_url_veto).count(), 2);
+        let source_without_url_vetoes = source.replace(credential_url_veto, "");
+        assert!(!source_without_url_vetoes.contains("password"));
         assert!(!source.contains("console."));
         Ok(())
     }
@@ -8757,6 +8984,29 @@ mod tests {
             .and_then(serde_json::Value::as_str)
             .is_some_and(|url| url.starts_with("https://rocketreach.co/")
                 || url.starts_with("https://rocketreach.com/"))));
+
+        for record in records {
+            let quote = record
+                .get("source_quote")
+                .and_then(serde_json::Value::as_str)
+                .expect("RocketReach records need an observed value quote");
+            let value = record
+                .get("value")
+                .and_then(serde_json::Value::as_str)
+                .expect("RocketReach field value");
+            assert!(quote.contains(value), "quote does not name {value}");
+            if record
+                .get("field")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|field| field.starts_with("person_"))
+            {
+                assert_eq!(
+                    record.get("person_key").and_then(serde_json::Value::as_str),
+                    Some("rocketreach-person-bexample"),
+                );
+                assert!(quote.contains("Example Manufacturing AG"));
+            }
+        }
 
         let wrong_company = parse_rocketreach_records_for_test(
             "Example Manufacturing AG",
