@@ -266,7 +266,11 @@ pub fn lookup_static_registry_model_info(
     if model_id.is_empty() {
         return None;
     }
-    let devin_static = super::devin_builtin::static_devin_models();
+    let devin_static = if catalog.devin.is_empty() {
+        super::devin_builtin::static_devin_models()
+    } else {
+        Vec::new()
+    };
     [
         &catalog.claude,
         &catalog.gemini,

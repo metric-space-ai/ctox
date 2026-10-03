@@ -106,14 +106,24 @@
   to false. Three regressions cover presence across execution paths and exact prefixes.
   Twelve hard-coded Devin fallback records and the always-present SWE-1.6 Slow
   override now retain upstream metadata, namespace provenance and catalog precedence.
-  Two regressions cover these records; the separate56-record embedded Devin catalog,
-  variant aggregation, remote update/store lifecycle and runtime wiring remain open.
+  The separate56-record Devin catalog is also imported byte-identically
+  (SHA256 1aee55bcd7af6be17d18c04046d25aba9c63a635af1088bfa4b7dc04d4be3360).
+  An instance-owned store retains raw bytes, deep snapshots and a separate revision;
+  validation namespaces IDs, rejects null/duplicate records, aggregates thinking
+  variants and preserves base metadata/token maxima/modalities. Registry getters
+  prioritize this active catalog, then the main catalog, then hard-coded records.
+  The existing host-owned updater loop refreshes both catalogs at startup/every3h,
+  bounds full-body reads and cancels in-flight fetches without another task/timer.
+  Rejected updates retain the last valid catalog; only changes notify Devin consumers.
+  Seven new regressions cover validation, aggregation, snapshot/lookup isolation,
+  update rejection/notifications, owned-loop cancellation and delayed HTTP bodies.
+  Actual native/default-transport/Go checks and host/runtime acceptance remain open.
   Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
   account-kind collisions, legacy Home execution, public JSON boundaries, native
-  capability refresh and built-in metadata. There are101 prepared candidate test
+  capability refresh and built-in metadata. There are108 prepared candidate test
   functions in total; none of the current candidate Cargo/Go checks has executed.
   Narrow formatting and whitespace checks passed. Other executor consumers,
-  separate Devin catalog/runtime integration,
+  host/runtime acceptance of the separate Devin catalog,
   remaining v8 semantic deltas and live thinking update-intent propagation remain open;
   this is not runtime or promotion acceptance.
   Source/target summary extraction

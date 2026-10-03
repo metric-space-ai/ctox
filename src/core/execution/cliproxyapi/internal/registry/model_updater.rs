@@ -11,13 +11,18 @@ use std::{
 
 use super::{
     embedded_models_catalog, lookup_static_registry_model_info, model_override_headers,
-    models_for_channel, parse_models_catalog, RegistryModelInfo, StaticModelCatalogError,
-    StaticModelsCatalog,
+    models_for_channel, parse_models_catalog, DevinModelsError, DevinModelsStore,
+    RegistryModelInfo, StaticModelCatalogError, StaticModelsCatalog,
 };
 
 pub const MODELS_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 pub const MODELS_REFRESH_INTERVAL: Duration = Duration::from_secs(3 * 60 * 60);
 pub const MAX_MODELS_CATALOG_SIZE: usize = 16 << 20;
+pub const MAX_DEVIN_MODELS_CATALOG_SIZE: usize = 8 << 20;
+pub const DEFAULT_DEVIN_MODELS_URLS: [&str; 2] = [
+    "https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/devin_models.json",
+    "https://models.router-for.me/devin_models.json",
+];
 pub const DEFAULT_MODELS_URLS: [&str; 2] = [
     "https://raw.githubusercontent.com/router-for-me/models/refs/heads/main/models.json",
     "https://models.router-for.me/models.json",
@@ -43,6 +48,7 @@ struct CatalogState {
 /// Instance-owned replacement for upstream's `modelsCatalogStore` global.
 pub struct ModelCatalogStore {
     state: RwLock<CatalogState>,
+    devin: DevinModelsStore,
 }
 
 impl ModelCatalogStore {
@@ -56,6 +62,7 @@ impl ModelCatalogStore {
                 catalog: Arc::new(catalog),
                 revision: 1,
             }),
+            devin: DevinModelsStore::from_embedded().unwrap_or_default(),
         }
     }
 
@@ -70,22 +77,42 @@ impl ModelCatalogStore {
         }
     }
 
+    pub fn devin_store(&self) -> &DevinModelsStore {
+        &self.devin
+    }
+
+    pub fn load_devin_bytes(
+        &self,
+        data: &[u8],
+        source: &str,
+    ) -> Result<CatalogLoad, DevinModelsError> {
+        self.devin.load(data, source)
+    }
+
     pub fn models_for_channel(&self, channel: &str) -> Option<Vec<RegistryModelInfo>> {
         let snapshot = self.snapshot();
+        if channel.trim().eq_ignore_ascii_case("devin") {
+            return Some(self.devin.models(&snapshot.catalog));
+        }
         models_for_channel(&snapshot.catalog, channel)
     }
 
-    pub fn lookup_model_info(&self, model_id: &str) -> Option<RegistryModelInfo> {
+    fn active_catalog(&self) -> StaticModelsCatalog {
         let snapshot = self.snapshot();
-        lookup_static_registry_model_info(&snapshot.catalog, model_id)
+        let mut catalog = (*snapshot.catalog).clone();
+        catalog.devin = self.devin.models(&catalog);
+        catalog
+    }
+
+    pub fn lookup_model_info(&self, model_id: &str) -> Option<RegistryModelInfo> {
+        lookup_static_registry_model_info(&self.active_catalog(), model_id)
     }
 
     pub fn model_override_headers(
         &self,
         model_id: &str,
     ) -> Option<std::collections::BTreeMap<String, String>> {
-        let snapshot = self.snapshot();
-        model_override_headers(&snapshot.catalog, model_id)
+        model_override_headers(&self.active_catalog(), model_id)
     }
 
     pub fn load(&self, catalog: StaticModelsCatalog) -> CatalogLoad {
@@ -189,6 +216,7 @@ pub struct ModelsUpdater {
     store: Arc<ModelCatalogStore>,
     source: Arc<dyn ModelsSource>,
     sources: Vec<String>,
+    devin_sources: Vec<String>,
     refresh_sink: Arc<ModelRefreshSink>,
     interval: Duration,
 }
@@ -204,6 +232,10 @@ impl ModelsUpdater {
             store,
             source,
             sources,
+            devin_sources: DEFAULT_DEVIN_MODELS_URLS
+                .iter()
+                .map(|source| (*source).into())
+                .collect(),
             refresh_sink,
             interval: MODELS_REFRESH_INTERVAL,
         }
@@ -211,6 +243,11 @@ impl ModelsUpdater {
 
     pub fn with_interval(mut self, interval: Duration) -> Self {
         self.interval = interval;
+        self
+    }
+
+    pub fn with_devin_sources(mut self, sources: Vec<String>) -> Self {
+        self.devin_sources = sources;
         self
     }
 
@@ -256,25 +293,93 @@ impl ModelsUpdater {
         Err(ModelsRefreshError { failures })
     }
 
-    /// Runs the startup refresh and then the periodic loop until cancellation.
-    /// CTOX owns the task and cancellation sender; repeated process-global
-    /// `sync.Once` startup is deliberately not recreated.
+    /// ref: internal/registry/devin_models_updater.go:53-107 @ d7914afd.
+    /// The first successfully fetched body owns validation; a rejected payload
+    /// keeps the current catalog, without silently switching catalog authority.
+    pub async fn refresh_devin_once(&self) -> Result<ModelsRefresh, ModelsRefreshError> {
+        let mut failures = Vec::with_capacity(self.devin_sources.len());
+        for source in &self.devin_sources {
+            let data = match tokio::time::timeout(
+                MODELS_FETCH_TIMEOUT,
+                self.source.fetch(source, MAX_DEVIN_MODELS_CATALOG_SIZE),
+            )
+            .await
+            {
+                Ok(Ok(data)) if data.len() <= MAX_DEVIN_MODELS_CATALOG_SIZE => data,
+                Ok(Ok(_)) => {
+                    failures.push(ModelFetchFailure {
+                        source: source.clone(),
+                        reason: format!("catalog exceeded {MAX_DEVIN_MODELS_CATALOG_SIZE} bytes"),
+                    });
+                    continue;
+                }
+                Ok(Err(reason)) => {
+                    failures.push(ModelFetchFailure {
+                        source: source.clone(),
+                        reason,
+                    });
+                    continue;
+                }
+                Err(_) => {
+                    failures.push(ModelFetchFailure {
+                        source: source.clone(),
+                        reason: "catalog fetch timed out".into(),
+                    });
+                    continue;
+                }
+            };
+            let load = self
+                .store
+                .load_devin_bytes(&data, source)
+                .map_err(|error| {
+                    failures.push(ModelFetchFailure {
+                        source: source.clone(),
+                        reason: error.to_string(),
+                    });
+                    ModelsRefreshError {
+                        failures: std::mem::take(&mut failures),
+                    }
+                })?;
+            self.refresh_sink.notify(&load.changed_providers);
+            return Ok(ModelsRefresh {
+                source: source.clone(),
+                changed: load.changed,
+                changed_providers: load.changed_providers,
+                revision: load.revision,
+            });
+        }
+        Err(ModelsRefreshError { failures })
+    }
+
+    async fn refresh_catalogs(&self) {
+        let _ = self.refresh_once().await;
+        let _ = self.refresh_devin_once().await;
+    }
+
+    /// The existing host-owned task refreshes both catalogs at startup and
+    /// every three hours. Cancellation drops in-flight header/body reads.
+    /// No process-global goroutine, retry worker or second timer is created.
     pub async fn run(&self, mut cancelled: tokio::sync::watch::Receiver<bool>) {
         if *cancelled.borrow() {
             return;
         }
-        let _ = self.refresh_once().await;
+        tokio::select! {
+            biased;
+            _ = cancelled.wait_for(|value| *value) => return,
+            _ = self.refresh_catalogs() => {}
+        }
         let mut ticker = tokio::time::interval(self.interval);
         ticker.tick().await;
         loop {
             tokio::select! {
-                changed = cancelled.changed() => {
-                    if changed.is_err() || *cancelled.borrow() {
-                        return;
-                    }
-                }
+                biased;
+                _ = cancelled.wait_for(|value| *value) => return,
                 _ = ticker.tick() => {
-                    let _ = self.refresh_once().await;
+                    tokio::select! {
+                        biased;
+                        _ = cancelled.wait_for(|value| *value) => return,
+                        _ = self.refresh_catalogs() => {}
+                    }
                 }
             }
         }
