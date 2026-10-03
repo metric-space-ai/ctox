@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
-import { crewAppTasksFromTasks, crewLiveKeys } from './business-chat.js';
+import { crewAppTasksFromTasks, crewLiveKeys, __businessChatTestInternals } from './business-chat.js';
 
 const task = (id, fields = {}) => ({
   id, title: 'Task ' + id, status: 'running', module: 'ctox', source_module: 'documents',
@@ -65,4 +65,87 @@ test('the actual presence query reads active statuses before applying its bounde
   } } } });
   assert.deepEqual([...query.selector.status.$in], ['running', 'leased', 'review', 'drafting']);
   assert.equal(query.limit, 200);
+});
+
+test('a stopped native harness retires workload even while the task query is cancelled', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const callbacks = new Map();
+  let cancelled = false;
+  let harness = { id: 'harness', service_running: true, active_task_ids: ['a'] };
+  const state = { crewMembers: [{ id: 'luma', name: 'Luma' }] };
+  globalThis.window = { setTimeout: callback => callback, clearTimeout() {} };
+  globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+  let dispose;
+  try {
+    dispose = __businessChatTestInternals.wireCrewAppPresence({
+      state,
+      db: { raw: {
+        ctox_queue_tasks: { find: () => ({ exec: async () => {
+          if (cancelled) throw Object.assign(new Error('retired query'), { code: 'QUERY_CANCELLED' });
+          return [task('a', { crew_member_id: 'luma' })];
+        } }) },
+        ctox_harness_status: { find: () => ({ exec: async () => [harness] }) },
+      } },
+      syncFacade: { subscribeCollectionReadiness: (name, callback) => {
+        callbacks.set(name, callback); return () => callbacks.delete(name);
+      } },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(state.crewWorkload.get('luma'), 1);
+    cancelled = true;
+    harness = { ...harness, service_running: false };
+    await callbacks.get('ctox_queue_tasks')();
+    assert.equal(state.crewWorkload.size, 0);
+  } finally {
+    dispose?.();
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
+test('presence reloads keep one storage read and coalesce repeated readiness notifications', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const callbacks = new Map();
+  const pending = [];
+  let reads = 0;
+  let active = 0;
+  let maximum = 0;
+  const state = { crewMembers: [] };
+  globalThis.window = { setTimeout: callback => callback, clearTimeout() {} };
+  globalThis.document = { querySelector: () => null, querySelectorAll: () => [] };
+  let dispose;
+  try {
+    dispose = __businessChatTestInternals.wireCrewAppPresence({
+      state,
+      db: { raw: {
+        ctox_queue_tasks: { find: () => ({ exec: () => {
+          reads++; active++; maximum = Math.max(maximum, active);
+          return new Promise(resolve => pending.push(() => { active--; resolve([]); }));
+        } }) },
+        ctox_harness_status: { find: () => ({ exec: async () => [
+          { id: 'harness', service_running: true, active_task_ids: [] },
+        ] }) },
+      } },
+      syncFacade: { subscribeCollectionReadiness: (name, callback) => {
+        callbacks.set(name, callback); return () => callbacks.delete(name);
+      } },
+    });
+    const notifications = Array.from({ length: 12 }, () => callbacks.get('ctox_queue_tasks')());
+    assert.equal(reads, 1);
+    assert.equal(active, 1);
+    pending.shift()();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reads, 2, 'the storm produces one coalesced follow-up');
+    assert.equal(active, 1);
+    pending.shift()();
+    await Promise.all(notifications);
+    assert.equal(maximum, 1);
+    assert.equal(reads, 2);
+  } finally {
+    dispose?.();
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
 });

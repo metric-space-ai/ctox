@@ -74,8 +74,9 @@ origin, deduplicate task identities, and expose only bounded title/status and
 the existing task navigation keys. Opening an app does not count as execution.
 The shared presence query selects active statuses before its 200-row window;
 the count reflects the confirmed projected tasks in that bounded snapshot.
-An unavailable harness snapshot supplies no confirmed count. Retired-query
-handling retains its existing presence snapshot and retries on readiness.
+An unavailable harness snapshot supplies no confirmed count. Presence reloads
+keep one read active and coalesce subsequent notifications. A cancelled queue
+read retains its rows, while fresh harness truth still retires stopped tasks.
 The task chooser rechecks its selected identity against the latest snapshot
 before navigation and is removed when the chat/presence owner is disposed.
 This browser consumption does not replace Crew's native projection authority

@@ -402,14 +402,26 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     expressionTimer = Number.isFinite(ttl) ? window.setTimeout(() => { expressionTimer = null; apply(); }, ttl + 50) : null;
     wireLate();
   };
+  let reloadInFlight = null;
+  let reloadRequested = false;
   const reload = () => {
     if (disposed) return Promise.resolve();
-    return Promise.all([loadCrewAppTasks(db), loadCrewHarnessStatus(db)]).then(([next, harness]) => {
-      if (disposed || next === null) return;
-      tasks = next;
-      liveKeys = crewLiveKeys(harness);
-      apply();
-    }).catch(() => {});
+    if (reloadInFlight) {
+      reloadRequested = true;
+      return reloadInFlight;
+    }
+    reloadInFlight = (async () => {
+      do {
+        reloadRequested = false;
+        const [next, harness] = await Promise.all([loadCrewAppTasks(db), loadCrewHarnessStatus(db)]);
+        if (disposed) return;
+        if (next !== null) tasks = next;
+        // Worker truth still retires counts when the queue query was cancelled.
+        liveKeys = crewLiveKeys(harness);
+        apply();
+      } while (reloadRequested && !disposed);
+    })().catch(() => {}).finally(() => { reloadInFlight = null; });
+    return reloadInFlight;
   };
   const scheduleReload = () => {
     if (disposed || reloadTimer) return;
@@ -463,6 +475,7 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     if (expressionTimer) window.clearTimeout(expressionTimer);
     desktopObserver?.disconnect?.();
     closeCrewAppTaskDialog();
+    applyCrewAppPresence(new Map(), new Map());
   };
 }
 
