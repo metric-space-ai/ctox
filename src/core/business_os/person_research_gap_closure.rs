@@ -270,7 +270,7 @@ struct FieldStatus {
 }
 
 /// Native provenance for one accepted writeback. A chat assignment without a
-/// durable gap task has an unknown attempt, not an invented zero counter.
+/// durable queue task has an unknown attempt, not an invented zero counter.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct FieldWritebackRevision {
@@ -1773,10 +1773,17 @@ pub(super) fn handle_research_writeback(
         }
         None => format!("native-writeback:{}", uuid::Uuid::new_v4()),
     };
+    let native_attempt = match &gap_task {
+        Some((task, _)) => Some(task.attempt),
+        None => {
+            channels::load_queue_task_for_business_os_command(root, &request.research_command_id)?
+                .map(|task| task.attempt)
+        }
+    };
     let revision = FieldWritebackRevision {
         writeback_id,
         command_id: request.research_command_id.clone(),
-        attempt: gap_task.as_ref().map(|(task, _)| task.attempt),
+        attempt: native_attempt,
         written_at_ms: now,
     };
     stamp_writeback_field_revisions(&mut request, &revision)?;

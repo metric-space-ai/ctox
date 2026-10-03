@@ -5,8 +5,9 @@
 Research writebacks stamp each delivered company status and accepted person-bound
 status with `revision: {writeback_id, command_id, attempt, written_at_ms}`.
 `writeback_id` is the native writeback receipt ID, `command_id` the correlated
-research command, and `attempt` the durable gap-task attempt. A chat assignment
-without such a task records `null`, rather than fabricating an attempt number.
+research command, and `attempt` the durable gap/research queue-task attempt.
+A chat assignment without such a task records `null`, rather than fabricating
+an attempt number.
 Trusted local calls without an envelope ID receive a native-generated ID which
 is returned with the writeback and persisted in the field revision.
 
