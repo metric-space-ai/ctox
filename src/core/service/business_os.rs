@@ -2615,9 +2615,9 @@ function parseDnbWzEvidence(company, snapshot, expectedUrl) {
   const text = typeof snapshot.text === "string" ? snapshot.text : "";
   // WZ 2008 (DE) and its five-digit subclass must be explicit. Never infer
   // that missing fifth digit from NACE, SIC, NOGA or OENACE.
-  const pattern = /\bWZ\s*2008\s*(?:\(\s*DE\s*\))?\s*(?:[|:]\s*)?(\d{5}|\d{2}\.\d{2}\.\d)\b[^\r\n|]*/gi;
+  const pattern = /\bWZ\s*2008\s*(?:\(\s*DE\s*\))?\s*(?:[|:]\s*)?(\d{5}|\d{2}\.\d{2}\.\d)\b(?![.\d])[^\r\n|]*/gi;
   const matches = Array.from(text.matchAll(pattern));
-  if (!matches.length || new Set(matches.map((match) => match[1])).size !== 1) return null;
+  if (!matches.length || new Set(matches.map((match) => match[1].replace(/\./g, ""))).size !== 1) return null;
   const quote = matches[0][0].trim();
   return {
     field: "wz_code", value: matches[0][1], confidence: "medium",

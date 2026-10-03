@@ -33,6 +33,19 @@ check('conflicting explicit WZ entries are rejected; repeated same evidence is p
   assert.equal(parse({ text: fixture.text + '\nWZ 2008 | 20150 - Other activity' }), null);
   assert.equal(parse({ text: fixture.text + '\nWZ 2008 | 20140 - Same activity' }).value, '20140');
 });
+check('equivalent dotted and plain WZ evidence preserves the first literal quote', () => {
+  const forward = parse({ text: fixture.text + '\nWZ 2008 (DE) | 20.14.0 - Same activity' });
+  assert.equal(forward.value, '20140');
+  assert.equal(forward.source_quote, 'WZ 2008 (DE) | 20140 - Manufacture of other organic basic chemicals');
+  const reverseText = 'WZ 2008 (DE) | 20.14.0 - Same activity\nWZ 2008 (DE) | 20140 - Same activity';
+  const reverse = parse({ text: reverseText });
+  assert.equal(reverse.value, '20.14.0');
+  assert.equal(reverse.source_quote, 'WZ 2008 (DE) | 20.14.0 - Same activity');
+});
+check('malformed or longer dotted classifications never supply a prefix', () => {
+  for (const code of ['20140.1', '20.14.0.1', '20..140'])
+    assert.equal(parse({ text: 'WZ 2008 (DE) | ' + code }), null);
+});
 check('line-separated and dotted subclasses retain the literal observed value', () => {
   for (const code of ['20140', '20.14.0']) {
     const text = 'WZ 2008 (DE)\n' + code + ' - Organic chemicals';

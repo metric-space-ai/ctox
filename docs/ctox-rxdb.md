@@ -184,9 +184,10 @@ never supplies a missing WZ digit. These browser-capture source gates do not
 certify an installed capture or the independently registered scrape script.
 
 The separate Direct+ JSON parser is compiled from Workjet, selected by the
-Cargo Git revision. The current de83eb26 dependency still treats NACE/SIC as
-WZ; its source correction and executing regressions belong in that active
-crate, followed by a reviewed CTOX dependency update. Editing CTOX's inactive
+Cargo Git revision. Its WZ correction and executing regressions belong in
+native/web-stack, followed by a reviewed CTOX dependency and lockfile update.
+The resolved package must execute the explicit-WZ, foreign-scheme, incomplete,
+conflicting and equivalent-notation cases. Editing CTOX's inactive
 src/tools/web-stack copy does not change the compiled parser.
 
 ### Outbound research source receipts
