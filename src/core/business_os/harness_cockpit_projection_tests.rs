@@ -934,7 +934,7 @@ fn projection_delivery_recovers_when_rxdb_collection_appears_after_writer_open()
 
 #[test]
 fn persisted_worker_snapshot_does_not_resurrect_active_app_work() -> Result<()> {
-    let (root, conn) = setup()?;
+    let (root, conn, _) = current_queue_worker_fixture()?;
     let mut writer = BusinessProjectionWriter::open(root.path())?;
     project_status(
         root.path(),
