@@ -14,6 +14,8 @@ import subprocess
 import uuid
 
 REPOS = ("metric-space-ai/ctox", "metric-space-ai/workjet", "mkh-welsch/ctox-dev")
+PROJECTS = dict(zip(REPOS, ("CTOX", "Workjet", "ctox-dev")))
+
 STOP = {174, 177, 181, 188, 189}
 WEIGHTS = dict(correctness=.30, assignment_fulfillment=.25, evidence_quality=.20,
                closure_quality=.15, efficiency=.10)
@@ -82,7 +84,7 @@ def collect(base, repositories=REPOS):
             for pr in page["nodes"]:
                 if not terminal(pr):
                     raise ValueError("Nonterminal PR returned")
-                pr.update(repository=repo, project="CTOX", snapshot_at=now())
+                pr.update(repository=repo, project=PROJECTS[repo], snapshot_at=now())
                 gathered.append(pr)
                 n += 1
             if not page["pageInfo"]["hasNextPage"]:
@@ -266,6 +268,8 @@ def leaderboard_data(records):
 def build(base):
     snapshot = load(base / "terminal-evidence/current.json")
     prs = snapshot["prs"]
+    for pr in prs:
+        pr["project"] = PROJECTS.get(pr["repository"], "External registry")
     mapping = {p["url"]: p for p in prs}
     records = assessments(base)
     legacy = []
@@ -285,6 +289,14 @@ def build(base):
             row["model"] = exact["model"]
             row["provenance"] = exact
     database = Path.home() / ".codex/state_5.sqlite"
+    workers = {j["thread_id"]: j for j in registry}
+    for row in records + legacy:
+        row["project"] = mapping[row["pr_url"]]["project"]
+        row["parent_id"] = (row["actor_id"] if row["role"] == "parent" else
+                            workers.get(row["actor_id"], {}).get("parent_thread") or
+                            recovered.get(row["actor_id"], {}).get("native_parent_id"))
+        row["worker_id"] = row["actor_id"] if row["role"] == "worker" else None
+        row["reviewed_commit"] = row.get("pr_head") or mapping[row["pr_url"]]["headRefOid"]
     if database.exists():
         connection = sqlite3.connect("file:" + str(database) + "?mode=ro", uri=True)
         for row in records + legacy:
@@ -292,7 +304,7 @@ def build(base):
             row["harness"] = owner[0] if owner and owner[0] else "Codex Desktop" if owner and owner[1] == "vscode" else None
         connection.close()
     urls = {r["pr_url"] for r in records if any((r.get(s) or {}).get("weighted_total") is not None for s in ("first", "corrected"))}
-    summary = dict(terminal_prs=len(prs), core_terminal=sum(p["project"] == "CTOX" for p in prs),
+    summary = dict(terminal_prs=len(prs), core_terminal=sum(p["repository"] in REPOS for p in prs),
                    merged=sum(p["state"] == "MERGED" for p in prs), closed=sum(p["state"] == "CLOSED" for p in prs),
                    unified_assessed_prs=len(urls), legacy_records=len(legacy), registry_jobs=len(registry),
                    registry_gpt61=sum(j.get("model") == "gpt-6.1-sol" for j in registry),
@@ -326,7 +338,7 @@ def bootstrap(base):
     for name, repo in zip(("ctox", "workjet", "ctox-dev"), REPOS):
         for p in load(base / (name + "-terminal-prs.json")):
             if terminal(p):
-                p.update(repository=repo, project="CTOX", snapshot_at=now())
+                p.update(repository=repo, project=PROJECTS[repo], snapshot_at=now())
                 prs.append(p)
     save(base / "terminal-evidence/current.json", dict(version=1, collected_at=now(), repositories=list(REPOS), prs=prs))
     return build(base)

@@ -35,7 +35,7 @@ const all=[...D.assessments.map(a=>({...a,rubric:a.schema})),...D.legacy];
 const value=(a,stage)=>a.rubric==='unified-actor-v1'?a[stage]?.weighted_total??null:a[stage]??null;
 const fill=(id,v,label)=>{$(id).innerHTML='<option value="">'+label+'</option>'+[...new Set(v)].sort().map(x=>'<option value="'+E(x)+'">'+E(x)+'</option>').join('')};
 fill('project',D.prs.map(p=>p.project),'Alle Projekte');fill('repo',D.prs.map(p=>p.repository),'Alle Repositories');fill('model',all.map(a=>a.model||'unknown'),'Alle Modelle');
-$('project').value='CTOX';$('stamp').textContent='Abgeschlossene PRs · Stand '+day(D.snapshot_at)+' · offline lesbar';
+$('stamp').textContent='Abgeschlossene PRs · Stand '+day(D.snapshot_at)+' · offline lesbar';
 $('registry').textContent='Proxy-Registry: '+D.summary.registry_jobs+' Aufträge, davon '+D.summary.registry_gpt61+' mit GPT-6.1 Sol. Diese Zahl beschreibt die Registry, nicht alle tatsächlichen GPT-6.1-Lieferungen.';
 let page=0,visible=[],actors=[];
 function current(p,role){
@@ -61,7 +61,9 @@ function refresh(reset=true){
  const n=visible.length,assessed=visible.filter(isScored).length,cy=known(visible.map(p=>p.cycle_hours)),accepted=visible.filter(p=>D.assessments.some(a=>a.pr_url===p.url&&a.lifecycle?.acceptance?.state==='passed')).length;
  $('summary').innerHTML=[[n,'abgeschlossene PRs'],[assessed+'/'+n,'mit neuer Gesamtbewertung'],[visible.filter(p=>p.state==='MERGED').length,'gemergt'],[accepted,'Abnahme belegt'],[cy.length?median(cy).toFixed(1)+' h':'—','mediane Durchlaufzeit · n='+cy.length]].map(([v,l])=>'<div><b>'+v+'</b><span>'+l+'</span></div>').join('');
  for(const role of ['parent','worker']){
- const rr=actors.filter(a=>a.role===role&&a.rubric===$('rubric').value),group=new Map();
+ const seen=new Set(),rr=actors.filter(a=>a.role===role&&a.rubric===$('rubric').value).filter(a=>{
+ const key=JSON.stringify([a.pr_url,a.role,a.actor_id,a.rubric,a.package||'delivery']);if(seen.has(key))return false;seen.add(key);return true;
+ }),group=new Map();
  for(const a of rr){const model=a.model||'unknown';if(!group.has(model))group.set(model,[]);group.get(model).push(a)}
  const rows=[...group].map(([model,aa])=>{const first=model==='unknown'?[]:known(aa.map(a=>value(a,'first'))),final=model==='unknown'?[]:known(aa.map(a=>value(a,'corrected'))),re=aa.filter(a=>a.rework&&a.rework!=='unknown');return {model,aa,first,final,re,mean:avg(final)}});
  rows.sort((a,b)=>(b.mean??-1)-(a.mean??-1));
@@ -77,7 +79,10 @@ function actorCell(a){
 }
 function scoreCell(a){
  if(!a.length)return '<span class="hint">nicht bewertet</span>';
- return a.map(x=>'<div><span class="number">'+F(value(x,'first'))+' → '+F(value(x,'corrected'))+'</span><p class="hint">'+(x.rubric==='unified-actor-v1'?'':'Alt · ')+E(x.rubric==='unified-actor-v1'?'einheitlich':x.rubric==='legacy-parent-phase-v1'?'Phasenbelege':x.rubric==='legacy-retrospective-v1'?'Rückblick':'Liefernote')+'</p></div>').join('');
+ return a.map(x=>{
+ if(x.rubric==='legacy-parent-phase-v1')return Object.entries(x.phases||{}).map(([k,v])=>'<div><span class="number">'+F(v.score)+'</span><p class="hint">Alt · '+E({handover:'Übergabe',review:'Review',lifecycle:'Abschluss'}[k]||k)+'</p></div>').join('');
+ return '<div><span class="number">'+F(value(x,'first'))+' → '+F(value(x,'corrected'))+'</span><p class="hint">'+(x.rubric==='unified-actor-v1'?'':'Alt · ')+E(x.rubric==='unified-actor-v1'?'einheitlich':x.rubric==='legacy-retrospective-v1'?'Rückblick':'Liefernote')+'</p></div>';
+ }).join('');
 }
 function draw(){
  const size=Number($('size').value),pages=Math.max(1,Math.ceil(visible.length/size));page=Math.min(page,pages-1);
@@ -100,6 +105,7 @@ function detail(p){
  html+='<h3>'+(a.role==='parent'?'Parent':'Worker')+' · '+E(a.model||'Modell nicht belegt')+' · '+E(a.harness||'Harness nicht belegt')+'</h3><p><code>'+E(a.actor_id)+'</code> · '+E(a.rubric)+'</p><p>'+E(a.scope||a.note||'Auftragsumfang nicht rekonstruiert')+'</p>';
  if(a.rubric==='unified-actor-v1')html+='<div class="detailgrid"><div>'+stage('Erste prüffertige Lieferung',a.first)+'</div><div>'+stage('Ergebnis nach Korrekturen',a.corrected)+'</div></div>';
  else html+='<p>Historische Erstnote: '+F(a.first)+' · Endnote: '+F(a.corrected)+'. Keine erfundenen Einzelnoten; nicht Teil des einheitlichen Leaderboards.</p><p>'+E(a.note||'')+'</p>';
+ if(a.phases)html+='<details><summary>Historische Parent-Phasennoten und Belege</summary><pre>'+E(JSON.stringify(a.phases,null,2))+'</pre></details>';
  html+='<p>Nacharbeit: '+E(a.rework||'unknown')+' · Ursache: '+E(a.cause||'unknown')+'</p><p>'+E(a.rework_note||'')+'</p>';
  const lc=a.lifecycle||{};
  html+='<div class="lifecycle">'+['checks','release','deployment','acceptance'].map(k=>'<span>'+({checks:'Prüfung',release:'Release',deployment:'Deployment',acceptance:'Abnahme'}[k])+': <b>'+E(lc[k]?.state||'nicht belegt')+'</b></span>').join('')+'</div>';
