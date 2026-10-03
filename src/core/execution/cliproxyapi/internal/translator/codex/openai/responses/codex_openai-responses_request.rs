@@ -30,10 +30,19 @@ pub fn convert_openai_responses_request_to_codex(
     changed |= set_required_bool(object, "parallel_tool_calls", true);
 
     // ref: internal/translator/codex/openai/responses/codex_openai-responses_request.go:118-150 @ 2044a01f
-    let include_sources = object.get("include").and_then(Value::as_array)
-        .is_some_and(|values| values.iter().any(|value| value.as_str() == Some("web_search_call.action.sources")));
+    let include_sources = object
+        .get("include")
+        .and_then(Value::as_array)
+        .is_some_and(|values| {
+            values
+                .iter()
+                .any(|value| value.as_str() == Some("web_search_call.action.sources"))
+        });
     let required_include = if include_sources {
-        json!(["reasoning.encrypted_content", "web_search_call.action.sources"])
+        json!([
+            "reasoning.encrypted_content",
+            "web_search_call.action.sources"
+        ])
     } else {
         json!(["reasoning.encrypted_content"])
     };

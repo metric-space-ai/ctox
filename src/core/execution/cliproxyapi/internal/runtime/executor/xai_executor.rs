@@ -13,7 +13,8 @@ use zeroize::Zeroizing;
 use crate::sdk::cliproxy::executor::Headers;
 
 pub const DEFAULT_XAI_API_BASE_URL: &str = "https://api.x.ai/v1";
-pub const DEFAULT_XAI_CHAT_BASE_URL: &str = crate::internal::auth::xai::types::CLI_CHAT_PROXY_BASE_URL;
+pub const DEFAULT_XAI_CHAT_BASE_URL: &str =
+    crate::internal::auth::xai::types::CLI_CHAT_PROXY_BASE_URL;
 pub const XAI_TOKEN_AUTH_HEADER: &str = "X-XAI-Token-Auth";
 pub const XAI_TOKEN_AUTH_VALUE: &str = "xai-grok-cli";
 pub const XAI_CLIENT_VERSION_HEADER: &str = "x-grok-client-version";

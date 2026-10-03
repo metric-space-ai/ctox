@@ -138,6 +138,11 @@
   account-kind collisions, legacy Home execution, public JSON boundaries, native
   capability refresh and built-in metadata. There are116 prepared candidate test
   functions in total; none of the current candidate Cargo/Go checks has executed.
+  The first admitted57c4 candidate stopped during formatting because an older
+  regression used a non-ASCII Rust raw-byte literal. The fixture now obtains
+  the identical UTF-8 bytes from a string; its Unicode/HTML-preservation guard
+  remains intact. The failed receipt/log and exact formatter-produced source
+  patch are retained durably. Candidate formatting is committed before retry.
   Narrow formatting and whitespace checks passed. Other executor consumers,
   host/runtime acceptance of the separate Devin catalog,
   remaining v8 semantic deltas and live thinking update-intent propagation remain open;

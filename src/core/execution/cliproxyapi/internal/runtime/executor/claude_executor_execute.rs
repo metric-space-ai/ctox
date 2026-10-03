@@ -21,9 +21,9 @@ use super::claude_executor_cloaking::{
     try_apply_claude_cloaking, ClaudeCallerSystemBlockError, ClaudeCloakPolicy,
 };
 use super::claude_executor_diagnostics::{
-    begin_claude_diagnostics_request, claude_message_id_from_response,
-    commit_claude_diagnostics, inject_claude_diagnostics_with_state,
-    observe_claude_stream_line, ClaudeDiagnosticsRequestState,
+    begin_claude_diagnostics_request, claude_message_id_from_response, commit_claude_diagnostics,
+    inject_claude_diagnostics_with_state, observe_claude_stream_line,
+    ClaudeDiagnosticsRequestState,
 };
 use super::claude_executor_request::{
     claude_request_uses_fast_mode, claude_requested_betas, extract_and_remove_claude_betas,
@@ -619,7 +619,8 @@ impl ClaudeSubscriptionMessagesExecutor {
         };
         if cloaked && target.is_anthropic_api() {
             // ref: internal/runtime/executor/claude_executor_cloaking.go:214-244 @ 2044a01f
-            cloak_policy.current_date = Some(diagnostics_state.pin_date(&cloak_policy.resolved_current_date()));
+            cloak_policy.current_date =
+                Some(diagnostics_state.pin_date(&cloak_policy.resolved_current_date()));
         }
         let body = try_apply_claude_cloaking(
             &body,
@@ -795,7 +796,8 @@ impl ClaudeSubscriptionMessagesExecutor {
         };
         if cloaked && target.is_anthropic_api() {
             // ref: internal/runtime/executor/claude_executor_cloaking.go:214-244 @ 2044a01f
-            cloak_policy.current_date = Some(diagnostics_state.pin_date(&cloak_policy.resolved_current_date()));
+            cloak_policy.current_date =
+                Some(diagnostics_state.pin_date(&cloak_policy.resolved_current_date()));
         }
         let body = try_apply_claude_cloaking(
             &body,

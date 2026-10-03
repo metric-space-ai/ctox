@@ -64,7 +64,10 @@ pub struct XaiRequestPolicy<'a> {
 pub fn xai_credentials(auth: Option<&Auth>) -> XaiCredentials {
     let token = auth
         .and_then(|a| {
-            a.attributes.get("api_key").map(String::as_str).map(str::trim)
+            a.attributes
+                .get("api_key")
+                .map(String::as_str)
+                .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .or_else(|| metadata_string(&a.metadata, "access_token"))
         })
@@ -95,16 +98,28 @@ pub fn xai_credentials(auth: Option<&Auth>) -> XaiCredentials {
 
 // ref: internal/runtime/executor/xai_executor_request.go:216-253 @ e2bff010
 fn xai_using_api(auth: Option<&Auth>) -> bool {
-    let Some(auth) = auth else { return true; };
-    if let Some(value) = auth.attributes.get("using_api").and_then(|value| xai_parse_bool(value)) {
+    let Some(auth) = auth else {
+        return true;
+    };
+    if let Some(value) = auth
+        .attributes
+        .get("using_api")
+        .and_then(|value| xai_parse_bool(value))
+    {
         return value;
     }
     if let Some(value) = auth.metadata.get("using_api").and_then(|value| {
-        value.as_bool().or_else(|| value.as_str().and_then(xai_parse_bool))
+        value
+            .as_bool()
+            .or_else(|| value.as_str().and_then(xai_parse_bool))
     }) {
         return value;
     }
-    let kind = auth.attributes.get("auth_kind").map(String::as_str).map(str::trim)
+    let kind = auth
+        .attributes
+        .get("auth_kind")
+        .map(String::as_str)
+        .map(str::trim)
         .filter(|value| !value.is_empty())
         .or_else(|| metadata_string(&auth.metadata, "auth_kind"))
         .map(str::trim);
@@ -123,7 +138,9 @@ fn xai_parse_bool(value: &str) -> Option<bool> {
 #[must_use]
 pub fn xai_chat_base_url(auth: Option<&Auth>) -> String {
     let credentials = xai_credentials(auth);
-    if credentials.using_api || credentials.base_url != super::xai_executor::DEFAULT_XAI_API_BASE_URL {
+    if credentials.using_api
+        || credentials.base_url != super::xai_executor::DEFAULT_XAI_API_BASE_URL
+    {
         credentials.base_url
     } else {
         super::xai_executor::DEFAULT_XAI_CHAT_BASE_URL.to_owned()
@@ -208,12 +225,25 @@ pub fn apply_xai_chat_headers(
     apply_xai_default_headers(headers, token, stream, session_id);
     // ref: internal/runtime/executor/xai_executor_request.go:356-365 @ e2bff010
     if !xai_credentials(auth).using_api
-        && xai_chat_base_url(auth) == super::xai_executor::DEFAULT_XAI_CHAT_BASE_URL {
+        && xai_chat_base_url(auth) == super::xai_executor::DEFAULT_XAI_CHAT_BASE_URL
+    {
         header_set(headers, XAI_TOKEN_AUTH_HEADER, XAI_TOKEN_AUTH_VALUE);
         header_set(headers, XAI_CLIENT_VERSION_HEADER, XAI_CLIENT_VERSION_VALUE);
-        header_set(headers, "User-Agent", format!("xai-grok-workspace/{XAI_CLIENT_VERSION_VALUE}"));
-        header_set(headers, XAI_CLIENT_IDENTIFIER_HEADER, XAI_CLIENT_IDENTIFIER_VALUE);
-        header_set(headers, XAI_AUTHENTICATE_RESPONSE_HEADER, XAI_AUTHENTICATE_RESPONSE_VALUE);
+        header_set(
+            headers,
+            "User-Agent",
+            format!("xai-grok-workspace/{XAI_CLIENT_VERSION_VALUE}"),
+        );
+        header_set(
+            headers,
+            XAI_CLIENT_IDENTIFIER_HEADER,
+            XAI_CLIENT_IDENTIFIER_VALUE,
+        );
+        header_set(
+            headers,
+            XAI_AUTHENTICATE_RESPONSE_HEADER,
+            XAI_AUTHENTICATE_RESPONSE_VALUE,
+        );
     }
     apply_xai_custom_headers(headers, auth);
 }

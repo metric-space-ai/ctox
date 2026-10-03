@@ -10,7 +10,11 @@ use super::{
 };
 
 fn response() -> ResponseTransform {
-    ResponseTransform { stream: None, non_stream: None, token_count: None }
+    ResponseTransform {
+        stream: None,
+        non_stream: None,
+        token_count: None,
+    }
 }
 
 fn envelope(format: &Format, body: &[u8]) -> RequestEnvelope {
@@ -48,13 +52,18 @@ fn normalizer_edits_report_update_intent_for_native_and_fallback_routes() {
         let format = openai_response();
         if native {
             registry.register(
-                format.clone(), format.clone(),
-                Some(Arc::new(|_, body, _| body.to_vec())), response(),
+                format.clone(),
+                format.clone(),
+                Some(Arc::new(|_, body, _| body.to_vec())),
+                response(),
             );
         }
         registry.set_plugin_hooks(Some(Arc::new(ReplaceBody(after.to_vec()))));
         let result = registry.translate_request_envelope(
-            &TranslationContext::default(), &format, &format, envelope(&format, before),
+            &TranslationContext::default(),
+            &format,
+            &format,
+            envelope(&format, before),
         );
         assert_eq!(result.body, after);
         assert!(result.configuration_updates_changed);
@@ -69,13 +78,20 @@ fn native_cross_protocol_removal_is_not_a_plugin_configuration_edit() {
     let to = claude();
     let after = br#"{"messages":[]}"#;
     registry.register(
-        from.clone(), to.clone(),
-        Some(Arc::new(move |_, _, _| after.to_vec())), response(),
+        from.clone(),
+        to.clone(),
+        Some(Arc::new(move |_, _, _| after.to_vec())),
+        response(),
     );
     registry.set_plugin_hooks(Some(Arc::new(ReplaceBody(after.to_vec()))));
     let result = registry.translate_request_envelope(
-        &TranslationContext::default(), &from, &to,
-        envelope(&from, br#"{"input":[{"type":"configuration_update","tools":[1]}]}"#),
+        &TranslationContext::default(),
+        &from,
+        &to,
+        envelope(
+            &from,
+            br#"{"input":[{"type":"configuration_update","tools":[1]}]}"#,
+        ),
     );
     assert!(!result.configuration_updates_changed);
     assert_eq!(result.body, after);
@@ -89,8 +105,13 @@ fn ordinary_message_normalizer_edits_leave_update_intent_false() {
         br#"{"input":[{"type":"message","content":"after"}]}"#.to_vec(),
     ))));
     let result = registry.translate_request_envelope(
-        &TranslationContext::default(), &format, &format,
-        envelope(&format, br#"{"input":[{"type":"message","content":"before"}]}"#),
+        &TranslationContext::default(),
+        &format,
+        &format,
+        envelope(
+            &format,
+            br#"{"input":[{"type":"message","content":"before"}]}"#,
+        ),
     );
     assert!(!result.configuration_updates_changed);
 }
@@ -118,7 +139,9 @@ fn update_order_and_internal_bytes_follow_upstream_raw_comparison() {
         let registry = Registry::new();
         registry.set_plugin_hooks(Some(Arc::new(ReplaceBody(after.as_bytes().to_vec()))));
         let result = registry.translate_request_envelope(
-            &TranslationContext::default(), &format, &format,
+            &TranslationContext::default(),
+            &format,
+            &format,
             envelope(&format, before.as_bytes()),
         );
         assert_eq!(result.configuration_updates_changed, changed);
@@ -132,19 +155,26 @@ fn incoming_and_transform_intent_survive_without_hooks() {
     let mut input = envelope(&format, br#"{"input":[]}"#);
     input.configuration_updates_changed = true;
     let result = registry.translate_request_envelope(
-        &TranslationContext::default(), &format, &format, input,
+        &TranslationContext::default(),
+        &format,
+        &format,
+        input,
     );
     assert!(result.configuration_updates_changed);
 
     registry.register_request_envelope(
-        format.clone(), format.clone(),
+        format.clone(),
+        format.clone(),
         Some(Arc::new(|_, mut request| {
             request.configuration_updates_changed = true;
             request
-        })), response(),
+        })),
+        response(),
     );
     let result = registry.translate_request_envelope(
-        &TranslationContext::default(), &format, &format,
+        &TranslationContext::default(),
+        &format,
+        &format,
         envelope(&format, br#"{"input":[]}"#),
     );
     assert!(result.configuration_updates_changed);
@@ -155,18 +185,24 @@ fn pipeline_preserves_transform_intent_through_middleware() {
     let format = openai_response();
     let registry = Arc::new(Registry::new());
     registry.register_request_envelope(
-        format.clone(), format.clone(),
+        format.clone(),
+        format.clone(),
         Some(Arc::new(|_, mut request| {
             request.configuration_updates_changed = true;
             request
-        })), response(),
+        })),
+        response(),
     );
     let mut pipeline = Pipeline::new(registry);
     pipeline.use_request(Arc::new(|context, request, next| next(context, request)));
-    let result = pipeline.translate_request(
-        &TranslationContext::default(), format.clone(), format.clone(),
-        envelope(&format, br#"{"input":[]}"#),
-    ).unwrap();
+    let result = pipeline
+        .translate_request(
+            &TranslationContext::default(),
+            format.clone(),
+            format.clone(),
+            envelope(&format, br#"{"input":[]}"#),
+        )
+        .unwrap();
     assert!(result.configuration_updates_changed);
     assert_eq!(result.format, format);
 }
@@ -177,7 +213,9 @@ fn non_object_bodies_do_not_expose_positional_struct_updates() {
     let format = openai_response();
     registry.set_plugin_hooks(Some(Arc::new(ReplaceBody(br#"{"input":[]}"#.to_vec()))));
     let result = registry.translate_request_envelope(
-        &TranslationContext::default(), &format, &format,
+        &TranslationContext::default(),
+        &format,
+        &format,
         envelope(&format, br#"[[{"type":"configuration_update","a":1}]]"#),
     );
     assert!(!result.configuration_updates_changed);
@@ -205,12 +243,16 @@ fn duplicate_keys_use_the_first_gjson_match_for_update_intent() {
     ] {
         let registry = Registry::new();
         registry.register(
-            format.clone(), format.clone(),
-            Some(Arc::new(|_, body, _| body.to_vec())), response(),
+            format.clone(),
+            format.clone(),
+            Some(Arc::new(|_, body, _| body.to_vec())),
+            response(),
         );
         registry.set_plugin_hooks(Some(Arc::new(ReplaceBody(after.as_bytes().to_vec()))));
         let result = registry.translate_request_envelope(
-            &TranslationContext::default(), &format, &format,
+            &TranslationContext::default(),
+            &format,
+            &format,
             envelope(&format, before.as_bytes()),
         );
         assert_eq!(result.configuration_updates_changed, changed);
@@ -221,10 +263,26 @@ fn duplicate_keys_use_the_first_gjson_match_for_update_intent() {
 fn chat_reasoning_depth_does_not_imply_claude_display_visibility() {
     use crate::internal::thinking::{extract_translated_summary_config, SummaryMode};
     for (body, target, expected) in [
-        (br#"{"reasoning_effort":"high"}"#.as_slice(), " Claude ", SummaryMode::Unspecified),
-        (br#"{"reasoning_effort":"none"}"#.as_slice(), "claude", SummaryMode::Unspecified),
-        (br#"{"reasoning_effort":"high"}"#.as_slice(), "codex", SummaryMode::Enabled),
-        (br#"{"reasoning_effort":"none"}"#.as_slice(), "gemini", SummaryMode::Disabled),
+        (
+            br#"{"reasoning_effort":"high"}"#.as_slice(),
+            " Claude ",
+            SummaryMode::Unspecified,
+        ),
+        (
+            br#"{"reasoning_effort":"none"}"#.as_slice(),
+            "claude",
+            SummaryMode::Unspecified,
+        ),
+        (
+            br#"{"reasoning_effort":"high"}"#.as_slice(),
+            "codex",
+            SummaryMode::Enabled,
+        ),
+        (
+            br#"{"reasoning_effort":"none"}"#.as_slice(),
+            "gemini",
+            SummaryMode::Disabled,
+        ),
     ] {
         let actual = extract_translated_summary_config(body, " OPENAI ", target);
         assert_eq!(actual.mode, expected);

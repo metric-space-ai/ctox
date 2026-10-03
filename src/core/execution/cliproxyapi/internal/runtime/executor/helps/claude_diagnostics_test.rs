@@ -7,7 +7,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::claude_diagnostics::{
     begin_claude_diagnostics, claude_diagnostics_cache_state_for_test, commit_claude_diagnostics,
-    expire_claude_diagnostics_for_test, reset_claude_diagnostics_for_test, pin_claude_session_date,
+    expire_claude_diagnostics_for_test, pin_claude_session_date, reset_claude_diagnostics_for_test,
     CLAUDE_DIAGNOSTICS_MAX_ENTRIES,
 };
 
@@ -41,11 +41,20 @@ fn pins_date_per_credential_session_and_preserves_continuity() {
     assert_eq!(pin_claude_session_date(&key, " 2026-10-02 "), "2026-10-02");
     commit_claude_diagnostics(&key, sequence, "msg_before_midnight");
     let (same_key, _, previous) = begin_claude_diagnostics("date-credential", "date-session");
-    assert_eq!(pin_claude_session_date(&same_key, "2026-10-03"), "2026-10-02");
+    assert_eq!(
+        pin_claude_session_date(&same_key, "2026-10-03"),
+        "2026-10-02"
+    );
     assert_eq!(previous, "msg_before_midnight");
-    for (credential, session) in [("date-other", "date-session"), ("date-credential", "date-other")] {
+    for (credential, session) in [
+        ("date-other", "date-session"),
+        ("date-credential", "date-other"),
+    ] {
         let (other_key, _, _) = begin_claude_diagnostics(credential, session);
-        assert_eq!(pin_claude_session_date(&other_key, "2026-10-03"), "2026-10-03");
+        assert_eq!(
+            pin_claude_session_date(&other_key, "2026-10-03"),
+            "2026-10-03"
+        );
     }
 }
 
@@ -53,13 +62,19 @@ fn pins_date_per_credential_session_and_preserves_continuity() {
 fn pin_date_falls_back_for_missing_empty_and_expired_sessions() {
     let _reset = ResetDiagnostics::new();
     assert_eq!(pin_claude_session_date("", "2026-10-03"), "2026-10-03");
-    assert_eq!(pin_claude_session_date("missing", "2026-10-03"), "2026-10-03");
+    assert_eq!(
+        pin_claude_session_date("missing", "2026-10-03"),
+        "2026-10-03"
+    );
     let (key, _, _) = begin_claude_diagnostics("date-expired", "session");
     assert_eq!(pin_claude_session_date(&key, " "), "");
     assert_eq!(pin_claude_session_date(&key, "2026-10-02"), "2026-10-02");
     expire_claude_diagnostics_for_test(&key);
     let (same_key, _, _) = begin_claude_diagnostics("date-expired", "session");
-    assert_eq!(pin_claude_session_date(&same_key, "2026-10-03"), "2026-10-03");
+    assert_eq!(
+        pin_claude_session_date(&same_key, "2026-10-03"),
+        "2026-10-03"
+    );
 }
 
 #[test]

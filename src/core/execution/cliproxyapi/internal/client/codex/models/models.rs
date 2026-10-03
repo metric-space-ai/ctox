@@ -226,10 +226,15 @@ fn apply_provider_capabilities(
     template_model: bool,
     providers: Option<&dyn ProvidersForModel>,
 ) {
-    if template_model && providers.is_some_and(|source| {
-        let routes = source.providers(id);
-        routes.is_empty() || routes.iter().any(|provider| !provider.trim().eq_ignore_ascii_case("codex"))
-    }) {
+    if template_model
+        && providers.is_some_and(|source| {
+            let routes = source.providers(id);
+            routes.is_empty()
+                || routes
+                    .iter()
+                    .any(|provider| !provider.trim().eq_ignore_ascii_case("codex"))
+        })
+    {
         entry.insert("supports_search_tool".to_owned(), Value::Bool(false));
         entry.insert("prefer_websockets".to_owned(), Value::Bool(false));
         entry.insert("service_tiers".to_owned(), Value::Array(Vec::new()));
@@ -334,7 +339,10 @@ fn apply_model_metadata(
 }
 
 fn apply_visibility_override(entry: &mut ModelMap, id: &str) {
-    let target = id.trim().split_once('/').map_or(id.trim(), |(_, suffix)| suffix.trim());
+    let target = id
+        .trim()
+        .split_once('/')
+        .map_or(id.trim(), |(_, suffix)| suffix.trim());
     if is_image_or_video_model(target) {
         entry.insert("visibility".to_owned(), Value::String("hide".to_owned()));
     }
@@ -376,9 +384,14 @@ fn apply_patch_tool_capability(
     if !supports_text && (has_modalities || string_value(entry, "visibility") == "hide") {
         return;
     }
-    let supported = capability.map_or(template_supported, |resolver| resolver.supports_apply_patch(id.trim()));
+    let supported = capability.map_or(template_supported, |resolver| {
+        resolver.supports_apply_patch(id.trim())
+    });
     if supported {
-        entry.insert("apply_patch_tool_type".to_owned(), Value::String("freeform".to_owned()));
+        entry.insert(
+            "apply_patch_tool_type".to_owned(),
+            Value::String("freeform".to_owned()),
+        );
     }
 }
 

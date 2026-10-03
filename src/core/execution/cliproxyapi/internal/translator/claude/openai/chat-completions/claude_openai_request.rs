@@ -89,8 +89,10 @@ fn convert_openai_chat_request_to_claude_impl(
             "user" | "assistant" => {
                 let mut content = Vec::new();
                 if preserve_empty_thinking_blocks && role == "assistant" {
-                    if let Some(reasoning_content) = message.get("reasoning_content")
-                        .and_then(Value::as_str).filter(|text| !text.trim().is_empty())
+                    if let Some(reasoning_content) = message
+                        .get("reasoning_content")
+                        .and_then(Value::as_str)
+                        .filter(|text| !text.trim().is_empty())
                     {
                         content.push(json!({
                             "type":"thinking", "thinking":reasoning_content, "signature":"",

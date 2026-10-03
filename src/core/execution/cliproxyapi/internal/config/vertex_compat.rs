@@ -201,10 +201,8 @@ mod tests {
 
     #[test]
     fn cooling_and_retry_overrides_stay_distinct_from_unset() {
-        let parsed: VertexCompatKey = serde_yaml::from_str(
-            "api-key: k\ndisable-cooling: false\nrequest-retry: 0\n",
-        )
-        .unwrap();
+        let parsed: VertexCompatKey =
+            serde_yaml::from_str("api-key: k\ndisable-cooling: false\nrequest-retry: 0\n").unwrap();
         assert_eq!(parsed.disable_cooling, Some(false));
         assert_eq!(parsed.request_retry, Some(0));
 

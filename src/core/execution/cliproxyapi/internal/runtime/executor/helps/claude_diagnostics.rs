@@ -105,7 +105,9 @@ pub fn pin_claude_session_date(key: &str, date: &str) -> String {
     if key.is_empty() || date.is_empty() {
         return date.to_owned();
     }
-    let mut state = diagnostics_state().lock().unwrap_or_else(|error| error.into_inner());
+    let mut state = diagnostics_state()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
     let Some(entry) = state.entries.get_mut(key) else {
         return date.to_owned();
     };

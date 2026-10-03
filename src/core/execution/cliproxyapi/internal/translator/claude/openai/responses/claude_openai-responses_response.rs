@@ -211,7 +211,10 @@ pub fn convert_claude_response_to_openai_responses_non_stream(
                     .unwrap_or("")
                     .to_owned();
                 usage.merge(event.pointer("/message/usage"));
-                if let Some(reason) = event.pointer("/message/stop_reason").and_then(Value::as_str) {
+                if let Some(reason) = event
+                    .pointer("/message/stop_reason")
+                    .and_then(Value::as_str)
+                {
                     stop_reason = reason.to_owned();
                 }
             }
@@ -365,7 +368,8 @@ pub fn convert_claude_response_to_openai_responses_non_stream(
             }
             OutputKind::Message => {
                 let mut message = message_item(&item.id, &item.text);
-                message["status"] = Value::String(claude_responses_terminal_state(&state.stop_reason).1.into());
+                message["status"] =
+                    Value::String(claude_responses_terminal_state(&state.stop_reason).1.into());
                 message["content"][0]["annotations"] = Value::Array(item.annotations);
                 output.push(message);
             }
@@ -653,7 +657,11 @@ fn finish_reasoning(state: &mut ClaudeToResponsesState) -> Vec<Vec<u8>> {
 // ref: internal/translator/claude/openai/responses/claude_openai-responses_response.go:166-192 @ 2044a01f
 fn claude_responses_terminal_state(stop_reason: &str) -> (&'static str, &'static str, Value) {
     if stop_reason.trim().eq_ignore_ascii_case("max_tokens") {
-        ("response.incomplete", "incomplete", json!({"reason":"max_output_tokens"}))
+        (
+            "response.incomplete",
+            "incomplete",
+            json!({"reason":"max_output_tokens"}),
+        )
     } else if stop_reason.trim().eq_ignore_ascii_case("pause_turn") {
         // Server-tool iteration pauses are unfinished, without a Responses token-limit reason.
         ("response.incomplete", "incomplete", Value::Null)

@@ -90,16 +90,28 @@ fn direct_gemini_keeps_thought_position_with_media_and_tools() {
     assert_eq!(parts[1]["text"], "reason");
     assert_eq!(parts[2]["text"], "after");
     assert_eq!(parts[3]["functionCall"]["name"], "inspect");
-    assert_eq!(output["contents"][1]["parts"][0]["functionResponse"]["name"], "inspect");
-    assert_eq!(output["contents"][1]["parts"][1]["inline_data"]["mime_type"], "image/png");
-    assert_eq!(output["contents"][1]["parts"][1]["inline_data"]["data"], "aGVsbG8=");
+    assert_eq!(
+        output["contents"][1]["parts"][0]["functionResponse"]["name"],
+        "inspect"
+    );
+    assert_eq!(
+        output["contents"][1]["parts"][1]["inline_data"]["mime_type"],
+        "image/png"
+    );
+    assert_eq!(
+        output["contents"][1]["parts"][1]["inline_data"]["data"],
+        "aGVsbG8="
+    );
 }
 
 #[test]
 fn both_direct_facades_preserve_invalid_and_non_object_bytes() {
     for input in [b"not-json".as_slice(), br#"["not-an-object"]"#, b"null"] {
         for stream in [false, true] {
-            assert_eq!(convert_claude_request_to_gemini("gemini-3-flash", input, stream), input);
+            assert_eq!(
+                convert_claude_request_to_gemini("gemini-3-flash", input, stream),
+                input
+            );
             assert_eq!(
                 convert_claude_request_to_gemini_with_compat("gemini-3-flash", input, stream),
                 input

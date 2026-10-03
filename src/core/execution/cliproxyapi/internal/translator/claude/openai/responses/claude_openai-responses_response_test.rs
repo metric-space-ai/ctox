@@ -41,10 +41,30 @@ fn started(state: &mut ClaudeToResponsesState) {
 #[test]
 fn terminal_stop_reasons_keep_pause_and_limits_incomplete_in_both_transports() {
     for (reason, event_type, status, details) in [
-        ("pause_turn", "response.incomplete", "incomplete", Value::Null),
-        (" PAUSE_TURN ", "response.incomplete", "incomplete", Value::Null),
-        ("max_tokens", "response.incomplete", "incomplete", json!({"reason":"max_output_tokens"})),
-        (" MAX_TOKENS ", "response.incomplete", "incomplete", json!({"reason":"max_output_tokens"})),
+        (
+            "pause_turn",
+            "response.incomplete",
+            "incomplete",
+            Value::Null,
+        ),
+        (
+            " PAUSE_TURN ",
+            "response.incomplete",
+            "incomplete",
+            Value::Null,
+        ),
+        (
+            "max_tokens",
+            "response.incomplete",
+            "incomplete",
+            json!({"reason":"max_output_tokens"}),
+        ),
+        (
+            " MAX_TOKENS ",
+            "response.incomplete",
+            "incomplete",
+            json!({"reason":"max_output_tokens"}),
+        ),
         ("end_turn", "response.completed", "completed", Value::Null),
         ("tool_use", "response.completed", "completed", Value::Null),
     ] {
@@ -52,20 +72,34 @@ fn terminal_stop_reasons_keep_pause_and_limits_incomplete_in_both_transports() {
             json!({"type":"message_start","message":{"id":"msg_stop","usage":{"input_tokens":5}}}),
             json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}),
             json!({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}),
-
             json!({"type":"content_block_stop","index":0}),
             json!({"type":"message_delta","delta":{"stop_reason":reason},"usage":{"output_tokens":2}}),
             json!({"type":"message_stop"}),
         ];
         let mut state = ClaudeToResponsesState::default();
-        let streamed: Vec<Value> = events.iter().flat_map(|event| send(&mut state, &json!({}), event.clone())).collect();
+        let streamed: Vec<Value> = events
+            .iter()
+            .flat_map(|event| send(&mut state, &json!({}), event.clone()))
+            .collect();
         let terminal = streamed.last().unwrap();
         assert_eq!(terminal["type"], event_type, "{reason}");
         assert_eq!(terminal["response"]["status"], status, "{reason}");
-        assert_eq!(terminal["response"]["incomplete_details"], details, "{reason}");
-        assert_eq!(terminal["response"]["output"][0]["status"], status, "{reason}");
-        let sse = events.iter().map(|event| format!("data: {event}\n\n")).collect::<String>();
-        let response: Value = serde_json::from_slice(&convert_claude_response_to_openai_responses_non_stream(b"{}", b"{}", sse.as_bytes())).unwrap();
+        assert_eq!(
+            terminal["response"]["incomplete_details"], details,
+            "{reason}"
+        );
+        assert_eq!(
+            terminal["response"]["output"][0]["status"], status,
+            "{reason}"
+        );
+        let sse = events
+            .iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>();
+        let response: Value = serde_json::from_slice(
+            &convert_claude_response_to_openai_responses_non_stream(b"{}", b"{}", sse.as_bytes()),
+        )
+        .unwrap();
         assert_eq!(response["status"], status, "{reason}");
         assert_eq!(response["incomplete_details"], details, "{reason}");
         assert_eq!(response["output"][0]["status"], status, "{reason}");

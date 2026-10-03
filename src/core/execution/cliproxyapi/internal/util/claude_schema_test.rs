@@ -180,6 +180,8 @@ fn pattern_strip_is_schema_aware() {
         r"\p{N}+"
     );
     assert!(value["patternProperties"].get(r"^\p{L}+$").is_none());
-    assert!(value["patternProperties"]["^[a-z]+$"].get("pattern").is_none());
+    assert!(value["patternProperties"]["^[a-z]+$"]
+        .get("pattern")
+        .is_none());
     assert_eq!(value["patternProperties"]["^[a-z]+$"]["type"], "number");
 }

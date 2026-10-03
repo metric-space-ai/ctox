@@ -126,14 +126,14 @@ fn api_and_chat_headers_remain_distinct() {
     let mut chat = Headers::new();
     apply_xai_chat_headers(&mut chat, Some(&auth), "secret", true, "session");
     assert_eq!(chat[XAI_TOKEN_AUTH_HEADER], vec![XAI_TOKEN_AUTH_VALUE]);
-    assert_eq!(
-        chat[XAI_CLIENT_VERSION_HEADER],
-        vec!["1.0.44"]
-    );
+    assert_eq!(chat[XAI_CLIENT_VERSION_HEADER], vec!["1.0.44"]);
     assert_eq!(chat["x-grok-conv-id"], vec!["session"]);
     assert_eq!(chat["User-Agent"], vec!["xai-grok-workspace/1.0.44"]);
     assert_eq!(chat[XAI_CLIENT_IDENTIFIER_HEADER], vec!["grok-shell"]);
-    assert_eq!(chat[XAI_AUTHENTICATE_RESPONSE_HEADER], vec!["authenticate-response"]);
+    assert_eq!(
+        chat[XAI_AUTHENTICATE_RESPONSE_HEADER],
+        vec!["authenticate-response"]
+    );
     auth.attributes.insert("using_api".into(), "true".into());
     let mut official = Headers::new();
     apply_xai_chat_headers(&mut official, Some(&auth), "secret", true, "");
@@ -168,8 +168,10 @@ fn xai_auth_mode_matches_upstream_boolean_and_oauth_defaults() {
 #[test]
 fn xai_credentials_prioritize_nonempty_attributes_over_metadata() {
     let mut auth = Auth::default();
-    auth.metadata.insert("access_token".into(), json!("oauth-token"));
-    auth.metadata.insert("base_url".into(), json!("https://edge.example/v1/"));
+    auth.metadata
+        .insert("access_token".into(), json!("oauth-token"));
+    auth.metadata
+        .insert("base_url".into(), json!("https://edge.example/v1/"));
     auth.attributes.insert("api_key".into(), " api-key ".into());
     auth.attributes.insert("base_url".into(), "   ".into());
     let credentials = xai_credentials(Some(&auth));
@@ -186,12 +188,19 @@ fn xai_subscription_chat_and_compact_routes_follow_upstream() {
     auth.metadata.insert("auth_kind".into(), json!("oauth"));
     for base_url in ["", " https://api.x.ai/v1/// "] {
         auth.attributes.insert("base_url".into(), base_url.into());
-        assert_eq!(xai_chat_base_url(Some(&auth)), "https://cli-chat-proxy.grok.com/v1");
+        assert_eq!(
+            xai_chat_base_url(Some(&auth)),
+            "https://cli-chat-proxy.grok.com/v1"
+        );
         assert_eq!(xai_compact_base_url(Some(&auth)), "https://api.x.ai/v1");
     }
-    auth.attributes.insert("base_url".into(), " https://cli-chat-proxy.grok.com/v1/ ".into());
+    auth.attributes.insert(
+        "base_url".into(),
+        " https://cli-chat-proxy.grok.com/v1/ ".into(),
+    );
     assert_eq!(xai_compact_base_url(Some(&auth)), "https://api.x.ai/v1");
-    auth.attributes.insert("base_url".into(), " https://edge.example/v1/ ".into());
+    auth.attributes
+        .insert("base_url".into(), " https://edge.example/v1/ ".into());
     assert_eq!(xai_chat_base_url(Some(&auth)), "https://edge.example/v1");
     assert_eq!(xai_compact_base_url(Some(&auth)), "https://edge.example/v1");
 }
@@ -200,13 +209,17 @@ fn xai_subscription_chat_and_compact_routes_follow_upstream() {
 fn xai_subscription_identity_is_scoped_and_custom_headers_override() {
     let mut auth = Auth::default();
     auth.attributes.insert("using_api".into(), "false".into());
-    auth.attributes.insert("base_url".into(), "https://edge.example/v1".into());
+    auth.attributes
+        .insert("base_url".into(), "https://edge.example/v1".into());
     let mut custom = Headers::new();
     apply_xai_chat_headers(&mut custom, Some(&auth), "", false, "");
     assert!(!custom.contains_key(XAI_TOKEN_AUTH_HEADER));
     assert!(!custom.contains_key("Authorization"));
     auth.attributes.remove("base_url");
-    auth.attributes.insert("header:x-grok-client-version".into(), "custom-version".into());
+    auth.attributes.insert(
+        "header:x-grok-client-version".into(),
+        "custom-version".into(),
+    );
     let mut official = Headers::new();
     apply_xai_chat_headers(&mut official, Some(&auth), "token", false, "s");
     assert_eq!(official[XAI_CLIENT_VERSION_HEADER], vec!["custom-version"]);

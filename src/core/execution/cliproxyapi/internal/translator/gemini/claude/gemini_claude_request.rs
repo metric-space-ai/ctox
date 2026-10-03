@@ -32,7 +32,8 @@ fn convert_claude_request_to_gemini_impl(
     if !matches!(serde_json::from_slice::<Value>(input), Ok(Value::Object(_))) {
         return input.to_vec();
     }
-    let wrapped = convert_claude_request_for_direct_gemini(model_name, input, stream, preserve_thinking);
+    let wrapped =
+        convert_claude_request_for_direct_gemini(model_name, input, stream, preserve_thinking);
     let root = serde_json::from_slice::<Value>(&wrapped).unwrap_or(Value::Null);
     let Some(mut request) = root.get("request").and_then(Value::as_object).cloned() else {
         return input.to_vec();

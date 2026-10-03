@@ -100,7 +100,10 @@ fn tool_parameters_drop_dialect_markers_and_unsupported_patterns() {
     assert!(parameters.get("$schema").is_none());
     assert!(parameters.get("$id").is_none());
     assert!(parameters["properties"]["field"].get("pattern").is_none());
-    assert_eq!(parameters["properties"]["asset_id"]["pattern"], "^[0-9a-f]{32}$");
+    assert_eq!(
+        parameters["properties"]["asset_id"]["pattern"],
+        "^[0-9a-f]{32}$"
+    );
     assert_eq!(
         parameters["properties"]["regex_config"]["default"]["pattern"],
         r"\p{L}+"

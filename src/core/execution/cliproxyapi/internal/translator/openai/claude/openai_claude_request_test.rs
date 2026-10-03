@@ -773,14 +773,23 @@ fn tool_schema_strips_bad_patterns_and_normalizes_boolean_subschemas() {
         }"#,
     );
     let parameters = &output["tools"][0]["function"]["parameters"];
-    assert_eq!(parameters["properties"]["patch"]["items"], serde_json::json!({}));
+    assert_eq!(
+        parameters["properties"]["patch"]["items"],
+        serde_json::json!({})
+    );
     assert_eq!(parameters["properties"]["anything"], serde_json::json!({}));
     assert_eq!(parameters["properties"]["disabled"], false);
     assert_eq!(parameters["properties"]["enabled_flag"]["default"], true);
     assert_eq!(parameters["properties"]["enabled_flag"]["enum"][0], true);
-    assert_eq!(parameters["properties"]["either"]["anyOf"][0], serde_json::json!({}));
+    assert_eq!(
+        parameters["properties"]["either"]["anyOf"][0],
+        serde_json::json!({})
+    );
     assert!(parameters["properties"]["field"].get("pattern").is_none());
-    assert_eq!(parameters["properties"]["asset_id"]["pattern"], "^[0-9a-f]{32}$");
+    assert_eq!(
+        parameters["properties"]["asset_id"]["pattern"],
+        "^[0-9a-f]{32}$"
+    );
     assert_eq!(
         parameters["properties"]["regex_config"]["default"]["pattern"],
         r"\p{L}+"
@@ -792,5 +801,8 @@ fn tool_schema_strips_bad_patterns_and_normalizes_boolean_subschemas() {
     );
     assert_eq!(parameters["$defs"]["wildcard"], serde_json::json!({}));
     assert!(parameters["patternProperties"].get(r"^\p{L}+$").is_none());
-    assert_eq!(parameters["patternProperties"]["^[a-z]+$"]["type"], "number");
+    assert_eq!(
+        parameters["patternProperties"]["^[a-z]+$"]["type"],
+        "number"
+    );
 }

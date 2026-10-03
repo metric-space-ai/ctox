@@ -260,11 +260,14 @@ fn apply_reasoning_effort(
 
 // ref: internal/translator/claude/openai/responses/claude_openai-responses_request.go:766-797
 fn convert_reasoning(item: &Value, preserve_empty_thinking_blocks: bool) -> Option<Value> {
-    let encrypted = item.get("encrypted_content").map(|value| match value {
-        Value::Null => String::new(),
-        Value::String(text) => text.clone(),
-        other => other.to_string(),
-    }).unwrap_or_default();
+    let encrypted = item
+        .get("encrypted_content")
+        .map(|value| match value {
+            Value::Null => String::new(),
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        })
+        .unwrap_or_default();
     if let Some(data) = encrypted
         .trim()
         .strip_prefix(CLAUDE_RESPONSES_REDACTED_THINKING_PREFIX)

@@ -4,7 +4,9 @@
 
 use serde_json::{json, Value};
 
-use super::helps::{begin_claude_diagnostics, commit_claude_diagnostics as commit_state, pin_claude_session_date};
+use super::helps::{
+    begin_claude_diagnostics, commit_claude_diagnostics as commit_state, pin_claude_session_date,
+};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClaudeDiagnosticsRequestState {
@@ -25,8 +27,13 @@ pub fn begin_claude_diagnostics_request(
     credential_identity: &str,
     session_id: &str,
 ) -> ClaudeDiagnosticsRequestState {
-    let (key, sequence, previous_message_id) = begin_claude_diagnostics(credential_identity, session_id);
-    ClaudeDiagnosticsRequestState { key, sequence, previous_message_id }
+    let (key, sequence, previous_message_id) =
+        begin_claude_diagnostics(credential_identity, session_id);
+    ClaudeDiagnosticsRequestState {
+        key,
+        sequence,
+        previous_message_id,
+    }
 }
 
 /// Adds the continuity object immediately after `context_management`, matching
@@ -37,7 +44,10 @@ pub fn inject_claude_diagnostics(
     credential_identity: &str,
     session_id: &str,
 ) -> (Vec<u8>, ClaudeDiagnosticsRequestState) {
-    inject_claude_diagnostics_with_state(body, begin_claude_diagnostics_request(credential_identity, session_id))
+    inject_claude_diagnostics_with_state(
+        body,
+        begin_claude_diagnostics_request(credential_identity, session_id),
+    )
 }
 
 pub fn inject_claude_diagnostics_with_state(

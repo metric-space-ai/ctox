@@ -93,9 +93,9 @@ fn extract_first_part_cache_control(src: &Value) -> Option<Value> {
         _ => src,
     };
     match content {
-        Value::Array(parts) => parts.iter().find_map(|part| {
-            valid_cache_control(part.get("cache_control")).cloned()
-        }),
+        Value::Array(parts) => parts
+            .iter()
+            .find_map(|part| valid_cache_control(part.get("cache_control")).cloned()),
         Value::Object(_) => valid_cache_control(content.get("cache_control")).cloned(),
         _ => None,
     }

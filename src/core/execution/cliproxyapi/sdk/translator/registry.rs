@@ -6,7 +6,9 @@ use super::{
     Format, PluginHooks, RequestEnvelope, RequestEnvelopeTransform, RequestTransform,
     ResponseTransform, TranslationContext, TranslationState,
 };
-use crate::internal::thinking::{apply_summary_config_for_model, extract_translated_summary_config};
+use crate::internal::thinking::{
+    apply_summary_config_for_model, extract_translated_summary_config,
+};
 use crate::internal::translator::common::set_top_level_string;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -67,9 +69,10 @@ impl Registry {
         response: ResponseTransform,
     ) {
         let mut state = self.state.write().expect("translator registry poisoned");
-        state
-            .requests
-            .insert((client.clone(), provider.clone()), wrap_request_transform(request));
+        state.requests.insert(
+            (client.clone(), provider.clone()),
+            wrap_request_transform(request),
+        );
         state.responses.insert((client, provider), response);
     }
 
@@ -156,7 +159,8 @@ impl Registry {
         };
 
         if let Some(transform) = transform {
-            let summary = extract_translated_summary_config(&request.body, from.as_str(), to.as_str());
+            let summary =
+                extract_translated_summary_config(&request.body, from.as_str(), to.as_str());
             request = transform(context, request);
             request.body = apply_summary_config_for_model(
                 &request.body,
@@ -167,9 +171,15 @@ impl Registry {
             if let Some(hooks) = hooks {
                 let before = configuration_updates(&request.body);
                 request.body = hooks.normalize_request(
-                    context, from, to, &request.model, request.body, request.stream,
+                    context,
+                    from,
+                    to,
+                    &request.model,
+                    request.body,
+                    request.stream,
                 );
-                request.configuration_updates_changed |= before != configuration_updates(&request.body);
+                request.configuration_updates_changed |=
+                    before != configuration_updates(&request.body);
             }
             request.format = to.clone();
             return request;
@@ -179,15 +189,29 @@ impl Registry {
         if let Some(hooks) = hooks {
             let before = configuration_updates(&request.body);
             request.body = hooks.normalize_request(
-                context, from, to, &request.model, request.body, request.stream,
+                context,
+                from,
+                to,
+                &request.model,
+                request.body,
+                request.stream,
             );
             request.configuration_updates_changed |= before != configuration_updates(&request.body);
-            let summary = extract_translated_summary_config(&request.body, from.as_str(), to.as_str());
+            let summary =
+                extract_translated_summary_config(&request.body, from.as_str(), to.as_str());
             if let Some(translated) = hooks.translate_request(
-                context, from, to, &request.model, &request.body, request.stream,
+                context,
+                from,
+                to,
+                &request.model,
+                &request.body,
+                request.stream,
             ) {
                 request.body = apply_summary_config_for_model(
-                    &translated, to.as_str(), &request.model, &summary,
+                    &translated,
+                    to.as_str(),
+                    &request.model,
+                    &summary,
                 );
             }
         }
@@ -206,7 +230,12 @@ impl Registry {
         body: Vec<u8>,
         stream: bool,
     ) -> Vec<u8> {
-        let hooks = self.state.read().expect("translator registry poisoned").hooks.clone();
+        let hooks = self
+            .state
+            .read()
+            .expect("translator registry poisoned")
+            .hooks
+            .clone();
         let Some(hooks) = hooks else { return body };
         hooks.normalize_request(context, from, to, model, body, stream)
     }

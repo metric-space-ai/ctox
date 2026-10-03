@@ -119,7 +119,7 @@ fn set_string_without_html_escape_keeps_markup_and_round_trips() {
             br#"{"arguments":""}"#,
             "arguments",
             "你好，世界！🚀 <&>",
-            br#"{"arguments":"你好，世界！🚀 <&>"}"#,
+            r#"{"arguments":"你好，世界！🚀 <&>"}"#.as_bytes(),
         ),
     ];
     for (data, path, value, expected) in cases {
