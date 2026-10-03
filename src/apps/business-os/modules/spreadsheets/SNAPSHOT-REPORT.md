@@ -14,8 +14,8 @@ ctx.actions.openApp('spreadsheets', {
     source_kind: 'research_generated',
     open_purpose: 'snapshot_report',
     report_snapshot: {
-      source_module: 'outbound',
-      source_collection: 'leads',
+      source_module: 'outbound-lead-generation',
+      source_collection: 'outbound_lead_generation_leads',
       source_record_ids: savedRecordIds,
       captured_at_ms: capturedAt,
       file_sha256: exactFileSha256,
@@ -28,6 +28,10 @@ ctx.actions.openApp('spreadsheets', {
 File bytes. Record IDs identify the saved rows used to build that file;
 `captured_at_ms` is a positive finite timestamp for the snapshot. The descriptor
 requires a nonempty source module, collection and record ID list.
+
+These identifiers are the Outbound owner's actual runtime module and collection
+binding, confirmed through typed module discovery. They describe the declared
+source; they do not attest the caller's code, source rows or report content.
 
 ## Receiving module
 

@@ -501,8 +501,8 @@ async function snapshotReportInput(overrides = {}) {
     source_kind: 'research_generated',
     open_purpose: 'snapshot_report',
     report_snapshot: {
-      source_module: 'outbound',
-      source_collection: 'leads',
+      source_module: 'outbound-lead-generation',
+      source_collection: 'outbound_lead_generation_leads',
       source_record_ids: ['saved-lead-1'],
       captured_at_ms: 1790970000000,
       file_sha256: fileSha256,
