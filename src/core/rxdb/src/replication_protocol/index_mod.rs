@@ -708,7 +708,11 @@ mod tests {
             assert!(handler
                 .master_write(vec![RxReplicationWriteToMasterRow {
                     new_document_state: incoming,
-                    assumed_master_state: Some(master.clone()),
+                    assumed_master_state: Some(
+                        crate::replication_protocol::helper::write_doc_to_doc_state(
+                            &master, false, false
+                        )
+                    ),
                 }])
                 .await
                 .is_err());
@@ -730,7 +734,11 @@ mod tests {
         assert!(handler
             .master_write(vec![RxReplicationWriteToMasterRow {
                 new_document_state: incoming,
-                assumed_master_state: Some(master),
+                assumed_master_state: Some(
+                    crate::replication_protocol::helper::write_doc_to_doc_state(
+                        &master, false, false
+                    )
+                ),
             }])
             .await
             .unwrap()
@@ -746,7 +754,11 @@ mod tests {
         assert!(handler
             .master_write(vec![RxReplicationWriteToMasterRow {
                 new_document_state: tombstone,
-                assumed_master_state: Some(edited),
+                assumed_master_state: Some(
+                    crate::replication_protocol::helper::write_doc_to_doc_state(
+                        &edited, false, false
+                    )
+                ),
             }])
             .await
             .unwrap()
@@ -791,7 +803,12 @@ mod tests {
                 .unwrap()
                 .error
                 .is_empty());
-            DefaultConflictHandler.is_equal(a, b, "race").await
+            let matches = DefaultConflictHandler.is_equal(a, b, "race").await;
+            assert!(
+                matches,
+                "race fixture must pass the wire-state optimistic comparison"
+            );
+            matches
         }
         async fn resolve(&self, input: &crate::types::RxConflictHandlerInput, _: &str) -> Value {
             input.real_master_state.clone()
@@ -829,7 +846,11 @@ mod tests {
         let conflicts = handler
             .master_write(vec![RxReplicationWriteToMasterRow {
                 new_document_state: incoming,
-                assumed_master_state: Some(master),
+                assumed_master_state: Some(
+                    crate::replication_protocol::helper::write_doc_to_doc_state(
+                        &master, false, false,
+                    ),
+                ),
             }])
             .await
             .unwrap();
