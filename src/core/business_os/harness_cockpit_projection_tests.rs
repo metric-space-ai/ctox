@@ -933,6 +933,41 @@ fn projection_delivery_recovers_when_rxdb_collection_appears_after_writer_open()
 }
 
 #[test]
+fn persisted_worker_snapshot_does_not_resurrect_active_app_work() -> Result<()> {
+    let (root, conn) = setup()?;
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    project_status(
+        root.path(),
+        &conn,
+        &mut writer,
+        &WorkerSnapshot {
+            service_running: true,
+            busy: true,
+            worker_active_count: 1,
+            worker_phase: Some("running".into()),
+            active_task_ids: vec!["old-task".into()],
+            last_error: Some("retained diagnostic".into()),
+            boot_id: "old-boot".into(),
+        },
+    )?;
+    let recovered = persisted_snapshot(root.path())?;
+    assert!(!recovered.service_running && !recovered.busy);
+    assert_eq!(recovered.worker_active_count, 0);
+    assert!(recovered.active_task_ids.is_empty() && recovered.worker_phase.is_none());
+    assert_eq!(recovered.last_error.as_deref(), Some("retained diagnostic"));
+    let live = WorkerSnapshot {
+        service_running: true,
+        active_task_ids: vec!["new-task".into()],
+        boot_id: "new-boot".into(),
+        ..Default::default()
+    };
+    let mut latest = BTreeMap::new();
+    assert!(record_snapshot(&mut latest, root.path(), live));
+    assert_eq!(latest[root.path()].snapshot.active_task_ids, ["new-task"]);
+    Ok(())
+}
+
+#[test]
 fn worker_snapshot_hooks_publish_start_and_graceful_stop() -> Result<()> {
     let (root, _) = setup()?;
     publish_worker_snapshot(
