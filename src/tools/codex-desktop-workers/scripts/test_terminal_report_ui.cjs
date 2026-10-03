@@ -89,7 +89,12 @@ assert.equal(options.length,api.getStyles().size+1);
 assert.equal(options[0],'Alle Kombinationen');
 assert.equal(color.disabled,true);
 assert.ok(!html.includes('id="legend"'));
-assert.ok(options.slice(1).every(label=>label.includes('(@codex)')));
+assert.ok(options.slice(1).every(label=>(label.match(/\(@[^)]+\)/g)||[]).length===2));
+const nativeClaude=api.getAll().filter(a=>a.harness==='claude-desktop');
+if(nativeClaude.length){
+ assert.ok([...api.getBoards().parent,...api.getBoards().worker].some(row=>row.label.includes('(@claude)')));
+ for(const id of ['parentboard','workerboard','prlist'])assert.ok(!document.getElementById(id).innerHTML.includes('claude-desktop'));
+}
 if(options.length>1){
  selector.value=realPairs[0].combination;selector.onchange();
  assert.equal(color.disabled,false);assert.ok(document.getElementById('scatter').innerHTML.includes('opacity="0.16"'));
