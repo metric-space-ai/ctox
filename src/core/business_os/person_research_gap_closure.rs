@@ -269,6 +269,39 @@ struct FieldStatus {
     extra: BTreeMap<String, Value>,
 }
 
+/// Native provenance for one accepted writeback. A chat assignment without a
+/// durable gap task has an unknown attempt, not an invented zero counter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct FieldWritebackRevision {
+    writeback_id: String,
+    command_id: String,
+    attempt: Option<i64>,
+    written_at_ms: i64,
+}
+
+fn stamp_writeback_field_revisions(
+    request: &mut ResearchWritebackRequest,
+    revision: &FieldWritebackRevision,
+) -> anyhow::Result<()> {
+    let revision = serde_json::to_value(revision)?;
+    for status in request.field_status.values_mut() {
+        status.extra.remove("review");
+        status
+            .extra
+            .insert("revision".to_string(), revision.clone());
+    }
+    if let Some(people) = request.result.person_field_status.as_object_mut() {
+        for fields in people.values_mut().filter_map(Value::as_object_mut) {
+            for status in fields.values_mut().filter_map(Value::as_object_mut) {
+                status.remove("review");
+                status.insert("revision".to_string(), revision.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Workers hand `sources` over as a list, but live runs also sent one source as
 /// a bare object and, on 07.09.2026, the whole list as a JSON string (three
 /// rejections in a row for one lead, "expected a sequence"). The meaning is
@@ -1730,6 +1763,23 @@ pub(super) fn handle_research_writeback(
                 .cloned()
         })
         .unwrap_or_else(|| Value::Array(Vec::new()));
+    // Provenance belongs to this native writeback, never to worker-supplied
+    // extra metadata. Stamp before moving result fields into the projection.
+    let now = super::person_research_command::now_ms();
+    let writeback_id = match command.id.as_deref() {
+        Some(id) => {
+            anyhow::ensure!(!id.trim().is_empty(), "writeback command id is empty");
+            id.to_string()
+        }
+        None => format!("native-writeback:{}", uuid::Uuid::new_v4()),
+    };
+    let revision = FieldWritebackRevision {
+        writeback_id,
+        command_id: request.research_command_id.clone(),
+        attempt: gap_task.as_ref().map(|(task, _)| task.attempt),
+        written_at_ms: now,
+    };
+    stamp_writeback_field_revisions(&mut request, &revision)?;
     let mut projection_result = serde_json::json!({
         "fields": request.result.fields,
         "person_records": request.result.person_records,
@@ -1737,7 +1787,6 @@ pub(super) fn handle_research_writeback(
         "known_person_records": known_person_records,
     });
     add_field_status_evidence(&mut projection_result, &request.field_status)?;
-    let now = super::person_research_command::now_ms();
     let previous_keys = previous_research_keys(&lead);
     let previous_person_statuses = lead
         .get("person_field_status")
@@ -1875,6 +1924,7 @@ pub(super) fn handle_research_writeback(
     Ok(serde_json::json!({
         "ok": true,
         "record_id": request.record_id,
+        "writeback_id": revision.writeback_id,
         "research_command_id": request.research_command_id,
         "gap_task_id": request.gap_task_id,
         "research_status": if needs_review { "needs_review" } else { "completed" },
@@ -4730,6 +4780,10 @@ mod tests {
                       "person_geschlecht": {"status": "no_match", "reason": "keine Angabe"}}
             }),
         );
+        let mut command = command;
+        let incoming = &mut command.payload["result"]["person_field_status"]["A"]["person_email"];
+        incoming["revision"] = serde_json::json!({"writeback_id": "forged-person"});
+        incoming["review"] = serde_json::json!({"verdict": "refuted"});
         let result = handle_research_writeback(temp.path(), &command)?;
         assert_eq!(result["ok"], true, "{result}");
         assert_eq!(
@@ -4762,6 +4816,21 @@ mod tests {
             contact("A")["field_status"]["person_email"]["status"],
             "verified",
             "{lead}"
+        );
+        let canonical = &lead["person_field_status"]["A"]["person_email"];
+        assert_eq!(
+            canonical["revision"]["writeback_id"],
+            result["writeback_id"]
+        );
+        assert_eq!(canonical["revision"]["command_id"], research_command_id);
+        assert!(
+            canonical["revision"]["attempt"].is_null(),
+            "unknown chat attempt stays unknown"
+        );
+        assert!(canonical.get("review").is_none());
+        assert_eq!(
+            contact("A")["field_status"]["person_email"]["revision"],
+            canonical["revision"]
         );
         assert!(
             contact("B")["field_status"].get("person_email").is_none(),
@@ -5803,9 +5872,23 @@ mod tests {
             }),
         );
 
-        handle_research_writeback(temp.path(), &command)?;
+        let mut command = command;
+        command.payload["field_status"]["firma_domain"]["revision"] =
+            serde_json::json!({"writeback_id": "caller-forged", "attempt": 999});
+        command.payload["field_status"]["firma_domain"]["review"] = serde_json::json!({"verdict": "refuted", "revision_ref": {"writeback_id": "caller-forged"}});
+        let result = handle_research_writeback(temp.path(), &command)?;
         let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
             .context("lead missing after writeback")?;
+        let status = &lead["field_status"]["firma_domain"];
+        assert_eq!(result["writeback_id"], command.id.as_deref().unwrap());
+        assert_eq!(status["revision"]["writeback_id"], result["writeback_id"]);
+        assert_eq!(status["revision"]["command_id"], research_command_id);
+        assert_eq!(status["revision"]["attempt"], task.attempt);
+        assert!(status["revision"]["written_at_ms"].as_i64().unwrap() > 0);
+        assert!(
+            status.get("review").is_none(),
+            "worker cannot author a review: {lead}"
+        );
         assert_eq!(lead["research_status"], "needs_review");
         assert!(lead["research_phase"].is_null());
         assert_eq!(lead["gap_task_id"], task.message_key);

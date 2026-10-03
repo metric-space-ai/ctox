@@ -1,5 +1,25 @@
 # CTOX Business OS
 
+## Native research field writeback provenance
+
+Research writebacks stamp each delivered company status and accepted person-bound
+status with `revision: {writeback_id, command_id, attempt, written_at_ms}`.
+`writeback_id` is the native writeback receipt ID, `command_id` the correlated
+research command, and `attempt` the durable gap-task attempt. A chat assignment
+without such a task records `null`, rather than fabricating an attempt number.
+Trusted local calls without an envelope ID receive a native-generated ID which
+is returned with the writeback and persisted in the field revision.
+
+Worker-supplied `revision` is replaced and worker-supplied `review` is removed.
+The existing field evidence, person binding and native email verdict guards
+still decide what is accepted. Partial writebacks retain untouched field
+statuses; a replacement status expires its previous review. The contact view
+copies the same revision from the canonical person status.
+
+This is writeback provenance only. Revision-bound typed refutation, atomic
+review publication and app field reopening remain separate required
+integration work; a revision stamp alone does not prove review acceptance.
+
 ## Operator coding presets and daemon readiness
 
 `ctox coding-agent models` reads the public `ctox.coding.models.v1`
