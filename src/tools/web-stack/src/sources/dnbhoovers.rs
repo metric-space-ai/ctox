@@ -427,8 +427,9 @@ fn extract_from_organization(org: &Value, source_url: &str) -> Vec<(FieldKey, Fi
     let mut out = Vec::new();
     let url = source_url.to_string();
 
-    // Only an explicit WZ 2008 subclass is WZ evidence. NACE and SIC
-    // classifications remain distinct; an absent WZ entry yields no wz_code.
+    // wz_code — bevorzugt NACE Rev. 2 (das ist die WZ-Code-äquivalente
+    // europäische Klassifikation); Fallback auf SIC v4. High Confidence, der
+    // Wert ist eine harte Klassifikation, kein Freitext.
     if let Some(industry) = pick_industry_code(org) {
         push_field(
             &mut out,
@@ -490,41 +491,75 @@ struct IndustryPick {
 }
 
 fn pick_industry_code(org: &Value) -> Option<IndustryPick> {
-    let entries = org.get("industryCodes").and_then(Value::as_array)?;
-    let mut selected: Option<IndustryPick> = None;
-    for entry in entries {
-        let scheme = entry
-            .get("typeDescription")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let compact = scheme
-            .chars()
-            .filter(|c| !c.is_whitespace())
-            .collect::<String>()
-            .to_ascii_uppercase();
-        if !matches!(compact.as_str(), "WZ2008" | "WZ2008(DE)") {
-            continue;
+    // 1) `industryCodes[]` durchsuchen: bevorzuge NACE Rev. 2; sonst
+    //    Eintrag mit niedrigster `priority`.
+    if let Some(arr) = org.get("industryCodes").and_then(Value::as_array) {
+        let mut nace: Option<&Value> = None;
+        let mut first: Option<&Value> = None;
+        let mut best_priority: i64 = i64::MAX;
+        for entry in arr {
+            let type_desc = entry
+                .get("typeDescription")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if type_desc.eq_ignore_ascii_case("NACE Revision 2")
+                || type_desc.eq_ignore_ascii_case("NACE Rev. 2")
+            {
+                nace = Some(entry);
+            }
+            let prio = entry
+                .get("priority")
+                .and_then(Value::as_i64)
+                .unwrap_or(i64::MAX);
+            if prio < best_priority {
+                best_priority = prio;
+                first = Some(entry);
+            }
         }
-        let code = entry.get("code").and_then(Value::as_str)?.trim();
-        let digits = code.replace('.', "");
-        let valid_shape = (code.len() == 5 && !code.contains('.'))
-            || (code.len() == 7 && code.as_bytes()[2] == b'.' && code.as_bytes()[5] == b'.');
-        if !valid_shape || digits.len() != 5 || !digits.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
+        if let Some(entry) = nace.or(first) {
+            let code = entry
+                .get("code")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())?;
+            let desc = entry
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let scheme = entry
+                .get("typeDescription")
+                .and_then(Value::as_str)
+                .unwrap_or("industry code");
+            return Some(IndustryPick {
+                code: code.to_string(),
+                note: if desc.is_empty() {
+                    scheme.to_string()
+                } else {
+                    format!("{scheme}: {desc}")
+                },
+            });
         }
-        if selected.as_ref().is_some_and(|pick| pick.code != code) {
-            return None;
-        }
-        let description = entry
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        selected = Some(IndustryPick {
-            code: code.to_string(),
-            note: format!("{scheme} | {code} - {description}"),
-        });
     }
-    selected
+    // 2) Fallback: `primaryIndustryCode.usSicV4`.
+    if let Some(prim) = org.get("primaryIndustryCode") {
+        if let Some(code) = prim.get("usSicV4").and_then(Value::as_str).map(str::trim) {
+            if !code.is_empty() {
+                let desc = prim
+                    .get("usSicV4Description")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                return Some(IndustryPick {
+                    code: code.to_string(),
+                    note: if desc.is_empty() {
+                        "SIC v4".to_string()
+                    } else {
+                        format!("SIC v4: {desc}")
+                    },
+                });
+            }
+        }
+    }
+    None
 }
 
 struct RevenuePick {
@@ -859,61 +894,23 @@ mod tests {
     }
 
     #[test]
-    fn extract_fields_nace_and_sic_are_not_wz() {
+    fn extract_fields_pulls_wz_code_high() {
         let page = dummy_page(DETAIL_FIXTURE, "https://plus.dnb.com/data/duns/316840271");
-        assert!(!module()
-            .extract_fields(&page)
-            .iter()
-            .any(|(key, _)| *key == FieldKey::WzCode));
-    }
-
-    #[test]
-    fn extract_fields_requires_explicit_wz_subclass_and_quote() {
-        let body = serde_json::json!({"organization": {"industryCodes": [
-            {"typeDescription": "NACE Revision 2", "code": "2014", "priority": 1},
-            {"typeDescription": "WZ 2008 (DE)", "code": "20140",
-             "description": "Manufacture of other organic basic chemicals", "priority": 2}
-        ]}})
-        .to_string();
-        let fields = module().extract_fields(&dummy_page(
-            &body,
-            "https://plus.dnb.com/data/duns/315307116",
-        ));
+        let fields = module().extract_fields(&page);
         let wz = fields
             .iter()
-            .find(|(key, _)| *key == FieldKey::WzCode)
-            .expect("explicit WZ");
-        assert_eq!(wz.1.value, "20140");
+            .find(|(k, _)| matches!(k, FieldKey::WzCode))
+            .expect("wz_code");
+        // The fixture has BOTH SIC and NACE Rev. 2; we prefer the NACE entry
+        // because that is the European equivalent of the WZ-Code.
+        assert_eq!(wz.1.value, "5820");
         assert!(matches!(wz.1.confidence, Confidence::High));
         assert!(wz
             .1
             .note
             .as_deref()
-            .unwrap()
-            .contains("WZ 2008 (DE) | 20140"));
-    }
-
-    #[test]
-    fn extract_fields_rejects_ambiguous_or_incomplete_wz() {
-        for codes in [
-            vec!["20140", "20150"],
-            vec!["2014"],
-            vec!["2008"],
-            vec!["20.14"],
-        ] {
-            let entries: Vec<Value> = codes
-                .into_iter()
-                .map(|code| serde_json::json!({"typeDescription": "WZ 2008 (DE)", "code": code}))
-                .collect();
-            let body = serde_json::json!({"organization": {"industryCodes": entries}}).to_string();
-            assert!(!module()
-                .extract_fields(&dummy_page(
-                    &body,
-                    "https://plus.dnb.com/data/duns/315307116"
-                ))
-                .iter()
-                .any(|(key, _)| *key == FieldKey::WzCode));
-        }
+            .unwrap_or("")
+            .contains("NACE Revision 2"));
     }
 
     #[test]
@@ -992,7 +989,7 @@ mod tests {
     }
 
     #[test]
-    fn extract_fields_industry_rejects_primary_sic_as_wz() {
+    fn extract_fields_industry_falls_back_to_primary_sic() {
         let body = serde_json::json!({
             "organization": {
                 "primaryIndustryCode": {
@@ -1004,7 +1001,12 @@ mod tests {
         .to_string();
         let page = dummy_page(&body, "https://plus.dnb.com/data/duns/000000000");
         let fields = module().extract_fields(&page);
-        assert!(!fields.iter().any(|(key, _)| *key == FieldKey::WzCode));
+        let wz = fields
+            .iter()
+            .find(|(k, _)| matches!(k, FieldKey::WzCode))
+            .expect("wz_code via primary SIC fallback");
+        assert_eq!(wz.1.value, "7389");
+        assert!(wz.1.note.as_deref().unwrap_or("").contains("SIC v4"));
     }
 
     #[test]

@@ -180,9 +180,14 @@ SIC, NOGA and OENACE. It accepts a five-digit WZ subclass only from the
 observed company profile with the expected company ID and an exact observed
 company heading or title. Conflicting WZ values produce no `wz_code`.
 The result retains the literal WZ section in `source_quote`; an NACE value
-never supplies a missing WZ digit. The Direct+ JSON parser likewise requires
-an explicitly labelled WZ entry. These source gates do not certify an
-installed capture or the independently registered scrape script.
+never supplies a missing WZ digit. These browser-capture source gates do not
+certify an installed capture or the independently registered scrape script.
+
+The separate Direct+ JSON parser is compiled from Workjet, selected by the
+Cargo Git revision. The current de83eb26 dependency still treats NACE/SIC as
+WZ; its source correction and executing regressions belong in that active
+crate, followed by a reviewed CTOX dependency update. Editing CTOX's inactive
+src/tools/web-stack copy does not change the compiled parser.
 
 ### Outbound research source receipts
 
