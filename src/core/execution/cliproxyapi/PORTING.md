@@ -118,9 +118,17 @@
   Seven new regressions cover validation, aggregation, snapshot/lookup isolation,
   update rejection/notifications, owned-loop cancellation and delayed HTTP bodies.
   Actual native/default-transport/Go checks and host/runtime acceptance remain open.
+  Interactions-to-Responses now emits the v8.0.13 reasoning summary part/text
+  lifecycle, stable item/summary indexes and completed reasoning items with one
+  concatenated summary. Two regressions cover empty/multiple summaries and
+  overlapping text/reasoning with a late complete signature; existing guards remain.
+  The v8.0.13 audit also confirms that a full Devin inference/frame executor is
+  absent from the Rust tree. Catalog/store support does not supply that executor;
+  its provider/runtime integration and stream ordering/signature accumulation
+  are concrete remaining implementation work, not only an acceptance wait.
   Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
   account-kind collisions, legacy Home execution, public JSON boundaries, native
-  capability refresh and built-in metadata. There are108 prepared candidate test
+  capability refresh and built-in metadata. There are110 prepared candidate test
   functions in total; none of the current candidate Cargo/Go checks has executed.
   Narrow formatting and whitespace checks passed. Other executor consumers,
   host/runtime acceptance of the separate Devin catalog,

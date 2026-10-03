@@ -315,3 +315,134 @@ fn responses_completion_falls_back_to_message_text_once() {
         .collect();
     assert_eq!(deltas.len(), 1);
 }
+
+// ref: interactions_openai_responses_response_test.go @ d7914afd
+#[test]
+fn candidate_interactions_v13_reasoning_summary_has_a_complete_single_part_lifecycle() {
+    for parts in [vec!["Über", "blick\n", "fertig"], Vec::<&str>::new()] {
+        let context = TranslationContext::default();
+        let mut state = None;
+        let mut inputs = vec![
+            json!({"event_type":"step.start","index":7,"step":{"type":"thought","id":"reasoning_7"}}),
+        ];
+        for text in &parts {
+            inputs.push(json!({"event_type":"step.delta","index":7,"delta":{"type":"thought_summary","text":text}}));
+        }
+        inputs.push(json!({"event_type":"step.stop","index":7}));
+        inputs.push(
+            json!({"event_type":"interaction.completed","interaction":{"id":"interaction_7"}}),
+        );
+        let parsed: Vec<_> = inputs
+            .iter()
+            .flat_map(|input| {
+                convert_interactions_response_to_openai_responses_stream(
+                    &context,
+                    "gpt-test",
+                    b"",
+                    b"",
+                    &serde_json::to_vec(input).unwrap(),
+                    &mut state,
+                )
+                .iter()
+                .map(|bytes| event(bytes))
+                .collect::<Vec<_>>()
+            })
+            .collect();
+        let mut names = vec![
+            "response.output_item.added",
+            "response.reasoning_summary_part.added",
+        ];
+        names.extend(std::iter::repeat("response.reasoning_summary_text.delta").take(parts.len()));
+        names.extend([
+            "response.reasoning_summary_text.done",
+            "response.reasoning_summary_part.done",
+            "response.output_item.done",
+            "response.completed",
+        ]);
+        assert_eq!(
+            parsed
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
+            names
+        );
+        for (position, (_, payload)) in parsed.iter().enumerate() {
+            assert_eq!(payload["sequence_number"], position + 1);
+            if position > 0 && position < parsed.len() - 2 {
+                assert_eq!(payload["item_id"], "reasoning_7");
+                assert_eq!(payload["output_index"], 7);
+                assert_eq!(payload["summary_index"], 0);
+            }
+        }
+        assert_eq!(
+            parsed[1].1["part"],
+            json!({"type":"summary_text","text":""})
+        );
+        let done = parsed
+            .iter()
+            .find(|(name, _)| name == "response.output_item.done")
+            .unwrap();
+        assert_eq!(done.1["item"]["status"], "completed");
+        assert_eq!(
+            done.1["item"]["summary"],
+            json!([{"type":"summary_text","text":parts.concat()}])
+        );
+        assert_eq!(
+            parsed.last().unwrap().1["response"]["output"][0],
+            done.1["item"]
+        );
+        assert_eq!(parsed[parsed.len() - 4].1["text"], parts.concat());
+        assert_eq!(parsed[parsed.len() - 3].1["part"]["text"], parts.concat());
+    }
+}
+
+#[test]
+fn candidate_interactions_v13_overlapping_output_keeps_late_signature_and_final_item_identical() {
+    let context = TranslationContext::default();
+    let mut state = None;
+    let chunks = [
+        json!({"event_type":"step.start","index":0,"step":{"type":"thought","id":"reason_0"}}),
+        json!({"event_type":"step.delta","index":0,"delta":{"type":"thought_summary","text":"first "}}),
+        json!({"event_type":"step.start","index":1,"step":{"type":"model_output","id":"message_1"}}),
+        json!({"event_type":"step.delta","index":1,"delta":{"type":"text","text":"answer"}}),
+        json!({"event_type":"step.delta","index":0,"delta":{"type":"thought_signature","signature":"partial"}}),
+        json!({"event_type":"step.delta","index":0,"delta":{"type":"thought_summary","text":"second"}}),
+        json!({"event_type":"step.delta","index":0,"delta":{"type":"thought_signature","signature":"partial-complete"}}),
+        json!({"event_type":"step.stop","index":1}),
+        json!({"event_type":"step.stop","index":0}),
+        json!({"event_type":"interaction.completed","interaction":{"id":"interaction"}}),
+    ];
+    let mut parsed = Vec::new();
+    for chunk in chunks {
+        parsed.extend(
+            convert_interactions_response_to_openai_responses_stream(
+                &context,
+                "gpt-test",
+                b"",
+                b"",
+                &serde_json::to_vec(&chunk).unwrap(),
+                &mut state,
+            )
+            .iter()
+            .map(|bytes| event(bytes)),
+        );
+    }
+    let item_done: Vec<_> = parsed
+        .iter()
+        .filter(|(name, _)| name == "response.output_item.done")
+        .collect();
+    assert_eq!(item_done.len(), 2);
+    assert_eq!(item_done[0].1["item"]["id"], "message_1");
+    assert_eq!(item_done[1].1["item"]["id"], "reason_0");
+    assert_eq!(
+        item_done[1].1["item"]["encrypted_content"],
+        "partial-complete"
+    );
+    assert_eq!(
+        item_done[1].1["item"]["summary"],
+        json!([{"type":"summary_text","text":"first second"}])
+    );
+    let completed = &parsed.last().unwrap().1["response"]["output"];
+    assert_eq!(completed[0], item_done[1].1["item"]);
+    assert_eq!(completed[1], item_done[0].1["item"]);
+}
