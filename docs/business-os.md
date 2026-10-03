@@ -48,7 +48,28 @@ normalization/budget clamping inside an IMMEDIATE transaction. A status-damaging
 projection rolls back before canonical commit or any core-mirror side effect;
 wire budgets remain unchanged. These patches reject deleted lead resurrection
 and cannot issue native receipts even for a DataWrite actor.
-Trusted native writebacks and audit publication retain their existing paths.
+Validated native writebacks and audit publication additionally commit one private
+native-store witness per exact Lead/field/person location with the normalized
+field status. This evidence is not replicated, is not another command claim or
+lifecycle store, and keeps only the current witnessed status. Publication requires
+that exact prior writeback witness, as well as the existing persisted audit and
+current native task authority. Both the new review and its witness commit in the
+same IMMEDIATE transaction; a projection that damages status rolls back both.
+Native writeback and email producers pass their complete pre-derivation master
+snapshot into final persistence. Inside the IMMEDIATE transaction that snapshot
+must equal the actual current row; otherwise the producer rejects the stale
+write before changing either document or witness. The publisher does not share
+the in-process research guard, so that guard alone is not this fence. A fresh
+producer can update another field while retaining the newer untouched verdict
+and witness. Email persistence preserves matching witnesses but cannot issue a
+writeback or review witness; no replay, receipt or attempt is manufactured.
+The native computation view recognizes a refutation only when the full current
+status matches its record/field/person witness. Copying IDs, changing a claim,
+or transplanting a status cannot confer authority. Legacy review metadata gets
+no historical receipt or fabricated attempt: computation ignores its unsupported
+review while its stored evidence remains unchanged. Actual writeback completion
+and asynchronous email completion use this native view; pure JSON shape predicates
+alone are not issuer authentication. Browser app acceptance remains separate.
 
 Browser rendering/selection and the installed end-to-end review workflow still
 require their app integration and acceptance; source code and provenance alone
