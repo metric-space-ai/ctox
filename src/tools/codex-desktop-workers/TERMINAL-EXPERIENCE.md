@@ -81,3 +81,9 @@ and cannot contribute numeric assessments or delivery statistics. Numeric
 assessments cannot be hidden with this classification. Native Grok deliveries
 retain the actual session/turn-number identity and raw authoring model/harness;
 the compact UI displays the native harness as @grok.
+
+Native Claude assessments retain the actual entrypoint from each exact
+assessed assistant event alongside session, turn UUID, model and timestamp.
+The compact display normalizes proved claude-desktop to @claude while raw
+client metadata remains in JSON and immutable assessment history. Unknown
+clients are preserved rather than inferred from a model name.

@@ -20,7 +20,7 @@
 const D=JSON.parse(document.getElementById('report-data').textContent),$=id=>document.getElementById(id);
 const E=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const F=v=>v==null?'—':Number(v).toFixed(1);
-const harnessLabel=h=>['Codex Desktop','Codex'].includes(h)?'codex':['native Grok Build CLI','Grok Build CLI'].includes(h)?'grok':h||'—';
+const harnessLabel=h=>['Codex Desktop','Codex'].includes(h)?'codex':['Claude Desktop','claude-desktop'].includes(h)?'claude':['native Grok Build CLI','Grok Build CLI'].includes(h)?'grok':h||'—';
 const avg=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:null,known=a=>a.filter(v=>v!=null);
 const all=[...D.assessments.map(a=>({...a,rubric:a.schema})),...D.legacy];
 const stageModel=(a,s)=>a[s]&&typeof a[s]==='object'?(Object.hasOwn(a[s],'model')?a[s].model:a[s].provenance?.model??a.model):Object.hasOwn(a,s+'_model')?a[s+'_model']:a.model;

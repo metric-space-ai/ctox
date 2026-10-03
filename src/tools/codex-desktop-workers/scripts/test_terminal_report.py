@@ -40,6 +40,16 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(group["harness"], "grok")
         self.assertEqual(row["harness"], raw)
         self.assertEqual((group["first"]["mean"], group["corrected"]["mean"]), (3.1,4))
+    def test_native_claude_harness_alias_preserves_client_evidence(self):
+        row = dict(pr_url="pr", role="parent", actor_id="native", schema=r.RUBRIC,
+                   model="claude-fable-5-1", harness="claude-desktop",
+                   parent_completion={"weighted_total":7.65}, rework_iterations=1,
+                   iteration_scope="pr")
+        group = r.leaderboard_data([row])[0]
+        self.assertEqual(group["harness"], "claude")
+        self.assertEqual(group["score"]["mean"], 7.65)
+        self.assertEqual(row["harness"], "claude-desktop")
+        self.assertEqual(r.harness_label("unknown-native-client"), "unknown-native-client")
     def test_weights_and_essential_cap(self):
         self.assertEqual(r.weighted(self.result()),8)
         result=self.result(9);result["essential_defect"]=True
