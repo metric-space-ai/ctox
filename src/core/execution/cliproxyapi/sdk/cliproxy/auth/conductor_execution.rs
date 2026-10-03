@@ -324,7 +324,12 @@ impl GenericAuthRuntime {
                 .execution()
                 .ok_or(GenericExecutionError::ExecutionUnavailable)?;
             let execute = |auth: &Auth| {
-                let execution = selected_executor_request(&request, auth, registration.provider());
+                let execution = selected_executor_request(
+                    &self.manager,
+                    &request,
+                    auth,
+                    registration.provider(),
+                );
                 let executor = executor.clone();
                 async move {
                     match operation {
@@ -570,6 +575,7 @@ pub(crate) fn scheduler_options(request: &ExecutorRequest) -> SchedulerPickOptio
 }
 
 pub(crate) fn selected_executor_request(
+    manager: &AuthManager,
     request: &ExecutorRequest,
     auth: &Auth,
     provider: &str,
@@ -577,6 +583,25 @@ pub(crate) fn selected_executor_request(
     let mut auth = auth.clone();
     let index = auth.ensure_index();
     let mut execution = prepare_executor_request(request, &auth, provider);
+    let route_model = auth_selection_model(request);
+    let (_, alias, snapshot) =
+        manager.execution_model_candidates_with_alias(&auth, &execution.model);
+    if !alias.upstream_model.trim().is_empty() {
+        execution.model = alias.upstream_model;
+    }
+    // Both ordinary and refreshed retries enter here after credential
+    // preparation. Rebind from this selected auth/model, never JSON metadata.
+    let selected = super::api_key_model_capabilities::attach_resolved_api_key_model_info(
+        &snapshot,
+        crate::sdk::cliproxy::executor::Request {
+            model: execution.model.clone(),
+            ..crate::sdk::cliproxy::executor::Request::default()
+        },
+        &auth,
+        &route_model,
+        &execution.model,
+    );
+    execution.resolved_model_info = selected.metadata.resolved_api_key_model_info;
     execution
         .metadata
         .insert("selected_auth_id".into(), serde_json::json!(auth.id));

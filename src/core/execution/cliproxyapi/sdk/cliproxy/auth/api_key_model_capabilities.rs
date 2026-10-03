@@ -213,12 +213,17 @@ fn compile_snapshot(config: &ProviderCompatConfig, auths: &[Auth]) -> ApiKeyMode
     snapshot
 }
 
+#[cfg(test)]
+#[path = "api_key_model_compat_test.rs"]
+mod candidate_resolved_model_capability_tests;
+
 #[derive(Clone)]
 struct ModelView {
     name: String,
     alias: String,
     model_type: &'static str,
     force_mapping: bool,
+    is_compat: bool,
     thinking: Option<ThinkingSupport>,
 }
 
@@ -313,6 +318,7 @@ fn codex_model_view(model: &CodexModel, model_type: &'static str) -> ModelView {
         alias: model.alias.clone(),
         model_type,
         force_mapping: model.force_mapping,
+        is_compat: model.is_compat,
         thinking: model.thinking.as_ref().map(thinking_support),
     }
 }
@@ -325,6 +331,7 @@ fn vertex_model_views(key: &VertexCompatKey) -> Vec<ModelView> {
             alias: model.alias.clone(),
             model_type: "gemini",
             force_mapping: model.force_mapping,
+            is_compat: false,
             thinking: model.thinking.as_ref().map(thinking_support),
         })
         .collect()
@@ -346,6 +353,7 @@ fn openai_model_views(entry: &OpenAiCompatibility) -> Vec<ModelView> {
                 alias: model.alias.clone(),
                 model_type: "openai-compatibility",
                 force_mapping: model.force_mapping,
+                is_compat: model.is_compat,
                 thinking,
             }
         })
@@ -375,15 +383,13 @@ fn add_route(by_route: &mut BTreeMap<String, Vec<ConfiguredRoute>>, model: Model
         return;
     }
     let support = model.thinking.as_ref();
+    let mut model_info = modelconfig::resolve_model_info(&name, model.model_type, support);
+    model_info.is_compat = model.is_compat;
     let route = ConfiguredRoute {
         upstream_model: name.clone(),
         force_mapping: model.force_mapping,
         original_alias: alias.clone(),
-        model_info: Arc::new(modelconfig::resolve_model_info(
-            &name,
-            model.model_type,
-            support,
-        )),
+        model_info: Arc::new(model_info),
     };
     let mut seen = Vec::new();
     for route_model in [&alias, &name] {

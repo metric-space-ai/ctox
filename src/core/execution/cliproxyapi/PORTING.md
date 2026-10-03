@@ -15,7 +15,7 @@
 - Current gate: open candidate `e2bff0107bb307337aaa19018ccddd55f64253d5`
   (tag `v8.0.11`, verified 2026-10-02). The accepted pin is still
   `a88197f845c979132c8978ea223c6af05cc81536`. This candidate is not promoted.
-- Latest observed upstream release: `v8.0.12`, published 2026-10-02 20:21:45 UTC,
+- Previous observed upstream release: `v8.0.12`, published 2026-10-02 20:21:45 UTC,
   commit `2044a01f422998de79a5da8015141b878886534d`. This is an additional
   required follow-up candidate for the requested current-upstream outcome,
   not a promotion of the frozen v8.0.11 review. Its delta against v8.0.11 is
@@ -26,6 +26,15 @@
   Preserve the v8.0.11 review; do not claim the full update is current after
   only that candidate passes.
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.12.
+- Latest observed upstream release: v8.0.13, published 2026-10-03 09:02:46 UTC,
+  commit d7914afdedca7af95ee974a42453dc49fc1388ce. Live GitHub API and the exact
+  release page agree. Its additional v8.0.12 delta is21 files (+1,891 / -60),
+  across11 commits: tool integer-field mappings, catalog IDs/token limits,
+  response/Devin stream lifecycles, Claude diagnostics/timeouts/search sources,
+  Codex usage order and auth snapshot synchronization. Semantic porting,
+  Rust/Go checks and promotion remain open. Preserve both earlier reviews;
+  the accepted pin is unchanged.
+  Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.13.
 - Parent continuation after bounded Grok runs: all six candidate request
   compatibility facades are now exported, with24 prepared regressions:
   Claude→Codex/OpenAI Chat/Interactions/Gemini and OpenAI Chat/Responses→Claude.
@@ -49,11 +58,22 @@
   Compatibility forces portable multi-agent messages independently of Codex
   client detection and removes internal per-item metadata through shared raw-JSON
   mutations. Opt-in collab_spawn orphan delegation consumes matching call counts
-  before downgrading only the two CTOX delegation tools; untouched siblings,
-  duplicate roots and non-string output bytes remain preserved.
+  before downgrading only codex_app create_thread/send_message_to_thread output;
+  untouched siblings, duplicate roots and non-string output bytes remain preserved.
   Twelve additional helper/client/orphan regressions are prepared, unexecuted.
-  Live per-attempt compatibility-capability propagation and executor integration
-  remain open; this is not runtime or promotion acceptance.
+  Typed API-key models now accept the upstream is-compat option and carry it in
+  the auth manager's private model snapshot. Generic unary, count and stream
+  attempts resolve aliases and selected capabilities from one immutable snapshot,
+  clear stale authority and rebind after each credential selection/refresh.
+  ExecutorRequest keeps this authority outside its JSON wire; client metadata
+  and headers cannot opt into compatibility. The active OpenAI-compatible
+  executor consumes it before registry translation, normalizes integer schemas
+  before conversion and uses the compatibility dispatcher/plugin normalizer.
+  Seven further configuration, selection, wire and executor regressions are
+  prepared, for63 new tests in total. Narrow formatting and whitespace checks
+  passed; Cargo/Go execution is still pending. Home capability binding, other
+  executor consumers and live thinking update-intent propagation remain open;
+  this is not runtime or promotion acceptance.
   Source/target summary extraction
   now keeps OpenAI Chat reasoning depth separate from Claude display visibility.
   The xAI subscription client-version header is updated from0.2.93 to upstream

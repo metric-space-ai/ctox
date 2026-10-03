@@ -370,6 +370,9 @@ pub fn prepare_executor_request(
     provider: &str,
 ) -> ExecutorRequest {
     let mut request = request.clone();
+    // A new credential selection must never inherit a previous attempt's
+    // private capability. The generic conductor rebinds from its own snapshot.
+    request.resolved_model_info = None;
     request.auth_id.clone_from(&auth.id);
     request.auth_provider = provider.to_owned();
     request.auth_metadata.clone_from(&auth.metadata);

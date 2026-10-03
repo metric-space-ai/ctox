@@ -608,6 +608,10 @@ pub struct ExecutorRequest {
     pub storage_json: Vec<u8>,
     pub auth_metadata: JsonMetadata,
     pub auth_attributes: BTreeMap<String, String>,
+    /// Auth-manager-owned selected-model snapshot. It is intentionally absent
+    /// from the public plugin/client JSON wire and cannot be supplied in metadata.
+    #[serde(skip)]
+    pub resolved_model_info: Option<Arc<crate::internal::modelconfig::ModelInfo>>,
     #[serde(skip)]
     pub http_client: Option<Arc<dyn HostHttpClient>>,
 }

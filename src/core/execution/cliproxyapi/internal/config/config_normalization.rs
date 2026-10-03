@@ -79,10 +79,18 @@ pub struct CodexModel {
     pub max_context_length: usize,
     #[serde(default)]
     pub force_mapping: bool,
+    /// Selected configured-model compatibility; never inferred from client input.
+    /// ref: internal/config/config_types.go @ 2044a01f
+    #[serde(default, skip_serializing_if = "compatibility_disabled")]
+    pub is_compat: bool,
     #[serde(default)]
     pub image: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<RegistryThinkingSupport>,
+}
+
+fn compatibility_disabled(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

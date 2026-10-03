@@ -32,6 +32,9 @@ pub struct ModelInfo {
     pub id: String,
     pub provider_type: String,
     pub user_defined: bool,
+    /// Private per-selected-model capability, matching registry.ModelInfo.IsCompat.
+    /// Static catalog entries default to false.
+    pub is_compat: bool,
     pub max_completion_tokens: usize,
     pub thinking: Option<ThinkingSupport>,
 }
@@ -86,6 +89,7 @@ impl From<registry::ModelInfo> for ModelInfo {
             id: info.id.to_owned(),
             provider_type: info.provider_type.to_owned(),
             user_defined: info.user_defined,
+            is_compat: false,
             max_completion_tokens: info.max_completion_tokens,
             thinking: info.thinking.map(ThinkingSupport::from),
         }
