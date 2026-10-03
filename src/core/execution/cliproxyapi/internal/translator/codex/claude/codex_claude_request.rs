@@ -8,7 +8,8 @@ use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::internal::signature::{
-    compatible_signature_for_provider, inspect_grok_encrypted_content, SignatureProvider,
+    compatible_signature_for_provider, detect_signature_provider_for_block,
+    inspect_grok_encrypted_content, SignatureBlockKind, SignatureProvider,
 };
 use crate::internal::thinking::convert_budget_to_level;
 use crate::internal::translator::common::claude_message_system_reminder_text;
@@ -25,7 +26,27 @@ const CODEX_NAME_LIMIT: usize = 64;
 pub fn convert_claude_request_to_codex(
     model_name: &str,
     input_raw_json: &[u8],
+    stream: bool,
+) -> Vec<u8> {
+    convert_claude_request_to_codex_impl(model_name, input_raw_json, stream, false)
+}
+
+/// ref: internal/translator/codex/claude/codex_claude_request.go:48-54
+/// Candidate e2bff010: compatibility endpoints retain empty or unknown thinking
+/// signatures while recognized incompatible provider signatures remain excluded.
+pub fn convert_claude_request_to_codex_with_compat(
+    model_name: &str,
+    input_raw_json: &[u8],
+    stream: bool,
+) -> Vec<u8> {
+    convert_claude_request_to_codex_impl(model_name, input_raw_json, stream, true)
+}
+
+fn convert_claude_request_to_codex_impl(
+    model_name: &str,
+    input_raw_json: &[u8],
     _stream: bool,
+    preserve_empty_thinking_blocks: bool,
 ) -> Vec<u8> {
     let Ok(root) = serde_json::from_slice::<Value>(input_raw_json) else {
         return input_raw_json.to_vec();
@@ -39,7 +60,13 @@ pub fn convert_claude_request_to_codex(
     append_system(object.get("system"), &mut input);
     if let Some(messages) = object.get("messages").and_then(Value::as_array) {
         for message in messages {
-            append_message(model_name, message, &tool_names, &mut input);
+            append_message(
+                model_name,
+                message,
+                &tool_names,
+                &mut input,
+                preserve_empty_thinking_blocks,
+            );
         }
     }
 
@@ -100,6 +127,7 @@ fn append_message(
     message: &Value,
     tool_names: &HashMap<String, String>,
     input: &mut Vec<Value>,
+    preserve_empty_thinking_blocks: bool,
 ) {
     let role = message
         .get("role")
@@ -132,10 +160,9 @@ fn append_message(
                 }
             }
             "thinking" if role == "assistant" => {
-                let signature = part
-                    .get("signature")
-                    .and_then(Value::as_str)
-                    .and_then(|raw| compatible_reasoning_signature(model_name, raw));
+                let signature = compatible_reasoning_signature(
+                    model_name, part, preserve_empty_thinking_blocks,
+                );
                 if let Some(signature) = signature {
                     flush_message(role, &mut buffered, input);
                     input.push(json!({
@@ -226,19 +253,32 @@ fn tool_result_output(content: Option<&Value>) -> Value {
     Value::String(value_as_string(content))
 }
 
-fn compatible_reasoning_signature(model_name: &str, raw: &str) -> Option<String> {
-    compatible_signature_for_provider(SignatureProvider::Gpt, raw).or_else(|| {
-        model_name
-            .trim()
-            .to_ascii_lowercase()
-            .contains("grok")
-            .then(|| {
-                inspect_grok_encrypted_content(raw)
-                    .ok()
-                    .map(|_| raw.to_owned())
-            })
-            .flatten()
-    })
+// ref: internal/translator/codex/claude/codex_claude_request.go:161-185
+fn compatible_reasoning_signature(
+    model_name: &str,
+    part: &Value,
+    preserve_empty_thinking_blocks: bool,
+) -> Option<String> {
+    let raw = part.get("signature").map(value_as_string).unwrap_or_default();
+    if let Some(signature) = compatible_signature_for_provider(SignatureProvider::Gpt, &raw) {
+        return Some(signature);
+    }
+    // Null and absent signatures match gjson's empty-string fallback. Other
+    // non-string values cannot use the unknown-signature compatibility branch.
+    if preserve_empty_thinking_blocks
+        && (raw.trim().is_empty()
+            || (part.get("signature").is_some_and(Value::is_string)
+                && detect_signature_provider_for_block(&raw, SignatureBlockKind::ClaudeThinking)
+                    == SignatureProvider::Unknown))
+    {
+        return Some(raw);
+    }
+    model_name
+        .trim()
+        .to_ascii_lowercase()
+        .contains("grok")
+        .then(|| inspect_grok_encrypted_content(&raw).ok().map(|_| raw.clone()))
+        .flatten()
 }
 
 fn convert_tools(tools: Option<&Value>, names: &HashMap<String, String>) -> Vec<Value> {

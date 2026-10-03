@@ -17,16 +17,15 @@
 //! * `tools` with no `properties` get an empty `properties: {}` injected
 //!   recursively into every object schema so the OpenAI wire remains valid.
 //! * Claude `tool_use` is only emitted for `role == "assistant"` and Claude
-//!   `thinking` only contributes to `reasoning_content` for assistant messages
-//!   that carry a signature that `compatible_signature_for_provider(GPT, ...)`
-//!   accepts. This is the upstream security gate against injection of foreign
-//!   reasoning state.
+//!   `thinking` contributes to `reasoning_content` for assistant messages.
+//!   The normal facade requires a GPT-compatible signature; the explicit
+//!   compatibility facade preserves thinking text for configured endpoints.
 //! * Tool-result messages must be emitted immediately after the assistant
 //!   `tool_calls` that produced them; the upstream comment notes this OpenAI
 //!   adjacency rule and we follow it verbatim by flushing `tool_result`
 //!   messages before the current message's own body when role is `assistant`.
-//! * `redacted_thinking` is never mapped to `reasoning_content` and unsigned
-//!   thinking is dropped.
+//! * `redacted_thinking` is never mapped to `reasoning_content`; the normal
+//!   facade drops unsigned thinking.
 
 use serde_json::{json, Map, Value};
 
@@ -44,6 +43,25 @@ use crate::internal::util::{
 /// Messages request, mirroring the upstream `ConvertClaudeRequestToOpenAI`
 /// signature. Returns raw JSON bytes ready for the SDK to feed downstream.
 pub fn convert_claude_request_to_openai(model_name: &str, input: &[u8], stream: bool) -> Vec<u8> {
+    convert_claude_request_to_openai_impl(model_name, input, stream, false)
+}
+
+/// ref: internal/translator/openai/claude/openai_claude_request.go:26-32
+/// Candidate e2bff010: preserve assistant thinking text for compatibility endpoints.
+pub fn convert_claude_request_to_openai_with_compat(
+    model_name: &str,
+    input: &[u8],
+    stream: bool,
+) -> Vec<u8> {
+    convert_claude_request_to_openai_impl(model_name, input, stream, true)
+}
+
+fn convert_claude_request_to_openai_impl(
+    model_name: &str,
+    input: &[u8],
+    stream: bool,
+    preserve_thinking_blocks: bool,
+) -> Vec<u8> {
     let Ok(root) = serde_json::from_slice::<Value>(input) else {
         return input.to_vec();
     };
@@ -171,7 +189,7 @@ pub fn convert_claude_request_to_openai(model_name: &str, input: &[u8], stream: 
     if let Some(messages) = root_object.get("messages") {
         if let Some(messages) = messages.as_array() {
             for message in messages {
-                convert_message(message, &mut message_items);
+                convert_message(message, &mut message_items, preserve_thinking_blocks);
             }
         }
     }
@@ -240,7 +258,11 @@ pub fn convert_claude_request_to_openai(model_name: &str, input: &[u8], stream: 
     output
 }
 
-fn convert_message(message: &Value, message_items: &mut Vec<Vec<u8>>) {
+fn convert_message(
+    message: &Value,
+    message_items: &mut Vec<Vec<u8>>,
+    preserve_thinking_blocks: bool,
+) {
     let role = message.get("role").and_then(Value::as_str).unwrap_or("");
     let content = message.get("content");
 
@@ -274,7 +296,7 @@ fn convert_message(message: &Value, message_items: &mut Vec<Vec<u8>>) {
                     if role != "assistant" {
                         continue;
                     }
-                    if !should_map_claude_thinking_to_gpt_reasoning(part) {
+                    if !preserve_thinking_blocks && !should_map_claude_thinking_to_gpt_reasoning(part) {
                         continue;
                     }
                     let text = get_thinking_text_value(part);
