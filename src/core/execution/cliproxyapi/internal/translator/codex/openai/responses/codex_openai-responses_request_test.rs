@@ -54,6 +54,19 @@ fn normalizes_all_web_search_alias_locations() {
 }
 
 #[test]
+fn preserves_requested_web_search_sources_and_normalized_bytes() {
+    for include in [
+        json!(["web_search_call.action.sources"]),
+        json!(["discarded", "web_search_call.action.sources", "reasoning.encrypted_content", "web_search_call.action.sources"]),
+    ] {
+        let output = convert(&serde_json::to_vec(&json!({"include":include})).unwrap());
+        assert_eq!(output["include"], json!(["reasoning.encrypted_content", "web_search_call.action.sources"]));
+    }
+    let input = br#" {"stream":true,"store":false,"parallel_tool_calls":true,"include":["reasoning.encrypted_content","web_search_call.action.sources"],"input":[]} "#;
+    assert_eq!(convert_openai_responses_request_to_codex("gpt-5.6", input, true), input);
+}
+
+#[test]
 fn normalized_request_preserves_bytes() {
     let input = br#" {"stream":true,"store":false,"parallel_tool_calls":true,"include":["reasoning.encrypted_content"],"service_tier":"priority","input":[]} "#;
     assert_eq!(

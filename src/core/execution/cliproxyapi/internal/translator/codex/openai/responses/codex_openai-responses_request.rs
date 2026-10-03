@@ -29,7 +29,14 @@ pub fn convert_openai_responses_request_to_codex(
     changed |= set_required_bool(object, "store", false);
     changed |= set_required_bool(object, "parallel_tool_calls", true);
 
-    let required_include = json!(["reasoning.encrypted_content"]);
+    // ref: internal/translator/codex/openai/responses/codex_openai-responses_request.go:118-150 @ 2044a01f
+    let include_sources = object.get("include").and_then(Value::as_array)
+        .is_some_and(|values| values.iter().any(|value| value.as_str() == Some("web_search_call.action.sources")));
+    let required_include = if include_sources {
+        json!(["reasoning.encrypted_content", "web_search_call.action.sources"])
+    } else {
+        json!(["reasoning.encrypted_content"])
+    };
     if object.get("include") != Some(&required_include) {
         object.insert("include".to_owned(), required_include);
         changed = true;

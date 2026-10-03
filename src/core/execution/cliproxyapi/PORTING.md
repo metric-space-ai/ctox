@@ -52,6 +52,9 @@
   headers retain their upstream precedence and session affinity uses x-grok-conv-id.
   Four additional routing/credential/header regressions are prepared; Rust/Go
   execution and live xAI inference acceptance remain unverified.
+  Two further v8.0.12 response regressions preserve requested Codex web-search
+  source includes and classify Claude pause_turn/max_tokens as incomplete in
+  both transports. They remain unexecuted; full response-path parity is open.
   Compilation/Rust/Go execution, live executor compatibility/update-intent
   callers and full candidate parity remain pending. No pin or release gate
   was promoted.
