@@ -208,6 +208,7 @@ class CtoxRxCollection {
     this.storageCollection = storageCollection;
     this.demandLoader = null;
     this.demandLoaderListeners = new Set();
+    this.localReplicaComplete = false;
     this.liveQueryPerformanceStats = {
       complexLiveQueryReexecs: 0,
       deltaLiveQueryApplies: 0,
@@ -223,6 +224,13 @@ class CtoxRxCollection {
     if (isControlPlaneStatusCollection(this.name)) {
       for (const listener of this.demandLoaderListeners) listener();
     }
+  }
+
+  // Set by the replication state of an eagerly pulled collection once its
+  // pull drained. Control-plane ledgers stay behind their authorized demand
+  // windows regardless (permission boundary, see exec()).
+  setLocalReplicaComplete(complete) {
+    this.localReplicaComplete = Boolean(complete) && !isControlPlaneStatusCollection(this.name);
   }
 
   subscribeDemandLoaderChange(listener) {
@@ -576,15 +584,23 @@ class CtoxRxQuery {
         let pendingTimer = null;
         let initialized = false;
         let queryEmissionGeneration = 0;
+        let queryInFlight = false;
+        let reexecRequested = false;
+        let queryController = null;
         let pendingPrimaryDoc = undefined;
         const primaryId = this.single
           ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath)
           : '';
-        // Storage deltas have no query-window permission stamp. Lifecycle
-        // subscriptions must re-execute through the demand loader.
+        // Storage deltas have neither the loader's window boundary nor its
+        // permission stamp. A syntactically unbounded find() is still a
+        // 200-row window when a loader/complete eager replica serves it.
+        // Check dynamically: a loader may attach after subscription starts.
         const controlPlaneRead = isControlPlaneStatusCollection(this.collection.name);
-        const canApplyPrimaryDelta = !controlPlaneRead && Boolean(primaryId);
-        const canApplyQueryDelta = !controlPlaneRead && !this.single && canApplyUnboundedQueryDelta(this.query);
+        const canApplyPrimaryDelta = () => !controlPlaneRead && Boolean(primaryId)
+          && !this.collection.demandLoader && !this.query.requireRevision;
+        const canApplyQueryDelta = () => !controlPlaneRead && !this.single
+          && !this.collection.demandLoader && !this.query.requireRevision
+          && canApplyUnboundedQueryDelta(this.query);
         let pendingSuccess = {};
         const queryDocumentsById = new Map();
         const emitQueryDocuments = () => {
@@ -602,22 +618,37 @@ class CtoxRxQuery {
           }
         };
         const flushEmit = () => {
+          if (pendingTimer != null) clearTimeout(pendingTimer);
           pendingTimer = null;
-          if (!active) return;
+          if (!active || this.signal?.aborted) return;
+          // A slow snapshot must not materialize again on every 50ms change
+          // tick. Keep one read and one coalesced follow-up per subscription.
+          // Ordinary writes do not fence the first usable snapshot; a loader
+          // replacement still does, through queryEmissionGeneration below.
+          if (queryInFlight) {
+            reexecRequested = true;
+            return;
+          }
+          queryInFlight = true;
+          reexecRequested = false;
+          const controller = new AbortController();
+          queryController = controller;
+          const abortFromCaller = () => controller.abort(this.signal.reason);
+          this.signal?.addEventListener('abort', abortFromCaller, { once: true });
           const generation = ++queryEmissionGeneration;
-          if (initialized && !canApplyPrimaryDelta && !canApplyQueryDelta) {
+          if (initialized && !canApplyPrimaryDelta() && !canApplyQueryDelta()) {
             this.collection.recordComplexLiveQueryReexec(this.query);
           }
-          this.exec()
+          this.exec({ signal: controller.signal })
             .then((value) => {
               if (!active || generation !== queryEmissionGeneration) return;
               initialized = true;
-              if (pendingPrimaryDoc !== undefined && canApplyPrimaryDelta) {
+              if (pendingPrimaryDoc !== undefined && canApplyPrimaryDelta()) {
                 listener(wrapPrimaryDeltaDocument(this.collection, pendingPrimaryDoc));
                 pendingPrimaryDoc = undefined;
                 return;
               }
-              if (canApplyQueryDelta && Array.isArray(value)) {
+              if (canApplyQueryDelta() && Array.isArray(value)) {
                 queryDocumentsById.clear();
                 for (const doc of value) {
                   const id = documentIdFromDoc(doc);
@@ -632,18 +663,32 @@ class CtoxRxQuery {
               }
               listener(value);
             })
-            .catch(() => {});
+            .catch(() => {})
+            .finally(() => {
+              this.signal?.removeEventListener('abort', abortFromCaller);
+              queryController = null;
+              queryInFlight = false;
+              if (active && reexecRequested) flushEmit();
+            });
         };
         const flushPrimaryDelta = () => {
           pendingTimer = null;
-          if (!active || !initialized || !canApplyPrimaryDelta || pendingPrimaryDoc === undefined) return;
+          if (!active || !initialized) return;
+          if (!canApplyPrimaryDelta()) { pendingPrimaryDoc = undefined; flushEmit(); return; }
+          if (pendingPrimaryDoc === undefined) return;
           const next = pendingPrimaryDoc;
           pendingPrimaryDoc = undefined;
           listener(wrapPrimaryDeltaDocument(this.collection, next));
         };
         const flushQueryDelta = () => {
           pendingTimer = null;
-          if (!active || !initialized || !canApplyQueryDelta) return;
+          if (!active || !initialized) return;
+          if (!canApplyQueryDelta()) {
+            pendingSuccess = {};
+            queryDocumentsById.clear();
+            flushEmit();
+            return;
+          }
           const success = pendingSuccess;
           pendingSuccess = {};
           applyQuerySuccess(success);
@@ -651,7 +696,7 @@ class CtoxRxQuery {
           emitQueryDocuments();
         };
         const emit = (event) => {
-          if (canApplyPrimaryDelta) {
+          if (canApplyPrimaryDelta()) {
             const success = successPayloadFromChangeEvent(event);
             if (!Object.prototype.hasOwnProperty.call(success, primaryId)) return;
             pendingPrimaryDoc = success[primaryId] || null;
@@ -660,7 +705,7 @@ class CtoxRxQuery {
             pendingTimer = setTimeout(flushPrimaryDelta, 50);
             return;
           }
-          if (canApplyQueryDelta) {
+          if (canApplyQueryDelta()) {
             pendingSuccess = {
               ...pendingSuccess,
               ...successPayloadFromChangeEvent(event),
@@ -670,12 +715,20 @@ class CtoxRxQuery {
             pendingTimer = setTimeout(flushQueryDelta, 50);
             return;
           }
+          pendingPrimaryDoc = undefined;
+          pendingSuccess = {};
+          queryDocumentsById.clear();
+          if (queryInFlight) {
+            reexecRequested = true;
+            return;
+          }
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushEmit, 50);
         };
         const unsubscribeLoader = this.collection.subscribeDemandLoaderChange(() => {
           if (!active) return;
           queryEmissionGeneration += 1;
+          queryController?.abort('generation-replaced');
           pendingSuccess = {};
           pendingPrimaryDoc = undefined;
           queryDocumentsById.clear();
@@ -687,7 +740,14 @@ class CtoxRxQuery {
         const unsubscribe = this.collection.observe(emit);
         return {
           unsubscribe: () => {
+            if (!active) return;
             active = false;
+            reexecRequested = false;
+            queryEmissionGeneration += 1;
+            queryController?.abort('subscription-ended');
+            pendingSuccess = {};
+            pendingPrimaryDoc = undefined;
+            queryDocumentsById.clear();
             if (pendingTimer != null) {
               clearTimeout(pendingTimer);
               pendingTimer = null;
@@ -742,21 +802,52 @@ class CtoxRxQuery {
     };
   }
 
-  async exec() {
+  async exec({ signal = this.signal } = {}) {
     // Phase 2: an imperative `.exec()` read keeps the collection foreground for
     // a short window so one-shot reads also get priority on the wire.
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     const demandLoader = this.collection.demandLoader;
-    if (demandLoader) {
+    // Replica coverage answers ordinary reads only. Explicit revision tokens
+    // still require the loader's authority and connection-generation checks.
+    if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision)) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit))
         ? { window: { offset: Number(this.query.skip || 0), limit: 1 } }
         : {};
-      demandOptions.signal = this.signal;
+      demandOptions.signal = signal;
       docs = await demandLoader.resolveQuery(this.query, demandOptions);
+    } else if (demandLoader) {
+      // A complete eager replica answers locally, but in the same window the
+      // loader serves (at most DEFAULT_WINDOW_LIMIT rows), so callers see the
+      // result shape they always had. Unbounded local reads handed the chat
+      // dock all 871 Business chats on the customer tenant (01.10.2026); it merged and
+      // re-persisted every one on each pass and froze the page.
+      const windowLimit = this.single && !Number.isFinite(Number(this.query.limit))
+        ? 1
+        : Math.min(
+          DEFAULT_WINDOW_LIMIT,
+          Math.max(1, Math.floor(Number(this.query.limit) || DEFAULT_WINDOW_LIMIT)),
+        );
+      const windowed = { ...this.query, limit: windowLimit };
+      docs = typeof this.collection.storageCollection.queryDocuments === 'function'
+        ? await this.collection.storageCollection.queryDocuments(windowed, {
+          matchesSelector,
+          sortDocuments,
+        })
+        : sortDocuments(
+          (await this.collection.storageCollection.allDocuments())
+            .filter((doc) => matchesSelector(doc, windowed.selector)),
+          windowed.sort,
+        ).slice(Math.max(0, Number(windowed.skip) || 0)).slice(0, windowLimit);
     } else if (isControlPlaneStatusCollection(this.collection.name)) {
       // Replication cancellation detaches the loader. A warm local row is not
       // evidence that the current actor may still read it after reconnect.
+      if (this.query.requireRevision) {
+        throw Object.assign(new Error('QUERY_GENERATION_REQUIRED: strict demand read has no loader'), {
+          code: 'QUERY_GENERATION_REQUIRED',
+          retryable: false,
+        });
+      }
       docs = [];
     } else if (typeof this.collection.storageCollection.queryDocuments === 'function') {
       docs = await this.collection.storageCollection.queryDocuments(this.query, {
@@ -777,7 +868,20 @@ class CtoxRxQuery {
     if (isControlPlaneStatusCollection(this.collection.name) && demandLoader !== this.collection.demandLoader) {
       // A response authorized under the previous bridge must not reach a
       // subscriber after that bridge has been detached or replaced.
+      if (this.query.requireRevision) {
+        throw Object.assign(new Error('QUERY_CANCELLED: generation-replaced'), {
+          code: 'QUERY_CANCELLED',
+          retryable: false,
+          generationChanged: true,
+        });
+      }
       docs = [];
+    }
+    if (signal?.aborted) {
+      throw Object.assign(new Error('QUERY_CANCELLED: consumer-abort'), {
+        code: 'QUERY_CANCELLED',
+        retryable: false,
+      });
     }
     const wrapped = docs.map((doc) => new CtoxRxDocument(this.collection, doc));
     return this.single ? wrapped[0] || null : wrapped;

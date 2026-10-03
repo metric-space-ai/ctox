@@ -28,6 +28,9 @@ const QUERY_RATE_LIMIT_RETRY_MS = 100;
 const QUERY_RATE_LIMIT_RETRIES = 16;
 const QUERY_PEER_RETRY_MS = 250;
 const QUERY_PEER_RETRIES = 24;
+// A missing ACK already consumed the full request deadline. Preserve one
+// recovery attempt without multiplying 45-second deadlines by peer retries.
+const QUERY_ACK_TIMEOUT_RETRIES = 1;
 const AUTHORIZED_PEER_WAIT_TIMEOUT_MS = 60000;
 const QUERY_PEER_WAIT_POLL_MS = 100;
 const QUERY_FETCH_REQUEST_TIMEOUT_MS = 45000;
@@ -371,16 +374,19 @@ export function createDemandLoadingTransport({
       } catch (error) {
         const peerUnavailable = isRetryableQueryPeerUnavailable(error);
         const rateLimited = isRetryableQueryRateLimited(error);
-        const retryLimit = peerUnavailable
-          ? QUERY_PEER_RETRIES
-          : rateLimited
-            ? QUERY_RATE_LIMIT_RETRIES
-            : QUERY_STREAM_LIMIT_RETRIES;
+        const ackTimeout = isQueryAckTimeout(error);
+        const retryLimit = ackTimeout
+          ? QUERY_ACK_TIMEOUT_RETRIES
+          : peerUnavailable
+            ? QUERY_PEER_RETRIES
+            : rateLimited
+              ? QUERY_RATE_LIMIT_RETRIES
+              : QUERY_STREAM_LIMIT_RETRIES;
         if (!isRetryableQueryFetch(error) || attempt >= retryLimit) {
           throw error;
         }
         attempt += 1;
-        const retryDelayMs = peerUnavailable
+        const retryDelayMs = peerUnavailable || ackTimeout
           ? QUERY_PEER_RETRY_MS
           : rateLimited
             ? QUERY_RATE_LIMIT_RETRY_MS
@@ -430,6 +436,7 @@ export function createDemandLoadingTransport({
   function isRetryableQueryFetch(error) {
     return isRetryableQueryStreamLimit(error)
       || isRetryableQueryRateLimited(error)
+      || isQueryAckTimeout(error)
       || isRetryableQueryPeerUnavailable(error);
   }
 
@@ -443,8 +450,11 @@ export function createDemandLoadingTransport({
   function isRetryableQueryPeerUnavailable(error) {
     const message = String(error?.message || '');
     return message === 'PEER_UNAVAILABLE'
-      || /WebRTC peer .* is not open/.test(message)
-      || message.includes('Timed out waiting for WebRTC response rxdb.query.fetch');
+      || /WebRTC peer .* is not open/.test(message);
+  }
+
+  function isQueryAckTimeout(error) {
+    return String(error?.message || '').includes('Timed out waiting for WebRTC response rxdb.query.fetch');
   }
 
   function delay(ms) {

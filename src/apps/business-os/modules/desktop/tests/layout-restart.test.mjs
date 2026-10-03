@@ -89,7 +89,7 @@ test('desktop imports the new export surface through a fresh module URL', async 
   const requested = new URL(match[2], new URL('../index.js', import.meta.url));
   const previouslyCached = new URL('../layout-authority.js', import.meta.url);
   assert.notEqual(requested.href, previouslyCached.href, 'old cached export surface must not satisfy the new import');
-  assert.equal(requested.search, '?v=20260919-layout-boundary-v2');
+  assert.equal(requested.search, '?v=20260929-desktop-icon-cancel-v1');
   const actualModule = await import(requested.href);
   for (const imported of match[1].split(',').map(value => value.trim())) {
     assert.equal(typeof actualModule[imported], 'function', `missing production export ${imported}`);

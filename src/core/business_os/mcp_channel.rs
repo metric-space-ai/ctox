@@ -1596,8 +1596,18 @@ pub fn tool_descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         ),
         write_tool(
             "business_os.execute_writeback",
-            "Persist completed lead research via its contracted native business_command. Requires the signed research task session. The server binds module and research_command_id; no CLI, shell or SQLite access is needed. Check the returned status; failed writeback means the task is not complete. A response with ok:true is accepted and stored: accepted_fields were taken over, open_fields lists what is still missing (not an error: research them and send them together in one further call), rejections lists defective entries only. Send many fields per call, never resend an accepted field, never send probe or debug calls. Exact shape (all keys lowercase, lists are JSON arrays, never strings): {\"record_id\": \"<lead id>\", \"payload\": {\"field_status\": {\"<field>\": {\"status\": \"verified|no_match|unsupported|action_required\", \"value\": <only for verified>, \"reason\": \"<why, for non-verified>\", \"sources\": [{\"source_id\": \"host\", \"url\": \"https://…\", \"quote\": \"verbatim\"}], \"person_key\": \"<for person_* fields>\"}}, \"result\": {\"fields\": {\"<verified field>\": {\"value\": <same as field_status>, \"sources\": [...]}}, \"person_records\": [{\"person_key\": \"…\", \"person_vorname\": \"…\", \"person_nachname\": \"…\", \"person_funktion\": \"…\", \"sources\": [...]}], \"evidence\": [{\"field_key\": \"…\", \"source_id\": \"…\", \"url\": \"…\", \"quote\": \"…\"}]}}}. Do not wrap the payload in \"item\", do not put field keys at the top level, and cover every requested field in field_status.",
-            object_schema(vec![required_string("record_id"), required_object("payload")]),
+            "Persist completed lead research via its contracted native business_command. Requires the signed research task session. The server binds module and research_command_id; no CLI, shell or SQLite access is needed. Check the returned status; failed writeback means the task is not complete. A response with ok:true is accepted and stored: accepted_fields were taken over, open_fields lists what is still missing (not an error: research them and send them together in one further call), rejections lists defective entries only. Send many fields per call, never resend an accepted field, never send probe or debug calls. Send payload as ONE JSON string that encodes the payload object (MiniMax drops large object arguments; a string arrives intact and the server decodes it and names the exact position of any JSON error). Payload object shape (all keys lowercase, lists are JSON arrays, never strings): {\"field_status\": {\"<field>\": {\"status\": \"verified|no_match|unsupported|action_required\", \"value\": <only for verified>, \"reason\": \"<why, for non-verified>\", \"sources\": [{\"source_id\": \"host\", \"url\": \"https://…\", \"quote\": \"verbatim\"}], \"person_key\": \"<for person_* fields>\"}}, \"result\": {\"fields\": {\"<verified field>\": {\"value\": <same as field_status>, \"sources\": [...]}}, \"person_records\": [{\"person_key\": \"…\", \"person_vorname\": \"…\", \"person_nachname\": \"…\", \"person_funktion\": \"…\", \"sources\": [...]}], \"evidence\": [{\"field_key\": \"…\", \"source_id\": \"…\", \"url\": \"…\", \"quote\": \"…\"}]}}. Do not wrap the payload in \"item\", do not put field keys at the top level, and cover every requested field in field_status. Call shape: {\"record_id\": \"<lead id>\", \"payload\": \"{\\\"field_status\\\": {...}, \\\"result\\\": {...}}\"}.",
+            object_schema(vec![
+                required_string("record_id"),
+                (
+                    "payload",
+                    serde_json::json!({
+                        "type": "string",
+                        "description": "The writeback payload object (field_status, result) encoded as one JSON string."
+                    }),
+                    true,
+                ),
+            ]),
         ),
         read_tool(
             "business_os.get_command_status",
@@ -9062,24 +9072,26 @@ mod tests {
         let top_two = query_records(root, &context, "customer_accounts", Some(2))?;
         assert_eq!(top_two.count, 2);
         assert_eq!(top_two.items[0].id, "new");
-        assert_eq!(top_two.items[1].id, "recent-fallback");
+        assert_eq!(top_two.items[1].id, "json-deleted");
 
         let top_three = query_records(root, &context, "customer_accounts", Some(3))?;
         assert_eq!(top_three.count, 3);
         assert_eq!(top_three.items[0].id, "new");
-        assert_eq!(top_three.items[1].id, "recent-fallback");
-        assert_eq!(top_three.items[2].id, "json-deleted");
-        assert_eq!(top_three.items[2].data["_deleted"], true);
+        assert_eq!(top_three.items[1].id, "json-deleted");
+        assert_eq!(top_three.items[1].data["_deleted"], true);
+        assert_eq!(top_three.items[2].id, "stale");
 
-        let with_fallback = query_records(root, &context, "customer_accounts", Some(5))?;
-        assert_eq!(with_fallback.count, 5);
-        assert_eq!(with_fallback.items[3].id, "stale");
-        assert_eq!(with_fallback.items[3].data["_deleted"], true);
-        assert_eq!(with_fallback.items[3].data["deleted"], true);
-        assert_eq!(with_fallback.items[3].data["is_deleted"], true);
-        assert_eq!(with_fallback.items[3].data["name"], "Tombstoned in RxDB");
-        assert_eq!(with_fallback.items[4].id, "fallback");
-        assert_eq!(with_fallback.items[4].data["_deleted"], false);
+        let native_only = query_records(root, &context, "customer_accounts", Some(5))?;
+        assert_eq!(native_only.count, 3);
+        assert_eq!(native_only.items[2].id, "stale");
+        assert_eq!(native_only.items[2].data["_deleted"], true);
+        assert_eq!(native_only.items[2].data["deleted"], true);
+        assert_eq!(native_only.items[2].data["is_deleted"], true);
+        assert_eq!(native_only.items[2].data["name"], "Tombstoned in RxDB");
+        assert!(!native_only
+            .items
+            .iter()
+            .any(|item| item.id == "fallback" || item.id == "recent-fallback"));
 
         let get_context = test_context("business_os.get_record");
         let stale = get_record(root, &get_context, "customer_accounts", "stale")?;
@@ -9089,8 +9101,105 @@ mod tests {
         assert_eq!(new.record.data["name"], "New RxDB only");
         let json_deleted = get_record(root, &get_context, "customer_accounts", "json-deleted")?;
         assert_eq!(json_deleted.record.data["_deleted"], true);
-        let fallback = get_record(root, &get_context, "customer_accounts", "fallback")?;
-        assert_eq!(fallback.record.data["name"], "Shadow only");
+        assert!(get_record(root, &get_context, "customer_accounts", "fallback").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_absence_is_authoritative_after_rxdb_tombstone_purge() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "documents": [{"id":"purged", "name":"Old live shadow", "updated_at_ms":500}]
+            }),
+        )?;
+        let path = store::rxdb_store_path(root);
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let conn = rusqlite::Connection::open(&path)?;
+        conn.execute_batch(
+            "CREATE TABLE ctox_business_os__customer_accounts__v2 (
+                id TEXT PRIMARY KEY NOT NULL, revision TEXT,
+                deleted INTEGER NOT NULL, lastWriteTime REAL NOT NULL, data TEXT NOT NULL
+            );",
+        )?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__customer_accounts__v2
+             (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![
+                "purged",
+                "2-deleted",
+                1,
+                300.0,
+                serde_json::json!({"id":"purged","name":"Native tombstone","_deleted":true})
+                    .to_string()
+            ],
+        )?;
+        let get_context = test_context("business_os.get_record");
+        let tombstone = get_record(root, &get_context, "customer_accounts", "purged")?;
+        assert_eq!(tombstone.record.data["_deleted"], true);
+        // Physical retention cleanup removes the tombstone, not native
+        // collection ownership. Reopening must not revive its older shadow.
+        conn.execute(
+            "DELETE FROM ctox_business_os__customer_accounts__v2 WHERE id=?1",
+            ["purged"],
+        )?;
+        drop(conn);
+        assert!(
+            store::pull_mcp_app_collection_record(root, "customer_accounts", "purged")?.is_none()
+        );
+        assert!(get_record(root, &get_context, "customer_accounts", "purged").is_err());
+        let query_context = test_context("business_os.query_records");
+        let empty = query_records(root, &query_context, "customer_accounts", Some(5))?;
+        assert_eq!(empty.count, 0);
+        assert!(empty.items.is_empty());
+        let reopened = rusqlite::Connection::open(&path)?;
+        assert_eq!(
+            reopened.query_row(
+                "SELECT COUNT(*) FROM ctox_business_os__customer_accounts__v2",
+                [],
+                |row| row.get::<_, i64>(0),
+            )?,
+            0
+        );
+        drop(reopened);
+        assert!(
+            store::pull_mcp_app_collection_record(root, "customer_accounts", "purged")?.is_none()
+        );
+        assert_eq!(
+            query_records(root, &query_context, "customer_accounts", Some(5))?.count,
+            0
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mcp_app_legacy_shadow_reads_require_no_native_collection() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        store::push_collection_records(
+            root,
+            serde_json::json!({
+                "collection": "customer_accounts",
+                "documents": [
+                    {"id":"older","name":"Legacy older","updated_at_ms":90},
+                    {"id":"recent","name":"Legacy recent","updated_at_ms":375}
+                ]
+            }),
+        )?;
+        let query_context = test_context("business_os.query_records");
+        let latest = query_records(root, &query_context, "customer_accounts", Some(1))?;
+        assert_eq!(latest.count, 1);
+        assert_eq!(latest.items[0].id, "recent");
+        let get_context = test_context("business_os.get_record");
+        assert_eq!(
+            get_record(root, &get_context, "customer_accounts", "older")?
+                .record
+                .data["name"],
+            "Legacy older"
+        );
         Ok(())
     }
 

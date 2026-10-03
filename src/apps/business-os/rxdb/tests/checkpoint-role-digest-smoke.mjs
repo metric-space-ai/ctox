@@ -129,6 +129,29 @@ async function makeState(name, capabilityTokenProvider) {
   return state;
 }
 
+// Reconnect handshakes renew the capability even before wall-clock expiry;
+// frequent permission digest reads do not request another control-plane fetch.
+{
+  const hints = [];
+  const state = await makeState('handshake-capability-refresh', async (options = {}) => {
+    hints.push(options);
+    return mintToken({ epoch: options.refresh ? 4 : 3 });
+  });
+  try {
+    const payload = await state.buildProtocolPayload();
+    assert(hints.at(-1)?.refresh === true, 'protocol handshake requests a fresh capability');
+    const beforeReads = hints.length;
+    await state.resolveReadPermissionDigest();
+    await state.resolveReadPermissionDigest();
+    assert(hints.length === beforeReads + 2, 'permission identity resolves for both reads');
+    assert(hints.slice(beforeReads).every((hint) => !hint.refresh),
+      'ordinary permission reads must not force a control-plane refresh');
+    assert(payload, 'protocol payload is still produced');
+  } finally {
+    await state.cancel();
+  }
+}
+
 {
   // The native storage generation and schema are unchanged across the whole
   // scenario (same daemon run) — the ONLY thing that changes is the browser's

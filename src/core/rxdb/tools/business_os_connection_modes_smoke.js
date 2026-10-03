@@ -19,6 +19,8 @@
 const path = require('path');
 const fs = require('fs');
 const { spawnSync } = require('child_process');
+const { startupReadiness, startupDiagnostics } = require('./business_os_startup_readiness.js');
+const { ensureStartupFileConsumer, releaseStartupFileConsumer, finishStartupFileConsumer } = require('./business_os_startup_file_consumer.js');
 
 const root = path.resolve(__dirname, '../../../..');
 const playwrightModule =
@@ -44,7 +46,7 @@ const directUrl = process.env.BUSINESS_OS_DIRECT_URL || 'http://127.0.0.1:8765/#
 const webDeployUrl = process.env.BUSINESS_OS_WEB_DEPLOY_URL || 'http://127.0.0.1:3000/business-os#ctox';
 const expectedSignalingUrl = process.env.CTOX_BUSINESS_OS_SIGNALING_URLS || 'ws://127.0.0.1:18990';
 const expectedModule = process.env.BUSINESS_OS_EXPECT_MODULE || 'ctox';
-const expectedText = process.env.BUSINESS_OS_EXPECT_TEXT || (expectedModule === 'ctox' ? 'Rxdb Webrtc' : '');
+const expectedText = process.env.BUSINESS_OS_EXPECT_TEXT || '';
 const resultPath = process.env.BUSINESS_OS_CONNECTION_SMOKE_RESULT_PATH || '';
 const shellVisibleBudgetMs = Number(process.env.BUSINESS_OS_SHELL_VISIBLE_BUDGET_MS || '3000');
 const readinessPollMs = Number(process.env.BUSINESS_OS_CONNECTION_SMOKE_POLL_MS || '250');
@@ -170,6 +172,7 @@ function packedWebDeployUrl() {
 async function checkMode(browser, mode, url) {
   const context = await browser.newContext();
   const page = await context.newPage();
+  let primaryError;
   const consoleIssues = [];
   page.on('console', (msg) => {
     if (['error', 'warning'].includes(msg.type())) {
@@ -202,6 +205,8 @@ async function checkMode(browser, mode, url) {
     }
     return {
       mode,
+      acceptanceScope: 'startup-and-explicit-file-consumer-readiness',
+      fileConsumer: state.fileConsumer,
       url: smokeUrl,
       appHosting: state.config.app_hosting || '',
       activeModule: state.activeModule || '',
@@ -216,8 +221,15 @@ async function checkMode(browser, mode, url) {
       dataPlane: serverStatus?.data_plane || null,
       consoleIssues,
     };
+  } catch (error) {
+    primaryError = error;
+    throw error;
   } finally {
-    await context.close().catch(() => {});
+    await finishStartupFileConsumer({
+      primaryError,
+      release: () => page.evaluate(releaseStartupFileConsumer),
+      close: () => context.close(),
+    });
   }
 }
 
@@ -263,13 +275,36 @@ async function waitForReady(page, mode) {
         includeCounts: false,
         requiredCollections: ['business_module_catalog', 'ctox_runtime_settings', 'desktop_files', 'desktop_file_chunks'],
       }).catch((error) => ({ ok: false, error: String(error?.message || error) }));
+      const visible = element => {
+        if (!element) return false;
+        const rect = element.getBoundingClientRect();
+        const style = getComputedStyle(element);
+        return rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      };
+      const windowElements = [...document.querySelectorAll('[data-shell-window][data-owner-id]')];
+      const windows = (app?.windowManager?.listWindows?.() || []).map(entry => {
+        const element = windowElements.find(element => element.dataset.ownerId === entry.ownerId);
+        const moduleRoot = element?.querySelector('[data-module-root]');
+        return {
+          ownerId: entry.ownerId,
+          visible: entry.state !== 'minimized' && visible(element),
+          moduleId: moduleRoot?.dataset?.moduleRoot || '',
+          mountComplete: moduleRoot?.dataset?.moduleReady === 'true',
+          loadFailed: moduleRoot?.dataset?.moduleLoadFailed === 'true',
+          recovery: Boolean(element?.querySelector('.shell-app-recovery')),
+          loading: Boolean(element?.querySelector('[data-loading-shadow], .module-loading-note')),
+        };
+      });
       return {
         title: document.title,
         config: globalThis.CTOX_BUSINESS_OS_CONFIG || app?.sync?.config || inlineConfig || storedConfig,
         activeModule: document.body?.dataset?.activeModule || app?.activeModule?.id || app?.state?.activeModuleId || '',
         loading: text.includes('Loading workspace') || document.body?.dataset?.moduleLoading === 'startup',
-        ctoxVisible: text.includes('CTOX LIVE FLOW') || text.includes('Was CTOX gerade tut') || text.includes('Rxdb Webrtc'),
-        connected: text.includes('Rxdb Webrtc') && text.includes('VERBUNDEN'),
+        shellVisible: visible(document.querySelector('.workspace-frame'))
+          && visible(document.querySelector('[data-module-host]')),
+        windows,
+        connected: advancedStatus?.checks?.dataPlaneWebrtc === true
+          && advancedStatus?.checks?.requiredCollectionsConnected === true,
         expectedTextFound: !expectedText || text.includes(expectedText),
         moduleCount: modules.length,
         advancedStatus,
@@ -277,11 +312,10 @@ async function waitForReady(page, mode) {
         textSample: text.slice(0, 500),
       };
     }, { expectedText });
-    const moduleOk = expectedModule ? lastState.activeModule === expectedModule : Boolean(lastState.activeModule);
-    const connectionOk = expectedModule === 'ctox' ? lastState.connected : true;
+    const readiness = startupReadiness(lastState, expectedModule, requiredAdvancedStatusVersion);
     let statusEvidenceOk = false;
 
-    if (firstShellVisibleMs === null && !lastState.loading && moduleOk && lastState.moduleCount > 0) {
+    if (firstShellVisibleMs === null && readiness.shellVisible) {
       firstShellVisibleMs = Date.now() - startedAt;
     }
     if (firstWebRtcConnectedMs === null && lastState.connected) {
@@ -294,31 +328,39 @@ async function waitForReady(page, mode) {
       shellVisibleBudgetMs,
     };
     if (firstShellVisibleMs === null && Date.now() - startedAt > shellVisibleBudgetMs) {
-      throw new Error(`${mode}: Business OS shell did not become visible within ${shellVisibleBudgetMs}ms: ${JSON.stringify(lastState, null, 2)}`);
+      throw new Error(`${mode}: Business OS shell did not become visible within ${shellVisibleBudgetMs}ms: ${JSON.stringify(startupDiagnostics(lastState), null, 2)}`);
     }
     if (firstShellVisibleMs !== null && firstShellVisibleMs > shellVisibleBudgetMs) {
-      throw new Error(`${mode}: Business OS shell became visible after ${firstShellVisibleMs}ms, exceeding ${shellVisibleBudgetMs}ms budget: ${JSON.stringify(lastState, null, 2)}`);
+      throw new Error(`${mode}: Business OS shell became visible after ${firstShellVisibleMs}ms, exceeding ${shellVisibleBudgetMs}ms budget: ${JSON.stringify(startupDiagnostics(lastState), null, 2)}`);
     }
     if (firstShellVisibleMs !== null) {
-      const statusBootTimings = lastState.advancedStatus?.shell?.bootTimings || null;
-      const statusShellVisibleMs = Number(statusBootTimings?.shellVisibleMs);
+      const statusShellVisibleMs = readiness.bootTimingMs;
       if (!lastState.advancedStatus || lastState.advancedStatus.version !== requiredAdvancedStatusVersion) {
-        throw new Error(`${mode}: missing ${requiredAdvancedStatusVersion} evidence: ${JSON.stringify(lastState, null, 2)}`);
+        throw new Error(`${mode}: missing ${requiredAdvancedStatusVersion} evidence: ${JSON.stringify(startupDiagnostics(lastState), null, 2)}`);
       }
       if (!Number.isFinite(statusShellVisibleMs)) {
-        throw new Error(`${mode}: advanced status missing shellVisibleMs boot timing: ${JSON.stringify(lastState, null, 2)}`);
+        throw new Error(`${mode}: advanced status missing shellVisibleMs boot timing: ${JSON.stringify(startupDiagnostics(lastState), null, 2)}`);
       }
       if (statusShellVisibleMs > shellVisibleBudgetMs) {
-        throw new Error(`${mode}: advanced status shellVisibleMs exceeded budget: shellVisibleMs=${statusShellVisibleMs}, budget=${shellVisibleBudgetMs}, state=${JSON.stringify(lastState, null, 2)}`);
+        throw new Error(`${mode}: advanced status shellVisibleMs exceeded budget: shellVisibleMs=${statusShellVisibleMs}, budget=${shellVisibleBudgetMs}, state=${JSON.stringify(startupDiagnostics(lastState), null, 2)}`);
       }
       statusEvidenceOk = true;
     }
-    if (!lastState.loading && lastState.moduleCount > 0 && moduleOk && connectionOk && lastState.expectedTextFound && statusEvidenceOk) {
+    // Observe the original shell-visibility milestone first. Explicitly
+    // request file transport only for this fixture's file-consumer contract;
+    // local diagnostic reads are not a production file lease.
+    if (firstShellVisibleMs !== null) {
+      lastState.fileConsumer = await page.evaluate(ensureStartupFileConsumer);
+      if (lastState.fileConsumer.phase === 'failed') {
+        throw new Error(`${mode}: file consumer acquisition failed`);
+      }
+    }
+    if (readiness.ready && statusEvidenceOk && lastState.fileConsumer?.phase === 'active') {
       return lastState;
     }
     await new Promise((resolve) => setTimeout(resolve, readinessPollMs));
   }
-  throw new Error(`${mode}: Business OS did not become ready: ${JSON.stringify(lastState, null, 2)}`);
+  throw new Error(`${mode}: Business OS did not become ready within 70000ms: ${JSON.stringify(startupDiagnostics(lastState), null, 2)}`);
 }
 
 async function fetchServerStatus(smokeUrl) {

@@ -358,6 +358,7 @@ function isUserFacingLiteral(literal, relativePath, metadata) {
   if (metadata || looksLikeHtml(literal.value)) return true;
   const nearby = literal.before.split('\n').slice(-3).join('\n');
   const lineBefore = literal.before.slice(literal.before.lastIndexOf('\n') + 1);
+  if (relativePath.endsWith('.html') && /(?:^|\s)(?:src|srcset|href)\s*=\s*$/iu.test(lineBefore)) return false;
   if (isTechnicalToken(literal.value)) return false;
   if (CONSOLE_PATTERN.test(lineBefore)) return false;
   if (/\.(?:includes|test)\s*\(/u.test(lineBefore)) return false;

@@ -1,5 +1,116 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Browser live-query single-flight
+
+Each `RxQuery.$` subscription keeps at most one executing snapshot and one
+coalesced follow-up. Storage changes during a slow read no longer start a new
+materialization on every debounce tick. The first available snapshot still
+paints before the follow-up; ordinary writes must not starve initial rendering.
+Only genuinely unbounded local queries without a demand loader/revision token
+retain their delta path. Loader-backed ordinary, eager and strict subscriptions
+re-execute their actual window: appending raw eager-pull deltas had expanded a
+200-row live chat query to all871 fixture rows. A loader attached after subscribe
+also establishes this boundary. Primary-key deltas cannot replace strict native
+authority either. Re-execution is bounded by the same single-flight mechanism.
+
+Replacing a control-plane demand loader still clears the visible result and
+fences its old authority generation. Replacement and unsubscribe abort only
+that subscription's read, never an imperative consumer or the caller's signal.
+A storage adapter that cannot cancel an in-progress read must finish it before
+the next snapshot starts; its late result cannot publish after unsubscribe.
+Strict revision tokens and permission checks remain on the existing loader.
+
+The global Shell chat consumes its bounded live-query snapshot directly;
+receiving that snapshot does not start another storage/demand read. During a
+pending merge it retains only the newest window (at most200 rows). Explicit
+hydration without a snapshot still executes the bounded query. Disposal releases
+the pending snapshot. Existing ownership/deletion filters, merge semantics and
+local drafts/history remain unchanged; this is not a native acceptance signal.
+
+Shared Browser surface validators require explicit native `ok:true` before
+confirming an image or input result. Input acknowledgements use each native
+result's submitted-event `index`, not its position in the result array. Missing,
+duplicate, noninteger or out-of-range indices prove no acknowledgement; valid
+partial results confirm only their matching successful events. These helpers
+still require Browser-module integration and real click/type/scroll acceptance.
+
+The deferred-storage regression proves the concurrency bound and generation
+fence, not tenant startup latency, Windows memory behavior or installed OOM
+resolution. Those require retained-profile browser measurements on the exact
+delivered source and independent installed acceptance.
+
+The Shell's bounded performance trace separates asset imports, local database
+open/preflight, cache migration, core schema registration, catalog, first module
+mount and restored windows from WebRTC readiness milestones. Heap values are
+browser-exposed samples; the observed maximum is not process RSS or a certified
+memory peak. Missing metrics remain unknown. No URLs, record payloads, actor
+credentials or error bodies enter the trace. Long-task counters and at most 64
+phase records bound retention; the existing Shell diagnostics expose them.
+`firstModuleMountedMs` is a mount milestone, not proof of usable interaction.
+
+Legacy/superseded replica inventory runs after initial module/restore handling,
+outside the critical startup wait. It still preserves all old primaries and
+recovery journals; slow metadata enumeration is not a deletion authorization.
+
+### Fresh native schema initialization
+
+Before dispatching native Business OS commands into a fresh root, run
+`ctox business-os rxdb init --root <source-root>`. This registers the compiled
+canonical native schemas and verifies every collection handle, including
+optional collections. It creates no domain records or Business OS app, starts
+no peer, and makes no WebRTC readiness claim. Repeating it preserves existing
+records. Schema drift that skips an optional collection fails initialization;
+this command does not silently repair or erase incompatible data.
+
+A fixture that already has empty canonical tables proves command behavior
+after initialization; it does not prove fresh-root bootstrap.
+
+### Workjet project list readiness
+
+Project control starts its three collection bridges concurrently. The command
+bus owns authenticated connection readiness; listing projects must not wait for
+the complete historical `business_commands` pull or the queue-task projection.
+After a correlated successful native list receipt, projects and working copies
+are read concurrently through direct, generation-bound native query bridges
+with a new `requireRevision` token. Cached rows cannot confirm the result.
+Working copies use stable-ID-sorted 200-row native windows up to the existing
+500-row API cap; a changed generation or repeated page boundary rejects the
+whole list rather than delivering a partial result.
+Missing authority, a replaced generation or a changed actor/database rejects
+the list; an authorized empty native result is valid.
+
+Collection acquisition, command completion and both queries share a 29-second
+deadline inside Workjet's existing 30-second desktop call. Timeout does not
+extend that call or introduce an HTTP data bridge. Query streams are aborted
+when the list settles; shared replication bridges are not stopped.
+
+### Native query cache shutdown
+
+Closing a native collection drains its query cache and marks those queries
+uncached. Queries own their collection and materialized document results, so
+retaining the cache after close would keep the whole database and its SQLite
+connections alive through a reference cycle. A query prepared before shutdown
+cannot repopulate the closed cache. Caller-owned query/document handles remain
+alive until their owners drop them; closing never deletes persisted documents.
+This fixes shutdown retention, without claiming it explains every service RSS
+increase during a continuously running peer.
+
+### Native command intake reader
+
+Each native command-consumer task owns one bounded read-only SQLite connection
+for its source-stamp and pending-command scans. Blocking tasks capture that
+reader from the consumer's task-local scope; different peers do not share it.
+On Unix, canonical path/device/inode fence reuse, limited to 64 reads or 30
+seconds. Other platforms keep fresh connections. Every query rediscovers the
+current table and reads current rows; there is no cached command, authorization
+or schema result. Attached domain-receipt databases are detached after every
+query. Errors, absence, replacement and retained transactions discard the
+connection. A main-file replacement that retains the previous nonempty WAL is
+rejected until the replacement owner removes or replaces that WAL: even a
+fresh SQLite connection can replay old frames onto the new main file. The
+read-only intake lane never deletes or checkpoints the SQLite file family.
+The existing notifier/lost-wakeup check and retry budget remain.
+
 ### Workjet computer schema upgrade (v0 to v1)
 
 Two deployed `workjet_computers` schemas used version 0. Adding binding, epoch,
@@ -62,6 +173,114 @@ existing browser controller and command policy. Recovery does not authenticate
 a session, pass review/validation, reopen terminal commands, or weaken the
 owned, expiring lease requirement for ordinary worker commands.
 
+### Outbound research source receipts
+
+The native person-research command retains a `sellify_lookup_runs` receipt in
+its final result and workspace envelope, including actual lookup success,
+`completed_empty`, or failure. Returned CRM record count and contributed field
+count are separate: an existing CRM match can contribute no requested fields.
+A failed lookup has an unknown (`null`) record count and a bounded error code,
+not a false empty result or raw database error. The enclosing command/workspace
+binds the receipt to the research; it is not a synthetic scrape run.
+
+The native person-research worker saves the Lead result before publishing a
+completed command. A rejected Lead writeback produces a failed command with
+operation `person_research_writeback`, retaining the previous Lead values.
+A successful result is projected once, so completion does not duplicate
+evidence or launch a second contact-validation sweep. This ordering is a
+delivery barrier, not a cross-database atomicity claim; command publication
+failures still use the existing recovery path.
+
+Lead-level person fields cannot inherit the first existing contact when their
+`person_key` is absent, empty or malformed. Those fields remain unapplied and
+are listed in `payload.unbound_person_field_keys`, outside the researched-field
+list. Existing imported names and contact details remain unchanged. Initial
+legacy discovery from an empty contact list and explicit keyed updates remain
+supported; this does not certify the source quality of those values.
+Contact deduplication also preserves two distinct nonempty person keys even
+when imported contacts share a local row ID. Duplicate rows with the same
+person key still coalesce; unkeyed legacy row-ID matching remains supported.
+Partial keyed contact updates preserve an existing observed full name when no
+structured first/last name is supplied. This preservation does not create a
+name, source receipt or verified field; explicit structured names still win.
+Historical lead evidence is retained, but completion counts only evidence for
+the current incoming value and, for person fields, the same person key.
+The shared native quantity and personal-email quote checks also apply to this
+completion count. They additionally require personal first/last names and
+titles to occur as whole words, with Unicode case and equivalent whitespace,
+hyphen, apostrophe and title punctuation handled. A valid URL beside a made-up
+name is insufficient. These checks apply to both field-status writeback and
+completion; a source for another person, an outdated value or a
+quote naming another address cannot certify the new result. Sellify alone
+continues to count as unverified. Distinct source quotes are retained so a
+later correct quote is not discarded behind an older unusable quote; multiple
+quotes from the same provider still count as one independent source.
+
+Sellify lookups require a readable collection and use one read-only SQLite
+transaction for ID, exact-field, fuzzy-field, and campaign-group probes.
+Before opening that snapshot, best-effort index preparation on an existing
+store preserves the indexed exact lookup and grouped campaign search; it
+never creates an absent store. Missing, non-file,
+corrupt, or unprojected storage fails the lookup instead of producing
+`completed_empty`; a readable collection with no matching records is genuinely
+empty. Optional projection readers elsewhere retain their existing behavior.
+
+Final persistence runs after all native source augmentation and summary, even
+with `auto_browser_capture=false`. Successful persistence leaves `envelope.json`
+equal to the returned payload, including workspace metadata and recovered-error
+removal. The native wrapper exposes the existing `scrape_runs.jsonl` in the
+manifest. Final envelope and manifest replacements are individually atomic;
+the workspace as a whole is not a transactional snapshot. Persistence errors
+remain explicit in `workspace_error` and must not count as durable acceptance.
+These changes do not alter country/field/source selection, access grants,
+authorization record scope or the WebRTC data boundary. A completed command remains distinct
+from all-provider success; inspect actual source outcomes and admissible evidence.
+
+The Outbound source-registry command reads current run and provider-account
+state from the native store. Unreadable run projections, malformed account
+rows, and invalid registry responses fail the command; they do not produce
+a successful empty list. A readable legacy store without the optional account
+state table legitimately has no recorded account state. Browser loading and
+error states must reflect the actual command result and preserve the last
+confirmed view while a refresh fails.
+
+An explicit inactive-account refusal is neither an expired browser session
+nor a script defect. The durable per-target state suppresses repeated provider
+calls without creating new scrape runs, retaining the causal and last probe
+run IDs. Credential-version changes, an authorized source-test request, or
+the 6-hour then 24-hour backoff permit one generation-bound probe lease.
+Backoff means eligibility on the next requested call, not a scheduled probe.
+Early operator probes require signed native `data.write` authorization;
+worker command sessions cannot grant that exception. A successful probe only
+clears the generation it owns, so a late result cannot erase a newer refusal.
+
+### Command projection identity
+
+Terminal and outbox projections retain the actor ID from the accepted native
+command context, where authenticated peer intake stamped owner_user_id and the
+matching actor. Claimed replica identity cannot substitute for that evidence.
+Only the non-secret ID is added to the reduced public lifecycle context; the
+canonical core intent, payload hash and authorization semantics are unchanged.
+The same enriched document is mirrored locally and to RxDB. Outbox delivery
+preserves an existing native client_context_json, including the credential
+needed for execution-time revalidation; public projections remain redacted.
+
+A projection that lacks matching native admission identity does not manufacture
+an actor from incoming metadata. The regression covers terminal state, outbox
+delivery to both stores, credential retention/redaction, forged projection
+identity and unchanged core intent/hash.
+
+### MCP app collection read authority
+
+Once a native RxDB collection table exists, MCP single-record and list reads
+use only that table. Native absence, including a physically purged tombstone
+or an empty table, cannot be replaced by an older `business_records` shadow.
+Present native tombstones retain their deletion flags and native ordering.
+Legacy shadow reads remain available when no native table exists for that
+collection; their write-time ordering and limits remain unchanged. This is a
+read boundary, not a record repair or a claim that the installed browser has
+converged. It does not change native table selection or actor permissions.
+
 ### Outbound MCP research record identity
 
 `web_stack.person_research` binds its proposal to the raw persisted
@@ -90,6 +309,23 @@ Two implementations, one contract:
 | Daemon | `rxdb-rs` (crate `ctox-rxdb`, lib name `rxdb`) | `src/core/rxdb/` + `src/core/business_os/rxdb_peer.rs` |
 
 ---
+## Capability issuance
+
+Capability issuance reconciles baseline and installed catalog grants before
+reading the actor's current role and capability epoch. Both materializers use
+one freshly loaded server-owned collection snapshot for that request and reuse
+prepared SQL statements within their transactions. On Unix, grant reconciliation
+and the actor read reuse the existing thread-local, database-identity-fenced SQLite
+connection; each grant transaction commits before the actor read, and no
+transaction remains open while signing. Other platforms preserve fresh opens
+because their existing cache key has no file identity. The ownership snapshot and
+authorization decision are never cached between token issuances. New installed
+collections, grant changes and role changes remain part of the fresh issuance
+and WebRTC admission checks. The Full Host gate exercises revocation,
+idempotent reconciliation, current actors across reused connections,
+newly installed catalog grants and server-owned
+write exclusions before measuring the unchanged command latency budget.
+
 ## Shell artifact boundary
 
 The native instance selects and verifies its signed Business OS release.
@@ -116,6 +352,36 @@ results, runtime projections and files continue through CTOX Sync/WebRTC.
 The immutable address mechanism alone does not certify bootstrap performance,
 mobile suspend/resume, or full runtime compatibility across all hosts.
 
+The `business-os-ui-regression` fixture exercises optional catalog apps as
+installed apps. Its fresh isolated source root receives private template inputs;
+the browser installs the 17 required catalog apps through the existing native
+`ctox.module.install_template` command and requires completed receipts before
+the unchanged catalog/opening assertions. The fixture never changes the product
+registry or default-installed flags, copies apps directly into installed state,
+or treats a merely accepted command as a completed installation. This setup
+requires real browser/native execution before claiming the UI regression passed.
+
+The launch-mode smoke recognizes requested apps in Shell-V2 desktop windows,
+requiring their completed mount without loading or recovery markers, rather
+than relying on obsolete CTOX status text or window visibility alone. Visible shell remains bounded
+to3000ms; fully healthy typed advanced status and the requested visible app must
+arrive within the existing70000ms readiness window. Early shell paint alone is
+not readiness. Failure diagnostics omit launch/session configuration.
+
+This integration fixture explicitly leases desktop_files and desktop_file_chunks
+through the normal scoped Sync API after observing shell visibility. Its file
+readiness assertions cover that requested consumer, not passive CTOX startup.
+The consumer acquires once, retains the original 70-second health deadline and
+releases in finally; pending acquisitions release any late lease, and the owned
+browser context closes on every exit. No records are seeded and no product
+startup warmup is added. Normal user file-open and installed acceptance remain
+separate requirements.
+
+Demand-file smoke payloads decode each independently Base64-encoded frame before
+joining the decoded bytes. Padding in intermediate frames is valid; malformed
+frames still fail. Native stored-chunk integrity does not establish browser
+transport, viewer or restart acceptance; those require actual execution.
+
 ### Desktop pin hydration
 
 The shell may paint UI-only defaults before Sync starts. Cached pin state is
@@ -123,6 +389,42 @@ read from the scoped localStorage entry; a missing or malformed entry is
 unknown, while a valid array — including `[]` — is a known local selection.
 Startup has no initialization timestamp and performs no pin-cache or layout
 write for unknown state.
+
+The Desktop module's first paint reads its existing `desktop_layout` and
+`desktop_icons` documents from local IndexedDB without waiting for a native
+round trip or icon repair writes. Native layout reconciliation and missing-icon
+repair run after mount in the background. An unavailable or malformed native
+answer keeps the locally painted layout and never authorizes a layout seed;
+only an explicit native `null` may reach the existing insert-if-missing path.
+Unmounted desktops do not start further reconciliation writes. This makes a
+previously loaded desktop usable during a slow or offline reconnect, but does
+not by itself establish that the full tenant data set has converged.
+
+Browser checkpoint validity includes a persisted local store identity and an
+eviction generation in the existing IndexedDB collection marker store. Ordinary
+pulls/writes can advance the local head without invalidating incremental resume.
+Hard deletion and cache clearing advance the generation in the same document
+transaction; a failed marker write rolls deletion back. Store recreation gets
+a new identity. Legacy checkpoints without that identity require one confirming
+pull before reuse; existing records and recovery journals are retained. Schema,
+permission and native-generation changes keep their existing invalidation rules.
+
+Historical first-pull readiness survives valid checkpoint reuse so cached UI
+can still paint immediately. It does not certify the current connection's
+freshness. Pull transport diagnostics expose `collectionFreshnessState` and
+`lastSuccessfulPullAtMs`: only a fully drained pull after local storage work
+in the current peer generation confirms `live`. A disconnect, pending pull,
+or failed drain leaves displayed cache unconfirmed without resetting its
+checkpoint or journal. The active app shows an inline warning until its
+replicated collections regain that confirmation; document age is not a
+freshness test, since an authoritative collection can legitimately be idle.
+Active replicated collections revalidate from their retained checkpoint at
+least every minute (the command control plane keeps its existing one-second
+interval). Missing change hints cannot strand a quiet collection indefinitely.
+An empty revalidation preserves the confirmed UI state; returned changes or
+failure invalidate it. Confirmation older than two minutes is unconfirmed,
+including after browser suspension. Query-only collections use their existing
+strict demand-read contract and are excluded from this pull warning.
 
 Authoritative reconciliation uses the existing collection lease and
 query-demand-loader with an opaque `requireRevision` hydration token. Query
@@ -222,6 +524,12 @@ way only for harness status and triggers its existing authoritative row read;
 it does not render the changed-document payload as a fully loaded collection.
 The shell's scoped collection facade preserves this subscription option.
 
+Crew app presence keeps its last valid queue snapshot when a read fails.
+An expected `QUERY_CANCELLED` from peer retirement does not emit a warning;
+other read failures retain their diagnostic. The existing collection-readiness
+callback retries the read, and only a successful empty response clears the
+presence and workload. Cancellation is never evidence that the queue is empty.
+
 The Rust side is a byte-correct port of RxDB 16.20.0 (upstream pin
 `c69c94bb…`, see `src/core/rxdb/PORTING.md` and `vendor/rxdb.version`),
 reduced to the CTOX-as-WebRTC-peer scope. The
@@ -252,6 +560,15 @@ relationship; no cross-WAL atomicity is implied.
 Workspace branding (`business_workspace_branding`) is treated as Business OS
 collection data under the same boundary: update through the Business OS command
 path, replicate through CTOX Sync Engine/WebRTC, never through HTTP.
+
+Native lead research projections require an explicit `business_os.chat.task`
+from `outbound-lead-generation` with a supported `business_command` writeback
+contract targeting `outbound.lead.research_writeback` in
+`outbound_lead_generation_leads`, and the lead's ID in `record_ids`.
+A chat task's `record_id` alone does not establish research intent: CRM-note
+reviews and unrelated tasks must preserve the lead's status, command/task IDs,
+research error, timestamp and revision. The same scope applies when a lease
+promotes a queued lead to running; its existing command ownership still applies.
 
 HTTP is **delivery and bootstrap only**: static shell assets, launch context,
 packed `ctox_config`, `/.well-known/ctox-business-os.json` status. In managed
@@ -424,10 +741,23 @@ at most 30 seconds. PID start identity is checked before attachment; child
 task inheritance and stack/memory capture are disabled. The profiler receives
 SIGINT at the limit (SIGKILL after three more seconds if needed); it never
 signals the native host. Host cleanup waits for bounded profiler finalization.
-The report subprocess has a five-second/two-MiB output bound. Permission errors,
+The report subprocess has a 20-second/two-MiB output bound. Permission errors,
 missing tools, zero samples and oversized recordings are explicit unavailable
 results, not successful profiles. See
 [perf-record(1)](https://man7.org/linux/man-pages/man1/perf-record.1.html).
+
+Linux perf 6.8 may exit255 during initial task metadata synthesis if an owned
+thread disappears. The fixture allows at most two recoveries only when each exact
+non-leader TID was observed under the same native PID before attachment,
+its task stat now returns ENOENT, the native start identity remains unchanged,
+and the terminal diagnostic names that TID within the first five seconds.
+Unknown ownership, permission errors, PID/TID reuse, a stop request or a third
+failure remain unavailable. All three attempts retain diagnostics and separate data
+files; retries consume the original monotonic30-second deadline and
+the remaining cumulative32-MiB recording budget. A failed attempt is never
+reported as a sample; recovery still requires a successful nonempty perf report.
+This addresses the owned-thread exit observed in FullHost36332356644 and does
+not rerun or alter its unprofiled product measurements.
 
 Artifacts under `ctox-host-proof/symbol-profile/` include tool version, fixture
 exit status, flat symbol report, recording and process identity metadata.
@@ -611,6 +941,23 @@ already exist always render regardless of readiness.
 Explicit non-goal: readiness is a **render hint, never a mount blocker**. The OS
 stays snappy; a module must not wait for sync to appear.
 
+On a warm browser open, the shell reads the locally persisted
+`business_module_catalog` projection before rendering. If that projection (or
+the server-injected snapshot) exists, packaged *code metadata* for the first
+paint comes from the generated catalog embedded in the same shell build; the
+shell does not wait for the registry manifest or per-module asset-revision
+requests. The embedded system-app ids are checked against `system-apps.json`,
+and the current instance allowlist still filters packaged apps. The native
+projection remains authoritative for runtime modules and later changes;
+WebRTC catalog catch-up starts in the background. A fresh profile without a
+persisted projection still follows the cold-start catalog path and cannot
+claim offline data it never received.
+The shell also requests `business_commands` transport warmup without awaiting
+its WebRTC registration before the cached workspace paints. Foreground command
+submission still calls the command bus's scoped sync preparation before it
+inserts a command, so this changes first-paint latency rather than write
+authorization or persistence semantics.
+
 A stricter authority-readiness barrier is separate from the render hint. It
 requires query-fetch capability plus a successfully installed demand loader for
 the current connection generation. `requireRevision` reads use this barrier and
@@ -646,6 +993,18 @@ until the current digest is known and matches, or a newly authorized fetch
 re-stamps the window.
 If replication cancellation detaches the demand loader, control-plane `find`,
 `findOne`, `count`, and live subscriptions return no cached lifecycle rows.
+For `find` and `findOne` with a nonempty `requireRevision`, a missing loader
+instead rejects with `QUERY_GENERATION_REQUIRED`; replacement during the read
+rejects with `QUERY_CANCELLED` and `generationChanged`. These states cannot
+confirm document absence. A stable authorized query returning no rows remains
+a successful empty result. Ordinary reads keep their fail-closed empty results.
+Demand-query ACK timeouts retain at most one recovery attempt with a fresh
+request ID, then propagate the original error. They do not consume the separate
+24-retry peer-unavailable allowance. Two 45-second ACK deadlines plus 250 ms
+backoff are 90.25 seconds, compared with the former 20-minute retry chain.
+This is not an end-to-end query deadline: stream admission, peer readiness and
+local materialization are separate phases. Rate-limit and stream-limit recovery
+and the terminal-chunk collector deadline remain unchanged.
 The loader transition immediately clears existing subscription snapshots,
 even without a storage change, and discards responses from its prior bridge.
 Control-plane `count()` walks authorized 200-row demand windows, retaining
@@ -659,6 +1018,16 @@ is carried through the existing in-flight identity and sidecar satisfied-token
 fields; it is not a server revision or new transport.
 
 ### 3.2 Shell integration
+
+The native `ctoxProtocol` reply includes a wall-clock sample. The browser may
+use it as an HLC time anchor only at the room handshake that requested it: a
+round trip over 10 seconds, or a wall-clock jump during that round trip, makes
+the sample inconclusive. A fresh sample uses the midpoint of the bounded
+round trip. Later collection catch-up reuses the negotiated protocol for
+schema/checkpoint work but must not compare its old timestamp with the current
+browser clock. An inconclusive sample retains the previous anchor; it neither
+proves skew nor resolves existing conflicts. Conflict resolution still requires
+authoritative review of each local and native revision.
 
 **`shared/db.js` — `createBusinessDb({ name })`.** Imports the bundle through
 the canonical `shared/rxdb-runtime.js` loader and its single versioned URL,
@@ -918,9 +1287,19 @@ documents is `runtime/business-os-rxdb.sqlite3` as above.
     later browser offer hit the fast path in `ensure_peer_connection` and
     never receive an answer." The responder PeerConnection is created when
     the actual offer arrives in `handle_signal`.
-  - On an inbound offer, `remove_unopened_peer_before_offer` drops an
-    existing peer entry whose DataChannel never opened, so a renewed browser
-    offer always gets a fresh responder (glare repair).
+  - On an inbound offer, Rust parses the SDP, applies it to a newly built,
+    unregistered responder and sends a valid answer before retiring the
+    existing generation. A rejected SDP or answer-send failure therefore
+    leaves the old open DataChannel intact. Candidate callbacks are staged
+    until the new generation is registered; a candidate that reaches a
+    terminal state before that handoff cannot replace the old peer. Handler
+    close takes the same pending-generation/lifecycle locks before clearing
+    peers, so a late offer cannot register into a closed handler. The native peer
+    remembers a bounded set of answered SDP session origins per signaling peer
+    and ignores delayed duplicate offers. A genuinely new browser
+    PeerConnection replaces the old responder even when its DataChannel is
+    still open; generation-guarded teardown prevents a late old-channel
+    callback from erasing the replacement.
 - The browser creates the DataChannel (label `ctox-rxdb`); offer/answer/ICE
   flow over the signaling relay. Rust answers offers and adds candidates in
   `handle_signal`; per-peer builds are deduplicated via a `OnceCell` claim
@@ -1247,7 +1626,7 @@ by `checkpoint-contract-smoke.mjs`, which drives the real
 | Failure | Mechanism | Where |
 |---|---|---|
 | Signaling socket drops (browser) | Self-reconnect with exponential backoff 1 s → 30 s; re-join re-broadcasts the peer list. Backoff resets on the `joined` broadcast, **not** on socket open — open-then-rejected sockets must keep backing off. | `webrtc-native.mjs::scheduleSignalingReconnect`, `handleSignalingMessage` |
-| Signaling socket drops (native) | Supervisor task reconnects with 1 s → 30 s backoff using **fresh URLs from the `url_provider` failover list**: sticky on the last-working candidate, rotates to the next one only after a failed establish attempt (rotation never resets the backoff; that still happens only on `joined`). All configured signaling URLs participate — the list used to be cosmetic (only the first entry was ever tried). Covered by chaos tests in the same file (the extra test-only `TcpListener` binds raised the data-plane-guard ratchet for `signaling_client.rs` from 2 to 7 — an architecture-decision record for that allowlist change). | `signaling_client.rs`, `rxdb_peer.rs::signaling_url_provider` |
+| Signaling socket drops (native) | Supervisor task reconnects with 1 s → 30 s backoff using **fresh URLs from the `url_provider` failover list**: sticky on the last-working candidate, rotates to the next one only after a failed establish attempt (rotation never resets the backoff; that still happens only on `joined`). All configured signaling URLs participate — the list used to be cosmetic (only the first entry was ever tried). Covered by chaos tests in the same file (the test-only local WebSocket listeners now share one helper, tightening the data-plane-guard ratchet for `signaling_client.rs` from 7 to 4; production remains listener-free). | `signaling_client.rs`, `rxdb_peer.rs::signaling_url_provider` |
 | Control-plane rejection | `ctoxError` frames are parsed and surfaced on both sides (the server closes the socket right after); otherwise a rejected join is indistinguishable from a blip and reconnects hammer silently. The browser shell additionally observes them via a WebSocket wrapper and treats them as fatal, non-retryable. | `signaling_client.rs`, `webrtc-native.mjs`, `sync.js::installSignalingErrorObserver` |
 | Request vs disconnect race | `send_message_and_await_answer` subscribes to response **and** disconnect streams before sending and races them against a 60 s deadline; a peer dying mid-request fails the request instead of hanging the handshake/fork forever. Browser requests default to 15 s; a timed-out `ctoxProtocol`/`token` recycles the connection with `forceInitiator`. | `webrtc_helper.rs`, `webrtc-native.mjs::request` |
 | Send-queue wedge / truncated foreign transfer | Exactly one drainer per peer queue (`draining` flag); `DrainResetGuard` re-opens its own drain slot on cancellation, and `remove_peer` drops the whole queue. A caller may complete its receipt only between whole queued messages: inline priority preemption can deliver that receipt while the drainer still owns another collection’s framed response. `QueuedTransferGuard` prevents successful receipt completion from cancelling that response; small messages still preempt on the wire. | `connection_handler_rs.rs`; `interleaved_own_receipt_preserves_the_other_collections_transfer`; [incident evidence](dev/ctox-sync-interleaved-receipt-20260907.md) |
@@ -1406,12 +1785,18 @@ and payload hash are durable. Startup registers collection replayers without
 serially blocking shell schema registration. Each collection starts a
 collection-scoped background replay; every mutating collection method still
 awaits that initialization and therefore remains fail-closed before accepting
-a new local write. Journal v3 adds the compound `stateCollection` index, so
-registration and native acknowledgement inspect only pending batches for the
-requested collection instead of scanning the entire WAL once per registered
-collection. Batches that already carry `primaryCommittedAtMs` are not written
-to the primary store a second time; they wait only for the native round-trip
-acknowledgement. Replication-origin and demand-loading writes bypass this WAL;
+a new local write. Journal v3 added the compound `stateCollection` index for
+collection-scoped replay. Journal v4 adds `state` and multi-entry `documentIds`
+indexes; master acknowledgements inspect only batches containing a returned
+document ID and do not rewrite unchanged batches. Retention GC still runs on
+changes or at most once an hour during idle native traffic. The first-write
+recovery check reads distinct, still-unacknowledged IDs in one primary
+transaction.
+`pendingWrites` counts only unacknowledged document IDs across pending batches,
+not the number of batches or distinct primary rows. Batches that already carry
+`primaryCommittedAtMs` are not written to the primary store a second time;
+they wait only for the native round-trip acknowledgement. Replication-origin
+and demand-loading writes bypass this WAL;
 the acknowledgement moves matching document/HLC entries to `master_acked`,
 which is retained for 24 hours.
 
@@ -1576,6 +1961,20 @@ guard checks this entire chain: shared static assets can remain fresh in
 browser/CDN caches for four hours, so changing only the bundle URL inside
 an unchanged loader URL does not deliver the new runtime to existing users.
 
+**Capability renewal after native reconfiguration.** A WebRTC protocol
+handshake asks the capability provider for `{ refresh: true }`. The shell
+renews its HTTP-session capability through the existing authenticated
+control-plane endpoint; concurrent acquisitions share one request. Ordinary
+read-permission digest lookups keep using the cache. Terminal authorization
+failures retain their negative cache, and host-injected device tokens remain
+host-owned rather than being replaced with an HTTP-session identity. Before
+signing the epoch, native issuance materializes the same first-party catalog
+grants as peer bring-up. Role/grant revocation and all native verification
+remain enforced. Before the initial local command insert, acquisition is checked
+again after bridge readiness and dependency delivery, so a reconnect cannot
+leave the prepared document bound to the pre-handshake token. Refresh does not
+replay or rewrite an already inserted command.
+
 Cancelled replication transfers must re-check their lifetime after asynchronous
 storage reads, dirty-marker updates, and transport responses. A retired state
 must not issue another write through its detached peer or advance checkpoints;
@@ -1651,6 +2050,13 @@ masked with the same allowlist as wrapped master documents. Connection-handler
 implementations must explicitly supply their field policy; there is no default
 unrestricted implementation.
 
+The Browser sync runtime mirrors native role-wide collection denials before
+starting a bridge. A User does not request the admin-only collections or the
+private cockpit projections (`ctox_runs`, `ctox_crew_learnings`,
+`ctox_harness_events`); Founder does not request admin-only collections.
+Module starts skip those collections without recording a transport failure.
+The native actor, grant and scope decision remains authoritative.
+
 ### Crew identity contracts (PR-2)
 
 The existing channel migration seeds four stable members in `crew_members` and
@@ -1695,6 +2101,30 @@ field-policy tests and browser schema/permission tests consume it. Module JSON,
 native schemas and both hash registries are regenerated before the pinned
 esbuild 0.28.0 bundle build; the sole bundle URL remains in `shared/rxdb-runtime.js`.
 ### Browser command receipts across reconnects
+
+Before dependency writes or a new command insert, the command bus renews its
+capability and compares its account/device and permission identity with the
+first protocol payload on the current connection. The browser stores only
+change-detection metadata, never a second bearer-token authority store. A changed
+permission epoch/role or expired captured capability closes that connection and
+uses the regular fresh-connection handshake (including native device challenge
+validation). Sending another payload on the old connection does not establish
+renewal. An account/device identity change fails closed and requires the host's
+database scope lifecycle.
+
+Room-wide renewal is coalesced. The command bus reacquires authority after a
+renewal and requires convergence within two rounds and the original readiness
+deadline, including the readiness of any replacement collection bridges.
+Neither renewal failure nor timeout inserts or replays a command. Native
+capability, collection and device-proof checks remain authoritative.
+
+During peer replacement, `QUERY_GENERATION_REQUIRED` leaves the exact-ID
+tracker pending within its existing finite revalidation schedule and caller
+deadline. This specific condition never falls back to local storage: the next
+strict read still requires a current bridge generation. A permanent push
+refusal is returned to the caller with its original error and immutable command
+identity, rather than being reported as a transient unconfirmed push. Its
+attached local receipt proves saved intent only, not native acceptance.
 
 Command tracking checks its exact command ID in local RxDB storage before
 waiting for bridge readiness and once more if readiness fails. Only a
@@ -1840,6 +2270,25 @@ commands. It preserves all seven correlated marks and recomputes the total
 browser-clock p50, requiring it to be strictly below 300 ms. Missing, duplicate,
 non-numeric or inconsistent measurements fail the gate. The synthetic
 `command-roundtrip-budget-smoke` cases validate only this rejection logic.
+The Browser flush acknowledgement may occur after native intake. `push` is
+therefore a parallel measurement, while the additive chain uses local insert
+to native intake. The browser/native clock-offset interval is bounded by
+those causal marks and commit-to-observation; an impossible interval fails
+explicitly rather than yielding a negative corrected stage.
+The same opt-in browser collector retains `preinsert_marks` and
+`preinsert_stages_ms` in the raw command-roundtrip-marks JSON. Five browser-clock
+boundaries split dispatch-to-insert into initial capability acquisition,
+document/database preparation, sync readiness, fresh peer authority renewal,
+dependency delivery/revalidation and local persistence. Complete spans sum to
+the original browser-insert duration; an incomplete diagnostic returns null.
+The seven primary marks and their mandatory budget report remain unchanged.
+Only the bounded timing-probe map holds these timestamps; no token, payload,
+new request, authorization cache or production configuration is added.
+The same sample includes at most two `authority_rounds`, separating fresh
+capability retrieval, peer renewal and bridge-readiness wait. The booleans
+`renewed` and `replaced` identify a second convergence round without retaining
+the token or peer identity. This attributes the measured renewal span; it does
+not relax the fresh native-authority requirement or the latency gate.
 For explicitly requested command timing probes, the native log additionally
 emits `command_intake_sample` with the command ID and measured authentication
 and identity-stamping milliseconds. Both phases precede the existing
@@ -1853,10 +2302,23 @@ a visible terminal status alone does not establish the canonical completion
 barrier. The full-host artifact retains those logs. These
 subphase diagnostics never change the seven marks or the total latency budget,
 and contain no token, identity claims or command payload.
-The command state writer retains one command-scoped RxDB projection writer
-through canonical completion. Core control completion attaches queue projection
-stores only after its transaction finds a linked task; unrelated control
-commands do not open them. The linked-task lookup, queue settlement and core
+On Unix, the command state writer retains at most one business_commands
+projection writer per executing thread, across commands and through canonical
+completion. Reuse requires the same root and canonical database device/inode;
+the next invocation discards it after 30 seconds or 64 uses. There is no idle
+transaction, retained authorization decision or business-record cache. Nested
+control execution uses an independent command-scoped writer; errors, missing
+collections and database replacement discard the cached entry. Other platforms
+keep command-scoped lifetime until their database key includes file identity.
+Each control projection validates schema generation inside an IMMEDIATE
+transaction before reading/merging/writing the current row. A changed generation
+reopens the writer for at most two projection attempts total (one retry); it never
+replays the command handler. Notifications follow commit. Schema discovery at
+open uses a single read snapshot. Other projection writes keep their existing
+lifetime and semantics. These guards are correctness boundaries, not evidence
+that the warm-command budget has passed.
+Core control completion attaches queue projection stores only after its
+transaction finds a linked task; unrelated control commands do not open them. The linked-task lookup, queue settlement and core
 completion remain in the same transaction. The full-host job runs the command
 plane and command transaction regressions before the unchanged browser budget.
 The linked-task regression opens both actual SQLite projection stores and
