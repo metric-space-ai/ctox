@@ -1498,6 +1498,12 @@ empty window is one final chunk. Extra error codes: `ROWS_TABLE_NOT_FOUND`
   `ParquetReader::with_slice`, evidence receipts, `row_id` enrichment from the
   absolute offset). The capability is advertised only when a rows source is
   registered.
+  A row window binds its content hash, schema and rows to one open Parquet
+  file. Native all-row reads retain that file across every page, so atomic
+  replacement cannot mix revisions; an incomplete count fails instead of
+  yielding a partial completion manifest. Independent browser requests can
+  observe newer revisions and still carry their own hashes. File-handle
+  identity guards the digest cache; reads keep the existing bounded page size.
 - Browser: `rows-demand-loader.mjs`, reachable from modules as
   `bridge.state.knowledgeRowsLoader` after
   `ctx.sync.startCollection('knowledge_tables')` (`fetchRows`,
