@@ -37,13 +37,18 @@ def extract(thread, prs, registry_job=None):
                            timestamp=entry.get("timestamp"),evidence=str(path)+":"+number)
                 if tid in turns and turns[tid]["model"]!=value["model"]:
                     value["model"]=None;value["conflict"]=True
-                turns[tid]=value
+                if tid not in turns or value.get("conflict"):
+                    turns[tid]=value
                 active_turn=tid
         if entry.get("type")=="response_item" and payload.get("type") in ("function_call_output","function_call","message"):
             if payload.get("type")=="message" and payload.get("role")!="assistant":continue
             meta=dict(payload.get("internal_chat_message_metadata_passthrough") or {})
             meta.setdefault("turn_id",active_turn)
             events.append((number,entry.get("timestamp"),payload,meta))
+        if entry.get("type")=="event_msg" and payload.get("type")=="item_completed":
+            item=payload.get("item") or {}
+            if item.get("type")=="CommandExecution":
+                events.append((number,entry.get("timestamp"),item,{"turn_id":payload.get("turn_id")}))
         if entry.get("type")=="event_msg" and payload.get("type")=="exec_command_end":
             events.append((number,entry.get("timestamp"),payload,{"turn_id":active_turn}))
     bindings=[]; claims=[]
@@ -59,6 +64,8 @@ def extract(thread, prs, registry_job=None):
         cmds=" ".join(str((t.get("arguments") or {}).get("cmd","")) for t in executed if isinstance(t.get("arguments"),dict))
         if payload.get("type")=="exec_command_end":
             cmds+=" ".join(str(x.get("cmd","")) for x in payload.get("parsed_cmd",[]) if isinstance(x,dict))
+        if payload.get("type")=="CommandExecution":
+            cmds+=" ".join(payload.get("command") or [])
         if payload.get("type")=="function_call":
             cmds+=str(payload.get("arguments",""))
         write=bool(re.search(r'git[^\n]{0,80}(commit|push)|greppy (patch|replace|write)|apply_patch',cmds))

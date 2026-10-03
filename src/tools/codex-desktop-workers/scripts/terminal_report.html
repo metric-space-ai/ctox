@@ -16,9 +16,9 @@
 <div class="leaderboards"><section class="box"><div class="boxhead"><h2>Parents</h2><small id="parentnote"></small></div><div class="scroll"><table><thead><tr><th>Modell</th><th>n Erst / End</th><th>Ø Erst</th><th>Ø End</th><th>Median End</th><th>Nacharbeit</th></tr></thead><tbody id="parentboard"></tbody></table></div></section>
 <section class="box"><div class="boxhead"><h2>Worker</h2><small id="workernote"></small></div><div class="scroll"><table><thead><tr><th>Modell</th><th>n Erst / End</th><th>Ø Erst</th><th>Ø End</th><th>Median End</th><th>Nacharbeit</th></tr></thead><tbody id="workerboard"></tbody></table></div></section></div>
 <div class="listheader"><h2>Pull Requests</h2><small id="total"></small></div>
-<div class="box scroll"><table><thead><tr><th>PR / Änderung</th><th>Status / Datum</th><th>Parent · Harness / Modell</th><th>Erst → End</th><th>Worker · Harness / Modell</th><th>Erst → End</th><th>Produktabnahme</th><th></th></tr></thead><tbody id="prlist"></tbody></table></div>
+<div class="box scroll"><table><thead><tr><th>PR / Änderung</th><th>Status / Datum</th><th>Parent · Harness / Modell</th><th>Erst → End</th><th>Worker · Harness / Modell</th><th>Erst → End</th><th>Produktabnahme</th></tr></thead><tbody id="prlist"></tbody></table></div>
 <div class="pager"><button id="prev">← Zurück</button><span id="page"></span><button id="next">Weiter →</button><label><select id="size"><option value="25">25 PRs pro Seite</option><option value="50">50 PRs pro Seite</option><option value="100">100 PRs pro Seite</option></select></label></div>
-<footer><div id="coveragefoot"></div><details class="method"><summary>Bewertungsschema und Datenbasis</summary><p>Gleiche Kriterien für Parent und Worker: Korrektheit 30 %, Auftragserfüllung 25 %, Nachweisqualität 20 %, Abschlussqualität 15 %, Effizienz 10 %. Je 0–10 Punkte; wesentlicher Fehler oder fehlende Kernanforderung: Gesamtnote höchstens 4. Fehlende Belege: nicht bewertet.</p><p>Erste Lieferung und korrigiertes Ergebnis bleiben getrennt. Altbewertungen stehen als „Alt“ in der PR-Liste und werden im einheitlichen Leaderboard nicht mitgerechnet. Parent-Phasen sind keine zusätzlichen Lieferungen. Unbekannte Modelle und fehlende Noten gehen nicht als null in Modellmittelwerte ein.</p><p>Nacharbeitsquote = Lieferungen mit Nacharbeit / Lieferungen mit bekannter Nacharbeit. Durchlaufzeit = PR-Erstellung bis Merge oder Schließung, einmal je PR. Merge, Release, Deployment und Abnahme sind getrennte Zustände. Historische Modelle stammen aus Turn-Belegen; „Modell im Auftrag“ ist keine bestätigte Autorenschaft.</p><p id="registry"></p></details></footer>
+<footer id="coveragefoot"></footer>
 </main>
 <script id="report-data" type="application/json">__REPORT_DATA__</script>
 <script>
@@ -36,7 +36,6 @@ const value=(a,stage)=>a.rubric==='unified-actor-v1'?a[stage]?.weighted_total??n
 const fill=(id,v,label)=>{$(id).innerHTML='<option value="">'+label+'</option>'+[...new Set(v)].sort().map(x=>'<option value="'+E(x)+'">'+E(x)+'</option>').join('')};
 fill('project',D.prs.map(p=>p.project),'Alle Projekte');fill('repo',D.prs.map(p=>p.repository),'Alle Repositories');fill('model',all.map(a=>a.model||'unknown'),'Alle Modelle');
 $('stamp').textContent='Abgeschlossene PRs · Stand '+day(D.snapshot_at)+' · offline lesbar';
-$('registry').textContent='Proxy-Registry: '+D.summary.registry_jobs+' Aufträge, davon '+D.summary.registry_gpt61+' mit GPT-6.1 Sol. Diese Zahl beschreibt die Registry, nicht alle tatsächlichen GPT-6.1-Lieferungen.';
 let page=0,visible=[],actors=[];
 function current(p,role){
  let a=all.filter(a=>a.pr_url===p.url&&a.role===role);
@@ -70,7 +69,7 @@ function refresh(reset=true){
  $(role+'board').innerHTML=rows.map(g=>'<tr><td class="model">'+E(g.model==='unknown'?'Modell unbekannt':g.model)+'<p class="hint">'+g.aa.length+' Lieferung'+(g.aa.length===1?'':'en')+'</p></td><td class="number">'+g.first.length+' / '+g.final.length+'</td><td class="number">'+F(avg(g.first))+'</td><td><span class="score">'+F(g.mean)+'</span>'+(g.mean!=null?'<div class="bar"><i style="width:'+g.mean*10+'%"></i></div>':'')+'</td><td class="number">'+F(median(g.final))+'</td><td class="number">'+g.re.filter(a=>a.rework!=='none').length+'/'+g.re.length+'</td></tr>').join('')||'<tr><td colspan="6" class="empty">Noch keine Bewertungen nach diesem Schema.</td></tr>';
  $(role+'note').textContent=$('rubric').value==='unified-actor-v1'?'einheitliches Schema':'historisches Schema';
  }
- $('coveragefoot').textContent='Bewertungsstand: '+assessed+' von '+n+' ausgewählten PRs haben neue Gesamtnoten. Fehlende Bewertungen und unvollständige Belege sind ausdrücklich markiert. STOP-PRs werden nicht neu bewertet.';
+ $('coveragefoot').textContent='Neue Bewertungen: '+assessed+' / '+n+' PRs · Historische Noten: Alt · Belege im JSON-Export';
  draw();
 }
 function actorCell(a){
@@ -90,31 +89,10 @@ function draw(){
  $('total').textContent=visible.length+' PRs';
  $('prlist').innerHTML=prs.map((p,i)=>{
  const parent=current(p,'parent'),worker=current(p,'worker'),accept=D.assessments.find(a=>a.pr_url===p.url&&a.lifecycle?.acceptance)?.lifecycle?.acceptance?.state||'unknown';
- return '<tr><td class="prtitle"><a target="_blank" rel="noopener" href="'+E(p.url)+'"><strong>#'+p.number+'</strong> '+E(p.title)+'</a><p class="hint">'+E(p.repository)+' · '+p.changedFiles+' Dateien</p></td><td><span class="tag '+p.state.toLowerCase()+'">'+(p.state==='MERGED'?'gemergt':'geschlossen')+'</span>'+(p.stop?' <span class="tag">STOP</span>':'')+'<p class="hint">'+day(p.closedAt)+'</p><code>'+E(p.headRefOid.slice(0,10))+'</code></td><td>'+actorCell(parent)+'</td><td>'+scoreCell(parent)+'</td><td>'+actorCell(worker)+'</td><td>'+scoreCell(worker)+'</td><td class="hint">'+E(accept==='passed'?'belegt':accept==='unknown'?'nicht belegt':accept==='pending'?'offen':accept==='unmeasured'?'nicht gemessen':accept)+'</td><td><button data-pr="'+i+'" aria-expanded="false">Belege</button></td></tr><tr id="detail'+i+'" hidden><td colspan="8" class="detail"></td></tr>';
- }).join('')||'<tr><td colspan="8" class="empty">Keine passenden PRs.</td></tr>';
- $('prlist').querySelectorAll('button[data-pr]').forEach(b=>b.onclick=()=>{const i=Number(b.dataset.pr),e=$('detail'+i);if(e.hidden){e.firstChild.innerHTML=detail(prs[i]);e.hidden=false}else e.hidden=true;b.setAttribute('aria-expanded',String(!e.hidden))});
+ return '<tr><td class="prtitle"><a target="_blank" rel="noopener" href="'+E(p.url)+'"><strong>#'+p.number+'</strong> '+E(p.title)+'</a><p class="hint">'+E(p.repository)+' · '+p.changedFiles+' Dateien</p></td><td><span class="tag '+p.state.toLowerCase()+'">'+(p.state==='MERGED'?'gemergt':'geschlossen')+'</span>'+(p.stop?' <span class="tag">STOP</span>':'')+'<p class="hint">'+day(p.closedAt)+'</p><code>'+E(p.headRefOid.slice(0,10))+'</code></td><td>'+actorCell(parent)+'</td><td>'+scoreCell(parent)+'</td><td>'+actorCell(worker)+'</td><td>'+scoreCell(worker)+'</td><td class="hint">'+E(accept==='passed'?'belegt':accept==='unknown'?'nicht belegt':accept==='pending'?'offen':accept==='unmeasured'?'nicht gemessen':accept)+'</td></tr>';
+ }).join('')||'<tr><td colspan="7" class="empty">Keine passenden PRs.</td></tr>';
  $('page').textContent='Seite '+(page+1)+' von '+pages+' · '+(visible.length?page*size+1:0)+'–'+Math.min((page+1)*size,visible.length)+' von '+visible.length;
  $('prev').disabled=page===0;$('next').disabled=page+1>=pages;
-}
-function detail(p){
- const rows=all.filter(a=>a.pr_url===p.url);
- const stage=(label,s)=>'<h3>'+label+'</h3>'+(s?'<p><code>'+E(s.head||'Commit nicht rekonstruiert')+'</code> · Gesamt: <strong>'+F(s.weighted_total)+'</strong></p><table class="detailscore"><tbody>'+Object.entries(s.criteria||{}).map(([k,v])=>'<tr><td>'+criterion[k]+'</td><td class="number">'+(v==null?'nicht bewertet':v)+'</td><td>'+E(s.criterion_reasons?.[k]||'')+'</td></tr>').join('')+'</tbody></table><p>'+E(s.rationale||s.unassessed_reason||'')+'</p>'+(s.unassessed_reason?'<p><b>Nicht bewertet:</b> '+E(s.unassessed_reason)+'</p>':'')+refs(s.evidence):'<p class="muted">Keine Bewertung dieser Lieferung gespeichert.</p>');
- let html='<p>PR erstellt '+day(p.createdAt)+' · geschlossen '+day(p.closedAt)+' · gemergt '+day(p.mergedAt)+' · Durchlaufzeit '+(p.cycle_hours??'—')+' h</p>';
- if(!rows.length)html+='<p><b>Nicht bewertet:</b> '+E(p.stop?'Expliziter STOP; nur historische Bestandsaufnahme.':'Zuordnung des eigenen Auftrags, der Akteure und der Review-Belege noch nicht abgeschlossen.')+'</p>';
- for(const a of rows){
- html+='<h3>'+(a.role==='parent'?'Parent':'Worker')+' · '+E(a.model||'Modell nicht belegt')+' · '+E(a.harness||'Harness nicht belegt')+'</h3><p><code>'+E(a.actor_id)+'</code> · '+E(a.rubric)+'</p><p>'+E(a.scope||a.note||'Auftragsumfang nicht rekonstruiert')+'</p>';
- if(a.rubric==='unified-actor-v1')html+='<div class="detailgrid"><div>'+stage('Erste prüffertige Lieferung',a.first)+'</div><div>'+stage('Ergebnis nach Korrekturen',a.corrected)+'</div></div>';
- else html+='<p>Historische Erstnote: '+F(a.first)+' · Endnote: '+F(a.corrected)+'. Keine erfundenen Einzelnoten; nicht Teil des einheitlichen Leaderboards.</p><p>'+E(a.note||'')+'</p>';
- if(a.phases)html+='<details><summary>Historische Parent-Phasennoten und Belege</summary><pre>'+E(JSON.stringify(a.phases,null,2))+'</pre></details>';
- html+='<p>Nacharbeit: '+E(a.rework||'unknown')+' · Ursache: '+E(a.cause||'unknown')+'</p><p>'+E(a.rework_note||'')+'</p>';
- const lc=a.lifecycle||{};
- html+='<div class="lifecycle">'+['checks','release','deployment','acceptance'].map(k=>'<span>'+({checks:'Prüfung',release:'Release',deployment:'Deployment',acceptance:'Abnahme'}[k])+': <b>'+E(lc[k]?.state||'nicht belegt')+'</b></span>').join('')+'</div>';
- html+='<details><summary>Turn, Modell und konkrete Belege</summary><pre>'+E(JSON.stringify(a.provenance||{reason:a.provenance_reason||'Historischer Turn nicht belegt'},null,2))+'</pre>'+refs(a.evidence)+'<pre>'+E(JSON.stringify(lc,null,2))+'</pre></details>';
- }
- const files=p.files?.nodes||p.files||[],reviews=p.reviews?.nodes||p.reviews||[],comments=p.comments?.nodes||p.comments||[];
- html+='<details><summary>Änderungen und PR-Beschreibung</summary><p>+'+p.additions+' / −'+p.deletions+' · '+p.changedFiles+' Dateien</p>'+files.map(f=>'<p><code>'+E(f.path)+'</code></p>').join('')+'<pre>'+E(p.body)+'</pre></details>';
- html+='<details><summary>GitHub-Reviews und Prüfstatus</summary>'+[...reviews,...comments].map(x=>'<p>'+E(x.submittedAt||x.createdAt)+' · '+E(x.state||'Kommentar')+'</p><pre>'+E(x.body)+'</pre>').join('')+'<pre>'+E(JSON.stringify(p.commits?.nodes?.[0]?.commit?.statusCheckRollup||p.statusCheckRollup||'nicht belegt',null,2))+'</pre></details>';
- return html;
 }
 document.querySelectorAll('.filters input,.filters select,.advanced input,.advanced select').forEach(e=>e.addEventListener('input',()=>refresh()));
 $('advanced').onclick=()=>$('extras').classList.toggle('open');$('prev').onclick=()=>{page--;draw()};$('next').onclick=()=>{page++;draw()};$('size').onchange=()=>{page=0;draw()};

@@ -293,7 +293,7 @@ def build(base):
     for row in records + legacy:
         row["project"] = mapping[row["pr_url"]]["project"]
         row["parent_id"] = (row["actor_id"] if row["role"] == "parent" else
-                            workers.get(row["actor_id"], {}).get("parent_thread") or
+                            row.get("parent_id") or workers.get(row["actor_id"], {}).get("parent_thread") or
                             recovered.get(row["actor_id"], {}).get("native_parent_id"))
         row["worker_id"] = row["actor_id"] if row["role"] == "worker" else None
         row["reviewed_commit"] = row.get("pr_head") or mapping[row["pr_url"]]["headRefOid"]
