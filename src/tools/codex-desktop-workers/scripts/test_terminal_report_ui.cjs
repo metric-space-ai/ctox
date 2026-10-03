@@ -70,15 +70,22 @@ const realPairs=api.getPairs().filter(p=>p.worker_first!=null&&p.worker_end!=nul
 assert.equal((svg.match(/class="plotpoint"/g)||[]).length,realPairs.length*2);
 assert.equal((svg.match(/class="arrow"/g)||[]).length,realPairs.filter(p=>p.worker_first!==p.worker_end).length);
 const selector=document.getElementById('pair'),color=document.getElementById('pair-color');
-const options=[...selector.innerHTML.matchAll(/<option value="[^"]+">([^<]+)<\/option>/g)].map(m=>m[1]);
+const options=[...selector.innerHTML.matchAll(/<option value="[^"]*">([^<]+)<\/option>/g)].map(m=>m[1]);
 assert.equal(new Set(options).size,options.length,'Identical visible model/harness pairs must share one classification');
-assert.equal(options.length,api.getStyles().size);
+assert.equal(options.length,api.getStyles().size+1);
+assert.equal(options[0],'Alle Kombinationen');
+assert.equal(color.disabled,true);
 assert.ok(!html.includes('id="legend"'));
-assert.ok(options.every(label=>label.includes('(@codex)')));
-if(options.length){color.value='#123456';color.oninput();assert.ok(document.getElementById('scatter').innerHTML.includes('#123456'))}
+assert.ok(options.slice(1).every(label=>label.includes('(@codex)')));
+if(options.length>1){
+ selector.value=Array.from(api.getStyles().keys())[0];selector.onchange();
+ assert.equal(color.disabled,false);assert.ok(document.getElementById('scatter').innerHTML.includes('opacity="0.16"'));
+ color.value='#123456';color.oninput();assert.ok(document.getElementById('scatter').innerHTML.includes('#123456'));
+ selector.value='';selector.onchange();assert.equal(color.disabled,true);assert.ok(!document.getElementById('scatter').innerHTML.includes('opacity="0.16"'));
+}
 assert.ok(!document.getElementById('parentboard').innerHTML.includes('Codex Desktop'));
 assert.ok(!document.getElementById('workerboard').innerHTML.includes('Codex Desktop'));
 assert.ok(!document.getElementById('prlist').innerHTML.includes('Codex Desktop'));
-const query=document.getElementById('query');query.value='NO_SUCH_PR_987654321';api.refresh();assert.equal(api.getVisible().length,0);assert.match(document.getElementById('page').textContent,/0–0 von 0/);query.value='';api.refresh();
-console.log('PASS: sortable 4/5/7 columns, numeric and null ordering, full-list sorting before pagination, score bars, filtered chart with real edges and first/end/arrows/color controls.');
+assert.ok(!html.includes('<div class="filters">'));
+console.log('PASS: sortable 4/5/7 columns, numeric and null ordering, full-list sorting before pagination, score bars, chart with real edges and first/end/arrows/color controls.');
 

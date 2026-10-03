@@ -41,7 +41,9 @@ score-difference counts. Unknown is not zero. Whole-PR totals require explicit
 PR scope or deduplicated evidence; parent/worker counts can overlap.
 
 Scatter X is parent completion, Y is worker. Switch first/final points/arrows.
-One compact combination dropdown and color field replace a repeated legend.
+The global filter bar is removed. One compact combination dropdown and color field
+replace a repeated legend. All combinations displays all points equally;
+selecting a combination highlights its points and fades the others.
 Absent first/final model endpoints normalize to the same visible combination.
 The JSON contains computed pairs/record IDs/stage models. Require a proved
 parent-child edge on the same PR; never fabricate missing points/arrows.
