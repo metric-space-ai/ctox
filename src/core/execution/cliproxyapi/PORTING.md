@@ -126,9 +126,17 @@
   absent from the Rust tree. Catalog/store support does not supply that executor;
   its provider/runtime integration and stream ordering/signature accumulation
   are concrete remaining implementation work, not only an acceptance wait.
+  The Connect framing layer now decodes fragmented async body chunks and exact
+  single-reader frames, preserves original flags and earlier emitted frames,
+  validates gzip CRC/concatenated members, bounds both wire/inflated sizes and
+  rejects truncated or failed-stream reuse. Typed trailer errors retain upstream
+  authentication/quota/permission/timeout classifications and null-string behavior.
+  Six additional regressions cover these boundaries. They are prepared, not executed;
+  protobuf messages, request/auth/refresh and the actual Devin executor consumer
+  still require implementation. This layer alone is not provider acceptance.
   Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
   account-kind collisions, legacy Home execution, public JSON boundaries, native
-  capability refresh and built-in metadata. There are110 prepared candidate test
+  capability refresh and built-in metadata. There are116 prepared candidate test
   functions in total; none of the current candidate Cargo/Go checks has executed.
   Narrow formatting and whitespace checks passed. Other executor consumers,
   host/runtime acceptance of the separate Devin catalog,
