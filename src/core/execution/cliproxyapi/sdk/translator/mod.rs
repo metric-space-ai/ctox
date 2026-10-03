@@ -16,6 +16,8 @@ pub mod builtin;
 mod registry_bytes_test;
 #[cfg(test)]
 mod registry_summary_test;
+#[cfg(test)]
+mod registry_update_intent_test;
 
 pub use format::Format;
 pub use formats::*;

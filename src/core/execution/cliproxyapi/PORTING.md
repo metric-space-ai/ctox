@@ -37,8 +37,14 @@
   One v8.0.12 OAuth change also prevents replaying a single-use refresh token
   after an ambiguous transport failure, with one prepared four-failure-case
   regression; explicit retryable HTTP responses keep their existing behavior.
-  Compilation/Rust/Go execution and live compatibility dispatch/update-intent
-  remain pending. No pin or release gate was promoted.
+  SDK registry/envelope and pipeline now carry request-scoped configuration
+  update intent, using exact ordered update-item bytes around plugin
+  normalization. Seven prepared regressions distinguish native conversion,
+  normalizer edits and ordinary message edits and preserve transform metadata.
+  Compilation/Rust/Go execution, live executor compatibility/update-intent
+  callers and full candidate parity remain pending. No pin or release gate
+  was promoted.
+
 - Scaffolds: not counted
 - Owner of shared registry/module graph: CTOX integration lane
 

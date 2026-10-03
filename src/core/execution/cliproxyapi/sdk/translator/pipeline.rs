@@ -11,6 +11,9 @@ pub struct RequestEnvelope {
     pub model: String,
     pub stream: bool,
     pub body: Vec<u8>,
+    /// Whether a request normalizer or explicit envelope transform changed
+    /// Responses configuration_update items for this request.
+    pub configuration_updates_changed: bool,
 }
 
 /// Translates a request while preserving request-scoped metadata.
@@ -80,17 +83,8 @@ impl Pipeline {
         request: RequestEnvelope,
     ) -> Result<RequestEnvelope, String> {
         let registry = self.registry.clone();
-        let terminal: RequestHandler = Arc::new(move |context, mut request| {
-            request.body = registry.translate_request(
-                context,
-                &from,
-                &to,
-                &request.model,
-                &request.body,
-                request.stream,
-            );
-            request.format = to.clone();
-            Ok(request)
+        let terminal: RequestHandler = Arc::new(move |context, request| {
+            Ok(registry.translate_request_envelope(context, &from, &to, request))
         });
         let handler = self
             .request_middleware
