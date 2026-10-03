@@ -30,12 +30,14 @@ fn queue_turn_fence_rejects_replaced_store_even_with_replayed_lease() -> Result<
         worker_id: "worker-target".into(),
     };
     let reader = fence.open_reader()?;
+    let retained_reader =
+        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     assert!(fence.still_owned(&reader)?);
     std::fs::rename(&path, path.with_extension("retired"))?;
     create(&path)?;
     // Both files contain the same lease. The retained SQLite connection
     // still reads the retired file, so a row-only check would allow the turn.
-    let retired_still_leased: bool = reader.connection.query_row(
+    let retired_still_leased: bool = retained_reader.query_row(
         "SELECT EXISTS(SELECT 1 FROM communication_routing_state
          WHERE message_key='queue:system::target' AND route_status='leased'
          AND lease_worker_id='worker-target')",
