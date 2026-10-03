@@ -43,13 +43,30 @@ fn valid_id(value: &str) -> bool {
 }
 
 fn parse_refutations(report: &str) -> anyhow::Result<Vec<Refutation>> {
-    let mut blocks = report
-        .lines()
-        .filter_map(|line| line.trim().strip_prefix("FIELD_REVIEWS:"));
-    let Some(block) = blocks.next() else {
+    let mut block = None;
+    let mut fence: Option<(u8, usize)> = None;
+    for line in report.lines() {
+        let line = line.trim();
+        let marker = line.as_bytes().first().copied().unwrap_or_default();
+        let count = line.bytes().take_while(|byte| *byte == marker).count();
+        if let Some((opened, length)) = fence {
+            if marker == opened && count >= length && line[count..].trim().is_empty() {
+                fence = None;
+            }
+            continue;
+        }
+        if count >= 3 && (marker == b'`' || marker == b'~') {
+            fence = Some((marker, count));
+            continue;
+        }
+        if let Some(candidate) = line.strip_prefix("FIELD_REVIEWS:") {
+            anyhow::ensure!(block.is_none(), "duplicate FIELD_REVIEWS block");
+            block = Some(candidate);
+        }
+    }
+    let Some(block) = block else {
         return Ok(Vec::new());
     };
-    anyhow::ensure!(blocks.next().is_none(), "duplicate FIELD_REVIEWS block");
     anyhow::ensure!(
         block.len() <= 32 * 1024,
         "FIELD_REVIEWS exceeds byte budget"
@@ -471,6 +488,16 @@ mod tests {
             1
         );
         assert!(parse_refutations(&format!("FIELD_REVIEWS: [{value},{value}]")).is_err());
+        let header = format!("FIELD_REVIEWS: [{value}]");
+        for fence in ["```", "~~~~", "````"] {
+            let quoted = format!("EVIDENCE:\n{fence}json\n{header}\n{fence}\n");
+            assert!(parse_refutations(&quoted).unwrap().is_empty());
+            let with_verdict = format!("{quoted}{header}");
+            assert_eq!(parse_refutations(&with_verdict).unwrap().len(), 1);
+        }
+        assert!(parse_refutations(&format!("````json\n```\n{header}\n````"))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
