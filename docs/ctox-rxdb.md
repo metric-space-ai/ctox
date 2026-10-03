@@ -60,6 +60,13 @@ workspace or actor changed. This removes one startup delay; retained-profile
 browser measurements still determine whether the complete shell meets its
 latency and memory targets.
 
+If a requested route is absent from a cached or injected native catalog, warm
+startup renders that actor's existing catalog immediately while catalog sync
+continues. A valid projected empty catalog also renders without the route wait.
+The existing catalog subscription opens the requested app only after it appears
+in the filtered projection. Cold shell-seed startup retains its existing bounded
+wait; a URL cannot add an app or grant access.
+
 ### Fresh native schema initialization
 
 Before dispatching native Business OS commands into a fresh root, run
