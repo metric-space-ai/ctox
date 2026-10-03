@@ -303,7 +303,8 @@ function crewAppPresenceHosts() {
 }
 
 export function applyCrewAppPresence(presence, appTasks = new Map()) {
-  for (const { host, appId } of crewAppPresenceHosts()) {
+  const hosts = crewAppPresenceHosts();
+  for (const { host, appId } of hosts) {
     const entries = presence.get(appId) || [];
     const tasks = appTasks.get(appId) || [];
     CREW_APP_TASK_SNAPSHOTS.set(host, tasks);
@@ -339,6 +340,7 @@ export function applyCrewAppPresence(presence, appTasks = new Map()) {
     }
     host.classList.add('has-crew-presence');
   }
+  return hosts;
 }
 
 async function loadCrewHarnessStatus(db) {
@@ -383,13 +385,14 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
   let busWired = false;
   let desktopObserver = null;
   let desktopObserverTarget = null;
+  let presenceHosts = [];
   const subscriptions = [];
   const readinessCleanups = [];
   let windowBusCleanup = null;
   const apply = () => {
     if (disposed) return;
     const members = state.crewMembers || [];
-    applyCrewAppPresence(crewAppPresenceFromTasks(tasks, members, liveKeys), crewAppTasksFromTasks(tasks, liveKeys));
+    presenceHosts = applyCrewAppPresence(crewAppPresenceFromTasks(tasks, members, liveKeys), crewAppTasksFromTasks(tasks, liveKeys));
     state.crewWorkload = crewWorkloadFromTasks(tasks, liveKeys);
     applyCrewWorkload(state);
     // Expressions decay (reading -> running, learning -> idle); re-draw when
@@ -475,7 +478,12 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     if (expressionTimer) window.clearTimeout(expressionTimer);
     desktopObserver?.disconnect?.();
     closeCrewAppTaskDialog();
-    applyCrewAppPresence(new Map(), new Map());
+    for (const { host } of presenceHosts) {
+      CREW_APP_TASK_SNAPSHOTS.delete(host);
+      host.querySelector(':scope > [data-crew-presence]')?.remove();
+      host.classList.remove('has-crew-presence');
+    }
+    presenceHosts = [];
   };
 }
 
