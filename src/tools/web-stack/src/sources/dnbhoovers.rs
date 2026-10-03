@@ -493,7 +493,10 @@ fn pick_industry_code(org: &Value) -> Option<IndustryPick> {
     let entries = org.get("industryCodes").and_then(Value::as_array)?;
     let mut selected: Option<IndustryPick> = None;
     for entry in entries {
-        let scheme = entry.get("typeDescription").and_then(Value::as_str).unwrap_or("");
+        let scheme = entry
+            .get("typeDescription")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         let compact = scheme
             .chars()
             .filter(|c| !c.is_whitespace())
@@ -512,7 +515,10 @@ fn pick_industry_code(org: &Value) -> Option<IndustryPick> {
         if selected.as_ref().is_some_and(|pick| pick.code != code) {
             return None;
         }
-        let description = entry.get("description").and_then(Value::as_str).unwrap_or("");
+        let description = entry
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         selected = Some(IndustryPick {
             code: code.to_string(),
             note: format!("{scheme} | {code} - {description}"),
@@ -855,7 +861,10 @@ mod tests {
     #[test]
     fn extract_fields_nace_and_sic_are_not_wz() {
         let page = dummy_page(DETAIL_FIXTURE, "https://plus.dnb.com/data/duns/316840271");
-        assert!(!module().extract_fields(&page).iter().any(|(key, _)| *key == FieldKey::WzCode));
+        assert!(!module()
+            .extract_fields(&page)
+            .iter()
+            .any(|(key, _)| *key == FieldKey::WzCode));
     }
 
     #[test]
@@ -864,22 +873,46 @@ mod tests {
             {"typeDescription": "NACE Revision 2", "code": "2014", "priority": 1},
             {"typeDescription": "WZ 2008 (DE)", "code": "20140",
              "description": "Manufacture of other organic basic chemicals", "priority": 2}
-        ]}}).to_string();
-        let fields = module().extract_fields(&dummy_page(&body, "https://plus.dnb.com/data/duns/315307116"));
-        let wz = fields.iter().find(|(key, _)| *key == FieldKey::WzCode).expect("explicit WZ");
+        ]}})
+        .to_string();
+        let fields = module().extract_fields(&dummy_page(
+            &body,
+            "https://plus.dnb.com/data/duns/315307116",
+        ));
+        let wz = fields
+            .iter()
+            .find(|(key, _)| *key == FieldKey::WzCode)
+            .expect("explicit WZ");
         assert_eq!(wz.1.value, "20140");
         assert!(matches!(wz.1.confidence, Confidence::High));
-        assert!(wz.1.note.as_deref().unwrap().contains("WZ 2008 (DE) | 20140"));
+        assert!(wz
+            .1
+            .note
+            .as_deref()
+            .unwrap()
+            .contains("WZ 2008 (DE) | 20140"));
     }
 
     #[test]
     fn extract_fields_rejects_ambiguous_or_incomplete_wz() {
-        for codes in [vec!["20140", "20150"], vec!["2014"], vec!["2008"], vec!["20.14"]] {
-            let entries: Vec<Value> = codes.into_iter().map(|code|
-                serde_json::json!({"typeDescription": "WZ 2008 (DE)", "code": code})).collect();
+        for codes in [
+            vec!["20140", "20150"],
+            vec!["2014"],
+            vec!["2008"],
+            vec!["20.14"],
+        ] {
+            let entries: Vec<Value> = codes
+                .into_iter()
+                .map(|code| serde_json::json!({"typeDescription": "WZ 2008 (DE)", "code": code}))
+                .collect();
             let body = serde_json::json!({"organization": {"industryCodes": entries}}).to_string();
-            assert!(!module().extract_fields(&dummy_page(&body, "https://plus.dnb.com/data/duns/315307116"))
-                .iter().any(|(key, _)| *key == FieldKey::WzCode));
+            assert!(!module()
+                .extract_fields(&dummy_page(
+                    &body,
+                    "https://plus.dnb.com/data/duns/315307116"
+                ))
+                .iter()
+                .any(|(key, _)| *key == FieldKey::WzCode));
         }
     }
 
