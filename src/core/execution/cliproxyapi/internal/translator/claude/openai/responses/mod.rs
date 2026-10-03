@@ -9,6 +9,8 @@ mod request;
 mod response;
 
 #[cfg(test)]
+mod claude_openai_responses_compat_test;
+#[cfg(test)]
 mod noop_optimization_test;
 #[cfg(test)]
 #[path = "claude_openai-responses_request_test.rs"]
@@ -18,7 +20,9 @@ mod request_test;
 mod response_test;
 
 pub use init::register_openai_responses_claude;
-pub use request::convert_openai_responses_request_to_claude;
+pub use request::{
+    convert_openai_responses_request_to_claude, convert_openai_responses_request_to_claude_with_compat,
+};
 pub use response::{
     convert_claude_response_to_openai_responses,
     convert_claude_response_to_openai_responses_non_stream, ClaudeResponsesStreamDecoder,

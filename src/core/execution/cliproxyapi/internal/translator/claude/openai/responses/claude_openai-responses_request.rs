@@ -14,6 +14,25 @@ pub fn convert_openai_responses_request_to_claude(
     input: &[u8],
     stream: bool,
 ) -> Vec<u8> {
+    convert_openai_responses_request_to_claude_impl(model_name, input, stream, false)
+}
+
+/// ref: internal/translator/claude/openai/responses/claude_openai-responses_request.go:40-46
+/// Candidate e2bff010: preserve empty and opaque reasoning for compatibility endpoints.
+pub fn convert_openai_responses_request_to_claude_with_compat(
+    model_name: &str,
+    input: &[u8],
+    stream: bool,
+) -> Vec<u8> {
+    convert_openai_responses_request_to_claude_impl(model_name, input, stream, true)
+}
+
+fn convert_openai_responses_request_to_claude_impl(
+    model_name: &str,
+    input: &[u8],
+    stream: bool,
+    preserve_empty_thinking_blocks: bool,
+) -> Vec<u8> {
     let Ok(root) = serde_json::from_slice::<Value>(input) else {
         return input.to_vec();
     };
@@ -98,7 +117,7 @@ pub fn convert_openai_responses_request_to_claude(
                 }
             }
             "reasoning" => {
-                if let Some(part) = convert_reasoning(item) {
+                if let Some(part) = convert_reasoning(item, preserve_empty_thinking_blocks) {
                     pending_reasoning.push(part);
                 }
             }
@@ -239,8 +258,13 @@ fn apply_reasoning_effort(
     }
 }
 
-fn convert_reasoning(item: &Value) -> Option<Value> {
-    let encrypted = item.get("encrypted_content")?.as_str()?;
+// ref: internal/translator/claude/openai/responses/claude_openai-responses_request.go:766-797
+fn convert_reasoning(item: &Value, preserve_empty_thinking_blocks: bool) -> Option<Value> {
+    let encrypted = item.get("encrypted_content").map(|value| match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }).unwrap_or_default();
     if let Some(data) = encrypted
         .trim()
         .strip_prefix(CLAUDE_RESPONSES_REDACTED_THINKING_PREFIX)
@@ -248,7 +272,8 @@ fn convert_reasoning(item: &Value) -> Option<Value> {
     {
         return (!data.is_empty()).then(|| json!({"type":"redacted_thinking", "data":data}));
     }
-    let signature = compatible_signature_for_provider(SignatureProvider::Claude, encrypted)?;
+    let signature = compatible_signature_for_provider(SignatureProvider::Claude, &encrypted)
+        .or_else(|| preserve_empty_thinking_blocks.then_some(encrypted.clone()))?;
     let thinking = reasoning_parts_text(item.get("summary"))
         .filter(|text| !text.is_empty())
         .or_else(|| reasoning_parts_text(item.get("content")))

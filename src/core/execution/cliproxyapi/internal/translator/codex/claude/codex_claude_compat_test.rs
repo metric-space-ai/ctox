@@ -14,7 +14,8 @@ fn translated(signature: Option<Value>, compat: bool, stream: bool) -> Value {
     }
     let request = serde_json::to_vec(&json!({
         "messages":[{"role":"assistant", "content":[part]}]
-    })).unwrap();
+    }))
+    .unwrap();
     let bytes = if compat {
         convert_claude_request_to_codex_with_compat("deepseek-v4", &request, stream)
     } else {
@@ -27,16 +28,21 @@ fn translated(signature: Option<Value>, compat: bool, stream: bool) -> Value {
 fn compatibility_preserves_empty_missing_null_and_whitespace_signatures() {
     for stream in [false, true] {
         for (signature, expected) in [
-            (None, ""), (Some(Value::Null), ""),
-            (Some(json!("")), ""), (Some(json!("   ")), "   "),
+            (None, ""),
+            (Some(Value::Null), ""),
+            (Some(json!("")), ""),
+            (Some(json!("   ")), "   "),
         ] {
             let strict = translated(signature.clone(), false, stream);
             assert_eq!(strict["input"], json!([]));
             let compatible = translated(signature, true, stream);
-            assert_eq!(compatible["input"][0], json!({
-                "type":"reasoning", "summary":[], "content":null,
-                "encrypted_content":expected,
-            }));
+            assert_eq!(
+                compatible["input"][0],
+                json!({
+                    "type":"reasoning", "summary":[], "content":null,
+                    "encrypted_content":expected,
+                })
+            );
             assert!(!compatible.to_string().contains("private-reasoning"));
         }
     }
@@ -52,20 +58,25 @@ fn unknown_escaped_signature_preserves_message_and_tool_order() {
             {"type":"text", "text":"after"},
             {"type":"tool_use", "id":"call-1", "name":"lookup", "input":{"q":"x"}},
         ]}]
-    })).unwrap();
+    }))
+    .unwrap();
     for stream in [false, true] {
         let compatible: Value = serde_json::from_slice(
-            &convert_claude_request_to_codex_with_compat("deepseek-v4", &request, stream)
-        ).unwrap();
+            &convert_claude_request_to_codex_with_compat("deepseek-v4", &request, stream),
+        )
+        .unwrap();
         assert_eq!(compatible["input"].as_array().unwrap().len(), 4);
         assert_eq!(compatible["input"][0]["content"][0]["text"], "before");
         assert_eq!(compatible["input"][1]["type"], "reasoning");
         assert_eq!(compatible["input"][1]["encrypted_content"], signature);
         assert_eq!(compatible["input"][2]["content"][0]["text"], "after");
         assert_eq!(compatible["input"][3]["type"], "function_call");
-        let strict: Value = serde_json::from_slice(
-            &convert_claude_request_to_codex("deepseek-v4", &request, stream)
-        ).unwrap();
+        let strict: Value = serde_json::from_slice(&convert_claude_request_to_codex(
+            "deepseek-v4",
+            &request,
+            stream,
+        ))
+        .unwrap();
         assert_eq!(strict["input"].as_array().unwrap().len(), 2);
         assert_eq!(strict["input"][0]["content"].as_array().unwrap().len(), 2);
     }
@@ -74,9 +85,17 @@ fn unknown_escaped_signature_preserves_message_and_tool_order() {
 #[test]
 fn compatibility_rejects_non_string_nonempty_signatures_and_known_foreign_provider() {
     for stream in [false, true] {
-        for signature in [json!(12345), json!(true), json!(["arr"]), json!({"opaque":"data"}),
-            json!("skip_thought_signature_validator")] {
-            assert_eq!(translated(Some(signature), true, stream)["input"], json!([]));
+        for signature in [
+            json!(12345),
+            json!(true),
+            json!(["arr"]),
+            json!({"opaque":"data"}),
+            json!("skip_thought_signature_validator"),
+        ] {
+            assert_eq!(
+                translated(Some(signature), true, stream)["input"],
+                json!([])
+            );
         }
     }
 }
@@ -91,8 +110,11 @@ fn compatibility_still_normalizes_valid_gpt_provider_prefix() {
     }
     let raw = general_purpose::URL_SAFE.encode(payload);
     for stream in [false, true] {
-        assert_eq!(translated(Some(json!(format!("gpt#{raw}"))), true, stream)
-            ["input"][0]["encrypted_content"], raw);
+        assert_eq!(
+            translated(Some(json!(format!("gpt#{raw}"))), true, stream)["input"][0]
+                ["encrypted_content"],
+            raw
+        );
     }
 }
 
@@ -100,8 +122,14 @@ fn compatibility_still_normalizes_valid_gpt_provider_prefix() {
 fn compatibility_no_op_keeps_invalid_or_non_object_bytes_identical() {
     for payload in [b"  {bad-json}\n".as_slice(), b" [ 1, 2 ]\n".as_slice()] {
         for stream in [false, true] {
-            assert_eq!(convert_claude_request_to_codex_with_compat("deepseek-v4", payload, stream), payload);
-            assert_eq!(convert_claude_request_to_codex("deepseek-v4", payload, stream), payload);
+            assert_eq!(
+                convert_claude_request_to_codex_with_compat("deepseek-v4", payload, stream),
+                payload
+            );
+            assert_eq!(
+                convert_claude_request_to_codex("deepseek-v4", payload, stream),
+                payload
+            );
         }
     }
 }

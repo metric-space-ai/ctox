@@ -296,7 +296,9 @@ fn convert_message(
                     if role != "assistant" {
                         continue;
                     }
-                    if !preserve_thinking_blocks && !should_map_claude_thinking_to_gpt_reasoning(part) {
+                    if !preserve_thinking_blocks
+                        && !should_map_claude_thinking_to_gpt_reasoning(part)
+                    {
                         continue;
                     }
                     let text = get_thinking_text_value(part);

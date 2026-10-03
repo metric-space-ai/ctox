@@ -26,13 +26,15 @@
   Preserve the v8.0.11 review; do not claim the full update is current after
   only that candidate passes.
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.12.
-- Parent continuation after the bounded Grok runs: candidate Claude→Codex and
-  Claude→OpenAI Chat `Convert*WithCompat` facades are implemented with nine
-  prepared regressions for signature classification, message/tool ordering,
-  absent/redacted/user thinking and no-op byte identity. Both are exported but
-  not connected to live executor dispatch. Compile/Rust/Go execution is pending.
-  The other four compatibility translators and request-scoped update-intent
-  plumbing remain open; no pin or release gate was promoted.
+- Parent continuation after the bounded Grok runs: five candidate `Convert*WithCompat`
+  facades are implemented: Claude→Codex, Claude→OpenAI Chat, Claude→Interactions,
+  OpenAI Chat→Claude and OpenAI Responses→Claude. Nineteen prepared regressions
+  cover signature classification, absent/redacted/user thinking, message/tool
+  ordering, reasoning preservation and no-op byte identity. They are exported
+  but not connected to live executor dispatch. Rust parsing/formatting passed
+  for the first three; compilation/Rust/Go execution remains pending. The
+  direct Gemini facade, request-scoped update-intent plumbing and full Responses
+  default-policy parity remain open; no pin or release gate was promoted.
 - Scaffolds: not counted
 - Owner of shared registry/module graph: CTOX integration lane
 

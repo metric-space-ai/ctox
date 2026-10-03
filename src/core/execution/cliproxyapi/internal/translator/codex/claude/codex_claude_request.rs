@@ -161,7 +161,9 @@ fn append_message(
             }
             "thinking" if role == "assistant" => {
                 let signature = compatible_reasoning_signature(
-                    model_name, part, preserve_empty_thinking_blocks,
+                    model_name,
+                    part,
+                    preserve_empty_thinking_blocks,
                 );
                 if let Some(signature) = signature {
                     flush_message(role, &mut buffered, input);
@@ -259,7 +261,10 @@ fn compatible_reasoning_signature(
     part: &Value,
     preserve_empty_thinking_blocks: bool,
 ) -> Option<String> {
-    let raw = part.get("signature").map(value_as_string).unwrap_or_default();
+    let raw = part
+        .get("signature")
+        .map(value_as_string)
+        .unwrap_or_default();
     if let Some(signature) = compatible_signature_for_provider(SignatureProvider::Gpt, &raw) {
         return Some(signature);
     }
@@ -277,7 +282,11 @@ fn compatible_reasoning_signature(
         .trim()
         .to_ascii_lowercase()
         .contains("grok")
-        .then(|| inspect_grok_encrypted_content(&raw).ok().map(|_| raw.clone()))
+        .then(|| {
+            inspect_grok_encrypted_content(&raw)
+                .ok()
+                .map(|_| raw.clone())
+        })
         .flatten()
 }
 

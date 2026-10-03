@@ -11,13 +11,31 @@ use crate::internal::translator::common::{
 };
 use serde_json::{json, Map, Value};
 
-/// Converts the independently gated OpenAI Chat Completions request surface
-/// into Claude Messages JSON. Responses remain unavailable until their own
-/// non-stream and stream parity gates land.
+/// Converts OpenAI Chat Completions input into Claude Messages JSON.
+/// Compatibility thinking preservation is available through its explicit facade.
 pub fn convert_openai_chat_request_to_claude(
     model_name: &str,
     input: &[u8],
     stream: bool,
+) -> Vec<u8> {
+    convert_openai_chat_request_to_claude_impl(model_name, input, stream, false)
+}
+
+/// ref: internal/translator/claude/openai/chat-completions/claude_openai_request.go:40-46
+/// Candidate e2bff010: preserve assistant reasoning_content as unsigned thinking.
+pub fn convert_openai_chat_request_to_claude_with_compat(
+    model_name: &str,
+    input: &[u8],
+    stream: bool,
+) -> Vec<u8> {
+    convert_openai_chat_request_to_claude_impl(model_name, input, stream, true)
+}
+
+fn convert_openai_chat_request_to_claude_impl(
+    model_name: &str,
+    input: &[u8],
+    stream: bool,
+    preserve_empty_thinking_blocks: bool,
 ) -> Vec<u8> {
     let Ok(root) = serde_json::from_slice::<Value>(input) else {
         return input.to_vec();
@@ -69,7 +87,17 @@ pub fn convert_openai_chat_request_to_claude(
         match role {
             "system" | "developer" => append_system_blocks(&mut system, message),
             "user" | "assistant" => {
-                let mut content = convert_message_content(message.get("content"));
+                let mut content = Vec::new();
+                if preserve_empty_thinking_blocks && role == "assistant" {
+                    if let Some(reasoning_content) = message.get("reasoning_content")
+                        .and_then(Value::as_str).filter(|text| !text.trim().is_empty())
+                    {
+                        content.push(json!({
+                            "type":"thinking", "thinking":reasoning_content, "signature":"",
+                        }));
+                    }
+                }
+                content.extend(convert_message_content(message.get("content")));
                 if role == "assistant" {
                     for call in message
                         .get("tool_calls")
