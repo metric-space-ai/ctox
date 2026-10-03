@@ -67,6 +67,18 @@ test('cached placement permits startup while IndexedDB refresh is pending and pr
   assert.equal(f.counts.persisted, 1);
 });
 
+for (const readTimestamp of [100, 900]) {
+  test('a move made during geometry refresh wins against snapshot timestamp ' + readTimestamp, { timeout: 1000 }, async () => {
+    const f = fixture();
+    await f.register();
+    const moved = { ...f.cached, x: 500, updated_at_ms: 100 };
+    f.state.windowGeometryCache.set(moved.owner_id, moved);
+    await f.finish([{ ...f.cached, workspace_scope: 'workspace-a', actor_scope: 'actor-a', updated_at_ms: readTimestamp }]);
+    assert.equal(f.state.windowGeometryCache.get(moved.owner_id), moved, 'a pending snapshot cannot overwrite an intervening move');
+    assert.equal(f.counts.persisted, 1, 'safe current-scope reconciliation still completes');
+  });
+}
+
 for (const changed of ['db', 'workspace', 'actor']) {
   test('late geometry refresh is discarded after ' + changed + ' replacement', { timeout: 1000 }, async () => {
     const f = fixture();

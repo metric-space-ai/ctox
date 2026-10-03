@@ -55,8 +55,9 @@ recovery journals; slow metadata enumeration is not a deletion authorization.
 Window placement hydrates from the scoped localStorage cache synchronously after
 core schema registration. Its optional IndexedDB refresh runs in the background,
 so a blocked read does not add the previous 1500ms wait before the first app.
-Late results retain newer local moves and are discarded if the database,
-workspace or actor changed. This removes one startup delay; retained-profile
+Late results retain moves made since the read began, even with equal timestamps
+or a remote clock ahead, and are discarded if the database, workspace or actor
+changed. This removes one startup delay; retained-profile
 browser measurements still determine whether the complete shell meets its
 latency and memory targets.
 
