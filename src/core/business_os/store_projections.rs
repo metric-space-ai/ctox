@@ -817,21 +817,39 @@ pub(super) fn write_queue_task_projection(
     command_id: Option<&str>,
     task: &channels::QueueTaskView,
     updated_at_ms: i64,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Value> {
     let structured_status =
         queue_projection_structured_status(conn, command_id, &task.message_key)?;
+    let mut payload = queue_task_payload(
+        command_id,
+        task,
+        structured_status.as_deref(),
+        updated_at_ms,
+    );
+    // Legacy admitted tasks have no origin stamp. Resolve their module from the
+    // accepted native command, rather than replacing it with the queue UI module.
+    if task.metadata.get("business_os_origin").is_none() {
+        if let Some(command_id) = command_id {
+            let module: Option<String> = conn
+                .query_row(
+                    "SELECT module FROM business_commands WHERE command_id=?1",
+                    [command_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if let Some(module) = module {
+                payload["source_module"] = Value::String(module);
+            }
+        }
+    }
     upsert_business_record(
         conn,
         "ctox_queue_tasks",
         &task.message_key,
         updated_at_ms,
-        queue_task_payload(
-            command_id,
-            task,
-            structured_status.as_deref(),
-            updated_at_ms,
-        ),
-    )
+        payload.clone(),
+    )?;
+    Ok(payload)
 }
 
 pub(super) fn queue_task_payload(
@@ -848,7 +866,7 @@ pub(super) fn queue_task_payload(
         "status": normalize_queue_status(&route_status),
         "route_status": route_status,
         "module": "ctox",
-        "source_module": "ctox",
+        "source_module": "",
         "inbound_channel": "business_os.llm.chat",
         "command_type": "business_os.chat.task",
         "priority": task.priority,
@@ -993,6 +1011,14 @@ pub(super) fn enrich_queue_projection_payload(
         Value::from(task.priority_time_credit_hours),
     );
     object.insert("attempt".into(), Value::from(task.attempt));
+    if let Some(module) = task
+        .metadata
+        .pointer("/business_os_origin/module")
+        .and_then(Value::as_str)
+        .filter(|module| !module.trim().is_empty())
+    {
+        object.insert("source_module".into(), Value::String(module.to_string()));
+    }
     if let Some(note) = task
         .status_note
         .as_deref()
@@ -1675,6 +1701,61 @@ pub(crate) mod tests {
         assert!(business_chat_result_status_is_failure("FAILED"));
         assert!(!business_chat_result_status_is_failure("completed"));
         assert!(!business_chat_result_status_is_failure("ready"));
+    }
+
+    #[test]
+    fn native_app_origin_survives_queue_edits_and_lease_clearance() -> anyhow::Result<()> {
+        let root = tempdir()?;
+        let mut task = channels::create_queue_task(
+            root.path(),
+            channels::QueueTaskCreateRequest {
+                title: "Origin projection".into(),
+                prompt: "A bounded child task.".into(),
+                thread_key: "origin/projection".into(),
+                workspace_root: None,
+                priority: "normal".into(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )?;
+        task.metadata["business_os_origin"] =
+            json!({"command_id":"origin-command","module":"inventory"});
+        let conn = open_store(root.path())?;
+        for (index, state) in ["pending", "leased", "review_rework", "blocked", "cancelled"]
+            .into_iter()
+            .enumerate()
+        {
+            task.title = format!("Edited {state}");
+            task.route_status = state.into();
+            task.attempt = index as i64;
+            task.lease_owner = (state == "leased").then(|| "ctox-service".to_string());
+            task.leased_at = (state == "leased").then(|| "2026-10-02T10:00:00Z".to_string());
+            task.lease_worker_id = (state == "leased").then(|| "current-worker".to_string());
+            let payload = super::write_queue_task_projection(&conn, None, &task, index as i64)?;
+            assert_eq!(payload["source_module"], "inventory");
+            assert_eq!(payload["title"], task.title);
+            assert_eq!(payload["attempt"], task.attempt);
+            if state != "leased" {
+                assert!(payload["lease_worker_id"].is_null());
+            }
+            let raw: String = conn.query_row("SELECT payload_json FROM business_records WHERE collection='ctox_queue_tasks' AND record_id=?1", [&task.message_key], |row| row.get(0))?;
+            assert_eq!(
+                serde_json::from_str::<Value>(&raw)?,
+                payload,
+                "API result must be the actual published origin/status"
+            );
+        }
+        task.metadata
+            .as_object_mut()
+            .unwrap()
+            .remove("business_os_origin");
+        assert_eq!(
+            super::queue_task_payload(None, &task, None, 99)["source_module"],
+            "",
+            "unattributed tasks do not adopt the CTOX app merely because it hosts the queue"
+        );
+        Ok(())
     }
 
     #[test]
