@@ -3,6 +3,55 @@
 // Port-Status: adapted_to_ctox
 // License: MIT (upstream); modifications AGPL-3.0-only
 
+#[tokio::test]
+async fn candidate_home_legacy_update_uses_exact_selected_codex_configuration() {
+    use super::super::api_key_model_capabilities_test::{auth, register};
+    use crate::internal::config::{CodexKey, CodexModel, ProviderCompatConfig};
+
+    for enabled in [false, true] {
+        let transport = TestHomeTransport::with_auth_ids(&[]);
+        let executor = TestExecutor::failing(0);
+        let (runtime, _) = runtime(transport.clone(), executor.clone());
+        let manager = runtime.manager();
+        manager.set_provider_config(&ProviderCompatConfig {
+            codex_api_key: vec![CodexKey {
+                api_key: "legacy-home-test-key".into(),
+                models: vec![CodexModel {
+                    name: "shared".into(),
+                    alias: "public".into(),
+                    support_configuration_update: enabled,
+                    ..CodexModel::default()
+                }],
+                ..CodexKey::default()
+            }],
+            ..ProviderCompatConfig::default()
+        });
+        let mut account = auth("codex", "legacy-home-test-key");
+        account.attributes.insert("config_index".into(), "0".into());
+        let account = register(&manager, account);
+        transport.push_dispatch(serde_json::json!({
+            "provider":"codex","model":"shared(high)","auth_index":account.index,
+            "model_info":{"id":"shared","context_length":32768},
+            "auth":account
+        }));
+        runtime
+            .execute_home(request("tenant/public(high)"), "", false)
+            .await
+            .unwrap();
+        let seen = executor.seen();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(
+            seen[0]
+                .resolved_model_info
+                .as_ref()
+                .unwrap()
+                .support_configuration_update,
+            enabled
+        );
+        assert!(!seen[0].resolved_model_info.as_ref().unwrap().is_compat);
+    }
+}
+
 use super::super::home_execution_paths_test::{request, runtime, TestExecutor, TestHomeTransport};
 use super::*;
 

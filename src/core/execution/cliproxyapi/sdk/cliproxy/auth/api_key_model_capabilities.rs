@@ -224,6 +224,7 @@ struct ModelView {
     model_type: &'static str,
     force_mapping: bool,
     is_compat: bool,
+    support_configuration_update: bool,
     thinking: Option<ThinkingSupport>,
 }
 
@@ -319,6 +320,7 @@ fn codex_model_view(model: &CodexModel, model_type: &'static str) -> ModelView {
         model_type,
         force_mapping: model.force_mapping,
         is_compat: model.is_compat,
+        support_configuration_update: model_type == "codex" && model.support_configuration_update,
         thinking: model.thinking.as_ref().map(thinking_support),
     }
 }
@@ -332,6 +334,7 @@ fn vertex_model_views(key: &VertexCompatKey) -> Vec<ModelView> {
             model_type: "gemini",
             force_mapping: model.force_mapping,
             is_compat: false,
+            support_configuration_update: false,
             thinking: model.thinking.as_ref().map(thinking_support),
         })
         .collect()
@@ -354,6 +357,7 @@ fn openai_model_views(entry: &OpenAiCompatibility) -> Vec<ModelView> {
                 model_type: "openai-compatibility",
                 force_mapping: model.force_mapping,
                 is_compat: model.is_compat,
+                support_configuration_update: false,
                 thinking,
             }
         })
@@ -385,6 +389,7 @@ fn add_route(by_route: &mut BTreeMap<String, Vec<ConfiguredRoute>>, model: Model
     let support = model.thinking.as_ref();
     let mut model_info = modelconfig::resolve_model_info(&name, model.model_type, support);
     model_info.is_compat = model.is_compat;
+    model_info.support_configuration_update = model.support_configuration_update;
     let route = ConfiguredRoute {
         upstream_model: name.clone(),
         force_mapping: model.force_mapping,

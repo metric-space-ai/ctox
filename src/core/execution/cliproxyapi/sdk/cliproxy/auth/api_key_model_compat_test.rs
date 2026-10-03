@@ -1,6 +1,63 @@
 // ref: sdk/cliproxy/auth/api_key_model_compat_test.go @ 2044a01f
 // License: MIT (upstream); modifications AGPL-3.0-only
 
+#[test]
+fn candidate_typed_codex_update_capability_defaults_false_and_is_account_bound() {
+    let ordinary: CodexModel =
+        serde_json::from_str(r#"{"name":"shared","alias":"public"}"#).unwrap();
+    assert!(!ordinary.support_configuration_update);
+    assert!(serde_json::to_value(&ordinary)
+        .unwrap()
+        .get("support-configuration-update")
+        .is_none());
+    let configured: CodexModel = serde_json::from_str(
+        r#"{"name":"shared","alias":"public","support-configuration-update":true}"#,
+    )
+    .unwrap();
+    assert!(configured.support_configuration_update);
+    assert!(serde_json::from_str::<CodexModel>(
+        r#"{"name":"shared","alias":"public","support-configuration-update":"true"}"#
+    )
+    .is_err());
+    let manager = manager();
+    manager.set_provider_config(&ProviderCompatConfig {
+        codex_api_key: vec![
+            CodexKey {
+                api_key: "first-test-key".into(),
+                models: vec![configured],
+                ..CodexKey::default()
+            },
+            CodexKey {
+                api_key: "second-test-key".into(),
+                models: vec![ordinary],
+                ..CodexKey::default()
+            },
+        ],
+        ..ProviderCompatConfig::default()
+    });
+    for (index, key, expected) in [(0, "first-test-key", true), (1, "second-test-key", false)] {
+        let mut account = auth("codex", key);
+        account
+            .attributes
+            .insert("config_index".into(), index.to_string());
+        let account = register(&manager, account);
+        let selected = manager.attach_resolved_api_key_model_info(
+            Request::default(),
+            &account,
+            "tenant/public(high)",
+            "shared(high)",
+        );
+        assert_eq!(
+            selected
+                .metadata
+                .resolved_api_key_model_info
+                .unwrap()
+                .support_configuration_update,
+            expected
+        );
+    }
+}
+
 use std::sync::Arc;
 
 use crate::internal::config::{CodexKey, CodexModel, OpenAiCompatibility, ProviderCompatConfig};

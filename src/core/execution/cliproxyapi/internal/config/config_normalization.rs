@@ -83,6 +83,10 @@ pub struct CodexModel {
     /// ref: internal/config/config_types.go @ 2044a01f
     #[serde(default, skip_serializing_if = "compatibility_disabled")]
     pub is_compat: bool,
+    /// Codex API-key model capability, independent of the OAuth catalog.
+    /// ref: internal/config/config_types.go @ d7914afd
+    #[serde(default, skip_serializing_if = "compatibility_disabled")]
+    pub support_configuration_update: bool,
     #[serde(default)]
     pub image: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
