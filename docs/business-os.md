@@ -55,6 +55,14 @@ lifecycle store, and keeps only the current witnessed status. Publication requir
 that exact prior writeback witness, as well as the existing persisted audit and
 current native task authority. Both the new review and its witness commit in the
 same IMMEDIATE transaction; a projection that damages status rolls back both.
+Native writeback and email producers pass their complete pre-derivation master
+snapshot into final persistence. Inside the IMMEDIATE transaction that snapshot
+must equal the actual current row; otherwise the producer rejects the stale
+write before changing either document or witness. The publisher does not share
+the in-process research guard, so that guard alone is not this fence. A fresh
+producer can update another field while retaining the newer untouched verdict
+and witness. Email persistence preserves matching witnesses but cannot issue a
+writeback or review witness; no replay, receipt or attempt is manufactured.
 The native computation view recognizes a refutation only when the full current
 status matches its record/field/person witness. Copying IDs, changing a claim,
 or transplanting a status cannot confer authority. Legacy review metadata gets

@@ -909,6 +909,7 @@ fn validate_lead_contacts(root: &Path, record_id: &str) -> anyhow::Result<usize>
     else {
         return Ok(0);
     };
+    let expected_master = lead.clone();
     let repaired = if emails.is_empty() {
         reconcile_receipted_email_status(&mut lead)
     } else {
@@ -940,7 +941,7 @@ fn validate_lead_contacts(root: &Path, record_id: &str) -> anyhow::Result<usize>
         });
     }
     lead["research_updated_at_ms"] = Value::from(now);
-    store::upsert_rxdb_collection_record(root, LEAD_COLLECTION, record_id, now, lead)?;
+    store::upsert_native_email_validation_record(root, record_id, now, lead, &expected_master)?;
     Ok(changed)
 }
 

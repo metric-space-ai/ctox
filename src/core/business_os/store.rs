@@ -12225,11 +12225,50 @@ pub(super) fn upsert_native_research_writeback_record(
     record_id: &str,
     updated_at_ms: i64,
     payload: Value,
+    expected_master: &Value,
     revision: &Value,
     keys: &BTreeSet<(String, String, String)>,
 ) -> anyhow::Result<()> {
+    upsert_native_field_status_if_current(
+        root,
+        record_id,
+        updated_at_ms,
+        payload,
+        expected_master,
+        super::outbound_field_review::NativeFieldStatusIssuance::Writeback { revision, keys },
+    )
+}
+
+/// Native email results do not issue writeback/review provenance. They must
+/// nevertheless fence the full canonical snapshot read before deriving their
+/// patch, so an independently published review cannot be lost.
+pub(super) fn upsert_native_email_validation_record(
+    root: &Path,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+    expected_master: &Value,
+) -> anyhow::Result<()> {
+    upsert_native_field_status_if_current(
+        root,
+        record_id,
+        updated_at_ms,
+        payload,
+        expected_master,
+        super::outbound_field_review::NativeFieldStatusIssuance::Preserve,
+    )
+}
+
+fn upsert_native_field_status_if_current(
+    root: &Path,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+    expected_master: &Value,
+    issuance: super::outbound_field_review::NativeFieldStatusIssuance<'_>,
+) -> anyhow::Result<()> {
     let writer = RxdbCollectionWriter::open(root, "outbound_lead_generation_leads")?
-        .context("native writeback collection unavailable")?;
+        .context("native research persistence collection unavailable")?;
     let tx = rusqlite::Transaction::new_unchecked(&writer.conn, TransactionBehavior::Immediate)?;
     let deleted_expression = ["deleted", "_deleted"]
         .into_iter()
@@ -12247,12 +12286,21 @@ pub(super) fn upsert_native_research_writeback_record(
         .optional()?;
     anyhow::ensure!(
         current.as_ref().is_some_and(|(_, deleted)| *deleted == 0),
-        "native writeback cannot create or resurrect a missing/deleted lead"
+        "native research persistence cannot create or resurrect a missing/deleted lead"
     );
-    let current: Value = serde_json::from_str(&current.unwrap().0)?;
+    let mut current: Value = serde_json::from_str(&current.unwrap().0)?;
+    if let Some(object) = current.as_object_mut() {
+        object
+            .entry("id".to_string())
+            .or_insert_with(|| Value::String(record_id.to_string()));
+    }
     anyhow::ensure!(
         !is_rxdb_deleted_document(&current),
-        "native writeback lead is deleted"
+        "native research lead is deleted"
+    );
+    anyhow::ensure!(
+        current == *expected_master,
+        "native lead changed before persistence; retry from the current record"
     );
     let issued = super::outbound_field_review::NativeFieldStatusWitnesses::load(&tx, record_id)?;
     write_native_field_status_record(
@@ -12262,7 +12310,7 @@ pub(super) fn upsert_native_research_writeback_record(
         updated_at_ms,
         payload,
         &issued,
-        super::outbound_field_review::NativeFieldStatusIssuance::Writeback { revision, keys },
+        issuance,
     )?;
     tx.commit()?;
     writer.notify_committed_change();

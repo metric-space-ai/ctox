@@ -109,6 +109,7 @@ pub(super) enum NativeFieldStatusIssuance<'a> {
         keys: &'a BTreeSet<FieldStatusKey>,
     },
     Review(&'a str),
+    Preserve,
 }
 
 impl NativeFieldStatusWitnesses {
@@ -212,6 +213,7 @@ impl NativeFieldStatusWitnesses {
         )?;
         for (key, status) in current {
             let newly_issued = match &issuance {
+                NativeFieldStatusIssuance::Preserve => false,
                 NativeFieldStatusIssuance::Writeback { revision, keys } => {
                     keys.contains(&key)
                         && status.get("revision") == Some(*revision)
@@ -1285,6 +1287,7 @@ mod tests {
             "lead-a",
             1,
             legacy,
+            &store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap_or(Value::Null),
             &negative()["revision"],
             &BTreeSet::from([("lead".into(), "".into(), "firma_prokura".into())]),
         )?;
@@ -1357,6 +1360,150 @@ mod tests {
     }
 
     #[test]
+    fn native_producers_cannot_erase_a_concurrently_published_field_review() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        store::tests::seed_business_user(root, "operator", "admin")?;
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root, COLLECTION,
+        )?;
+        let now = super::super::person_research_command::now_ms();
+        let (token, _) = store::issue_business_os_capability_token(root, "operator", now)?;
+        let accepted = store::accept_rxdb_business_command_with_origin(
+            root,
+            json!({
+                "id":"research-a", "command_id":"research-a", "module":"outbound-lead-generation",
+                "command_type":"business_os.chat.task", "record_id":"lead-a", "status":"pending_sync",
+                "payload":{"title":"Research lead-a", "instruction":"Research and persist the saved evidence.",
+                    "fields":["firma_prokura"], "writeback_contract":{"command_type":"outbound.lead.research_writeback",
+                        "collection":COLLECTION, "record_ids":["lead-a"]}},
+                "client_context":{"actor":{"id":"operator", "role":"admin"}, "capability_token":token}
+            }),
+            store::CommandOrigin::ReplicatedPeer,
+        )?;
+        assert_eq!(accepted["status"], "accepted");
+        let parent = channels::business_command_projection(root, "research-a")?;
+        let task_key = parent["execution_task_id"]
+            .as_str()
+            .context("native task missing")?
+            .to_owned();
+        let lead = json!({"id":"lead-a", "field_status":{"firma_prokura":negative()}});
+        store::upsert_rxdb_collection_record(root, COLLECTION, "lead-a", 1, lead)?;
+        let initial = store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap();
+        store::upsert_native_research_writeback_record(
+            root,
+            "lead-a",
+            1,
+            initial.clone(),
+            &initial,
+            &negative()["revision"],
+            &BTreeSet::from([("lead".into(), "".into(), "firma_prokura".into())]),
+        )?;
+        // Both producers retain this old full document while publication wins
+        // the next transaction. The field they will deliver is different.
+        let stale_master = store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap();
+        let run = audit(root)?;
+        let engine = lcm::LcmEngine::open(
+            &root.join("runtime/ctox.sqlite3"),
+            lcm::LcmConfig::default(),
+        )?;
+        engine.persist_verification_run(&run, &[])?;
+        assert_eq!(publish(root, &[task_key], &run)?, 1);
+        let current = store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap();
+        let conn = Connection::open(store::rxdb_store_path(root))?;
+        let current_witnesses = NativeFieldStatusWitnesses::load(&conn, "lead-a")?.0;
+        assert!(is_refuted_no_match(
+            &current["field_status"]["firma_prokura"]
+        ));
+        assert_eq!(
+            current_witnesses[&("lead".into(), "".into(), "firma_prokura".into())],
+            current["field_status"]["firma_prokura"]
+        );
+        let revision = json!({"writeback_id":"wb-phone", "command_id":"research-a", "attempt":8, "written_at_ms":3});
+        let phone = json!({"status":"verified", "value":"+4940636841000", "revision":revision, "review":null});
+        let keys = BTreeSet::from([("lead".into(), "".into(), "firma_telefon".into())]);
+        let mut stale = stale_master.clone();
+        stale["field_status"]["firma_telefon"] = phone.clone();
+        let error = store::upsert_native_research_writeback_record(
+            root,
+            "lead-a",
+            3,
+            stale,
+            &stale_master,
+            &revision,
+            &keys,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("changed before persistence"),
+            "{error:#}"
+        );
+        assert_eq!(
+            store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?,
+            Some(current.clone())
+        );
+        assert_eq!(
+            NativeFieldStatusWitnesses::load(&conn, "lead-a")?.0,
+            current_witnesses
+        );
+        let mut stale_email = stale_master.clone();
+        stale_email["payload"] = json!({"email_validation_pass":{"at_ms":3, "checked":[]}});
+        let error = store::upsert_native_email_validation_record(
+            root,
+            "lead-a",
+            3,
+            stale_email,
+            &stale_master,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("changed before persistence"),
+            "{error:#}"
+        );
+        assert_eq!(
+            store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?,
+            Some(current.clone())
+        );
+        assert_eq!(
+            NativeFieldStatusWitnesses::load(&conn, "lead-a")?.0,
+            current_witnesses
+        );
+        // A fresh producer can still deliver another field and must retain
+        // both the newer untouched review and its exact issuance witness.
+        let mut fresh = current.clone();
+        fresh["field_status"]["firma_telefon"] = phone;
+        store::upsert_native_research_writeback_record(
+            root, "lead-a", 4, fresh, &current, &revision, &keys,
+        )?;
+        let fresh = store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap();
+        assert_eq!(
+            fresh["field_status"]["firma_prokura"],
+            current["field_status"]["firma_prokura"]
+        );
+        let fresh_witnesses = NativeFieldStatusWitnesses::load(&conn, "lead-a")?.0;
+        assert_eq!(
+            fresh_witnesses[&("lead".into(), "".into(), "firma_prokura".into())],
+            current_witnesses[&("lead".into(), "".into(), "firma_prokura".into())]
+        );
+        let mut fresh_email = fresh.clone();
+        fresh_email["payload"] = json!({"email_validation_pass":{"at_ms":5, "checked":[]}});
+        store::upsert_native_email_validation_record(root, "lead-a", 5, fresh_email, &fresh)?;
+        assert_eq!(
+            NativeFieldStatusWitnesses::load(&conn, "lead-a")?.0,
+            fresh_witnesses,
+            "native email may preserve witnesses, never issue another writeback"
+        );
+        assert!(is_refuted_no_match(
+            &native_review_view(
+                root,
+                "lead-a",
+                &store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap()
+            )?["field_status"]["firma_prokura"]
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn native_field_status_witnesses_bind_people_and_rollback_a_clamped_issuance(
     ) -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
@@ -1380,6 +1527,7 @@ mod tests {
             "lead-a",
             1,
             lead,
+            &store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap_or(Value::Null),
             &negative()["revision"],
             &keys,
         )?;
@@ -1433,6 +1581,7 @@ mod tests {
             "lead-a",
             3,
             too_large,
+            &store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap_or(Value::Null),
             &negative()["revision"],
             &BTreeSet::from([("lead".into(), "".into(), "firma_prokura".into())])
         )
@@ -1472,6 +1621,7 @@ mod tests {
             "lead-a",
             6,
             saved.clone(),
+            &store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap_or(Value::Null),
             &negative()["revision"],
             &keys
         )
@@ -1481,6 +1631,7 @@ mod tests {
             "missing",
             6,
             saved,
+            &store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap_or(Value::Null),
             &negative()["revision"],
             &keys
         )

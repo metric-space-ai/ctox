@@ -1690,6 +1690,7 @@ pub(super) fn handle_research_writeback(
     validate_original_research_command(root, &request)?;
     let mut lead = store::load_rxdb_collection_record(root, LEAD_COLLECTION, &request.record_id)?
         .context("research writeback lead record does not exist")?;
+    let expected_master = lead.clone();
     let gap_task = if request.gap_task_id.trim().is_empty() {
         // Chat assignment: the harness worker researched the lead directly
         // (skill `outbound-lead-generation-research`). No queue task, no
@@ -1973,6 +1974,7 @@ pub(super) fn handle_research_writeback(
         &request.record_id,
         now,
         lead,
+        &expected_master,
         &serde_json::to_value(&revision)?,
         &issued_keys,
     )?;
