@@ -1,3 +1,6 @@
+use ctox_sync::contracts::{
+    SessionHandoffPermit, SessionHandoffPhase, CTOX_SYNC_SESSION_HANDOFF_PERMIT_VERSION,
+};
 use ctox_sync::{
     authority::{auth::SigningIdentity, ExecutionSpec, Ownership},
     checkpoint::CheckpointStore,
@@ -8,6 +11,47 @@ use ctox_sync::{
 };
 use sha2::{Digest, Sha256};
 use std::{collections::BTreeSet, io::Cursor, path::Path};
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// Mint quorum-evidence permits with the real signing path, exactly as the
+/// native policy adapter does after a policy decision: audience is the job
+/// scope, nonce is the command request id.
+pub fn handoff_permit(
+    key: &SigningIdentity,
+    phase: SessionHandoffPhase,
+    spec: &ExecutionSpec,
+    checkpoint_digest: &str,
+    sequence: u64,
+    ownership: &Ownership,
+    request_id: &str,
+) -> SessionHandoffPermit {
+    let now = now_ms();
+    key.sign_session_handoff_permit(&SessionHandoffPermit {
+        version: CTOX_SYNC_SESSION_HANDOFF_PERMIT_VERSION,
+        binding_digest: "b".repeat(64),
+        phase,
+        audience: spec.scope_id.clone(),
+        nonce: request_id.to_owned(),
+        job_id: spec.job_id.clone(),
+        session_id: spec.session_id.clone(),
+        scope_id: spec.scope_id.clone(),
+        checkpoint_digest: checkpoint_digest.to_owned(),
+        checkpoint_sequence: sequence,
+        ownership_generation: ownership.generation,
+        principal_epoch: 0,
+        binding_revision: 1,
+        issued_at_ms: now,
+        expires_at_ms: now + 60_000,
+        signature: String::new(),
+    })
+    .unwrap()
+}
 
 /// Even consensus-only fixtures obtain receipts from independently persisted data.
 pub fn copy_receipt(

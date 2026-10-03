@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub mod auth;
 pub mod client;
 pub mod diagnostics;
+pub mod handoff;
 pub mod network;
 pub mod node;
 mod routing;
@@ -19,7 +20,8 @@ pub type NodeId = u64;
 pub use crate::contracts::ExecutionPeer as Peer;
 
 pub use crate::contracts::{
-    CheckpointCopyReceipt, ExecutionOwnership as Ownership, ExecutionSpec, WorkerMembership,
+    CheckpointCopyReceipt, ExecutionOwnership as Ownership, ExecutionSpec, SessionHandoffPermit,
+    SessionHandoffPhase, WorkerMembership,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +32,10 @@ pub struct ProtectedCheckpoint {
     pub replicas: BTreeSet<NodeId>,
     /// Retain the authenticated evidence across Raft log compaction and snapshots.
     pub receipts: Vec<CheckpointCopyReceipt>,
+    /// Legacy snapshots remain readable but cannot authorize takeover without
+    /// freshly protected disclosure evidence.
+    #[serde(default)]
+    pub disclosure: Option<SessionHandoffPermit>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,12 +71,17 @@ pub enum Command {
         job_id: String,
         ownership: Ownership,
         receipts: Vec<CheckpointCopyReceipt>,
+        /// Current signed source-disclosure decision, verified deterministically
+        /// against the enrolled owner key, this scope and the request id.
+        disclosure: SessionHandoffPermit,
     },
     TakeOver {
         job_id: String,
         expected: Ownership,
         checkpoint_digest: String,
         owner: NodeId,
+        /// Current signed target-resume decision from the new owner instance.
+        resume: SessionHandoffPermit,
     },
     BeginEffect {
         job_id: String,
@@ -117,6 +128,8 @@ pub enum Rejection {
     StaleOwner,
     CheckpointUnavailable,
     CheckpointRegressed,
+    /// The embedded session-handoff permit is missing, forged, mismatched or stale.
+    PolicyDenied,
     ReconciliationRequired,
     EffectAlreadyCompleted,
     EffectNotStarted,
@@ -285,7 +298,11 @@ impl State {
             return Err(StaleOwner);
         }
         match &request.command {
-            Command::ProtectCheckpoint { receipts, .. } => {
+            Command::ProtectCheckpoint {
+                receipts,
+                disclosure,
+                ..
+            } => {
                 if !job.pending_effects.is_empty() {
                     return Err(ReconciliationRequired);
                 }
@@ -293,6 +310,21 @@ impl State {
                     return Err(CheckpointUnavailable);
                 }
                 let first = &receipts[0];
+                // Disclosure evidence is part of the deterministic transition:
+                // signed by the enrolled owner key, bound to this exact job,
+                // checkpoint, ownership generation, scope and request id.
+                let owner_peer = peers.get(&expected.node_id).ok_or(PolicyDenied)?;
+                auth::session_handoff::verify_permit_evidence(
+                    disclosure,
+                    &owner_peer.identity,
+                    SessionHandoffPhase::Disclose,
+                    &job.spec,
+                    &first.checkpoint_digest,
+                    first.sequence,
+                    expected.generation,
+                    &request.request_id,
+                )
+                .map_err(|_| PolicyDenied)?;
                 let mut replicas = BTreeSet::new();
                 for receipt in receipts {
                     let peer = peers.get(&receipt.node_id).ok_or(CheckpointUnavailable)?;
@@ -311,6 +343,7 @@ impl State {
                     sequence: first.sequence,
                     replicas,
                     receipts: receipts.clone(),
+                    disclosure: Some(disclosure.clone()),
                 };
                 if checkpoint.digest.len() != 64
                     || !checkpoint
@@ -327,7 +360,15 @@ impl State {
                     return Err(CheckpointUnavailable);
                 }
                 if let Some(previous) = &job.checkpoint {
-                    if checkpoint.sequence <= previous.sequence {
+                    // Upgrade an unchanged legacy checkpoint only after the
+                    // current owner supplied newly verified disclosure evidence.
+                    // No checkpoint bytes, copy evidence or ownership can change.
+                    let authorizes_legacy = previous.disclosure.is_none()
+                        && checkpoint.sequence == previous.sequence
+                        && checkpoint.digest == previous.digest
+                        && checkpoint.replicas == previous.replicas
+                        && checkpoint.receipts == previous.receipts;
+                    if checkpoint.sequence <= previous.sequence && !authorizes_legacy {
                         return Err(CheckpointRegressed);
                     }
                 }
@@ -336,6 +377,7 @@ impl State {
             Command::TakeOver {
                 owner,
                 checkpoint_digest,
+                resume,
                 ..
             } => {
                 if *owner != request.actor || *owner == expected.node_id {
@@ -348,6 +390,24 @@ impl State {
                 if &checkpoint.digest != checkpoint_digest || !checkpoint.replicas.contains(owner) {
                     return Err(CheckpointUnavailable);
                 }
+                // The new owner must carry its own current, signed resume
+                // decision: target execution starts only with target policy.
+                let disclosure = checkpoint.disclosure.as_ref().ok_or(PolicyDenied)?;
+                if resume.binding_digest != disclosure.binding_digest {
+                    return Err(PolicyDenied);
+                }
+                let new_owner_peer = peers.get(owner).ok_or(PolicyDenied)?;
+                auth::session_handoff::verify_permit_evidence(
+                    resume,
+                    &new_owner_peer.identity,
+                    SessionHandoffPhase::Resume,
+                    &job.spec,
+                    &checkpoint.digest,
+                    checkpoint.sequence,
+                    expected.generation,
+                    &request.request_id,
+                )
+                .map_err(|_| PolicyDenied)?;
                 let generation = expected.generation.checked_add(1).ok_or(InvalidRequest)?;
                 job.ownership = Ownership {
                     node_id: *owner,

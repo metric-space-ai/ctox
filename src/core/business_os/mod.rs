@@ -53,6 +53,7 @@ mod rxdb_peer_tombstones;
 mod rxdb_peer_workjet_devices;
 pub mod server;
 mod session;
+mod session_handoff_gate;
 mod shell_assets;
 pub mod shell_update;
 pub mod store;
@@ -108,6 +109,8 @@ pub(crate) use rxdb_peer::sync_knowledge_tables;
 pub use rxdb_peer::{ensure_native_peer, native_peer_maintenance_health, restart_native_peer};
 pub use server::serve_business_os;
 pub use server::BusinessOsServeOptions;
+pub use session_handoff_gate::native_session_handoff_gate;
+pub use session_handoff_gate::NativeSessionHandoffGate;
 
 pub(crate) use external_sql_sync::start_background_sync;
 pub(crate) use person_research_command::recover_once as recover_person_research_commands_once;
