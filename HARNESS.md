@@ -53,6 +53,22 @@ reasoning section contributes one activity turn. Streaming deltas, tool ends,
 and transport replays do not. Reasoning contents are never copied into this
 store.
 
+The direct-session adapter accepts both typed `TurnPlanUpdated` notifications
+and legacy `PlanUpdate` events. Typed plans require the current thread and turn
+ids; their explicit identity does not depend on receiving a legacy turn-start
+event first. Both forms normalize to the same plan payload and deduplicate
+within the turn before progress counters and durable persistence. A real plan
+is still required before review: the adapter never invents completed steps
+from a reply or a writeback receipt.
+
+The completion reviewer receives the latest durable plan revision for the
+stable work key, including its task and command identities, phase, review
+status and step statuses. This is a latest-work-key query, not an attempt-local
+filter: retries can create a newer revision while prior revisions remain
+evidence. Completed plan steps do not establish review approval or prove a
+requested side effect. Missing, incomplete and failed-review evidence remains
+subject to the deterministic completion and recovery gates.
+
 Plan steps own the first 90 percent of progress, divided equally and rounded:
 `round(90 * completed_steps / total_steps)`. Completed model work remains at
 90 percent through pending or failed native review; validated review sets 100
@@ -405,6 +421,19 @@ closed. A truthful blocker report does not complete requested execution; a
 verified query with zero matches can complete it. Review admission preserves
 incomplete plan steps and their actual progress.
 
+When an otherwise accepted Business OS chat queue result still has incomplete
+durable plan steps, finalization records a terminal failure with the same
+attempt/work key and plan revision/counts. It does not complete those steps,
+replay research/writebacks, or enqueue an automatic recovery prompt. Partial
+writeback receipts are retained evidence, not completion proof. Reconciliation
+of the saved result and plan must precede an explicit retry. Storage failures
+remain recoverable from the stored attempt.
+
+The failure transition checks current plan and lease ownership under an
+Immediate transaction. A prior nonterminal hold's effect marker is preserved;
+it cannot swallow this terminal transition. Cancellation and other terminal
+owners are retained. A changed lease or plan is not overwritten.
+
 The supported dispositions are:
 
 - `Approved`
@@ -551,6 +580,15 @@ persisted reviewer provenance.
 Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually
 fails terminally instead of creating unbounded review/rework cascades.
+
+Founder communication rework spends its existing two-attempt review-rejection
+budget from the durable routing `attempt` count, scoped to the same self-work
+item. Re-leasing one queue row therefore cannot bypass the budget by keeping
+the message count at one. Legacy or not-yet-leased rows still reserve at least
+one attempt each. Exhaustion fails the matching rework rows and item once;
+unrelated work and the original email are not sent or mutated by this counter.
+The separate reviewed-send evidence gate still prevents an unsent rework from
+closing successfully.
 
 Transient model/API failures also keep the original durable identity. A typed
 Business OS command moves from `running` to `retry_wait` before its linked queue
@@ -816,7 +854,15 @@ Fehlschläge in der Tätigkeit nur ohne Alternative. Die Antwort ist JSON
 (`member_id`, `reason`); ein unbrauchbares oder unerreichbares Urteil fällt auf
 die deterministische Punktzahl (`crew::select`) zurück, und die Begründung sagt
 das. Archivierte Mitglieder werden nicht neu ausgewählt. Ein wiederaufgenommener
-Versuch behält seine ursprüngliche Identität. Die wörtliche Begründung steht im
+Versuch behält seine ursprüngliche Identität. Die Zulassung prüft die bestehende
+Attempt-Zeile innerhalb derselben Schreibtransaktion wie die Crew-Bindung:
+Aufgabe und Mitglied müssen übereinstimmen, und der Attempt darf noch nicht
+finalisiert sein. Ein Konflikt verbraucht keine manuelle Zuweisung und schreibt
+keine neue Auswahl. Ein neuer Versuch benötigt eine neue Attempt-ID. Diese
+Prüfung ist eine Voraussetzung für die externe Crew-Anbindung, noch keine
+externe Laufzulassungs-API. Der separate [MCP-Kontextabruf](docs/workjet-crew-context.md)
+liefert nur den gebundenen Kontext eines bereits zugelassenen Versuchs unter
+bestehenden privaten Crew-Leserechten. Die wörtliche Begründung steht im
 Harness-Flow-Ereignis `crew_selected` (`selection_kind` routed/selected/
 assigned/continuity) und in dessen Cockpit-Projektion; das Lesen des
 Gedächtnisses erzeugt `crew.memory_read`. In Tests ist kein Router-Urteil

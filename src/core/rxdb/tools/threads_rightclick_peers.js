@@ -531,11 +531,12 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
 
   await globalThis.__ctoxReportThreadsPhase('open-threads-module');
   await ensureThreadsModuleCollections();
+  // The requester has the User role; business_users is Admin-only and is
+  // exercised by the separate reviewer profile below.
   await waitFor(() => {
     const raw = state.db?.raw || {};
     const names = [
       'business_commands',
-      'business_users',
       ...threadsCollections,
     ];
     return {
@@ -546,7 +547,6 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
   await globalThis.__ctoxReportThreadsPhase('start-thread-collections');
   await Promise.all([
     'business_commands',
-    'business_users',
     ...threadsCollections,
     'ctox_queue_tasks',
   ].map((name) => state.sync?.startCollection?.(name).catch(() => null)));
@@ -640,7 +640,7 @@ async function runRequesterInBrowser({ smokeMode, threadsScaleSeed }) {
   }
   const commandStatus = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
     includeCounts: false,
-    requiredCollections: ['business_commands', 'business_users'],
+    requiredCollections: ['business_commands'],
   });
   await globalThis.__ctoxRecordThreadsStatus(commandStatus);
   if (commandStatus?.version !== 'business-os-advanced-status-v1' || commandStatus.ok !== true) {

@@ -16,6 +16,7 @@ const BUILD = '20260903-research-claims-evaluation-v98';
 const DEFAULT_AXIS_X = 'evidence_strength';
 const DEFAULT_AXIS_Y = 'topic_fit';
 const ROW_LIMIT = 5000;
+const KNOWLEDGE_CATALOG_FETCH_CONCURRENCY = 3;
 // 10 s reichten nicht, sobald Knowledge-Chunks (bis 256 KB je Dokument) den
 // selben WebRTC-Kanal fuellen: die Pflicht-Collections liefen dann in den
 // Timeout und die Sicht kippte in den Fehlerzustand (skf.ctox.dev, 02.09.2026).
@@ -469,6 +470,7 @@ const state = {
   },
   rowLimitWarnings: [],
   chunkDiagnostics: [],
+  knowledgeTableRowStates: {},
   cleanup: [],
   contextMenu: null,
   mountToken: null,
@@ -546,6 +548,7 @@ export async function mount(ctx) {
   schedulePostSyncRefresh(1200);
   return () => {
     if (state.mountToken === mountToken) state.mountToken = null;
+    abortKnowledgeRowFetches('unmount');
     for (const lease of state.syncLeases) lease?.release?.().catch?.(() => null);
     state.syncLeases.clear();
     // Cleanup globals
@@ -702,6 +705,8 @@ function bindEvents(root) {
       await dispatchGraphAiAction(target.dataset.graphAi || 'research');
     } else if (action === 'refresh') {
       await refreshAll();
+    } else if (action === 'retry-knowledge-rows') {
+      await retryKnowledgeTableRows(target.dataset.tableId || '');
     } else if (action === 'new-task') {
       openTaskDialog();
     } else if (action === 'edit-task') {
@@ -1159,6 +1164,7 @@ function knowledgeBasesFromTables(tables = []) {
       domain,
       table_key: tableKey,
     };
+    if (isKnowledgeCatalogDocument(table)) attachCachedCatalogRows(table);
     if (!byDomain.has(domain)) {
       byDomain.set(domain, {
         id: domain,
@@ -1197,6 +1203,9 @@ function mergeKnowledgeTableChunks(tables = []) {
   }
 
   return [...groups.entries()].map(([logicalId, parts]) => {
+    if (parts.every(({ rawTable, source }) => isKnowledgeCatalogDocument(rawTable) || isKnowledgeCatalogDocument(source))) {
+      return mergeKnowledgeCatalogParts(logicalId, parts);
+    }
     parts.sort((left, right) => (
       Number(left.source.chunk_index ?? left.rawTable.chunk_index ?? 0)
       - Number(right.source.chunk_index ?? right.rawTable.chunk_index ?? 0)
@@ -1235,7 +1244,168 @@ function mergeKnowledgeTableChunks(tables = []) {
   });
 }
 
+function isKnowledgeCatalogDocument(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return false;
+  const payload = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const version = record.projection_version ?? payload?.projection_version;
+  const rowsSource = record.rows_source ?? payload?.rows_source;
+  const marked = version === 2 || version === '2' || rowsSource === 'rxdb.rows.fetch';
+  if (!marked) return false;
+  return !hasEmbeddedKnowledgeRows(record);
+}
+
+function hasEmbeddedKnowledgeRows(record) {
+  if (!record || typeof record !== 'object') return false;
+  const payload = record.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const candidates = [
+    record.rows,
+    record.records,
+    record.data,
+    record.dataframe?.rows,
+    record.dataframe?.records,
+    record.dataframe?.data,
+    payload?.rows,
+    payload?.records,
+    payload?.data,
+    payload?.dataframe?.rows,
+    payload?.dataframe?.records,
+    payload?.dataframe?.data,
+  ];
+  return candidates.some((value) => Array.isArray(value) && value.length > 0);
+}
+
+function catalogRowCount(record) {
+  const payload = record?.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const value = record?.row_count ?? payload?.row_count;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) return null;
+  return number;
+}
+
+function knowledgeContentHash(record) {
+  const payload = record?.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : null;
+  const value = record?.content_hash ?? payload?.content_hash ?? '';
+  return value == null ? '' : String(value);
+}
+
+function logicalKnowledgeTableId(record) {
+  const source = record?.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : record;
+  return String(
+    source?.logical_table_id
+    || record?.logical_table_id
+    || source?.id
+    || record?.id
+    || '',
+  ).trim();
+}
+
+function omitEmbeddedKnowledgeRows(record) {
+  if (!record || typeof record !== 'object' || Array.isArray(record)) return {};
+  const next = { ...record };
+  delete next.rows;
+  delete next.records;
+  delete next.data;
+  delete next.rows_origin;
+  delete next.rows_content_hash;
+  if (next.dataframe && typeof next.dataframe === 'object' && !Array.isArray(next.dataframe)) {
+    next.dataframe = { ...next.dataframe };
+    delete next.dataframe.rows;
+    delete next.dataframe.records;
+    delete next.dataframe.data;
+  }
+  if (next.payload && next.payload !== record && typeof next.payload === 'object' && !Array.isArray(next.payload)) {
+    next.payload = omitEmbeddedKnowledgeRows(next.payload);
+  }
+  return next;
+}
+
+function mergeKnowledgeCatalogParts(logicalId, parts) {
+  const first = parts[0];
+  const rowCount = parts
+    .map(({ rawTable, source }) => catalogRowCount(source) ?? catalogRowCount(rawTable))
+    .find((value) => value != null);
+  const payload = omitEmbeddedKnowledgeRows({
+    ...(first.source || {}),
+    id: logicalId,
+    logical_table_id: logicalId,
+    rows_complete: true,
+  });
+  delete payload.chunk_index;
+  delete payload.chunk_count;
+  delete payload.chunk_row_offset;
+  delete payload.chunk_row_count;
+  delete payload.projected_row_count;
+  if (rowCount != null) payload.row_count = rowCount;
+  return {
+    ...omitEmbeddedKnowledgeRows(first.rawTable || {}),
+    ...payload,
+    payload,
+  };
+}
+
+function isKnowledgeTableBaseDocument(document) {
+  if (isKnowledgeCatalogDocument(document)) return true;
+  const source = document?.payload && typeof document.payload === 'object' && !Array.isArray(document.payload)
+    ? document.payload
+    : document;
+  const chunkIndex = Number(source?.chunk_index ?? document?.chunk_index ?? 0);
+  return !Number.isFinite(chunkIndex) || chunkIndex === 0;
+}
+
 const knowledgeTableLoads = new Map();
+const knowledgeRowsCache = new Map();
+let knowledgeRowsFetchController = null;
+let knowledgeRowsFetchDomainKey = '';
+
+function restartKnowledgeRowFetches(domains = []) {
+  const domainKey = JSON.stringify([...new Set((domains || [])
+    .map((domain) => String(domain || '').trim())
+    .filter(Boolean))].sort());
+  const reason = knowledgeRowsFetchDomainKey && knowledgeRowsFetchDomainKey !== domainKey
+    ? 'domain-change'
+    : 'reload';
+  abortKnowledgeRowFetches(reason);
+  knowledgeRowsFetchController = new AbortController();
+  knowledgeRowsFetchDomainKey = domainKey;
+  return knowledgeRowsFetchController.signal;
+}
+
+function abortKnowledgeRowFetches(reason = 'reload') {
+  const current = knowledgeRowsFetchController;
+  knowledgeRowsFetchController = null;
+  if (!current || current.signal.aborted) return;
+  try { current.abort(reason); } catch { /* already aborted */ }
+}
+
+function currentKnowledgeRowsSignal() {
+  if (!knowledgeRowsFetchController || knowledgeRowsFetchController.signal.aborted) {
+    knowledgeRowsFetchController = new AbortController();
+  }
+  return knowledgeRowsFetchController.signal;
+}
+
+function rowsCancelError(reason) {
+  const text = typeof reason === 'string' && reason.trim() ? reason.trim() : 'client-abort';
+  const error = new Error(`ROWS_CANCELLED: ${text}`);
+  error.name = 'AbortError';
+  error.code = 'ROWS_CANCELLED';
+  error.retryable = false;
+  return error;
+}
+
+function isRowsFetchCancelled(error) {
+  return error?.name === 'AbortError' || error?.code === 'ROWS_CANCELLED';
+}
 
 async function loadKnowledgeTables(options = {}) {
   const domains = [...new Set((options.domains || [])
@@ -1255,14 +1425,23 @@ async function loadKnowledgeTables(options = {}) {
 }
 
 async function loadKnowledgeTablesOnce({ retryEmpty = true, domains = [] } = {}) {
+  const signal = restartKnowledgeRowFetches(domains);
   const collection = readableCollection('knowledge_tables');
   const first = await loadKnowledgeTableChunks(collection, domains);
-  if (first.length || !collection?.find) return first;
+  if (signal.aborted) return first;
+  if (first.length || !collection?.find) {
+    await prefetchCatalogRows(first, signal);
+    return first;
+  }
   if (!retryEmpty || !shouldRetryEmptyKnowledgeTables()) return first;
   for (const delay of KNOWLEDGE_TABLE_EMPTY_RETRY_DELAYS_MS) {
+    if (signal.aborted) return first;
     await sleep(delay);
     const retry = await loadKnowledgeTableChunks(collection, domains);
-    if (retry.length) return retry;
+    if (retry.length) {
+      await prefetchCatalogRows(retry, signal);
+      return retry;
+    }
   }
   return first;
 }
@@ -1273,14 +1452,23 @@ async function loadKnowledgeTableChunks(collection, domains = []) {
     .map((domain) => String(domain || '').trim())
     .filter(Boolean))];
   const selectors = normalizedDomains.length
-    ? normalizedDomains.map((domain) => ({ domain, chunk_index: 0 }))
-    : [{ chunk_index: 0 }];
+    ? normalizedDomains.flatMap((domain) => ([
+        { domain, chunk_index: 0 },
+        { domain, projection_version: 2 },
+        { domain, rows_source: 'rxdb.rows.fetch' },
+      ]))
+    : [
+        { chunk_index: 0 },
+        { projection_version: 2 },
+        { rows_source: 'rxdb.rows.fetch' },
+      ];
   const baseDocuments = [];
   for (const selector of selectors) {
     const docs = await findBySelector(collection, selector, 'knowledge_tables');
     baseDocuments.push(...docs);
   }
-  const bases = [...new Map(baseDocuments.map((document) => [document.id, document])).values()];
+  const bases = [...new Map(baseDocuments.map((document) => [document.id, document])).values()]
+    .filter(isKnowledgeTableBaseDocument);
   const chunkIds = knowledgeTableChunkDocumentIds(bases);
   const chunks = [];
   for (let offset = 0; offset < chunkIds.length; offset += 3) {
@@ -1298,6 +1486,7 @@ function knowledgeTableChunkDocumentIds(baseDocuments = []) {
     const source = document?.payload && typeof document.payload === 'object'
       ? document.payload
       : document;
+    if (isKnowledgeCatalogDocument(document) || isKnowledgeCatalogDocument(source)) return [];
     const logicalId = String(
       source?.logical_table_id
       || document?.logical_table_id
@@ -1312,6 +1501,253 @@ function knowledgeTableChunkDocumentIds(baseDocuments = []) {
       (_, index) => `${logicalId}:chunk:${String(index + 1).padStart(4, '0')}`,
     );
   });
+}
+
+function catalogDocumentsByLogicalId(documents = []) {
+  const groups = new Map();
+  for (const document of Array.isArray(documents) ? documents : []) {
+    if (!isKnowledgeCatalogDocument(document)) continue;
+    const logicalId = logicalKnowledgeTableId(document);
+    if (!logicalId || groups.has(logicalId)) continue;
+    groups.set(logicalId, document);
+  }
+  return [...groups.values()];
+}
+
+async function prefetchCatalogRows(documents, signal) {
+  const tables = catalogDocumentsByLogicalId(documents);
+  await mapPool(tables, KNOWLEDGE_CATALOG_FETCH_CONCURRENCY, async (document) => {
+    if (signal?.aborted) return null;
+    try {
+      return await fetchCatalogRowsIntoCache(document, { signal });
+    } catch (error) {
+      if (isRowsFetchCancelled(error) || signal?.aborted) return null;
+      throw error;
+    }
+  });
+}
+
+async function mapPool(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const workers = Math.min(Math.max(1, limit), items.length);
+  if (!workers) return results;
+  async function run() {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      results[index] = await worker(items[index], index);
+    }
+  }
+  await Promise.all(Array.from({ length: workers }, () => run()));
+  return results;
+}
+
+async function fetchCatalogRowsIntoCache(record, { signal, force = false } = {}) {
+  const tableId = knowledgeRowsTableId(record);
+  const logicalId = logicalKnowledgeTableId(record) || tableId;
+  const contentHash = knowledgeContentHash(record);
+  if (!tableId) return null;
+  if (!force && contentHash) {
+    const cached = readKnowledgeRowsCache(tableId, contentHash);
+    if (cached) {
+      noteKnowledgeTableRowState(record, logicalId, 'ready');
+      return cached.rows;
+    }
+  }
+  const loader = await knowledgeRowsLoaderFor(state.ctx);
+  if (typeof loader?.fetchAllRows !== 'function') return null;
+  noteKnowledgeTableRowState(record, logicalId, 'loading');
+  try {
+    if (signal?.aborted) throw rowsCancelError(signal.reason);
+    const result = await loader.fetchAllRows(tableId, { signal });
+    if (signal?.aborted) throw rowsCancelError(signal.reason);
+    const rows = (Array.isArray(result?.rows) ? result.rows : [])
+      .map((row) => (row && typeof row === 'object' ? row : { value: row }));
+    const expected = catalogRowCount(record);
+    const declared = Number(result?.rowCount);
+    const declaredCount = Number.isFinite(declared) && declared >= 0 ? declared : null;
+    if ((expected != null && rows.length !== expected) || (declaredCount != null && rows.length !== declaredCount)) {
+      const error = new Error(`unvollständig: ${rows.length} von ${expected ?? declaredCount} Zeilen`);
+      error.retryable = true;
+      error.code = 'ROWS_SOURCE_ERROR';
+      throw error;
+    }
+    const hash = contentHash || String(result?.contentHash || '');
+    if (hash) {
+      writeKnowledgeRowsCache(tableId, hash, {
+        rows,
+        rowCount: rows.length,
+        contentHash: hash,
+        schemaHash: result?.schemaHash ?? null,
+      });
+    }
+    noteKnowledgeTableRowState(record, logicalId, 'ready');
+    return rows;
+  } catch (error) {
+    if (isRowsFetchCancelled(error) || signal?.aborted) {
+      if (state.knowledgeTableRowStates?.[logicalId]?.phase === 'loading') {
+        delete state.knowledgeTableRowStates[logicalId];
+      }
+      throw isRowsFetchCancelled(error) ? error : rowsCancelError(signal?.reason);
+    }
+    noteKnowledgeTableRowState(record, logicalId, 'error', error);
+    return null;
+  }
+}
+
+function readKnowledgeRowsCache(tableId, contentHash) {
+  if (!tableId || !contentHash) return null;
+  return knowledgeRowsCache.get(`${tableId}\0${contentHash}`) || null;
+}
+
+function writeKnowledgeRowsCache(tableId, contentHash, value) {
+  if (!tableId || !contentHash) return;
+  const prefix = `${tableId}\0`;
+  const key = `${prefix}${contentHash}`;
+  for (const existing of [...knowledgeRowsCache.keys()]) {
+    if (existing.startsWith(prefix) && existing !== key) knowledgeRowsCache.delete(existing);
+  }
+  knowledgeRowsCache.set(key, value);
+}
+
+function forgetKnowledgeRowsCache(tableId) {
+  if (!tableId) return;
+  const prefix = `${tableId}\0`;
+  for (const existing of [...knowledgeRowsCache.keys()]) {
+    if (existing.startsWith(prefix)) knowledgeRowsCache.delete(existing);
+  }
+}
+
+function attachCachedCatalogRows(table) {
+  const cached = readKnowledgeRowsCache(knowledgeRowsTableId(table), knowledgeContentHash(table));
+  if (!cached) return false;
+  attachCatalogRows(table, cached.rows, cached);
+  return true;
+}
+
+function attachCatalogRows(table, rows, meta = {}) {
+  if (!table || typeof table !== 'object') return;
+  const list = Array.isArray(rows) ? [...rows] : [];
+  table.rows = list;
+  table.rows_origin = 'rxdb.rows.fetch';
+  table.rows_content_hash = meta.contentHash || knowledgeContentHash(table);
+  if (!table.payload || typeof table.payload !== 'object' || Array.isArray(table.payload)) {
+    table.payload = {};
+  }
+  table.payload = {
+    ...table.payload,
+    rows: list,
+    rows_origin: 'rxdb.rows.fetch',
+  };
+}
+
+function stripAttachedCatalogRows(table) {
+  if (!table || typeof table !== 'object') return;
+  delete table.rows;
+  delete table.records;
+  delete table.data;
+  delete table.rows_origin;
+  delete table.rows_content_hash;
+  if (table.payload && typeof table.payload === 'object' && !Array.isArray(table.payload)) {
+    delete table.payload.rows;
+    delete table.payload.records;
+    delete table.payload.data;
+    delete table.payload.rows_origin;
+  }
+}
+
+function usesCatalogRowWindow(table) {
+  return table?.rows_origin === 'rxdb.rows.fetch' || table?.payload?.rows_origin === 'rxdb.rows.fetch';
+}
+
+function noteKnowledgeTableRowState(record, logicalId, phase, error = null) {
+  const id = String(logicalId || logicalKnowledgeTableId(record) || '').trim();
+  if (!id) return;
+  if (!state.knowledgeTableRowStates || typeof state.knowledgeTableRowStates !== 'object') {
+    state.knowledgeTableRowStates = {};
+  }
+  if (phase === 'ready') {
+    delete state.knowledgeTableRowStates[id];
+    return;
+  }
+  const source = record?.payload && typeof record.payload === 'object' && !Array.isArray(record.payload)
+    ? record.payload
+    : record;
+  state.knowledgeTableRowStates[id] = {
+    tableId: id,
+    tableKey: String(source?.table_key || record?.table_key || ''),
+    title: String(source?.title || record?.title || source?.table_key || record?.table_key || id),
+    phase,
+    message: phase === 'error'
+      ? String(error?.message || state.t('rowsLoadFailed', 'Zeilen konnten nicht geladen werden'))
+      : '',
+    retryable: phase === 'error' && error?.retryable === true,
+  };
+}
+
+async function knowledgeRowsLoaderFor(ctx) {
+  try {
+    if (typeof ctx?.sync?.startCollection !== 'function') return null;
+    const bridge = await ctx.sync.startCollection('knowledge_tables');
+    return bridge?.state?.knowledgeRowsLoader || null;
+  } catch {
+    return null;
+  }
+}
+
+function knowledgeRowsTableId(table) {
+  const explicit = table?.table_id || table?.payload?.table_id;
+  if (explicit) return stripKnowledgeTablePrefix(explicit);
+  return stripKnowledgeTablePrefix(table?.logical_table_id || table?.id || '');
+}
+
+function stripKnowledgeTablePrefix(value) {
+  const text = String(value || '').trim();
+  return text.startsWith('table:') ? text.slice('table:'.length) : text;
+}
+
+function findKnowledgeTable(tableId) {
+  const wanted = String(tableId || '').trim();
+  if (!wanted) return null;
+  const bare = stripKnowledgeTablePrefix(wanted);
+  return state.knowledgeBases
+    .flatMap((base) => base.tables || [])
+    .find((entry) => entry?.id === wanted
+      || entry?.logical_table_id === wanted
+      || entry?.table_id === wanted
+      || stripKnowledgeTablePrefix(entry?.id) === bare
+      || stripKnowledgeTablePrefix(entry?.table_id) === bare
+      || stripKnowledgeTablePrefix(entry?.logical_table_id) === bare) || null;
+}
+
+async function retryKnowledgeTableRows(tableId) {
+  const table = findKnowledgeTable(tableId);
+  if (!table) return;
+  const logicalId = logicalKnowledgeTableId(table) || table.id || tableId;
+  forgetKnowledgeRowsCache(knowledgeRowsTableId(table));
+  stripAttachedCatalogRows(table);
+  delete state.knowledgeTableRowStates?.[logicalId];
+  const signal = currentKnowledgeRowsSignal();
+  try {
+    const rows = await fetchCatalogRowsIntoCache(table, { signal, force: true });
+    const cached = readKnowledgeRowsCache(knowledgeRowsTableId(table), knowledgeContentHash(table));
+    if (cached) attachCatalogRows(table, cached.rows, cached);
+    else if (rows) attachCatalogRows(table, rows, { contentHash: knowledgeContentHash(table) });
+  } catch (error) {
+    if (!isRowsFetchCancelled(error)) noteKnowledgeTableRowState(table, logicalId, 'error', error);
+  }
+  await loadDashboardData();
+  if (state.ctx?.host) render();
+}
+
+function resetKnowledgeRowsForTest() {
+  abortKnowledgeRowFetches('test-reset');
+  knowledgeRowsCache.clear();
+  knowledgeRowsFetchDomainKey = '';
+  state.knowledgeTableRowStates = {};
+  state.rowLimitWarnings = [];
+  state.chunkDiagnostics = [];
 }
 
 async function findBySelector(collection, selector, collectionName = '') {
@@ -1473,15 +1909,15 @@ async function loadDashboardData() {
   const claimTable = tableForKey(base, task.claims_table_key || 'claims') || firstTableMatching(base, /^claims$/i);
   const evidenceTable = tableForKey(base, task.evidence_table_key || 'evidence_points') || firstTableMatching(base, /evidence.*point/i);
   const [candidateRows, sourceRows, curatedRows, measurementRows, derivedMeasurementRows, graphNodeRows, graphEdgeRows, claimRows, evidenceRows] = await Promise.all([
-    candidateTable ? fetchTableRows(candidateTable.id) : Promise.resolve([]),
-    sourceTable ? fetchTableRows(sourceTable.id) : Promise.resolve([]),
-    curatedTable && curatedTable.id !== sourceTable?.id ? fetchTableRows(curatedTable.id) : Promise.resolve([]),
-    measurementTable && measurementTable.id !== sourceTable?.id && measurementTable.id !== curatedTable?.id ? fetchTableRows(measurementTable.id) : Promise.resolve([]),
-    derivedMeasurementTable ? fetchTableRows(derivedMeasurementTable.id) : Promise.resolve([]),
-    graphNodeTable ? fetchTableRows(graphNodeTable.id) : Promise.resolve([]),
-    graphEdgeTable ? fetchTableRows(graphEdgeTable.id) : Promise.resolve([]),
-    claimTable ? fetchTableRows(claimTable.id) : Promise.resolve([]),
-    evidenceTable ? fetchTableRows(evidenceTable.id) : Promise.resolve([]),
+    fetchDashboardRows(candidateTable),
+    fetchDashboardRows(sourceTable),
+    curatedTable && curatedTable.id !== sourceTable?.id ? fetchDashboardRows(curatedTable) : Promise.resolve([]),
+    measurementTable && measurementTable.id !== sourceTable?.id && measurementTable.id !== curatedTable?.id ? fetchDashboardRows(measurementTable) : Promise.resolve([]),
+    fetchDashboardRows(derivedMeasurementTable),
+    fetchDashboardRows(graphNodeTable),
+    fetchDashboardRows(graphEdgeTable),
+    fetchDashboardRows(claimTable),
+    fetchDashboardRows(evidenceTable),
   ]);
   state.candidateRows = candidateRows;
   state.sourceRows = sourceRows;
@@ -1517,25 +1953,59 @@ async function loadDashboardData() {
   }
 }
 
+async function fetchDashboardRows(table) {
+  if (!table?.id) return [];
+  try {
+    return await fetchTableRows(table.id);
+  } catch (error) {
+    if (!isRowsFetchCancelled(error)) {
+      noteKnowledgeTableRowState(table, logicalKnowledgeTableId(table) || table.id, 'error', error);
+    }
+    return [];
+  }
+}
+
 async function fetchTableRows(tableId) {
   if (!tableId) return [];
-  const table = state.knowledgeBases
-    .flatMap((base) => base.tables || [])
-    .find((entry) => entry.id === tableId);
+  const table = findKnowledgeTable(tableId);
+  try {
+    if (table && isKnowledgeCatalogDocument(table) && !state.knowledgeTableRowStates?.[logicalKnowledgeTableId(table) || table.id]) {
+      const signal = currentKnowledgeRowsSignal();
+      const rows = await fetchCatalogRowsIntoCache(table, { signal });
+      const cached = readKnowledgeRowsCache(knowledgeRowsTableId(table), knowledgeContentHash(table));
+      if (cached) attachCatalogRows(table, cached.rows, cached);
+      else if (rows) attachCatalogRows(table, rows, { contentHash: knowledgeContentHash(table) });
+    }
+  } catch (error) {
+    if (isRowsFetchCancelled(error)) return [];
+    noteKnowledgeTableRowState(table, logicalKnowledgeTableId(table) || table?.id || tableId, 'error', error);
+    return [];
+  }
   const normalized = normalizeKnowledgeTableRows(table, tableId);
-  if (normalized.valid && normalized.rows.length) return applyRowLimit(normalized.rows, table, tableId, normalized.rowCount);
   if (!normalized.valid) return [];
-  // Record-shaped rows flow exclusively through the RxDB/WebRTC mesh: CTOX, as
-  // the authoritative peer, materializes the parquet records into the synced
-  // knowledge_tables doc. There is no HTTP fallback — if a doc carries no rows
-  // yet, we surface nothing until replication delivers them.
+  if (usesCatalogRowWindow(table)) {
+    const expected = catalogRowCount(table);
+    if (expected != null && normalized.rows.length !== expected) {
+      const error = new Error(`unvollständig: ${normalized.rows.length} von ${expected} Zeilen`);
+      error.retryable = true;
+      error.code = 'ROWS_SOURCE_ERROR';
+      noteKnowledgeTableRowState(table, logicalKnowledgeTableId(table) || tableId, 'error', error);
+      return [];
+    }
+    noteKnowledgeTableRowState(table, logicalKnowledgeTableId(table) || tableId, 'ready');
+    return normalized.rows;
+  }
+  if (normalized.rows.length) return applyRowLimit(normalized.rows, table, tableId, normalized.rowCount);
+  // Chunk fallback only: catalog tables never land in a collection. Embedded
+  // rows stay the pre-S8 path, and a null rows loader leaves those rows in
+  // place. There is no HTTP fallback.
   markCollectionDiagnostic('knowledge_tables', 'read', 'ok', `0 synced rows (${String(tableId || '')})`);
   return [];
 }
 
 function normalizeKnowledgeTableRows(table, tableId = '') {
   const source = table?.payload && typeof table.payload === 'object' ? table.payload : table;
-  const chunks = firstArray(
+  const chunks = usesCatalogRowWindow(table) ? [] : firstArray(
     table?.chunks,
     table?.row_chunks,
     table?.rows_chunks,
@@ -1581,6 +2051,7 @@ function normalizeKnowledgeTableRows(table, tableId = '') {
 }
 
 function applyRowLimit(rows, table, tableId, declaredRowCount = rows.length) {
+  if (usesCatalogRowWindow(table)) return rows;
   const sourceRowCount = Math.max(rows.length, Number(declaredRowCount) || 0, Number(table?.row_count) || 0, Number(table?.payload?.row_count) || 0);
   if (sourceRowCount > ROW_LIMIT || rows.length > ROW_LIMIT) {
     state.rowLimitWarnings.push({
@@ -2367,6 +2838,7 @@ function renderCenter() {
     <div class="research-center-body${state.showDiagram ? '' : ' has-hidden-map'}">
       ${renderSemanticGraph(task, projection)}
       <section class="research-workbench">
+        ${renderKnowledgeTableRowStates()}
         <div class="research-tabs-container">
           <div class="ctox-pane-tabs" role="tablist" aria-label="Research views">
             ${countedTabButton('sources', state.t('sources', 'Sources'), evidenceRankedSources().length)}
@@ -4066,6 +4538,22 @@ function renderKnowledgeTables(task) {
       ${rows.length ? '' : `<div class="research-empty">${escapeHtml(state.t('noKnowledgeClaims', 'Keine Aussagen für diesen Filter.'))}</div>`}
     </div>
   `;
+}
+
+function renderKnowledgeTableRowStates() {
+  const entries = Object.values(state.knowledgeTableRowStates || {})
+    .filter((entry) => entry?.phase === 'loading' || entry?.phase === 'error');
+  if (!entries.length) return '';
+  return `<div class="research-table-row-states">${entries.map((entry) => {
+    const label = entry.title || entry.tableKey || entry.tableId;
+    if (entry.phase === 'loading') {
+      return `<div class="research-table-row-state" role="status" data-table-id="${escapeHtml(entry.tableId)}" data-table-key="${escapeHtml(entry.tableKey)}" data-row-state="loading"><span class="research-spinner" aria-hidden="true"></span><span>${escapeHtml(label)}: ${escapeHtml(state.t('rowsLoading', 'Zeilen werden geladen …'))}</span></div>`;
+    }
+    const retry = entry.retryable
+      ? `<button type="button" class="ctox-button" data-action="retry-knowledge-rows" data-table-id="${escapeHtml(entry.tableId)}">${escapeHtml(state.t('rowsRetry', 'Erneut versuchen'))}</button>`
+      : '';
+    return `<div class="research-table-row-state" role="alert" data-table-id="${escapeHtml(entry.tableId)}" data-table-key="${escapeHtml(entry.tableKey)}" data-row-state="error"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(entry.message || state.t('rowsLoadFailed', 'Zeilen konnten nicht geladen werden'))}</span>${retry}</div>`;
+  }).join('')}</div>`;
 }
 
 function renderDataQualityNotices() {
@@ -6628,7 +7116,14 @@ export const __researchTestHooks = {
   hasVerifiedEvidence: () => evidenceRankedSources().length > 0,
   knowledgeBasesFromTables,
   knowledgeTableChunkDocumentIds,
+  knowledgeTableRowStates: () => ({ ...(state.knowledgeTableRowStates || {}) }),
+  loadDashboardData,
+  loadKnowledgeBases,
   mergeKnowledgeTableChunks,
+  renderKnowledgeTableRowStates,
+  renderMeasurementsTable,
+  resetKnowledgeRowsForTest,
+  setLoadedOnceForTest: () => { state.diagnostics.loadedOnce = true; },
   knowledgeLineageForPayload,
   knowledgeRefreshPayload,
   compactKnowledgeTableReferences,

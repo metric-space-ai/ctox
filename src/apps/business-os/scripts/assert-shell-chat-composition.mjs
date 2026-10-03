@@ -12,6 +12,7 @@ const outputDir = process.env.SHELL_CHAT_COMPOSITION_OUTPUT_DIR
   || path.join(repoRoot, 'output/playwright', `shell-chat-composition-${timestampForPath()}`);
 const reportPath = path.join(outputDir, 'shell-chat-composition.json');
 const screenshotPath = path.join(outputDir, 'shell-chat-composition-expanded.png');
+const fixtureMinimum = { width: 640, height: 480 };
 fs.mkdirSync(outputDir, { recursive: true });
 
 const { chromium } = require(resolvePlaywrightModule());
@@ -19,17 +20,19 @@ const failures = [];
 const observations = [];
 const consoleEvents = [];
 const server = createServer((request, response) => serveRequest(request, response));
-const port = await listen(server);
-const url = `http://127.0.0.1:${port}/`;
-const browser = await chromium.launch({
-  headless: process.env.SHELL_CHAT_COMPOSITION_HEADLESS !== '0',
-  executablePath: existingChromeExecutable(chromium),
-  args: ['--disable-gpu'],
-});
+let browser;
+let page;
 
 try {
+  const port = await listen(server);
+  const url = `http://127.0.0.1:${port}/`;
+  browser = await chromium.launch({
+    headless: process.env.SHELL_CHAT_COMPOSITION_HEADLESS !== '0',
+    executablePath: existingChromeExecutable(chromium),
+    args: ['--disable-gpu'],
+  });
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1 });
-  const page = await context.newPage();
+  page = await context.newPage();
   page.on('console', (message) => consoleEvents.push({ type: message.type(), text: message.text() }));
   page.on('pageerror', (error) => consoleEvents.push({ type: 'pageerror', text: error?.stack || String(error) }));
   page.on('requestfailed', (request) => consoleEvents.push({ type: 'requestfailed', text: `${request.method()} ${request.url()}` }));
@@ -54,20 +57,75 @@ try {
 
   const topAppTab = page.locator('[data-top-app-tab]');
   expect(await topAppTab.count() === 1, 'top app tab locator must be unique');
-  // Shell-V2 windows carry a single title-bar control (close); minimizing comes
-  // from the window menu, which calls `wm.minimize(id)` (app.js:2227). Asserting
-  // a `.shell-window-control--minimize` button asserted the v1 chrome and left
-  // this guard red on main. The v2 chrome rule is checked instead, and the
-  // harness minimizes the way the shell does.
+  // Shell-V2 exposes the layout menu immediately left of close. Its seven
+  // actions replace drag-edge workspace snapping and the old direct title-bar
+  // minimize/maximize controls.
   const titleBarControls = await page.evaluate(
     () => [...document.querySelectorAll('.shell-window [data-window-control]')].map((node) => node.dataset.windowControl),
   );
   expect(
-    titleBarControls.length === 1 && titleBarControls[0] === 'close',
-    `Shell-V2 windows expose exactly one title-bar control: ${JSON.stringify(titleBarControls)}`,
+    JSON.stringify(titleBarControls) === JSON.stringify(['layout', 'close']),
+    `Shell-V2 windows expose layout immediately left of close: ${JSON.stringify(titleBarControls)}`,
   );
-  await page.evaluate(() => window.shellHarness.minimize());
+  const layoutTrigger = page.locator('.shell-window [data-window-layout-trigger]');
+  const triggerBox = await layoutTrigger.boundingBox();
+  const closeBox = await page.locator('.shell-window [data-window-control="close"]').boundingBox();
+  expect(triggerBox && closeBox && triggerBox.width > 0 && triggerBox.height > 0
+    && closeBox.width > 0 && closeBox.height > 0
+    && triggerBox.x + triggerBox.width <= closeBox.x + 1,
+  'the visible layout trigger must sit left of Close');
+  expect(await layoutTrigger.locator('.shell-window-layout-glyph--free').count() === 1,
+    'the layout trigger must show its actual framed window glyph');
+  await layoutTrigger.click();
+  const layoutOptions = await page.locator('.shell-window [data-window-layout-menu] [data-window-layout-control]')
+    .evaluateAll((nodes) => nodes.map((node) => node.dataset.windowLayoutControl));
+  expect(
+    JSON.stringify(layoutOptions) === JSON.stringify(['free', 'maximize', 'minimize', 'left', 'right', 'top', 'bottom']),
+    `the layout menu must expose the seven requested actions: ${JSON.stringify(layoutOptions)}`,
+  );
+  const layoutMenu = page.locator('.shell-window [data-window-layout-menu]');
+  const glyphs = await layoutMenu.locator('[data-window-layout-control]').evaluateAll(nodes => nodes.map(node => {
+    const glyph = node.querySelector('.shell-window-layout-glyph');
+    const rect = glyph?.getBoundingClientRect();
+    const style = glyph && getComputedStyle(glyph);
+    const detail = glyph && getComputedStyle(glyph, '::after');
+    return { action: node.dataset.windowLayoutControl,
+      correctVariant: Boolean(glyph?.classList.contains('shell-window-layout-glyph--' + node.dataset.windowLayoutControl)),
+      width: rect?.width, height: rect?.height, frameWidth: Number.parseFloat(style?.borderTopWidth),
+      frameStyle: style?.borderTopStyle, frameColor: style?.borderTopColor,
+      detailContent: detail?.content, detailWidth: Number.parseFloat(detail?.width), detailHeight: Number.parseFloat(detail?.height) };
+  }));
+  expect(glyphs.length === 7 && glyphs.every(glyph => glyph.correctVariant
+    && glyph.width > 0 && glyph.height > 0 && glyph.frameWidth > 0 && glyph.frameStyle !== 'none'
+    && !['transparent', 'rgba(0, 0, 0, 0)'].includes(glyph.frameColor)
+    && glyph.detailContent !== 'none' && glyph.detailWidth > 0 && glyph.detailHeight > 0),
+  'each of the seven choices must render its own nonempty framed window glyph and layout detail');
+  observations.push({ phase: 'layout-visible-glyphs', glyphs });
+  await topAppTab.click();
+  const outsideClickClosed = !(await layoutMenu.isVisible()) && await layoutTrigger.getAttribute('aria-expanded') === 'false';
+  expect(outsideClickClosed,
+    'clicking outside the window must close the layout menu');
+  await layoutTrigger.focus();
+  await layoutTrigger.press('Enter');
+  const enterOpened = await layoutMenu.isVisible() && await layoutTrigger.getAttribute('aria-expanded') === 'true';
+  expect(enterOpened,
+    'Enter on the window icon must open the layout menu');
+  await layoutMenu.locator('[data-window-layout-control="free"]').focus();
+  await page.keyboard.press('Escape');
+  const escapeClosed = !(await layoutMenu.isVisible()) && await layoutTrigger.getAttribute('aria-expanded') === 'false';
+  expect(escapeClosed,
+    'Escape from a layout choice must close the menu');
+  const focusReturned = await layoutTrigger.evaluate((node) => document.activeElement === node);
+  expect(focusReturned,
+    'Escape must return keyboard focus to the window icon');
+  observations.push({ phase: 'layout-keyboard-open-dismiss', outsideClickClosed,
+    enterOpened, escapeClosed, focusReturned });
+  await layoutTrigger.press('Enter');
+  await layoutMenu.locator('[data-window-layout-control="minimize"]').focus();
+  await page.keyboard.press('Enter');
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell-window')).display === 'none');
+  observations.push({ phase: 'layout-keyboard-minimize',
+    ...await page.evaluate(() => window.shellHarness.collect()) });
   await topAppTab.click();
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell-window')).display !== 'none');
   await page.waitForSelector('[data-top-app-tab][data-state="focused"]');
@@ -75,7 +133,7 @@ try {
   observations.push({ phase: 'expanded-restored-from-top-tab', ...restoredFromTopTab });
   expect(closeRect(restoredFromTopTab.window, restoredFromTopTab.baselineWindow), 'restoring from the top tab must preserve normal window geometry');
   expect(!restoredFromTopTab.chatSide, 'restoring an app must not move chat to the side');
-  await page.evaluate(() => window.shellHarness.minimize());
+  await chooseLayout(page, 'minimize');
   await page.waitForFunction(() => getComputedStyle(document.querySelector('.shell-window')).display === 'none');
   await topAppTab.focus();
   await topAppTab.press('Enter');
@@ -94,9 +152,14 @@ try {
 
   await chatToggle.click();
   await page.waitForFunction(() => document.body.hasAttribute('data-shell-chat-dock-expanded'));
-  await page.evaluate(() => window.shellHarness.maximize());
+  await chooseLayout(page, 'maximize');
   const maximized = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'expanded-maximized', ...maximized });
+  observations.push({ phase: 'expanded-maximized', ...maximized,
+    expectedWindow: expectFixedLayout(maximized, await page.evaluate(() => window.shellHarness.workArea()), 'maximize') });
+  await chooseLayout(page, 'maximize');
+  const maximizedAgain = await page.evaluate(() => window.shellHarness.collect());
+  expect(maximizedAgain.windowState === 'maximized' && closeRect(maximizedAgain.window, maximized.window),
+    'choosing maximize again must remain maximized, not toggle back to free');
   // Window-neutral overlay contract (shared/shell-chat-composition.js,
   // f0d376fbc 2026-07-17 "chat as window-neutral overlay"): the chat dock
   // floats ABOVE app windows and reserves ZERO work-area inset, so a maximized
@@ -106,9 +169,10 @@ try {
   expect(maximized.window.bottom >= maximized.viewport.height - 10, `maximized window must fill the full work area under the floating chat dock (no reserved bottom inset): ${JSON.stringify({ windowBottom: maximized.window.bottom, viewportHeight: maximized.viewport.height })}`);
   expect(maximized.window.right <= maximized.viewport.width, 'maximized window must use the full shell width');
 
-  await page.evaluate(() => window.shellHarness.snapBottom());
+  await chooseLayout(page, 'bottom');
   const snapped = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'expanded-bottom-snap', ...snapped });
+  observations.push({ phase: 'expanded-bottom-snap', ...snapped,
+    expectedWindow: expectFixedLayout(snapped, await page.evaluate(() => window.shellHarness.workArea()), 'bottom') });
   expect(snapped.window.bottom >= snapped.viewport.height - 10, `bottom-snapped window must reach the work-area bottom under the floating chat dock (no reserved inset): ${JSON.stringify({ windowBottom: snapped.window.bottom, viewportHeight: snapped.viewport.height })}`);
   expect(snapped.window.height >= 199, `bottom snap must preserve the minimum window height, got ${snapped.window.height}`);
 
@@ -131,15 +195,13 @@ try {
     expect(chat.x >= 0 && chat.right <= 1200, `active chat must remain inside viewport: ${JSON.stringify(chat)}`);
   }
 
-  // Snapping is resolved from the dragged window's edges, not from the pointer:
-  // `resolveWindowLayout` makes a zone eligible when the window's edge lands
-  // within the mouse `enter` threshold (16px) of the work-area edge
-  // (window-layout-resolver.js). The old pointer-edge assertions belonged to an
-  // earlier model. The window is first made small enough that one edge can be
-  // near the work area at a time; at its normal size it touches top and bottom
-  // at once and every drag resolves to a corner.
-  await page.evaluate(() => window.shellHarness.restoreNormal());
-  await page.evaluate(() => window.shellHarness.setSize(420, 300));
+  // Workspace edges no longer trigger Shell-V2 snapping. Each edge remains a
+  // free move until the user explicitly selects its layout-menu action.
+  await chooseLayout(page, 'free');
+  const freedFromBottom = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'layout-free-after-bottom', ...freedFromBottom });
+  expect(freedFromBottom.snapZone === null, 'free layout must release the bottom snap');
+  await page.evaluate(({ width, height }) => window.shellHarness.setSize(width, height), fixtureMinimum);
   const work = await page.evaluate(() => window.shellHarness.workArea());
   const inset = 40;
 
@@ -149,24 +211,106 @@ try {
   expect(freelyMoved.snapZone === null, `moving a window inside the desktop must not force a snap, got ${freelyMoved.snapZone}`);
 
   await dragWindowToLayerPoint(page, work, { left: work.left + 2, top: work.top + inset });
+  const leftEdge = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'drag-free-left-edge', ...leftEdge });
+  expect(leftEdge.snapZone === null, `dragging to the left work edge must remain free, got ${leftEdge.snapZone}`);
+  await chooseLayout(page, 'left');
   const leftSnap = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'drag-snap-left', ...leftSnap });
-  expect(leftSnap.snapZone === 'left', `a window parked on the left work edge must snap left, got ${leftSnap.snapZone}`);
+  observations.push({ phase: 'layout-snap-left', ...leftSnap,
+    expectedWindow: expectFixedLayout(leftSnap, work, 'left') });
+  expect(leftSnap.snapZone === 'left', `the left menu action must snap left, got ${leftSnap.snapZone}`);
 
-  await page.evaluate(() => window.shellHarness.restoreNormal());
-  await page.evaluate(() => window.shellHarness.setSize(420, 300));
-  await dragWindowToLayerPoint(page, work, { left: work.left + work.width - 422, top: work.top + inset });
+  await chooseLayout(page, 'free');
+  await page.evaluate(({ width, height }) => window.shellHarness.setSize(width, height), fixtureMinimum);
+  const rightStart = await page.evaluate(() => window.shellHarness.collect());
+  await dragWindowToLayerPoint(page, work, { left: work.left + work.width - rightStart.window.width - 2, top: work.top + inset });
+  const rightEdge = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'drag-free-right-edge', ...rightEdge });
+  expect(rightEdge.snapZone === null, `dragging to the right work edge must remain free, got ${rightEdge.snapZone}`);
+  await chooseLayout(page, 'right');
   const rightSnap = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'drag-snap-right', ...rightSnap });
-  expect(rightSnap.snapZone === 'right', `a window parked on the right work edge must snap right, got ${rightSnap.snapZone}`);
+  observations.push({ phase: 'layout-snap-right', ...rightSnap,
+    expectedWindow: expectFixedLayout(rightSnap, work, 'right') });
+  expect(rightSnap.snapZone === 'right', `the right menu action must snap right, got ${rightSnap.snapZone}`);
 
-  await page.evaluate(() => window.shellHarness.restoreNormal());
-  await page.evaluate(() => window.shellHarness.setSize(420, 300));
+  await chooseLayout(page, 'free');
+  await page.evaluate(({ width, height }) => window.shellHarness.setSize(width, height), fixtureMinimum);
   await dragWindowToLayerPoint(page, work, { left: work.left + 120, top: work.top + 2 });
+  const topEdge = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'drag-free-top-edge', ...topEdge });
+  expect(topEdge.snapZone === null, `dragging to the top work edge must remain free, got ${topEdge.snapZone}`);
+  await chooseLayout(page, 'top');
   const topSnap = await page.evaluate(() => window.shellHarness.collect());
-  observations.push({ phase: 'drag-snap-top', ...topSnap });
-  expect(topSnap.snapZone === 'top', `a window parked on the top work edge must snap top, got ${topSnap.snapZone}`);
-  await page.evaluate(() => window.shellHarness.restoreNormal());
+  observations.push({ phase: 'layout-snap-top', ...topSnap,
+    expectedWindow: expectFixedLayout(topSnap, work, 'top') });
+  expect(topSnap.snapZone === 'top', `the top menu action must snap top, got ${topSnap.snapZone}`);
+  await chooseLayout(page, 'free');
+
+  await page.evaluate(({ width, height }) => window.shellHarness.setSize(width, height), fixtureMinimum);
+  const bottomStart = await page.evaluate(() => window.shellHarness.collect());
+  await dragWindowToLayerPoint(page, work, {
+    left: work.left + 120,
+    top: work.top + work.height - bottomStart.window.height - 2,
+  });
+  const bottomEdge = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'drag-free-bottom-edge', ...bottomEdge });
+  expect(bottomEdge.snapZone === null, `dragging to the bottom work edge must remain free, got ${bottomEdge.snapZone}`);
+  await chooseLayout(page, 'bottom');
+  const bottomSnap = await page.evaluate(() => window.shellHarness.collect());
+  observations.push({ phase: 'layout-snap-bottom', ...bottomSnap,
+    expectedWindow: expectFixedLayout(bottomSnap, work, 'bottom') });
+  expect(bottomSnap.snapZone === 'bottom', `the bottom menu action must snap bottom, got ${bottomSnap.snapZone}`);
+  await chooseLayout(page, 'free');
+
+  // Resize through the actual focusable corner, rather than counting a harness
+  // style assignment as a user resize. Start with room for both 16px steps.
+  await page.evaluate(() => window.shellHarness.setSize(640, 480));
+  await dragWindowToLayerPoint(page, work, { left: work.left + 40, top: work.top + 40 });
+  const beforeKeyboardResize = await page.evaluate(() => window.shellHarness.collect());
+  const resizeCorner = page.locator('.shell-window [data-window-resize="se"]');
+  expect(await resizeCorner.count() === 1 && await resizeCorner.isVisible(),
+    'the free window must expose its actual southeast resize corner');
+  await resizeCorner.focus();
+  await resizeCorner.press('ArrowRight');
+  await resizeCorner.press('ArrowDown');
+  const keyboardResized = await page.evaluate(() => window.shellHarness.collect());
+  const expectedResized = { ...beforeKeyboardResize.window,
+    width: beforeKeyboardResize.window.width + 16, height: beforeKeyboardResize.window.height + 16 };
+  expect(closeRect(keyboardResized.window, expectedResized),
+    `corner keyboard resize must grow both dimensions without moving: ${JSON.stringify({ before: beforeKeyboardResize.window, expected: expectedResized, after: keyboardResized.window })}`);
+  expect(keyboardResized.snapZone === null && keyboardResized.windowState === 'normal',
+    'resizing a free window must not choose a fixed layout');
+  observations.push({ phase: 'free-keyboard-resize', before: beforeKeyboardResize.window,
+    expected: expectedResized, ...keyboardResized });
+  await reloadHarness(page, url);
+  const reopenedResized = await page.evaluate(() => window.shellHarness.collect());
+  expect(closeRect(reopenedResized.window, keyboardResized.window)
+    && reopenedResized.snapZone === null && reopenedResized.windowState === 'normal',
+  'the user-resized free window must retain its geometry and free state after reload');
+  observations.push({ phase: 'reopened-free-resized', ...reopenedResized });
+
+  // Reopening must use the last explicit menu selection, including returning
+  // to free geometry. The harness supplies the real manager persistence port.
+  for (const action of ['maximize', 'left', 'right', 'top', 'bottom']) {
+    await chooseLayout(page, action);
+    const beforeReopen = await page.evaluate(() => window.shellHarness.collect());
+    await reloadHarness(page, url);
+    const reopened = await page.evaluate(() => window.shellHarness.collect());
+    observations.push({ phase: `reopened-${action}`, ...reopened,
+      expectedWindow: expectFixedLayout(reopened, await page.evaluate(() => window.shellHarness.workArea()), action) });
+    expect(closeRect(reopened.window, beforeReopen.window), `${action} geometry must survive reopening`);
+    expect(reopened.snapZone === beforeReopen.snapZone, `${action} snap selection must survive reopening`);
+    expect(reopened.windowState === beforeReopen.windowState, `${action} window state must survive reopening`);
+    await chooseLayout(page, 'free');
+    const freeBeforeReopen = await page.evaluate(() => window.shellHarness.collect());
+    const savedFree = await page.evaluate(() => JSON.parse(localStorage.getItem('composition-window-layout')));
+    expect(savedFree?.state === 'normal' && !savedFree?.snapZone, `free after ${action} must persist the cleared layout`);
+    await reloadHarness(page, url);
+    const freeReopened = await page.evaluate(() => window.shellHarness.collect());
+    observations.push({ phase: `reopened-free-after-${action}`, ...freeReopened });
+    expect(freeReopened.snapZone === null && freeReopened.windowState === 'normal', `free after ${action} must stay free on reopen`);
+    expect(closeRect(freeReopened.window, freeBeforeReopen.window), `free geometry after ${action} must survive reopening`);
+  }
 
   const fatalConsole = consoleEvents.filter((event) => ['pageerror', 'requestfailed', 'error'].includes(event.type));
   expect(fatalConsole.length === 0, `browser console/network must stay clean: ${JSON.stringify(fatalConsole)}`);
@@ -185,9 +329,43 @@ try {
   } else {
     console.log(JSON.stringify({ ok: true, reportPath, screenshotPath, phases: observations.length }, null, 2));
   }
+} catch (error) {
+  // A failing click must retain its actual hit target and completed phases
+  // before teardown, not leave a stale success report from an earlier run.
+  failures.push(error?.stack || String(error));
+  let failureSnapshot = null;
+  let failureCaptureError = null;
+  let captureTimer;
+  try {
+    if (page) failureSnapshot = await Promise.race([
+      page.evaluate(() => {
+        const trigger = document.querySelector('.shell-window [data-window-layout-trigger]');
+        const rect = trigger?.getBoundingClientRect();
+        const describe = node => ({ tag: node.tagName, className: node.className?.baseVal ?? node.className });
+        return {
+          state: window.shellHarness?.collect(),
+          trigger: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+          triggerCenterHits: rect ? document.elementsFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2)
+            .slice(0, 12).map(describe) : [],
+          chatWindows: window.shellHarness?.collectChatWindows(),
+        };
+      }),
+      new Promise((_, reject) => { captureTimer = setTimeout(() => reject(new Error('failure snapshot deadline')), 3000); }),
+    ]);
+    if (page) await page.screenshot({ path: path.join(outputDir, 'shell-chat-composition-failure.png'), fullPage: true, timeout: 3000 });
+  } catch (captureError) {
+    failureCaptureError = captureError?.message || String(captureError);
+  } finally {
+    clearTimeout(captureTimer);
+  }
+  try {
+    fs.writeFileSync(reportPath, JSON.stringify({ ok: false, failures, observations, consoleEvents,
+      failureSnapshot, failureCaptureError, screenshotPath }, null, 2));
+  } catch { /* Evidence failure must not replace the original failure or skip cleanup. */ }
+  throw error;
 } finally {
-  await browser.close().catch(() => {});
-  await new Promise((resolve) => server.close(resolve));
+  if (browser) await browser.close().catch(() => {});
+  if (server.listening) await new Promise((resolve) => server.close(resolve));
 }
 
 function expect(condition, message) {
@@ -196,6 +374,38 @@ function expect(condition, message) {
 
 function closeRect(actual, expected, tolerance = 1) {
   return ['x', 'y', 'width', 'height'].every((key) => Math.abs(actual[key] - expected[key]) <= tolerance);
+}
+
+function expectFixedLayout(observation, work, action) {
+  // Independent fixture oracle: a fixed layout fills the work area or anchors
+  // a half-size pane to its selected edge, respecting this app's declared min.
+  // Do not ask the manager for its target rectangle: that would verify itself.
+  expect(work.width >= fixtureMinimum.width && work.height >= fixtureMinimum.height,
+    'fixed-layout fixture must have enough work area for its declared minimum');
+  const expected = { x: work.originLeft + work.left, y: work.originTop + work.top,
+    width: work.width, height: work.height };
+  if (action === 'left' || action === 'right') {
+    expected.width = Math.max(fixtureMinimum.width, work.width / 2);
+    if (action === 'right') expected.x += work.width - expected.width;
+  } else if (action === 'top' || action === 'bottom') {
+    expected.height = Math.max(fixtureMinimum.height, work.height / 2);
+    if (action === 'bottom') expected.y += work.height - expected.height;
+  } else if (action !== 'maximize') {
+    throw new Error(`No fixed-layout fixture oracle for ${action}`);
+  }
+  expect(closeRect(observation.window, expected, 2),
+    `${action} must apply real anchored bounds, not only a state marker: ${JSON.stringify({ expected, actual: observation.window })}`);
+  return expected;
+}
+
+async function chooseLayout(page, action) {
+  await page.locator('.shell-window [data-window-layout-trigger]').click();
+  await page.locator(`.shell-window [data-window-layout-menu] [data-window-layout-control="${action}"]`).click();
+}
+
+async function reloadHarness(page, url) {
+  await page.goto(url, { waitUntil: 'load' });
+  await page.waitForFunction(() => window.shellHarness?.ready === true, null, { timeout: 5000 });
 }
 
 async function dragWindowHeaderTo(page, targetX, targetY) {
@@ -254,7 +464,7 @@ async function dragWindowToLayerPoint(page, work, { left, top }) {
   const grab = await windowDragGrabPoint(page);
   const rect = await page.evaluate(() => {
     const el = document.querySelector('.shell-window').getBoundingClientRect();
-    return { left: el.left, top: el.top };
+    return { left: el.left, top: el.top, width: el.width, height: el.height };
   });
   await page.mouse.move(grab.x, grab.y);
   await page.mouse.down();
@@ -263,8 +473,23 @@ async function dragWindowToLayerPoint(page, work, { left, top }) {
     grab.y + (work.originTop + top - rect.top),
     { steps: 12 },
   );
+  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const during = await page.evaluate(() => window.shellHarness.collect());
+  expect(during.snapPreviewVisible === false, 'moving near an edge must not show a workspace snap preview during the drag');
   await page.mouse.up();
   await page.waitForTimeout(80);
+  const after = await page.evaluate(() => window.shellHarness.collect());
+  const expected = {
+    x: work.originLeft + left, y: work.originTop + top,
+    width: rect.width, height: rect.height,
+  };
+  expect(closeRect(after.window, expected, 2), `drag must reach the requested free position without resizing: ${JSON.stringify({ before: rect, expected, after: after.window })}`);
+  expect(Math.abs(after.window.x - rect.left) > 1 || Math.abs(after.window.y - rect.top) > 1,
+    `drag must actually move the window: ${JSON.stringify({ before: rect, after: after.window })}`);
+  expect(after.snapZone === null && after.windowState === 'normal', 'edge drag must preserve free window state');
+  expect(after.snapPreviewVisible === false, 'edge drag must not show a workspace snap preview');
+  observations.push({ phase: 'coordinate-verified-free-drag', before: rect, expected, after: after.window,
+    duringSnapPreviewVisible: during.snapPreviewVisible, afterSnapPreviewVisible: after.snapPreviewVisible });
 }
 
 function serveRequest(request, response) {
@@ -367,13 +592,17 @@ function harnessHtml() {
       rootEl:document.documentElement,
       snapPreviewEl:document.querySelector('[data-snap-preview]'),
       eventBus,
+      persistence:{
+        load:() => JSON.parse(localStorage.getItem('composition-window-layout') || 'null'),
+        save:(_ownerId, snapshot) => localStorage.setItem('composition-window-layout', JSON.stringify(snapshot)),
+      },
     });
     wm.setInsets({ top:0, right:0, bottom:0, left:0 });
     const controller = createShellChatCompositionController({ windowManager:wm });
     controller.start();
     ['window:opened','window:closed','window:minimized','window:restored'].forEach((name) => eventBus.on(name, () => controller.refresh()));
     const handle = wm.create({
-      ownerId:'module:test', title:'Testfenster', x:80, y:60, width:1000, height:610, minWidth:640, minHeight:480,
+      ownerId:'module:test', title:'Testfenster', x:80, y:60, width:1000, height:610, minWidth:${fixtureMinimum.width}, minHeight:${fixtureMinimum.height},
       content:'<div class="harness-window-content"><button type="button" data-window-action>Freigabe ausführen</button></div>',
     });
     let windowClicks = 0;
@@ -410,12 +639,8 @@ function harnessHtml() {
       ready:false,
       get windowClicks(){ return windowClicks; },
       get layoutEvents(){ return layoutEvents; },
-      maximize(){ if (wm.describe(handle.id)?.state !== 'maximized') wm.toggleMaximize(handle.id); },
-      minimize(){ wm.minimize(handle.id); },
       workArea(){ const vp = wm.getViewport(); return { originLeft: vp.originLeft, originTop: vp.originTop, left: vp.left, top: vp.top, width: Math.max(0, vp.w - vp.left - vp.right), height: Math.max(0, vp.h - vp.top - vp.bottom) }; },
       setSize(width, height){ const el = document.querySelector('.shell-window'); el.style.width = width + 'px'; el.style.height = height + 'px'; },
-      snapBottom(){ if (wm.describe(handle.id)?.state === 'maximized') wm.toggleMaximize(handle.id); wm.snapTo(handle.id, 'bottom'); },
-      restoreNormal(){ const el=document.querySelector('.shell-window'); if(wm.describe(handle.id)?.state==='maximized'){ wm.toggleMaximize(handle.id); } else if(el?.classList.contains('is-snapped')){ wm.toggleMaximize(handle.id); wm.toggleMaximize(handle.id); } },
       collect,
       addInactiveChatClones(){ const active=document.querySelector('.ctox-chat-window.is-active'); if(!active) return; ['left','right'].forEach((rel,index) => { const clone=active.cloneNode(true); clone.classList.remove('is-active'); clone.dataset.chatId='clone_'+rel; clone.dataset.chatRel=rel; clone.style.left=(700+index*400)+'px'; active.parentElement.appendChild(clone); }); },
       collectChatWindows(){ return [...document.querySelectorAll('.ctox-chat-window')].filter((node) => { const style=getComputedStyle(node); const rect=node.getBoundingClientRect(); return style.display!=='none' && rect.width>0 && rect.height>0; }).map((node) => ({...box(node),active:node.classList.contains('is-active')})); },
@@ -435,6 +660,8 @@ function harnessHtml() {
         chatSide:document.body.hasAttribute('data-shell-chat-dock-side'),
         chatCompact:document.body.hasAttribute('data-shell-chat-dock-compact'),
         snapZone:document.querySelector('.shell-window')?.dataset.snapZone || null,
+        snapPreviewVisible:(() => { const preview=document.querySelector('[data-snap-preview]'); return Boolean(preview && !preview.hidden && getComputedStyle(preview).display!=='none'); })(),
+        windowState:wm.describe(handle.id)?.state,
         overlap:{
           windowChat:intersection(windowRect, chatRect),
           windowDock:intersection(windowRect, dockRect),

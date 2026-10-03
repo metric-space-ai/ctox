@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20260920-shell-v2-window-recovery-v387';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261003-shell-v2-window-recovery-v439';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
@@ -26,11 +26,11 @@ const SELLIFY_DEMAND_CACHE_COLLECTIONS = Object.freeze([
   'sellify_companies',
 ]);
 
-export async function createBusinessDb({ name }) {
-  const storageHealth = await inspectBrowserStorageDurability(name);
+export async function createBusinessDb({ name, trace = (_name, action) => action() }) {
+  const storageHealth = await trace('storage-durability', () => inspectBrowserStorageDurability(name));
   try {
     const db = await Promise.race([
-      createRxBusinessDb({ name }),
+      createRxBusinessDb({ name, trace }),
       timeoutAfter(RXDB_OPEN_TIMEOUT_MS, `RxDB database creation timed out after ${RXDB_OPEN_TIMEOUT_MS}ms (possible IndexedDB lock)`),
     ]);
     clearRecoveryDatabaseName(name);
@@ -40,7 +40,7 @@ export async function createBusinessDb({ name }) {
     console.info('[business-os] IndexedDB open stalled; retrying local RxDB open once without deleting cache', error);
     try {
       const db = await Promise.race([
-        createRxBusinessDb({ name }),
+        createRxBusinessDb({ name, trace }),
         timeoutAfter(RXDB_OPEN_RETRY_TIMEOUT_MS, `RxDB database retry timed out after ${RXDB_OPEN_RETRY_TIMEOUT_MS}ms (possible IndexedDB lock)`),
       ]);
       clearRecoveryDatabaseName(name);
@@ -98,20 +98,20 @@ function isIndexedDbOpenStall(error) {
     || message.includes('indexeddb lock');
 }
 
-async function createRxBusinessDb({ name }) {
-  await prepareIndexedDbForRxdb(name);
-  const rxdb = await loadRxdb();
+async function createRxBusinessDb({ name, trace }) {
+  await trace('indexeddb-preflight', () => prepareIndexedDbForRxdb(name));
+  const rxdb = await trace('rxdb-bundle-import', loadRxdb);
   const { createRxDatabase, getCtoxIndexedDbStorage } = rxdb;
   const db = await Promise.race([
-    createRxDatabase({
+    trace('indexeddb-open', () => createRxDatabase({
       name,
       storage: getCtoxIndexedDbStorage(),
       multiInstance: false,
       closeDuplicates: true,
-    }),
+    })),
     timeoutAfter(RXDB_CREATE_DATABASE_TIMEOUT_MS, `RxDB createRxDatabase timed out after ${RXDB_CREATE_DATABASE_TIMEOUT_MS}ms (possible IndexedDB lock)`),
   ]);
-  await migrateSellifyDemandCache(db, name);
+  await trace('cache-migration', () => migrateSellifyDemandCache(db, name));
   return {
     mode: 'rxdb',
     name,

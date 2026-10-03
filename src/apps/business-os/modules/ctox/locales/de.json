@@ -144,6 +144,8 @@
   "learningFromAssignment": "lernt aus dem Einsatz",
   "restingAfterFailure": "erholt sich nach einem Fehlschlag",
   "noCrewMember": "ohne Crew-Zuordnung",
+  "noCrewMemberShort": "ohne Crew",
+  "crewTaskCount": "{count} Aufgaben",
   "close": "Schließen",
   "memberName": "Name",
   "soul": "Seele",

@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20260920-shell-v2-window-recovery-v387';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20260920-shell-v2-window-recovery-v387';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20260920-shell-v2-window-recovery-v387';
+} from './sync-contract.js?v=20261003-shell-v2-window-recovery-v439';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261003-shell-v2-window-recovery-v439';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261003-shell-v2-window-recovery-v439';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20260920-shell-v2-window-recovery-v387';
+const MULTI_TAB_COORDINATOR_EPOCH = '20261003-shell-v2-window-recovery-v439';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -59,6 +59,13 @@ const COMMAND_FOLLOWER_DIRECT_FLUSH_TIMEOUT_MS = 35_000;
 const COMMAND_FOLLOWER_BRIDGE_TIMEOUT_MS = 40_000;
 const SYNC_DIAGNOSTIC_EMIT_MIN_INTERVAL_MS = 250;
 const DEMAND_ONLY_COLLECTION_START_ERROR = 'DEMAND_ONLY_COLLECTION_REQUIRES_LEASE';
+const COLLECTION_READ_FORBIDDEN = 'COLLECTION_READ_FORBIDDEN';
+
+function collectionReadForbiddenError(collection) {
+  const error = new Error(`${collection} is not readable by this Business OS role.`);
+  error.code = COLLECTION_READ_FORBIDDEN;
+  return error;
+}
 const ROOM_CIRCUIT_FAILURE_THRESHOLD = 5;
 const ROOM_CIRCUIT_OPEN_MS = 120_000;
 const ROOM_RETRY_BASE_MS = 1_000;
@@ -154,6 +161,7 @@ export function createSyncRuntime({
   onDiagnostic,
   capabilityTokenProvider = getBusinessOsCapabilityToken,
   onNativeQueryReady = null,
+  mayReadCollection = () => true,
 }) {
   const bridges = new CollectionSyncRegistry();
   const activeCollections = new Set();
@@ -587,6 +595,7 @@ export function createSyncRuntime({
     config,
     mode: runtimeMode,
     diagnostics,
+    mayReadCollection,
     recordCommandMetric(metric = {}) {
       const name = String(metric.name || '').trim();
       if (!name) return;
@@ -638,6 +647,13 @@ export function createSyncRuntime({
       const results = [];
       emitDiagnostic({ phase: 'module-sync', moduleId: moduleManifest?.id || null });
       for (const collection of collections) {
+        if (!mayReadCollection(collection)) {
+          results.push({
+            status: 'fulfilled',
+            value: { mode: 'skipped', collection, reason: 'role-denied', stop: async () => {} },
+          });
+          continue;
+        }
         if (!moduleSyncCollections([collection]).length) {
           results.push({
             status: 'fulfilled',
@@ -665,10 +681,20 @@ export function createSyncRuntime({
       const leases = [];
       try {
         for (const collection of collections) {
-          leases.push(await this.leaseCollection(
-            collection,
-            `${reason}:${moduleManifest?.id || 'unknown'}`,
-          ));
+          // Session/governance can resolve while a module's leases are opening.
+          // Check the current role for each collection, not a snapshot taken
+          // before the asynchronous loop began.
+          if (!mayReadCollection(collection)) continue;
+          try {
+            const lease = await this.leaseCollection(
+              collection,
+              `${reason}:${moduleManifest?.id || 'unknown'}`,
+            );
+            if (mayReadCollection(collection)) leases.push(lease);
+            else await lease.release();
+          } catch (error) {
+            if (error?.code !== COLLECTION_READ_FORBIDDEN) throw error;
+          }
           await delay(25);
         }
       } catch (error) {
@@ -688,10 +714,11 @@ export function createSyncRuntime({
         },
       };
     },
-    async leaseCollection(collection, reason = 'scoped-collection-lease') {
+    async leaseCollection(collection, reason = 'scoped-collection-lease', options = {}) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       const normalized = normalizeCollectionName(collection);
       if (!normalized) throw new Error('collection is required.');
+      if (!mayReadCollection(normalized)) throw collectionReadForbiddenError(normalized);
       const lease = bridges.acquire(normalized, reason, async (remaining) => {
         publishResourceBudget();
         if (remaining <= 0 && !pinnedCollections.has(normalized)) {
@@ -711,7 +738,7 @@ export function createSyncRuntime({
       });
       publishResourceBudget();
       try {
-        await this.startCollection(normalized, { pin: false });
+        await this.startCollection(normalized, { pin: false, forceDirect: options.forceDirect === true });
         return lease;
       } catch (error) {
         await lease.release();
@@ -722,6 +749,17 @@ export function createSyncRuntime({
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       collection = normalizeCollectionName(collection);
       if (!collection) throw new Error('collection is required.');
+      if (!mayReadCollection(collection)) {
+        recordCollection(collection, {
+          status: 'skipped',
+          connectionStatus: 'role-denied',
+          reason: 'role-denied',
+          active: false,
+          lastError: null,
+          reconnectingSince: null,
+        });
+        throw collectionReadForbiddenError(collection);
+      }
       const coordinator = await ensureMultiTabCoordinator();
       if (isModuleDemandOnlyCollection(collection) && !bridges.leaseCount(collection)) {
         const error = new Error(`${collection} is demand-only and must be started through leaseCollection().`);
@@ -912,6 +950,18 @@ export function createSyncRuntime({
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
       collection = normalizeCollectionName(collection);
       if (!collection) throw new Error('collection is required.');
+      if (!mayReadCollection(collection)) {
+        await this.stopCollection(collection);
+        recordCollection(collection, {
+          status: 'skipped',
+          connectionStatus: 'role-denied',
+          reason: 'role-denied',
+          active: false,
+          lastError: null,
+          reconnectingSince: null,
+        });
+        throw collectionReadForbiddenError(collection);
+      }
       const wasPinned = pinnedCollections.has(collection);
       activeCollections.add(collection);
       await this.stopCollection(collection, { preserveLeases: true, preservePin: true });
@@ -925,11 +975,23 @@ export function createSyncRuntime({
         .filter((collection) => typeof collection === 'string')
         .map(normalizeCollectionName)
         .filter(Boolean))];
+      for (const collection of requested.filter((name) => !mayReadCollection(name))) {
+        await this.stopCollection(collection);
+        recordCollection(collection, {
+          status: 'skipped',
+          connectionStatus: 'role-denied',
+          reason: 'role-denied',
+          active: false,
+          lastError: null,
+          reconnectingSince: null,
+        });
+      }
       const restartable = requested.filter((collection) => (
-        !isModuleDemandOnlyCollection(collection) || bridges.leaseCount(collection) > 0
+        mayReadCollection(collection)
+        && (!isModuleDemandOnlyCollection(collection) || bridges.leaseCount(collection) > 0)
       ));
       for (const collection of requested) {
-        if (restartable.includes(collection)) continue;
+        if (restartable.includes(collection) || !mayReadCollection(collection)) continue;
         activeCollections.delete(collection);
         recordCollection(collection, {
           status: 'skipped',
@@ -1072,13 +1134,17 @@ export function createSyncRuntime({
       const remainingMs = () => Math.max(1, budgetMs - (Date.now() - startedAt));
       const controller = typeof AbortController === 'function' ? new AbortController() : null;
       nativeReadSequence = (nativeReadSequence + 1) % Number.MAX_SAFE_INTEGER;
-      const lease = await withRejectingTimeout(
-        () => this.leaseCollection(normalized, 'authoritative-native-read'),
-        remainingMs(),
-        `Native read lease for ${normalized} exceeded ${budgetMs}ms.`,
-      );
+      // Follower stubs only forward writes; an authoritative query needs a
+      // leased native bridge, just like requestNativeDirectly().
+      const acquisition = this.leaseCollection(normalized, 'authoritative-native-read', { forceDirect: true });
+      let lease = null;
       let timer = null;
       try {
+        lease = await withRejectingTimeout(
+          () => acquisition,
+          remainingMs(),
+          `Native read lease for ${normalized} exceeded ${budgetMs}ms.`,
+        );
         let bridge = lease.bridge;
         if (!bridge?.state && bridge?.ready) {
           bridge = await withRejectingTimeout(
@@ -1116,7 +1182,10 @@ export function createSyncRuntime({
       } finally {
         if (timer) clearTimeout(timer);
         controller?.abort?.();
-        await lease.release().catch(() => {});
+        if (lease) await lease.release().catch(() => {});
+        // A deadline can win while startup is still acquiring the lease.
+        // Release that late ownership without stopping other consumers.
+        else acquisition.then((lateLease) => lateLease.release()).catch(() => {});
       }
     },
 
@@ -2738,6 +2807,9 @@ function sanitizeReplicationTransportStatus(status) {
     lastAckLagMs: numberField('lastAckLagMs'),
     lastBufferedAmount: numberField('lastBufferedAmount'),
     collectionReadinessState: normalizeCollectionReadinessState(status.collectionReadinessState),
+    collectionFreshnessState: normalizeCollectionReadinessState(status.collectionFreshnessState),
+    pullEnabled: typeof status.pullEnabled === 'boolean' ? status.pullEnabled : null,
+    lastSuccessfulPullAtMs: numberField('lastSuccessfulPullAtMs'),
     firstPullCompletedAtMs: numberField('firstPullCompletedAtMs'),
     pullInProgress: status.pullInProgress === true,
     pushInProgress: status.pushInProgress === true,
