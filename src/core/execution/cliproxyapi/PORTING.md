@@ -45,8 +45,13 @@
   uses the same GJSON semantics as upstream. Source/target summary extraction
   now keeps OpenAI Chat reasoning depth separate from Claude display visibility.
   The xAI subscription client-version header is updated from0.2.93 to upstream
-  1.0.44, with a literal header assertion; endpoint/identity and live xAI parity
-  still require completion and actual inference acceptance.
+  1.0.44. API/OAuth mode inference, boolean overrides and nonempty credential
+  precedence now follow the frozen Go source. OAuth chat resolves to the official
+  CLI chat proxy while compact remains on the API; explicit custom origins stay
+  intact. CLI identity headers are scoped to the official chat proxy, custom
+  headers retain their upstream precedence and session affinity uses x-grok-conv-id.
+  Four additional routing/credential/header regressions are prepared; Rust/Go
+  execution and live xAI inference acceptance remain unverified.
   Compilation/Rust/Go execution, live executor compatibility/update-intent
   callers and full candidate parity remain pending. No pin or release gate
   was promoted.

@@ -13,13 +13,17 @@ use zeroize::Zeroizing;
 use crate::sdk::cliproxy::executor::Headers;
 
 pub const DEFAULT_XAI_API_BASE_URL: &str = "https://api.x.ai/v1";
-pub const DEFAULT_XAI_CHAT_BASE_URL: &str = "https://api.x.ai/v1";
+pub const DEFAULT_XAI_CHAT_BASE_URL: &str = crate::internal::auth::xai::types::CLI_CHAT_PROXY_BASE_URL;
 pub const XAI_TOKEN_AUTH_HEADER: &str = "X-XAI-Token-Auth";
 pub const XAI_TOKEN_AUTH_VALUE: &str = "xai-grok-cli";
 pub const XAI_CLIENT_VERSION_HEADER: &str = "x-grok-client-version";
 // ref: internal/runtime/executor/xai_executor.go:51-54 @ e2bff010
 // The subscription chat proxy rejects versions older than 1.0.13 with HTTP 426.
 pub const XAI_CLIENT_VERSION_VALUE: &str = "1.0.44";
+pub const XAI_CLIENT_IDENTIFIER_HEADER: &str = "x-grok-client-identifier";
+pub const XAI_CLIENT_IDENTIFIER_VALUE: &str = "grok-shell";
+pub const XAI_AUTHENTICATE_RESPONSE_HEADER: &str = "x-authenticateresponse";
+pub const XAI_AUTHENTICATE_RESPONSE_VALUE: &str = "authenticate-response";
 pub const MAX_XAI_BODY_BYTES: usize = 52_428_800;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
