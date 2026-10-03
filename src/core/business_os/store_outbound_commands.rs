@@ -3,10 +3,8 @@
 
 use super::backup_restore::file_sha256;
 use super::store::{
-    find_rxdb_collection_record_by_string_field, find_rxdb_collection_records_by_string_field,
-    find_rxdb_collection_records_by_string_field_contains, insert_business_event,
-    is_safe_rxdb_collection_name, load_rxdb_collection_record, now_ms, open_store,
-    outbound_first_string, outbound_id_from_command, outbound_load_record,
+    insert_business_event, is_safe_rxdb_collection_name, load_rxdb_collection_record, now_ms,
+    open_store, outbound_first_string, outbound_id_from_command, outbound_load_record,
     outbound_load_records_by_string_field, outbound_load_required, outbound_merge_fields,
     outbound_object_payload, outbound_put_default_i64, outbound_put_default_object,
     outbound_put_default_string, outbound_put_i64, outbound_put_string,
@@ -1207,15 +1205,7 @@ fn outbound_handle_research_source_registry_read(
 ) -> anyhow::Result<Value> {
     let antwort = scrape::dispatch_capturing(root, &["list-targets".to_string()])
         .context("scrape registry could not be read")?;
-    let ziele = antwort
-        .as_array()
-        .cloned()
-        .or_else(|| {
-            antwort
-                .as_object()
-                .and_then(|map| map.values().find_map(|v| v.as_array().cloned()))
-        })
-        .unwrap_or_default();
+    let ziele = outbound_registry_target_list(&antwort)?;
     let gesucht = command
         .payload
         .get("target_keys")
@@ -1227,6 +1217,10 @@ fn outbound_handle_research_source_registry_read(
                 .map(str::to_string)
                 .collect::<std::collections::BTreeSet<_>>()
         });
+    let laeufe = outbound_registry_last_runs(root)
+        .context("scrape registry run records could not be read")?;
+    let kontozustaende = outbound_registry_account_states(root)
+        .context("scrape registry provider account states could not be read")?;
     let mut eintraege = Vec::new();
     for ziel in ziele {
         let key = ziel
@@ -1250,6 +1244,9 @@ fn outbound_handle_research_source_registry_read(
             "target_kind": ziel.get("target_kind").and_then(Value::as_str).unwrap_or_default(),
             "start_url": ziel.get("start_url").and_then(Value::as_str).unwrap_or_default(),
             "latest_script_revision_no": ziel.get("latest_script_revision_no").cloned().unwrap_or(Value::Null),
+            "last_run": laeufe.get(ziel.get("target_id").and_then(Value::as_str).unwrap_or_default()).map(|(last, _)| last.clone()).unwrap_or(Value::Null),
+            "last_successful_run": laeufe.get(ziel.get("target_id").and_then(Value::as_str).unwrap_or_default()).and_then(|(_, ok)| ok.clone()).unwrap_or(Value::Null),
+            "account_state": kontozustaende.get(ziel.get("target_id").and_then(Value::as_str).unwrap_or_default()).cloned().unwrap_or(Value::Null),
         }));
     }
     let script = match command
@@ -1268,6 +1265,146 @@ fn outbound_handle_research_source_registry_read(
         "targets": eintraege,
         "script": script,
     }))
+}
+
+/// Accept the native list-targets envelope or the legacy direct list. Unrelated
+/// arrays and failed envelopes must never become a successful empty registry.
+fn outbound_registry_target_list(answer: &Value) -> anyhow::Result<Vec<Value>> {
+    let targets = if let Some(targets) = answer.as_array() {
+        targets
+    } else {
+        anyhow::ensure!(
+            answer.get("ok").and_then(Value::as_bool) == Some(true),
+            "scrape registry returned no successful target envelope"
+        );
+        answer
+            .get("targets")
+            .and_then(Value::as_array)
+            .context("scrape registry returned no target list")?
+    };
+    anyhow::ensure!(
+        targets.iter().all(|target| target
+            .get("target_key")
+            .and_then(Value::as_str)
+            .is_some_and(|key| !key.trim().is_empty())),
+        "scrape registry returned a malformed target entry"
+    );
+    Ok(targets.clone())
+}
+
+/// Provider account state per scrape target (capabilities/scrape/
+/// account_state.rs). While a provider refuses the paying account, calls are
+/// answered without contacting it; the app shows why, which run caused it,
+/// the last probe and when another requested call may probe automatically.
+/// Legacy stores can lack the optional state table. An unreadable store or
+/// malformed row is an error, never evidence that no account is inactive.
+fn outbound_registry_account_states(root: &Path) -> anyhow::Result<BTreeMap<String, Value>> {
+    let mut out = BTreeMap::new();
+    let conn = Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    let has_table: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scrape_account_state')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_table {
+        return Ok(out);
+    }
+    let mut statement = conn.prepare(
+        "SELECT target_id, reason, causal_run_id, last_probe_run_id, failed_probes,
+                next_probe_at_ms, probe_lease_owner, probe_lease_until_ms, updated_at_ms
+         FROM scrape_account_state",
+    )?;
+    let now = chrono::Utc::now().timestamp_millis();
+    let rows = statement.query_map([], |row| {
+        let next_probe_at_ms: i64 = row.get(5)?;
+        let lease_owner: Option<String> = row.get(6)?;
+        let lease_until_ms: i64 = row.get(7)?;
+        Ok((
+            row.get::<_, String>(0)?,
+            serde_json::json!({
+                "status": "provider_account_inactive",
+                "reason": row.get::<_, String>(1)?.chars().take(300).collect::<String>(),
+                "causal_run_id": row.get::<_, String>(2)?,
+                "last_probe_run_id": row.get::<_, String>(3)?,
+                "failed_probes": row.get::<_, i64>(4)?,
+                "next_probe_at_ms": next_probe_at_ms,
+                "next_probe_at": chrono::DateTime::from_timestamp_millis(next_probe_at_ms)
+                    .map(|at| at.to_rfc3339()),
+                "probe_in_progress": lease_owner.is_some() && lease_until_ms > now,
+                "updated_at_ms": row.get::<_, i64>(8)?,
+            }),
+        ))
+    });
+    for row in rows? {
+        let (target_id, state) = row?;
+        out.insert(target_id, state);
+    }
+    Ok(out)
+}
+
+/// Last run and last successful run per scrape target. The app list showed
+/// the result of its own source test (mostly 18.09.) while research runs had
+/// been succeeding on newer scripts for days (thesen, 24.09.2026); the real
+/// run state was never shown next to the test state.
+fn outbound_registry_last_runs(
+    root: &Path,
+) -> anyhow::Result<BTreeMap<String, (Value, Option<Value>)>> {
+    let conn = Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    // failure_mode and detail travel with the run: without them the app
+    // could not tell "account inactive at the provider" (Bright Data "Customer
+    // is not active", 77 of 80 LinkedIn runs on 27.09.2026) from a network
+    // hiccup or a missing credential.
+    let run = |row: &rusqlite::Row<'_>| -> rusqlite::Result<(String, Value)> {
+        let result = row
+            .get::<_, Option<String>>(5)?
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .unwrap_or(Value::Null);
+        let text = |key: &str| {
+            result
+                .get(key)
+                .and_then(Value::as_str)
+                .map(|value| value.chars().take(300).collect::<String>())
+        };
+        Ok((
+            row.get::<_, String>(0)?,
+            serde_json::json!({
+                "run_id": row.get::<_, String>(1)?,
+                "status": row.get::<_, String>(2)?,
+                "started_at": row.get::<_, Option<String>>(3)?,
+                "finished_at": row.get::<_, Option<String>>(4)?,
+                "failure_mode": text("failure_mode"),
+                "detail": text("detail"),
+            }),
+        ))
+    };
+    let mut out: BTreeMap<String, (Value, Option<Value>)> = BTreeMap::new();
+    let mut last = conn.prepare(
+        "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at, r.result_json FROM scrape_run r
+         WHERE r.started_at = (SELECT MAX(started_at) FROM scrape_run WHERE target_id = r.target_id)",
+    )?;
+    for entry in last.query_map([], run)? {
+        let (target_id, value) = entry?;
+        out.insert(target_id, (value, None));
+    }
+    let mut ok = conn.prepare(
+        "SELECT r.target_id, r.run_id, r.status, r.started_at, r.finished_at, r.result_json FROM scrape_run r
+         WHERE r.status IN ('succeeded', 'completed_empty')
+           AND r.started_at = (SELECT MAX(started_at) FROM scrape_run
+                               WHERE target_id = r.target_id AND status IN ('succeeded', 'completed_empty'))",
+    )?;
+    for entry in ok.query_map([], run)? {
+        let (target_id, value) = entry?;
+        if let Some(slot) = out.get_mut(&target_id) {
+            slot.1 = Some(value);
+        }
+    }
+    Ok(out)
 }
 
 /// Latest registered script of one scrape target, for the Outbound app's
@@ -1338,6 +1475,149 @@ fn outbound_registry_latest_script(root: &Path, target_key: &str) -> anyhow::Res
     }))
 }
 
+fn decode_sellify_lookup_record(id: &str, raw: &str) -> anyhow::Result<Value> {
+    let mut record: Value = serde_json::from_str(raw)?;
+    if let Some(object) = record.as_object_mut() {
+        object
+            .entry("id".to_string())
+            .or_insert_with(|| Value::String(id.to_string()));
+    }
+    Ok(record)
+}
+
+fn sellify_lookup_field_rows(
+    conn: &Connection,
+    table: &str,
+    field: &str,
+    value: &str,
+    contains: bool,
+    limit: usize,
+) -> anyhow::Result<Vec<(String, Value)>> {
+    if limit == 0 || (contains && value.trim().len() < 2) {
+        return Ok(Vec::new());
+    }
+    let rows = if contains {
+        let escaped = value
+            .trim()
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let mut statement = conn.prepare(&format!(
+            "SELECT id, data FROM {table}
+             WHERE CAST(json_extract(data, ?1) AS TEXT) LIKE ?2 ESCAPE '\\'
+             ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
+             LIMIT ?3"
+        ))?;
+        let rows = statement
+            .query_map(
+                params![format!("$.{field}"), format!("%{escaped}%"), limit as i64],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    } else {
+        // Keep main's literal JSON path so the existing expression index is
+        // usable; the parameterized CAST path scans every membership row.
+        let numeric = value.parse::<i64>().ok();
+        let mut statement =
+            conn.prepare(&super::store::rxdb_string_field_lookup_sql(table, field))?;
+        let rows = statement
+            .query_map(params![value, numeric, limit as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    rows.into_iter()
+        .map(|(id, raw)| {
+            let record = decode_sellify_lookup_record(&id, &raw)?;
+            Ok((id, record))
+        })
+        .collect()
+}
+
+/// Campaign search: names and member counts grouped on the required read-only
+/// snapshot. Exact `selectors` count as a
+/// containment probe too, so a full campaign name finds its own group.
+fn outbound_sellify_campaign_name_groups(
+    conn: &Connection,
+    table: &str,
+    allowed_fields: &[&str],
+    payload: &Value,
+) -> anyhow::Result<Value> {
+    const MAX_GROUPS: usize = 200;
+    let mut counts: BTreeMap<String, u64> = BTreeMap::new();
+    let mut scanned = 0_u64;
+    for key in ["fuzzy_selectors", "selectors"] {
+        for selector in payload
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let field = selector
+                .get("field")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            let needle = selector
+                .get("value")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            anyhow::ensure!(
+                allowed_fields.contains(&field),
+                "unsupported campaign lookup field `{field}`"
+            );
+            if needle.is_empty() {
+                continue;
+            }
+            if needle.len() < 2 {
+                continue;
+            }
+            let escaped = needle
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            // Group on the same required read-only snapshot as ID/exact/fuzzy
+            // probes. Reopening via optional readers can invent an empty query.
+            let mut statement =
+                conn.prepare(&super::store::rxdb_string_field_group_sql(table, field))?;
+            let groups = statement
+                .query_map(params![format!("%{escaped}%")], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let matched = groups.iter().map(|(_, count)| (*count).max(0) as u64).sum();
+            let groups = groups
+                .into_iter()
+                .map(|(name, count)| (name.trim().to_string(), count.max(0) as u64))
+                .filter(|(name, _)| !name.is_empty());
+            scanned = scanned.saturating_add(matched);
+            for (name, count) in groups {
+                let entry = counts.entry(name).or_default();
+                *entry = (*entry).max(count);
+            }
+        }
+    }
+    let mut groups = counts.into_iter().collect::<Vec<_>>();
+    groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    let truncated = groups.len() > MAX_GROUPS;
+    let groups = groups
+        .into_iter()
+        .take(MAX_GROUPS)
+        .map(|(name, count)| serde_json::json!({ "name": name, "count": count }))
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "ok": true,
+        "entity": "campaign",
+        "groups": groups,
+        "scanned": scanned,
+        "truncated": truncated,
+        "records": [],
+    }))
+}
+
 pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::Result<Value> {
     let entity = outbound_required_string(payload, &["entity"])?;
     let (collection, allowed_fields): (&str, &[&str]) = match entity.as_str() {
@@ -1382,14 +1662,38 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
                 "last_name",
             ],
         ),
-        _ => anyhow::bail!("entity must be company or person"),
+        _ => anyhow::bail!("entity must be company, person or campaign"),
     };
+    // A completed-empty CRM receipt requires an actual readable collection.
+    // Optional store readers deliberately tolerate absent projections elsewhere;
+    // they must not stand in for a successful Sellify research query here.
+    let group_by_name =
+        entity == "campaign" && payload.get("group_by").and_then(Value::as_str) == Some("name");
+    let mut indexed_fields = BTreeSet::new();
+    for key in ["selectors", "fuzzy_selectors"] {
+        if key == "fuzzy_selectors" && !group_by_name {
+            continue;
+        }
+        for selector in payload
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(field) = selector.get("field").and_then(Value::as_str).map(str::trim) {
+                if allowed_fields.contains(&field) {
+                    indexed_fields.insert(field);
+                }
+            }
+        }
+    }
+    let indexed_fields = indexed_fields.into_iter().collect::<Vec<_>>();
+    let (lookup_conn, lookup_table) =
+        super::store::required_rxdb_collection_read_connection(root, collection, &indexed_fields)?;
     // Campaign imports must see the FULL membership of one campaign; the
     // usual dedupe/lookup cap of 100 would silently truncate it.
     // A name search groups rows server-side (see below), so it may scan many
     // more rows than it returns.
-    let group_by_name =
-        entity == "campaign" && payload.get("group_by").and_then(Value::as_str) == Some("name");
     let limit_cap = if group_by_name {
         50_000
     } else if entity == "campaign" {
@@ -1402,6 +1706,14 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
         .and_then(Value::as_u64)
         .unwrap_or(25)
         .clamp(1, limit_cap) as usize;
+    if group_by_name {
+        return outbound_sellify_campaign_name_groups(
+            &lookup_conn,
+            &lookup_table,
+            allowed_fields,
+            payload,
+        );
+    }
     let mut records = Vec::new();
     let mut seen = BTreeSet::new();
     if let Some(ids) = payload.get("ids").and_then(Value::as_array) {
@@ -1414,7 +1726,15 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             if records.len() >= limit {
                 break;
             }
-            if let Some(record) = load_rxdb_collection_record(root, collection, id)? {
+            let raw = lookup_conn
+                .query_row(
+                    &format!("SELECT data FROM {lookup_table} WHERE id = ?1"),
+                    [id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(raw) = raw {
+                let record = decode_sellify_lookup_record(id, &raw)?;
                 if seen.insert(id.to_string()) {
                     records.push(record);
                 }
@@ -1443,11 +1763,12 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             if expected.is_empty() {
                 continue;
             }
-            for (id, record) in find_rxdb_collection_records_by_string_field(
-                root,
-                collection,
+            for (id, record) in sellify_lookup_field_rows(
+                &lookup_conn,
+                &lookup_table,
                 field,
                 expected,
+                false,
                 limit.saturating_sub(records.len()),
             )? {
                 if seen.insert(id) {
@@ -1481,11 +1802,12 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             if needle.is_empty() {
                 continue;
             }
-            for (id, record) in find_rxdb_collection_records_by_string_field_contains(
-                root,
-                collection,
+            for (id, record) in sellify_lookup_field_rows(
+                &lookup_conn,
+                &lookup_table,
                 field,
                 needle,
+                true,
                 limit.saturating_sub(records.len()),
             )? {
                 if seen.insert(id) {
@@ -1493,40 +1815,6 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
                 }
             }
         }
-    }
-    // Beauty, 11.09.2026: a campaign search returned 2000 full rows (1.1 MB);
-    // the peer dropped the result ("exceeds peer wire budget", 256 KB) and the
-    // browser reported "no Sellify campaign found". A search needs names and
-    // counts, an import only a few columns.
-    if group_by_name {
-        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
-        for record in &records {
-            let name = record
-                .get("name")
-                .or_else(|| record.get("title"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .unwrap_or("");
-            if !name.is_empty() && record.get("is_deleted").and_then(Value::as_bool) != Some(true) {
-                *counts.entry(name.to_string()).or_default() += 1;
-            }
-        }
-        let mut groups = counts.into_iter().collect::<Vec<_>>();
-        groups.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        let truncated = records.len() >= limit;
-        let groups = groups
-            .into_iter()
-            .take(200)
-            .map(|(name, count)| serde_json::json!({ "name": name, "count": count }))
-            .collect::<Vec<_>>();
-        return Ok(serde_json::json!({
-            "ok": true,
-            "entity": entity,
-            "groups": groups,
-            "scanned": records.len(),
-            "truncated": truncated,
-            "records": [],
-        }));
     }
     let fields = payload
         .get("fields")
@@ -1896,53 +2184,50 @@ pub(super) fn apply_outbound_adapter_reconciliation_reply(
             .filter(|value| value.is_object())
             .cloned()
             .unwrap_or_else(|| serde_json::json!({}));
-        outbound_payload_insert(
-            &mut payload,
-            "configuration_digest",
+        // This is already the adapter's payload object. The record-level
+        // helper would create an unintended payload.payload nesting.
+        let payload_fields = payload
+            .as_object_mut()
+            .context("adapter payload is not an object")?;
+        payload_fields.insert(
+            "configuration_digest".to_string(),
             Value::String(expected_digest.clone()),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "reconciliation_command_id",
+        payload_fields.insert(
+            "reconciliation_command_id".to_string(),
             Value::String(command_id.to_string()),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "reconciliation_task_id",
+        payload_fields.insert(
+            "reconciliation_task_id".to_string(),
             Value::String(task_id.to_string()),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "reconciled_command_id",
+        payload_fields.insert(
+            "reconciled_command_id".to_string(),
             Value::String(command_id.to_string()),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "reconciled_command_status",
+        payload_fields.insert(
+            "reconciled_command_status".to_string(),
             Value::String(result_status.clone()),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "adapter_revision",
+        payload_fields.insert(
+            "adapter_revision".to_string(),
             adapter_result
                 .get("adapter_revision")
                 .cloned()
                 .unwrap_or(Value::Null),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "script_path",
+        payload_fields.insert(
+            "script_path".to_string(),
             adapter_result
                 .get("script_path")
                 .cloned()
                 .unwrap_or(Value::Null),
         );
-        outbound_payload_insert(
-            &mut payload,
-            "test",
+        payload_fields.insert(
+            "test".to_string(),
             adapter_result.get("test").cloned().unwrap_or(Value::Null),
         );
-        outbound_payload_insert(&mut payload, "secret_value_in_payload", Value::Bool(false));
+        payload_fields.insert("secret_value_in_payload".to_string(), Value::Bool(false));
         let record = serde_json::json!({
             "id": adapter_id.clone(),
             "source_id": source_id.clone(),
@@ -2602,6 +2887,34 @@ fn outbound_apply_research_adapter_scrape_effect(
             "adapter_kind": adapter_kind,
         }));
     }
+    // Validate identity before registration, scraping, or automatic healing.
+    // Adapter labels and source IDs describe the provider, never the company.
+    let test_input = if command_type == "outbound.research_source.test" {
+        match outbound_research_scrape_test_input(command, adapter_payload, source_id) {
+            Ok(input) => Some(input),
+            Err(error) => {
+                let message = error.to_string();
+                let test = outbound_persist_scrape_test_preflight_failure(
+                    record,
+                    "test_input_required",
+                    "input_required",
+                    &message,
+                    scrape_effect_started.elapsed(),
+                );
+                return Some(serde_json::json!({
+                    "ok": false,
+                    "phase": "input",
+                    "status": "input_required",
+                    "test_skipped": true,
+                    "error": message,
+                    "required_fields": ["test_input.company"],
+                    "test": test,
+                }));
+            }
+        }
+    } else {
+        None
+    };
     let Some(target_key) = outbound_first_string(&[
         outbound_string(record, &["target_key"]),
         outbound_string(adapter_payload, &["target_key"]),
@@ -2629,21 +2942,52 @@ fn outbound_apply_research_adapter_scrape_effect(
         return Some(effect);
     };
 
-    let registration = outbound_register_research_scrape_target(
-        root,
-        adapter_payload,
-        record,
-        adapter_id,
-        source_id,
-        &target_key,
-    );
+    // A test observes the active registry revision. Registering the bundled
+    // template here can silently replace a tenant's specialized script.
+    let registration = if command_type == "outbound.research_source.test" {
+        scrape::registered_target_summary(root, &target_key).and_then(|target| {
+            // First use still needs a native target/workspace before generation.
+            // Existing targets must remain untouched by a source test.
+            if target.is_none() {
+                return outbound_register_research_scrape_target(
+                    root,
+                    adapter_payload,
+                    record,
+                    adapter_id,
+                    source_id,
+                    &target_key,
+                );
+            }
+            let script_revision_no = target
+                .as_ref()
+                .and_then(|value| value.get("latest_script_revision_no"))
+                .and_then(Value::as_i64);
+            Ok(serde_json::json!({
+                "ok": true,
+                "target_key": target_key,
+                "registered_from": "existing_registry",
+                "script_registered": script_revision_no.is_some(),
+                "script_revision_no": script_revision_no,
+                "script_sha256": target.as_ref().and_then(|value| value.get("latest_script_sha256")),
+            }))
+        })
+    } else {
+        outbound_register_research_scrape_target(
+            root,
+            adapter_payload,
+            record,
+            adapter_id,
+            source_id,
+            &target_key,
+        )
+    };
     let mut effect = match registration {
         Ok(effect) => effect,
         Err(err) => {
             let message = err.to_string();
             let mut effect = serde_json::json!({
                 "ok": false,
-                "phase": "register",
+                "phase": if command_type == "outbound.research_source.test" { "registry_lookup" } else { "register" },
                 "target_key": target_key,
                 "error": message.clone(),
             });
@@ -2651,7 +2995,11 @@ fn outbound_apply_research_adapter_scrape_effect(
                 let test_effect = outbound_persist_scrape_test_preflight_failure(
                     record,
                     "test_failed",
-                    "registration_failed",
+                    if command_type == "outbound.research_source.test" {
+                        "registry_lookup_failed"
+                    } else {
+                        "registration_failed"
+                    },
                     &message,
                     scrape_effect_started.elapsed(),
                 );
@@ -2669,7 +3017,7 @@ fn outbound_apply_research_adapter_scrape_effect(
         .get("script_registered")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if command_type == "outbound.research_source.generate_adapter" {
+    if command_type == "outbound.research_source.generate_adapter" || !has_script {
         if !has_script {
             match outbound_queue_research_scraper_generation(
                 root,
@@ -2679,11 +3027,20 @@ fn outbound_apply_research_adapter_scrape_effect(
                 &target_key,
             ) {
                 Ok(task_effect) => {
+                    let runnable = matches!(
+                        task_effect.get("task_status").and_then(Value::as_str),
+                        Some("pending" | "leased" | "running" | "review_rework")
+                    );
                     if let Some(object) = effect.as_object_mut() {
                         object.insert("generation_task".to_string(), task_effect);
                     }
-                    outbound_put_string(record, "status", "generation_queued");
-                    outbound_put_string(record, "scrape_status", "generation_queued");
+                    let status = if runnable {
+                        "generation_queued"
+                    } else {
+                        "generation_blocked"
+                    };
+                    outbound_put_string(record, "status", status);
+                    outbound_put_string(record, "scrape_status", status);
                     return Some(effect);
                 }
                 Err(err) => {
@@ -2734,13 +3091,19 @@ fn outbound_apply_research_adapter_scrape_effect(
         return Some(effect);
     }
 
+    // The source test is the operator's explicit request to check the
+    // source. Its policy-checked authorization (trusted user, DataWrite) may
+    // probe a provider account the scrape state holds as inactive, once and
+    // under the probe lease. Worker sessions cannot produce this grant.
+    let probe_grant = outbound_source_test_probe_grant(root, command);
     let test_started = Instant::now();
     match outbound_execute_research_scrape_target(
         root,
-        command,
-        adapter_payload,
-        source_id,
         &target_key,
+        test_input
+            .as_ref()
+            .expect("test input validated before registration"),
+        probe_grant.as_ref(),
     ) {
         Ok(test_outcome) => {
             let expected_fields = record
@@ -2853,6 +3216,10 @@ fn outbound_apply_research_adapter_scrape_effect(
                         scrape::ScrapeRunStatus::AuthorizationRequired => {
                             ("test_auth_required", "test_auth_required")
                         }
+                        scrape::ScrapeRunStatus::ProviderAccountInactive => (
+                            "test_provider_account_inactive",
+                            "test_provider_account_inactive",
+                        ),
                         scrape::ScrapeRunStatus::Blocked => ("test_blocked", "test_blocked"),
                         scrape::ScrapeRunStatus::PortalDrift => {
                             ("test_portal_drift", "test_portal_drift")
@@ -3178,11 +3545,34 @@ fn outbound_queue_research_scraper_generation(
         .or_else(|| command.payload.get("scrape_contract"))
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
+    let registration = scrape::target_script_registration(root, target_key)?
+        .context("generation requires a registered scrape target")?;
+    let workspace = registration
+        .get("workspace_dir")
+        .and_then(Value::as_str)
+        .context("registered scrape target has no workspace")?;
     let command_id = command.id.clone().unwrap_or_default();
     let task_idempotency_key = if command_id.is_empty() {
         format!("outbound-research-adapter:{target_key}:legacy:{}", now_ms())
     } else {
         format!("outbound-research-adapter:{target_key}:{command_id}")
+    };
+    let test_input = outbound_research_scrape_test_input(command, adapter_payload, source_id)
+        .ok()
+        .map(|mut input| {
+            // The generated worker must use its own real queue task reference.
+            input.as_object_mut().unwrap().remove("task_id");
+            input
+        });
+    let test_instruction = match test_input {
+        Some(input) => {
+            let timeout = outbound_scrape_operation_timeout_ms(input.get("operation_timeout_ms"))?;
+            let runner_seconds = timeout.div_ceil(1_000) + 30;
+            format!(
+                "Schreibe exakt diesen Testinput in eine JSON-Datei unter {workspace}/scripts/: {input}. Ergaenze task_id nur aus der tatsaechlichen eigenen Queue-Aufgabe des Harness, nie aus Target-Config oder geratenen IDs. Fuehre `ctox scrape execute --target-key {target_key} --timeout-seconds {runner_seconds} --input-file <absoluter Pfad zur JSON-Datei>` aus. Dokumentiere Run-ID, Quellen und Felder."
+            )
+        }
+        None => "Es fehlt ein gueltiger expliziter Testinput mit company. Registriere den Adapter, aber fuehre keinen Recherche-Test aus und erfinde keine Firma. Melde input_required.".to_string(),
     };
     let prompt = format!(
         "Erzeuge oder repariere einen CTOX Universal-Scraping Adapter fuer die Outbound Research Quelle.\n\
@@ -3193,21 +3583,24 @@ fn outbound_queue_research_scraper_generation(
          - target_key: {target_key}\n\n\
          Anforderungen:\n\
          - Nutze den universal-scraping Skill.\n\
-         - Lege den ausfuehrbaren Scraper als JavaScript unter runtime/scraping/targets/{target_key}/scripts/ ab.\n\
-         - Registriere das Target mit `ctox scrape upsert-target` und den Script-Stand mit `ctox scrape register-script`.\n\
+         - Arbeite ausschliesslich im isolierten Target-Workspace {workspace}; bearbeite scripts/ und sources/. Aendere keine Datenbank, Elternverzeichnisse oder Runtime-Symlinks. Pruefe vorhandene registrierte Revisionen vor einer Neuerstellung.\n\
+         - Das Target ist nativ registriert. Registriere den Script-Stand mit `ctox scrape register-script --target-key {target_key} --script-file <absoluter Pfad unter {workspace}/scripts/>`. Registrierung und Execute laufen ueber den bestehenden Daemon-Relay; keine direkten Runtime-Datenbankschreibzugriffe.\n\
          - Der Scraper muss `prospect.v1` Records ausgeben: field, value, confidence, source_url, note.\n\
          - Verwende keine Credential-Werte im Prompt, Code oder Log. Nur Secret-Referenzen sind erlaubt.\n\
-         - Fuehre danach `ctox scrape execute --target-key {target_key} --allow-heal` mit einem kleinen Testinput aus und dokumentiere Run-ID, Quellen und Felder.\n\n\
+         - Lies Anbieter-Konfiguration und Secret-Referenzen aus der registrierten CTOX_SCRAPE_MANIFEST_PATH config. Nutze CTOX_SCRAPE_INPUT_JSON fuer die konkrete Abfrage und operation_timeout_ms fuer die Browseroperation. Config und Owner-Angaben ersetzen keine native Autorisierung; bei Auth-Ablehnung keine alternativen Routen versuchen.\n\
+         - {test_instruction}\n\n\
          target_manifest:\n{manifest}\n\n\
          scrape_contract:\n{contract}\n"
     );
-    let task = channels::create_queue_task(
+    let task = channels::create_scrape_repair_queue_task(
         root,
+        "scrape",
+        target_key,
         channels::QueueTaskCreateRequest {
             title: format!("Outbound Scraper Adapter erzeugen: {label}"),
             prompt,
             thread_key: format!("business-os/outbound/research-adapter/{target_key}"),
-            workspace_root: Some(root.display().to_string()),
+            workspace_root: Some(workspace.to_string()),
             // Adapter generation is background maintenance; it must not
             // outrank the research that needs the adapter (thesen 07.09.2026).
             priority: "low".to_string(),
@@ -3218,6 +3611,7 @@ fn outbound_queue_research_scraper_generation(
                 "source": "outbound.research_source.generate_adapter",
                 "adapter_source_id": source_id,
                 "target_key": target_key,
+                "scrape_repair": {"workspace_root": workspace},
                 "idempotency_key": task_idempotency_key,
             })),
         },
@@ -3296,7 +3690,7 @@ fn outbound_register_research_scrape_target(
     root: &Path,
     adapter_payload: &Value,
     record: &Value,
-    adapter_id: &str,
+    _adapter_id: &str,
     source_id: &str,
     target_key: &str,
 ) -> anyhow::Result<Value> {
@@ -3304,42 +3698,8 @@ fn outbound_register_research_scrape_target(
         outbound_string(record, &["url"]),
         outbound_string(adapter_payload, &["url"]),
     ]);
-    if let Some((target_dir, script_path)) =
-        outbound_find_bundled_scrape_target_dir(root, source_id, target_key, url.as_deref())
-    {
-        let manifest_path = target_dir.join("target.json");
-        scrape::handle_scrape_command(
-            root,
-            &[
-                "upsert-target".to_string(),
-                "--input".to_string(),
-                manifest_path.to_string_lossy().to_string(),
-            ],
-        )?;
-        scrape::handle_scrape_command(
-            root,
-            &[
-                "register-script".to_string(),
-                "--target-key".to_string(),
-                target_key.to_string(),
-                "--script-file".to_string(),
-                script_path.to_string_lossy().to_string(),
-                "--language".to_string(),
-                "javascript".to_string(),
-                "--change-reason".to_string(),
-                "outbound_adapter_registration".to_string(),
-                "--notes".to_string(),
-                format!("Registered from Outbound adapter {adapter_id} for {source_id}"),
-            ],
-        )?;
-        return Ok(serde_json::json!({
-            "ok": true,
-            "target_key": target_key,
-            "registered_from": "source_tree",
-            "target_manifest": manifest_path,
-            "script_file": script_path,
-            "script_registered": true,
-        }));
+    if let Some(registration) = scrape::target_script_registration(root, target_key)? {
+        return Ok(registration);
     }
 
     let manifest = adapter_payload
@@ -3401,20 +3761,18 @@ fn outbound_register_research_scrape_target(
     }))
 }
 
-fn outbound_execute_research_scrape_target(
-    root: &Path,
+fn outbound_research_scrape_test_input(
     command: &BusinessCommand,
     adapter_payload: &Value,
     source_id: &str,
-    target_key: &str,
-) -> anyhow::Result<scrape::ScrapeExecutionOutcome> {
+) -> anyhow::Result<Value> {
     let company = outbound_first_string(&[
         outbound_string(&command.payload, &["test_input", "company"]),
         outbound_string(&command.payload, &["company"]),
-        outbound_string(adapter_payload, &["label"]),
-        Some(source_id.to_string()),
     ])
-    .unwrap_or_else(|| source_id.to_string());
+    .context(
+        "Provide a non-empty test_input.company (or company) before testing this research adapter",
+    )?;
     let country = outbound_first_string(&[
         outbound_string(&command.payload, &["test_input", "country"]),
         outbound_string(&command.payload, &["country"]),
@@ -3426,29 +3784,87 @@ fn outbound_execute_research_scrape_target(
             .map(ToOwned::to_owned),
     ])
     .unwrap_or_else(|| "DE".to_string());
-    let input = serde_json::json!({
+    let operation_timeout_ms = outbound_scrape_operation_timeout_ms(
+        command.payload.pointer("/test_input/operation_timeout_ms"),
+    )?;
+    Ok(serde_json::json!({
         "company": company,
         "country": country,
         "source_id": source_id,
         "adapter_test": true,
-    });
-    scrape::execute_scrape_with_outcome(
-        root,
-        &[
-            "execute".to_string(),
-            "--target-key".to_string(),
-            target_key.to_string(),
-            "--trigger-kind".to_string(),
-            "manual".to_string(),
-            "--timeout-seconds".to_string(),
-            "45".to_string(),
-            "--allow-heal".to_string(),
-            "--input-json".to_string(),
-            input.to_string(),
-        ],
+        // Correlation only: the auth service must authorize this command.
+        "task_id": command.id.as_deref().map(str::trim).filter(|id| !id.is_empty()),
+        "operation_timeout_ms": operation_timeout_ms,
+    }))
+}
+
+fn outbound_scrape_operation_timeout_ms(value: Option<&Value>) -> anyhow::Result<u64> {
+    let timeout = match value {
+        None => 90_000,
+        Some(value) => value.as_u64().context(
+            "test_input.operation_timeout_ms must be an integer between 1000 and 300000",
+        )?,
+    };
+    anyhow::ensure!(
+        (1_000..=300_000).contains(&timeout),
+        "test_input.operation_timeout_ms must be an integer between 1000 and 300000"
+    );
+    Ok(timeout)
+}
+
+fn outbound_scrape_test_execution_args(
+    target_key: &str,
+    input: &Value,
+) -> anyhow::Result<Vec<String>> {
+    let operation_timeout_ms =
+        outbound_scrape_operation_timeout_ms(input.get("operation_timeout_ms"))?;
+    // Leave time to serialize browser evidence before the runner stops its tree.
+    let runner_timeout_seconds = operation_timeout_ms.div_ceil(1_000) + 30;
+    Ok(vec![
+        "execute".to_string(),
+        "--target-key".to_string(),
+        target_key.to_string(),
+        "--trigger-kind".to_string(),
+        "manual".to_string(),
+        "--timeout-seconds".to_string(),
+        runner_timeout_seconds.to_string(),
+        "--input-json".to_string(),
+        input.to_string(),
+    ])
+}
+
+/// The account probe grant of an Outbound source test: derived only from the
+/// command's server-side authorization (signed capability session, module
+/// policy DataWrite) and only for `outbound.research_source.test`.
+fn outbound_source_test_probe_grant(
+    root: &Path,
+    command: &BusinessCommand,
+) -> Option<scrape::AccountProbeGrant> {
+    if command.command_type != "outbound.research_source.test" {
+        return None;
+    }
+    let authorization =
+        super::store::recoverable_background_control_claim_authorization(root, command)?;
+    scrape::AccountProbeGrant::from_command_authorization(
+        command.id.as_deref().unwrap_or_default(),
+        &authorization,
     )
 }
 
+fn outbound_execute_research_scrape_target(
+    root: &Path,
+    target_key: &str,
+    input: &Value,
+    probe_grant: Option<&scrape::AccountProbeGrant>,
+) -> anyhow::Result<scrape::ScrapeExecutionOutcome> {
+    scrape::execute_scrape_with_probe_grant(
+        root,
+        &outbound_scrape_test_execution_args(target_key, input)?,
+        probe_grant,
+    )
+}
+
+#[cfg(test)]
 fn outbound_find_bundled_scrape_target_dir(
     root: &Path,
     source_id: &str,
@@ -3495,6 +3911,7 @@ fn outbound_find_bundled_scrape_target_dir(
     None
 }
 
+#[cfg(test)]
 fn outbound_scrape_target_roots(root: &Path) -> Vec<PathBuf> {
     let mut roots = Vec::new();
     let mut seen = BTreeSet::new();
@@ -3520,6 +3937,7 @@ fn outbound_scrape_target_roots(root: &Path) -> Vec<PathBuf> {
     roots
 }
 
+#[cfg(test)]
 fn outbound_host_from_url(url: Option<&str>) -> Option<String> {
     let raw = url?.trim();
     if raw.is_empty() {
@@ -6348,6 +6766,200 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[test]
+    fn sellify_required_lookup_preserves_indexed_text_and_numeric_matching() -> anyhow::Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE lookup_table (id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0);
+             CREATE INDEX lookup_contact_idx ON lookup_table
+                (deleted, json_extract(data, '$.contact_id'), id);
+             INSERT INTO lookup_table (id, data) VALUES
+                ('text', '{\"contact_id\":\"123\",\"updated_at_ms\":4}'),
+                ('number', '{\"contact_id\":123,\"updated_at_ms\":3}'),
+                ('other', '{\"contact_id\":1234,\"updated_at_ms\":5}');",
+        )?;
+        let rows =
+            sellify_lookup_field_rows(&conn, "lookup_table", "contact_id", "123", false, 10)?;
+        assert_eq!(
+            rows.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["text", "number"]
+        );
+        assert_eq!(rows[0].1["id"], "text");
+        let sql = super::super::store::rxdb_string_field_lookup_sql("lookup_table", "contact_id");
+        let mut statement = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+        let plan = statement
+            .query_map(params!["123", Some(123_i64), 10_i64], |row| {
+                row.get::<_, String>(3)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .join("\n");
+        assert!(
+            plan.contains("lookup_contact_idx"),
+            "lookup must retain expression index: {plan}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_campaign_groups_share_the_required_read_snapshot() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root,
+            "sellify_campaigns",
+        )?;
+        let writer = Connection::open(super::super::store::rxdb_store_path(root))?;
+        writer.execute_batch("PRAGMA journal_mode=WAL;")?;
+        let table = "ctox_business_os__sellify_campaigns__v0";
+        for (id, name, deleted, is_deleted) in [
+            ("a", "Chemie%_CH", 0, false),
+            ("b", "Chemie%_CH", 0, false),
+            ("tombstone", "Chemie%_CH", 1, false),
+            ("deleted_import", "Chemie%_CH", 0, true),
+            ("wildcard_decoy", "ChemieZZCH", 0, false),
+        ] {
+            writer.execute(
+                &format!("INSERT INTO {table} (id,data,deleted,lastWriteTime) VALUES (?1,?2,?3,1)"),
+                params![
+                    id,
+                    serde_json::json!({"name":name,"is_deleted":is_deleted}).to_string(),
+                    deleted
+                ],
+            )?;
+        }
+        let (snapshot, snapshot_table) =
+            super::super::store::required_rxdb_collection_read_connection(
+                root,
+                "sellify_campaigns",
+                &[],
+            )?;
+        assert_eq!(
+            snapshot.query_row(
+                &format!("SELECT COUNT(*) FROM {snapshot_table}"),
+                [],
+                |row| row.get::<_, i64>(0)
+            )?,
+            5
+        );
+        writer.execute(
+            &format!("INSERT INTO {table} (id,data,deleted,lastWriteTime) VALUES ('later',?1,0,2)"),
+            [serde_json::json!({"name":"Chemie%_CH"}).to_string()],
+        )?;
+        let request = serde_json::json!({"entity":"campaign","group_by":"name",
+            "fuzzy_selectors":[{"field":"name","value":"Chemie%_"}]});
+        let old =
+            outbound_sellify_campaign_name_groups(&snapshot, &snapshot_table, &["name"], &request)?;
+        assert_eq!(
+            old["groups"],
+            serde_json::json!([{"name":"Chemie%_CH","count":2}])
+        );
+        assert_eq!(old["scanned"], 2);
+        assert!(
+            snapshot
+                .execute(&format!("DELETE FROM {snapshot_table}"), [])
+                .is_err(),
+            "required lookup must remain read-only"
+        );
+        let fresh = outbound_sellify_lookup(root, &request)?;
+        assert_eq!(
+            fresh["groups"],
+            serde_json::json!([{"name":"Chemie%_CH","count":3}])
+        );
+        assert_eq!(fresh["scanned"], 3);
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_campaign_grouping_never_calls_an_unavailable_projection_empty() -> anyhow::Result<()>
+    {
+        for state in ["missing", "no_collection", "corrupt", "empty"] {
+            let temp = tempdir()?;
+            let root = temp.path();
+            let path = super::super::store::rxdb_store_path(root);
+            match state {
+                "missing" => {}
+                "no_collection" => {
+                    std::fs::create_dir_all(path.parent().context("fixture parent")?)?;
+                    drop(Connection::open(&path)?);
+                }
+                "corrupt" => {
+                    std::fs::create_dir_all(path.parent().context("fixture parent")?)?;
+                    std::fs::write(&path, b"not SQLite")?;
+                }
+                "empty" => {
+                    super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                        root,
+                        "sellify_campaigns",
+                    )?
+                }
+                _ => unreachable!(),
+            }
+            let result = outbound_sellify_lookup(
+                root,
+                &serde_json::json!({"entity":"campaign",
+                "group_by":"name","fuzzy_selectors":[{"field":"name","value":"Chemie"}]}),
+            );
+            if state == "empty" {
+                assert_eq!(result?["groups"], serde_json::json!([]));
+            } else {
+                assert!(
+                    result.is_err(),
+                    "unavailable campaign projection became empty: {state}"
+                );
+            }
+            if state == "missing" {
+                assert!(!path.exists());
+            }
+        }
+        Ok(())
+    }
+
+    fn create_adapter_reconciliation_rxdb_fixture(root: &Path) -> anyhow::Result<()> {
+        let path = super::super::store::rxdb_store_path(root);
+        std::fs::create_dir_all(path.parent().context("RxDB fixture parent")?)?;
+        let conn = Connection::open(path)?;
+        let schemas: Value =
+            serde_json::from_str(include_str!("business_os_schema_contract.json"))?;
+        for collection in [
+            "outbound_lead_generation_sources",
+            "outbound_lead_generation_adapters",
+            "outbound_lead_generation_research_policies",
+        ] {
+            // Sources and policies are app-owned v0 schemas, deliberately not
+            // part of the native core contract. Adapters remain core-owned.
+            let version = match collection {
+                "outbound_lead_generation_sources"
+                | "outbound_lead_generation_research_policies" => 0,
+                _ => schemas[collection]["version"]
+                    .as_u64()
+                    .context("reconciliation collection schema version")?,
+            };
+            conn.execute_batch(&format!(
+                "CREATE TABLE ctox_business_os__{collection}__v{version} (
+                    id TEXT PRIMARY KEY NOT NULL,
+                    revision TEXT,
+                    deleted INTEGER NOT NULL,
+                    lastWriteTime REAL NOT NULL,
+                    data TEXT NOT NULL
+                );"
+            ))?;
+        }
+        let tables = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert_eq!(
+            tables,
+            [
+                "ctox_business_os__outbound_lead_generation_adapters__v2",
+                "ctox_business_os__outbound_lead_generation_research_policies__v0",
+                "ctox_business_os__outbound_lead_generation_sources__v0",
+            ]
+        );
+        Ok(())
+    }
+
     // Klicktest P4 V14 (11.09.2026): "Adapter-Skript ansehen" could never show
     // a script; the registry read now carries the latest script of one target.
     #[test]
@@ -6425,6 +7037,15 @@ mod tests {
             },
         )?;
         assert!(plain.get("script").is_some_and(Value::is_null));
+        // The list carries the real run state next to the registration; a
+        // target that never ran reports null, not a guessed status.
+        assert!(outbound_registry_last_runs(root).is_ok());
+        assert!(plain.pointer("/targets/0").is_some_and(|target| target
+            .get("last_run")
+            .is_some_and(Value::is_null)
+            && target
+                .get("last_successful_run")
+                .is_some_and(Value::is_null)));
         Ok(())
     }
 
@@ -6477,6 +7098,30 @@ mod tests {
         assert!(rows
             .iter()
             .all(|row| row.get("note_text").is_none() && row["contact_id"].is_number()));
+        let (conn, table) = super::super::store::required_rxdb_collection_read_connection(
+            root,
+            "sellify_campaigns",
+            &[],
+        )?;
+        let mut statement = conn.prepare(&format!(
+            "EXPLAIN QUERY PLAN {}",
+            super::super::store::rxdb_string_field_lookup_sql(&table, "name")
+        ))?;
+        let plan = statement
+            .query_map(
+                params![
+                    "Beauty - Welle 5 – 10.09.2026",
+                    Option::<i64>::None,
+                    2000_i64
+                ],
+                |row| row.get::<_, String>(3),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .join("\n");
+        assert!(
+            plan.contains("_lookup_name_idx"),
+            "required import lost main's index preparation: {plan}"
+        );
         Ok(())
     }
 
@@ -6485,6 +7130,7 @@ mod tests {
     {
         let temp = tempdir()?;
         let root = temp.path();
+        create_adapter_reconciliation_rxdb_fixture(root)?;
         let conn = open_store(root)?;
         let now = 1_000;
         let source = serde_json::json!({
@@ -6594,6 +7240,7 @@ mod tests {
         )?
         .context("adapter writeback")?;
         assert_eq!(adapter.get("status").and_then(Value::as_str), Some("ready"));
+        assert!(adapter.pointer("/payload/payload").is_none());
         assert_eq!(
             adapter
                 .pointer("/payload/test/records_found")
@@ -6619,6 +7266,7 @@ mod tests {
     {
         let temp = tempdir()?;
         let root = temp.path();
+        create_adapter_reconciliation_rxdb_fixture(root)?;
         let conn = open_store(root)?;
         let now = 1_000;
         let source = |id: &str| {
@@ -7299,6 +7947,205 @@ mod tests {
     }
 
     #[test]
+    fn outbound_runtime_library_preserves_activated_revision_over_bundle() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let body = "process.stdout.write(JSON.stringify({records: []}));";
+        write_outbound_scrape_test_fixture(root, body)?;
+        let source = root.join("src/tools/web-stack/scrape-targets/fixture.example/scripts/v1.js");
+        fs::write(&source, "// newer revision\nprocess.stdout.write('{}');")?;
+        let register = vec![
+            "register-script".into(),
+            "--target-key".into(),
+            "fixture-example".into(),
+            "--script-file".into(),
+            source.to_string_lossy().into_owned(),
+        ];
+        scrape::dispatch_capturing(root, &register)?;
+        // Deliberately reactivate the older revision. MAX(revision_no) is not authority.
+        fs::write(&source, body)?;
+        scrape::dispatch_capturing(root, &register)?;
+        let show = vec![
+            "show-target".into(),
+            "--target-key".into(),
+            "fixture-example".into(),
+        ];
+        let before = scrape::dispatch_capturing(root, &show)?;
+        assert_eq!(before["target"]["latest_script_revision_no"], 1);
+        fs::write(
+            &source,
+            "throw new Error('bundled code must not replace runtime library');",
+        )?;
+        let registration = outbound_register_research_scrape_target(
+            root,
+            &serde_json::json!({"target_manifest": {"config": {"replace": true}}}),
+            &serde_json::json!({"url":"https://fixture.example/"}),
+            "adapter_fixture",
+            "fixture.example",
+            "fixture-example",
+        )?;
+        assert_eq!(registration["registered_from"], "runtime_sqlite");
+        assert_eq!(registration["script_registered"], true);
+        assert_eq!(registration["revision_no"], 1);
+        assert_eq!(before, scrape::dispatch_capturing(root, &show)?);
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_runtime_library_invalid_materialization_does_not_import_bundle(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_outbound_scrape_test_fixture(root, "process.stdout.write('{}');")?;
+        let show = vec![
+            "show-target".into(),
+            "--target-key".into(),
+            "fixture-example".into(),
+        ];
+        let before = scrape::dispatch_capturing(root, &show)?;
+        let stored = before
+            .pointer("/target/revisions/0/script_path")
+            .and_then(Value::as_str)
+            .context("revision path")?;
+        let path = if Path::new(stored).is_absolute() {
+            PathBuf::from(stored)
+        } else {
+            root.join(stored)
+        };
+        fs::write(path, "tampered execution materialization")?;
+        let registration = outbound_register_research_scrape_target(
+            root,
+            &serde_json::json!({}),
+            &serde_json::json!({}),
+            "adapter_fixture",
+            "fixture.example",
+            "fixture-example",
+        )?;
+        assert_eq!(registration["script_registered"], false);
+        assert_eq!(registration["registered_from"], "runtime_sqlite");
+        assert_eq!(before, scrape::dispatch_capturing(root, &show)?);
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_runtime_library_novel_first_use_generates_then_executes_registered_script(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let adapter = serde_json::json!({
+            "source_id":"novel.example", "label":"Novel", "url":"https://novel.example/",
+            "adapter_kind":"scrape_target", "target_key":"novel-example", "field_keys":["company_name"],
+            "target_manifest": {"target_key":"novel-example", "display_name":"Novel",
+                "start_url":"https://novel.example/", "target_kind":"prospect-research", "status":"active",
+                "config":{"skip_probe":true,"expected_min_records":0,"record_key_fields":["field","source_url"]},
+                "output_schema":{"schema_key":"prospect.v1","record_key_fields":["field","source_url"]}}
+        });
+        let command = BusinessCommand {
+            id: Some("cmd_novel_first_use".into()),
+            module: "outbound".into(),
+            command_type: "outbound.research_source.test".into(),
+            record_id: Some("adapter_novel".into()),
+            payload: serde_json::json!({"test_input":{"company":"Novel GmbH","country":"DE"}}),
+            client_context: serde_json::json!({}),
+            origin: CommandOrigin::TrustedLocal,
+        };
+        let mut record = adapter.clone();
+        record["id"] = serde_json::json!("adapter_novel");
+        record["payload"] = serde_json::json!({});
+        assert!(scrape::registered_target_summary(root, "novel-example")?.is_none());
+        let first = outbound_apply_research_adapter_scrape_effect(
+            root,
+            &command,
+            &adapter,
+            "adapter_novel",
+            "novel.example",
+            &mut record,
+        )
+        .context("first use")?;
+        let task_id = first
+            .pointer("/generation_task/task_id")
+            .and_then(Value::as_str)
+            .context("generation task")?;
+        let task = channels::load_queue_task(root, task_id)?.context("task exists")?;
+        let workspace = root.join("runtime/scraping/targets/novel-example");
+        assert!(task.prompt.contains("--input-file"));
+        assert!(task.prompt.contains("--timeout-seconds 120"));
+        assert!(task.prompt.contains("operation_timeout_ms"));
+        assert!(task.prompt.contains("CTOX_SCRAPE_MANIFEST_PATH"));
+        assert_eq!(
+            task.workspace_root.as_deref(),
+            Some(workspace.to_string_lossy().as_ref())
+        );
+        assert_eq!(
+            task.metadata
+                .pointer("/scrape_repair/target_key")
+                .and_then(Value::as_str),
+            Some("novel-example")
+        );
+        let registered_target = scrape::registered_target_summary(root, "novel-example")?
+            .context("first use registered the generation target")?;
+        assert!(registered_target["latest_script_revision_no"].is_null());
+        let mut stale_adapter = adapter.clone();
+        stale_adapter["target_manifest"]["start_url"] = serde_json::json!("https://stale.example/");
+        stale_adapter["target_manifest"]["config"] = serde_json::json!({"stale": true});
+        let second = outbound_apply_research_adapter_scrape_effect(
+            root,
+            &command,
+            &stale_adapter,
+            "adapter_novel",
+            "novel.example",
+            &mut record,
+        )
+        .context("second first-use request")?;
+        assert_eq!(
+            first["generation_task"]["task_id"],
+            second["generation_task"]["task_id"]
+        );
+        assert_eq!(
+            scrape::registered_target_summary(root, "novel-example")?
+                .context("target retained after repeated first use")?,
+            registered_target,
+            "a repeated source test must not replace the registered manifest"
+        );
+        // Stand in for the bounded harness's generated artifact; register through
+        // the same native scrape command that the existing daemon relay dispatches.
+        let script = workspace.join("scripts/generated.js");
+        fs::write(
+            &script,
+            r#"process.stdout.write(JSON.stringify({records:[{field:"company_name",value:"Novel GmbH",source_url:"https://novel.example/"}]}));"#,
+        )?;
+        let registered = scrape::dispatch_capturing(
+            root,
+            &[
+                "register-script".into(),
+                "--target-key".into(),
+                "novel-example".into(),
+                "--script-file".into(),
+                script.to_string_lossy().into_owned(),
+            ],
+        )?;
+        let result = outbound_apply_research_adapter_scrape_effect(
+            root,
+            &command,
+            &adapter,
+            "adapter_novel",
+            "novel.example",
+            &mut record,
+        )
+        .context("registered execution")?;
+        assert_eq!(result["registered_from"], "existing_registry");
+        assert!(result.get("generation_task").is_none());
+        assert_eq!(result["test"]["status"], "succeeded");
+        assert_eq!(result["test"]["records_found"], 1);
+        assert_eq!(
+            result["script_sha256"],
+            registered["script"]["script_sha256"]
+        );
+        assert_eq!(result["test"]["evidence"]["valid"], true);
+        Ok(())
+    }
+
+    #[test]
     fn outbound_custom_research_adapter_queues_universal_scraping_generation() -> anyhow::Result<()>
     {
         let temp = tempdir()?;
@@ -7436,6 +8283,165 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn outbound_scrape_test_missing_identity_has_no_scrape_or_repair_effects() -> anyhow::Result<()>
+    {
+        let temp = tempdir()?;
+        let root = temp.path().join("must-remain-absent");
+        let adapter = serde_json::json!({
+            "label": "Unternehmenswebsite / Impressum",
+            "countries": ["DE"],
+            "adapter_kind": "scrape_target",
+            "target_key": "fixture-example"
+        });
+        for payload in [
+            serde_json::json!({}),
+            serde_json::json!({"test_input": {"company": ""}}),
+            serde_json::json!({"test_input": {"company": " \t\n "}, "company": "  "}),
+            serde_json::json!({"test_input": {"company": 42}}),
+        ] {
+            let command = BusinessCommand {
+                id: Some("cmd_missing_company".to_string()),
+                module: "outbound".to_string(),
+                command_type: "outbound.research_source.test".to_string(),
+                record_id: Some("adapter_fixture".to_string()),
+                payload,
+                client_context: serde_json::json!({}),
+                origin: CommandOrigin::TrustedLocal,
+            };
+            let mut record = serde_json::json!({
+                "adapter_kind": "scrape_target",
+                "target_key": "fixture-example",
+                "test_ok": true,
+                "payload": {}
+            });
+            let effect = outbound_apply_research_adapter_scrape_effect(
+                &root,
+                &command,
+                &adapter,
+                "adapter_fixture",
+                "fixture.example",
+                &mut record,
+            )
+            .context("test effect")?;
+            assert_eq!(record["status"], "test_input_required");
+            assert_eq!(record["test_ok"], false);
+            assert_eq!(record["last_test"]["status"], "input_required");
+            assert_eq!(effect["phase"], "input");
+            assert_eq!(effect["test_skipped"], true);
+            assert!(effect["error"]
+                .as_str()
+                .unwrap()
+                .contains("test_input.company"));
+            // Registration, run evidence and repair queue persistence all need
+            // this root. Missing input must return before any of those effects.
+            assert!(
+                !root.exists(),
+                "invalid input created scrape or repair state"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scrape_test_uses_explicit_identity_instead_of_adapter_metadata(
+    ) -> anyhow::Result<()> {
+        let adapter = serde_json::json!({"label": "Provider label", "countries": ["DE"]});
+        for (payload, company, country) in [
+            (
+                serde_json::json!({"test_input": {"company": " Fixture GmbH ", "country": " AT "}, "company": "Other", "country": "CH"}),
+                "Fixture GmbH",
+                "AT",
+            ),
+            (
+                serde_json::json!({"company": " Swiss Fixture AG ", "country": " CH "}),
+                "Swiss Fixture AG",
+                "CH",
+            ),
+        ] {
+            let command = BusinessCommand {
+                id: None,
+                module: "outbound".to_string(),
+                command_type: "outbound.research_source.test".to_string(),
+                record_id: None,
+                payload,
+                client_context: serde_json::json!({}),
+                origin: CommandOrigin::TrustedLocal,
+            };
+            let input = outbound_research_scrape_test_input(&command, &adapter, "fixture.example")?;
+            assert_eq!(input["company"], company);
+            assert_eq!(input["country"], country);
+            assert_eq!(input["source_id"], "fixture.example");
+            assert_eq!(input["adapter_test"], true);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn outbound_scrape_test_contract_rejects_invalid_budget_and_drops_claimed_authority(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path().join("must-remain-absent");
+        let adapter =
+            serde_json::json!({"adapter_kind":"scrape_target", "target_key":"fixture-example"});
+        let mut command = BusinessCommand {
+            id: Some("native-command".into()),
+            module: "outbound".into(),
+            command_type: "outbound.research_source.test".into(),
+            record_id: None,
+            payload: serde_json::json!({"test_input": {
+                "company":"Fixture GmbH", "task_id":"foreign-task",
+                "owner_user_id":"forged", "command_session":"forged",
+                "operation_timeout_ms":90001
+            }}),
+            client_context: serde_json::json!({}),
+            origin: CommandOrigin::TrustedLocal,
+        };
+        let input = outbound_research_scrape_test_input(&command, &adapter, "fixture.example")?;
+        assert_eq!(input["task_id"], "native-command");
+        assert!(input.get("owner_user_id").is_none());
+        assert!(input.get("command_session").is_none());
+        let args = outbound_scrape_test_execution_args("fixture-example", &input)?;
+        let timeout = args
+            .windows(2)
+            .find(|pair| pair[0] == "--timeout-seconds")
+            .unwrap();
+        assert_eq!(timeout[1], "121");
+        let forwarded = args
+            .windows(2)
+            .find(|pair| pair[0] == "--input-json")
+            .unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&forwarded[1])?, input);
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!(999),
+            serde_json::json!(300001),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("90000"),
+            Value::Null,
+        ] {
+            command.payload["test_input"]["operation_timeout_ms"] = invalid;
+            let mut record = adapter.clone();
+            let effect = outbound_apply_research_adapter_scrape_effect(
+                &root,
+                &command,
+                &adapter,
+                "adapter_fixture",
+                "fixture.example",
+                &mut record,
+            )
+            .context("effect")?;
+            assert_eq!(effect["phase"], "input");
+            assert_eq!(effect["test_skipped"], true);
+            assert!(
+                !root.exists(),
+                "invalid operation budget caused registration or execution"
+            );
+        }
+        Ok(())
+    }
+
     fn write_outbound_scrape_test_fixture(root: &Path, script_body: &str) -> anyhow::Result<()> {
         let target_dir = root.join("src/tools/web-stack/scrape-targets/fixture.example");
         let script_path = target_dir.join("scripts/v1.js");
@@ -7460,6 +8466,29 @@ mod tests {
             }))?,
         )?;
         fs::write(&script_path, script_body)?;
+        scrape::handle_scrape_command(
+            root,
+            &[
+                "upsert-target".into(),
+                "--input".into(),
+                target_dir
+                    .join("target.json")
+                    .to_string_lossy()
+                    .into_owned(),
+            ],
+        )?;
+        scrape::handle_scrape_command(
+            root,
+            &[
+                "register-script".into(),
+                "--target-key".into(),
+                "fixture-example".into(),
+                "--script-file".into(),
+                script_path.to_string_lossy().into_owned(),
+                "--change-reason".into(),
+                "fixture_setup".into(),
+            ],
+        )?;
         Ok(())
     }
 
@@ -7475,6 +8504,13 @@ mod tests {
         let root = temp.path();
         write_outbound_scrape_test_fixture(root, script_body)?;
 
+        run_outbound_scrape_test_registered_fixture(root, field_keys)
+    }
+
+    fn run_outbound_scrape_test_registered_fixture(
+        root: &Path,
+        field_keys: &[&str],
+    ) -> anyhow::Result<(Value, Value)> {
         let adapter_payload = serde_json::json!({
             "source_id": "fixture.example",
             "label": "Fixture Research",
@@ -7542,6 +8578,43 @@ mod tests {
             true,
             true,
         ));
+    }
+
+    #[test]
+    fn outbound_source_test_preserves_registered_script_when_bundled_script_changes(
+    ) -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        write_outbound_scrape_test_fixture(
+            root,
+            r#"process.stdout.write(JSON.stringify({records:[{field:"company_name",value:"Original GmbH",source_url:"https://fixture.example/"}]}));"#,
+        )?;
+        let before = scrape::registered_target_summary(root, "fixture-example")?
+            .context("registered fixture target")?;
+        fs::write(
+            root.join("src/tools/web-stack/scrape-targets/fixture.example/scripts/v1.js"),
+            r#"process.stdout.write(JSON.stringify({records:[{field:"company_name",value:"Replacement GmbH",source_url:"https://fixture.example/"}]}));"#,
+        )?;
+
+        let (record, effect) =
+            run_outbound_scrape_test_registered_fixture(root, &["company_name"])?;
+        let after = scrape::registered_target_summary(root, "fixture-example")?
+            .context("registered fixture target after test")?;
+        assert_eq!(
+            before.get("latest_script_sha256"),
+            after.get("latest_script_sha256")
+        );
+        assert_eq!(
+            before.get("latest_script_revision_no"),
+            after.get("latest_script_revision_no")
+        );
+        assert_eq!(before.get("revisions"), after.get("revisions"));
+        assert_eq!(
+            effect.get("registered_from").and_then(Value::as_str),
+            Some("existing_registry")
+        );
+        assert_eq!(record.get("test_ok").and_then(Value::as_bool), Some(true));
+        Ok(())
     }
 
     #[test]
@@ -12412,4 +13485,266 @@ pub(super) fn outbound_mark_source_authenticated(
         }
     }
     Ok(touched)
+}
+
+#[cfg(test)]
+mod registry_last_run_detail_tests {
+    use super::*;
+
+    // A production incident had 77 of 80 LinkedIn runs end with Bright Data
+    // "Customer is not active"; the app only saw "temporary unreachable".
+    #[test]
+    fn last_run_carries_failure_mode_and_detail() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let db = crate::paths::core_db(temp.path());
+        std::fs::create_dir_all(db.parent().expect("db parent"))?;
+        let conn = Connection::open(&db)?;
+        conn.execute_batch(
+            "CREATE TABLE scrape_run (run_id TEXT, target_id TEXT, status TEXT,
+                started_at TEXT, finished_at TEXT, result_json TEXT);",
+        )?;
+        conn.execute(
+            "INSERT INTO scrape_run VALUES ('run-ok', 't-li', 'succeeded', '2026-09-26T13:22', '2026-09-26T13:23', '{}')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO scrape_run VALUES ('run-fail', 't-li', 'temporary_unreachable', '2026-09-27T11:02', '2026-09-27T11:02',
+             '{\"failure_mode\":\"temporary_unreachable\",\"detail\":\"Bright Data antwortete mit HTTP 400: Customer is not active\"}')",
+            [],
+        )?;
+        drop(conn);
+        let runs = outbound_registry_last_runs(temp.path())?;
+        let (last, ok) = runs.get("t-li").expect("target runs");
+        assert_eq!(last["run_id"], "run-fail");
+        assert_eq!(last["failure_mode"], "temporary_unreachable");
+        assert_eq!(
+            last["detail"],
+            "Bright Data antwortete mit HTTP 400: Customer is not active"
+        );
+        assert_eq!(ok.as_ref().expect("last success")["run_id"], "run-ok");
+        assert!(ok.as_ref().expect("last success")["detail"].is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn registry_projects_the_provider_account_state() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        assert!(
+            outbound_registry_account_states(temp.path()).is_err(),
+            "an unreadable database is not an empty account state"
+        );
+        let db = crate::paths::core_db(temp.path());
+        std::fs::create_dir_all(db.parent().expect("core db parent"))?;
+        let conn = Connection::open(&db)?;
+        assert!(
+            outbound_registry_account_states(temp.path())?.is_empty(),
+            "a readable legacy database can legitimately lack the optional state table"
+        );
+        conn.execute_batch(
+            "CREATE TABLE scrape_account_state (
+                target_id TEXT PRIMARY KEY, generation INTEGER NOT NULL, reason TEXT NOT NULL,
+                causal_run_id TEXT NOT NULL, last_probe_run_id TEXT NOT NULL,
+                credential_ref TEXT, credential_version TEXT, failed_probes INTEGER NOT NULL,
+                next_probe_at_ms INTEGER NOT NULL, probe_lease_owner TEXT,
+                probe_lease_until_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL);
+             INSERT INTO scrape_account_state VALUES
+               ('t-li', 2, 'Bright Data antwortete mit HTTP 400: Customer is not active',
+                'run-causal', 'run-probe', 'credentials/BRIGHTDATA_API_KEY', 'v1', 2,
+                1790600000000, NULL, 0, 1790514000000);",
+        )?;
+        drop(conn);
+        let states = outbound_registry_account_states(temp.path())?;
+        let state = states.get("t-li").expect("account state");
+        assert_eq!(state["status"], "provider_account_inactive");
+        assert_eq!(state["causal_run_id"], "run-causal");
+        assert_eq!(state["last_probe_run_id"], "run-probe");
+        assert_eq!(state["failed_probes"], 2);
+        assert_eq!(state["next_probe_at_ms"], 1790600000000_i64);
+        assert_eq!(state["probe_in_progress"], false);
+        assert!(
+            state.get("credential_version").is_none(),
+            "no credential details"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn registry_target_list_never_uses_an_error_or_unrelated_array() -> anyhow::Result<()> {
+        let targets = serde_json::json!([{ "target_key": "linkedin-com" }]);
+        assert_eq!(outbound_registry_target_list(&targets)?.len(), 1);
+        assert_eq!(
+            outbound_registry_target_list(&serde_json::json!({"ok": true, "targets": targets}))?
+                .len(),
+            1
+        );
+        assert!(outbound_registry_target_list(&serde_json::json!([]))?.is_empty());
+        assert!(
+            outbound_registry_target_list(&serde_json::json!({"ok": true, "targets": []}))?
+                .is_empty()
+        );
+        for invalid in [
+            serde_json::json!({"ok": false, "targets": []}),
+            serde_json::json!({"ok": true, "errors": []}),
+            serde_json::json!({"ok": true, "errors": [], "targets": "bad"}),
+            serde_json::json!({"targets": []}),
+            serde_json::json!({"ok": "true", "targets": []}),
+            serde_json::json!([{}]),
+            serde_json::json!([{ "target_key": " " }]),
+        ] {
+            assert!(
+                outbound_registry_target_list(&invalid).is_err(),
+                "{invalid}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn registry_read_rejects_unreadable_run_or_account_projection() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        scrape::dispatch_capturing(root, &["list-targets".to_string()])?;
+        let command = BusinessCommand {
+            id: Some("cmd-registry-read-integrity".to_string()),
+            module: "outbound-lead-generation".to_string(),
+            command_type: "outbound.research_source.registry_read".to_string(),
+            record_id: None,
+            payload: serde_json::json!({}),
+            client_context: serde_json::json!({}),
+            origin: super::super::store::CommandOrigin::TrustedLocal,
+        };
+        assert_eq!(
+            outbound_handle_research_source_registry_read(root, &command)?["ok"],
+            true
+        );
+        let conn = Connection::open(crate::paths::core_db(root))?;
+        conn.execute_batch(
+            "INSERT INTO scrape_target
+               (target_id, target_key, display_name, start_url, workspace_dir, created_at, updated_at)
+             VALUES
+               ('t-invalid', 'fixture-registry-integrity', 'Registry Integrity Fixture',
+                'https://fixture.invalid/', 'fixture', '2026-10-02T00:00:00Z', '2026-10-02T00:00:00Z');
+             INSERT INTO scrape_account_state VALUES
+               ('t-invalid', 1, 'Customer is not active', 'run-causal', 'run-causal',
+                NULL, NULL, 'not-a-number', 0, NULL, 0, 0);",
+        )?;
+        assert!(outbound_registry_account_states(root).is_err());
+        let account_error = outbound_handle_research_source_registry_read(root, &command)
+            .expect_err("a malformed account row must not become a successful empty registry");
+        assert!(
+            format!("{account_error:#}").contains("provider account states could not be read"),
+            "{account_error:#}"
+        );
+        conn.execute_batch(
+            "DELETE FROM scrape_account_state;
+             DROP TABLE scrape_run;
+             CREATE TABLE scrape_run (run_id TEXT PRIMARY KEY, target_id TEXT, started_at TEXT);",
+        )?;
+        assert!(outbound_registry_last_runs(root).is_err());
+        let run_error = outbound_handle_research_source_registry_read(root, &command)
+            .expect_err("an unreadable run projection must not become a successful empty registry");
+        assert!(
+            format!("{run_error:#}").contains("run records could not be read"),
+            "{run_error:#}"
+        );
+        Ok(())
+    }
+
+    // The source test's probe grant comes from the real authorization path:
+    // a signed capability session and the module policy, never from the
+    // claimed actor or the command type alone.
+    #[test]
+    fn source_test_probe_grant_follows_the_signed_session_and_policy() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let now = chrono::Utc::now().timestamp_millis();
+        let (admin_capability, _) =
+            super::super::store::issue_business_os_capability_token_for_managed_user(
+                root, "operator", "Operator", "admin", now,
+            )?;
+        // A signed team member (role "user") with no module assignment and no
+        // explicit grant: the session is valid, module policy denies data.write.
+        let (member_capability, _) =
+            super::super::store::issue_business_os_capability_token_for_managed_user(
+                root, "member", "Member", "user", now,
+            )?;
+        let command = |command_type: &str, client_context: Value| BusinessCommand {
+            id: Some("cmd-source-test-grant".to_string()),
+            module: "outbound-lead-generation".to_string(),
+            command_type: command_type.to_string(),
+            record_id: Some("adapter-linkedin".to_string()),
+            payload: serde_json::json!({}),
+            client_context,
+            origin: super::super::store::CommandOrigin::ReplicatedPeer,
+        };
+        let source_test = |capability: &str| {
+            command(
+                "outbound.research_source.test",
+                serde_json::json!({ "capability_token": capability }),
+            )
+        };
+        // Both premises are established through the real session and policy
+        // functions, not assumed from test-root defaults.
+        let policy = |cmd: &BusinessCommand| -> anyhow::Result<(bool, bool)> {
+            let session = super::super::store::rxdb_authenticated_session(root, cmd)?;
+            let decision = super::super::store_policy::module_policy_decision(
+                root,
+                &session,
+                super::super::policy::BusinessOsPermission::DataWrite,
+                &cmd.module,
+            )?;
+            Ok((session.authenticated, decision.allowed))
+        };
+        let admin_command = source_test(&admin_capability);
+        assert_eq!(
+            policy(&admin_command)?,
+            (true, true),
+            "admin: valid signed session, module policy allows data.write"
+        );
+        assert!(
+            outbound_source_test_probe_grant(root, &admin_command).is_some(),
+            "allowed policy on a signed session yields a grant"
+        );
+        let member_command = source_test(&member_capability);
+        assert_eq!(
+            policy(&member_command)?,
+            (true, false),
+            "member: valid signed session, module policy denies data.write"
+        );
+        assert!(
+            outbound_source_test_probe_grant(root, &member_command).is_none(),
+            "a denied policy yields no grant even with a valid session"
+        );
+        assert!(
+            outbound_source_test_probe_grant(
+                root,
+                &command("outbound.research_source.test", serde_json::json!({})),
+            )
+            .is_none(),
+            "no session, no grant"
+        );
+        assert!(
+            outbound_source_test_probe_grant(
+                root,
+                &command(
+                    "outbound.research_source.test",
+                    serde_json::json!({ "actor": { "id": "operator", "role": "admin" } }),
+                ),
+            )
+            .is_none(),
+            "a claimed actor without a signed session is not authority"
+        );
+        assert!(
+            outbound_source_test_probe_grant(
+                root,
+                &command(
+                    "business_os.chat.task",
+                    serde_json::json!({ "capability_token": admin_capability }),
+                ),
+            )
+            .is_none(),
+            "only the source test grants a probe"
+        );
+        Ok(())
+    }
 }

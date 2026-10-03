@@ -13,6 +13,7 @@ const fixture = JSON.parse(readFileSync(fixturePath, 'utf8'));
 
 const queryRpc = fixture.queryRpc || {};
 const fileRpc = fixture.fileRpc || {};
+const rowsRpc = fixture.rowsRpc || {};
 const presenceRpc = fixture.presenceRpc || {};
 const queryFetchCapability = fixture.optionalCapabilities?.queryFetch || 'ctox-rxdb-query-fetch-v1';
 const presenceCapability = fixture.optionalCapabilities?.presence || 'ctox-presence-v1';
@@ -22,6 +23,8 @@ const checkpointGenerationCapability = fixture.optionalCapabilities?.checkpointG
   || 'ctox-checkpoint-generation-v2';
 const appRuntimeCapability = fixture.optionalCapabilities?.appRuntime
   || 'ctox-app-runtime-v1';
+const rowsFetchCapability = fixture.optionalCapabilities?.rowsFetch
+  || 'ctox-rxdb-rows-fetch-v1';
 
 const js = `// Generated from src/core/rxdb/tests/fixtures/webrtc-rxdb-protocol.json.
 // Run: node src/core/rxdb/tools/build_webrtc_rxdb_protocol_contract.mjs
@@ -35,6 +38,8 @@ export const CTOX_SCHEMA_HASH_SOURCES = Object.freeze(${json(fixture.schemaHashS
 export const CTOX_QUERY_FETCH_CAPABILITY = ${json(queryFetchCapability)};
 export const CTOX_QUERY_RPC = Object.freeze(${json(queryRpc)});
 export const CTOX_FILE_RPC = Object.freeze(${json(fileRpc)});
+export const CTOX_ROWS_FETCH_CAPABILITY = ${json(rowsFetchCapability)};
+export const CTOX_ROWS_RPC = Object.freeze(${json(rowsRpc)});
 export const CTOX_PRESENCE_CAPABILITY = ${json(presenceCapability)};
 export const CTOX_PRESENCE_RPC = Object.freeze(${json(presenceRpc)});
 export const CTOX_COMMAND_LIFECYCLE_CAPABILITY = ${json(commandLifecycleCapability)};
@@ -100,6 +105,20 @@ pub(super) const CTOX_FILE_RPC_CHUNK: &str = ${rustString(fileRpc.chunk || 'rxdb
 pub(super) const CTOX_FILE_RPC_ERROR: &str = ${rustString(fileRpc.error || 'rxdb.file.error')};
 pub(super) const CTOX_FILE_RPC_CANCEL: &str = ${rustString(fileRpc.cancel || 'rxdb.file.cancel')};
 pub(super) const CTOX_FILE_MAX_BYTES_PER_CHUNK: u32 = ${fileRpc.maxBytesPerChunk ?? 262144};
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_FETCH_CAPABILITY: &str = ${rustString(rowsFetchCapability)};
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_RPC_FETCH: &str = ${rustString(rowsRpc.fetch || 'rxdb.rows.fetch')};
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_RPC_CHUNK: &str = ${rustString(rowsRpc.chunk || 'rxdb.rows.chunk')};
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_RPC_ERROR: &str = ${rustString(rowsRpc.error || 'rxdb.rows.error')};
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_RPC_CANCEL: &str = ${rustString(rowsRpc.cancel || 'rxdb.rows.cancel')};
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_MAX_BYTES_PER_CHUNK: u32 = ${rowsRpc.maxBytesPerChunk ?? 262144};
+#[allow(dead_code)]
+pub(super) const CTOX_ROWS_MAX_ROWS_PER_WINDOW: u32 = ${rowsRpc.maxRowsPerWindow ?? 1000};
 pub(super) const CTOX_PRESENCE_CAPABILITY: &str = ${rustString(presenceCapability)};
 pub(super) const CTOX_PRESENCE_RPC_UPDATE: &str = ${rustString(presenceRpc.update || 'rxdb.presence.update')};
 pub(super) const CTOX_PRESENCE_STREAM_ID: &str = ${rustString(presenceRpc.streamId || 'presence$')};

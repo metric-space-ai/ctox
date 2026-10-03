@@ -4360,6 +4360,9 @@ function ensureCtoxSmokeBinary() {
     threadsScaleSeed = await seedBusinessOsThreadsScaleNativeSetup();
     console.log(`business_os_threads_rightclick_scale_seed_ms=${Date.now() - scaleSeedStartedAt}`);
   }
+  const uiCatalogFixture = smokeMode === 'business-os-ui-regression'
+    ? require('./business_os_ui_catalog_fixture.js').prepareUiCatalogFixture(root, runtimeRoot)
+    : null;
   let ctox = startCtoxServer();
   const browserDiagnostics = {
     warnings: 0,
@@ -7727,7 +7730,7 @@ function ensureCtoxSmokeBinary() {
       })
       : await browserEvaluationTarget.evaluate(async (stateOrArgs, maybeArgs) => {
       const sellifyScaleAppState = maybeArgs ? stateOrArgs : null;
-      const { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes } = maybeArgs || stateOrArgs;
+      const { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes, uiCatalogFixture } = maybeArgs || stateOrArgs;
       if (!globalThis.process) globalThis.process = {};
       if (typeof globalThis.process.nextTick !== 'function') {
         globalThis.process.nextTick = (callback, ...args) => Promise.resolve().then(() => callback(...args));
@@ -7874,6 +7877,7 @@ function ensureCtoxSmokeBinary() {
       const backgroundIndexerSmokeMode = smokeMode === 'workspace-agent-artifacts-background-rust-to-browser';
       const deferInitialFileCollections = smokeMode === 'file-chunk-tombstone-error-browser-status';
       const needsCommandCollections = commandSmokeMode
+        || smokeMode === 'business-os-ui-regression'
         || materializeSmokeMode
         || ticketSmokeMode
         || outboundActiveUiSmokeMode
@@ -8284,7 +8288,9 @@ function ensureCtoxSmokeBinary() {
               const contiguous = demandChunks.length > 0
                 && demandChunks.every((chunk, index) => Number(chunk.sequence) === index);
               if (contiguous) {
-                const payload = atob(demandChunks.map((chunk) => chunk.bytesBase64 ?? chunk.bytes_base64 ?? '').join(''));
+                // Demand frames encode their own byte slices. Padding in an
+                // intermediate frame is valid; decode before joining bytes.
+                const payload = demandChunks.map((chunk) => atob(chunk.bytesBase64 ?? chunk.bytes_base64 ?? '')).join('');
                 lastSeen = {
                   file,
                   chunks: demandChunks,
@@ -8560,6 +8566,34 @@ function ensureCtoxSmokeBinary() {
           'support',
           'threads',
         ];
+        if (!uiCatalogFixture?.installs?.length || !appState?.commandBus?.dispatch) {
+          throw new Error('Business OS UI regression catalog installation prerequisite is missing');
+        }
+        const catalogInstallReceipts = [];
+        const installDeadline = Date.now() + 120000;
+        for (const item of uiCatalogFixture.installs) {
+          if (!expectedSecondaryModules.includes(item.moduleId)) {
+            throw new Error(`Unexpected UI catalog prerequisite: ${item.moduleId}`);
+          }
+          const remaining = installDeadline - Date.now();
+          if (remaining <= 0) throw new Error('UI catalog installation prerequisite timed out');
+          const receipt = await appState.commandBus.dispatch({
+            id: `cmd_ui_catalog_${crypto.randomUUID()}`,
+            module: 'app-store',
+            type: 'ctox.module.install_template',
+            record_id: item.moduleId,
+            payload: { template_id: item.templateId, module_id: item.moduleId, title: item.title },
+            client_context: smokeClientContext({ source: 'business-os-ui-catalog-fixture' }),
+          }, { until: 'terminal', timeoutMs: Math.min(30000, remaining), sync_queue_tasks: false });
+          if (!receipt?.ok || receipt.status !== 'completed' || receipt.result?.module_id !== item.moduleId) {
+            throw new Error(`UI catalog installation failed for ${item.moduleId}: ${JSON.stringify(receipt)}`);
+          }
+          catalogInstallReceipts.push({ moduleId: item.moduleId, commandId: receipt.command_id, status: receipt.status });
+        }
+        // Use the same shell refresh event as App Store after a completed install.
+        window.dispatchEvent(new CustomEvent('ctox-business-os-modules-changed', {
+          detail: { source: 'app-store', command_type: 'ctox.module.install_template' },
+        }));
         const moduleCatalog = await waitFor(() => {
           const moduleIds = Array.isArray(appState?.modules)
             ? appState.modules.map((mod) => mod?.id).filter(Boolean)
@@ -9480,6 +9514,7 @@ function ensureCtoxSmokeBinary() {
           mode: smokeMode,
           moduleCount: moduleIds.length,
           moduleIds,
+          catalogInstallReceipts,
           startMenuItemCount: startMenu.itemCount,
           openedModules,
           secondaryOpenedModules,
@@ -12647,6 +12682,8 @@ function ensureCtoxSmokeBinary() {
         }, 8000, `app audience ${label} tabs`);
 
         let result = null;
+        let tamperedScopedTaskbarPinsKey = '';
+        let storedScopedTaskbarPins = null;
         try {
           const helperPrivateHiddenForTeam = !canSeeModuleForAppVersion(privateModule, {
             session: outsideSession,
@@ -13017,6 +13054,44 @@ function ensureCtoxSmokeBinary() {
           document.body.dataset.authState = 'authenticated';
           return catalog;
         };
+        const ensureAppStoreCardsGrid = async (label) => {
+          await waitFor(() => {
+            const root = document.querySelector('[data-app-store-root]');
+            const center = root?.querySelector('.store-center');
+            const toggle = root?.querySelector('[data-store-view-toggle]');
+            return {
+              ok: Boolean(root && center && toggle
+                && visible('[data-app-store-root]')
+                && visible('[data-store-view-toggle]')
+                && center.dataset.pgWired === 'true'),
+              activeModule: state.activeModule?.id || document.body?.dataset?.activeModule || '',
+              paneGrammarWired: center?.dataset?.pgWired || '',
+              toggleMode: toggle?.dataset?.viewMode || '',
+              text: root?.innerText?.slice(0, 500) || '',
+            };
+          }, 30000, `${label} opened`);
+          // Card actions (release/versions/...) render only on the
+          // shard-card grid of the CARDS view: the list view renders compact
+          // rows without action buttons (Karten/Listen-Differenzierung), so
+          // forcing list view makes every data-card-action query structurally
+          // empty. The cards view hides the DOM grid only while the WebGL
+          // shelf is live; the smoke environment falls back to DOM shard
+          // cards, which keep the grid visible and actionable.
+          const toggle = document.querySelector('[data-app-store-root] [data-store-view-toggle]');
+          if (toggle?.dataset?.viewMode === 'list') {
+            click('[data-app-store-root] [data-store-view-toggle]', `${label} cards toggle`);
+          }
+          await waitFor(() => {
+            const grid = document.querySelector('[data-app-store-root] [data-apps-grid]');
+            return {
+              ok: Boolean(toggle?.dataset?.viewMode === 'cards'
+                && visible('[data-app-store-root] [data-apps-grid]')
+                && grid && !grid.hidden),
+              toggleMode: toggle?.dataset?.viewMode || '',
+              gridHidden: grid?.hidden ?? null,
+            };
+          }, 10000, `${label} cards grid`);
+        };
 
         await syncBusinessCollections();
         const initialCatalog = await applyReleaseSession();
@@ -13041,26 +13116,25 @@ function ensureCtoxSmokeBinary() {
             session: releaseSession,
             governance: initialCatalog.governance,
           });
+        // Fail fast with the actual projection gap instead of an opaque card
+        // timeout downstream: the release button needs the founder assignment
+        // (governance.founders) and the private lifecycle in the catalog doc.
+        if (!privateBeforeRelease) {
+          throw new Error(`release fixture must be private and founder-visible before release: ${JSON.stringify({
+            lifecycle: initialModule.lifecycle || null,
+            version: initialModule.version || '',
+            governanceFounders: Object.keys(initialCatalog.governance?.founders || {}),
+            founderAssignment: initialCatalog.governance?.founders?.[moduleId] || null,
+          })}`);
+        }
 
         await state.openModule('app-store', { force: true, asModule: true });
-        await waitFor(() => ({
-          ok: visible('[data-app-store-root]')
-            && visible('[data-pg-view="list"]')
-            && document.querySelector('[data-pg-view="list"]')?.closest('.ctox-pane')?.dataset?.pgWired === 'true',
-          activeModule: state.activeModule?.id || document.body?.dataset?.activeModule || '',
-          paneGrammarWired: document.querySelector('[data-pg-view="list"]')?.closest('.ctox-pane')?.dataset?.pgWired || '',
-          text: document.querySelector('[data-app-store-root]')?.innerText?.slice(0, 500) || '',
-        }), 30000, 'App Store opened for release smoke');
-        click('[data-pg-view="list"]', 'App Store list view');
-        await waitFor(() => ({
-          ok: visible('[data-apps-grid]'),
-          listViewPressed: document.querySelector('[data-pg-view="list"]')?.getAttribute('aria-pressed') || '',
-          gridHidden: document.querySelector('[data-apps-grid]')?.hidden ?? null,
-        }), 10000, 'App Store list view opened for release smoke');
+        await ensureAppStoreCardsGrid('App Store for release smoke');
         click('[data-scope="installed"]', 'installed scope');
         await waitFor(() => {
           const card = document.querySelector(`[data-apps-grid] [data-app-id="${css(moduleId)}"]`);
           const releaseButton = card?.querySelector('[data-card-action="release"]');
+          const deniedButton = card?.querySelector('button.denied[data-disabled-reason]');
           const lifecycleBadge = card?.querySelector('.app-card-version-row .ctox-badge[data-state]');
           return {
             ok: Boolean(card
@@ -13070,6 +13144,8 @@ function ensureCtoxSmokeBinary() {
             hasCard: Boolean(card),
             hasReleaseButton: Boolean(releaseButton),
             releaseDisabled: releaseButton?.disabled ?? null,
+            deniedReason: deniedButton?.dataset?.disabledReason || '',
+            viewMode: document.querySelector('[data-app-store-root] [data-store-view-toggle]')?.dataset?.viewMode || '',
             lifecycleText: lifecycleBadge?.textContent?.trim() || '',
             cardText: card?.innerText?.slice(0, 500) || '',
           };
@@ -13168,18 +13244,7 @@ function ensureCtoxSmokeBinary() {
         localStorage.removeItem(storageKey);
 
         await state.openModule('app-store', { force: true, asModule: true });
-        if (!visible('[data-apps-grid]')) {
-          await waitFor(() => ({
-            ok: document.querySelector('[data-pg-view="list"]')?.closest('.ctox-pane')?.dataset?.pgWired === 'true',
-            paneGrammarWired: document.querySelector('[data-pg-view="list"]')?.closest('.ctox-pane')?.dataset?.pgWired || '',
-          }), 10000, 'App Store pane grammar before versions');
-          click('[data-pg-view="list"]', 'App Store list view before versions');
-          await waitFor(() => ({
-            ok: visible('[data-apps-grid]'),
-            listViewPressed: document.querySelector('[data-pg-view="list"]')?.getAttribute('aria-pressed') || '',
-            gridHidden: document.querySelector('[data-apps-grid]')?.hidden ?? null,
-          }), 10000, 'App Store list view before versions');
-        }
+        await ensureAppStoreCardsGrid('App Store before versions');
         const versionStateReady = await waitFor(async () => {
           await syncBusinessCollections(5000);
           const catalog = await catalogSnapshot();
@@ -16760,7 +16825,7 @@ function ensureCtoxSmokeBinary() {
           desktop_file_chunks: describeReplicationPool(appChunkReplicationState),
         },
       };
-    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes });
+    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes, uiCatalogFixture });
     outerPhaseTimings.pageEvaluateMs = Date.now() - pageEvaluateStartedAt;
 
     if (result.mode === 'business-os-ui-regression') {

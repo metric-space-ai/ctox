@@ -453,8 +453,11 @@ impl RxDatabase {
                 .map(|(_, collection)| collection)
                 .collect()
         };
-        for collection in collections {
+        // Release every query cycle even if one storage close returns an error.
+        for collection in &collections {
             collection.close();
+        }
+        for collection in collections {
             collection.storage_instance.close().await?;
         }
         if let Some(internal_store) = &self.internal_store {
@@ -1265,6 +1268,76 @@ mod tests {
             "closed RxDatabase stayed alive: RxCollection holds a strong Arc back to its \
              database, so database -> collections -> database never drops"
         );
+    }
+
+    #[tokio::test]
+    async fn closing_database_releases_cached_query_results_and_blocks_late_recaching() {
+        for round in 0..3 {
+            let database = create_rx_database(RxDatabaseCreator {
+                name: format!("query-cycle-db-{round}"),
+                storage: get_rx_storage_memory(()),
+                multi_instance: false,
+                password: None,
+                hash_function: Arc::new(TestHashFunction),
+                options: HashMap::new(),
+                ignore_duplicate: false,
+                close_duplicates: false,
+                event_reduce: true,
+                allow_slow_count: false,
+            })
+            .await
+            .unwrap();
+            let collections = database
+                .add_collections(HashMap::from([(
+                    "humans".to_string(),
+                    RxCollectionCreator {
+                        schema: test_schema(),
+                        conflict_handler: None,
+                        options: HashMap::new(),
+                    },
+                )]))
+                .await
+                .unwrap();
+            let collection = Arc::clone(&collections["humans"]);
+            collection
+                .insert(json!({"id": "alice", "age": 42}))
+                .await
+                .unwrap();
+            let query = collection.find(None).unwrap();
+            let result = query.exec(false).await.unwrap();
+            assert_eq!(result[0]["id"], "alice");
+            assert_eq!(collection.query_cache_size(), 1);
+            let database_observer = Arc::downgrade(&database);
+            let collection_observer = Arc::downgrade(&collection);
+            let query_observer = Arc::downgrade(&query);
+
+            database.close().await.unwrap();
+            assert!(query.is_uncached());
+            assert_eq!(collection.query_cache_size(), 0);
+            let late_query = collection.get_by_query_cache(Arc::clone(&query));
+            assert!(Arc::ptr_eq(&late_query, &query));
+            assert_eq!(collection.query_cache_size(), 0);
+            assert!(collection.find(None).is_err());
+            // Caller-owned handles remain valid until the caller drops them.
+            assert!(database_observer.upgrade().is_some());
+            drop(late_query);
+            drop(query);
+            drop(result);
+            drop(collection);
+            drop(collections);
+            drop(database);
+            // The scheduled replacement task may still own a temporary Arc.
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                while database_observer.upgrade().is_some()
+                    || collection_observer.upgrade().is_some()
+                    || query_observer.upgrade().is_some()
+                {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("closed database, collection and cached query must be reclaimed");
+        }
     }
 
     #[tokio::test]

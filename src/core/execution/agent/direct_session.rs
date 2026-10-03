@@ -38,6 +38,7 @@ use ctox_core::ThreadManager;
 use ctox_feedback::CodexFeedback;
 use ctox_protocol::config_types::SandboxMode;
 use ctox_protocol::openai_models::ReasoningEffort;
+use ctox_protocol::plan_tool::{PlanItemArg, StepStatus, UpdatePlanArgs};
 use ctox_protocol::protocol::{
     AskForApproval, CodexErrorInfo, EventMsg, SandboxPolicy, SessionSource,
 };
@@ -166,7 +167,10 @@ fn business_os_mcp_thread_config(
                 },
                 "enabled": true,
                 "required": true,
-                "startup_timeout_sec": 10,
+                // 10 s was too short under business-os.sqlite3 write contention:
+                // seven research runs failed on 25.09.2026 with "timed out
+                // handshaking with MCP server after 10s" while a browser synced.
+                "startup_timeout_sec": 45,
                 "tool_timeout_sec": 120,
                 "enabled_tools": BUSINESS_OS_MCP_SESSION_TOOLS
             }
@@ -1789,6 +1793,7 @@ impl PersistentSession {
         let mut tool_call_count = 0_u64;
         let mut activity_turn_count = 0_u64;
         let mut saw_reasoning_section_break = false;
+        let mut seen_plan_updates = None;
         let deadline = timeout.map(|d| tokio::time::Instant::now() + d);
 
         loop {
@@ -1859,6 +1864,22 @@ impl PersistentSession {
             match event {
                 InProcessServerEvent::ServerRequest(_) => {}
                 InProcessServerEvent::ServerNotification(notification) => {
+                    // V2 notifications carry their own thread/turn identity and
+                    // must not depend on seeing a legacy TurnStarted first.
+                    if let Some(plan) = current_turn_plan_event(&notification, &thread_id, &turn_id)
+                    {
+                        if let Some(event) = direct_session_progress_event(
+                            &plan,
+                            &turn_id,
+                            turn_started_at.elapsed(),
+                            &mut tool_call_count,
+                            &mut activity_turn_count,
+                            &mut saw_reasoning_section_break,
+                            &mut seen_plan_updates,
+                        ) {
+                            progress(&event);
+                        }
+                    }
                     if let ServerNotification::ContextCompacted(compacted) = notification {
                         if compacted.turn_id == turn_id {
                             eprintln!(
@@ -1911,6 +1932,7 @@ impl PersistentSession {
                                 &mut tool_call_count,
                                 &mut activity_turn_count,
                                 &mut saw_reasoning_section_break,
+                                &mut seen_plan_updates,
                             ) {
                                 progress(&event);
                             }
@@ -2197,6 +2219,176 @@ impl PersistentSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plan_v2_notification(
+        thread_id: &str,
+        turn_id: &str,
+        status: ctox_app_server_protocol::TurnPlanStepStatus,
+    ) -> ServerNotification {
+        ServerNotification::TurnPlanUpdated(ctox_app_server_protocol::TurnPlanUpdatedNotification {
+            thread_id: thread_id.into(),
+            turn_id: turn_id.into(),
+            explanation: Some("Verify the recorded result".into()),
+            plan: vec![ctox_app_server_protocol::TurnPlanStep {
+                step: "Prüfen".into(),
+                status,
+            }],
+        })
+    }
+
+    #[test]
+    fn direct_plan_v2_persists_real_steps_before_review_without_legacy_start() -> Result<()> {
+        use crate::context::lcm;
+        let notification = plan_v2_notification(
+            "thread-current",
+            "turn-current",
+            ctox_app_server_protocol::TurnPlanStepStatus::InProgress,
+        );
+        let msg = current_turn_plan_event(&notification, "thread-current", "turn-current")
+            .expect("a scoped typed plan must not require a legacy start event");
+        let mut tool_count = 0;
+        let mut activity_count = 0;
+        let mut seen = None;
+        let event = direct_session_progress_event(
+            &msg,
+            "turn-current",
+            Duration::ZERO,
+            &mut tool_count,
+            &mut activity_count,
+            &mut false,
+            &mut seen,
+        )
+        .expect("typed plan reaches the native progress contract");
+        assert_eq!(event["event_kind"], "worker.plan_updated");
+        let plan = &event["metadata"]["plan"];
+        assert_eq!(plan["plan"][0]["status"], "in_progress");
+        let steps = plan["plan"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| lcm::TaskExecutionPlanStepInput {
+                label: step["step"].as_str().unwrap().to_owned(),
+                status: step["status"].as_str().unwrap().to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let temp = tempfile::tempdir()?;
+        let db = temp.path().join("ctox.sqlite3");
+        lcm::run_record_task_execution_plan(
+            &db,
+            lcm::TaskExecutionPlanUpdate {
+                work_key: "worker-attempt:typed-plan",
+                task_id: "task-typed-plan",
+                command_id: "command-typed-plan",
+                attempt_id: "attempt-typed-plan",
+                explanation: plan["explanation"].as_str(),
+                steps: &steps,
+            },
+        )?;
+        let review = lcm::run_prepare_task_execution_review(&db, "worker-attempt:typed-plan")?;
+        assert_eq!(review["total_steps"], 1);
+        assert_eq!(review["completed_steps"], 0);
+        assert_eq!(review["steps"][0]["label"], "Prüfen");
+        assert!(
+            lcm::run_set_task_execution_review_status(
+                &db,
+                "worker-attempt:typed-plan",
+                "completed"
+            )
+            .is_err(),
+            "a received plan is not completed-work evidence"
+        );
+        assert_eq!((tool_count, activity_count), (1, 1));
+        Ok(())
+    }
+
+    #[test]
+    fn direct_plan_v2_rejects_foreign_thread_and_stale_turn() {
+        for (thread, turn) in [("foreign", "current"), ("current", "stale")] {
+            let notification = plan_v2_notification(
+                thread,
+                turn,
+                ctox_app_server_protocol::TurnPlanStepStatus::Completed,
+            );
+            assert!(current_turn_plan_event(&notification, "current", "current").is_none());
+        }
+    }
+
+    #[test]
+    fn direct_plan_v2_and_legacy_deduplicate_in_either_order_but_keep_changes() {
+        for typed_first in [true, false] {
+            let notification = plan_v2_notification(
+                "thread",
+                "turn",
+                ctox_app_server_protocol::TurnPlanStepStatus::Pending,
+            );
+            let typed = current_turn_plan_event(&notification, "thread", "turn").unwrap();
+            let legacy = EventMsg::PlanUpdate(UpdatePlanArgs {
+                explanation: Some("Verify the recorded result".into()),
+                plan: vec![PlanItemArg {
+                    step: "Prüfen".into(),
+                    status: StepStatus::Pending,
+                }],
+            });
+            let ordered = if typed_first {
+                [&typed, &legacy]
+            } else {
+                [&legacy, &typed]
+            };
+            let mut seen = None;
+            let mut tools = 0;
+            let mut activities = 0;
+            for (index, msg) in ordered.into_iter().enumerate() {
+                assert_eq!(
+                    direct_session_progress_event(
+                        msg,
+                        "turn",
+                        Duration::ZERO,
+                        &mut tools,
+                        &mut activities,
+                        &mut false,
+                        &mut seen,
+                    )
+                    .is_some(),
+                    index == 0
+                );
+            }
+            let changed = current_turn_plan_event(
+                &plan_v2_notification(
+                    "thread",
+                    "turn",
+                    ctox_app_server_protocol::TurnPlanStepStatus::Completed,
+                ),
+                "thread",
+                "turn",
+            )
+            .unwrap();
+            let event = direct_session_progress_event(
+                &changed,
+                "turn",
+                Duration::ZERO,
+                &mut tools,
+                &mut activities,
+                &mut false,
+                &mut seen,
+            )
+            .expect("a real status change must still be persisted");
+            assert_eq!(event["metadata"]["plan"]["plan"][0]["status"], "completed");
+            assert_eq!((tools, activities), (2, 2));
+            // A genuine return to an earlier plan after a different update
+            // must not be confused with the duplicate transport notification.
+            assert!(direct_session_progress_event(
+                &legacy,
+                "turn",
+                Duration::ZERO,
+                &mut tools,
+                &mut activities,
+                &mut false,
+                &mut seen,
+            )
+            .is_some());
+            assert_eq!((tools, activities), (3, 3));
+        }
+    }
 
     #[test]
     fn direct_sessions_receive_the_managed_linux_sandbox_executable() {
@@ -2910,6 +3102,38 @@ fn tokens_per_second(tokens: i64, elapsed_ms: i64) -> Option<f64> {
     Some(tokens as f64 / (elapsed_ms as f64 / 1000.0))
 }
 
+fn current_turn_plan_event(
+    notification: &ServerNotification,
+    thread_id: &str,
+    turn_id: &str,
+) -> Option<EventMsg> {
+    let ServerNotification::TurnPlanUpdated(plan) = notification else {
+        return None;
+    };
+    if plan.thread_id != thread_id || plan.turn_id != turn_id {
+        return None;
+    }
+    Some(EventMsg::PlanUpdate(UpdatePlanArgs {
+        explanation: plan.explanation.clone(),
+        plan: plan
+            .plan
+            .iter()
+            .map(|step| PlanItemArg {
+                step: step.step.clone(),
+                status: match step.status {
+                    ctox_app_server_protocol::TurnPlanStepStatus::Pending => StepStatus::Pending,
+                    ctox_app_server_protocol::TurnPlanStepStatus::InProgress => {
+                        StepStatus::InProgress
+                    }
+                    ctox_app_server_protocol::TurnPlanStepStatus::Completed => {
+                        StepStatus::Completed
+                    }
+                },
+            })
+            .collect(),
+    }))
+}
+
 fn direct_session_progress_event(
     msg: &EventMsg,
     turn_id: &str,
@@ -2917,6 +3141,7 @@ fn direct_session_progress_event(
     tool_call_count: &mut u64,
     activity_turn_count: &mut u64,
     saw_reasoning_section_break: &mut bool,
+    seen_plan_updates: &mut Option<String>,
 ) -> Option<JsonValue> {
     let elapsed_seconds = elapsed.as_secs();
     let cumulative_metadata = |extra: JsonValue| {
@@ -2971,8 +3196,6 @@ fn direct_session_progress_event(
 
     match msg {
         EventMsg::PlanUpdate(plan) => {
-            *tool_call_count = tool_call_count.saturating_add(1);
-            *activity_turn_count = activity_turn_count.saturating_add(1);
             // PlanUpdate does not expose the originating tool call id. Bind
             // the activity to the stable turn plus canonical plan payload so
             // a replayed notification is deduplicated by durable storage.
@@ -2981,6 +3204,14 @@ fn direct_session_progress_event(
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>();
+            // The server can emit both typed and legacy forms of one update.
+            // Use the same canonical payload as the durable activity identity.
+            if seen_plan_updates.as_deref() == Some(plan_event_id.as_str()) {
+                return None;
+            }
+            *seen_plan_updates = Some(plan_event_id.clone());
+            *tool_call_count = tool_call_count.saturating_add(1);
+            *activity_turn_count = activity_turn_count.saturating_add(1);
             Some(serde_json::json!({
                 "event_kind": "worker.plan_updated",
                 "title": "Execution plan updated",

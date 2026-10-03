@@ -66,13 +66,42 @@
 .mail-nav-body {
   display: block;
   overflow-y: auto;
-  padding: 6px;
+  padding: 10px 8px;
 }
+
+.mail-compose-primary {
+  display: block;
+  width: calc(100% - 12px);
+  min-height: 38px;
+  margin: 2px 6px 14px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--control-radius);
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  cursor: pointer;
+  transition: filter 150ms cubic-bezier(.25, 1, .5, 1);
+}
+.mail-compose-primary:hover { filter: brightness(1.1); }
+.mail-compose-primary:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
 
 .mail-scope-list {
   display: grid;
   align-content: start;
   gap: 2px;
+}
+
+.mail-scope-section-title {
+  padding: 12px 12px 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
 }
 
 .mail-scope-card {
@@ -94,17 +123,25 @@
   transition: background 150ms cubic-bezier(.25, 1, .5, 1), border-color 150ms cubic-bezier(.25, 1, .5, 1);
 }
 
-.mail-scope-card:hover { background: var(--surface-2); }
+.mail-scope-card:hover:not(.is-active) { background: color-mix(in srgb, var(--text) 5%, var(--surface)); }
 .mail-scope-card:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: -1px; }
 .mail-scope-card.is-active {
   border-color: color-mix(in srgb, var(--accent) 32%, var(--line));
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
+.mail-scope-card.is-active::before {
+  position: absolute;
+  inset: 7px auto 7px 0;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--accent);
+  content: '';
+}
 
 .mail-scope-title {
   overflow: hidden;
   color: var(--text-strong, var(--text));
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 650;
   line-height: 1.25;
   text-overflow: ellipsis;
@@ -115,7 +152,7 @@
   grid-column: 1;
   overflow: hidden;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -126,12 +163,15 @@
   grid-row: 1 / span 2;
   align-self: center;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
 /* Shard: title over a meta line, generous padding. */
-.mail-scope-card--shard { gap: 3px 8px; min-height: 50px; padding: 9px 10px; }
+.mail-scope-card--shard { gap: 4px 8px; min-height: 54px; padding: 10px 12px; }
+.mail-scope-card--shard .mail-scope-title { font-size: 13px; letter-spacing: -.01em; }
+.mail-scope-card--shard .mail-scope-meta { font-size: 11.5px; }
+.mail-scope-card--shard .mail-scope-count { font-size: 12px; }
 
 /* Line: one dense row, title plus the count as the only meta. */
 .mail-sidebar[data-mail-view="list"] .mail-scope-list { gap: 0; }
@@ -189,12 +229,35 @@
   border-bottom: 1px solid var(--line);
   background: var(--surface-2);
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 650;
   letter-spacing: .02em;
 }
 .mail-table-head-subject,
 .mail-table-head-time { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.mail-read-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 28%, var(--line));
+  color: var(--text);
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  font-size: 12px;
+  line-height: 1.35;
+}
+.mail-read-error[hidden] { display: none; }
+.mail-read-error button {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
 
 .mail-table-check { display: inline-flex; align-items: center; justify-content: center; }
 .mail-table-check input,
@@ -214,12 +277,12 @@
   transition: background 150ms cubic-bezier(.25, 1, .5, 1);
 }
 
-/* Shard: bold subject over one or two meta lines, generous padding. */
+/* Shard: the correspondent leads, followed by subject and a quiet preview. */
 .mail-record-row--shard {
   align-items: start;
-  gap: 3px 10px;
-  min-height: 62px;
-  padding: 10px 12px 11px;
+  gap: 4px 14px;
+  min-height: 82px;
+  padding: 12px 16px 14px;
 }
 .mail-record-row--shard .mail-record-select { margin-top: 3px; }
 .mail-record-row--shard .mail-record-time { align-self: start; margin-top: 1px; }
@@ -244,6 +307,9 @@
 }
 
 .mail-record-copy { min-width: 0; }
+.mail-record-identity,
+.mail-record-person,
+.mail-record-status,
 .mail-record-subject,
 .mail-record-meta,
 .mail-record-preview {
@@ -252,13 +318,16 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mail-record-copy { display: grid; gap: 2px; }
-.mail-record-subject { color: var(--text-strong, var(--text)); font-size: 12px; font-weight: 620; }
-.mail-record-meta { color: var(--muted); font-size: 11px; }
-.mail-record-preview { color: var(--muted); font-size: 10.5px; }
-.mail-record-row.is-unread .mail-record-meta,
+.mail-record-copy { display: grid; gap: 3px; }
+.mail-record-identity { display: flex; align-items: baseline; gap: 10px; }
+.mail-record-person { flex: 0 1 auto; color: var(--text-strong, var(--text)); font-size: 14px; font-weight: 650; letter-spacing: -.01em; }
+.mail-record-status { flex: 0 1 auto; color: var(--muted); font-size: 11px; }
+.mail-record-subject { color: var(--text); font-size: 13px; font-weight: 550; }
+.mail-record-meta { color: var(--muted); font-size: 12px; }
+.mail-record-preview { color: var(--muted); font-size: 12px; }
+.mail-record-row.is-unread .mail-record-person,
 .mail-record-row.is-unread .mail-record-subject { font-weight: 720; }
-.mail-record-time { color: var(--muted); font-size: 10.5px; white-space: nowrap; }
+.mail-record-time { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .mail-record-time { text-align: right; font-variant-numeric: tabular-nums; }
 
 .mail-record-progress {

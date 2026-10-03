@@ -151,6 +151,7 @@ ctox web unlock <list-probes|list-vectors|baseline|history|add-vector|set-vector
 ### Login sources and the human in the loop
 
 ```bash
+ctox business-os web-stack auth-assist-login --source-id <id> --credential-ref <ctox-secret://scope/name> [--target-url <login-url>] [--login-hint <hint>] [--task-id <id>] [--timeout-ms <n>]
 ctox business-os web-stack auth-assist-request --source-id <id> [--target-url <url>] [--credential-ref <ctox-secret://scope/name>] [--login-hint <hint>] [--task-id <id>]
 ctox business-os web-stack auth-assist-status --session-id <id>
 ctox business-os web-stack context-capture --session-id <id> [--source-id <id>] [--task-id <id>] [--no-handoff]
@@ -161,11 +162,12 @@ ctox business-os web-stack authenticated-automation --source-id <id> --target-ur
 
 Unblocking with continuation, in this order:
 
+0. **Automatic sign-in first.** When a scrape or capture returns `authorization_required` / `session_expired_*` and its `reauthorization` names a `credential_ref`, run `auth-assist-login --source-id <source_id> --credential-ref <credential_ref> --target-url <login_url> --task-id <your command id> --timeout-ms 240000` yourself. CTOX fills the stored credential in its own browser (you never see or type the value) and completes an e-mail one-time code on its own (D&B/Okta "Send me an email": the code mail arrives in the connected mailbox). Then rerun the same `ctox scrape execute` / `source-capture`. An expired session is routine, not a reason to stop: do this in the same turn before reporting the source as unreachable. Only when `auth-assist-login` itself fails (MFA push, captcha, locked account) go on with step 1.
 1. `auth-assist-request --source-id <id> --task-id <your command id>` — opens the owner's streamed browser on that source and returns the browser `session_id`; the human signs in or solves the challenge in the stream.
 2. `auth-assist-status --session-id <id>` — poll until the session reports authenticated; do not proceed on a pending session.
 3. Continue **in the same session**: `ctox web browser-automation --session-id <id> --script-file <path>` for your own navigation and extraction, `source-capture --source-id <id> --session-id <id> --company <name>` for the built-in extractors of dnbhoovers.com, leadfeeder.com, rocketreach.com and xing.com, `context-capture --session-id <id>` / `context-extract --session-id <id>` for a page the human positioned for you.
 
-Never type credentials yourself; never guess what a login source would have said. If the human does not complete the login within the turn, the field ends `action_required` with the `session_id` and your command id as reference.
+Never type credentials yourself (`auth-assist-login` is CTOX filling the stored credential, not you); never guess what a login source would have said. If the human does not complete the login within the turn, the field ends `action_required` with the `session_id` and your command id as reference.
 
 ### Scraping pipeline (scripts and records live in SQLite)
 
@@ -224,12 +226,15 @@ rejects the task as incomplete when no successful `execute_writeback` receipt ex
 lead and your research command. Never edit collections directly, never report results as chat
 text only.
 
-Call:
+Call it with `payload` as **one JSON string** that encodes the payload object. MiniMax drops
+large object arguments on the way to the tool (tenant 26.09.2026: 5 of 6 replayed calls arrived
+as `{}`); a string arrives intact, the server decodes it and names the exact position of any JSON
+error. The payload object inside that string:
 
 ```json
 business_os.execute_writeback({
   "record_id": "<lead-id>",
-  "payload": {
+  "payload": /* JSON.stringify of: */ {
     "field_status": {
       "<field>": {
         "status": "verified|no_match|unsupported|action_required",
@@ -267,6 +272,7 @@ Build the writeback in this order: (1) collect the terminal status per field, (2
 - A **non-verified** field (`no_match`, `unsupported`, `action_required`) must NOT carry a populated `value`. State the reason instead.
 - Person fields describe the priority contact(s) you actually found: when you report persons in `person_records`, set the matching `person_*` fields `verified` with their `person_key` instead of `no_match`. `no_match` on a person field means you found no such person at all.
 - Person fields carry a `person_key`; `result.fields` holds structured objects only, never free text.
+- **Status per person.** With several persons, put each person's field status into `result.person_field_status`: `{"<person_key>": {"person_email": {"status": "verified|no_match|action_required|unsupported", "value": ..., "sources": [...], "reason": "..."}}}`. The lead-level `field_status` holds one entry per field, so a second person's status overwrote the first. The server stores these per person, shows them on the contact, and drops only a malformed entry, not the others.
 - **Send large results in parts.** A tool call is limited by the model's output size: a 50 KB writeback (all 32 fields with sources) breaks off and the turn ends without a receipt (Sasol, 11.09.2026, twice). Send at most about 10 fields per `execute_writeback` call; the server merges the parts, a field missing from one part keeps the status an earlier part gave it, and the response lists `open_fields` still to send. Do not re-send fields that are already stored.
 - Never dispatch read commands (`outbound.task.readback`, `outbound.lead.read`, `outbound.queue_task.read`, `outbound.lead.show` or anything similar) to check your own result, and never enqueue Business OS actions (`business_os.execute_action`, `business_os.propose_action`) for the writeback — they are not the writeback and are rejected outside the task contract. Every dispatched command becomes its own queue task and its own agent turn — twelve such reads once blocked a whole campaign for three hours.
 - Done means `business_os.execute_writeback` returned status `accepted` or `completed`. Report the counts (verified / no_match / action_required / unsupported) and the persons found in one short chat message.
