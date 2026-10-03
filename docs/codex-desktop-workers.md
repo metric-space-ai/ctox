@@ -14,10 +14,12 @@ The shared instructions govern future tasks; explicitly include them when
 assigning or correcting a task that was already running.
 
 The helper prepares a saved task with an explicit model/provider and a validated
-existing tmp worktree and records the task ID durably before running a no-tool,
-READY-only preparation turn. This bounded model request (at most 90 seconds)
-materializes the rollout file, which `thread/start` alone creates lazily. Only a
-successful completed turn with a real rollout file marks preparation ready.
+existing tmp worktree and records the task ID durably before persisting an
+authorized developer execution contract through `thread/inject_items`. This uses
+no model request, user message or initialization reply. `thread/start` alone
+creates the rollout lazily; contract persistence and successful read-back are
+required before marking the task ready. The first Desktop user request is the
+actual implementation assignment.
 Failures retain the existing task ID and recovery guidance; do not rerun create
 or dispatch implementation until that preparation is recovered. The helper always
 stops its temporary app-server.
