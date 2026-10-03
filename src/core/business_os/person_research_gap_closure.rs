@@ -269,6 +269,40 @@ struct FieldStatus {
     extra: BTreeMap<String, Value>,
 }
 
+/// Native provenance for one accepted writeback. A chat assignment without a
+/// durable queue task has an unknown attempt, not an invented zero counter.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct FieldWritebackRevision {
+    writeback_id: String,
+    command_id: String,
+    attempt: Option<i64>,
+    written_at_ms: i64,
+}
+
+fn stamp_writeback_field_revisions(
+    request: &mut ResearchWritebackRequest,
+    revision: &FieldWritebackRevision,
+) -> anyhow::Result<()> {
+    let revision = serde_json::to_value(revision)?;
+    for status in request.field_status.values_mut() {
+        // Store object merges preserve omitted keys: null expires an old review.
+        status.extra.insert("review".to_string(), Value::Null);
+        status
+            .extra
+            .insert("revision".to_string(), revision.clone());
+    }
+    if let Some(people) = request.result.person_field_status.as_object_mut() {
+        for fields in people.values_mut().filter_map(Value::as_object_mut) {
+            for status in fields.values_mut().filter_map(Value::as_object_mut) {
+                status.insert("review".to_string(), Value::Null);
+                status.insert("revision".to_string(), revision.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Workers hand `sources` over as a list, but live runs also sent one source as
 /// a bare object and, on 07.09.2026, the whole list as a JSON string (three
 /// rejections in a row for one lead, "expected a sequence"). The meaning is
@@ -1419,6 +1453,9 @@ fn open_persons_for_field(lead: &Value, field: &str) -> Option<Vec<String>> {
 /// question is still open, whether the worker never delivered the field or the
 /// evidence gate rejected what it delivered.
 fn research_field_is_answered(status: &Value) -> bool {
+    if super::outbound_field_review::is_refuted_no_match(status) {
+        return false;
+    }
     matches!(
         status
             .get("status")
@@ -1730,6 +1767,30 @@ pub(super) fn handle_research_writeback(
                 .cloned()
         })
         .unwrap_or_else(|| Value::Array(Vec::new()));
+    // Provenance belongs to this native writeback, never to worker-supplied
+    // extra metadata. Stamp before moving result fields into the projection.
+    let now = super::person_research_command::now_ms();
+    let writeback_id = match command.id.as_deref() {
+        Some(id) => {
+            anyhow::ensure!(!id.trim().is_empty(), "writeback command id is empty");
+            id.to_string()
+        }
+        None => format!("native-writeback:{}", uuid::Uuid::new_v4()),
+    };
+    let native_attempt = match &gap_task {
+        Some((task, _)) => Some(task.attempt),
+        None => {
+            channels::load_queue_task_for_business_os_command(root, &request.research_command_id)?
+                .map(|task| task.attempt)
+        }
+    };
+    let revision = FieldWritebackRevision {
+        writeback_id,
+        command_id: request.research_command_id.clone(),
+        attempt: native_attempt,
+        written_at_ms: now,
+    };
+    stamp_writeback_field_revisions(&mut request, &revision)?;
     let mut projection_result = serde_json::json!({
         "fields": request.result.fields,
         "person_records": request.result.person_records,
@@ -1737,7 +1798,6 @@ pub(super) fn handle_research_writeback(
         "known_person_records": known_person_records,
     });
     add_field_status_evidence(&mut projection_result, &request.field_status)?;
-    let now = super::person_research_command::now_ms();
     let previous_keys = previous_research_keys(&lead);
     let previous_person_statuses = lead
         .get("person_field_status")
@@ -1875,6 +1935,7 @@ pub(super) fn handle_research_writeback(
     Ok(serde_json::json!({
         "ok": true,
         "record_id": request.record_id,
+        "writeback_id": revision.writeback_id,
         "research_command_id": request.research_command_id,
         "gap_task_id": request.gap_task_id,
         "research_status": if needs_review { "needs_review" } else { "completed" },
@@ -3705,6 +3766,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_refuted_negative_reopens_only_its_current_writeback_and_person() {
+        let mut status = serde_json::json!({
+            "status": "no_match", "person_key": "person-a",
+            "revision": {"writeback_id": "wb-a", "command_id": "research-a"}
+        });
+        assert!(research_field_is_answered(&status));
+        status["review"] = serde_json::json!({
+            "schema": "ctox.outbound.field_review.v1", "verdict": "refuted",
+            "claim_status": "no_match", "command_id": "research-a",
+            "person_key": "person-a", "revision_ref": {"writeback_id": "wb-a"}
+        });
+        assert!(
+            research_field_is_answered(&status),
+            "partial metadata is not a typed native verdict"
+        );
+        status["review"]["review_attempt_id"] = serde_json::json!("review-a");
+        status["review"]["attempt"] = serde_json::json!(8);
+        status["review"]["reviewed_at_ms"] = serde_json::json!(2);
+        status["review"]["reason_code"] = serde_json::json!("contradicted_by_saved_source");
+        assert!(!research_field_is_answered(&status));
+        status["review"]["person_key"] = serde_json::json!("person-b");
+        assert!(research_field_is_answered(&status));
+        status["review"]["person_key"] = serde_json::json!("person-a");
+        status["revision"]["writeback_id"] = serde_json::json!("wb-new");
+        assert!(research_field_is_answered(&status));
+        status["review"] = Value::Null;
+        assert!(research_field_is_answered(&status));
+    }
+
+    #[test]
     fn a_size_class_or_other_number_never_backs_an_exact_figure() {
         // Carbosulf 23.09.2026: Leadfeeder's range cited for "30".
         assert!(!quantity_quote_backs(
@@ -4730,6 +4821,10 @@ mod tests {
                       "person_geschlecht": {"status": "no_match", "reason": "keine Angabe"}}
             }),
         );
+        let mut command = command;
+        let incoming = &mut command.payload["result"]["person_field_status"]["A"]["person_email"];
+        incoming["revision"] = serde_json::json!({"writeback_id": "forged-person"});
+        incoming["review"] = serde_json::json!({"verdict": "refuted"});
         let result = handle_research_writeback(temp.path(), &command)?;
         assert_eq!(result["ok"], true, "{result}");
         assert_eq!(
@@ -4762,6 +4857,21 @@ mod tests {
             contact("A")["field_status"]["person_email"]["status"],
             "verified",
             "{lead}"
+        );
+        let canonical = &lead["person_field_status"]["A"]["person_email"];
+        assert_eq!(
+            canonical["revision"]["writeback_id"],
+            result["writeback_id"]
+        );
+        assert_eq!(canonical["revision"]["command_id"], research_command_id);
+        assert!(
+            canonical["revision"]["attempt"].is_null(),
+            "unknown chat attempt stays unknown"
+        );
+        assert_eq!(canonical.get("review"), Some(&Value::Null));
+        assert_eq!(
+            contact("A")["field_status"]["person_email"]["revision"],
+            canonical["revision"]
         );
         assert!(
             contact("B")["field_status"].get("person_email").is_none(),
@@ -5803,13 +5913,38 @@ mod tests {
             }),
         );
 
-        handle_research_writeback(temp.path(), &command)?;
+        let mut prior =
+            store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+                .context("prior lead")?;
+        prior["field_status"] = serde_json::json!({
+            "firma_domain": {"status": "no_match", "revision": {"writeback_id": "previous"},
+                "review": {"verdict": "refuted", "revision_ref": {"writeback_id": "previous"}}},
+            "firma_name": {"status": "verified", "value": "Unchanged AG", "revision": {"writeback_id": "untouched"}}
+        });
+        let untouched = prior["field_status"]["firma_name"].clone();
+        store::upsert_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id, 1, prior)?;
+        let mut command = command;
+        command.payload["field_status"]["firma_domain"]["revision"] =
+            serde_json::json!({"writeback_id": "caller-forged", "attempt": 999});
+        command.payload["field_status"]["firma_domain"]["review"] = serde_json::json!({"verdict": "refuted", "revision_ref": {"writeback_id": "caller-forged"}});
+        let result = handle_research_writeback(temp.path(), &command)?;
         let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
             .context("lead missing after writeback")?;
+        let status = &lead["field_status"]["firma_domain"];
+        assert_eq!(result["writeback_id"], command.id.as_deref().unwrap());
+        assert_eq!(status["revision"]["writeback_id"], result["writeback_id"]);
+        assert_eq!(status["revision"]["command_id"], research_command_id);
+        assert_eq!(status["revision"]["attempt"], task.attempt);
+        assert!(status["revision"]["written_at_ms"].as_i64().unwrap() > 0);
+        assert!(
+            status.get("review") == Some(&Value::Null),
+            "a new native writeback expires reviews instead of accepting worker metadata: {lead}"
+        );
         assert_eq!(lead["research_status"], "needs_review");
         assert!(lead["research_phase"].is_null());
         assert_eq!(lead["gap_task_id"], task.message_key);
         assert_eq!(lead["field_status"]["firma_domain"]["status"], "no_match");
+        assert_eq!(lead["field_status"]["firma_name"], untouched);
         Ok(())
     }
 

@@ -9854,14 +9854,14 @@ fn run_completion_review(
         source_label: review_request.source_label.clone(),
         owner_visible,
     };
-    let review_audit_key = match verification::record_slice_assurance(
+    let (review_audit_key, recorded_review) = match verification::record_slice_assurance(
         root,
         &verification_request,
         reply_text,
         None,
         Some(&outcome),
     ) {
-        Ok(recorded) => recorded.run.run_id.clone(),
+        Ok(recorded) => (recorded.run.run_id.clone(), recorded.run),
         Err(err) => {
             push_event(
                 state,
@@ -9878,6 +9878,18 @@ fn run_completion_review(
             };
         }
     };
+    if let Err(error) = crate::business_os::outbound_field_review::publish(
+        root,
+        &job.leased_message_keys,
+        &recorded_review,
+    ) {
+        return CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "outbound-field-review-publication".to_string(),
+            },
+            summary: format!("Field review could not be bound and persisted: {error}"),
+        };
+    }
     push_event(
         state,
         format!(

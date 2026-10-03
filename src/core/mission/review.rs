@@ -121,6 +121,16 @@ EVIDENCE:
 HANDOFF:
 - <only when another review run should continue; otherwise write "none">
 
+FIELD_REVIEWS contract (Outbound research only):
+- Optional single line: FIELD_REVIEWS: <JSON array>; omit it or use [] for all other reviews.
+- Emit a field refutation only after inspecting a saved source that contradicts the current no_match, not from worker prose, a general needs_review state, or a missing value.
+- Each entry is exactly {record_id, field, person_key? (required for person_*), verdict:"refuted", claim_status:"no_match", revision_ref:{writeback_id}, reason_code:"contradicted_by_saved_source", evidence_ref?}.
+- Inspect the current native field status and copy its exact revision.writeback_id; never invent an ID. A status without a revision cannot be refuted through this contract.
+- Review only the records of this task. Native code binds the persisted review ID, research command, actual attempt and timestamp; do not supply these as authority.
+- Keep the verdict FAIL or PARTIAL when publishing a refutation; this line never bypasses ordinary completion gates.
+- No more than 64 entries / 32 KiB; no extra keys. Do not write the field yourself.
+- The native service discards a verdict against a different or newer writeback. Honest no_match remains an answer without a matching typed refutation.
+
 CATEGORIZED_FINDINGS contract:
 - emit one line per concrete finding the run produces
 - each line is pipe-delimited key:value pairs in the order id | category | evidence | corrective_action
@@ -1865,6 +1875,7 @@ fn parse_handoff_block(report: &str) -> Option<String> {
                 || trimmed.starts_with("PIPELINE_RESOLUTION:")
                 || trimmed.starts_with("EVIDENCE:")
                 || trimmed.starts_with("CATEGORIZED_FINDINGS:")
+                || trimmed.starts_with("FIELD_REVIEWS:")
                 || trimmed.starts_with("DISPOSITION:")
                 || trimmed.starts_with("NO_SEND_REASON:")
                 || trimmed.starts_with("WAIT_REF:")
@@ -1906,6 +1917,7 @@ fn parse_section_items(report: &str, header: &str) -> Vec<String> {
                 "FAILED_GATES:",
                 "FINDINGS:",
                 "CATEGORIZED_FINDINGS:",
+                "FIELD_REVIEWS:",
                 "OPEN_ITEMS:",
                 "PASS_PROOF:",
                 "PIPELINE_RESOLUTION:",

@@ -1,5 +1,45 @@
 # CTOX Business OS
 
+## Native research field writeback provenance
+
+Research writebacks stamp each delivered company status and accepted person-bound
+status with `revision: {writeback_id, command_id, attempt, written_at_ms}`.
+`writeback_id` is the native writeback receipt ID, `command_id` the correlated
+research command, and `attempt` the durable gap/research queue-task attempt.
+A chat assignment without such a task records `null`, rather than fabricating
+an attempt number.
+Trusted local calls without an envelope ID receive a native-generated ID which
+is returned with the writeback and persisted in the field revision.
+
+Worker-supplied `revision` is replaced and `review` is explicitly set to `null`.
+Omission would retain an old review through the native store object merge.
+The existing field evidence, person binding and native email verdict guards
+still decide what is accepted. Partial writebacks retain untouched field
+statuses; a replacement status expires its previous review. The contact view
+copies the same revision from the canonical person status.
+
+An Outbound completion review can additionally publish one typed `FIELD_REVIEWS`
+JSON array. Only `refuted` / `no_match` / `contradicted_by_saved_source` is
+supported. Each entry names the task's record, field, exact writeback ID, and
+the exact `person_key` for person fields. The native service binds the verdict
+to the persisted rejecting review audit, original research command, durable
+task attempt and native timestamp, and rechecks the command's execution
+authority. Reviewer-supplied authority fields and cross-record entries fail
+closed; ordinary review prose cannot change a field.
+
+Publication compares the current field revision and writes its review inside
+one SQLite IMMEDIATE transaction. Missing/deleted records, changed writebacks,
+different research parents and ambiguous person identities are never changed.
+Canonical person statuses and matching contact projections share the verdict.
+The native reopening predicate requires the complete audit ID, reason, nonnegative
+attempt and positive review timestamp, alongside the current writeback/parent/person
+identity. Contact projections with a newer parent or native verified verdict retain
+their current result. An exactly bound refutation reopens native gap closure; honest
+`no_match` remains answered, and a replacement writeback expires the review.
+Browser rendering/selection and the installed end-to-end review workflow still
+require their app integration and acceptance; source code and provenance alone
+do not establish product acceptance.
+
 ## Operator coding presets and daemon readiness
 
 `ctox coding-agent models` reads the public `ctox.coding.models.v1`
