@@ -31,7 +31,10 @@ Publication compares the current field revision and writes its review inside
 one SQLite IMMEDIATE transaction. Missing/deleted records, changed writebacks,
 different research parents and ambiguous person identities are never changed.
 Canonical person statuses and matching contact projections share the verdict.
-An exactly bound refutation reopens the native gap-closure field; honest
+The native reopening predicate requires the complete audit ID, reason, nonnegative
+attempt and positive review timestamp, alongside the current writeback/parent/person
+identity. Contact projections with a newer parent or native verified verdict retain
+their current result. An exactly bound refutation reopens native gap closure; honest
 `no_match` remains answered, and a replacement writeback expires the review.
 Browser rendering/selection and the installed end-to-end review workflow still
 require their app integration and acceptance; source code and provenance alone

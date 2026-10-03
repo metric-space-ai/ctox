@@ -3777,6 +3777,14 @@ mod tests {
             "claim_status": "no_match", "command_id": "research-a",
             "person_key": "person-a", "revision_ref": {"writeback_id": "wb-a"}
         });
+        assert!(
+            research_field_is_answered(&status),
+            "partial metadata is not a typed native verdict"
+        );
+        status["review"]["review_attempt_id"] = serde_json::json!("review-a");
+        status["review"]["attempt"] = serde_json::json!(8);
+        status["review"]["reviewed_at_ms"] = serde_json::json!(2);
+        status["review"]["reason_code"] = serde_json::json!("contradicted_by_saved_source");
         assert!(!research_field_is_answered(&status));
         status["review"]["person_key"] = serde_json::json!("person-b");
         assert!(research_field_is_answered(&status));

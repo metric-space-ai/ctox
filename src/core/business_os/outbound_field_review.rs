@@ -222,12 +222,26 @@ pub(super) fn is_refuted_no_match(status: &Value) -> bool {
             .and_then(Value::as_str)
             != Some(writeback)
         || review["command_id"] != command
+        || review["reason_code"] != "contradicted_by_saved_source"
+        || !review
+            .get("review_attempt_id")
+            .and_then(Value::as_str)
+            .is_some_and(valid_id)
+        || !review
+            .get("attempt")
+            .and_then(Value::as_i64)
+            .is_some_and(|attempt| attempt >= 0)
+        || !review
+            .get("reviewed_at_ms")
+            .and_then(Value::as_i64)
+            .is_some_and(|time| time > 0)
     {
         return false;
     }
-    match status.get("person_key").and_then(Value::as_str) {
-        Some(key) => valid_id(key) && review["person_key"] == key,
-        None => review.get("person_key").is_none_or(Value::is_null),
+    match status.get("person_key") {
+        Some(Value::String(key)) => valid_id(key) && review["person_key"] == key.as_str(),
+        None | Some(Value::Null) => review.get("person_key").is_none_or(Value::is_null),
+        _ => false,
     }
 }
 
@@ -309,6 +323,11 @@ fn apply_refutation(
                         .pointer("/revision/writeback_id")
                         .and_then(Value::as_str)
                         == Some(claim.revision_ref.writeback_id.as_str())
+                        && projected
+                            .pointer("/revision/command_id")
+                            .and_then(Value::as_str)
+                            == Some(binding.command_id.as_str())
+                        && projected["status"] == "no_match"
                     {
                         projected["review"] = review.clone();
                     }
@@ -544,6 +563,89 @@ mod tests {
             3
         ));
         assert_eq!(lead, ambiguous);
+    }
+
+    #[test]
+    fn person_projection_keeps_a_newer_parent_or_native_validation() {
+        for (revision, status) in [
+            (
+                json!({"writeback_id": "wb-new", "command_id": "research-a"}),
+                "no_match",
+            ),
+            (
+                json!({"writeback_id": "wb-a", "command_id": "research-other"}),
+                "no_match",
+            ),
+            (
+                json!({"writeback_id": "wb-a", "command_id": "research-a"}),
+                "verified",
+            ),
+        ] {
+            let mut canonical = negative();
+            canonical["person_key"] = json!("person-a");
+            let mut projected = canonical.clone();
+            projected["revision"] = revision;
+            projected["status"] = json!(status);
+            let mut lead = json!({
+                "person_field_status": {"person-a": {"person_email": canonical}},
+                "contacts": [{"person_key": "person-a", "field_status": {"person_email": projected}}]
+            });
+            let contact = lead["contacts"][0].clone();
+            assert!(apply_refutation(
+                &mut lead,
+                &claim(Some("person-a")),
+                &binding(),
+                "review-a",
+                2
+            ));
+            assert!(is_refuted_no_match(
+                &lead["person_field_status"]["person-a"]["person_email"]
+            ));
+            assert_eq!(lead["contacts"][0], contact);
+        }
+    }
+
+    #[test]
+    fn conditional_publication_never_resurrects_a_tombstone() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let root = dir.path();
+        store::open_store(root)?;
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root, COLLECTION,
+        )?;
+        store::upsert_rxdb_collection_record(
+            root,
+            COLLECTION,
+            "lead-a",
+            1,
+            json!({"id": "lead-a", "field_status": {"firma_prokura": negative()}}),
+        )?;
+        let conn = rusqlite::Connection::open(store::rxdb_store_path(root))?;
+        conn.execute(
+            "UPDATE ctox_business_os__outbound_lead_generation_leads__v0 SET deleted=1 WHERE id='lead-a'", []
+        )?;
+        let before: String = conn.query_row(
+            "SELECT data FROM ctox_business_os__outbound_lead_generation_leads__v0 WHERE id='lead-a'",
+            [], |row| row.get(0)
+        )?;
+        let mut invoked = false;
+        assert!(!store::update_rxdb_record_conditionally(
+            root,
+            COLLECTION,
+            "lead-a",
+            2,
+            |_| {
+                invoked = true;
+                Ok(true)
+            }
+        )?);
+        assert!(!invoked);
+        let after: (String, i64) = conn.query_row(
+            "SELECT data, deleted FROM ctox_business_os__outbound_lead_generation_leads__v0 WHERE id='lead-a'",
+            [], |row| Ok((row.get(0)?, row.get(1)?))
+        )?;
+        assert_eq!(after, (before, 1));
+        Ok(())
     }
 
     fn audit(root: &Path) -> anyhow::Result<lcm::VerificationRunRecord> {
