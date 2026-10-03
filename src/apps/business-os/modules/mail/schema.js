@@ -4,10 +4,10 @@
 import {
   collections as conversationCollections,
   migrationStrategies as conversationMigrationStrategies,
-} from '../conversations/schema.js';
-import { collections as ctoxCollections } from '../ctox/schema.js?v=20260816-browser-sync-guards-v141';
-import { collections as appStoreCollections } from '../app-store/schema.js';
-import { collections as documentCollections } from '../documents/schema.js';
+} from '../../modules/conversations/schema.js';
+import { collections as ctoxCollections } from '../../modules/ctox/schema.js?v=20260816-browser-sync-guards-v141';
+import { collections as appStoreCollections } from '../../modules/app-store/schema.js';
+import { collections as documentCollections } from '../../modules/documents/schema.js';
 
 const MAIL_COLLECTIONS = [
   'communication_accounts',

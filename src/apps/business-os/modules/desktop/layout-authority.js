@@ -11,15 +11,87 @@ function isConflictError(error) {
   return message.includes('conflict') || message.includes('already');
 }
 
-export async function ensureDesktopLayoutWithAuthority({
+export function isDatabaseClosingError(error) {
+  const message = String(error?.message || error || '');
+  return /IDBDatabase.*closing|database connection is closing/i.test(message);
+}
+
+function isReplicationCancelledIconRead(error) {
+  const message = String(error?.message || error || '');
+  return /^QUERY_CANCELLED:\s*replication-cancel$/i.test(message);
+}
+
+// A replication handoff cancels its outstanding demand reads. Desktop icons
+// may paint local launcher defaults until the replacement read arrives; this
+// read-only fallback must never publish an icon or layout document.
+export async function readLocalDesktopIcons({ collection, fallbackIcons }) {
+  const fallback = () => ({ docs: fallbackIcons(), usingFallbackDocs: true });
+  if (!collection) return fallback();
+  try {
+    return { docs: await collection.find().exec(), usingFallbackDocs: false };
+  } catch (error) {
+    if (!isDatabaseClosingError(error) && !isReplicationCancelledIconRead(error)) throw error;
+    return fallback();
+  }
+}
+
+// Only the initial read may be skipped. Once reconciliation starts, a write
+// failure must reach the caller even if its text resembles a query cancel.
+export async function withDesktopIconReconciliationRead(collection, reconcile) {
+  let existing;
+  try {
+    existing = await collection.find().exec();
+  } catch (error) {
+    if (isReplicationCancelledIconRead(error)) return false;
+    throw error;
+  }
+  await reconcile(existing);
+  return true;
+}
+
+// The first paint may use an already replicated local layout. Reading it never
+// seeds or patches the collection; native authority is reconciled separately.
+export async function readLocalDesktopLayout({
   collection,
   defaultLayout,
+  documentId = 'layout',
+  onDatabaseClosing,
+}) {
+  if (!collection) return defaultLayout();
+  try {
+    const query = await collection.findOne(documentId);
+    const document = await query.exec();
+    return document?.toJSON?.() ?? document ?? defaultLayout();
+  } catch (error) {
+    if (!isDatabaseClosingError(error)) throw error;
+    onDatabaseClosing?.(error);
+    return defaultLayout();
+  }
+}
+
+// One boundary owns restart fallback for every local stage. Native read
+// rejection remains unknown authority inside the resolver and never seeds.
+export async function ensureDesktopLayoutWithAuthority(options) {
+  try {
+    return await resolveDesktopLayout(options);
+  } catch (error) {
+    if (!isDatabaseClosingError(error)) throw error;
+    options.onDatabaseClosing?.(error);
+    return (options.unknownLayout || options.defaultLayout)();
+  }
+}
+
+async function resolveDesktopLayout({
+  collection,
+  defaultLayout,
+  unknownLayout = defaultLayout,
   readNativeDocument,
   insertMissingSeed,
   documentId = 'layout',
   now = Date.now,
+  isCurrent = () => true,
 }) {
-  if (typeof readNativeDocument !== 'function') return defaultLayout();
+  if (typeof readNativeDocument !== 'function') return unknownLayout();
 
   let authority;
   try {
@@ -27,13 +99,14 @@ export async function ensureDesktopLayoutWithAuthority({
   } catch {
     // Rejection is unknown state, not authoritative absence. Render locally and
     // leave the replicated document untouched.
-    return defaultLayout();
+    return unknownLayout();
   }
+  if (!isCurrent()) return unknownLayout();
   if (authority) return authority?.toJSON?.() ?? authority;
   if (authority !== null) {
     // Undefined/false are unknown or malformed outcomes. Only the strict
     // reader normalized null represents confirmed native absence.
-    return defaultLayout();
+    return unknownLayout();
   }
 
   // Native authority has confirmed absence. Insert once; if another writer wins

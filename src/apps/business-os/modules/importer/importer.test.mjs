@@ -17,7 +17,10 @@ import {
   validModuleId,
 } from './index.js';
 
-test('snapshot upload retries targeted pushes until the native peer acknowledges every row', async () => {
+test('snapshot upload retries targeted pushes until the native peer acknowledges every row', async (t) => {
+  // Model protocol time explicitly so concurrent browser tests cannot consume the retry budget.
+  let now = 0;
+  t.mock.method(Date, 'now', () => now);
   const releases = [];
   let attempts = 0;
   const ctx = {
@@ -26,6 +29,7 @@ test('snapshot upload retries targeted pushes until the native peer acknowledges
         assert.equal(collection, 'desktop_file_chunks');
         assert.equal(reason, 'app-import-snapshot:desktop_file_chunks');
         const attempt = ++attempts;
+        now += 5;
         return {
           bridge: {
             state: {
@@ -46,6 +50,29 @@ test('snapshot upload retries targeted pushes until the native peer acknowledges
   ], { timeoutMs: 100, retryMs: 0 });
   assert.equal(attempts, 2);
   assert.deepEqual(releases, [1, 2]);
+});
+
+
+test('snapshot upload fails closed at its deadline without an acknowledgement and releases every lease', async (t) => {
+  let now = 0;
+  let attempts = 0;
+  let releases = 0;
+  t.mock.method(Date, 'now', () => now);
+  const ctx = { sync: { async leaseCollection() {
+    attempts += 1;
+    return {
+      bridge: { state: { async pushDocumentsToRemotePeers() { now += 50; return false; } } },
+      async release() { releases += 1; },
+    };
+  } } };
+  await assert.rejects(
+    confirmSnapshotDocuments(ctx, 'desktop_file_chunks', [{ id: 'unconfirmed' }], { timeoutMs: 100, retryMs: 0 }),
+    (error) => error.message === 'desktop_file_chunks_snapshot_sync_timeout'
+      && error.cause.message === 'desktop_file_chunks_push_unconfirmed',
+  );
+  assert.equal(now, 100);
+  assert.equal(attempts, 2);
+  assert.equal(releases, 2);
 });
 
 test('snapshot upload accepts a multi-tab leader acknowledgement', async () => {

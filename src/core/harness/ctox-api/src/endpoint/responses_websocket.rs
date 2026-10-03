@@ -539,6 +539,7 @@ async fn run_websocket_response_stream(
     connection_reused: bool,
 ) -> Result<(), ApiError> {
     let mut last_server_model: Option<String> = None;
+    let mut argument_recovery = crate::sse::responses::FunctionCallArgumentsRecovery::default();
     let request_text = match serde_json::to_string(&request_body) {
         Ok(text) => text,
         Err(err) => {
@@ -619,6 +620,8 @@ async fn run_websocket_response_stream(
                         .await;
                     last_server_model = Some(model);
                 }
+                let mut event = event;
+                argument_recovery.observe(&mut event);
                 match process_responses_event(event) {
                     Ok(Some(event)) => {
                         let is_completed = matches!(event, ResponseEvent::Completed { .. });

@@ -152,6 +152,66 @@ test('merges physical table chunks into one logical dataframe before grouping', 
   assert.deepEqual(hub.tableIds, ['table:load-points']);
 });
 
+test('keeps catalog knowledge tables complete without embedding rows', () => {
+  const [table] = mergeKnowledgeTableChunks([{
+    id: 'table:kdt-loads',
+    payload: {
+      id: 'table:kdt-loads',
+      logical_table_id: 'table:kdt-loads',
+      table_id: 'kdt-loads',
+      domain: 'drone_bearing_design',
+      projection_version: 2,
+      rows_source: 'rxdb.rows.fetch',
+      row_count: 5103,
+      rows_complete: true,
+      columns: [{ name: 'measurement_id', type: 'string' }],
+    },
+  }]);
+
+  assert.equal(table.id, 'table:kdt-loads');
+  assert.equal(table.table_id, 'kdt-loads');
+  assert.equal(table.rows_complete, true);
+  assert.equal(table.row_count, 5103);
+  assert.equal(table.payload.row_count, 5103);
+  assert.equal(table.rows, undefined);
+  assert.equal(table.payload.rows, undefined);
+  assert.equal(table.chunk_index, undefined);
+  assert.equal(table.chunk_count, undefined);
+
+  const completeness = dataFrameCompleteness(table);
+  assert.equal(completeness.complete, true);
+  assert.equal(completeness.expectedRows, 5103);
+  assert.equal(completeness.actualRows, 5103);
+  assert.deepEqual(completeness.rows, []);
+  assert.equal(completeness.reason, '');
+
+  const schema = localDataFrameSchema(table);
+  assert.equal(schema.complete, true);
+  assert.equal(schema.row_count, 5103);
+  assert.equal(schema.columns[0].key, 'measurement_id');
+});
+
+test('keeps embedded rows when a catalog marker still carries row arrays', () => {
+  const [table] = mergeKnowledgeTableChunks([{
+    id: 'table:loads',
+    payload: {
+      logical_table_id: 'table:loads',
+      projection_version: 2,
+      rows_source: 'rxdb.rows.fetch',
+      row_count: 1,
+      rows_complete: true,
+      chunk_index: 0,
+      chunk_count: 1,
+      rows: [{ measurement_id: 'MLP-001' }],
+    },
+  }]);
+
+  assert.equal(table.payload.rows.length, 1);
+  const completeness = dataFrameCompleteness(table);
+  assert.equal(completeness.complete, true);
+  assert.equal(completeness.rows[0].measurement_id, 'MLP-001');
+});
+
 test('matches a Research handoff to a Knowledge group by entry domain', () => {
   const group = {
     id: 'research/drone-design/drone-bearing-loads',

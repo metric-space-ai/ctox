@@ -166,7 +166,13 @@ test('repeated lease replacement cannot reset the command deadline or bypass pee
     await assert.rejects(bus.submit({
       id: 'cmd-lease-deadline', command_type: 'business_os.chat.task',
       sync_queue_tasks: false, sync_ready_timeout_ms: 80,
-    }), /no authenticated WebRTC peer after 80 ms/);
+    }), (error) => {
+      assert.equal(error.code, 'native_unavailable');
+      const match = error.message.match(/no authenticated WebRTC peer after (\d+) ms/);
+      assert.ok(match, error.message);
+      assert.ok(Number(match[1]) >= 1 && Number(match[1]) <= 80, error.message);
+      return true;
+    });
     assert.equal(inserts, 0);
     assert.equal(registry.leaseCount('business_commands'), 0);
   } finally { clearInterval(replacement); registry.revokeAllLeases(); }
@@ -1404,6 +1410,7 @@ test('command timing probe records seven correlated marks only when requested', 
   let stored = null;
   const collection = {
     async insert(document) {
+      await new Promise(resolve => setTimeout(resolve, 15));
       stored = { ...document };
     },
     findOne(id) {
@@ -1429,6 +1436,10 @@ test('command timing probe records seven correlated marks only when requested', 
       async startCollection() {
         return {
           state: {
+            async ensurePeerAuthority() {
+              await new Promise(resolve => setTimeout(resolve, 15));
+              return false;
+            },
             async pushDocumentsToRemotePeers() {
               stored = {
                 ...stored,
@@ -1488,6 +1499,30 @@ test('command timing probe records seven correlated marks only when requested', 
   assert.ok(marks.native_handler_completed >= marks.native_dispatch_entered);
   assert.ok(marks.native_rxdb_projection_committed >= marks.native_handler_completed);
   assert.ok(marks.browser_terminal_observed >= marks.browser_push_confirmed);
+  assert.deepEqual(Object.keys(sample.preinsert_marks), [
+    'capability_resolved', 'database_resolved', 'sync_ready',
+    'authority_resolved', 'local_write_started',
+  ]);
+  assert.deepEqual(Object.keys(sample.preinsert_stages_ms), [
+    'initial_capability', 'document_and_database', 'sync_readiness',
+    'fresh_peer_authority', 'dependencies_and_revalidation', 'local_persistence',
+  ]);
+  assert.ok(Object.values(sample.preinsert_stages_ms).every(value => value >= 0));
+  assert.equal(
+    Object.values(sample.preinsert_stages_ms).reduce((sum, value) => sum + value, 0),
+    marks.browser_local_inserted - marks.browser_dispatch_started,
+  );
+  // Independent waits distinguish peer renewal from the local storage span.
+  assert.ok(sample.preinsert_stages_ms.fresh_peer_authority >= 10);
+  assert.equal(sample.authority_rounds.length, 1);
+  assert.ok(sample.authority_rounds[0].peer_renewal_ms >= 10);
+  assert.ok(sample.authority_rounds[0].capability_ms >= 0);
+  assert.ok(sample.authority_rounds[0].bridge_ready_ms >= 0);
+  assert.equal(sample.authority_rounds[0].renewed, false);
+  assert.equal(sample.authority_rounds[0].replaced, false);
+  const secondRead = peekCommandRoundtripTiming('cmd-timing-probe');
+  assert.equal(secondRead, null, 'consumption removes the bounded diagnostic sample');
+  assert.ok(sample.preinsert_stages_ms.local_persistence >= 10);
   assert.ok(metrics.some((metric) => metric.name === 'roundtrip_total'));
   assert.ok(!JSON.stringify(sample).includes('capability_token'));
 });

@@ -230,7 +230,7 @@ pub(crate) fn ensure_schema(conn: &Connection) -> Result<()> {
             "crew-lumi",
             "Lumi",
             "triangle",
-            "#7d7f84",
+            "#e97255",
             [20, 20, 40, 20, 30],
             "Ich prüfe Daten sorgfältig und halte Strukturen konsistent.",
             vec!["reports"],
@@ -269,6 +269,14 @@ pub(crate) fn ensure_schema(conn: &Connection) -> Result<()> {
             VALUES (?1,?2,?3,?4,?5,0,?6,?7,?8,?5)",
             params![id,name,shape,color,now,serde_json::to_string(&soul)?,serde_json::to_string(&specialties)?,serde_json::to_string(&Stats::default())?])?;
     }
+    // Lumi was seeded in the neutral "no member" grey, so its tasks looked
+    // unassigned and colourless. Recolour only the untouched seed; an owner's
+    // own colour choice stays.
+    conn.execute(
+        "UPDATE crew_members SET color='#e97255', updated_at=?1
+         WHERE id='crew-lumi' AND color='#7d7f84'",
+        params![now],
+    )?;
     Ok(())
 }
 
@@ -592,6 +600,55 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn seed_grey_lumi_gets_a_colour_but_owner_colours_stay() {
+        let conn = fixture();
+        conn.execute(
+            "UPDATE crew_members SET color='#7d7f84' WHERE id='crew-lumi'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE crew_members SET color='#7d7f84' WHERE id='crew-pico'",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        let all = members(&conn).unwrap();
+        let color = |id: &str| all.iter().find(|m| m.id == id).unwrap().color.clone();
+        assert_eq!(color("crew-lumi"), "#e97255");
+        assert_eq!(
+            color("crew-pico"),
+            "#7d7f84",
+            "an owner colour is not rewritten"
+        );
+        assert_eq!(
+            all.iter()
+                .filter(|m| m.id != "crew-pico")
+                .map(|m| m.color.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            3,
+            "the seeded crew wears distinct colours"
+        );
+        conn.execute(
+            "UPDATE crew_members SET color='#34a26f' WHERE id='crew-lumi'",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        assert_eq!(
+            members(&conn)
+                .unwrap()
+                .iter()
+                .find(|m| m.id == "crew-lumi")
+                .unwrap()
+                .color,
+            "#34a26f",
+            "an owner's later colour for Lumi stays"
+        );
+    }
+
     #[test]
     fn migration_preserves_existing_rows_and_seed_edits() {
         let conn = fixture();
