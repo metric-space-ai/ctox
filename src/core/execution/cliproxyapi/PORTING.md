@@ -26,15 +26,19 @@
   Preserve the v8.0.11 review; do not claim the full update is current after
   only that candidate passes.
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.12.
-- Parent continuation after the bounded Grok runs: five candidate `Convert*WithCompat`
-  facades are implemented: Claude→Codex, Claude→OpenAI Chat, Claude→Interactions,
-  OpenAI Chat→Claude and OpenAI Responses→Claude. Nineteen prepared regressions
-  cover signature classification, absent/redacted/user thinking, message/tool
-  ordering, reasoning preservation and no-op byte identity. They are exported
-  but not connected to live executor dispatch. Rust parsing/formatting passed
-  for the first three; compilation/Rust/Go execution remains pending. The
-  direct Gemini facade, request-scoped update-intent plumbing and full Responses
-  default-policy parity remain open; no pin or release gate was promoted.
+- Parent continuation after bounded Grok runs: all six candidate request
+  compatibility facades are now exported, with24 prepared regressions:
+  Claude→Codex/OpenAI Chat/Interactions/Gemini and OpenAI Chat/Responses→Claude.
+  Direct Gemini has an explicit request-local thinking policy; its standard
+  path drops thoughts, compatibility retains their source positions and uses
+  Gemini-model-part signature validation/bypass. Antigravity's signature cache
+  and policy stay separate. Full Gemini role/tool alignment/merge/trailing-turn
+  and Responses default-policy parity are not certified by these tests.
+  One v8.0.12 OAuth change also prevents replaying a single-use refresh token
+  after an ambiguous transport failure, with one prepared four-failure-case
+  regression; explicit retryable HTTP responses keep their existing behavior.
+  Compilation/Rust/Go execution and live compatibility dispatch/update-intent
+  remain pending. No pin or release gate was promoted.
 - Scaffolds: not counted
 - Owner of shared registry/module graph: CTOX integration lane
 
