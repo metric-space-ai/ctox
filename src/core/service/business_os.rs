@@ -2585,6 +2585,48 @@ fn run_business_os_web_stack_source_capture_with_browser_authorization(
     }))
 }
 
+const DNB_BROWSER_WZ_PARSER: &str = r#"
+function dnbCompanyDetailMatches(company, snapshot, expectedUrl) {
+  const normalize = (value) => String(value || "").normalize("NFKC")
+    .toLocaleLowerCase("de-DE").replace(/[^a-z0-9äöüß]+/g, " ").trim();
+  const identity = (raw) => {
+    try {
+      const url = new URL(raw);
+      if (!url.href.startsWith("https://app.dnbhoovers.com/")) return null;
+      return url.pathname.match(/^\/company\/([^/]+)(?:\/|$)/)?.[1] || null;
+    } catch { return null; }
+  };
+  const expected = identity(expectedUrl);
+  if (!expected || identity(snapshot?.url) !== expected) return false;
+  const name = normalize(company);
+  if (!name) return false;
+  const headings = Array.isArray(snapshot.headings)
+    ? snapshot.headings.filter((value) => typeof value === "string" && value.trim()) : [];
+  // A different observed heading cannot be rescued by the requested name in
+  // navigation, recommendations or the full body.
+  if (headings.length) return headings.some((value) => normalize(value) === name)
+    && !headings.some((value) => normalize(value) !== name);
+  const titleName = String(snapshot.title || "").split("|")[0].trim();
+  return normalize(titleName) === name;
+}
+
+function parseDnbWzEvidence(company, snapshot, expectedUrl) {
+  if (!dnbCompanyDetailMatches(company, snapshot, expectedUrl)) return null;
+  const text = typeof snapshot.text === "string" ? snapshot.text : "";
+  // WZ 2008 (DE) and its five-digit subclass must be explicit. Never infer
+  // that missing fifth digit from NACE, SIC, NOGA or OENACE.
+  const pattern = /\bWZ\s*2008\s*(?:\(\s*DE\s*\))?\s*(?:[|:]\s*)?(\d{5}|\d{2}\.\d{2}\.\d)\b(?![.\d])[^\r\n|]*/gi;
+  const matches = Array.from(text.matchAll(pattern));
+  if (!matches.length || new Set(matches.map((match) => match[1].replace(/\./g, ""))).size !== 1) return null;
+  const quote = matches[0][0].trim();
+  return {
+    field: "wz_code", value: matches[0][1], confidence: "medium",
+    source_url: snapshot.url, source_quote: quote,
+    note: `D&B Hoovers Firmenseite: ${quote}`,
+  };
+}
+"#;
+
 fn build_web_stack_authenticated_source_capture(
     source_id: &str,
     company: &str,
@@ -2602,6 +2644,7 @@ fn build_web_stack_authenticated_source_capture(
         r#"const sourceId = {};
 const company = {};
 const country = {};
+{}
 const allowedHosts = {{
   "dnbhoovers.com": ["dnbhoovers.com", "app.dnbhoovers.com"],
   "leadfeeder.com": ["leadfeeder.com", "app.leadfeeder.com"],
@@ -2715,17 +2758,20 @@ if (sourceId === "dnbhoovers.com") {{
         if (size > 4000) break;
       }}
       if (hostAllowed(page.url()) && /\/company\//i.test(page.url())) {{
-        const detail = await page.evaluate(() => String(document.body?.innerText || "").replace(/[ \t]+/g, " "));
-        // The classification year is not a code: "WZ 2008" read as wz_code=2008
-        // for HAMM AG (25.09.2026). Label and value may sit on separate lines.
-        const codeRe = /\b(WZ\s*2008|WZ|NACE(?:\s*Rev\.?\s*2)?|ÖNACE(?:\s*2008)?|NOGA(?:\s*2008)?)\b[^0-9]{{0,80}}(?!(?:1993|2003|2008)\b)(\d{{2}}(?:\.\d{{1,2}}){{1,2}}|\d{{4,5}})\b/i;
-        const code = detail.match(codeRe);
-        if (code) {{
-          push("wz_code", code[2], "medium", `D&B Hoovers Firmenseite: ${{code[1]}} ${{code[2]}}`, page.url());
-        }}
-        const marker = detail.search(/\b(Branchencodes?|Industry Codes|NACE|WZ\s*2008|NOGA|ÖNACE|SIC|NAICS)\b/i);
-        if (marker >= 0) {{
-          push("branche_codes_rohtext", detail.slice(Math.max(0, marker - 40), marker + 600).replace(/\n+/g, " | "), "medium", "D&B Hoovers Firmenseite: Abschnitt Branchencodes (Rohtext)", page.url());
+        const detail = await page.evaluate(() => ({{
+          url: location.href,
+          title: document.title,
+          headings: Array.from(document.querySelectorAll('h1, [data-testid="company-name"]'))
+            .map((node) => String(node.innerText || node.textContent || "").trim()),
+          text: String(document.body?.innerText || "").replace(/[ \t]+/g, " "),
+        }}));
+        if (dnbCompanyDetailMatches(company, detail, hit.url)) {{
+          const wz = parseDnbWzEvidence(company, detail, hit.url);
+          if (wz) records.push(wz);
+          const marker = detail.text.search(/\b(Branchencodes?|Industry Codes|NACE|WZ\s*2008|NOGA|ÖNACE|SIC|NAICS)\b/i);
+          if (marker >= 0) {{
+            push("branche_codes_rohtext", detail.text.slice(Math.max(0, marker - 40), marker + 600).replace(/\n+/g, " | "), "medium", "D&B Hoovers Firmenseite: Abschnitt Branchencodes (Rohtext)", detail.url);
+          }}
         }}
       }}
     }} catch {{}}
@@ -2755,6 +2801,7 @@ return {{
         serde_json::to_string(source_id)?,
         serde_json::to_string(company)?,
         serde_json::to_string(country)?,
+        DNB_BROWSER_WZ_PARSER,
     ))
 }
 
@@ -8825,8 +8872,8 @@ mod tests {
         assert!(dnb.contains("D&B Hoovers exact company result"));
         // The classification year "WZ 2008" must never be read as the code, and
         // the rendered script carries plain regex braces (format escapes gone).
-        assert!(dnb.contains("(?!(?:1993|2003|2008)\\b)"));
-        assert!(dnb.contains("[^0-9]{0,80}"));
+        assert!(dnb.contains("parseDnbWzEvidence(company, detail, hit.url)"));
+        assert!(dnb.contains("source_quote: quote"));
         assert!(dnb.contains("SIC|NAICS)\\b/i"));
         assert!(dnb.contains("(?:\\s*[KMB]\\b)?"));
 

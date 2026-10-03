@@ -173,6 +173,23 @@ existing browser controller and command policy. Recovery does not authenticate
 a session, pass review/validation, reopen terminal commands, or weaken the
 owned, expiring lease requirement for ordinary worker commands.
 
+### D&B classification evidence
+
+Direct authenticated company capture keeps WZ 2008 (DE) distinct from NACE,
+SIC, NOGA and OENACE. It accepts a five-digit WZ subclass only from the
+observed company profile with the expected company ID and an exact observed
+company heading or title. Conflicting WZ values produce no `wz_code`.
+The result retains the literal WZ section in `source_quote`; an NACE value
+never supplies a missing WZ digit. These browser-capture source gates do not
+certify an installed capture or the independently registered scrape script.
+
+The separate Direct+ JSON parser is compiled from Workjet, selected by the
+Cargo Git revision. Its WZ correction and executing regressions belong in
+native/web-stack, followed by a reviewed CTOX dependency and lockfile update.
+The resolved package must execute the explicit-WZ, foreign-scheme, incomplete,
+conflicting and equivalent-notation cases. Editing CTOX's inactive
+src/tools/web-stack copy does not change the compiled parser.
+
 ### Outbound research source receipts
 
 The native person-research command retains a `sellify_lookup_runs` receipt in

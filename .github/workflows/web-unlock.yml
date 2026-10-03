@@ -17,12 +17,24 @@ on:
     paths:
       - 'src/tools/web-stack/**'
       - 'src/skills/system/communication/web-unlock/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/web_stack_source.py'
+      - 'scripts/test_web_stack_source.py'
+      - 'scripts/web_stack_mutation.py'
+      - 'scripts/test_web_stack_mutation.py'
       - '.github/workflows/web-unlock.yml'
   pull_request:
     branches: [main]
     paths:
       - 'src/tools/web-stack/**'
       - 'src/skills/system/communication/web-unlock/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'scripts/web_stack_source.py'
+      - 'scripts/test_web_stack_source.py'
+      - 'scripts/web_stack_mutation.py'
+      - 'scripts/test_web_stack_mutation.py'
       - '.github/workflows/web-unlock.yml'
   workflow_dispatch:
     inputs:
@@ -38,6 +50,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_BUILD_JOBS: "2"
+  RUST_TEST_THREADS: "2"
   CARGO_TARGET_DIR: target
 
 jobs:
@@ -66,11 +80,14 @@ jobs:
             libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev \
             jq sqlite3
 
+      - name: Test web-stack source binding
+        run: python3 -m unittest discover -s scripts -p 'test_web_stack*.py'
+
       - name: Build ctox
-        run: cargo build --locked -p ctox
+        run: python3 scripts/web_stack_source.py daemon-build
 
       - name: Unlock unit tests
-        run: "cargo test --locked --manifest-path src/tools/web-stack/Cargo.toml --lib unlock:: --quiet"
+        run: "python3 scripts/web_stack_source.py test -- --lib unlock:: --quiet -- --test-threads=2"
 
       - name: Stage 1 E2E
         run: src/tools/web-stack/scripts/test_web_unlock_e2e.sh --stage1
@@ -104,14 +121,9 @@ jobs:
             libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev \
             jq sqlite3
 
-      - name: Build ctox
-        run: cargo build --locked -p ctox
-
-      - name: Install patchright + chromium
-        run: |
-          mkdir -p runtime/browser/interactive-reference
-          ./target/debug/ctox web browser-prepare \
-            --install-reference --install-browser
+      - name: Test web-stack source binding
+        run: python3 -m unittest discover -s scripts -p 'test_web_stack*.py'
 
       - name: Stage 2 E2E
+        # Owns isolated canonical source, daemon builds and browser runtime.
         run: src/tools/web-stack/scripts/test_web_unlock_e2e.sh --stage2
