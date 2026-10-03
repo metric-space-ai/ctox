@@ -6,6 +6,48 @@ use std::fs;
 use std::sync::{Arc, Barrier};
 use std::thread;
 
+#[cfg(unix)]
+#[test]
+fn queue_turn_fence_rejects_replaced_store_even_with_replayed_lease() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = resolve_db_path(root.path(), None);
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let create = |path: &Path| -> Result<()> {
+        let conn = Connection::open(path)?;
+        conn.execute_batch(
+            "CREATE TABLE communication_routing_state (
+                message_key TEXT, route_status TEXT, lease_worker_id TEXT
+             );
+             INSERT INTO communication_routing_state VALUES
+                ('queue:system::target', 'leased', 'worker-target');",
+        )?;
+        Ok(())
+    };
+    create(&path)?;
+    let fence = QueueTurnLeaseFence {
+        root: root.path().to_owned(),
+        message_keys: vec!["queue:system::target".into()],
+        worker_id: "worker-target".into(),
+    };
+    let reader = fence.open_reader()?;
+    assert!(fence.still_owned(&reader)?);
+    std::fs::rename(&path, path.with_extension("retired"))?;
+    create(&path)?;
+    // Both files contain the same lease. The retained SQLite connection
+    // still reads the retired file, so a row-only check would allow the turn.
+    let retired_still_leased: bool = reader.connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM communication_routing_state
+         WHERE message_key='queue:system::target' AND route_status='leased'
+         AND lease_worker_id='worker-target')",
+        [],
+        |row| row.get(0),
+    )?;
+    assert!(retired_still_leased);
+    assert!(!fence.still_owned(&reader)?);
+    assert!(fence.still_owned(&fence.open_reader()?)?);
+    Ok(())
+}
+
 #[test]
 fn queue_turn_fence_observes_cancel_and_preserves_other_worker() -> Result<()> {
     let root = tempfile::tempdir()?;
@@ -97,6 +139,7 @@ fn queue_turn_fence_observes_cancel_and_preserves_other_worker() -> Result<()> {
     assert!(!fence("queue:system::missing", "worker-target").still_owned(&reader)?);
     assert!(fence(&other.message_key, "").open_reader().is_err());
     assert!(reader
+        .connection
         .execute("DELETE FROM communication_routing_state", [])
         .is_err());
     Ok(())

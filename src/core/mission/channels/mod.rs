@@ -4216,23 +4216,63 @@ pub(crate) struct QueueTurnLeaseFence {
     pub(crate) worker_id: String,
 }
 
+pub(crate) struct QueueTurnLeaseReader {
+    connection: Connection,
+    #[cfg(unix)]
+    identity: (u64, u64),
+}
+
+#[cfg(unix)]
+fn queue_turn_store_identity(path: &Path) -> std::io::Result<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let metadata = std::fs::metadata(path)?;
+    Ok((metadata.dev(), metadata.ino()))
+}
+
 impl QueueTurnLeaseFence {
-    pub(crate) fn open_reader(&self) -> Result<Connection> {
+    pub(crate) fn open_reader(&self) -> Result<QueueTurnLeaseReader> {
         anyhow::ensure!(
             !self.message_keys.is_empty() && !self.worker_id.trim().is_empty(),
             "queue turn cancelled: missing native lease identity"
         );
-        let conn = Connection::open_with_flags(
-            resolve_db_path(&self.root, None),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )?;
+        let path = resolve_db_path(&self.root, None);
+        #[cfg(unix)]
+        let identity = queue_turn_store_identity(&path)?;
+        let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        #[cfg(unix)]
+        anyhow::ensure!(
+            queue_turn_store_identity(&path)? == identity,
+            "queue turn cancelled: native store changed while opening lease reader"
+        );
         // Keep one read-only connection per bounded turn, without schema
         // repair, write transactions or a long-lived WAL read transaction.
         conn.busy_timeout(std::time::Duration::from_millis(100))?;
-        Ok(conn)
+        Ok(QueueTurnLeaseReader {
+            connection: conn,
+            #[cfg(unix)]
+            identity,
+        })
     }
 
-    pub(crate) fn still_owned(&self, conn: &Connection) -> Result<bool> {
+    pub(crate) fn still_owned(&self, reader: &QueueTurnLeaseReader) -> Result<bool> {
+        let path = resolve_db_path(&self.root, None);
+        #[cfg(unix)]
+        let conn = {
+            if queue_turn_store_identity(&path)? != reader.identity {
+                return Ok(false);
+            }
+            &reader.connection
+        };
+        // Platforms without a stable file identity read the current path on
+        // every check rather than trusting the retained connection's file.
+        #[cfg(not(unix))]
+        let conn = {
+            let _ = &reader.connection;
+            let conn =
+                Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            conn.busy_timeout(std::time::Duration::from_millis(100))?;
+            conn
+        };
         for key in &self.message_keys {
             let owned: bool = conn.query_row(
                 "SELECT EXISTS(SELECT 1 FROM communication_routing_state
@@ -4243,6 +4283,10 @@ impl QueueTurnLeaseFence {
             if !owned {
                 return Ok(false);
             }
+        }
+        #[cfg(unix)]
+        if queue_turn_store_identity(&path)? != reader.identity {
+            return Ok(false);
         }
         Ok(true)
     }
