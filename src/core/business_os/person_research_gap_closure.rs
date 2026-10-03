@@ -5518,6 +5518,98 @@ mod tests {
     }
 
     #[test]
+    fn native_writeback_without_an_id_has_distinct_receipts_and_no_invented_attempt(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-native-receipt";
+        let research_command_id = "research-native-receipt";
+        create_chat_fixture_with_sellify(
+            temp.path(),
+            research_command_id,
+            record_id,
+            &["firma_telefon"],
+        )?;
+        assert!(channels::load_queue_task_for_business_os_command(
+            temp.path(),
+            research_command_id
+        )?
+        .is_none());
+        let mut prior =
+            store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+                .context("fixture lead")?;
+        prior["field_status"] = serde_json::json!({
+            "firma_telefon": {
+                "status": "no_match",
+                "revision": {"writeback_id": "old-receipt"},
+                "review": {"verdict": "refuted"}
+            },
+            "firma_name": {"status": "verified", "value": "Untouched AG"}
+        });
+        let untouched = prior["field_status"]["firma_name"].clone();
+        store::upsert_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id, 1, prior)?;
+        let mut command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id": record_id,
+                "module": "outbound-lead-generation",
+                "research_command_id": research_command_id,
+                "gap_task_id": "",
+                "field_status": {
+                    "firma_telefon": {
+                        "status": "verified", "value": "+4940636841000",
+                        "sources": [{
+                            "source_id": "sasol.com",
+                            "url": "https://www.sasol.com/contact",
+                            "quote": "+4940636841000"
+                        }],
+                        "revision": {"writeback_id": "caller-forged", "attempt": 999},
+                        "review": {"verdict": "refuted"}
+                    }
+                },
+                "result": {
+                    "fields": {"firma_telefon": {"value": "+4940636841000"}},
+                    "person_records": [], "evidence": []
+                }
+            }),
+        );
+        command.id = None;
+        let mut previous_id = None;
+        for _ in 0..2 {
+            let result = handle_research_writeback(temp.path(), &command)?;
+            let id = result["writeback_id"]
+                .as_str()
+                .context("native receipt is missing")?;
+            let receipt_uuid = id
+                .strip_prefix("native-writeback:")
+                .context("native receipt namespace is missing")?;
+            assert_eq!(uuid::Uuid::parse_str(receipt_uuid)?.get_version_num(), 4);
+            assert_ne!(previous_id.as_deref(), Some(id));
+            let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+                .context("persisted native writeback")?;
+            let status = &lead["field_status"]["firma_telefon"];
+            assert_eq!(status["status"], "verified", "{result}");
+            assert_eq!(status["revision"]["writeback_id"], id);
+            assert_eq!(status["revision"]["command_id"], research_command_id);
+            assert_eq!(status["revision"].get("attempt"), Some(&Value::Null));
+            assert!(status["revision"]["written_at_ms"].as_i64().unwrap() > 0);
+            assert_eq!(status.get("review"), Some(&Value::Null));
+            assert_eq!(lead["field_status"]["firma_name"], untouched);
+            previous_id = Some(id.to_string());
+        }
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("lead before rejected empty identifier")?;
+        command.id = Some(" ".to_string());
+        let error = handle_research_writeback(temp.path(), &command).unwrap_err();
+        assert!(error.to_string().contains("writeback command id is empty"));
+        assert_eq!(
+            store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?,
+            Some(saved),
+            "rejecting an empty supplied identifier must not publish another revision"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn a_checked_sellify_value_counts_as_one_source_and_a_forged_one_as_none() -> anyhow::Result<()>
     {
         let temp = tempfile::tempdir()?;
