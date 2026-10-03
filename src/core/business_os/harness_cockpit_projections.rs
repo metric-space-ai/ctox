@@ -129,10 +129,18 @@ fn persisted_snapshot(root: &Path) -> Result<WorkerSnapshot> {
             |row| row.get(0),
         )
         .optional()?;
-    Ok(raw
+    let mut snapshot: WorkerSnapshot = raw
         .map(|raw| serde_json::from_str(&raw))
         .transpose()?
-        .unwrap_or_default())
+        .unwrap_or_default();
+    // Durable diagnostics survive restart; live worker authority does not.
+    // Only a current process publication can advertise active task IDs again.
+    snapshot.service_running = false;
+    snapshot.busy = false;
+    snapshot.worker_active_count = 0;
+    snapshot.worker_phase = None;
+    snapshot.active_task_ids.clear();
+    Ok(snapshot)
 }
 
 struct Pump {

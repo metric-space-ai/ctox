@@ -66,6 +66,8 @@ pub(crate) struct ChatTurnSessionOptions {
     /// Service-owned durable completion marker. When present, the successful
     /// reply is bound to this attempt before any assistant-message effect.
     pub(crate) worker_attempt: Option<WorkerAttemptContext>,
+    /// Native worker lease, never a model-provided task or thread selector.
+    pub(crate) queue_turn_lease: Option<crate::channels::QueueTurnLeaseFence>,
 }
 
 struct ToolFreeSemanticSummarizer {
@@ -917,24 +919,26 @@ where
             emit(&format!("worker-progress {}", event));
         };
         let reply = match session.as_deref_mut() {
-            Some(sess) => sess.run_turn_inner_with_context_and_progress(
+            Some(sess) => sess.run_turn_inner_with_context_progress_and_lease(
                 prompt,
                 None,
                 Some(Duration::from_secs(config.turn_timeout_secs)),
                 None,
                 &mut emit_progress,
                 options.required_initial_tool.as_deref(),
+                options.queue_turn_lease.as_ref(),
             )?,
             None => owned_session
                 .as_mut()
                 .expect("owned persistent session should exist when no session was supplied")
-                .run_turn_inner_with_context_and_progress(
+                .run_turn_inner_with_context_progress_and_lease(
                     prompt,
                     None,
                     Some(Duration::from_secs(config.turn_timeout_secs)),
                     None,
                     &mut emit_progress,
                     options.required_initial_tool.as_deref(),
+                    options.queue_turn_lease.as_ref(),
                 )?,
         };
         emit("persist-assistant-turn");
@@ -1206,24 +1210,26 @@ where
         emit(&format!("worker-progress {}", event));
     };
     let reply = match session.as_deref_mut() {
-        Some(sess) => sess.run_turn_inner_with_context_and_progress(
+        Some(sess) => sess.run_turn_inner_with_context_progress_and_lease(
             &rendered_prompt.latest_user_prompt,
             Some(&rendered_prompt.context_instructions),
             Some(Duration::from_secs(config.turn_timeout_secs)),
             exact_prompt_preflight.clone(),
             &mut emit_progress,
             options.required_initial_tool.as_deref(),
+            options.queue_turn_lease.as_ref(),
         )?,
         None => owned_session
             .as_mut()
             .expect("owned persistent session should exist when no session was supplied")
-            .run_turn_inner_with_context_and_progress(
+            .run_turn_inner_with_context_progress_and_lease(
                 &rendered_prompt.latest_user_prompt,
                 Some(&rendered_prompt.context_instructions),
                 Some(Duration::from_secs(config.turn_timeout_secs)),
                 exact_prompt_preflight.clone(),
                 &mut emit_progress,
                 options.required_initial_tool.as_deref(),
+                options.queue_turn_lease.as_ref(),
             )?,
     };
     emit("persist-assistant-turn");

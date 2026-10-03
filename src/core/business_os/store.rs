@@ -91,8 +91,7 @@ use super::store_projections::{
     is_placeholder_business_chat_owner, materialize_pending_business_chat, normalize_queue_status,
     persist_terminal_business_chat_command_projection, queue_projection_command_id,
     queue_projection_execution_phase, queue_projection_structured_status,
-    queue_projection_terminal_status, queue_task_payload, refresh_queue_task_projection,
-    write_queue_task_projection,
+    queue_projection_terminal_status, refresh_queue_task_projection, write_queue_task_projection,
 };
 use super::store_release_review::{
     data_access_review_from_release_snapshot, module_release_data_access_review_summary,
@@ -19677,17 +19676,10 @@ pub fn update_ctox_task(
     )?;
     let now = now_ms() as i64;
     let command_id = queue_projection_command_id(&conn, &task_id)?;
-    let structured_status =
-        queue_projection_structured_status(&conn, command_id.as_deref(), &task_id)?;
-    write_queue_task_projection(&conn, command_id.as_deref(), &updated, now)?;
+    let task_payload = write_queue_task_projection(&conn, command_id.as_deref(), &updated, now)?;
     Ok(serde_json::json!({
         "ok": true,
-        "task": queue_task_payload(
-            command_id.as_deref(),
-            &updated,
-            structured_status.as_deref(),
-            now,
-        )
+        "task": task_payload
     }))
 }
 

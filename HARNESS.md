@@ -18,6 +18,30 @@ The core design rule is still durable-state first: prompts may describe work,
 but completion, review, retries, durable spawn edges, and outcome
 evidence must be explainable from persisted state, not from assistant prose.
 
+## Queue Cancellation and Live Turns
+
+Durable queue cancellation also revokes the running in-process harness turn's
+native lease. Service-owned queue turns bind the exact message keys and
+instance-unique `lease_worker_id` before model execution. One read-only SQLite
+connection checks that identity every 250 ms without retaining a read
+transaction or performing schema repair. On Unix, the reader also fences the
+native file's device/inode before and after its reads: a replacement store
+cannot authorize the old turn through a retained connection, even if it replays
+the same lease rows. Other platforms reopen the current path for each check.
+Cancellation, a missing row, a replaced store or a replacement worker stops the
+old turn; unrelated workers and a new lease are not interrupted. An unverifiable
+lease fails closed.
+
+The direct-session adapter submits `TurnInterrupt` for its actual thread and
+turn while continuing to drain events, with a ten-second bound. Only a terminal
+event matching both identities is a stop witness. An acknowledgement alone is
+not one. The cancelled session is discarded even when that witness is missing;
+its bounded existing teardown remains the fallback. Pre-start and pre-reply
+checks reject revoked work, including cancellation during context preparation.
+Usage already observed before interruption remains recorded even though the
+reply is suppressed. This does not undo writes committed before the interrupt
+or implement cancellation for a separately owned external executor.
+
 ## Runtime State
 
 Core runtime state lives in `runtime/ctox.sqlite3`. The central path helper is

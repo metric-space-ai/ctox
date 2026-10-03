@@ -6746,6 +6746,13 @@ fn start_prompt_worker(
                 source_label: job.source_label.clone(),
                 progress_error: Arc::clone(&progress_error),
             });
+            if job.source_label == "queue" && !job.leased_message_keys.is_empty() {
+                session_options.queue_turn_lease = Some(channels::QueueTurnLeaseFence {
+                    root: root.clone(),
+                    message_keys: job.leased_message_keys.clone(),
+                    worker_id: worker_activity.lease_worker_id.clone().unwrap_or_default(),
+                });
+            }
             let invoked_result = if let Some(attempt) = recoverable_attempt.as_ref() {
                 push_event(
                     &event_state,
@@ -11636,6 +11643,7 @@ fn chat_turn_session_options_for_queue_job(
             additional_writable_roots: Vec::new(),
             additional_readable_roots: Vec::new(),
             worker_attempt: None,
+            queue_turn_lease: None,
             crew_persona: None,
             crew_memory_block: None,
         };
@@ -11660,6 +11668,7 @@ fn chat_turn_session_options_for_queue_job(
             additional_writable_roots: Vec::new(),
             additional_readable_roots: Vec::new(),
             worker_attempt: None,
+            queue_turn_lease: None,
             crew_persona: None,
             crew_memory_block: None,
         };
@@ -11677,6 +11686,7 @@ fn chat_turn_session_options_for_queue_job(
             additional_writable_roots: Vec::new(),
             additional_readable_roots: Vec::new(),
             worker_attempt: None,
+            queue_turn_lease: None,
             crew_persona: None,
             crew_memory_block: None,
         };
