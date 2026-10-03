@@ -38,6 +38,7 @@ ctox-postgres-adapter = { path = "src/tools/postgres-adapter" }
 rxdb = { package = "ctox-rxdb", path = "src/core/rxdb" }
 ctox-sync = { path = "src/core/sync", features = ["webrtc"] }
 ctox-mailserver = { path = "src/core/mailserver" }
+ctox-transfers = { path = "src/core/transfers" }
 crossterm = "0.28"
 # Ohne Vorgabemerkmale: `https` bindet libgit2 gegen OpenSSL, und OpenSSL
 # kollidiert auf Linux mit dem BoringSSL aus wreq. Die Wurzel benutzt git2 nur
@@ -131,6 +132,7 @@ exclude = [
     "src/core/mailserver",
     "src/core/rxdb",
     "src/core/sync",
+    "src/core/transfers",
     "src/tools/appsec-pentest",
     "src/tools/doc-stack",
     "src/tools/pdf-parse",

@@ -560,6 +560,22 @@ pub(crate) fn mobile_invite_sync_config(
 }
 pub(crate) const BUSINESS_OS_SIGNALING_AUTH_VERSION: &str = "ctox-role-bound-v1";
 
+/// Safe inside an auxiliary handler: avoids the recursive peer liveness
+/// snapshot in sync_config while preserving the source's configured ICE/TURN.
+pub(super) fn native_transfer_ice_config(
+    root: &Path,
+    device_id: &str,
+) -> (Vec<Value>, Option<i64>) {
+    let mut servers = ice_servers_config(root);
+    if let Some(server) = ephemeral_turn_server(root, device_id) {
+        servers.push(server);
+    }
+    let expiry = ice_diagnostics(&servers)
+        .get("credentialExpiresAtMs")
+        .and_then(Value::as_i64);
+    (servers, expiry)
+}
+
 pub(crate) fn signaling_auth_config(
     root: &Path,
     room_password: &str,

@@ -225,6 +225,27 @@ pub fn read_secret_values(root: &Path, keys: &[(&str, &str)]) -> Result<Vec<Stri
 /// Encrypts a credential tuple first and commits every record in one SQLite
 /// transaction. Encryption or SQL failure leaves the previous tuple intact.
 pub fn write_secret_records(root: &Path, records: &[SecretRecordWrite<'_>]) -> Result<()> {
+    mutate_secret_records(root, &[], records, &[])?;
+    Ok(())
+}
+
+/// Compare and commit inside one IMMEDIATE SQLite transaction. Stale native
+/// refreshes/disconnects cannot replace a later account or revocation.
+pub(crate) fn compare_and_write_secret_records(
+    root: &Path,
+    guards: &[(&str, &str, Option<&str>)],
+    records: &[SecretRecordWrite<'_>],
+    deletes: &[(&str, &str)],
+) -> Result<bool> {
+    mutate_secret_records(root, guards, records, deletes)
+}
+
+fn mutate_secret_records(
+    root: &Path,
+    guards: &[(&str, &str, Option<&str>)],
+    records: &[SecretRecordWrite<'_>],
+    deletes: &[(&str, &str)],
+) -> Result<bool> {
     let (key_bytes, _) = ensure_secret_master_key(root)?;
     let encrypted = records
         .iter()
@@ -237,7 +258,29 @@ pub fn write_secret_records(root: &Path, records: &[SecretRecordWrite<'_>]) -> R
         })
         .collect::<Result<Vec<_>>>()?;
     let mut conn = open_secret_db(root)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    for &(scope, name, expected) in guards {
+        let current: Option<(String, String)> = tx.query_row(
+            "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
+            params![scope, name],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?;
+        let current = current
+            .map(|(nonce, ciphertext)| {
+                let value = decrypt_secret_value(&key_bytes, &nonce, &ciphertext)?;
+                Ok::<_, anyhow::Error>(std::str::from_utf8(&value)?.to_owned())
+            })
+            .transpose()?;
+        if current.as_deref() != expected {
+            return Ok(false);
+        }
+    }
+    for (scope, name) in deletes {
+        tx.execute(
+            "DELETE FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
+            params![scope, name],
+        )?;
+    }
     let now = now_iso_string();
     for (record, encrypted, metadata_json) in encrypted {
         let secret_id = format!("secret:{}:{}", record.scope, stable_digest(record.name));
@@ -267,7 +310,7 @@ pub fn write_secret_records(root: &Path, records: &[SecretRecordWrite<'_>]) -> R
         )?;
     }
     tx.commit()?;
-    Ok(())
+    Ok(true)
 }
 
 /// Deletes a credential tuple in one SQLite transaction. This is used after
@@ -305,6 +348,40 @@ pub fn write_secret_record(
     metadata: Value,
 ) -> Result<SecretRecordView> {
     put_secret(root, scope, name, value, description, metadata)
+}
+
+/// Atomically create an encrypted record without ever replacing its existing
+/// value. SQLite's unique tuple and single INSERT arbitrate across processes;
+/// callers must read the stored winner rather than return their candidate.
+pub(crate) fn create_secret_record_if_absent(
+    root: &Path,
+    scope: &str,
+    name: &str,
+    value: &str,
+    metadata: Value,
+) -> Result<bool> {
+    let conn = open_secret_db(root)?;
+    ensure_secret_schema(&conn)?;
+    let (key_bytes, _) = ensure_secret_master_key(root)?;
+    let encrypted = encrypt_secret_value(&key_bytes, value.as_bytes())?;
+    let now = now_iso_string();
+    let secret_id = format!("secret:{}:{}", scope, stable_digest(name));
+    Ok(conn.execute(
+        "INSERT INTO ctox_secret_records
+         (secret_id, scope, secret_name, description, metadata_json,
+          nonce_b64, ciphertext_b64, created_at, updated_at)
+         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?7)
+         ON CONFLICT(scope, secret_name) DO NOTHING",
+        params![
+            secret_id,
+            scope,
+            name,
+            serde_json::to_string(&metadata)?,
+            encrypted.nonce_b64,
+            encrypted.ciphertext_b64,
+            now
+        ],
+    )? == 1)
 }
 
 pub fn delete_secret_record(root: &Path, scope: &str, name: &str) -> Result<()> {

@@ -1102,8 +1102,8 @@ The three declarations must agree: `module.json` `collections`,
 ### 4.1 Crate layout (`src/core/rxdb/`)
 
 Standalone Cargo package `ctox-rxdb` (lib name `rxdb`), with its own
-`Cargo.toml` and `Cargo.lock`. The root `Cargo.toml` has **no `[workspace]`
-section**; the crate is consumed as a path dependency
+`Cargo.toml` and `Cargo.lock`. The root workspace excludes this crate;
+it is consumed as a path dependency
 (`rxdb = { package = "ctox-rxdb", path = "src/core/rxdb" }`), so its tests run
 only via `--manifest-path` (see §10).
 
@@ -1436,6 +1436,22 @@ frames are intrinsically high, oversized `masterWrite`s stay low, frames for
 active collections are high.
 
 ### 6.4 Demand-loading RPCs (V1.5)
+
+The native `NativeSyncSession::file_range` consumer uses the existing
+`rxdb.file.fetch` exchange on an already admitted connection. Each request
+requires an explicit range of at most 2 MiB and a fresh generated request ID.
+It shares the existing eight-reader budget with native query pages. Each
+Base64 frame is decoded independently and checked against its chunk SHA-256;
+sequence gaps, malformed bytes, wrong hashes, cancellation, disconnect,
+timeout, and a terminal frame before the requested byte count discard the
+entire range. Acceptance and an ordered empty terminal frame are both required.
+Dropping a read sends cancellation through the pool-owned task lifecycle for
+the same connection generation. This is a bounded transport consumer, not a
+durable checkpoint: the caller must verify the complete content identity and
+flush the destination before advancing durable transfer state or issuing a
+receipt. Native policy, destination admission and execution fencing remain
+with their existing owners. The new consumer regressions and full native/browser
+gates must execute before this interface is treated as verified.
 
 From `protocol_contract_generated.rs` (and the JS twin): `rxdb.query.fetch` /
 `rxdb.query.chunk` / `rxdb.query.error` / `rxdb.query.cancel`, and

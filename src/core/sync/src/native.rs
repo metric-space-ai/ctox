@@ -418,6 +418,24 @@ impl NativeSyncSession {
         .await
     }
 
+    /// Read one bounded file range over the current admitted WebRTC connection.
+    /// The host owns source authorization, durable resume and final content identity.
+    pub async fn file_range(
+        &self,
+        connection: rxdb::plugins::replication_webrtc::WebRTCRsConnection,
+        request: rxdb::plugins::replication_webrtc::file_fetch_handler::FileFetchRequest,
+    ) -> Result<
+        rxdb::plugins::replication_webrtc::file_fetch_client::FileRangeBytes,
+        rxdb::rx_error::RxError,
+    > {
+        rxdb::plugins::replication_webrtc::file_fetch_client::fetch_file_range(
+            self.pool().clone(),
+            connection,
+            request,
+        )
+        .await
+    }
+
     /// Read a nonce-bound source proof from a current admitted DataChannel.
     /// The key and instance pin must come from trusted host enrollment, not
     /// signaling or the reply. This does not install credentials, authenticate

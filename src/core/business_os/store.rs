@@ -17473,6 +17473,48 @@ pub(super) fn verify_webrtc_capability_actor(root: &Path, token: &str) -> Option
     verified_webrtc_capability_claims(root, token).map(|claims| (claims.user_id, claims.role))
 }
 
+/// Renew only the already admitted device assertion. No user upsert, role
+/// change, new pairing or caller-supplied principal is performed here.
+pub(super) fn renew_native_transfer_capability(
+    root: &Path,
+    token: &str,
+) -> anyhow::Result<(String, i64)> {
+    let before = verified_webrtc_capability_claims(root, token)
+        .ok_or_else(|| anyhow::anyhow!("native transfer account unauthorized"))?;
+    anyhow::ensure!(
+        before.device_binding.is_some(),
+        "enrolled native device required"
+    );
+    let now = now_ms() as i64;
+    let expires = now
+        .checked_add(CAPABILITY_TOKEN_TTL_MS)
+        .ok_or_else(|| anyhow::anyhow!("native transfer capability unavailable"))?;
+    let secret = capability_signing_secret(root)?;
+    let renewed = super::capability::issue_capability_token_with_epoch_and_identity(
+        &secret,
+        &before.user_id,
+        before.email.as_deref(),
+        &before.role,
+        before.actor_epoch,
+        now,
+        expires,
+        before.device_binding.as_ref(),
+    );
+    let after = verified_webrtc_capability_claims(root, token)
+        .ok_or_else(|| anyhow::anyhow!("native transfer account revoked"))?;
+    let issued = verified_webrtc_capability_claims(root, &renewed)
+        .ok_or_else(|| anyhow::anyhow!("native transfer renewal rejected"))?;
+    anyhow::ensure!(
+        before == after
+            && issued.user_id == before.user_id
+            && issued.role == before.role
+            && issued.actor_epoch == before.actor_epoch
+            && issued.device_binding == before.device_binding,
+        "native transfer account changed"
+    );
+    Ok((renewed, expires))
+}
+
 pub(super) fn capability_allows_collection_permission(
     root: &Path,
     token: &str,

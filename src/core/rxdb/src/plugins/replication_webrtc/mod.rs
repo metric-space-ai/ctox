@@ -32,6 +32,7 @@
 //! bundle.
 
 pub mod connection_handler_rs;
+pub mod file_fetch_client;
 pub mod file_fetch_handler;
 pub mod index_mod;
 pub mod local_session;
