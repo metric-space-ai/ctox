@@ -104,12 +104,16 @@
   a present empty/null/unmatched model list. Legacy dispatches without model_info
   retain the selected local fallback; central model_info still defaults compatibility
   to false. Three regressions cover presence across execution paths and exact prefixes.
+  Twelve hard-coded Devin fallback records and the always-present SWE-1.6 Slow
+  override now retain upstream metadata, namespace provenance and catalog precedence.
+  Two regressions cover these records; the separate56-record embedded Devin catalog,
+  variant aggregation, remote update/store lifecycle and runtime wiring remain open.
   Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
   account-kind collisions, legacy Home execution, public JSON boundaries, native
-  capability refresh and built-in metadata. There are99 prepared candidate test
+  capability refresh and built-in metadata. There are101 prepared candidate test
   functions in total; none of the current candidate Cargo/Go checks has executed.
   Narrow formatting and whitespace checks passed. Other executor consumers,
-  hard-coded Devin model definitions,
+  separate Devin catalog/runtime integration,
   remaining v8 semantic deltas and live thinking update-intent propagation remain open;
   this is not runtime or promotion acceptance.
   Source/target summary extraction

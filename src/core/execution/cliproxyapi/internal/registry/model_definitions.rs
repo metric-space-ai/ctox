@@ -248,6 +248,11 @@ pub fn models_for_channel(
         "antigravity" => catalog.antigravity.clone(),
         "xai" | "x-ai" | "grok" => with_xai_builtins(catalog.xai.clone()),
         "meta" | "muse" => catalog.meta.clone(),
+        "devin" => with_devin_builtins(if catalog.devin.is_empty() {
+            super::devin_builtin::static_devin_models()
+        } else {
+            catalog.devin.clone()
+        }),
         "gemini-interactions" => catalog.gemini.clone(),
         _ => return None,
     };
@@ -261,6 +266,7 @@ pub fn lookup_static_registry_model_info(
     if model_id.is_empty() {
         return None;
     }
+    let devin_static = super::devin_builtin::static_devin_models();
     [
         &catalog.claude,
         &catalog.gemini,
@@ -271,6 +277,7 @@ pub fn lookup_static_registry_model_info(
         &catalog.antigravity,
         &catalog.xai,
         &catalog.devin,
+        &devin_static,
         &catalog.meta,
     ]
     .into_iter()
@@ -301,6 +308,13 @@ pub fn with_codex_builtins(models: Vec<RegistryModelInfo>) -> Vec<RegistryModelI
 
 pub fn with_xai_builtins(models: Vec<RegistryModelInfo>) -> Vec<RegistryModelInfo> {
     upsert_model_infos(models, xai_builtins())
+}
+
+pub fn with_devin_builtins(models: Vec<RegistryModelInfo>) -> Vec<RegistryModelInfo> {
+    upsert_model_infos(
+        models,
+        vec![super::devin_builtin::devin_builtin_swe16_slow()],
+    )
 }
 
 fn upsert_model_infos(

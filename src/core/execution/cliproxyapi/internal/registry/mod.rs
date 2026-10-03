@@ -3,6 +3,7 @@
 
 mod codex_client_models;
 mod codex_client_models_updater;
+mod devin_builtin;
 mod model_definitions;
 mod model_registry;
 mod model_updater;
