@@ -240,6 +240,16 @@ def stats(values):
                 median=statistics.median(known) if known else None,
                 distribution=[sum(lo <= v < hi for v in known) for lo, hi in [(0, 3), (3, 5), (5, 8), (8, 11)]])
 
+def stage_model(row, stage):
+    result = row.get(stage)
+    if isinstance(result, dict):
+        if "model" in result:
+            return result["model"]
+        if result.get("provenance", {}).get("model"):
+            return result["provenance"]["model"]
+    return row.get(stage + "_model", row.get("model"))
+
+
 def leaderboard_data(records):
     groups = {}
     seen = set()
@@ -249,15 +259,17 @@ def leaderboard_data(records):
             continue
         seen.add(key)
         rubric = row.get("rubric", row.get("schema"))
-        group = groups.setdefault((row["role"], row.get("model"), rubric), [])
-        group.append(row)
+        for model in {stage_model(row, stage) for stage in ("first", "corrected")}:
+            groups.setdefault((row["role"], model, rubric), []).append(row)
     result = []
     for (role, model, rubric), rows in sorted(groups.items(), key=lambda x: str(x[0])):
         def score(row, stage):
+            if model is None or stage_model(row, stage) != model:
+                return None
             value = row.get(stage)
             return value.get("weighted_total") if isinstance(value, dict) else value
-        first = [score(r, "first") for r in rows] if model else [None] * len(rows)
-        corrected = [score(r, "corrected") for r in rows] if model else [None] * len(rows)
+        first = [score(r, "first") for r in rows]
+        corrected = [score(r, "corrected") for r in rows]
         rework = [r["rework"] for r in rows if r.get("rework") not in (None, "unknown")]
         result.append(dict(role=role, model=model, rubric=rubric, deliveries=len(rows),
                            first=stats(first), corrected=stats(corrected),
@@ -283,11 +295,13 @@ def build(base):
         prov = recovered.get(row["actor_id"], {})
         model_set = {r["model"] for r in prov.get("turns", []) if r.get("model")}
         # Require exact head-correlated turn; session-constant model alone is insufficient.
-        exact = next((r for r in prov.get("bindings", []) if r.get("kind") == "source_action" and r.get("head") in
-                     (row.get("first_head"), row.get("corrected_head")) and r.get("model")), None)
-        if exact:
-            row["model"] = exact["model"]
-            row["provenance"] = exact
+        for stage in ("first", "corrected"):
+            exact = next((r for r in prov.get("bindings", []) if r.get("kind") == "source_action"
+                          and r.get("head") == row.get(stage + "_head") and r.get("model")), None)
+            row[stage + "_model"] = exact["model"] if exact else None
+            if exact:
+                row.setdefault("provenance", {})[stage] = exact
+        row["model"] = row.get("first_model") or row.get("corrected_model")
     database = Path.home() / ".codex/state_5.sqlite"
     workers = {j["thread_id"]: j for j in registry}
     for row in records + legacy:

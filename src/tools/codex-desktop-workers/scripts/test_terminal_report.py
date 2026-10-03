@@ -34,6 +34,16 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(output[0]["corrected"]["mean"],8)
         row["model"]=None
         self.assertIsNone(r.leaderboard_data([row])[0]["corrected"]["mean"])
+    def test_first_and_corrected_models_remain_separate(self):
+        row=dict(pr_url="pr",role="parent",actor_id="actor",schema=r.RUBRIC,model="gpt-6-astra",
+                 first={"model":"gpt-6-astra","weighted_total":4},
+                 corrected={"model":"gpt-6.1-sol","weighted_total":8},rework="bounded")
+        groups={g["model"]:g for g in r.leaderboard_data([row,copy.deepcopy(row)])}
+        self.assertEqual(groups["gpt-6-astra"]["first"]["mean"],4)
+        self.assertIsNone(groups["gpt-6-astra"]["corrected"]["mean"])
+        self.assertIsNone(groups["gpt-6.1-sol"]["first"]["mean"])
+        self.assertEqual(groups["gpt-6.1-sol"]["corrected"]["mean"],8)
+        self.assertEqual(groups["gpt-6.1-sol"]["deliveries"],1)
     def test_immutable_revisions_and_reject_self_score_live_stop(self):
         with tempfile.TemporaryDirectory() as temp:
             base=Path(temp)

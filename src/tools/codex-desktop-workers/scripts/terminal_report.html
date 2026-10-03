@@ -32,9 +32,12 @@ const known=a=>a.filter(v=>v!=null);
 const refs=a=>(a||[]).map(v=>'<p class="refs">'+(/^https:\/\/github\.com\//.test(v)?'<a target="_blank" rel="noopener" href="'+E(v)+'">'+E(v)+'</a>':E(v))+'</p>').join('');
 const criterion={correctness:'Korrektheit',assignment_fulfillment:'Auftragserfüllung',evidence_quality:'Nachweisqualität',closure_quality:'Abschlussqualität',efficiency:'Effizienz'};
 const all=[...D.assessments.map(a=>({...a,rubric:a.schema})),...D.legacy];
+const stageModel=(a,s)=>a[s]&&typeof a[s]==='object'?(Object.hasOwn(a[s],'model')?a[s].model:a[s].provenance?.model??a.model):Object.hasOwn(a,s+'_model')?a[s+'_model']:a.model;
+const actorModels=a=>[...new Set(['first','corrected'].map(s=>stageModel(a,s)).filter(Boolean))];
+const matchesModel=(a,m)=>!m||actorModels(a).includes(m)||(m==='unknown'&&actorModels(a).length===0);
 const value=(a,stage)=>a.rubric==='unified-actor-v1'?a[stage]?.weighted_total??null:a[stage]??null;
 const fill=(id,v,label)=>{$(id).innerHTML='<option value="">'+label+'</option>'+[...new Set(v)].sort().map(x=>'<option value="'+E(x)+'">'+E(x)+'</option>').join('')};
-fill('project',D.prs.map(p=>p.project),'Alle Projekte');fill('repo',D.prs.map(p=>p.repository),'Alle Repositories');fill('model',all.map(a=>a.model||'unknown'),'Alle Modelle');
+fill('project',D.prs.map(p=>p.project),'Alle Projekte');fill('repo',D.prs.map(p=>p.repository),'Alle Repositories');fill('model',all.flatMap(a=>actorModels(a).length?actorModels(a):['unknown']),'Alle Modelle');
 $('stamp').textContent='Abgeschlossene PRs · Stand '+day(D.snapshot_at)+' · offline lesbar';
 let page=0,visible=[],actors=[];
 function current(p,role){
@@ -51,20 +54,20 @@ function refresh(reset=true){
  visible=D.prs.filter(p=>{
  const aa=all.filter(a=>a.pr_url===p.url),date=day(p.mergedAt||p.closedAt),q=$('query').value.toLowerCase();
  return (!$('project').value||p.project===$('project').value)&&(!$('repo').value||p.repository===$('repo').value)&&
- (!$('role').value||aa.some(a=>a.role===$('role').value))&&(!$('model').value||aa.some(a=>(a.model||'unknown')===$('model').value))&&
+ (!$('role').value||aa.some(a=>a.role===$('role').value))&&(!$('model').value||aa.some(a=>matchesModel(a,$('model').value)))&&
  (!$('status').value||p.state===$('status').value)&&(!$('from').value||date>=$('from').value)&&(!$('through').value||date<=$('through').value)&&
  (!$('coverage').value||isScored(p)===($('coverage').value==='scored'))&&
  (!q||(p.repository+' #'+p.number+' '+p.title+' '+aa.map(a=>a.model+' '+a.actor_id).join(' ')).toLowerCase().includes(q));
  }).sort((a,b)=>(b.closedAt||'').localeCompare(a.closedAt||''));
- actors=all.filter(a=>visible.some(p=>p.url===a.pr_url)&&(!$('role').value||a.role===$('role').value)&&(!$('model').value||(a.model||'unknown')===$('model').value));
+ actors=all.filter(a=>visible.some(p=>p.url===a.pr_url)&&(!$('role').value||a.role===$('role').value)&&(!$('model').value||matchesModel(a,$('model').value)));
  const n=visible.length,assessed=visible.filter(isScored).length,cy=known(visible.map(p=>p.cycle_hours)),accepted=visible.filter(p=>D.assessments.some(a=>a.pr_url===p.url&&a.lifecycle?.acceptance?.state==='passed')).length;
  $('summary').innerHTML=[[n,'abgeschlossene PRs'],[assessed+'/'+n,'mit neuer Gesamtbewertung'],[visible.filter(p=>p.state==='MERGED').length,'gemergt'],[accepted,'Abnahme belegt'],[cy.length?median(cy).toFixed(1)+' h':'—','mediane Durchlaufzeit · n='+cy.length]].map(([v,l])=>'<div><b>'+v+'</b><span>'+l+'</span></div>').join('');
  for(const role of ['parent','worker']){
  const seen=new Set(),rr=actors.filter(a=>a.role===role&&a.rubric===$('rubric').value).filter(a=>{
  const key=JSON.stringify([a.pr_url,a.role,a.actor_id,a.rubric,a.package||'delivery']);if(seen.has(key))return false;seen.add(key);return true;
  }),group=new Map();
- for(const a of rr){const model=a.model||'unknown';if(!group.has(model))group.set(model,[]);group.get(model).push(a)}
- const rows=[...group].map(([model,aa])=>{const first=model==='unknown'?[]:known(aa.map(a=>value(a,'first'))),final=model==='unknown'?[]:known(aa.map(a=>value(a,'corrected'))),re=aa.filter(a=>a.rework&&a.rework!=='unknown');return {model,aa,first,final,re,mean:avg(final)}});
+ for(const a of rr){for(const model of new Set(['first','corrected'].map(s=>stageModel(a,s)||'unknown'))){if($('model').value&&model!==$('model').value)continue;if(!group.has(model))group.set(model,[]);group.get(model).push(a)}}
+ const rows=[...group].map(([model,aa])=>{const first=model==='unknown'?[]:known(aa.map(a=>stageModel(a,'first')===model?value(a,'first'):null)),final=model==='unknown'?[]:known(aa.map(a=>stageModel(a,'corrected')===model?value(a,'corrected'):null)),re=aa.filter(a=>a.rework&&a.rework!=='unknown');return {model,aa,first,final,re,mean:avg(final)}});
  rows.sort((a,b)=>(b.mean??-1)-(a.mean??-1));
  $(role+'board').innerHTML=rows.map(g=>'<tr><td class="model">'+E(g.model==='unknown'?'Modell unbekannt':g.model)+'<p class="hint">'+g.aa.length+' Lieferung'+(g.aa.length===1?'':'en')+'</p></td><td class="number">'+g.first.length+' / '+g.final.length+'</td><td class="number">'+F(avg(g.first))+'</td><td><span class="score">'+F(g.mean)+'</span>'+(g.mean!=null?'<div class="bar"><i style="width:'+g.mean*10+'%"></i></div>':'')+'</td><td class="number">'+F(median(g.final))+'</td><td class="number">'+g.re.filter(a=>a.rework!=='none').length+'/'+g.re.length+'</td></tr>').join('')||'<tr><td colspan="6" class="empty">Noch keine Bewertungen nach diesem Schema.</td></tr>';
  $(role+'note').textContent=$('rubric').value==='unified-actor-v1'?'einheitliches Schema':'historisches Schema';
@@ -74,7 +77,7 @@ function refresh(reset=true){
 }
 function actorCell(a){
  if(!a.length)return '<span class="hint">nicht zugeordnet</span>';
- return a.map(x=>'<div class="actor"><span class="model">'+E(x.model||'Modell nicht belegt')+'</span><p class="hint">'+E(x.harness||'Harness nicht belegt')+'</p>'+(x.registered_model&&!x.model?'<p class="hint">Modell im Auftrag: '+E(x.registered_model)+'</p>':'')+'</div>').join('');
+ return a.map(x=>'<div class="actor"><span class="model">'+E(actorModels(x).join(' → ')||'Modell nicht belegt')+'</span><p class="hint">'+E(x.harness||'Harness nicht belegt')+'</p>'+(x.registered_model&&!x.model?'<p class="hint">Modell im Auftrag: '+E(x.registered_model)+'</p>':'')+'</div>').join('');
 }
 function scoreCell(a){
  if(!a.length)return '<span class="hint">nicht bewertet</span>';
