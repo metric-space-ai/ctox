@@ -10,7 +10,7 @@ const retries = [...source.matchAll(/onRetry: async \(\) => \{([\s\S]*?)\n      
 function fixture(body, mode = 'delayed') {
   const listeners = new Map();
   const old = { id: 'old', ownerId: 'desktop-app:mail' };
-  const windows = [old];
+  const windows = mode === "already-closed" ? [] : [old];
   let mounted = 0;
   const emit = id => { for (const listener of listeners.values()) listener({ id }); };
   const finish = () => { windows.splice(0); emit(old.id); };
@@ -22,6 +22,7 @@ function fixture(body, mode = 'delayed') {
       destroy: () => {
         if (mode === 'veto') return Promise.resolve(false);
         if (mode === 'error') throw new Error('close failed');
+        if (mode === 'rejected') return Promise.reject(new Error('close failed'));
         if (mode === 'immediate') finish();
         return Promise.resolve(true);
       },
@@ -58,7 +59,13 @@ for (const [index, body] of retries.entries()) {
     assert.equal(f.mounted(), 1);
     assert.equal(f.listeners.size, 0);
   });
-  for (const mode of ['veto', 'error']) test(`recovery ${index} preserves ${mode}`, async () => {
+  test(`recovery ${index} reopens an already removed window without waiting`, async () => {
+    const f = fixture(body, 'already-closed');
+    await f.retry();
+    assert.equal(f.mounted(), 1);
+    assert.equal(f.listeners.size, 0);
+  });
+  for (const mode of ['veto', 'error', 'rejected']) test(`recovery ${index} preserves ${mode}`, async () => {
     const f = fixture(body, mode);
     await assert.rejects(f.retry());
     assert.equal(f.mounted(), 0);
