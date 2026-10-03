@@ -149,10 +149,12 @@ the accepted pin:
   a winning custom `apply_patch` declaration becomes a function, explicit
   custom patch history becomes function calls, and a Chat function of the
   same name wins over the translated custom tool. The streaming input decoder,
-  custom-tool event builders, and `ApplyPatchResponsesBridge` are ported.
-  The bridge source is uncompiled. `ApplyPatchResponsesState` is not, so Kimi
-  still translates the normalized request to chat and xAI and Meta still have
-  no live response-path caller.
+  custom-tool event builders, `ApplyPatchResponsesBridge`, and
+  `ApplyPatchResponsesState` are ported. Both are uncompiled. The state
+  covers dispatcher identity, snapshots, SSE framing, and terminal
+  restoration, with the upstream helper regressions. Kimi still translates
+  the normalized request to chat, and xAI and Meta still have no live
+  response-path caller.
 - API-key model-compatibility helpers integer-normalize before the host
   processor. The six `Convert*WithCompat` translators are not ported, and
   the update-intent flag stays false.

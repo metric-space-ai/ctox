@@ -6,8 +6,8 @@
 //!
 //! Winners are collected before rewriting. `ApplyPatchResponsesBridge`
 //! converts function-call events for a custom `apply_patch` declaration.
-//! `ApplyPatchResponsesState` is still the executor stream wrapper and is
-//! not in this module.
+//! `ApplyPatchResponsesState` owns one bridge for a non-native executor stream.
+//! That state lives in the executor helper, not in this module.
 
 use std::collections::{HashMap, HashSet};
 
@@ -120,7 +120,7 @@ fn normalize_prepared(raw: &[u8]) -> Result<Vec<u8>, &'static str> {
     Ok(output)
 }
 
-fn prefer_chat_function_patch_tools(original: &[u8], declarations: &[u8]) -> Vec<u8> {
+pub(crate) fn prefer_chat_function_patch_tools(original: &[u8], declarations: &[u8]) -> Vec<u8> {
     let Ok(original_document) = std::str::from_utf8(original) else {
         return declarations.to_vec();
     };
@@ -305,7 +305,7 @@ fn tool_name(tool: &Value<'_>) -> String {
     tool.get("function.name").str().trim().to_owned()
 }
 
-fn qualify_namespace_tool_name(namespace_name: &str, child_name: &str) -> String {
+pub(crate) fn qualify_namespace_tool_name(namespace_name: &str, child_name: &str) -> String {
     let child_name = child_name.trim();
     let namespace_name = namespace_name.trim();
     if child_name.is_empty() || namespace_name.is_empty() || child_name.starts_with("mcp__") {
@@ -406,12 +406,12 @@ fn value_offset(document: &str, value: &Value<'_>) -> Option<usize> {
     (document.as_bytes()[offset..offset + raw.len()] == *raw.as_bytes()).then_some(offset)
 }
 
-fn set_json_string(data: &[u8], path: &str, value: &str) -> Vec<u8> {
+pub(crate) fn set_json_string(data: &[u8], path: &str, value: &str) -> Vec<u8> {
     let literal = go_json_string(value);
     set_raw_path(data, path, literal.as_bytes())
 }
 
-fn set_json_i64(data: &[u8], path: &str, value: i64) -> Vec<u8> {
+pub(crate) fn set_json_i64(data: &[u8], path: &str, value: i64) -> Vec<u8> {
     set_raw_path(data, path, value.to_string().as_bytes())
 }
 
@@ -425,7 +425,7 @@ fn delete_root_key(data: &[u8], key: &str) -> Vec<u8> {
     delete_key(document, key).into_bytes()
 }
 
-fn set_raw_path(data: &[u8], path: &str, replacement: &[u8]) -> Vec<u8> {
+pub(crate) fn set_raw_path(data: &[u8], path: &str, replacement: &[u8]) -> Vec<u8> {
     let Ok(document) = std::str::from_utf8(data) else {
         return data.to_vec();
     };
@@ -1034,6 +1034,25 @@ impl ApplyPatchResponsesBridge {
     fn descriptor(&self, namespace: &str, name: &str) -> Option<BridgeTool> {
         let qualified = qualify_namespace_tool_name(namespace, name);
         self.tools.get(&qualified).cloned()
+    }
+
+    pub(crate) fn active(&self) -> bool {
+        self.active
+    }
+
+    /// Reports whether a namespace still owns a winning custom patch child.
+    pub(crate) fn namespace_has_custom(&self, namespace: &str) -> bool {
+        self.tools
+            .values()
+            .any(|tool| tool.namespace == namespace && tool.custom)
+    }
+
+    /// Qualified name and custom flag. A missing declaration is not custom.
+    pub(crate) fn child_tool(&self, namespace: &str, name: &str) -> (String, bool) {
+        match self.descriptor(namespace, name) {
+            Some(tool) => (tool.name, tool.custom),
+            None => (String::new(), false),
+        }
     }
 
     /// Checks every supplied identity. Conflicting unmatched keys and multiple

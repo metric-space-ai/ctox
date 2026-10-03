@@ -12,6 +12,10 @@ mod json;
 mod sse;
 
 pub use apply_patch_responses::normalize_apply_patch_responses_request;
+pub(crate) use apply_patch_responses::{
+    prefer_chat_function_patch_tools, qualify_namespace_tool_name, set_json_i64, set_json_string,
+    set_raw_path, ApplyPatchResponsesBridge,
+};
 pub use bytes::{
     append_sse_event, claude_input_tokens_json, gemini_token_count_json, join_raw_array,
     new_raw_array_items, set_raw_array_items, set_string_without_html_escape, sse_event_data,
