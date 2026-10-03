@@ -91,7 +91,7 @@ assert.equal(color.disabled,true);
 assert.ok(!html.includes('id="legend"'));
 assert.ok(options.slice(1).every(label=>label.includes('(@codex)')));
 if(options.length>1){
- selector.value=Array.from(api.getStyles().keys())[0];selector.onchange();
+ selector.value=realPairs[0].combination;selector.onchange();
  assert.equal(color.disabled,false);assert.ok(document.getElementById('scatter').innerHTML.includes('opacity="0.16"'));
  color.value='#123456';color.oninput();assert.ok(document.getElementById('scatter').innerHTML.includes('#123456'));
  selector.value='';selector.onchange();assert.equal(color.disabled,true);assert.ok(!document.getElementById('scatter').innerHTML.includes('opacity="0.16"'));

@@ -89,7 +89,7 @@ function refresh(reset=true){
  boards[role]=[...group].map(([key,aa])=>{
  const [harness,model]=JSON.parse(key);
  if(role==='worker')aa=aa.filter(a=>['first','corrected'].every(s=>stageModel(a,s)===model&&a[s]?.weighted_total!=null));
- const ss=s=>known(aa.map(a=>stageModel(a,s)===model?a[s]?.weighted_total??null:null)),re=aa.map(a=>reworkIterations(a,model));
+ const ss=s=>known(aa.map(a=>stageModel(a,s)===model?a[s]?.weighted_total??null:null)),re=aa.map(a=>role==='parent'?reworkCount({url:a.pr_url}):reworkIterations(a,model));
  return {label:model+' (@'+harness+')',prs:new Set(aa.map(a=>a.pr_url)).size,score:avg(ss('parent_completion')),first:avg(ss('first')),end:avg(ss('corrected')),rework:re.length&&re.every(n=>n!=null)?re.reduce((sum,n)=>sum+n,0)/new Set(aa.map(a=>a.pr_url)).size:null};
  }).filter(g=>g.prs>0);
  }
@@ -114,7 +114,7 @@ function draw(){
  const size=Number($('size').value),pages=Math.max(1,Math.ceil(visible.length/size));page=Math.max(0,Math.min(page,pages-1));
  $('prlist').innerHTML=visible.slice(page*size,(page+1)*size).map(p=>{
  const parent=current(p,'parent'),worker=current(p,'worker');
- return '<tr><td class="prtitle"><a target="_blank" rel="noopener" href="'+E(p.url)+'"><strong>'+E(p.repository.split('/').pop())+' #'+p.number+'</strong> '+E(p.title)+'</a></td><td><span class="tag '+p.state.toLowerCase()+'">'+(p.state==='MERGED'?'gemergt':'geschlossen')+'</span>'+(p.stop?' <span class="tag">STOP</span>':'')+'</td><td class="actors">'+actorCell(parent,'P')+actorCell(worker,'W')+'</td><td>'+scoreCell(parent,'parent_completion')+'</td><td>'+scoreCell(worker,'first')+'</td><td>'+scoreCell(worker,'corrected')+'</td><td class="number">'+(reworkCount(p)??'—')+'</td></tr>';
+ return '<tr><td class="prtitle"><a target="_blank" rel="noopener" href="'+E(p.url)+'"><strong>'+E(p.repository.split('/').pop())+' #'+p.number+'</strong> '+E(p.title)+'</a></td><td><span class="tag '+p.state.toLowerCase()+'">'+(p.state==='MERGED'?'gemergt'+(p.baseRefName?' → '+E(p.baseRefName):''):'geschlossen')+'</span>'+(p.stop?' <span class="tag">STOP</span>':'')+'</td><td class="actors">'+actorCell(parent,'P')+actorCell(worker,'W')+'</td><td>'+scoreCell(parent,'parent_completion')+'</td><td>'+scoreCell(worker,'first')+'</td><td>'+scoreCell(worker,'corrected')+'</td><td class="number">'+(reworkCount(p)??'—')+'</td></tr>';
  }).join('')||'<tr><td colspan="7" class="empty">Keine passenden PRs.</td></tr>';
  $('page').textContent='Seite '+(page+1)+' von '+pages+' · '+(visible.length?page*size+1:0)+'–'+Math.min((page+1)*size,visible.length)+' von '+visible.length;
  $('prev').disabled=page===0;$('next').disabled=page+1>=pages;

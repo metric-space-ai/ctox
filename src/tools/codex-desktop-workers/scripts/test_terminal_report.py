@@ -50,7 +50,7 @@ class ReportTests(unittest.TestCase):
         row=dict(pr_url="pr",role="parent",actor_id="p",schema=r.RUBRIC,model="old",
                  first={"weighted_total":4},corrected={"weighted_total":4},
                  parent_completion={"weighted_total":7.8,"model":"actual-closing-model"},
-                 rework_iterations=3,iteration_evidence=[{"kind":"correction","model":"actual-closing-model"}]*3)
+                 rework_iterations=3,iteration_scope="pr",iteration_evidence=[{"kind":"correction","model":"actual-closing-model"}]*3)
         groups=r.leaderboard_data([row])
         self.assertEqual(len(groups),1)
         self.assertEqual(groups[0]["model"],"actual-closing-model")
@@ -102,6 +102,17 @@ class ReportTests(unittest.TestCase):
         self.assertIsNone(r.leaderboard_data([a,b])[0]["rework"]["mean"])
         a["rework_iterations"]=0;b["rework_iterations"]=0
         self.assertEqual(r.leaderboard_data([a,b])[0]["rework"]["mean"],0)
+    def test_parent_rework_covers_entire_pr_not_closing_model(self):
+        a=dict(pr_url="one",role="parent",actor_id="p",schema=r.RUBRIC,model="parent-model",
+               parent_completion={"weighted_total":8},rework_iterations=9,iteration_scope="pr",
+               iteration_evidence=[dict(kind="correction",head=str(i),model="worker-model" if i<5 else "parent-model") for i in range(9)])
+        b=copy.deepcopy(a);b.update(pr_url="two",rework_iterations=0,iteration_evidence=[])
+        g=r.leaderboard_data([a,b])[0]
+        self.assertEqual((g["prs"],g["rework"]["iterations"],g["rework"]["mean"]),(2,9,4.5))
+        a["iteration_scope"]="actor";a["iteration_history_complete"]=False
+        self.assertIsNone(r.leaderboard_data([a,b])[0]["rework"]["mean"])
+        a["iteration_history_complete"]=True
+        self.assertEqual(r.whole_pr_iterations([a,b],"one"),9)
     def test_pair_classification_ignores_missing_model_endpoint(self):
         parent=dict(pr_url="pr",role="parent",actor_id="p",record_id="p",
                     model="pm",harness="Codex Desktop",parent_completion={"weighted_total":8})

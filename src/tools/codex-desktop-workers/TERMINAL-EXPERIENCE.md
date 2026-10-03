@@ -66,3 +66,12 @@ It executes the generated script in a static DOM harness to verify sorting,
 pagination, columns, actual chart edges/modes, unique model/harness selection
 and color changes. It does not claim real-browser visual acceptance.
 Broad suites/indexing require the shared admission gate.
+
+Parent leaderboards use the full proved correction count for each compared PR,
+including corrections authored by workers on other models. Worker comparisons
+retain author-specific counts. Unknown whole-PR history is never zero.
+
+Explicit user-requested terminal URLs in terminal-evidence/explicit-terminal-prs.json
+are retained by collection alongside the configured repositories and existing
+external registry cases. Merge target branches are captured as baseRefName;
+an integration-branch merge does not imply delivery to main.

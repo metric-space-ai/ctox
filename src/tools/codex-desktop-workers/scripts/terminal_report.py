@@ -58,8 +58,12 @@ def collect(base, repositories=REPOS):
     """Only request terminal states; snapshot history is content addressed."""
     existing = jobs(base)
     extra = {j["pr_url"] for j in existing if j.get("pr_url") and j.get("repository") not in repositories}
+    explicit = base / "terminal-evidence/explicit-terminal-prs.json"
+    if explicit.exists():
+        extra.update(load(explicit).get("urls", []))
+    extra = {url for url in extra if url.split("github.com/")[-1].split("/pull/")[0] not in repositories}
     gathered = []
-    fields = """number title url state isDraft headRefName headRefOid createdAt closedAt mergedAt additions deletions changedFiles body
+    fields = """number title url state isDraft baseRefName headRefName headRefOid createdAt closedAt mergedAt additions deletions changedFiles body
         mergeCommit {oid} author {login}
         files(first:100){totalCount pageInfo{hasNextPage} nodes{path additions deletions}}
         reviews(first:100){totalCount pageInfo{hasNextPage} nodes{body state submittedAt url commit{oid} author{login}}}
@@ -96,7 +100,7 @@ def collect(base, repositories=REPOS):
     for url in sorted(extra):
         # Existing external registry cases only. Do not inventory unrelated repositories.
         pr = json.loads(command("gh", "pr", "view", url, "--json",
-            "number,title,url,state,headRefName,headRefOid,createdAt,closedAt,mergedAt,additions,deletions,changedFiles,body,reviews,comments,files,statusCheckRollup"))
+            "number,title,url,state,baseRefName,headRefName,headRefOid,createdAt,closedAt,mergedAt,additions,deletions,changedFiles,body,reviews,comments,files,statusCheckRollup"))
         if terminal(pr):
             pr.update(repository=url.split("github.com/")[1].split("/pull/")[0],
                       project="External registry", snapshot_at=now())
@@ -274,6 +278,25 @@ def rework_iterations(row, model=None):
     return None
 
 
+def whole_pr_iterations(records, pr_url):
+    """Count all proved corrections to a PR, independently of its closing model."""
+    rows = [a for a in records if a["pr_url"] == pr_url and a.get("schema", a.get("rubric")) == RUBRIC]
+    whole = [a["rework_iterations"] for a in rows if a.get("iteration_scope") == "pr" and rework_iterations(a) is not None]
+    if whole and len(set(whole)) == 1:
+        return whole[0]
+    if not rows or any(rework_iterations(a) is None for a in rows) or not any(a.get("iteration_history_complete") is True for a in rows):
+        return None
+    heads = set()
+    for a in rows:
+        events = [e for e in a.get("iteration_evidence", []) if e.get("kind") == "correction"]
+        if rework_iterations(a) == 0:
+            continue
+        if len(events) != rework_iterations(a) or any(not e.get("head") for e in events):
+            return None
+        heads.update(e["head"] for e in events)
+    return len(heads)
+
+
 def harness_label(value):
     return "codex" if value in ("Codex Desktop", "Codex") else value
 
@@ -306,7 +329,7 @@ def leaderboard_data(records):
         first = [None if historical_parent else score(r, "first") for r in rows]
         corrected = [None if historical_parent else score(r, "corrected") for r in rows]
         completion = [score(r, "parent_completion") for r in rows]
-        rework = [rework_iterations(r, model) for r in rows]
+        rework = [whole_pr_iterations(records, r["pr_url"]) if historical_parent else rework_iterations(r, model) for r in rows]
         known_rework = [v for v in rework if v is not None]
         rework_prs = len({r["pr_url"] for r in rows})
         iteration_total = sum(known_rework) if rows and len(known_rework) == len(rows) else None
