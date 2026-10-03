@@ -23,6 +23,8 @@ pub(crate) struct WorkerSnapshot {
     pub worker_active_count: usize,
     pub worker_phase: Option<String>,
     pub active_task_ids: Vec<String>,
+    // Process-local instances only; a persisted status is never a heartbeat.
+    pub worker_instance_ids: BTreeMap<String, String>,
     pub last_error: Option<String>,
     pub boot_id: String,
 }
@@ -140,6 +142,7 @@ fn persisted_snapshot(root: &Path) -> Result<WorkerSnapshot> {
     snapshot.worker_active_count = 0;
     snapshot.worker_phase = None;
     snapshot.active_task_ids.clear();
+    snapshot.worker_instance_ids.clear();
     Ok(snapshot)
 }
 
@@ -644,6 +647,45 @@ fn refresh_measured(
     Ok(())
 }
 
+fn current_queue_workers(conn: &Connection, snapshot: &WorkerSnapshot) -> Result<Vec<Value>> {
+    if !snapshot.service_running
+        || snapshot.boot_id.is_empty()
+        || snapshot.worker_instance_ids.is_empty()
+    {
+        return Ok(Vec::new());
+    }
+    let mut query = conn.prepare(
+        "SELECT attempt, leased_at, lease_expires_at FROM communication_routing_state
+         WHERE message_key=?1 AND route_status='leased' AND lease_owner='ctox-service'
+           AND lease_worker_id=?2 AND attempt>0
+           AND julianday(lease_expires_at)>julianday('now')",
+    )?;
+    let mut workers = Vec::new();
+    let boot_prefix = format!("{}:", snapshot.boot_id);
+    for (task_id, worker_id) in &snapshot.worker_instance_ids {
+        if !snapshot.active_task_ids.contains(task_id) || !worker_id.starts_with(&boot_prefix) {
+            continue;
+        }
+        let lease = query
+            .query_row(params![task_id, worker_id], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })
+            .optional()?;
+        if let Some((attempt, leased_at, lease_expires_at)) = lease {
+            workers.push(json!({
+                "task_id":task_id, "lease_worker_id":worker_id, "attempt":attempt,
+                "boot_id":snapshot.boot_id, "leased_at":leased_at,
+                "lease_expires_at":lease_expires_at
+            }));
+        }
+    }
+    Ok(workers)
+}
+
 fn project_status(
     root: &Path,
     conn: &Connection,
@@ -658,6 +700,7 @@ fn project_status(
         snapshot.worker_active_count = 0;
         snapshot.worker_phase = None;
         snapshot.active_task_ids.clear();
+        snapshot.worker_instance_ids.clear();
     }
     let mut statement = conn.prepare(
         "SELECT r.route_status, COUNT(*) FROM communication_routing_state r
@@ -735,6 +778,7 @@ fn project_status(
         });
     }
     let now = Utc::now().timestamp_millis();
+    let current_queue_workers = current_queue_workers(conn, &snapshot)?;
     let capacity = crate::service::configure_queue_worker_capacity(root, None)?;
     let threshold = crate::service::queue_pressure_threshold();
     let active_crew: Option<String> = if has_table(conn, "crew_members")? {
@@ -757,6 +801,7 @@ fn project_status(
         "blocked_count":count("blocked"),"review_count":review_count,"failed_recent_count":failed_recent,
         "pressure_active":count("pending") >= threshold as i64,"pressure_threshold":threshold,
         "work_hours":crate::service::working_hours::snapshot(root),"active_task_ids":snapshot.active_task_ids,
+        "current_queue_workers":current_queue_workers,
         "active_crew_member_id":active_crew,"last_error":snapshot.last_error,"boot_id":snapshot.boot_id,"updated_at_ms":now
     }))?;
     Ok(())

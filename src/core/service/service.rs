@@ -976,6 +976,7 @@ struct SharedState {
     // Only a live PromptWorkerActivity owns these keys. Routing cache entries
     // alone do not prove that a worker still exists.
     active_worker_lease_keys: HashSet<String>,
+    active_worker_instance_ids: BTreeMap<String, String>,
     active_worker_threads: BTreeMap<String, usize>,
     parallel_queue_jobs: BTreeMap<String, QueuedPrompt>,
     current_goal_preview: Option<String>,
@@ -1001,6 +1002,7 @@ impl Default for SharedState {
             pending_prompts: VecDeque::new(),
             leased_message_keys_inflight: HashSet::new(),
             active_worker_lease_keys: HashSet::new(),
+            active_worker_instance_ids: BTreeMap::new(),
             active_worker_threads: BTreeMap::new(),
             parallel_queue_jobs: BTreeMap::new(),
             current_goal_preview: None,
@@ -5636,6 +5638,7 @@ fn publish_cockpit_worker_state_with_task(root: &Path, shared: &SharedState, ext
             worker_active_count: shared.worker_active_count,
             worker_phase: shared.worker_phase.clone(),
             active_task_ids,
+            worker_instance_ids: shared.active_worker_instance_ids.clone(),
             last_error: shared.last_error.clone(),
             boot_id: SERVICE_PERFORMANCE_BOOT_ID
                 .get_or_init(|| uuid::Uuid::new_v4().to_string())
@@ -5727,7 +5730,14 @@ impl PromptWorkerActivity {
                     ),
                 );
             } else {
+                let mut shared = lock_shared_state(state);
+                for key in &job.leased_message_keys {
+                    shared
+                        .active_worker_instance_ids
+                        .insert(key.clone(), worker_id.clone());
+                }
                 lease_worker_id = Some(worker_id);
+                publish_cockpit_worker_state(root, &shared);
             }
         }
         Self {
@@ -5785,6 +5795,9 @@ impl Drop for PromptWorkerActivity {
                 .chain(&self.leased_ticket_event_keys)
             {
                 shared.active_worker_lease_keys.remove(key);
+                if shared.active_worker_instance_ids.get(key) == self.lease_worker_id.as_ref() {
+                    shared.active_worker_instance_ids.remove(key);
+                }
                 shared.parallel_queue_jobs.remove(key);
             }
             let (leaked_message_keys, leaked_ticket_event_keys) = if self.leases_released {
