@@ -181,3 +181,48 @@ fn response_has_expected_envelope() {
     );
     assert_eq!(response["models"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn candidate_apply_patch_template_fallback_and_exact_capability_override() {
+    let available = vec![model(json!({"id":"custom"}))];
+    let inherited = catalog(1).build_models(&available, &empty_metadata, None, false);
+    assert_eq!(inherited[0]["apply_patch_tool_type"], "freeform");
+    for supported in [false, true] {
+        let resolver = |id: &str| {
+            assert_eq!(id, "custom");
+            supported
+        };
+        let models = catalog(1).build_models_with_apply_patch_capability(
+            &available, &empty_metadata, None, false, Some(&resolver),
+        );
+        assert_eq!(models[0]["apply_patch_tool_type"], if supported { json!("freeform") } else { Value::Null });
+    }
+}
+
+#[test]
+fn candidate_apply_patch_non_text_models_cannot_inherit_conversation_tools() {
+    for id in [
+        "gpt-image-2.5-flare", "gpt-image-2.5-sunburst", "gpt-image-2.5",
+        "grok-imagine-image-2.0", "grok-imagine-video-1.5",
+        "custom/gpt-image-2.5", "custom/grok-imagine-video-1.5",
+    ] {
+        let available = vec![model(json!({"id":id}))];
+        let forbidden = |_: &str| panic!("non-text model must not query routing capability");
+        let models = catalog(1).build_models_with_apply_patch_capability(
+            &available, &empty_metadata, None, false, Some(&forbidden),
+        );
+        assert_eq!(models[0]["visibility"], "hide", "{id}");
+        assert_eq!(models[0]["apply_patch_tool_type"], Value::Null, "{id}");
+    }
+    for entry in [
+        json!({"apply_patch_tool_type":"freeform", "input_modalities":["image"]}),
+        json!({"apply_patch_tool_type":"freeform", "visibility":"hide"}),
+    ] {
+        let mut entry = model(entry);
+        apply_patch_tool_capability(&mut entry, "non-text", None);
+        assert_eq!(entry["apply_patch_tool_type"], Value::Null);
+    }
+    let mut hidden_text = model(json!({"apply_patch_tool_type":"freeform", "visibility":"hide", "input_modalities":["text"]}));
+    apply_patch_tool_capability(&mut hidden_text, "hidden-text", None);
+    assert_eq!(hidden_text["apply_patch_tool_type"], "freeform");
+}

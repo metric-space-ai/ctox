@@ -60,6 +60,12 @@
   reminder until continuity expires; missing identity/restart retains the
   per-request fallback. Diagnostics are still injected after cloaking to retain
   member order. Two scoped/date-expiry regressions remain prepared, unexecuted.
+  The live Codex model catalog also retains a template's freeform apply-patch
+  support for eligible text models when no routing-capability resolver is
+  supplied, matching v8.0.12. An injected exact-model resolver can restrict it;
+  image/video and explicitly non-text entries cannot inherit conversation tools.
+  Two additional catalog regressions are prepared and unexecuted. Binding a
+  routing-capability resolver in actual consumers remains unverified.
   Compilation/Rust/Go execution, live executor compatibility/update-intent
   callers and full candidate parity remain pending. No pin or release gate
   was promoted.
