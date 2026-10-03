@@ -128,7 +128,7 @@ FIELD_REVIEWS contract (Outbound research only):
 - Inspect the current native field status and copy its exact revision.writeback_id; never invent an ID. A status without a revision cannot be refuted through this contract.
 - Review only the records of this task. Native code binds the persisted review ID, research command, actual attempt and timestamp; do not supply these as authority.
 - Keep the verdict FAIL or PARTIAL when publishing a refutation; this line never bypasses ordinary completion gates.
-- No more than 64 entries / 32 KiB; no extra keys. Do not write the field yourself.
+- No more than 64 entries / 32 KiB; no extra keys. Emit this line outside code fences; quoted examples are not verdicts. Do not write the field yourself.
 - The native service discards a verdict against a different or newer writeback. Honest no_match remains an answer without a matching typed refutation.
 
 CATEGORIZED_FINDINGS contract:
