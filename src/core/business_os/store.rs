@@ -13079,6 +13079,22 @@ pub(super) fn upsert_external_projection_record(
         false,
         false,
     )?;
+    // Normalization and the existing wire-budget clamp run inside the writer.
+    // Validate the actual staged document as well, not only its input patch.
+    let staged: String = tx.query_row(
+        &format!("SELECT data FROM {} WHERE id = ?1", writer.table),
+        [record_id],
+        |row| row.get(0),
+    )?;
+    let staged: Value = serde_json::from_str(&staged)?;
+    anyhow::ensure!(
+        super::outbound_field_review::peer_preserves_native_field_status(
+            collection,
+            &staged,
+            master.as_ref(),
+        ),
+        "external record projection would change native-owned field status"
+    );
     tx.commit()?;
     writer.notify_committed_change();
     // The existing core projection mirror follows the accepted RxDB write.

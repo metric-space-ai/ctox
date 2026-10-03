@@ -9432,6 +9432,7 @@ mod tests {
             root, collection,
         )?;
         let status = serde_json::json!({"status": "no_match", "value": null,
+            "reason": "native evidence ".repeat(160),
             "revision": {"writeback_id": "native-a", "command_id": "research-a"}});
         store::upsert_projection_record(
             root,
@@ -9481,6 +9482,40 @@ mod tests {
             );
             assert_eq!(mirror_snapshot()?, mirror_before);
         }
+        // The patch preserves native status, but the existing projection
+        // clamp would trim that >1KiB field before committing the document.
+        // Small ordinary fields are deliberately ineligible for trimming.
+        let mut oversized = serde_json::json!({});
+        let mut projected = before.clone();
+        for index in 0..1000 {
+            let key = format!("ordinary_{index}");
+            let value = serde_json::json!("x".repeat(900));
+            oversized[&key] = value.clone();
+            projected[&key] = value;
+            if serde_json::to_vec(&projected)?.len() > store::MAX_PROJECTED_DOCUMENT_BYTES + 128 {
+                break;
+            }
+        }
+        assert!(
+            super::super::outbound_field_review::peer_preserves_native_field_status(
+                collection,
+                &projected,
+                Some(&before),
+            )
+        );
+        let mut clamped = projected.clone();
+        store::clamp_projected_document_to_wire_budget(
+            "ctox_business_os__outbound_lead_generation_leads__v0",
+            "lead-a",
+            &mut clamped,
+        )?;
+        assert_eq!(clamped["field_status"]["_omitted"], true);
+        assert!(call("lead-a", oversized).is_err());
+        assert_eq!(
+            store::load_rxdb_collection_record(root, collection, "lead-a")?.unwrap(),
+            before
+        );
+        assert_eq!(mirror_snapshot()?, mirror_before);
         assert!(call(
             "new-lead",
             serde_json::json!({"field_status": {"firma_prokura": status}})
