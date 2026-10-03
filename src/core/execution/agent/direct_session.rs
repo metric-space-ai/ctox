@@ -1935,7 +1935,7 @@ impl PersistentSession {
                     }
                     continue;
                 }
-                event = async { match deadline {
+                event = async { Ok::<_, anyhow::Error>(match deadline {
                 Some(d) => tokio::select! {
                     ev = client.next_event() => ev,
                     _ = tokio::time::sleep_until(d) => {
@@ -1997,7 +1997,7 @@ impl PersistentSession {
                     }
                 },
                 None => client.next_event().await,
-                }} => event,
+                })} => event?,
             };
             let Some(event) = event else { break };
             match event {
