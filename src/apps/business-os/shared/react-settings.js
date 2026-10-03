@@ -1,4 +1,4 @@
-import { subscriptionModelUnavailable } from './model-access-health.js?v=20261003-shell-v2-startup-recovery-v445';
+import { subscriptionModelUnavailable } from './model-access-health.js?v=20261004-shell-v2-app-task-counts-v446';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import { appReleaseProjection } from './app-lifecycle.js?v=20260831-ctox-desktopapp-ports-v328';
 import {

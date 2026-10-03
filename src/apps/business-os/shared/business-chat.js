@@ -137,7 +137,7 @@ export function crewAppPresenceFromTasks(tasks, members, liveKeys = null) {
     const memberId = String(task?.crew_member_id || '').trim();
     const member = memberId ? byId.get(memberId) : null;
     if (!member) continue;
-    const moduleId = String(task?.module || task?.source_module || '').trim();
+    const moduleId = String(task?.source_module || task?.module || '').trim();
     if (!moduleId) continue;
     const entries = presence.get(moduleId) || [];
     if (entries.some((entry) => entry.member.id === member.id)) continue;
@@ -198,6 +198,79 @@ function applyCrewWorkload(state) {
   });
 }
 
+const CREW_APP_TASK_SNAPSHOTS = new WeakMap();
+let crewAppTaskDialog = null;
+
+// Counts and detail targets require native worker truth, not merely a leased
+// queue row or an open app. Retain one item per projected task identity.
+export function crewAppTasksFromTasks(tasks, liveKeys = null) {
+  const apps = new Map();
+  if (!liveKeys) return apps;
+  const seen = new Set();
+  for (const task of Array.isArray(tasks) ? tasks : []) {
+    if (task?._deleted || task?.is_deleted || !crewTaskIsWorking(task, liveKeys)) continue;
+    const id = String(task?.task_id || task?.id || '').trim();
+    const appId = String(task?.source_module || task?.module || '').trim();
+    if (!id || !appId || seen.has(id)) continue;
+    seen.add(id);
+    const rows = apps.get(appId) || [];
+    rows.push({
+      id, commandId: String(task.command_id || ''),
+      title: String(task.title || id).slice(0, 256),
+      status: String(task.status || ''),
+    });
+    apps.set(appId, rows);
+  }
+  for (const rows of apps.values()) rows.sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id));
+  return apps;
+}
+
+function closeCrewAppTaskDialog() {
+  if (!crewAppTaskDialog) return;
+  const dialog = crewAppTaskDialog;
+  crewAppTaskDialog = null;
+  dialog.close();
+  dialog.remove();
+}
+
+function openCrewAppTaskDialog(host) {
+  closeCrewAppTaskDialog();
+  const tasks = CREW_APP_TASK_SNAPSHOTS.get(host) || [];
+  if (!tasks.length) return;
+  const german = chatUiIsGerman();
+  const dialog = document.createElement('dialog');
+  dialog.className = 'ctox-app-task-dialog';
+  dialog.setAttribute('aria-label', german ? 'Aufgaben dieser App' : 'Tasks for this app');
+  dialog.innerHTML = '<h2>' + (german ? 'Aufgaben dieser App' : 'Tasks for this app') + '</h2>'
+    + '<ul>' + tasks.map((task, index) => '<li><button type="button" data-app-task-index="' + index
+      + '"><strong>' + escapeHtml(task.title) + '</strong><small>' + escapeHtml(task.status)
+      + '</small></button></li>').join('') + '</ul>'
+    + '<button type="button" data-app-task-close>' + (german ? 'Schließen' : 'Close') + '</button>';
+  dialog.querySelector('[data-app-task-close]').addEventListener('click', closeCrewAppTaskDialog);
+  dialog.addEventListener('close', () => {
+    if (crewAppTaskDialog === dialog) crewAppTaskDialog = null;
+    dialog.remove();
+  });
+  dialog.querySelectorAll('[data-app-task-index]').forEach(button => {
+    button.addEventListener('click', async () => {
+      const selected = tasks[Number(button.dataset.appTaskIndex)];
+      const current = (CREW_APP_TASK_SNAPSHOTS.get(host) || []).find(task => task.id === selected?.id);
+      if (!current) { closeCrewAppTaskDialog(); return; }
+      button.disabled = true;
+      try {
+        await openCtoxTask(current.id, current.commandId, current.status);
+        closeCrewAppTaskDialog();
+      } catch (error) {
+        button.disabled = false;
+        console.warn('[business-chat] app task navigation failed', error);
+      }
+    });
+  });
+  document.body.append(dialog);
+  crewAppTaskDialog = dialog;
+  dialog.showModal();
+}
+
 function crewAppPresenceSignature(entries, nowMs = Date.now()) {
   return entries.map((entry) => `${entry.member.id}:${crewMemberExpression(entry.member, nowMs)}`).join('|');
 }
@@ -206,9 +279,11 @@ function crewAppPresenceHtml(entries) {
   const german = chatUiIsGerman();
   const shown = entries.slice(0, CREW_APP_PRESENCE_LIMIT);
   const names = entries.map((entry) => entry.member.name).join(', ');
-  const title = german
-    ? `${names} ${entries.length === 1 ? 'arbeitet' : 'arbeiten'} hier`
-    : `${names} ${entries.length === 1 ? 'is' : 'are'} working here`;
+  const title = entries.length === 0
+    ? (german ? 'Bestätigte Aufgaben dieser App' : 'Confirmed tasks for this app')
+    : german
+      ? `${names} ${entries.length === 1 ? 'arbeitet' : 'arbeiten'} hier`
+      : `${names} ${entries.length === 1 ? 'is' : 'are'} working here`;
   const more = entries.length > shown.length ? `<b>+${entries.length - shown.length}</b>` : '';
   return `<span class="ctox-crew-app-presence" data-crew-presence data-crew-presence-signature="${escapeAttr(crewAppPresenceSignature(entries))}" title="${escapeAttr(title)}" aria-label="${escapeAttr(title)}">${shown.map((entry) => renderCrewReference({ appearance: { id: entry.member.id, name: entry.member.name, shape: entry.member.shape, color: entry.member.color }, size: 18, mode: 'working' })).join('')}${more}</span>`;
 }
@@ -227,19 +302,41 @@ function crewAppPresenceHosts() {
   return hosts;
 }
 
-export function applyCrewAppPresence(presence) {
+export function applyCrewAppPresence(presence, appTasks = new Map()) {
   for (const { host, appId } of crewAppPresenceHosts()) {
     const entries = presence.get(appId) || [];
+    const tasks = appTasks.get(appId) || [];
+    CREW_APP_TASK_SNAPSHOTS.set(host, tasks);
     const existing = host.querySelector(':scope > [data-crew-presence]');
-    if (!entries.length) {
+    if (!entries.length && !tasks.length) {
       existing?.remove();
       host.classList.remove('has-crew-presence');
       continue;
     }
-    const signature = crewAppPresenceSignature(entries);
+    const signature = crewAppPresenceSignature(entries) + ':' + JSON.stringify(tasks);
     if (existing && existing.dataset.crewPresenceSignature === signature) continue;
     existing?.remove();
     host.insertAdjacentHTML('beforeend', crewAppPresenceHtml(entries));
+    const badge = host.querySelector(':scope > [data-crew-presence]');
+    badge.dataset.crewPresenceSignature = signature;
+    if (tasks.length) {
+      const count = document.createElement('button');
+      count.type = 'button';
+      count.className = 'ctox-app-task-count';
+      count.textContent = String(tasks.length);
+      count.setAttribute('aria-label', chatUiIsGerman()
+        ? tasks.length + ' bestätigte Aufgaben dieser App anzeigen'
+        : 'Show ' + tasks.length + ' confirmed tasks for this app');
+      for (const event of ['pointerdown', 'mousedown', 'dblclick', 'keydown', 'keyup', 'contextmenu']) {
+        count.addEventListener(event, event => event.stopPropagation());
+      }
+      count.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        openCrewAppTaskDialog(host);
+      });
+      badge.append(count);
+    }
     host.classList.add('has-crew-presence');
   }
 }
@@ -261,7 +358,7 @@ async function loadCrewAppTasks(db) {
   if (!collection || typeof collection.find !== 'function') return [];
   try {
     const docs = await collection.find({
-      selector: { updated_at_ms: { $gt: 0 } },
+      selector: { status: { $in: [...CREW_APP_PRESENCE_STATUSES] }, updated_at_ms: { $gt: 0 } },
       sort: [{ updated_at_ms: 'desc' }],
       limit: CREW_APP_PRESENCE_TASK_LIMIT,
     }).exec();
@@ -292,7 +389,7 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
   const apply = () => {
     if (disposed) return;
     const members = state.crewMembers || [];
-    applyCrewAppPresence(crewAppPresenceFromTasks(tasks, members, liveKeys));
+    applyCrewAppPresence(crewAppPresenceFromTasks(tasks, members, liveKeys), crewAppTasksFromTasks(tasks, liveKeys));
     state.crewWorkload = crewWorkloadFromTasks(tasks, liveKeys);
     applyCrewWorkload(state);
     // Expressions decay (reading -> running, learning -> idle); re-draw when
@@ -365,6 +462,7 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
     if (reloadTimer) window.clearTimeout(reloadTimer);
     if (expressionTimer) window.clearTimeout(expressionTimer);
     desktopObserver?.disconnect?.();
+    closeCrewAppTaskDialog();
   };
 }
 
@@ -8294,6 +8392,52 @@ ${CREW_CREATURE_BASE_CSS}
       color: var(--text);
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
     }
+    .ctox-app-task-count {
+      pointer-events: auto;
+      display: inline-grid;
+      place-items: center;
+      min-width: 22px;
+      height: 22px;
+      margin-left: 3px;
+      padding: 0 4px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: var(--surface);
+      color: var(--text);
+      font: 700 11px/1 var(--font-sans);
+      cursor: pointer;
+    }
+    .ctox-app-task-count:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    .ctox-app-task-dialog {
+      width: min(480px, calc(100vw - 32px));
+      max-height: calc(100dvh - 48px);
+      overflow: auto;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: var(--panel-radius);
+      background: var(--surface);
+      color: var(--text);
+    }
+    .ctox-app-task-dialog::backdrop { background: rgb(0 0 0 / 0.35); }
+    .ctox-app-task-dialog h2 { margin: 0 0 12px; font-size: 16px; }
+    .ctox-app-task-dialog ul { margin: 0 0 12px; padding: 0; list-style: none; }
+    .ctox-app-task-dialog li button {
+      display: grid;
+      gap: 4px;
+      width: 100%;
+      padding: 10px;
+      text-align: left;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+      color: var(--text);
+      cursor: pointer;
+    }
+    .ctox-app-task-dialog li button:hover { background: var(--surface-2); }
+    .ctox-app-task-dialog small { color: var(--muted); }
     .desktop-icon-glyph.has-crew-presence {
       position: relative;
     }
