@@ -1379,29 +1379,37 @@ fn project_person_field_status(lead: &mut Value) {
 /// on the contacts after the projection: every contact that is a person
 /// (carries a person key) counts, whether or not a status was ever delivered
 /// for it, and a person's canonical key and alias are one contact. `None`
-/// when the lead holds no per-person status at all (the lead-level entry then
-/// decides, as before).
+/// when the lead holds no keyed contacts (the lead-level entry then decides).
+/// An absent or empty status map is missing work, not an empty person scope.
 fn open_persons_for_field(lead: &Value, field: &str) -> Option<Vec<String>> {
     if !field.starts_with("person_") {
         return None;
     }
-    let stored = lead.get("person_field_status")?.as_object()?;
-    if stored.is_empty() {
+    let contacts = lead.get("contacts").and_then(Value::as_array)?;
+    let persons = contacts
+        .iter()
+        .filter_map(|contact| {
+            contact_person_keys(contact)
+                .into_iter()
+                .next()
+                .map(|key| (key, contact))
+        })
+        .collect::<Vec<_>>();
+    if persons.is_empty() {
         return None;
     }
     Some(
-        lead.get("contacts")
-            .and_then(Value::as_array)
+        persons
             .into_iter()
-            .flatten()
-            .filter_map(|contact| {
-                let key = contact_person_keys(contact).into_iter().next()?;
+            .filter_map(|(key, contact)| {
                 let answered = contact
                     .get("field_status")
                     .and_then(|statuses| statuses.get(field))
                     .is_some_and(research_field_is_answered);
                 (!answered).then_some(key)
             })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect(),
     )
 }
@@ -1778,7 +1786,7 @@ pub(super) fn handle_research_writeback(
     // source host. Reporting those as answered told the worker there was
     // nothing left to do and ended the run with 3 of 32 fields stored while 10
     // verified answers had been dropped (thesen, Sasol Germany, 09.09.2026).
-    // Person fields with per-person status are judged per person: A answered
+    // Person fields with keyed contacts are judged per person: A answered
     // and B still open is open; every person answered is answered even when
     // the single lead-level entry was a filler (no pointless retry).
     let lead_level_answered = |field: &str| {
@@ -4807,6 +4815,113 @@ mod tests {
             emails.contains(&serde_json::json!("bernd.beta@firma.test")),
             "{lead}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn person_scope_without_a_status_map_keeps_each_keyed_contact_open() {
+        for statuses in [None, Some(Value::Null), Some(serde_json::json!({}))] {
+            let mut lead = serde_json::json!({
+                "contacts": [{"person_key":"B"}, {"person_key":"A"}, {"person_key":"A"}],
+                "field_status":{"person_email":{"status":"no_match","reason":"unbound"}}
+            });
+            if let Some(statuses) = statuses {
+                lead["person_field_status"] = statuses;
+            }
+            assert_eq!(
+                open_persons_for_field(&lead, "person_email"),
+                Some(vec!["A".to_string(), "B".to_string()]),
+                "{lead}"
+            );
+            assert_eq!(open_persons_for_field(&lead, "firma_email"), None);
+        }
+    }
+
+    #[test]
+    fn person_scope_preserves_bound_answers_and_no_contact_negative_results() {
+        let mut lead = serde_json::json!({
+            "contacts":[{"person_key":"A","sellify_person_id":"8235"}, {"person_key":"B"}],
+            "person_field_status":{
+                "sellify-person-8235":{"person_email":{"status":"verified","value":"a@firma.test"}},
+                "B":{"person_email":{"status":"no_match","reason":"documented search"}}
+            }
+        });
+        project_person_field_status(&mut lead);
+        assert_eq!(open_persons_for_field(&lead, "person_email"), Some(vec![]));
+        for contacts in [
+            serde_json::json!([]),
+            serde_json::json!([{"name":"unkeyed legacy contact"}]),
+        ] {
+            lead["contacts"] = contacts;
+            lead["field_status"] = serde_json::json!({"person_email":{"status":"no_match"}});
+            assert_eq!(open_persons_for_field(&lead, "person_email"), None);
+            assert!(research_field_is_answered(
+                &lead["field_status"]["person_email"]
+            ));
+        }
+    }
+
+    #[test]
+    fn person_scope_blocks_native_email_completion_without_each_person_answer() {
+        let mut lead = serde_json::json!({
+            "research_status":"needs_review",
+            "contacts":[{"person_key":"A"}, {"person_key":"B"}],
+            "field_status":{"person_email":{"status":"verified","value":"unbound@firma.test"}},
+            "payload":{
+                "native_research_terminal_status":"needs_review",
+                "native_research_requested_fields":["person_email"],
+                "native_research_rejections_count":0
+            }
+        });
+        assert!(!complete_after_native_email_validation(&mut lead));
+        assert_eq!(lead["research_status"], "needs_review");
+    }
+
+    #[test]
+    fn person_scope_writeback_does_not_close_keyed_contacts_with_unbound_no_match(
+    ) -> anyhow::Result<()> {
+        for statuses in [None, Some(serde_json::json!({}))] {
+            let temp = tempfile::tempdir()?;
+            let (record_id, research_command_id) =
+                ("lead-unbound-person", "research-unbound-person");
+            create_chat_fixture_with_sellify(
+                temp.path(),
+                research_command_id,
+                record_id,
+                &["person_email"],
+            )?;
+            let mut command = two_person_writeback(record_id, research_command_id, Value::Null);
+            command.payload["field_status"] = serde_json::json!({
+                "person_email":{
+                    "status":"no_match", "reason":"No address was found for the lead",
+                    "attempts":[{"source_id":"official","url":"https://firma.test/team"}]
+                }
+            });
+            if let Some(statuses) = statuses {
+                command.payload["result"]["person_field_status"] = statuses;
+            } else {
+                command.payload["result"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("person_field_status");
+            }
+            let result = handle_research_writeback(temp.path(), &command)?;
+            assert_eq!(result["ok"], true, "{result}");
+            assert_eq!(result["accepted_fields"], serde_json::json!([]), "{result}");
+            assert_eq!(
+                result["open_fields"],
+                serde_json::json!(["person_email"]),
+                "{result}"
+            );
+            let open: Vec<String> = serde_json::from_value(result["open_person_fields"].clone())?;
+            for key in ["A:person_email", "B:person_email"] {
+                assert!(open.iter().any(|entry| entry == key), "{result}");
+            }
+            assert_eq!(result["research_status"], "needs_review", "{result}");
+            let lead = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+                .context("persisted lead")?;
+            assert_eq!(lead["research_status"], "needs_review", "{lead}");
+        }
         Ok(())
     }
 

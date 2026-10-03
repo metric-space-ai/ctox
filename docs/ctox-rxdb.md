@@ -197,6 +197,14 @@ are listed in `payload.unbound_person_field_keys`, outside the researched-field
 list. Existing imported names and contact details remain unchanged. Initial
 legacy discovery from an empty contact list and explicit keyed updates remain
 supported; this does not certify the source quality of those values.
+Completion of a requested person field is judged for every keyed contact,
+including contacts for which the worker supplied no status. An absent or empty
+`person_field_status` map cannot let an unbound Lead-level answer close those
+people. Repeated rows for one key produce one open-person entry. Leads without
+keyed contacts retain the documented Lead-level negative-result path. The same
+rule applies when native email validation considers promoting a research result
+from `needs_review`; this does not create a new person-selection contract or
+validate a worker's evidence.
 Contact deduplication also preserves two distinct nonempty person keys even
 when imported contacts share a local row ID. Duplicate rows with the same
 person key still coalesce; unkeyed legacy row-ID matching remains supported.
