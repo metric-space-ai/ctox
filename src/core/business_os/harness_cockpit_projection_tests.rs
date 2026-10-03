@@ -946,6 +946,10 @@ fn persisted_worker_snapshot_does_not_resurrect_active_app_work() -> Result<()> 
             worker_active_count: 1,
             worker_phase: Some("running".into()),
             active_task_ids: vec!["old-task".into()],
+            worker_instance_ids: BTreeMap::from([(
+                "old-task".into(),
+                "old-boot:worker:old".into(),
+            )]),
             last_error: Some("retained diagnostic".into()),
             boot_id: "old-boot".into(),
         },
@@ -954,6 +958,7 @@ fn persisted_worker_snapshot_does_not_resurrect_active_app_work() -> Result<()> 
     assert!(!recovered.service_running && !recovered.busy);
     assert_eq!(recovered.worker_active_count, 0);
     assert!(recovered.active_task_ids.is_empty() && recovered.worker_phase.is_none());
+    assert!(recovered.worker_instance_ids.is_empty());
     assert_eq!(recovered.last_error.as_deref(), Some("retained diagnostic"));
     let live = WorkerSnapshot {
         service_running: true,
@@ -964,6 +969,93 @@ fn persisted_worker_snapshot_does_not_resurrect_active_app_work() -> Result<()> 
     let mut latest = BTreeMap::new();
     assert!(record_snapshot(&mut latest, root.path(), live));
     assert_eq!(latest[root.path()].snapshot.active_task_ids, ["new-task"]);
+    Ok(())
+}
+
+fn current_queue_worker_fixture() -> Result<(TempDir, Connection, WorkerSnapshot)> {
+    let (root, conn) = setup()?;
+    conn.execute_batch(
+        "ALTER TABLE communication_routing_state ADD COLUMN lease_owner TEXT;
+         ALTER TABLE communication_routing_state ADD COLUMN lease_worker_id TEXT;
+         ALTER TABLE communication_routing_state ADD COLUMN leased_at TEXT;
+         ALTER TABLE communication_routing_state ADD COLUMN lease_expires_at TEXT;
+         ALTER TABLE communication_routing_state ADD COLUMN attempt INTEGER;
+         INSERT INTO communication_routing_state(message_key,route_status,updated_at,lease_owner,
+             lease_worker_id,leased_at,lease_expires_at,attempt)
+         VALUES('task','leased','2026-01-01T00:00:00Z','ctox-service','boot:worker:current',
+             '2026-01-01T00:00:00Z','9999-01-01T00:00:00Z',8);",
+    )?;
+    let snapshot = WorkerSnapshot {
+        service_running: true,
+        worker_active_count: 1,
+        active_task_ids: vec!["task".into()],
+        worker_instance_ids: BTreeMap::from([("task".into(), "boot:worker:current".into())]),
+        boot_id: "boot".into(),
+        ..Default::default()
+    };
+    Ok((root, conn, snapshot))
+}
+
+#[test]
+fn current_queue_workers_require_current_instance_and_owned_unexpired_lease() -> Result<()> {
+    let (_root, conn, mut snapshot) = current_queue_worker_fixture()?;
+    let worker = current_queue_workers(&conn, &snapshot)?;
+    assert_eq!(worker.len(), 1);
+    assert_eq!(worker[0]["attempt"], 8);
+    assert_eq!(worker[0]["lease_worker_id"], "boot:worker:current");
+    for change in [
+        "UPDATE communication_routing_state SET route_status='cancelled'",
+        "UPDATE communication_routing_state SET lease_owner='other-owner'",
+        "UPDATE communication_routing_state SET lease_expires_at='2000-01-01T00:00:00Z'",
+        "UPDATE communication_routing_state SET lease_worker_id='boot:worker:replacement',attempt=9",
+    ] {
+        conn.execute_batch("UPDATE communication_routing_state SET route_status='leased',
+            lease_owner='ctox-service',lease_worker_id='boot:worker:current',
+            lease_expires_at='9999-01-01T00:00:00Z',attempt=8")?;
+        conn.execute_batch(change)?;
+        assert!(current_queue_workers(&conn, &snapshot)?.is_empty(), "{change}");
+    }
+    snapshot
+        .worker_instance_ids
+        .insert("task".into(), "boot:worker:replacement".into());
+    assert_eq!(current_queue_workers(&conn, &snapshot)?[0]["attempt"], 9);
+    Ok(())
+}
+
+#[test]
+fn current_queue_workers_do_not_infer_liveness_from_task_ids_or_old_boot() -> Result<()> {
+    let (_root, conn, mut snapshot) = current_queue_worker_fixture()?;
+    snapshot.worker_instance_ids.clear();
+    assert!(current_queue_workers(&conn, &snapshot)?.is_empty());
+    snapshot
+        .worker_instance_ids
+        .insert("task".into(), "boot:worker:current".into());
+    snapshot.boot_id = "next-boot".into();
+    assert!(current_queue_workers(&conn, &snapshot)?.is_empty());
+    snapshot.boot_id = "boot".into();
+    snapshot.active_task_ids.clear();
+    assert!(current_queue_workers(&conn, &snapshot)?.is_empty());
+    snapshot.active_task_ids.push("task".into());
+    snapshot.service_running = false;
+    assert!(current_queue_workers(&conn, &snapshot)?.is_empty());
+    Ok(())
+}
+
+#[test]
+fn current_queue_workers_project_binding_but_never_restore_live_authority() -> Result<()> {
+    let (root, conn, snapshot) = current_queue_worker_fixture()?;
+    let mut writer = BusinessProjectionWriter::open(root.path())?;
+    project_status(root.path(), &conn, &mut writer, &snapshot)?;
+    let status = record(root.path(), "ctox_harness_status", "harness")?;
+    assert_eq!(status["current_queue_workers"][0]["task_id"], "task");
+    assert_eq!(status["current_queue_workers"][0]["attempt"], 8);
+    let restored = persisted_snapshot(root.path())?;
+    assert!(current_queue_workers(&conn, &restored)?.is_empty());
+    project_status(root.path(), &conn, &mut writer, &restored)?;
+    assert_eq!(
+        record(root.path(), "ctox_harness_status", "harness")?["current_queue_workers"],
+        json!([])
+    );
     Ok(())
 }
 

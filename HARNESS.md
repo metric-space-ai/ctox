@@ -42,6 +42,16 @@ Usage already observed before interruption remains recorded even though the
 reply is suppressed. This does not undo writes committed before the interrupt
 or implement cancellation for a separately owned external executor.
 
+The public `ctox_harness_status.current_queue_workers` array binds each
+advertised queue worker to its task, current boot, instance-unique lease worker,
+durable routing attempt and lease timestamps. The service publishes instances
+only after native lease attachment. Projection includes a binding only while
+the current process owns that exact unexpired native lease; task IDs, counts,
+cached routing rows and persisted snapshots alone are insufficient. Replacement,
+cancellation and expiry remove the binding on the next status projection.
+This lossy observation is not a completion receipt or cancellation stop witness.
+Consumers still need freshness and their normal native authorization.
+
 ## Runtime State
 
 Core runtime state lives in `runtime/ctox.sqlite3`. The central path helper is
