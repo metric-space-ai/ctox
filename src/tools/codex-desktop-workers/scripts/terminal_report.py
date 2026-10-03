@@ -298,7 +298,22 @@ def whole_pr_iterations(records, pr_url):
 
 
 def harness_label(value):
-    return "codex" if value in ("Codex Desktop", "Codex") else value
+    if value in ("Codex Desktop", "Codex"):
+        return "codex"
+    return "grok" if value in ("native Grok Build CLI", "Grok Build CLI") else value
+
+def partition_deliveries(records):
+    deliveries, attempts = [], []
+    for row in records:
+        if row.get("delivery_status") != "not_delivered":
+            deliveries.append(row)
+            continue
+        if not row.get("no_delivery_evidence") or any(
+                (row.get(stage) or {}).get("weighted_total") is not None
+                for stage in ("first", "corrected", "parent_completion")):
+            raise ValueError("Non-delivery requires evidence and cannot hide numeric assessments")
+        attempts.append(row)
+    return deliveries, attempts
 
 
 def leaderboard_data(records):
@@ -380,12 +395,15 @@ def build(base):
     for pr in prs:
         pr["project"] = PROJECTS.get(pr["repository"], "External registry")
     mapping = {p["url"]: p for p in prs}
-    records = assessments(base)
+    records, non_delivery_attempts = partition_deliveries(assessments(base))
     legacy = []
     registry = jobs(base)
     for j in registry:
         if j.get("pr_url") in mapping:
             legacy.extend(legacy_rows(j, mapping[j["pr_url"]]))
+    excluded = {(row["pr_url"], row["actor_id"]) for row in non_delivery_attempts}
+    non_delivery_legacy = [row for row in legacy if (row["pr_url"], row["actor_id"]) in excluded]
+    legacy = [row for row in legacy if (row["pr_url"], row["actor_id"]) not in excluded]
     provenance_path = base / "terminal-evidence/provenance.json"
     recovered = load(provenance_path) if provenance_path.exists() else {}
     for row in legacy:
@@ -431,6 +449,7 @@ def build(base):
             "PR evidence collected; assignment/actor review not yet completed")
     data = dict(schema=RUBRIC, generated_at=now(), snapshot_at=snapshot["collected_at"],
                 summary=summary, weights=WEIGHTS, prs=prs, assessments=records, legacy=legacy,
+                non_delivery_attempts=non_delivery_attempts, non_delivery_legacy=non_delivery_legacy,
                 leaderboards=leaderboard_data(records + legacy), parent_worker_pairs=parent_worker_pairs(records, mapping), scope_repositories=list(REPOS))
     save(base / "MODEL-EXPERIENCE.json", data)
     template = read(Path(__file__).with_name("terminal_report.html"))

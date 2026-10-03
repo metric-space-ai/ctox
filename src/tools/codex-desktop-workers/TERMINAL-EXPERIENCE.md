@@ -75,3 +75,9 @@ Explicit user-requested terminal URLs in terminal-evidence/explicit-terminal-prs
 are retained by collection alongside the configured repositories and existing
 external registry cases. Merge target branches are captured as baseRefName;
 an integration-branch merge does not imply delivery to main.
+
+Proved pre-inference failures are retained separately as non_delivery_attempts
+and cannot contribute numeric assessments or delivery statistics. Numeric
+assessments cannot be hidden with this classification. Native Grok deliveries
+retain the actual session/turn-number identity and raw authoring model/harness;
+the compact UI displays the native harness as @grok.

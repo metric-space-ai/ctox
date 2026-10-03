@@ -13,6 +13,33 @@ class ReportTests(unittest.TestCase):
         return dict(head="a"*40, criteria={k:score for k in r.WEIGHTS},
                     criterion_reasons={k:"Observed evidence" for k in r.WEIGHTS},
                     evidence=["immutable-review"], rationale="Checked source and outcome")
+    def test_non_delivery_is_preserved_outside_delivery_statistics(self):
+        delivery = dict(actor_id="real", pr_url="pr", first=self.result(4))
+        delivery["first"]["weighted_total"] = 4
+        failed = dict(actor_id="failed-proxy", pr_url="pr",
+                      delivery_status="not_delivered", no_delivery_evidence=["503 before inference"],
+                      first=dict(weighted_total=None), corrected=None)
+        active, attempts = r.partition_deliveries([delivery, failed])
+        self.assertEqual(active, [delivery])
+        self.assertEqual(attempts, [failed])
+        self.assertEqual(failed["actor_id"], "failed-proxy")
+        hidden = copy.deepcopy(failed)
+        hidden["first"] = dict(weighted_total=3)
+        with self.assertRaises(ValueError):
+            r.partition_deliveries([hidden])
+        unsupported = copy.deepcopy(failed)
+        unsupported.pop("no_delivery_evidence")
+        with self.assertRaises(ValueError):
+            r.partition_deliveries([unsupported])
+    def test_native_harness_alias_keeps_raw_provenance(self):
+        raw = "native Grok Build CLI"
+        row = dict(pr_url="pr", role="worker", actor_id="native", schema=r.RUBRIC,
+                   model="grok-4.7-build", harness=raw, first={"weighted_total":3.1},
+                   corrected={"weighted_total":4}, rework_iterations=1)
+        group = r.leaderboard_data([row])[0]
+        self.assertEqual(group["harness"], "grok")
+        self.assertEqual(row["harness"], raw)
+        self.assertEqual((group["first"]["mean"], group["corrected"]["mean"]), (3.1,4))
     def test_weights_and_essential_cap(self):
         self.assertEqual(r.weighted(self.result()),8)
         result=self.result(9);result["essential_defect"]=True
