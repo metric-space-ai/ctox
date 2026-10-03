@@ -14,7 +14,7 @@ use crate::browser::BrowserPrepareOptions;
 use crate::deep_research::run_ctox_deep_research_tool;
 use crate::deep_research::DeepResearchDepth;
 use crate::deep_research::DeepResearchRequest;
-use crate::person_research::run_ctox_person_research_tool;
+
 use crate::person_research::PersonResearchRequest;
 use crate::scholarly_search::run_ctox_scholarly_search_tool;
 use crate::scholarly_search::ScholarlySearchProvider;
@@ -23,7 +23,7 @@ use crate::sources::Country as SourceCountry;
 use crate::sources::FieldKey as SourceFieldKey;
 use crate::sources::ResearchMode as SourceResearchMode;
 use crate::web_search::run_ctox_web_read_tool;
-use crate::web_search::run_ctox_web_search_tool;
+
 use crate::web_search::CanonicalWebSearchRequest;
 use crate::web_search::ContextSize;
 use crate::web_search::DirectWebReadRequest;
@@ -95,6 +95,15 @@ pub fn handle_web_command(
     args: &[String],
     scrape_executor: &dyn Fn(&Path, &[String]) -> Result<()>,
 ) -> Result<()> {
+    handle_web_command_with_resolver(root, args, scrape_executor, None)
+}
+
+pub fn handle_web_command_with_resolver(
+    root: &Path,
+    args: &[String],
+    scrape_executor: &dyn Fn(&Path, &[String]) -> Result<()>,
+    resolver: Option<&dyn crate::credentials::CredentialResolver>,
+) -> Result<()> {
     let command = args.first().map(String::as_str).unwrap_or("");
     if matches!(command, "" | "help" | "-h" | "--help") {
         println!("{}", web_usage());
@@ -121,7 +130,7 @@ pub fn handle_web_command(
                 country: find_flag_value(args, "--country").map(|raw| raw.trim().to_string()),
                 ..SearchUserLocation::default()
             };
-            let payload = run_ctox_web_search_tool(
+            let payload = crate::web_search::run_ctox_web_search_tool_with_resolver(
                 root,
                 &CanonicalWebSearchRequest {
                     query: query.to_string(),
@@ -139,6 +148,7 @@ pub fn handle_web_command(
                         .map(ToOwned::to_owned)
                         .collect(),
                 },
+                resolver,
             )?;
             print_json(&payload)
         }
@@ -198,7 +208,7 @@ pub fn handle_web_command(
                 .collect();
             let workspace = find_flag_value(args, "--workspace").map(PathBuf::from);
             let persist_workspace = !args.iter().any(|arg| arg == "--no-workspace");
-            let payload = run_ctox_person_research_tool(
+            let payload = crate::person_research::run_ctox_person_research_tool_with_resolver(
                 root,
                 &PersonResearchRequest {
                     company: company.to_string(),
@@ -211,6 +221,7 @@ pub fn handle_web_command(
                     workspace,
                     persist_workspace,
                 },
+                resolver,
             )?;
             print_json(&payload)
         }

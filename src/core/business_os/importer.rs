@@ -3271,7 +3271,7 @@ fn run_person_research(
     fields: Vec<FieldKey>,
 ) -> anyhow::Result<Value> {
     let country = Country::from_iso(country).unwrap_or(Country::De);
-    ctox_web_stack::run_ctox_person_research_tool(
+    crate::web_stack::run_ctox_person_research_tool(
         root,
         &PersonResearchRequest {
             company: company.to_string(),
