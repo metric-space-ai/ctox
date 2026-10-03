@@ -378,6 +378,11 @@ impl NativeSyncSession {
             .expect("a started native session owns its pool")
     }
 
+    /// Typed data operations retain the same owned pool, not a replacement.
+    pub fn pool_clone(&self) -> NativePool {
+        self.pool().clone()
+    }
+
     /// Offer to a current, browser-admitted data route using existing WebRTC.
     /// This is transport setup only. It never issues a ready user-data handle.
     /// The host owns bounded discovery/retry and must await session shutdown.
