@@ -329,9 +329,62 @@ mod command_binding_tests {
     }
 }
 
+/// Authority for one probe of a provider account that the account state
+/// holds as inactive. It is built only from a Business OS command
+/// authorization that the server-side policy allowed for a trusted, logged-in
+/// user (the Outbound source test). The CLI and worker command sessions
+/// cannot create one; a `--probe-account` flag carries no authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AccountProbeGrant {
+    command_id: String,
+    actor_id: String,
+}
+
+impl AccountProbeGrant {
+    /// `authorization` is the `ctox-business-command-authorization-v1`
+    /// record of the command (allowed data.write, actor.trusted, actor.id).
+    pub(crate) fn from_command_authorization(
+        command_id: &str,
+        authorization: &Value,
+    ) -> Option<Self> {
+        let command_id = command_id.trim();
+        let actor = authorization.get("actor")?;
+        let actor_id = actor.get("id").and_then(Value::as_str)?.trim();
+        let valid = !command_id.is_empty()
+            && !actor_id.is_empty()
+            && authorization.get("contract").and_then(Value::as_str)
+                == Some("ctox-business-command-authorization-v1")
+            && authorization.get("allowed").and_then(Value::as_bool) == Some(true)
+            && authorization.get("permission").and_then(Value::as_str) == Some("data.write")
+            && actor.get("trusted").and_then(Value::as_bool) == Some(true);
+        valid.then(|| Self {
+            command_id: command_id.to_string(),
+            actor_id: actor_id.to_string(),
+        })
+    }
+}
+
+/// An early operator probe needs a grant and cannot be authorized inside a
+/// worker command session. Ordinary credential-change/backoff probes are
+/// governed separately by the durable account state.
+pub(super) fn account_probe_authorized(
+    grant: Option<&AccountProbeGrant>,
+    session_owner_user_id: Option<&str>,
+) -> bool {
+    grant.is_some() && session_owner_user_id.is_none()
+}
+
 pub(crate) fn execute_scrape_with_outcome(
     root: &Path,
     args: &[String],
+) -> Result<ScrapeExecutionOutcome> {
+    execute_scrape_with_probe_grant(root, args, None)
+}
+
+pub(crate) fn execute_scrape_with_probe_grant(
+    root: &Path,
+    args: &[String],
+    probe_grant: Option<&AccountProbeGrant>,
 ) -> Result<ScrapeExecutionOutcome> {
     let execution_started = Instant::now();
     let target_key = required_flag_value(args, "--target-key")
@@ -408,6 +461,41 @@ pub(crate) fn execute_scrape_with_outcome(
             run_started_at
         ))
     );
+    // Provider account state (account_state.rs): while the provider refuses
+    // the account, calls are answered from the stored state without
+    // contacting it; one probe runs per credential change, per policy-granted
+    // operator request (AccountProbeGrant, never from a worker session) or
+    // when the backoff is due.
+    let credential = target_credential(root, &target);
+    let authorized_probe = account_probe_authorized(probe_grant, session_owner_user_id.as_deref());
+    anyhow::ensure!(
+        !args.iter().any(|arg| arg == "--probe-account") || authorized_probe,
+        "--probe-account is refused: a provider account probe needs a policy-granted operator request (Outbound source test); the CLI and worker sessions cannot authorize it"
+    );
+    if let Some(grant) = probe_grant.filter(|_| authorized_probe) {
+        eprintln!(
+            "[scrape] account probe granted for {} by command {} (actor {})",
+            target.view.target_key, grant.command_id, grant.actor_id
+        );
+    }
+    let probe_generation = match super::account_state::admit(
+        &conn,
+        &target.view.target_id,
+        credential.as_ref(),
+        authorized_probe,
+        now_millis(),
+        &run_id,
+    )? {
+        super::account_state::Admission::Suppress(state) => {
+            return Ok(suppressed_account_outcome(
+                &target,
+                &workspace_dir,
+                state,
+                execution_started,
+            ));
+        }
+        super::account_state::Admission::Run { probe_generation } => probe_generation,
+    };
     let run_dir = workspace_dir.join("runs").join(&run_id);
     let output_dir = run_dir.join("outputs");
     fs::create_dir_all(&output_dir).with_context(|| {
@@ -599,6 +687,8 @@ pub(crate) fn execute_scrape_with_outcome(
     };
     let failure_mode = if classification.status == ScrapeRunStatus::AuthorizationRequired {
         Some("authorization_required")
+    } else if classification.status == ScrapeRunStatus::ProviderAccountInactive {
+        Some("provider_account_inactive")
     } else {
         payload.get("failure_mode").and_then(Value::as_str)
     };
@@ -673,6 +763,28 @@ pub(crate) fn execute_scrape_with_outcome(
             output_dir: run_dir.clone(),
             artifacts: artifacts.clone(),
         },
+    )?;
+    super::account_state::record(
+        &conn,
+        &target.view.target_id,
+        &run_id,
+        probe_generation,
+        match classification.status {
+            ScrapeRunStatus::ProviderAccountInactive => {
+                super::account_state::RunResult::AccountInactive(
+                    payload
+                        .get("detail")
+                        .and_then(Value::as_str)
+                        .unwrap_or("provider_account_inactive"),
+                )
+            }
+            ScrapeRunStatus::Succeeded | ScrapeRunStatus::CompletedEmpty => {
+                super::account_state::RunResult::Succeeded
+            }
+            _ => super::account_state::RunResult::OtherFailure,
+        },
+        credential.as_ref(),
+        now_millis(),
     )?;
 
     let template_event = if classification.status == ScrapeRunStatus::Succeeded {
@@ -763,6 +875,117 @@ pub(crate) fn execute_scrape_with_outcome(
         materialization: materialization.as_ref().map(|item| item.summary.clone()),
         run_manifest_path: run_dir.join("run.json"),
     })
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// The stored credential the target depends on, by name: `credential_secret_name`
+/// in the target config, else the config's `credential_ref`
+/// (`ctox-secret://<scope>/<NAME>`, the form installed Outbound manifests
+/// carry, e.g. the LinkedIn target's Bright Data key), else the name the
+/// source's recipe or id implies (as for protected capture). Never the value.
+pub(super) fn target_credential_name(config: &Value) -> Option<String> {
+    let text = |key: &str| {
+        config
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    if let Some(name) = text("credential_secret_name") {
+        return Some(name.to_string());
+    }
+    if let Some(reference) = text("credential_ref") {
+        if super::reauth::valid_credential_reference(reference) {
+            let prefix = format!("ctox-secret://{}/", crate::secrets::credential_scope());
+            return reference.strip_prefix(prefix.as_str()).map(str::to_string);
+        }
+    }
+    let provider = text("expected_provider")?;
+    Some(
+        ctox_web_stack::sources::find(provider)
+            .and_then(|module| module.browser_recipe())
+            .and_then(|recipe| recipe.required_secret_name.map(str::to_string))
+            .unwrap_or_else(|| super::reauth::derived_secret_name(provider)),
+    )
+}
+
+/// Version of the named secret: its record's `updated_at`, `absent` when the
+/// store has no such record. A store that cannot be read yields `None`, which
+/// is NOT "absent": an unreadable store must neither look like a credential
+/// change (and trigger a probe) nor overwrite the version the state recorded.
+pub(super) fn credential_version(
+    records: Result<Vec<crate::secrets::SecretRecordView>>,
+    name: &str,
+) -> Option<String> {
+    let records = records.ok()?;
+    Some(
+        records
+            .into_iter()
+            .find(|record| record.secret_name == name)
+            .map(|record| record.updated_at)
+            .unwrap_or_else(|| "absent".to_string()),
+    )
+}
+
+fn target_credential(
+    root: &Path,
+    target: &RegisteredTarget,
+) -> Option<super::account_state::Credential> {
+    let name = target_credential_name(&target.view.config)?;
+    let scope = crate::secrets::credential_scope();
+    let version = credential_version(
+        crate::secrets::list_secret_records(root, Some(scope)),
+        &name,
+    );
+    Some(super::account_state::Credential {
+        reference: format!("{scope}/{name}"),
+        version,
+    })
+}
+
+/// The answer for a suppressed call: no provider call and no new run; it
+/// names the run that caused the state and the last probe.
+fn suppressed_account_outcome(
+    target: &RegisteredTarget,
+    workspace_dir: &Path,
+    state: super::account_state::AccountState,
+    started: Instant,
+) -> ScrapeExecutionOutcome {
+    let next_probe = chrono::DateTime::from_timestamp_millis(state.next_probe_at_ms)
+        .map(|at| at.to_rfc3339())
+        .unwrap_or_default();
+    ScrapeExecutionOutcome {
+        ok: false,
+        target_key: target.view.target_key.clone(),
+        run_id: state.last_probe_run_id.clone(),
+        status: ScrapeRunStatus::ProviderAccountInactive,
+        records_found: 0,
+        fields_extracted: Vec::new(),
+        latency_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        reason: "provider_account_inactive_suppressed".to_string(),
+        error: Some(format!(
+            "Konto beim Anbieter inaktiv: {} (erfasst in {}, zuletzt geprüft in {}); kein Anbieteraufruf. Automatische Wiederprüfung beim nächsten Abruf ab {next_probe}, früher nach geänderten Zugangsdaten oder autorisierter Prüfung.",
+            state.reason, state.causal_run_id, state.last_probe_run_id
+        )),
+        query_completion: None,
+        probe: Value::Null,
+        should_queue_repair: false,
+        repair_request_path: None,
+        repair_queue_task: None,
+        reauthorization: None,
+        template_event: None,
+        materialization: None,
+        run_manifest_path: workspace_dir
+            .join("runs")
+            .join(&state.last_probe_run_id)
+            .join("run.json"),
+    }
 }
 
 pub(super) fn is_preserved_runner_env_key(key: &str) -> bool {

@@ -13743,11 +13743,14 @@ var CtoxRxQuery = class _CtoxRxQuery {
         let pendingTimer = null;
         let initialized = false;
         let queryEmissionGeneration = 0;
+        let queryInFlight = false;
+        let reexecRequested = false;
+        let queryController = null;
         let pendingPrimaryDoc = void 0;
         const primaryId = this.single ? singlePrimaryKeyCandidateId(this.query, this.collection.schema.primaryPath) : "";
         const controlPlaneRead = isControlPlaneStatusCollection(this.collection.name);
-        const canApplyPrimaryDelta = !controlPlaneRead && Boolean(primaryId);
-        const canApplyQueryDelta = !controlPlaneRead && !this.single && canApplyUnboundedQueryDelta(this.query);
+        const canApplyPrimaryDelta = () => !controlPlaneRead && Boolean(primaryId) && !this.collection.demandLoader && !this.query.requireRevision;
+        const canApplyQueryDelta = () => !controlPlaneRead && !this.single && !this.collection.demandLoader && !this.query.requireRevision && canApplyUnboundedQueryDelta(this.query);
         let pendingSuccess = {};
         const queryDocumentsById = /* @__PURE__ */ new Map();
         const emitQueryDocuments = () => {
@@ -13765,21 +13768,32 @@ var CtoxRxQuery = class _CtoxRxQuery {
           }
         };
         const flushEmit = () => {
+          if (pendingTimer != null) clearTimeout(pendingTimer);
           pendingTimer = null;
-          if (!active) return;
+          if (!active || this.signal?.aborted) return;
+          if (queryInFlight) {
+            reexecRequested = true;
+            return;
+          }
+          queryInFlight = true;
+          reexecRequested = false;
+          const controller = new AbortController();
+          queryController = controller;
+          const abortFromCaller = () => controller.abort(this.signal.reason);
+          this.signal?.addEventListener("abort", abortFromCaller, { once: true });
           const generation = ++queryEmissionGeneration;
-          if (initialized && !canApplyPrimaryDelta && !canApplyQueryDelta) {
+          if (initialized && !canApplyPrimaryDelta() && !canApplyQueryDelta()) {
             this.collection.recordComplexLiveQueryReexec(this.query);
           }
-          this.exec().then((value) => {
+          this.exec({ signal: controller.signal }).then((value) => {
             if (!active || generation !== queryEmissionGeneration) return;
             initialized = true;
-            if (pendingPrimaryDoc !== void 0 && canApplyPrimaryDelta) {
+            if (pendingPrimaryDoc !== void 0 && canApplyPrimaryDelta()) {
               listener(wrapPrimaryDeltaDocument(this.collection, pendingPrimaryDoc));
               pendingPrimaryDoc = void 0;
               return;
             }
-            if (canApplyQueryDelta && Array.isArray(value)) {
+            if (canApplyQueryDelta() && Array.isArray(value)) {
               queryDocumentsById.clear();
               for (const doc of value) {
                 const id = documentIdFromDoc(doc);
@@ -13794,18 +13808,35 @@ var CtoxRxQuery = class _CtoxRxQuery {
             }
             listener(value);
           }).catch(() => {
+          }).finally(() => {
+            this.signal?.removeEventListener("abort", abortFromCaller);
+            queryController = null;
+            queryInFlight = false;
+            if (active && reexecRequested) flushEmit();
           });
         };
         const flushPrimaryDelta = () => {
           pendingTimer = null;
-          if (!active || !initialized || !canApplyPrimaryDelta || pendingPrimaryDoc === void 0) return;
+          if (!active || !initialized) return;
+          if (!canApplyPrimaryDelta()) {
+            pendingPrimaryDoc = void 0;
+            flushEmit();
+            return;
+          }
+          if (pendingPrimaryDoc === void 0) return;
           const next = pendingPrimaryDoc;
           pendingPrimaryDoc = void 0;
           listener(wrapPrimaryDeltaDocument(this.collection, next));
         };
         const flushQueryDelta = () => {
           pendingTimer = null;
-          if (!active || !initialized || !canApplyQueryDelta) return;
+          if (!active || !initialized) return;
+          if (!canApplyQueryDelta()) {
+            pendingSuccess = {};
+            queryDocumentsById.clear();
+            flushEmit();
+            return;
+          }
           const success = pendingSuccess;
           pendingSuccess = {};
           applyQuerySuccess(success);
@@ -13813,7 +13844,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
           emitQueryDocuments();
         };
         const emit = (event) => {
-          if (canApplyPrimaryDelta) {
+          if (canApplyPrimaryDelta()) {
             const success = successPayloadFromChangeEvent(event);
             if (!Object.prototype.hasOwnProperty.call(success, primaryId)) return;
             pendingPrimaryDoc = success[primaryId] || null;
@@ -13822,7 +13853,7 @@ var CtoxRxQuery = class _CtoxRxQuery {
             pendingTimer = setTimeout(flushPrimaryDelta, 50);
             return;
           }
-          if (canApplyQueryDelta) {
+          if (canApplyQueryDelta()) {
             pendingSuccess = {
               ...pendingSuccess,
               ...successPayloadFromChangeEvent(event)
@@ -13832,12 +13863,20 @@ var CtoxRxQuery = class _CtoxRxQuery {
             pendingTimer = setTimeout(flushQueryDelta, 50);
             return;
           }
+          pendingPrimaryDoc = void 0;
+          pendingSuccess = {};
+          queryDocumentsById.clear();
+          if (queryInFlight) {
+            reexecRequested = true;
+            return;
+          }
           if (pendingTimer != null) return;
           pendingTimer = setTimeout(flushEmit, 50);
         };
         const unsubscribeLoader = this.collection.subscribeDemandLoaderChange(() => {
           if (!active) return;
           queryEmissionGeneration += 1;
+          queryController?.abort("generation-replaced");
           pendingSuccess = {};
           pendingPrimaryDoc = void 0;
           queryDocumentsById.clear();
@@ -13849,7 +13888,14 @@ var CtoxRxQuery = class _CtoxRxQuery {
         const unsubscribe = this.collection.observe(emit);
         return {
           unsubscribe: () => {
+            if (!active) return;
             active = false;
+            reexecRequested = false;
+            queryEmissionGeneration += 1;
+            queryController?.abort("subscription-ended");
+            pendingSuccess = {};
+            pendingPrimaryDoc = void 0;
+            queryDocumentsById.clear();
             if (pendingTimer != null) {
               clearTimeout(pendingTimer);
               pendingTimer = null;
@@ -13896,13 +13942,13 @@ var CtoxRxQuery = class _CtoxRxQuery {
       regex: (value) => withOperator("$regex", value)
     };
   }
-  async exec() {
+  async exec({ signal = this.signal } = {}) {
     getActiveCollectionRegistry().markRead(this.collection.name);
     let docs;
     const demandLoader = this.collection.demandLoader;
     if (demandLoader && (!this.collection.localReplicaComplete || this.query.requireRevision)) {
       const demandOptions = this.single && !Number.isFinite(Number(this.query.limit)) ? { window: { offset: Number(this.query.skip || 0), limit: 1 } } : {};
-      demandOptions.signal = this.signal;
+      demandOptions.signal = signal;
       docs = await demandLoader.resolveQuery(this.query, demandOptions);
     } else if (demandLoader) {
       const windowLimit = this.single && !Number.isFinite(Number(this.query.limit)) ? 1 : Math.min(
@@ -13950,6 +13996,12 @@ var CtoxRxQuery = class _CtoxRxQuery {
         });
       }
       docs = [];
+    }
+    if (signal?.aborted) {
+      throw Object.assign(new Error("QUERY_CANCELLED: consumer-abort"), {
+        code: "QUERY_CANCELLED",
+        retryable: false
+      });
     }
     const wrapped = docs.map((doc) => new CtoxRxDocument(this.collection, doc));
     return this.single ? wrapped[0] || null : wrapped;
