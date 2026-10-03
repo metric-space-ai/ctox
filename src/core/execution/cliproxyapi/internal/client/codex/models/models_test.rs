@@ -207,22 +207,27 @@ fn candidate_apply_patch_non_text_models_cannot_inherit_conversation_tools() {
         "custom/gpt-image-2.5", "custom/grok-imagine-video-1.5",
     ] {
         let available = vec![model(json!({"id":id}))];
-        let forbidden = |_: &str| panic!("non-text model must not query routing capability");
+        let forbidden = |_: &str| -> bool { panic!("non-text model must not query routing capability") };
         let models = catalog(1).build_models_with_apply_patch_capability(
             &available, &empty_metadata, None, false, Some(&forbidden),
         );
         assert_eq!(models[0]["visibility"], "hide", "{id}");
         assert_eq!(models[0]["apply_patch_tool_type"], Value::Null, "{id}");
     }
-    for entry in [
+    for template in [
         json!({"apply_patch_tool_type":"freeform", "input_modalities":["image"]}),
         json!({"apply_patch_tool_type":"freeform", "visibility":"hide"}),
     ] {
-        let mut entry = model(entry);
-        apply_patch_tool_capability(&mut entry, "non-text", None);
-        assert_eq!(entry["apply_patch_tool_type"], Value::Null);
+        let mut template = model(template);
+        template.insert("slug".into(), json!("non-text"));
+        let raw = serde_json::to_vec(&json!({"models":[{"slug":"gpt-5.5"}, template]})).unwrap();
+        let catalog = CodexModelCatalog::parse(&raw, 1).unwrap();
+        let entries = catalog.build_models(&[model(json!({"id":"non-text"}))], &empty_metadata, None, false);
+        assert_eq!(entries[0]["apply_patch_tool_type"], Value::Null);
     }
-    let mut hidden_text = model(json!({"apply_patch_tool_type":"freeform", "visibility":"hide", "input_modalities":["text"]}));
-    apply_patch_tool_capability(&mut hidden_text, "hidden-text", None);
-    assert_eq!(hidden_text["apply_patch_tool_type"], "freeform");
+    let catalog = CodexModelCatalog::parse(
+        br#"{"models":[{"slug":"gpt-5.5","apply_patch_tool_type":"freeform","visibility":"hide","input_modalities":["text"]}]}"#, 1,
+    ).unwrap();
+    let entries = catalog.build_models(&[model(json!({"id":"gpt-5.5"}))], &empty_metadata, None, false);
+    assert_eq!(entries[0]["apply_patch_tool_type"], "freeform");
 }
