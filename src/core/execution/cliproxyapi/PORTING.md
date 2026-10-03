@@ -55,6 +55,11 @@
   Two further v8.0.12 response regressions preserve requested Codex web-search
   source includes and classify Claude pause_turn/max_tokens as incomplete in
   both transports. They remain unexecuted; full response-path parity is open.
+  Claude continuity now pins the first credential-local date for an active
+  session, including both live execute paths. Midnight cannot rewrite that
+  reminder until continuity expires; missing identity/restart retains the
+  per-request fallback. Diagnostics are still injected after cloaking to retain
+  member order. Two scoped/date-expiry regressions remain prepared, unexecuted.
   Compilation/Rust/Go execution, live executor compatibility/update-intent
   callers and full candidate parity remain pending. No pin or release gate
   was promoted.

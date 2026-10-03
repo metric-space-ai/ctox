@@ -4,12 +4,29 @@
 
 use serde_json::{json, Value};
 
-use super::helps::{begin_claude_diagnostics, commit_claude_diagnostics as commit_state};
+use super::helps::{begin_claude_diagnostics, commit_claude_diagnostics as commit_state, pin_claude_session_date};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ClaudeDiagnosticsRequestState {
     key: String,
     sequence: u64,
+    previous_message_id: String,
+}
+
+impl ClaudeDiagnosticsRequestState {
+    pub fn pin_date(&self, date: &str) -> String {
+        pin_claude_session_date(&self.key, date)
+    }
+}
+
+/// Resolves continuity before cloaking so its date can be pinned. Injection
+/// remains after cloaking to preserve the observable diagnostics member order.
+pub fn begin_claude_diagnostics_request(
+    credential_identity: &str,
+    session_id: &str,
+) -> ClaudeDiagnosticsRequestState {
+    let (key, sequence, previous_message_id) = begin_claude_diagnostics(credential_identity, session_id);
+    ClaudeDiagnosticsRequestState { key, sequence, previous_message_id }
 }
 
 /// Adds the continuity object immediately after `context_management`, matching
@@ -20,17 +37,21 @@ pub fn inject_claude_diagnostics(
     credential_identity: &str,
     session_id: &str,
 ) -> (Vec<u8>, ClaudeDiagnosticsRequestState) {
-    let (key, sequence, previous) = begin_claude_diagnostics(credential_identity, session_id);
-    if key.is_empty() {
+    inject_claude_diagnostics_with_state(body, begin_claude_diagnostics_request(credential_identity, session_id))
+}
+
+pub fn inject_claude_diagnostics_with_state(
+    body: &[u8],
+    state: ClaudeDiagnosticsRequestState,
+) -> (Vec<u8>, ClaudeDiagnosticsRequestState) {
+    if state.key.is_empty() {
         return (body.to_vec(), ClaudeDiagnosticsRequestState::default());
     }
     let diagnostics = json!({
-        "previous_message_id": if previous.is_empty() { Value::Null } else { Value::String(previous) }
+        "previous_message_id": if state.previous_message_id.is_empty() { Value::Null } else { Value::String(state.previous_message_id.clone()) }
     });
     let encoded = serde_json::to_vec(&diagnostics)
         .unwrap_or_else(|_| b"{\"previous_message_id\":null}".to_vec());
-    let state = ClaudeDiagnosticsRequestState { key, sequence };
-
     if let Some((start, end)) = top_level_member_value_range(body, "diagnostics") {
         let mut output = Vec::with_capacity(body.len() - (end - start) + encoded.len());
         output.extend_from_slice(&body[..start]);

@@ -43,6 +43,11 @@ pub struct ClaudeCloakPolicy {
 }
 
 impl ClaudeCloakPolicy {
+    pub(crate) fn resolved_current_date(&self) -> String {
+        self.current_date.as_deref().map(str::trim).filter(|date| !date.is_empty())
+            .map(str::to_owned).unwrap_or_else(|| current_date_in_timezone(self.timezone))
+    }
+
     pub fn oauth_default() -> Self {
         Self {
             mode: "auto".to_owned(),

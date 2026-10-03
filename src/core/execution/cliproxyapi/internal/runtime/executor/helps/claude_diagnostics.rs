@@ -17,6 +17,7 @@ const CLAUDE_DIAGNOSTICS_EVICT_BATCH_SIZE: usize = 256;
 #[derive(Clone, Debug)]
 struct ClaudeDiagnosticsEntry {
     previous_message_id: String,
+    pinned_date: String,
     minimum_sequence: u64,
     committed_sequence: u64,
     last_access: u64,
@@ -77,6 +78,7 @@ pub fn begin_claude_diagnostics(
             key.clone(),
             ClaudeDiagnosticsEntry {
                 previous_message_id: String::new(),
+                pinned_date: String::new(),
                 minimum_sequence: sequence,
                 committed_sequence: 0,
                 last_access,
@@ -92,6 +94,25 @@ pub fn begin_claude_diagnostics(
     entry.expires_at = now + CLAUDE_DIAGNOSTICS_TTL;
     let previous_message_id = entry.previous_message_id.clone();
     (key, sequence, previous_message_id)
+}
+
+// ref: internal/runtime/executor/helps/claude_diagnostics.go:271-298 @ 2044a01f
+/// Pins the first resolved credential-local date to the existing session.
+/// Missing continuity (including a process restart) preserves the supplied date.
+pub fn pin_claude_session_date(key: &str, date: &str) -> String {
+    let key = key.trim();
+    let date = date.trim();
+    if key.is_empty() || date.is_empty() {
+        return date.to_owned();
+    }
+    let mut state = diagnostics_state().lock().unwrap_or_else(|error| error.into_inner());
+    let Some(entry) = state.entries.get_mut(key) else {
+        return date.to_owned();
+    };
+    if entry.pinned_date.is_empty() {
+        entry.pinned_date = date.to_owned();
+    }
+    entry.pinned_date.clone()
 }
 
 /// Advances continuity only after a response completes. Late responses from

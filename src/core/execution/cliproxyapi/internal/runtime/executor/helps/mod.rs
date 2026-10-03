@@ -125,7 +125,7 @@ pub use claude_device_profile::{
     default_claude_device_profile, default_claude_version, map_stainless_arch, map_stainless_os,
     ClaudeDeviceProfile, ClaudeDeviceProfileCache, ClaudeHeaderDefaults,
 };
-pub use claude_diagnostics::{begin_claude_diagnostics, commit_claude_diagnostics};
+pub use claude_diagnostics::{begin_claude_diagnostics, commit_claude_diagnostics, pin_claude_session_date};
 pub use claude_input_tokens::{
     count_claude_input_tokens, ClaudeInputTokenError, ClaudeInputTokenFailureSink,
     ClaudeInputTokenState,

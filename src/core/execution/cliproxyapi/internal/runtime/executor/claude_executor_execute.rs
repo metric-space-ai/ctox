@@ -21,7 +21,8 @@ use super::claude_executor_cloaking::{
     try_apply_claude_cloaking, ClaudeCallerSystemBlockError, ClaudeCloakPolicy,
 };
 use super::claude_executor_diagnostics::{
-    claude_message_id_from_response, commit_claude_diagnostics, inject_claude_diagnostics,
+    begin_claude_diagnostics_request, claude_message_id_from_response,
+    commit_claude_diagnostics, inject_claude_diagnostics_with_state,
     observe_claude_stream_line, ClaudeDiagnosticsRequestState,
 };
 use super::claude_executor_request::{
@@ -608,6 +609,18 @@ impl ClaudeSubscriptionMessagesExecutor {
             }
         }
         let cloaked = cloak_policy.should_cloak_request();
+        let credential_identity = self
+            .account_state_auth_id()
+            .unwrap_or_else(|| credentials.access_token().expose_secret());
+        let diagnostics_state = if cloaked && target.is_anthropic_api() {
+            begin_claude_diagnostics_request(credential_identity, &session_id)
+        } else {
+            ClaudeDiagnosticsRequestState::default()
+        };
+        if cloaked && target.is_anthropic_api() {
+            // ref: internal/runtime/executor/claude_executor_cloaking.go:214-244 @ 2044a01f
+            cloak_policy.current_date = Some(diagnostics_state.pin_date(&cloak_policy.resolved_current_date()));
+        }
         let body = try_apply_claude_cloaking(
             &body,
             model.unwrap_or_default(),
@@ -615,14 +628,12 @@ impl ClaudeSubscriptionMessagesExecutor {
             Some(&self.cloak_user_id),
         )
         .map_err(ClaudeExecutionError::CallerSystemBlock)?;
-        let credential_identity = self
-            .account_state_auth_id()
-            .unwrap_or_else(|| credentials.access_token().expose_secret());
         let (body, diagnostics_state) = if cloaked && target.is_anthropic_api() {
-            inject_claude_diagnostics(&body, credential_identity, &session_id)
+            inject_claude_diagnostics_with_state(&body, diagnostics_state)
         } else {
-            (body, ClaudeDiagnosticsRequestState::default())
+            (body, diagnostics_state)
         };
+
         let body = self.apply_request_credential_identity(
             context,
             prepared_auth.as_ref(),
@@ -774,6 +785,18 @@ impl ClaudeSubscriptionMessagesExecutor {
             }
         }
         let cloaked = cloak_policy.should_cloak_request();
+        let credential_identity = self
+            .account_state_auth_id()
+            .unwrap_or_else(|| credentials.access_token().expose_secret());
+        let diagnostics_state = if cloaked && target.is_anthropic_api() {
+            begin_claude_diagnostics_request(credential_identity, &session_id)
+        } else {
+            ClaudeDiagnosticsRequestState::default()
+        };
+        if cloaked && target.is_anthropic_api() {
+            // ref: internal/runtime/executor/claude_executor_cloaking.go:214-244 @ 2044a01f
+            cloak_policy.current_date = Some(diagnostics_state.pin_date(&cloak_policy.resolved_current_date()));
+        }
         let body = try_apply_claude_cloaking(
             &body,
             model.unwrap_or_default(),
@@ -781,14 +804,12 @@ impl ClaudeSubscriptionMessagesExecutor {
             Some(&self.cloak_user_id),
         )
         .map_err(ClaudeExecutionError::CallerSystemBlock)?;
-        let credential_identity = self
-            .account_state_auth_id()
-            .unwrap_or_else(|| credentials.access_token().expose_secret());
         let (body, diagnostics_state) = if cloaked && target.is_anthropic_api() {
-            inject_claude_diagnostics(&body, credential_identity, &session_id)
+            inject_claude_diagnostics_with_state(&body, diagnostics_state)
         } else {
-            (body, ClaudeDiagnosticsRequestState::default())
+            (body, diagnostics_state)
         };
+
         let body = self.apply_request_credential_identity(
             context,
             prepared_auth.as_ref(),
