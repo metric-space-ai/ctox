@@ -445,7 +445,12 @@ pub(crate) fn validate_path(path: &str) -> io::Result<()> {
         return Err(invalid("unsafe portable session path"));
     }
     for part in path.split('/') {
-        if part.is_empty() || part == "." || part == ".." || part.ends_with([' ', '.']) {
+        if part.is_empty()
+            || part == "."
+            || part == ".."
+            || part.eq_ignore_ascii_case(".git")
+            || part.ends_with([' ', '.'])
+        {
             return Err(invalid("unsafe portable session path component"));
         }
         let stem = part
