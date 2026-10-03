@@ -44,13 +44,7 @@ pub struct ModelInfo {
     pub support_configuration_update: bool,
 }
 
-/// Tri-state native capability supplied by the selected Home dispatch.
-/// ref: internal/registry/model_registry.go:29-33 @ d7914afd
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub struct NativeCapabilities {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub web_search: Option<bool>,
-}
+pub use crate::internal::registry::NativeCapabilities;
 
 /// Execution-only selected credential model options and upstream defaults.
 /// ref: internal/config/config_types.go:892-928 @ d7914afd
@@ -81,7 +75,9 @@ pub fn resolve_model_info(
 ) -> ModelInfo {
     let trimmed_name = name.trim();
     let base_name = thinking::parse_suffix(trimmed_name).model_name;
-    let mut info = registry::lookup_model_info(base_name.trim(), "claude")
+    let mut info = registry::embedded_models_catalog()
+        .ok()
+        .and_then(|catalog| registry::lookup_static_registry_model_info(&catalog, base_name.trim()))
         .map(ModelInfo::from)
         .unwrap_or_default();
     info.id = trimmed_name.to_owned();
@@ -124,6 +120,30 @@ impl From<registry::ModelInfo> for ModelInfo {
             max_completion_tokens: info.max_completion_tokens,
             thinking: info.thinking.map(ThinkingSupport::from),
             ..Self::default()
+        }
+    }
+}
+
+impl From<registry::RegistryModelInfo> for ModelInfo {
+    fn from(info: registry::RegistryModelInfo) -> Self {
+        Self {
+            id: info.id,
+            provider_type: info.provider_type,
+            user_defined: info.user_defined,
+            is_compat: false,
+            input_token_limit: info.input_token_limit,
+            output_token_limit: info.output_token_limit,
+            context_length: info.context_length,
+            max_completion_tokens: info.max_completion_tokens,
+            thinking: info.thinking.map(|support| ThinkingSupport {
+                min: support.min,
+                max: support.max,
+                zero_allowed: support.zero_allowed,
+                dynamic_allowed: support.dynamic_allowed,
+                levels: support.levels,
+            }),
+            native_capabilities: info.native_capabilities,
+            support_configuration_update: info.support_configuration_update,
         }
     }
 }

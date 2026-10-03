@@ -18,7 +18,7 @@ fn registry() -> ModelRegistry {
 #[test]
 fn model_override_headers_from_embedded_models() {
     const WANT_UA: &str =
-        "codex-tui/0.144.0 (Mac OS 26.5.1; arm64) iTerm.app/3.6.11 (codex-tui; 0.144.0)";
+        "codex-tui/0.154.0 (Mac OS 26.5.2; arm64) iTerm.app/3.6.11 (codex-tui; 0.154.0)";
     let registry = registry();
     assert_eq!(
         registry.model_override_headers("gpt-5.6-luna", "").unwrap()["user-agent"],
@@ -53,7 +53,7 @@ fn xai_builtins_include_video_preview_and_replace_case_insensitively() {
             .count(),
         1
     );
-    assert_eq!(models.len(), 4);
+    assert_eq!(models.len(), 6);
 }
 
 #[test]
@@ -143,17 +143,23 @@ fn complete_embedded_catalog_hash_channels_and_lookup_are_stable() {
             "{:x}",
             Sha256::digest(include_str!("models/models.json").trim_end().as_bytes())
         ),
-        "a872f4f35fe141383110a8477e2a9cc6ffc47f0b37fda8100133820a3787e32e"
+        "c8b7f9a3339801ca49f68c85f214ac5e1fa97ce63a94f5ba55a12d91d5c3b40a"
     );
     let expected = [
-        ("claude", 15),
-        ("gemini", 12),
-        ("vertex", 19),
-        ("aistudio", 14),
-        ("codex", 10),
-        ("kimi", 8),
+        ("claude", 18),
+        ("gemini", 14),
+        ("gemini-interactions", 14),
+        ("vertex", 21),
+        ("aistudio", 16),
+        ("codex", 14),
+        ("codex-free", 10),
+        ("codex-team", 14),
+        ("codex-plus", 14),
+        ("codex-pro", 14),
+        ("kimi", 10),
         ("antigravity", 12),
-        ("xai", 13),
+        ("xai", 18),
+        ("meta", 5),
     ];
     for (channel, count) in expected {
         assert_eq!(
@@ -219,6 +225,10 @@ async fn updater_falls_back_validates_commits_atomically_and_notifies() {
     let initial = embedded_models_catalog().unwrap();
     let mut next = initial.clone();
     next.kimi[0].description.push_str(" changed");
+    // Network catalogs retain private capabilities omitted by public model JSON.
+    let mut next_json: serde_json::Value =
+        serde_json::from_str(include_str!("models/models.json")).unwrap();
+    next_json["kimi"][0]["description"] = next.kimi[0].description.clone().into();
     let store = Arc::new(ModelCatalogStore::new(initial));
     let registry = ModelRegistry::from_store(Arc::clone(&store));
     let source = Arc::new(Source(Mutex::new(HashMap::from([
@@ -227,7 +237,10 @@ async fn updater_falls_back_validates_commits_atomically_and_notifies() {
             "invalid".to_owned(),
             Ok(br#"{"claude": [{"id": ""}]}"#.to_vec()),
         ),
-        ("valid".to_owned(), Ok(serde_json::to_vec(&next).unwrap())),
+        (
+            "valid".to_owned(),
+            Ok(serde_json::to_vec(&next_json).unwrap()),
+        ),
     ]))));
     let notifications = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
     let target = Arc::clone(&notifications);

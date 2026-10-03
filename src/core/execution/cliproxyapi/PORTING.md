@@ -38,13 +38,16 @@
   history/notes fixture is vendored unchanged; six new scoped regressions are
   prepared. The Claude handler now maps both408 and504 to timeout_error,
   retains explicit upstream error classifications and supplies the request-timeout
-  fallback message. The two Antigravity Claude5.5 high catalog entries now
-  match the complete upstream records, including context/output and modalities;
-  unrelated catalog data stays unchanged and the exact full-catalog hash guard
-  remains enforced. Three further catalog/error regressions are prepared, for72
-  candidate test functions in total. Prepared cases cover buffered JSON errors;
+  fallback message. The complete embedded models.json now matches the exact
+  v8.0.13 file (raw SHA256 f46d38b1ace1da689468daf4c36dbbd2e6af2c0496a3cb3ad4f3b5edac95ea7d).
+  The full-catalog guard retains an exact normalized hash and provider/tier counts.
+  This includes the Antigravity Claude5.5 records, current Codex tier catalogs,
+  Meta models and current headers; Codex/xAI built-in image/video records match
+  the pinned Go metadata and order. Internal native/update capabilities decode
+  into owned Rust snapshots, stay absent from public model JSON and participate
+  in refresh detection. Prepared cases cover buffered JSON errors;
   the committed-SSE timeout lifecycle remains unverified.
-  The Go oracle is materialized at this exact commit and the bounded controller
+  The bounded controller materializes the Go oracle at this exact commit and
   requires five integer and two Claude-error upstream parent tests; execution, remaining
   semantic deltas and promotion remain open. Preserve both earlier reviews;
   the accepted pin is unchanged.
@@ -84,11 +87,21 @@
   and headers cannot opt into compatibility. The active OpenAI-compatible
   executor consumes it before registry translation, normalizes integer schemas
   before conversion and uses the compatibility dispatcher/plugin normalizer.
-  Seven further configuration, selection, wire and executor regressions are
-  prepared; with the nine v8.0.13 cases above there are72 candidate
-  tests. Narrow formatting and whitespace checks passed; Cargo/Go execution
-  is still pending. Home capability binding, other
-  executor consumers and live thinking update-intent propagation remain open;
+  Home dispatch now binds central model metadata and selected credential options
+  privately on unary, count and stream paths, including refresh replay and retained
+  sessions. Explicit central configuration-update true/false takes precedence;
+  legacy payloads can inherit only a matching selected API-key or Codex OAuth model.
+  Codex OAuth capability comes from the selected account's free/plus/team/pro
+  catalog, including business/go aliases, and never from another account's API-key
+  snapshot. Each rebind clears stale API-key/OAuth authority; configured model
+  snapshots retain complete static model metadata and configured overrides.
+  Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
+  account-kind collisions, legacy Home execution, public JSON boundaries, native
+  capability refresh and built-in metadata. There are90 prepared candidate test
+  functions in total; none of the current candidate Cargo/Go checks has executed.
+  Narrow formatting and whitespace checks passed. Other executor consumers,
+  unlisted Codex API-key capability fallback, hard-coded Devin model definitions,
+  remaining v8 semantic deltas and live thinking update-intent propagation remain open;
   this is not runtime or promotion acceptance.
   Source/target summary extraction
   now keeps OpenAI Chat reasoning depth separate from Claude display visibility.

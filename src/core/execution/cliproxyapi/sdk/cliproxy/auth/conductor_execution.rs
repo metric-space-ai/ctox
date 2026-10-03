@@ -601,7 +601,8 @@ pub(crate) fn selected_executor_request(
         &route_model,
         &execution.model,
     );
-    execution.resolved_model_info = selected.metadata.resolved_api_key_model_info;
+    execution.resolved_model_info =
+        super::api_key_model_capabilities::resolved_model_info(&selected);
     execution
         .metadata
         .insert("selected_auth_id".into(), serde_json::json!(auth.id));

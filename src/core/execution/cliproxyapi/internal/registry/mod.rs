@@ -22,8 +22,9 @@ pub use model_definitions::{
     antigravity_web_search_model_for, embedded_models_catalog, lookup_model_info,
     lookup_static_registry_model_info, model_override_headers, models_for_channel,
     parse_models_catalog, static_model_definitions_by_channel, validate_models_catalog,
-    with_codex_builtins, with_xai_builtins, ModelConfig, ModelInfo, RegistryModelInfo,
-    RegistryThinkingSupport, StaticModelCatalogError, StaticModelsCatalog, ThinkingSupport,
+    with_codex_builtins, with_xai_builtins, ModelConfig, ModelInfo, NativeCapabilities,
+    RegistryModelInfo, RegistryThinkingSupport, StaticModelCatalogError, StaticModelsCatalog,
+    ThinkingSupport,
 };
 pub use model_registry::{
     HookContext, ModelRegistry, ModelRegistryHook, RegistryClock, RegistryError,
@@ -41,6 +42,8 @@ pub use model_updater::{WreqModelsSource, WreqModelsSourceBuildError};
 
 #[cfg(test)]
 mod codex_client_models_test;
+#[cfg(test)]
+mod model_catalog_v8_test;
 #[cfg(test)]
 mod model_definitions_test;
 #[cfg(test)]

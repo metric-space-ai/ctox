@@ -45,7 +45,9 @@ pub use antigravity_credits::{
     AntigravityCreditsClock, AntigravityCreditsHint, AntigravityCreditsHints,
     AntigravityCreditsRequest, AntigravityCreditsStore, AntigravityCreditsStoreError,
 };
-pub use api_key_model_capabilities::{resolved_api_key_model_info, ApiKeyModelRoutingSnapshot};
+pub use api_key_model_capabilities::{
+    resolved_api_key_model_info, resolved_model_info, ApiKeyModelRoutingSnapshot,
+};
 pub use auto_refresh_loop::{
     next_refresh_check_at, AuthRefresherResolver, AutoRefreshClock, AutoRefreshConfig,
     AutoRefreshWorker, RefreshSchedule, SystemAutoRefreshClock,
@@ -173,6 +175,8 @@ mod candidate_token_fingerprint_test;
 mod classification_test;
 #[cfg(test)]
 mod codex_forcemap_ws_forward_test;
+#[cfg(test)]
+mod codex_oauth_model_capabilities_test;
 #[cfg(test)]
 mod conductor_availability_test;
 #[cfg(test)]

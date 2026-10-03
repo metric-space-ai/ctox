@@ -70,7 +70,8 @@ pub(super) fn prepare_home_executor_request(
         route_model,
         &execution.model,
     );
-    execution.resolved_model_info = selected.metadata.resolved_api_key_model_info;
+    execution.resolved_model_info =
+        super::api_key_model_capabilities::resolved_model_info(&selected);
     attach_home_model_info(execution, auth, route_model, selection.model_info.as_ref())
 }
 

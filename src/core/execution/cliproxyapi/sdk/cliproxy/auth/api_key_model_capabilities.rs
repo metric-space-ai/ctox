@@ -49,6 +49,45 @@ pub fn resolved_api_key_model_info(request: &Request) -> Option<Arc<ModelInfo>> 
     request.metadata.resolved_api_key_model_info.clone()
 }
 
+/// Effective selected model capability; Codex OAuth stays independently typed.
+/// ref: sdk/cliproxy/auth/api_key_model_capabilities.go @ d7914afd
+#[must_use]
+pub fn resolved_model_info(request: &Request) -> Option<Arc<ModelInfo>> {
+    request
+        .metadata
+        .resolved_codex_oauth_model_info
+        .clone()
+        .or_else(|| request.metadata.resolved_api_key_model_info.clone())
+}
+
+fn lookup_codex_oauth_model_info(auth: &Auth, upstream_model: &str) -> Option<Arc<ModelInfo>> {
+    if auth.auth_kind() != Some(AuthKind::OAuth)
+        || !auth.provider.trim().eq_ignore_ascii_case("codex")
+    {
+        return None;
+    }
+    let plan = auth
+        .attributes
+        .get("plan_type")
+        .map(String::as_str)
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    let channel = match plan.as_str() {
+        "plus" => "codex-plus",
+        "team" | "business" | "go" => "codex-team",
+        "free" => "codex-free",
+        _ => "codex-pro",
+    };
+    let selected = parse_suffix(upstream_model.trim()).model_name;
+    let catalog = crate::internal::registry::embedded_models_catalog().ok()?;
+    crate::internal::registry::models_for_channel(&catalog, channel)?
+        .into_iter()
+        .find(|model| model.id.eq_ignore_ascii_case(selected.trim()))
+        .map(ModelInfo::from)
+        .map(Arc::new)
+}
+
 impl AuthManager {
     /// Atomically publishes a routing generation derived from a cloned typed
     /// config and the manager-owned credential generation.
@@ -173,8 +212,14 @@ pub(crate) fn attach_resolved_api_key_model_info(
     upstream_model: &str,
 ) -> Request {
     let requested = rewrite_model_for_auth(route_model, auth);
+    request.metadata.resolved_api_key_model_info = None;
+    request.metadata.resolved_codex_oauth_model_info = None;
     let selected = upstream_model.trim();
-    let routes = matching_routes(snapshot, &auth.id, &requested);
+    let routes = if is_configured_model_routing_auth(auth) {
+        matching_routes(snapshot, &auth.id, &requested)
+    } else {
+        Vec::new()
+    };
     let exact = routes
         .iter()
         .find(|route| route.upstream_model.trim().eq_ignore_ascii_case(selected));
@@ -190,6 +235,9 @@ pub(crate) fn attach_resolved_api_key_model_info(
     });
     if let Some(route) = fallback {
         request.metadata.resolved_api_key_model_info = Some(route.model_info.clone());
+    } else {
+        request.metadata.resolved_codex_oauth_model_info =
+            lookup_codex_oauth_model_info(auth, upstream_model);
     }
     request
 }

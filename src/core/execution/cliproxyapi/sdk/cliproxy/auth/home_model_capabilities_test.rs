@@ -27,6 +27,7 @@ async fn candidate_home_legacy_update_uses_exact_selected_codex_configuration() 
             ..ProviderCompatConfig::default()
         });
         let mut account = auth("codex", "legacy-home-test-key");
+        account.provider = "codex".into();
         account.attributes.insert("config_index".into(), "0".into());
         let account = register(&manager, account);
         transport.push_dispatch(serde_json::json!({

@@ -328,6 +328,8 @@ pub fn detect_changed_providers(
         ("kimi", &old.kimi, &new.kimi),
         ("antigravity", &old.antigravity, &new.antigravity),
         ("xai", &old.xai, &new.xai),
+        ("meta", &old.meta, &new.meta),
+        ("devin", &old.devin, &new.devin),
     ];
     let mut seen = std::collections::HashSet::new();
     let mut changed = Vec::new();
