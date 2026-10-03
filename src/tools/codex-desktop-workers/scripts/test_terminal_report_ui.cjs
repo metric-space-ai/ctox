@@ -30,7 +30,7 @@ const document={
 document.getElementById('report-data').textContent=data;
 document.getElementById('size').value='25';
 const context=vm.createContext({document,console,Set,Map,JSON,Number,String,Math,Object,Blob,URL,setTimeout});
-const capture='\nglobalThis.testAPI={compare,sorted,refresh,drawChart,prKey,parentScore,getVisible:()=>visible,getBoards:()=>boards,getMode:()=>mode,getStyles:()=>pairStyles,getPairs:()=>D.parent_worker_pairs};';
+const capture='\nglobalThis.testAPI={compare,sorted,refresh,drawChart,prKey,parentScore,reworkCount,getAll:()=>all,getVisible:()=>visible,getBoards:()=>boards,getMode:()=>mode,getStyles:()=>pairStyles,getPairs:()=>D.parent_worker_pairs};';
 vm.runInContext(scripts[0][1]+capture,context,{timeout:10000});
 const api=context.testAPI;
 assert.equal(headers.parent.length,4);assert.equal(headers.worker.length,5);assert.equal(headers.pr.length,7);
@@ -55,6 +55,12 @@ for(const role of ['parent','worker'])for(const actual of api.getBoards()[role])
  assert.equal(actual.rework,expected.rework.mean,'Leaderboard must show average corrections per PR');
  if(actual.rework!=null){assert.equal(actual.rework,expected.rework.iterations/actual.prs);assert.ok(document.getElementById(role+'board').innerHTML.includes('>'+actual.rework.toFixed(1)+'</td>'));}
 }
+// A worker's known count does not prove the whole PR correction history.
+const fixture={url:'fixture-pr'},actor={pr_url:'fixture-pr',role:'worker',actor_id:'fixture-worker',rubric:'unified-actor-v1',model:'m',rework_iterations:2,iteration_scope:'actor',iteration_evidence:[{kind:'correction',head:'one'},{kind:'correction',head:'two'}]};
+api.getAll().push(actor);
+assert.equal(api.reworkCount(fixture),null,'Actor-only counts must not masquerade as complete PR totals');
+actor.iteration_scope='pr';assert.equal(api.reworkCount(fixture),2);
+api.getAll().pop();
 click('pr','parent');numericOrder(api.getVisible().map(p=>api.prKey(p,'parent')),-1);
 const first=api.getVisible()[0];assert.ok(document.getElementById('prlist').innerHTML.includes(first.url));
 click('pr','parent');numericOrder(api.getVisible().map(p=>api.prKey(p,'parent')),1);

@@ -54,10 +54,9 @@ function reworkCount(p){
  const rows=[...current(p,'parent'),...current(p,'worker')];
  const whole=rows.filter(a=>a.iteration_scope==='pr'&&reworkIterations(a)!=null);
  if(whole.length&&new Set(whole.map(a=>a.rework_iterations)).size===1)return whole[0].rework_iterations;
- if(rows.length===1)return reworkIterations(rows[0]);
  // Actor counts can overlap: an aggregate requires disjoint evidence or a PR-level count.
  const events=new Map();
- if(!rows.length||rows.some(a=>reworkIterations(a)==null))return null;
+ if(!rows.length||rows.some(a=>reworkIterations(a)==null)||!rows.some(a=>a.iteration_history_complete===true))return null;
  for(const a of rows){const n=reworkIterations(a),ee=(a.iteration_evidence||[]).filter(e=>e.kind==='correction');
  if(n===0)continue;if(ee.length!==n||ee.some(e=>!e.head))return null;
  for(const e of ee)events.set(e.head,e);}

@@ -41,7 +41,9 @@ score-difference counts. Leaderboards show the mean absolute iteration count ove
 used for scores (11 iterations across 2 PRs = 5.5); the PR list retains each
 individual absolute count. JSON preserves both mean and raw iteration total.
 Unknown is not zero. Whole-PR totals require explicit
-PR scope or deduplicated evidence; parent/worker counts can overlap.
+PR scope or deduplicated complete history; parent/worker counts can overlap.
+A sole actor count does not establish a whole-PR total. Actor event union is
+used only when the review explicitly attests complete PR correction history.
 
 Scatter X is parent completion, Y is worker. Switch first/final points/arrows.
 The global filter bar is removed. One compact combination dropdown and color field
