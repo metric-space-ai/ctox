@@ -1,17 +1,17 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261003-shell-v2-startup-recovery-v441';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261003-shell-v2-startup-recovery-v441';
-import { CtoxResizer } from './shared/resizer.js?v=20261003-shell-v2-startup-recovery-v441';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20261003-shell-v2-startup-recovery-v441';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261003-shell-v2-startup-recovery-v441';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261003-shell-v2-startup-recovery-v441';
-import { createAppActions } from './shared/app-actions.js?v=20261003-shell-v2-startup-recovery-v441';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261003-shell-v2-startup-recovery-v442';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261003-shell-v2-startup-recovery-v442';
+import { CtoxResizer } from './shared/resizer.js?v=20261003-shell-v2-startup-recovery-v442';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20261003-shell-v2-startup-recovery-v442';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261003-shell-v2-startup-recovery-v442';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261003-shell-v2-startup-recovery-v442';
+import { createAppActions } from './shared/app-actions.js?v=20261003-shell-v2-startup-recovery-v442';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261003-shell-v2-startup-recovery-v441';
+} from './shared/app-lifecycle.js?v=20261003-shell-v2-startup-recovery-v442';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -20,20 +20,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261003-shell-v2-startup-recovery-v441';
+} from './shared/permissions.js?v=20261003-shell-v2-startup-recovery-v442';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261003-shell-v2-startup-recovery-v441';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261003-shell-v2-startup-recovery-v441';
+} from './shared/branding.js?v=20261003-shell-v2-startup-recovery-v442';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261003-shell-v2-startup-recovery-v442';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261003-shell-v2-startup-recovery-v441';
+} from './shared/presentation.js?v=20261003-shell-v2-startup-recovery-v442';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -44,9 +44,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261003-shell-v2-startup-recovery-v441';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261003-shell-v2-startup-recovery-v441';
-import { createDocumentsFacade } from './shared/documents.js?v=20261003-shell-v2-startup-recovery-v441';
+} from './shared/shell-permissions-ui.js?v=20261003-shell-v2-startup-recovery-v442';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261003-shell-v2-startup-recovery-v442';
+import { createDocumentsFacade } from './shared/documents.js?v=20261003-shell-v2-startup-recovery-v442';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -54,16 +54,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261003-shell-v2-startup-recovery-v441';
+} from './shared/maintenance-state.js?v=20261003-shell-v2-startup-recovery-v442';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261003-shell-v2-startup-recovery-v441';
+} from './shared/workspace-session.js?v=20261003-shell-v2-startup-recovery-v442';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261003-shell-v2-startup-recovery-v441';
+} from './shared/taskbar-pins.js?v=20261003-shell-v2-startup-recovery-v442';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -71,10 +71,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261003-shell-v2-startup-recovery-v441';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261003-shell-v2-startup-recovery-v442';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261003-shell-v2-startup-recovery-v441';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261003-shell-v2-startup-recovery-v441';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261003-shell-v2-startup-recovery-v442';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261003-shell-v2-startup-recovery-v442';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -82,8 +82,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261003-shell-v2-startup-recovery-v441';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261003-shell-v2-startup-recovery-v441';
+} from './shared/startup-deadlines.js?v=20261003-shell-v2-startup-recovery-v442';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261003-shell-v2-startup-recovery-v442';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -101,7 +101,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261003-shell-v2-startup-recovery-v441';
+const APP_BUILD = '20261003-shell-v2-startup-recovery-v442';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -1794,14 +1794,15 @@ async function registerCoreCollections() {
   setStartupProgress(61, shellText('bootSchemasDone'));
   const t1 = performance.now();
   console.log(`[business-os] registerCoreCollections took ${(t1 - t0).toFixed(2)}ms`);
-  // Window placement is optional cached UI state. An IndexedDB read blocked
-  // by another tab must not prevent WebRTC and the app catalog from starting.
-  // The read may finish later; do not close/reopen the registered database.
-  await withStartupTimeout(primeWindowGeometryCache(), 1500, null, 'window geometry cache');
+  // Scoped window placement is hydrated synchronously from localStorage.
+  // Its optional IndexedDB refresh must not delay the first usable app.
+  void primeWindowGeometryCache();
 }
 
 async function primeWindowGeometryCache() {
-  const coll = state.db?.collections?.desktop_windows;
+  const db = state.db;
+  const scope = currentWindowGeometryScope();
+  const coll = db?.collections?.desktop_windows;
   state.windowGeometryCache.clear();
   for (const [ownerId, payload] of readWindowGeometryLocalCache()) {
     state.windowGeometryCache.set(ownerId, payload);
@@ -1809,6 +1810,10 @@ async function primeWindowGeometryCache() {
   if (!coll) return;
   try {
     const docs = await coll.find().exec();
+    const currentScope = currentWindowGeometryScope();
+    if (state.db !== db
+      || currentScope.workspace_scope !== scope.workspace_scope
+      || currentScope.actor_scope !== scope.actor_scope) return;
     for (const doc of docs) {
       const payload = doc.toJSON();
       if (!payload?.owner_id) continue;
