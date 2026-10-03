@@ -18,9 +18,24 @@ still decide what is accepted. Partial writebacks retain untouched field
 statuses; a replacement status expires its previous review. The contact view
 copies the same revision from the canonical person status.
 
-This is writeback provenance only. Revision-bound typed refutation, atomic
-review publication and app field reopening remain separate required
-integration work; a revision stamp alone does not prove review acceptance.
+An Outbound completion review can additionally publish one typed `FIELD_REVIEWS`
+JSON array. Only `refuted` / `no_match` / `contradicted_by_saved_source` is
+supported. Each entry names the task's record, field, exact writeback ID, and
+the exact `person_key` for person fields. The native service binds the verdict
+to the persisted rejecting review audit, original research command, durable
+task attempt and native timestamp, and rechecks the command's execution
+authority. Reviewer-supplied authority fields and cross-record entries fail
+closed; ordinary review prose cannot change a field.
+
+Publication compares the current field revision and writes its review inside
+one SQLite IMMEDIATE transaction. Missing/deleted records, changed writebacks,
+different research parents and ambiguous person identities are never changed.
+Canonical person statuses and matching contact projections share the verdict.
+An exactly bound refutation reopens the native gap-closure field; honest
+`no_match` remains answered, and a replacement writeback expires the review.
+Browser rendering/selection and the installed end-to-end review workflow still
+require their app integration and acceptance; source code and provenance alone
+do not establish product acceptance.
 
 ## Operator coding presets and daemon readiness
 

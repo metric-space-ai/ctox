@@ -12174,6 +12174,59 @@ pub(crate) fn project_web_stack_auth_session_placeholder(
     Ok(())
 }
 
+/// Apply native field-review metadata to the current persisted document.
+/// The comparison and publication share an IMMEDIATE transaction, including
+/// browser/native writes. Absence and tombstones never become new records.
+pub(super) fn update_rxdb_record_conditionally(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+    updated_at_ms: i64,
+    update: impl FnOnce(&mut Value) -> anyhow::Result<bool>,
+) -> anyhow::Result<bool> {
+    let writer = RxdbCollectionWriter::open(root, collection)?
+        .context("native conditional update collection unavailable")?;
+    let tx = rusqlite::Transaction::new_unchecked(&writer.conn, TransactionBehavior::Immediate)?;
+    let deleted_column = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column));
+    let deleted_expression = deleted_column.unwrap_or("0");
+    let raw = tx
+        .query_row(
+            &format!(
+                "SELECT data, {deleted_expression} FROM {} WHERE id = ?1",
+                writer.table
+            ),
+            [record_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let Some((raw, deleted)) = raw else {
+        tx.rollback()?;
+        return Ok(false);
+    };
+    let mut record: Value = serde_json::from_str(&raw)?;
+    if deleted != 0 || is_rxdb_deleted_document(&record) || !update(&mut record)? {
+        tx.rollback()?;
+        return Ok(false);
+    }
+    upsert_rxdb_collection_record_with_writer(
+        &tx,
+        &writer.table,
+        &writer.columns,
+        record_id,
+        updated_at_ms,
+        updated_at_ms,
+        record,
+        writer.demand_file_storage,
+        false,
+        false,
+    )?;
+    tx.commit()?;
+    writer.notify_committed_change();
+    Ok(true)
+}
+
 pub(super) fn upsert_rxdb_collection_record_cached(
     root: &Path,
     mut writers: Option<&mut RxdbProjectionWriterCache>,

@@ -1453,6 +1453,9 @@ fn open_persons_for_field(lead: &Value, field: &str) -> Option<Vec<String>> {
 /// question is still open, whether the worker never delivered the field or the
 /// evidence gate rejected what it delivered.
 fn research_field_is_answered(status: &Value) -> bool {
+    if super::outbound_field_review::is_refuted_no_match(status) {
+        return false;
+    }
     matches!(
         status
             .get("status")
@@ -3761,6 +3764,28 @@ pub(super) fn seed_rxdb_collection_table_for_tests(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refuted_negative_reopens_only_its_current_writeback_and_person() {
+        let mut status = serde_json::json!({
+            "status": "no_match", "person_key": "person-a",
+            "revision": {"writeback_id": "wb-a", "command_id": "research-a"}
+        });
+        assert!(research_field_is_answered(&status));
+        status["review"] = serde_json::json!({
+            "schema": "ctox.outbound.field_review.v1", "verdict": "refuted",
+            "claim_status": "no_match", "command_id": "research-a",
+            "person_key": "person-a", "revision_ref": {"writeback_id": "wb-a"}
+        });
+        assert!(!research_field_is_answered(&status));
+        status["review"]["person_key"] = serde_json::json!("person-b");
+        assert!(research_field_is_answered(&status));
+        status["review"]["person_key"] = serde_json::json!("person-a");
+        status["revision"]["writeback_id"] = serde_json::json!("wb-new");
+        assert!(research_field_is_answered(&status));
+        status["review"] = Value::Null;
+        assert!(research_field_is_answered(&status));
+    }
 
     #[test]
     fn a_size_class_or_other_number_never_backs_an_exact_figure() {
