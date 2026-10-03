@@ -121,6 +121,17 @@ existing browser controller and command policy. Recovery does not authenticate
 a session, pass review/validation, reopen terminal commands, or weaken the
 owned, expiring lease requirement for ordinary worker commands.
 
+### D&B classification evidence
+
+Direct authenticated company capture keeps WZ 2008 (DE) distinct from NACE,
+SIC, NOGA and OENACE. It accepts a five-digit WZ subclass only from the
+observed company profile with the expected company ID and an exact observed
+company heading or title. Conflicting WZ values produce no `wz_code`.
+The result retains the literal WZ section in `source_quote`; an NACE value
+never supplies a missing WZ digit. The Direct+ JSON parser likewise requires
+an explicitly labelled WZ entry. These source gates do not certify an
+installed capture or the independently registered scrape script.
+
 ### Outbound research source receipts
 
 The native person-research command retains a `sellify_lookup_runs` receipt in
