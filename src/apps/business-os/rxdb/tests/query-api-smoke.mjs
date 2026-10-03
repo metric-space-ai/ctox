@@ -1,4 +1,6 @@
-import { createRxDatabase, ctoxRxdbTestInternals } from '../dist/ctox-rxdb-js.mjs';
+const { createRxDatabase, ctoxRxdbTestInternals } = await import(
+  process.argv.includes('--source') ? '../src/index.mjs' : '../dist/ctox-rxdb-js.mjs'
+);
 import { readFile } from "node:fs/promises";
 
 const {
