@@ -42,7 +42,19 @@
   normalization. Nine prepared regressions distinguish native conversion,
   normalizer edits, ordered raw bytes, duplicate-key first-match behavior,
   ordinary message edits and preserved transform metadata. Snapshot scanning
-  uses the same GJSON semantics as upstream. Source/target summary extraction
+  uses the same GJSON semantics as upstream. The executor compatibility helper
+  now dispatches all six facades, applies summary handling before one plugin
+  normalizer, and preserves envelope update intent on normal/native-Codex routes.
+  An injected registry/client processor implements the portable owner contract.
+  Compatibility forces portable multi-agent messages independently of Codex
+  client detection and removes internal per-item metadata through shared raw-JSON
+  mutations. Opt-in collab_spawn orphan delegation consumes matching call counts
+  before downgrading only the two CTOX delegation tools; untouched siblings,
+  duplicate roots and non-string output bytes remain preserved.
+  Twelve additional helper/client/orphan regressions are prepared, unexecuted.
+  Live per-attempt compatibility-capability propagation and executor integration
+  remain open; this is not runtime or promotion acceptance.
+  Source/target summary extraction
   now keeps OpenAI Chat reasoning depth separate from Claude display visibility.
   The xAI subscription client-version header is updated from0.2.93 to upstream
   1.0.44. API/OAuth mode inference, boolean overrides and nonempty credential

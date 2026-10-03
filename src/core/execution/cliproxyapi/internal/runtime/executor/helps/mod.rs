@@ -66,6 +66,8 @@ mod claude_upstream_test;
 #[cfg(test)]
 mod codex_input_ids_test;
 #[cfg(test)]
+mod codex_multi_agent_v2_compat_test;
+#[cfg(test)]
 mod codex_tool_schema_test;
 #[cfg(test)]
 mod derived_session_test;
@@ -125,7 +127,9 @@ pub use claude_device_profile::{
     default_claude_device_profile, default_claude_version, map_stainless_arch, map_stainless_os,
     ClaudeDeviceProfile, ClaudeDeviceProfileCache, ClaudeHeaderDefaults,
 };
-pub use claude_diagnostics::{begin_claude_diagnostics, commit_claude_diagnostics, pin_claude_session_date};
+pub use claude_diagnostics::{
+    begin_claude_diagnostics, commit_claude_diagnostics, pin_claude_session_date,
+};
 pub use claude_input_tokens::{
     count_claude_input_tokens, ClaudeInputTokenError, ClaudeInputTokenFailureSink,
     ClaudeInputTokenState,
@@ -148,6 +152,7 @@ pub use codex_multi_agent_v2::{
     translate_request_with_api_key_model_compatibility_for_executor,
     translate_request_with_codex_multi_agent_v2,
     translate_request_with_codex_multi_agent_v2_for_executor, CodexMultiAgentV2Processor,
+    RegistryCodexMultiAgentV2Processor,
 };
 pub use codex_tool_schema::{
     is_codex_target_executor, is_codex_user_agent, normalize_codex_tool_integer_types,

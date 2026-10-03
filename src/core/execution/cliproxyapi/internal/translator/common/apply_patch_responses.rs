@@ -425,6 +425,39 @@ fn delete_root_key(data: &[u8], key: &str) -> Vec<u8> {
     delete_key(document, key).into_bytes()
 }
 
+/// Removes the first named member while retaining raw sibling values and order.
+pub(crate) fn delete_raw_path(data: &[u8], path: &str) -> Vec<u8> {
+    let Ok(document) = std::str::from_utf8(data) else {
+        return data.to_vec();
+    };
+    let (parent, key) = split_last(path);
+    let object = if parent.is_empty() {
+        gjson::parse(document)
+    } else {
+        gjson::get(document, parent)
+    };
+    let Some(members) = object_members(object.json()) else {
+        return data.to_vec();
+    };
+    let mut removed = false;
+    let parts: Vec<String> = members
+        .into_iter()
+        .filter_map(|(name, raw)| {
+            if name == key && !removed {
+                removed = true;
+                None
+            } else {
+                Some(raw)
+            }
+        })
+        .collect();
+    if !removed {
+        return data.to_vec();
+    }
+    let updated = format!("{{{}}}", parts.join(","));
+    splice(data, document, object.json(), updated.as_bytes()).unwrap_or_else(|| data.to_vec())
+}
+
 pub(crate) fn set_raw_path(data: &[u8], path: &str, replacement: &[u8]) -> Vec<u8> {
     let Ok(document) = std::str::from_utf8(data) else {
         return data.to_vec();

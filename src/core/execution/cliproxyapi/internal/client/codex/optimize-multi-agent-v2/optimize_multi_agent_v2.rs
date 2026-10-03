@@ -4,8 +4,17 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::internal::translator::common::{delete_raw_path, set_raw_path};
 use serde::Deserialize;
 use serde_json::{Map, Value};
+
+#[path = "orphan_delegation.rs"]
+mod orphan_delegation;
+pub use orphan_delegation::rewrite_orphan_delegation_input;
+
+#[cfg(test)]
+#[path = "input_compat_test.rs"]
+mod input_compat_test;
 
 pub const CODEX_SPAWN_AGENT_DESCRIPTION_MARKER: &str = "Spawns an agent";
 pub const CODEX_SPAWN_AGENT_MODELS_HEADING: &str =
@@ -107,14 +116,71 @@ pub fn rewrite_spawn_agent_description(
 
 #[must_use]
 pub fn rewrite_multi_agent_input(context: &MultiAgentV2Context, payload: &[u8]) -> Vec<u8> {
-    if !enabled(context) {
+    rewrite_multi_agent_input_with_compat(context, payload, false)
+}
+
+/// ref: internal/client/codex/optimize-multi-agent-v2/optimize_multi_agent_v2.go:71-78,788-833
+/// Compatibility mode forces portable messages independently of client detection
+/// and strips internal metadata from every input item.
+#[must_use]
+pub fn rewrite_multi_agent_input_with_compat(
+    context: &MultiAgentV2Context,
+    payload: &[u8],
+    is_compat: bool,
+) -> Vec<u8> {
+    if !is_compat && !enabled(context) {
         return payload.to_vec();
     }
-    let Ok(mut value) = serde_json::from_slice::<Value>(payload) else {
+    let input = crate::internal::util::get_gjson_bytes_no_copy(payload, "input");
+    if input.kind() != gjson::Kind::Array {
         return payload.to_vec();
-    };
-    rewrite_agent_message_input(&mut value);
-    serde_json::to_vec(&value).unwrap_or_else(|_| payload.to_vec())
+    }
+    let mut updated = payload.to_vec();
+    let mut index = 0;
+    input.each(|_, item| {
+        let path = format!("input.{index}");
+        if item.get("type").str().trim() == "agent_message" {
+            let content = item.get("content");
+            if content.kind() == gjson::Kind::Array {
+                let mut part_index = 0;
+                content.each(|_, part| {
+                    let encrypted = part.get("encrypted_content");
+                    if part.get("type").str().trim() == "encrypted_content"
+                        && encrypted.kind() == gjson::Kind::String
+                    {
+                        let part_path = format!("{path}.content.{part_index}");
+                        updated = set_raw_path(
+                            &updated,
+                            &format!("{part_path}.type"),
+                            br#""input_text""#,
+                        );
+                        let text = serde_json::to_vec(encrypted.str()).expect("string JSON");
+                        updated = set_raw_path(&updated, &format!("{part_path}.text"), &text);
+                        updated =
+                            delete_raw_path(&updated, &format!("{part_path}.encrypted_content"));
+                    }
+                    part_index += 1;
+                    true
+                });
+            }
+            updated = set_raw_path(&updated, &format!("{path}.role"), br#""user""#);
+            updated = set_raw_path(&updated, &format!("{path}.type"), br#""message""#);
+        }
+        if is_compat {
+            for key in [
+                "author",
+                "recipient",
+                "internal_chat_message_metadata_passthrough",
+            ] {
+                if item.get(key).exists() {
+                    updated = delete_raw_path(&updated, &format!("{path}.{key}"));
+                }
+            }
+        }
+        index += 1;
+        true
+    });
+    updated
 }
 
 #[must_use]
@@ -480,21 +546,6 @@ fn rewrite_agent_message_content(value: &mut Value) {
                     part.insert("type".to_owned(), Value::String("input_text".to_owned()));
                     part.insert("text".to_owned(), Value::String(encrypted));
                 }
-            }
-        }
-    }
-}
-
-fn rewrite_agent_message_input(value: &mut Value) {
-    rewrite_agent_message_content(value);
-    let Some(input) = value.get_mut("input").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for item in input {
-        if item.get("type").and_then(Value::as_str) == Some("agent_message") {
-            if let Some(item) = item.as_object_mut() {
-                item.insert("role".to_owned(), Value::String("user".to_owned()));
-                item.insert("type".to_owned(), Value::String("message".to_owned()));
             }
         }
     }
