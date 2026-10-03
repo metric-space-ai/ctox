@@ -392,7 +392,9 @@ function wireCrewAppPresence({ state, db, syncFacade }) {
   const apply = () => {
     if (disposed) return;
     const members = state.crewMembers || [];
-    presenceHosts = applyCrewAppPresence(crewAppPresenceFromTasks(tasks, members, liveKeys), crewAppTasksFromTasks(tasks, liveKeys));
+    const appPresence = liveKeys ? crewAppPresenceFromTasks(tasks, members, liveKeys) : new Map();
+    presenceHosts = applyCrewAppPresence(appPresence, crewAppTasksFromTasks(tasks, liveKeys));
+
     state.crewWorkload = crewWorkloadFromTasks(tasks, liveKeys);
     applyCrewWorkload(state);
     // Expressions decay (reading -> running, learning -> idle); re-draw when

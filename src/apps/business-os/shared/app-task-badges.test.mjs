@@ -149,3 +149,37 @@ test('presence reloads keep one storage read and coalesce repeated readiness not
     globalThis.document = previousDocument;
   }
 });
+
+test('unknown native worker truth removes the app execution avatar as well as its count', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  let removed = 0;
+  let recreated = 0;
+  const badge = { dataset: {}, remove() { removed++; } };
+  const glyph = {
+    closest: () => ({ dataset: { target: 'documents' } }),
+    querySelector: () => badge,
+    classList: { add() {}, remove() {} },
+    insertAdjacentHTML() { recreated++; },
+  };
+  globalThis.window = { setTimeout: callback => callback, clearTimeout() {} };
+  globalThis.document = { querySelector: () => null,
+    querySelectorAll: selector => selector.includes('.desktop-icon[data-target]') ? [glyph] : [] };
+  let dispose;
+  try {
+    dispose = __businessChatTestInternals.wireCrewAppPresence({
+      state: { crewMembers: [{ id: 'luma', name: 'Luma' }] },
+      db: { raw: { ctox_queue_tasks: { find: () => ({ exec: async () => [
+        task('a', { crew_member_id: 'luma' }),
+      ] }) } } },
+      syncFacade: { subscribeCollectionReadiness: () => () => {} },
+    });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(removed, 1, 'cached execution indicator is retired');
+    assert.equal(recreated, 0, 'a running queue status alone cannot recreate the app badge');
+  } finally {
+    dispose?.();
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});

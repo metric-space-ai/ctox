@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261004-shell-v2-background-transfer-v447';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261004-shell-v2-native-app-presence-v448';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',
