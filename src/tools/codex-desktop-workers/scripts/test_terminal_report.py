@@ -89,6 +89,19 @@ class ReportTests(unittest.TestCase):
         self.assertEqual((g["first"]["mean"],g["corrected"]["mean"]),(4,8))
         self.assertEqual((g["deliveries"],g["comparison_excluded"]),(3,2))
         self.assertEqual(g["rework"]["iterations"],2)
+    def test_rework_leaderboard_averages_counts_per_compared_pr(self):
+        a=dict(pr_url="one",role="worker",actor_id="a",schema=r.RUBRIC,model="m",
+               first={"weighted_total":4},corrected={"weighted_total":8},rework_iterations=8)
+        b=copy.deepcopy(a);b.update(pr_url="two",actor_id="b",rework_iterations=3)
+        g=r.leaderboard_data([a,b])[0]
+        self.assertEqual(g["prs"],2)
+        self.assertEqual(g["rework"]["iterations"],11)
+        self.assertEqual(g["rework"]["mean"],5.5)
+        self.assertEqual((a["rework_iterations"],b["rework_iterations"]),(8,3))
+        b["rework_iterations"]=None
+        self.assertIsNone(r.leaderboard_data([a,b])[0]["rework"]["mean"])
+        a["rework_iterations"]=0;b["rework_iterations"]=0
+        self.assertEqual(r.leaderboard_data([a,b])[0]["rework"]["mean"],0)
     def test_pair_classification_ignores_missing_model_endpoint(self):
         parent=dict(pr_url="pr",role="parent",actor_id="p",record_id="p",
                     model="pm",harness="Codex Desktop",parent_completion={"weighted_total":8})

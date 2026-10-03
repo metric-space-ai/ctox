@@ -8,8 +8,8 @@
 </style></head>
 <body><main>
 <header><h1>PR-Auswertung</h1><button id="export">JSON herunterladen</button></header>
-<div class="leaderboards"><section class="box"><div class="boxhead"><h2>Parents</h2></div><div class="scroll"><table id="parenttable"><thead><tr><th data-sort="label">Modell / Harness</th><th data-sort="prs">PRs</th><th data-sort="score">Score</th><th data-sort="rework">Nacharbeiten</th></tr></thead><tbody id="parentboard"></tbody></table></div></section>
-<section class="box"><div class="boxhead"><h2>Worker</h2></div><div class="scroll"><table id="workertable"><thead><tr><th data-sort="label">Modell / Harness</th><th data-sort="prs">PRs</th><th data-sort="first">Erstscore</th><th data-sort="end">Endscore</th><th data-sort="rework">Nacharbeiten</th></tr></thead><tbody id="workerboard"></tbody></table></div></section></div>
+<div class="leaderboards"><section class="box"><div class="boxhead"><h2>Parents</h2></div><div class="scroll"><table id="parenttable"><thead><tr><th data-sort="label">Modell / Harness</th><th data-sort="prs">PRs</th><th data-sort="score">Score</th><th data-sort="rework">Ø Nacharbeiten</th></tr></thead><tbody id="parentboard"></tbody></table></div></section>
+<section class="box"><div class="boxhead"><h2>Worker</h2></div><div class="scroll"><table id="workertable"><thead><tr><th data-sort="label">Modell / Harness</th><th data-sort="prs">PRs</th><th data-sort="first">Erstscore</th><th data-sort="end">Endscore</th><th data-sort="rework">Ø Nacharbeiten</th></tr></thead><tbody id="workerboard"></tbody></table></div></section></div>
 <section class="box chartbox"><div class="boxhead charthead"><h2>Parent × Worker</h2><div class="modes"><button data-mode="first" aria-pressed="false">Erstscore</button><button data-mode="end" aria-pressed="false">Endscore</button><button data-mode="arrows" aria-pressed="true">Erst → End</button></div><div class="pair-controls"><select id="pair" aria-label="Parent / Worker"></select><input id="pair-color" type="color" aria-label="Farbe der Kombination"></div></div><div class="chartlayout"><svg id="scatter" viewBox="0 0 620 460" role="img" aria-label="Parent-Score auf der X-Achse, Worker-Score auf der Y-Achse"></svg></div></section>
 <div class="box scroll"><table id="prtable"><thead><tr><th data-sort="pr">PR</th><th data-sort="status">Status</th><th data-sort="actors">Parent / Worker</th><th data-sort="parent">Parent Score</th><th data-sort="first">Worker Erst</th><th data-sort="end">Worker End</th><th data-sort="rework">Nacharbeiten</th></tr></thead><tbody id="prlist"></tbody></table></div>
 <div class="pager"><button id="prev">← Zurück</button><span id="page"></span><button id="next">Weiter →</button><label><select id="size"><option value="25">25 PRs pro Seite</option><option value="50">50 PRs pro Seite</option><option value="100">100 PRs pro Seite</option></select></label></div>
@@ -91,7 +91,7 @@ function refresh(reset=true){
  const [harness,model]=JSON.parse(key);
  if(role==='worker')aa=aa.filter(a=>['first','corrected'].every(s=>stageModel(a,s)===model&&a[s]?.weighted_total!=null));
  const ss=s=>known(aa.map(a=>stageModel(a,s)===model?a[s]?.weighted_total??null:null)),re=aa.map(a=>reworkIterations(a,model));
- return {label:model+' (@'+harness+')',prs:new Set(aa.map(a=>a.pr_url)).size,score:avg(ss('parent_completion')),first:avg(ss('first')),end:avg(ss('corrected')),rework:re.length&&re.every(n=>n!=null)?re.reduce((sum,n)=>sum+n,0):null};
+ return {label:model+' (@'+harness+')',prs:new Set(aa.map(a=>a.pr_url)).size,score:avg(ss('parent_completion')),first:avg(ss('first')),end:avg(ss('corrected')),rework:re.length&&re.every(n=>n!=null)?re.reduce((sum,n)=>sum+n,0)/new Set(aa.map(a=>a.pr_url)).size:null};
  }).filter(g=>g.prs>0);
  }
  drawBoards();draw();drawChart();updateSortHeaders();
@@ -101,7 +101,7 @@ function drawBoards(){
  const rows=sorted(boards[role],sortState[role]);
  $(role+'board').innerHTML=rows.map(g=>'<tr><td>'+E(g.label)+'</td><td class="number">'+g.prs+'</td>'+
  (role==='parent'?'<td>'+scoreBar(g.score)+'</td>':'<td>'+scoreBar(g.first)+'</td><td>'+scoreBar(g.end)+'</td>')+
- '<td class="number">'+(g.rework??'—')+'</td></tr>').join('')||'<tr><td colspan="'+(role==='parent'?4:5)+'" class="empty">—</td></tr>';
+ '<td class="number">'+(g.rework==null?'—':F(g.rework))+'</td></tr>').join('')||'<tr><td colspan="'+(role==='parent'?4:5)+'" class="empty">—</td></tr>';
  }}
 function actorCell(a,role){
  return '<div class="actor"><span>'+role+'</span><div>'+(!a.length?'—':a.map(x=>E(x.role==='parent'&&x.parent_completion?stageModel(x,'parent_completion')||'—':actorModels(x).join(' → ')||'—')+' (@'+E(harnessLabel(x.harness))+')').join('<br>'))+'</div></div>';

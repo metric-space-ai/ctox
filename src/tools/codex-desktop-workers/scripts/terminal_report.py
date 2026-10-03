@@ -308,11 +308,14 @@ def leaderboard_data(records):
         completion = [score(r, "parent_completion") for r in rows]
         rework = [rework_iterations(r, model) for r in rows]
         known_rework = [v for v in rework if v is not None]
+        rework_prs = len({r["pr_url"] for r in rows})
+        iteration_total = sum(known_rework) if rows and len(known_rework) == len(rows) else None
         result.append(dict(role=role, harness=harness, model=model, rubric=rubric, deliveries=len(independent_rows), comparison_excluded=len(independent_rows)-len(rows),
                            prs=len({r["pr_url"] for r in rows if any(score(r,s) is not None for s in (("parent_completion",) if role == "parent" and rubric == RUBRIC else ("first", "corrected")))}),
                            score=stats(completion),
                            first=stats(first), corrected=stats(corrected),
-                           rework=dict(iterations=sum(known_rework) if rows and len(known_rework) == len(rows) else None,
+                           rework=dict(iterations=iteration_total,
+                                       mean=iteration_total / rework_prs if iteration_total is not None else None,
                                        observed_iterations=sum(known_rework) if known_rework else None,
                                        known=len(known_rework), unknown=len(rows)-len(known_rework))))
     return result

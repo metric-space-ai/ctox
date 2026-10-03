@@ -48,6 +48,13 @@ for(const name of ['parent','worker']){
  assert.equal(headers[name].find(h=>h.dataset.sort===key).attrs['aria-sort'],'ascending');
  click(name,key);assert.equal(headers[name].find(h=>h.dataset.sort===key).attrs['aria-sort'],'descending');
 }
+const expectedBoards=JSON.parse(data).leaderboards.filter(g=>g.rubric==='unified-actor-v1'&&g.prs>0);
+for(const role of ['parent','worker'])for(const actual of api.getBoards()[role]){
+ const expected=expectedBoards.find(g=>g.role===role&&g.model+' (@'+(g.harness||'—')+')'===actual.label);
+ assert.ok(expected,actual.label);
+ assert.equal(actual.rework,expected.rework.mean,'Leaderboard must show average corrections per PR');
+ if(actual.rework!=null){assert.equal(actual.rework,expected.rework.iterations/actual.prs);assert.ok(document.getElementById(role+'board').innerHTML.includes('>'+actual.rework.toFixed(1)+'</td>'));}
+}
 click('pr','parent');numericOrder(api.getVisible().map(p=>api.prKey(p,'parent')),-1);
 const first=api.getVisible()[0];assert.ok(document.getElementById('prlist').innerHTML.includes(first.url));
 click('pr','parent');numericOrder(api.getVisible().map(p=>api.prKey(p,'parent')),1);

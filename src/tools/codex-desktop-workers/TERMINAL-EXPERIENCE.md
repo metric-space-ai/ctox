@@ -23,8 +23,8 @@ record is pooled. Historical first/final results remain immutable.
 Parents get one parent_completion score for the actual PR review/integration/
 checks/merge or justified closure, attributed to the actual closing/action turn.
 Broader product-acceptance grades stay historical; completion cannot silently
-reuse them. Parent leaderboard: model/harness, PRs, score, corrections.
-Worker leaderboard: model/harness, PRs, first, final, corrections.
+reuse them. Parent leaderboard: model/harness, PRs, score, average corrections per PR.
+Worker leaderboard: model/harness, PRs, first, final, average corrections per PR.
 PR list: link/description, status, combined parent/worker, parent score,
 worker first, worker final, corrections.
 
@@ -37,7 +37,10 @@ in JSON/PR list with explicit comparison_excluded counts.
 
 Corrections are evidenced absolute iterations after PR publication (including
 Draft) through merge/close, not percentages or inferred commit/test/rerating/
-score-difference counts. Unknown is not zero. Whole-PR totals require explicit
+score-difference counts. Leaderboards show the mean absolute iteration count over the same PR cohort
+used for scores (11 iterations across 2 PRs = 5.5); the PR list retains each
+individual absolute count. JSON preserves both mean and raw iteration total.
+Unknown is not zero. Whole-PR totals require explicit
 PR scope or deduplicated evidence; parent/worker counts can overlap.
 
 Scatter X is parent completion, Y is worker. Switch first/final points/arrows.
