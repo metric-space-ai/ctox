@@ -11,7 +11,8 @@ an attempt number.
 Trusted local calls without an envelope ID receive a native-generated ID which
 is returned with the writeback and persisted in the field revision.
 
-Worker-supplied `revision` is replaced and worker-supplied `review` is removed.
+Worker-supplied `revision` is replaced and `review` is explicitly set to `null`.
+Omission would retain an old review through the native store object merge.
 The existing field evidence, person binding and native email verdict guards
 still decide what is accepted. Partial writebacks retain untouched field
 statuses; a replacement status expires its previous review. The contact view

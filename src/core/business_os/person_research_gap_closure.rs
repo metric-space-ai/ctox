@@ -286,7 +286,8 @@ fn stamp_writeback_field_revisions(
 ) -> anyhow::Result<()> {
     let revision = serde_json::to_value(revision)?;
     for status in request.field_status.values_mut() {
-        status.extra.remove("review");
+        // Store object merges preserve omitted keys: null expires an old review.
+        status.extra.insert("review".to_string(), Value::Null);
         status
             .extra
             .insert("revision".to_string(), revision.clone());
@@ -294,7 +295,7 @@ fn stamp_writeback_field_revisions(
     if let Some(people) = request.result.person_field_status.as_object_mut() {
         for fields in people.values_mut().filter_map(Value::as_object_mut) {
             for status in fields.values_mut().filter_map(Value::as_object_mut) {
-                status.remove("review");
+                status.insert("review".to_string(), Value::Null);
                 status.insert("revision".to_string(), revision.clone());
             }
         }
@@ -4834,7 +4835,7 @@ mod tests {
             canonical["revision"]["attempt"].is_null(),
             "unknown chat attempt stays unknown"
         );
-        assert!(canonical.get("review").is_none());
+        assert_eq!(canonical.get("review"), Some(&Value::Null));
         assert_eq!(
             contact("A")["field_status"]["person_email"]["revision"],
             canonical["revision"]
@@ -5879,6 +5880,16 @@ mod tests {
             }),
         );
 
+        let mut prior =
+            store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+                .context("prior lead")?;
+        prior["field_status"] = serde_json::json!({
+            "firma_domain": {"status": "no_match", "revision": {"writeback_id": "previous"},
+                "review": {"verdict": "refuted", "revision_ref": {"writeback_id": "previous"}}},
+            "firma_name": {"status": "verified", "value": "Unchanged AG", "revision": {"writeback_id": "untouched"}}
+        });
+        let untouched = prior["field_status"]["firma_name"].clone();
+        store::upsert_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id, 1, prior)?;
         let mut command = command;
         command.payload["field_status"]["firma_domain"]["revision"] =
             serde_json::json!({"writeback_id": "caller-forged", "attempt": 999});
@@ -5893,13 +5904,14 @@ mod tests {
         assert_eq!(status["revision"]["attempt"], task.attempt);
         assert!(status["revision"]["written_at_ms"].as_i64().unwrap() > 0);
         assert!(
-            status.get("review").is_none(),
-            "worker cannot author a review: {lead}"
+            status.get("review") == Some(&Value::Null),
+            "a new native writeback expires reviews instead of accepting worker metadata: {lead}"
         );
         assert_eq!(lead["research_status"], "needs_review");
         assert!(lead["research_phase"].is_null());
         assert_eq!(lead["gap_task_id"], task.message_key);
         assert_eq!(lead["field_status"]["firma_domain"]["status"], "no_match");
+        assert_eq!(lead["field_status"]["firma_name"], untouched);
         Ok(())
     }
 
