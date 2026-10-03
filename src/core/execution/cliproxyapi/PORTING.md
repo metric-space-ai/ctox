@@ -31,9 +31,17 @@
   release page agree. Its additional v8.0.12 delta is21 files (+1,891 / -60),
   across11 commits: tool integer-field mappings, catalog IDs/token limits,
   response/Devin stream lifecycles, Claude diagnostics/timeouts/search sources,
-  Codex usage order and auth snapshot synchronization. Semantic porting,
-  Rust/Go checks and promotion remain open. Preserve both earlier reviews;
+  Codex usage order and auth snapshot synchronization. The integer-field slice
+  now follows explicit schema paths and qualified namespaces across all tool
+  forms, changes only selected raw type values, preserves unrelated/duplicate
+  data and keeps unknown tools unchanged. The exact412-line upstream
+  history/notes fixture is vendored unchanged; six new scoped regressions are
+  prepared, for69 candidate tests in total. Narrow formatting passed.
+  The Go oracle is materialized at this exact commit and the bounded controller
+  requires five executed upstream parent tests; Rust/Go execution, remaining
+  semantic deltas and promotion remain open. Preserve both earlier reviews;
   the accepted pin is unchanged.
+
   Source: https://github.com/router-for-me/CLIProxyAPI/releases/tag/v8.0.13.
 - Parent continuation after bounded Grok runs: all six candidate request
   compatibility facades are now exported, with24 prepared regressions:
@@ -70,8 +78,9 @@
   executor consumes it before registry translation, normalizes integer schemas
   before conversion and uses the compatibility dispatcher/plugin normalizer.
   Seven further configuration, selection, wire and executor regressions are
-  prepared, for63 new tests in total. Narrow formatting and whitespace checks
-  passed; Cargo/Go execution is still pending. Home capability binding, other
+  prepared; with the six v8.0.13 integer cases above there are69 candidate
+  tests. Narrow formatting and whitespace checks passed; Cargo/Go execution
+  is still pending. Home capability binding, other
   executor consumers and live thinking update-intent propagation remain open;
   this is not runtime or promotion acceptance.
   Source/target summary extraction

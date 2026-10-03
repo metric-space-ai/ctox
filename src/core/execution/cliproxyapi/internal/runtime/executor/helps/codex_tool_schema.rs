@@ -15,7 +15,12 @@ use std::collections::{BTreeMap, HashSet};
 use gjson::Kind;
 use serde_json::Value;
 
+use crate::internal::translator::common::set_raw_path;
 use crate::internal::util::strip_unsupported_schema_patterns;
+
+#[cfg(test)]
+#[path = "codex_tool_integer_fields_v13_test.rs"]
+mod candidate_integer_field_tests;
 
 const CODEX_COMPLEX_UNION_BRANCH_THRESHOLD: usize = 8;
 
@@ -62,7 +67,7 @@ pub fn is_codex_target_executor(target_executor: &str) -> bool {
 /// Rewrites selected Codex client tool fields from `number` to `integer`.
 ///
 /// Empty bodies, non-Codex user agents, and payloads with no matching field
-/// keep their original bytes. Only changed tool objects are re-encoded.
+/// keep their original bytes. Only the explicitly selected type values change.
 ///
 /// Upstream walks top-level `tools` and `input`. Antigravity's translated
 /// envelope stores the same declarations at `request.tools`, which that
@@ -170,7 +175,10 @@ fn splice_input_additional_tools(input_json: &str) -> Option<String> {
     splice_json_array(input_json, normalize_additional_tools_item)
 }
 
-fn splice_json_array(array_json: &str, transform: fn(&str) -> Option<String>) -> Option<String> {
+fn splice_json_array(
+    array_json: &str,
+    transform: impl Fn(&str) -> Option<String>,
+) -> Option<String> {
     let items = gjson::parse(array_json);
     if items.kind() != Kind::Array {
         return None;
@@ -229,110 +237,93 @@ fn normalize_additional_tools_item(item_json: &str) -> Option<String> {
 }
 
 fn normalize_integer_tool_json(tool_json: &str) -> Option<String> {
+    normalize_integer_tool_json_with_namespace(tool_json, "")
+}
+
+/// ref: internal/client/codex/tool-schema/tool_schema.go:288-366 @ d7914afd
+fn normalize_integer_tool_json_with_namespace(tool_json: &str, namespace: &str) -> Option<String> {
     let tool = gjson::parse(tool_json);
-    let kind = {
-        let kind_value = tool.get("type");
-        kind_value.str().to_owned()
-    };
-    if kind == "namespace" {
+    if tool.get("type").str() == "namespace" {
+        // Upstream accepts one explicit namespace level only.
+        if !namespace.is_empty() {
+            return None;
+        }
+        let name = tool.get("name").str().to_owned();
+        if name.is_empty() {
+            return None;
+        }
         let nested = tool.get("tools");
-        let updated = splice_integer_tool_list(nested.json())?;
+        let updated = splice_json_array(nested.json(), |child| {
+            normalize_integer_tool_json_with_namespace(child, &name)
+        })?;
         return replace_object_field(tool_json, "tools", &updated);
     }
     for key in ["function_declarations", "functionDeclarations"] {
         let declarations = tool.get(key);
         if declarations.kind() == Kind::Array {
-            let updated = splice_integer_tool_list(declarations.json())?;
+            let updated = splice_json_array(declarations.json(), |child| {
+                normalize_integer_tool_json_with_namespace(child, namespace)
+            })?;
             return replace_object_field(tool_json, key, &updated);
         }
     }
-    let mut parsed: Value = serde_json::from_str(tool_json).ok()?;
-    if !normalize_integer_tool_value(&mut parsed) {
-        return None;
+
+    let mut name = tool.get("name").str().to_owned();
+    let mut parameter_path = "parameters";
+    let mut parameters = tool.get(parameter_path);
+    if parameters.kind() != Kind::Object {
+        let function_parameters = tool.get("function.parameters");
+        let input_schema = tool.get("input_schema");
+        let json_schema = tool.get("parametersJsonSchema");
+        if function_parameters.kind() == Kind::Object {
+            parameter_path = "function.parameters";
+            parameters = function_parameters;
+            if name.is_empty() {
+                name = tool.get("function.name").str().to_owned();
+            }
+        } else if input_schema.kind() == Kind::Object {
+            parameter_path = "input_schema";
+            parameters = input_schema;
+        } else if json_schema.kind() == Kind::Object {
+            parameter_path = "parametersJsonSchema";
+            parameters = json_schema;
+        } else {
+            return None;
+        }
     }
-    serde_json::to_string(&parsed).ok()
+    if !namespace.is_empty() {
+        name = format!("{namespace}__{name}");
+    }
+    let updated_parameters =
+        normalize_raw_integer_field_types(parameters.json(), codex_integer_fields(&name))?;
+    let updated = set_raw_path(
+        tool_json.as_bytes(),
+        parameter_path,
+        updated_parameters.as_bytes(),
+    );
+    (updated != tool_json.as_bytes())
+        .then(|| String::from_utf8(updated).ok())
+        .flatten()
 }
 
-#[derive(Clone, Copy)]
-enum ParameterSlot {
-    Parameters,
-    FunctionParameters,
-    InputSchema,
-    ParametersJsonSchema,
-}
-
-fn integer_parameter_slot(tool: &Value) -> Option<(ParameterSlot, String)> {
-    if tool.get("parameters").is_some_and(Value::is_object) {
-        return Some((
-            ParameterSlot::Parameters,
-            tool.get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned(),
-        ));
-    }
-    if tool
-        .pointer("/function/parameters")
-        .is_some_and(Value::is_object)
-    {
-        let name = tool
-            .get("name")
-            .and_then(Value::as_str)
-            .filter(|name| !name.is_empty())
-            .or_else(|| tool.pointer("/function/name").and_then(Value::as_str))
-            .unwrap_or("")
-            .to_owned();
-        return Some((ParameterSlot::FunctionParameters, name));
-    }
-    if tool.get("input_schema").is_some_and(Value::is_object) {
-        return Some((
-            ParameterSlot::InputSchema,
-            tool.get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned(),
-        ));
-    }
-    if tool
-        .get("parametersJsonSchema")
-        .is_some_and(Value::is_object)
-    {
-        return Some((
-            ParameterSlot::ParametersJsonSchema,
-            tool.get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned(),
-        ));
-    }
-    None
-}
-
-fn normalize_integer_tool_value(tool: &mut Value) -> bool {
-    let Some((slot, name)) = integer_parameter_slot(tool) else {
-        return false;
-    };
-    let fields = codex_integer_fields(&name);
-    if fields.is_empty() {
-        return false;
-    }
-    let Some(parameters) = (match slot {
-        ParameterSlot::Parameters => tool.get_mut("parameters"),
-        ParameterSlot::FunctionParameters => tool.pointer_mut("/function/parameters"),
-        ParameterSlot::InputSchema => tool.get_mut("input_schema"),
-        ParameterSlot::ParametersJsonSchema => tool.get_mut("parametersJsonSchema"),
-    }) else {
-        return false;
-    };
-    normalize_codex_tool_field_types(parameters, fields)
-}
-
+/// Keys are explicit paths relative to parameters.properties, never recursive
+/// field-name matches.
+/// ref: internal/client/codex/tool-schema/tool_schema.go:41-164 @ d7914afd
 fn codex_integer_fields(tool_name: &str) -> &'static [&'static str] {
     let base = tool_name.trim();
     let base = base
         .strip_prefix("functions__")
         .or_else(|| base.strip_prefix("collab__"))
         .unwrap_or(base);
+    let base = match base {
+        "multi_agent_v1__wait_agent" | "collaboration__wait_agent" => "wait_agent",
+        "collaboration__get_channels"
+        | "collaboration__list_threads"
+        | "collaboration__search_posts"
+        | "collaboration__read_thread"
+        | "collaboration__read_post" => base.strip_prefix("collaboration__").unwrap_or(base),
+        _ => base,
+    };
     match base {
         "exec_command" => &["yield_time_ms", "max_output_tokens", "timeout_ms"],
         "write_stdin" => &["session_id", "yield_time_ms", "max_output_tokens"],
@@ -345,61 +336,89 @@ fn codex_integer_fields(tool_name: &str) -> &'static [&'static str] {
             "sleep_after_ms",
             "participants",
             "timeout_ms",
+            "barrier.properties.participants",
+            "barrier.properties.timeout_ms",
+        ],
+        "create_goal" => &["token_budget"],
+        "get_channels" => &["limit"],
+        "list_threads" | "search_posts" | "read_thread" => &["limit", "max_chars_per_post"],
+        "read_post" | "history__read_item" => &["offset_chars", "limit_chars"],
+        "memories__list" | "notes__list_files_by_prefix" => &["max_results"],
+        "memories__read" => &["line_offset", "max_lines"],
+        "memories__search" => &["context_lines", "max_results"],
+        "history__list_windows" | "history__search_contents" => &["limit"],
+        "history__list_items" => &["limit", "max_chars_per_item"],
+        "notes__read_file" => &[
+            "start_line",
+            "stop_line",
+            "start_line.anyOf.0",
+            "stop_line.anyOf.0",
+        ],
+        "notes__search_contents" => &["max_matches_per_file", "max_files"],
+        "image_gen__imagegen" => &["num_last_images_to_include"],
+        "web__run" => &[
+            "search_query.items.properties.recency",
+            "image_query.items.properties.recency",
+            "open.items.properties.lineno",
+            "click.items.properties.id",
+            "screenshot.items.properties.pageno",
+            "weather.items.properties.duration",
+            "sports.items.properties.num_games",
         ],
         _ => &[],
     }
 }
 
-fn normalize_codex_tool_field_types(parameters: &mut Value, fields: &[&str]) -> bool {
-    let Some(properties) = parameters
-        .get_mut("properties")
-        .and_then(Value::as_object_mut)
-    else {
-        return false;
-    };
+/// ref: internal/client/codex/tool-schema/tool_schema.go:165-211 @ d7914afd
+fn normalize_raw_integer_field_types(parameters: &str, fields: &[&str]) -> Option<String> {
+    let params = gjson::parse(parameters);
+    let properties = params.get("properties");
+    if fields.is_empty() || properties.kind() != Kind::Object {
+        return None;
+    }
+    let mut output = parameters.as_bytes().to_vec();
     let mut changed = false;
     for field in fields {
-        let Some(property) = properties.get_mut(*field) else {
-            continue;
-        };
-        let Some(type_value) = property.get_mut("type") else {
-            continue;
-        };
-        changed |= rewrite_number_type(type_value);
-    }
-    changed
-}
-
-fn rewrite_number_type(type_value: &mut Value) -> bool {
-    match type_value {
-        Value::String(text) if text == "number" => {
-            *text = "integer".to_owned();
-            true
-        }
-        Value::Array(items) => {
-            let mut rewritten = Vec::with_capacity(items.len());
+        let property = properties.get(field);
+        let type_value = property.get("type");
+        let replacement = if type_value.kind() == Kind::String && type_value.str() == "number" {
+            Some(br#""integer""#.to_vec())
+        } else if type_value.kind() == Kind::Array {
             let mut seen = HashSet::new();
-            let mut changed = false;
-            for item in items.iter() {
-                let Some(text) = item.as_str() else {
-                    return false;
+            let mut values = Vec::new();
+            let mut has_number = false;
+            type_value.each(|_, item| {
+                let text = if item.kind() == Kind::String {
+                    item.str()
+                } else if item.kind() == Kind::Null {
+                    ""
+                } else {
+                    item.json()
                 };
-                let mut text = text.to_owned();
-                if text == "number" {
-                    text = "integer".to_owned();
-                    changed = true;
+                let text = if text == "number" {
+                    has_number = true;
+                    "integer"
+                } else {
+                    text
+                };
+                if seen.insert(text.to_owned()) {
+                    values.push(text.to_owned());
                 }
-                if seen.insert(text.clone()) {
-                    rewritten.push(Value::String(text));
-                }
-            }
-            if changed {
-                *items = rewritten;
-            }
-            changed
+                true
+            });
+            has_number
+                .then(|| serde_json::to_vec(&values).ok())
+                .flatten()
+        } else {
+            None
+        };
+        if let Some(replacement) = replacement {
+            let updated = set_raw_path(&output, &format!("properties.{field}.type"), &replacement);
+            changed |= updated != output;
+            output = updated;
         }
-        _ => false,
     }
+    changed.then(|| String::from_utf8(output).ok()).flatten()
 }
 
 fn normalize_tool_list_json(tools_json: &str) -> Option<String> {
