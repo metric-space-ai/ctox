@@ -81,24 +81,28 @@ fn attach_home_model_info(
     route_model: &str,
     wire: Option<&HomeDispatchModelInfo>,
 ) -> ExecutorRequest {
+    let selected = wire.and_then(HomeDispatchModelInfo::model_info);
     let upstream = auth
         .attributes
         .get("home_upstream_model")
         .map(String::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .or_else(|| wire.map(|info| info.id.as_str()))
+        .or_else(|| selected.as_ref().map(|info| info.id.as_str()))
         .unwrap_or(&request.model);
     let options = home_model_options(auth, upstream, route_model);
-    // Home owns explicit options and their defaults. Never inherit a local
-    // account's compatibility flag when central options are absent or invalid.
-    request.resolved_home_model_options = Some(options.unwrap_or_default());
-    let Some(wire) = wire else {
+    // A present empty/null/unmatched list owns its false defaults. Missing or
+    // invalid options remain absent, matching legacy Home's local fallback.
+    // A central model still starts with is_compat=false, never a local value.
+    if selected.is_none() && options.is_none() {
+        return request;
+    }
+    request.resolved_home_model_options = options;
+    let Some(mut info) = selected else {
         return request;
     };
-    let Some(mut info) = wire.model_info() else {
-        return request;
-    };
+    let wire = wire.expect("selected model came from this wire");
+
     let same_model = request.resolved_model_info.as_ref().filter(|local| {
         parse_suffix(local.id.trim())
             .model_name
@@ -130,7 +134,7 @@ fn home_model_options(auth: &Auth, model: &str, route_model: &str) -> Option<Hom
     }
     let parsed = parse_suffix(requested);
     let base = parsed.model_name.trim();
-    let prefix = auth.prefix.trim().trim_matches('/');
+    let prefix = auth.prefix.trim();
     let route_model = route_model.trim();
     let route = if prefix.is_empty() {
         route_model
@@ -182,3 +186,7 @@ fn home_model_options(auth: &Auth, model: &str, route_model: &str) -> Option<Hom
 #[cfg(test)]
 #[path = "home_model_capabilities_test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "home_model_contract_test.rs"]
+mod contract_tests;

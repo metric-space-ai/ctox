@@ -100,9 +100,13 @@
   defaults. Credential/base-URL validation and source-aware index/prefix/proxy
   selection follow the pinned resolver. Six more regressions cover this fallback,
   config reload, redaction, shared Vertex selection and legacy Home execution.
+  The Home contract now distinguishes absent/invalid credential options from
+  a present empty/null/unmatched model list. Legacy dispatches without model_info
+  retain the selected local fallback; central model_info still defaults compatibility
+  to false. Three regressions cover presence across execution paths and exact prefixes.
   Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
   account-kind collisions, legacy Home execution, public JSON boundaries, native
-  capability refresh and built-in metadata. There are96 prepared candidate test
+  capability refresh and built-in metadata. There are99 prepared candidate test
   functions in total; none of the current candidate Cargo/Go checks has executed.
   Narrow formatting and whitespace checks passed. Other executor consumers,
   hard-coded Devin model definitions,

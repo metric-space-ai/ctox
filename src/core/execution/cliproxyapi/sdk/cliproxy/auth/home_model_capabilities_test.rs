@@ -207,13 +207,11 @@ fn candidate_home_missing_invalid_options_never_inherit_local_compatibility() {
             !bound.resolved_model_info.as_ref().unwrap().is_compat,
             "{raw:?}"
         );
-        assert!(
-            !bound
-                .resolved_home_model_options
-                .as_ref()
-                .unwrap()
-                .is_compat
-        );
+        assert!(!bound
+            .resolved_home_model_options
+            .as_ref()
+            .is_some_and(|options| options.is_compat));
+
         assert!(local.is_compat);
     }
 }
