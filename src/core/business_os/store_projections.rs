@@ -1736,13 +1736,16 @@ pub(crate) mod tests {
             task.lease_owner = (state == "leased").then(|| "ctox-service".to_string());
             task.leased_at = (state == "leased").then(|| "2026-10-02T10:00:00Z".to_string());
             task.lease_worker_id = (state == "leased").then(|| "current-worker".to_string());
+            task.lease_expires_at = (state == "leased").then(|| "2026-10-02T10:05:00Z".to_string());
             let payload = super::write_queue_task_projection(&conn, None, &task, index as i64)?;
             assert_eq!(payload["source_module"], "inventory");
             assert_eq!(payload["title"], task.title);
             assert_eq!(payload["attempt"], task.attempt);
-            if state != "leased" {
-                assert!(payload["lease_worker_id"].is_null());
-            }
+            assert_eq!(payload["route_status"], state);
+            assert_eq!(payload["lease_owner"], json!(task.lease_owner));
+            assert_eq!(payload["leased_at"], json!(task.leased_at));
+            assert_eq!(payload["lease_worker_id"], json!(task.lease_worker_id));
+            assert_eq!(payload["lease_expires_at"], json!(task.lease_expires_at));
             let raw: String = conn.query_row("SELECT payload_json FROM business_records WHERE collection='ctox_queue_tasks' AND record_id=?1", [&task.message_key], |row| row.get(0))?;
             assert_eq!(
                 serde_json::from_str::<Value>(&raw)?,
