@@ -4,14 +4,14 @@
 use super::store::{
     apply_queue_projection_status_fields, browser_context_artifact_for_command, clip_text,
     command_inbound_channel, command_status_for_queue_route_status,
-    count_legacy_http_fallback_records, find_queue_task_for_command, first_string_field, now_ms,
-    open_store, projection_route_status_for_command_status, projection_status_is_active,
-    push_repair_action, queue_status_is_terminal_failure, queue_status_is_terminal_success,
-    redact_document_client_context_secrets, repair_inline_payload_artifacts,
-    repair_placeholder_business_chat_owners, upsert_command_projection_from_queue_status,
-    upsert_rxdb_collection_record, upsert_rxdb_collection_record_cached, BusinessCommand,
-    QueueProjectionRepairOptions, RxdbProjectionWriterCache,
-    BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS,
+    count_legacy_http_fallback_records, find_queue_task_for_command, first_string_field,
+    load_business_record_payload, now_ms, open_store, projection_route_status_for_command_status,
+    projection_status_is_active, push_repair_action, queue_status_is_terminal_failure,
+    queue_status_is_terminal_success, redact_document_client_context_secrets,
+    repair_inline_payload_artifacts, repair_placeholder_business_chat_owners,
+    upsert_command_projection_from_queue_status, upsert_rxdb_collection_record,
+    upsert_rxdb_collection_record_cached, BusinessCommand, QueueProjectionRepairOptions,
+    RxdbProjectionWriterCache, BUSINESS_OS_QUEUE_ORPHAN_REPAIR_AGE_MS,
 };
 use crate::mission::channels;
 use anyhow::Context;
@@ -847,9 +847,13 @@ pub(super) fn write_queue_task_projection(
         "ctox_queue_tasks",
         &task.message_key,
         updated_at_ms,
-        payload.clone(),
+        payload,
     )?;
-    Ok(payload)
+    // Return the published document, including the native revision and deletion
+    // marker added by persistence. Mutation callers must see the same origin
+    // and status as replica readers, rather than a pre-publication snapshot.
+    load_business_record_payload(conn, "ctox_queue_tasks", &task.message_key)?
+        .context("published queue task projection is missing")
 }
 
 pub(super) fn queue_task_payload(
