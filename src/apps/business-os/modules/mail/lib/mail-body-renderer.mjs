@@ -341,4 +341,3 @@ export const __mailBodyTestHooks = {
   extractSafeUrl,
   sanitizeBodyHtml,
 };
-
