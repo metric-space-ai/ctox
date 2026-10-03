@@ -3,11 +3,8 @@
 
 use super::backup_restore::file_sha256;
 use super::store::{
-    find_rxdb_collection_record_by_string_field, find_rxdb_collection_records_by_string_field,
-    find_rxdb_collection_records_by_string_field_contains,
-    group_rxdb_collection_string_field_contains, insert_business_event,
-    is_safe_rxdb_collection_name, load_rxdb_collection_record, now_ms, open_store,
-    outbound_first_string, outbound_id_from_command, outbound_load_record,
+    insert_business_event, is_safe_rxdb_collection_name, load_rxdb_collection_record, now_ms,
+    open_store, outbound_first_string, outbound_id_from_command, outbound_load_record,
     outbound_load_records_by_string_field, outbound_load_required, outbound_merge_fields,
     outbound_object_payload, outbound_put_default_i64, outbound_put_default_object,
     outbound_put_default_string, outbound_put_i64, outbound_put_string,
@@ -1208,15 +1205,7 @@ fn outbound_handle_research_source_registry_read(
 ) -> anyhow::Result<Value> {
     let antwort = scrape::dispatch_capturing(root, &["list-targets".to_string()])
         .context("scrape registry could not be read")?;
-    let ziele = antwort
-        .as_array()
-        .cloned()
-        .or_else(|| {
-            antwort
-                .as_object()
-                .and_then(|map| map.values().find_map(|v| v.as_array().cloned()))
-        })
-        .unwrap_or_default();
+    let ziele = outbound_registry_target_list(&antwort)?;
     let gesucht = command
         .payload
         .get("target_keys")
@@ -1228,7 +1217,10 @@ fn outbound_handle_research_source_registry_read(
                 .map(str::to_string)
                 .collect::<std::collections::BTreeSet<_>>()
         });
-    let laeufe = outbound_registry_last_runs(root).unwrap_or_default();
+    let laeufe = outbound_registry_last_runs(root)
+        .context("scrape registry run records could not be read")?;
+    let kontozustaende = outbound_registry_account_states(root)
+        .context("scrape registry provider account states could not be read")?;
     let mut eintraege = Vec::new();
     for ziel in ziele {
         let key = ziel
@@ -1254,6 +1246,7 @@ fn outbound_handle_research_source_registry_read(
             "latest_script_revision_no": ziel.get("latest_script_revision_no").cloned().unwrap_or(Value::Null),
             "last_run": laeufe.get(ziel.get("target_id").and_then(Value::as_str).unwrap_or_default()).map(|(last, _)| last.clone()).unwrap_or(Value::Null),
             "last_successful_run": laeufe.get(ziel.get("target_id").and_then(Value::as_str).unwrap_or_default()).and_then(|(_, ok)| ok.clone()).unwrap_or(Value::Null),
+            "account_state": kontozustaende.get(ziel.get("target_id").and_then(Value::as_str).unwrap_or_default()).cloned().unwrap_or(Value::Null),
         }));
     }
     let script = match command
@@ -1272,6 +1265,84 @@ fn outbound_handle_research_source_registry_read(
         "targets": eintraege,
         "script": script,
     }))
+}
+
+/// Accept the native list-targets envelope or the legacy direct list. Unrelated
+/// arrays and failed envelopes must never become a successful empty registry.
+fn outbound_registry_target_list(answer: &Value) -> anyhow::Result<Vec<Value>> {
+    let targets = if let Some(targets) = answer.as_array() {
+        targets
+    } else {
+        anyhow::ensure!(
+            answer.get("ok").and_then(Value::as_bool) == Some(true),
+            "scrape registry returned no successful target envelope"
+        );
+        answer
+            .get("targets")
+            .and_then(Value::as_array)
+            .context("scrape registry returned no target list")?
+    };
+    anyhow::ensure!(
+        targets.iter().all(|target| target
+            .get("target_key")
+            .and_then(Value::as_str)
+            .is_some_and(|key| !key.trim().is_empty())),
+        "scrape registry returned a malformed target entry"
+    );
+    Ok(targets.clone())
+}
+
+/// Provider account state per scrape target (capabilities/scrape/
+/// account_state.rs). While a provider refuses the paying account, calls are
+/// answered without contacting it; the app shows why, which run caused it,
+/// the last probe and when another requested call may probe automatically.
+/// Legacy stores can lack the optional state table. An unreadable store or
+/// malformed row is an error, never evidence that no account is inactive.
+fn outbound_registry_account_states(root: &Path) -> anyhow::Result<BTreeMap<String, Value>> {
+    let mut out = BTreeMap::new();
+    let conn = Connection::open_with_flags(
+        crate::paths::core_db(root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    let has_table: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'scrape_account_state')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_table {
+        return Ok(out);
+    }
+    let mut statement = conn.prepare(
+        "SELECT target_id, reason, causal_run_id, last_probe_run_id, failed_probes,
+                next_probe_at_ms, probe_lease_owner, probe_lease_until_ms, updated_at_ms
+         FROM scrape_account_state",
+    )?;
+    let now = chrono::Utc::now().timestamp_millis();
+    let rows = statement.query_map([], |row| {
+        let next_probe_at_ms: i64 = row.get(5)?;
+        let lease_owner: Option<String> = row.get(6)?;
+        let lease_until_ms: i64 = row.get(7)?;
+        Ok((
+            row.get::<_, String>(0)?,
+            serde_json::json!({
+                "status": "provider_account_inactive",
+                "reason": row.get::<_, String>(1)?.chars().take(300).collect::<String>(),
+                "causal_run_id": row.get::<_, String>(2)?,
+                "last_probe_run_id": row.get::<_, String>(3)?,
+                "failed_probes": row.get::<_, i64>(4)?,
+                "next_probe_at_ms": next_probe_at_ms,
+                "next_probe_at": chrono::DateTime::from_timestamp_millis(next_probe_at_ms)
+                    .map(|at| at.to_rfc3339()),
+                "probe_in_progress": lease_owner.is_some() && lease_until_ms > now,
+                "updated_at_ms": row.get::<_, i64>(8)?,
+            }),
+        ))
+    });
+    for row in rows? {
+        let (target_id, state) = row?;
+        out.insert(target_id, state);
+    }
+    Ok(out)
 }
 
 /// Last run and last successful run per scrape target. The app list showed
@@ -1404,12 +1475,73 @@ fn outbound_registry_latest_script(root: &Path, target_key: &str) -> anyhow::Res
     }))
 }
 
-/// Campaign search: names and member counts grouped in SQL (see
-/// `group_rxdb_collection_string_field_contains`). Exact `selectors` count as a
+fn decode_sellify_lookup_record(id: &str, raw: &str) -> anyhow::Result<Value> {
+    let mut record: Value = serde_json::from_str(raw)?;
+    if let Some(object) = record.as_object_mut() {
+        object
+            .entry("id".to_string())
+            .or_insert_with(|| Value::String(id.to_string()));
+    }
+    Ok(record)
+}
+
+fn sellify_lookup_field_rows(
+    conn: &Connection,
+    table: &str,
+    field: &str,
+    value: &str,
+    contains: bool,
+    limit: usize,
+) -> anyhow::Result<Vec<(String, Value)>> {
+    if limit == 0 || (contains && value.trim().len() < 2) {
+        return Ok(Vec::new());
+    }
+    let rows = if contains {
+        let escaped = value
+            .trim()
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let mut statement = conn.prepare(&format!(
+            "SELECT id, data FROM {table}
+             WHERE CAST(json_extract(data, ?1) AS TEXT) LIKE ?2 ESCAPE '\\'
+             ORDER BY CAST(COALESCE(json_extract(data, '$.updated_at_ms'), 0) AS INTEGER) DESC, id DESC
+             LIMIT ?3"
+        ))?;
+        let rows = statement
+            .query_map(
+                params![format!("$.{field}"), format!("%{escaped}%"), limit as i64],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    } else {
+        // Keep main's literal JSON path so the existing expression index is
+        // usable; the parameterized CAST path scans every membership row.
+        let numeric = value.parse::<i64>().ok();
+        let mut statement =
+            conn.prepare(&super::store::rxdb_string_field_lookup_sql(table, field))?;
+        let rows = statement
+            .query_map(params![value, numeric, limit as i64], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    rows.into_iter()
+        .map(|(id, raw)| {
+            let record = decode_sellify_lookup_record(&id, &raw)?;
+            Ok((id, record))
+        })
+        .collect()
+}
+
+/// Campaign search: names and member counts grouped on the required read-only
+/// snapshot. Exact `selectors` count as a
 /// containment probe too, so a full campaign name finds its own group.
 fn outbound_sellify_campaign_name_groups(
-    root: &Path,
-    collection: &str,
+    conn: &Connection,
+    table: &str,
     allowed_fields: &[&str],
     payload: &Value,
 ) -> anyhow::Result<Value> {
@@ -1440,13 +1572,27 @@ fn outbound_sellify_campaign_name_groups(
             if needle.is_empty() {
                 continue;
             }
-            let (groups, matched) = group_rxdb_collection_string_field_contains(
-                root,
-                collection,
-                field,
-                needle,
-                usize::MAX,
-            )?;
+            if needle.len() < 2 {
+                continue;
+            }
+            let escaped = needle
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            // Group on the same required read-only snapshot as ID/exact/fuzzy
+            // probes. Reopening via optional readers can invent an empty query.
+            let mut statement =
+                conn.prepare(&super::store::rxdb_string_field_group_sql(table, field))?;
+            let groups = statement
+                .query_map(params![format!("%{escaped}%")], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let matched = groups.iter().map(|(_, count)| (*count).max(0) as u64).sum();
+            let groups = groups
+                .into_iter()
+                .map(|(name, count)| (name.trim().to_string(), count.max(0) as u64))
+                .filter(|(name, _)| !name.is_empty());
             scanned = scanned.saturating_add(matched);
             for (name, count) in groups {
                 let entry = counts.entry(name).or_default();
@@ -1516,14 +1662,38 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
                 "last_name",
             ],
         ),
-        _ => anyhow::bail!("entity must be company or person"),
+        _ => anyhow::bail!("entity must be company, person or campaign"),
     };
+    // A completed-empty CRM receipt requires an actual readable collection.
+    // Optional store readers deliberately tolerate absent projections elsewhere;
+    // they must not stand in for a successful Sellify research query here.
+    let group_by_name =
+        entity == "campaign" && payload.get("group_by").and_then(Value::as_str) == Some("name");
+    let mut indexed_fields = BTreeSet::new();
+    for key in ["selectors", "fuzzy_selectors"] {
+        if key == "fuzzy_selectors" && !group_by_name {
+            continue;
+        }
+        for selector in payload
+            .get(key)
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(field) = selector.get("field").and_then(Value::as_str).map(str::trim) {
+                if allowed_fields.contains(&field) {
+                    indexed_fields.insert(field);
+                }
+            }
+        }
+    }
+    let indexed_fields = indexed_fields.into_iter().collect::<Vec<_>>();
+    let (lookup_conn, lookup_table) =
+        super::store::required_rxdb_collection_read_connection(root, collection, &indexed_fields)?;
     // Campaign imports must see the FULL membership of one campaign; the
     // usual dedupe/lookup cap of 100 would silently truncate it.
     // A name search groups rows server-side (see below), so it may scan many
     // more rows than it returns.
-    let group_by_name =
-        entity == "campaign" && payload.get("group_by").and_then(Value::as_str) == Some("name");
     let limit_cap = if group_by_name {
         50_000
     } else if entity == "campaign" {
@@ -1537,7 +1707,12 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
         .unwrap_or(25)
         .clamp(1, limit_cap) as usize;
     if group_by_name {
-        return outbound_sellify_campaign_name_groups(root, collection, allowed_fields, payload);
+        return outbound_sellify_campaign_name_groups(
+            &lookup_conn,
+            &lookup_table,
+            allowed_fields,
+            payload,
+        );
     }
     let mut records = Vec::new();
     let mut seen = BTreeSet::new();
@@ -1551,7 +1726,15 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             if records.len() >= limit {
                 break;
             }
-            if let Some(record) = load_rxdb_collection_record(root, collection, id)? {
+            let raw = lookup_conn
+                .query_row(
+                    &format!("SELECT data FROM {lookup_table} WHERE id = ?1"),
+                    [id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            if let Some(raw) = raw {
+                let record = decode_sellify_lookup_record(id, &raw)?;
                 if seen.insert(id.to_string()) {
                     records.push(record);
                 }
@@ -1580,11 +1763,12 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             if expected.is_empty() {
                 continue;
             }
-            for (id, record) in find_rxdb_collection_records_by_string_field(
-                root,
-                collection,
+            for (id, record) in sellify_lookup_field_rows(
+                &lookup_conn,
+                &lookup_table,
                 field,
                 expected,
+                false,
                 limit.saturating_sub(records.len()),
             )? {
                 if seen.insert(id) {
@@ -1618,11 +1802,12 @@ pub(super) fn outbound_sellify_lookup(root: &Path, payload: &Value) -> anyhow::R
             if needle.is_empty() {
                 continue;
             }
-            for (id, record) in find_rxdb_collection_records_by_string_field_contains(
-                root,
-                collection,
+            for (id, record) in sellify_lookup_field_rows(
+                &lookup_conn,
+                &lookup_table,
                 field,
                 needle,
+                true,
                 limit.saturating_sub(records.len()),
             )? {
                 if seen.insert(id) {
@@ -2906,6 +3091,11 @@ fn outbound_apply_research_adapter_scrape_effect(
         return Some(effect);
     }
 
+    // The source test is the operator's explicit request to check the
+    // source. Its policy-checked authorization (trusted user, DataWrite) may
+    // probe a provider account the scrape state holds as inactive, once and
+    // under the probe lease. Worker sessions cannot produce this grant.
+    let probe_grant = outbound_source_test_probe_grant(root, command);
     let test_started = Instant::now();
     match outbound_execute_research_scrape_target(
         root,
@@ -2913,6 +3103,7 @@ fn outbound_apply_research_adapter_scrape_effect(
         test_input
             .as_ref()
             .expect("test input validated before registration"),
+        probe_grant.as_ref(),
     ) {
         Ok(test_outcome) => {
             let expected_fields = record
@@ -3025,6 +3216,10 @@ fn outbound_apply_research_adapter_scrape_effect(
                         scrape::ScrapeRunStatus::AuthorizationRequired => {
                             ("test_auth_required", "test_auth_required")
                         }
+                        scrape::ScrapeRunStatus::ProviderAccountInactive => (
+                            "test_provider_account_inactive",
+                            "test_provider_account_inactive",
+                        ),
                         scrape::ScrapeRunStatus::Blocked => ("test_blocked", "test_blocked"),
                         scrape::ScrapeRunStatus::PortalDrift => {
                             ("test_portal_drift", "test_portal_drift")
@@ -3638,14 +3833,34 @@ fn outbound_scrape_test_execution_args(
     ])
 }
 
+/// The account probe grant of an Outbound source test: derived only from the
+/// command's server-side authorization (signed capability session, module
+/// policy DataWrite) and only for `outbound.research_source.test`.
+fn outbound_source_test_probe_grant(
+    root: &Path,
+    command: &BusinessCommand,
+) -> Option<scrape::AccountProbeGrant> {
+    if command.command_type != "outbound.research_source.test" {
+        return None;
+    }
+    let authorization =
+        super::store::recoverable_background_control_claim_authorization(root, command)?;
+    scrape::AccountProbeGrant::from_command_authorization(
+        command.id.as_deref().unwrap_or_default(),
+        &authorization,
+    )
+}
+
 fn outbound_execute_research_scrape_target(
     root: &Path,
     target_key: &str,
     input: &Value,
+    probe_grant: Option<&scrape::AccountProbeGrant>,
 ) -> anyhow::Result<scrape::ScrapeExecutionOutcome> {
-    scrape::execute_scrape_with_outcome(
+    scrape::execute_scrape_with_probe_grant(
         root,
         &outbound_scrape_test_execution_args(target_key, input)?,
+        probe_grant,
     )
 }
 
@@ -6551,6 +6766,155 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    #[test]
+    fn sellify_required_lookup_preserves_indexed_text_and_numeric_matching() -> anyhow::Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch(
+            "CREATE TABLE lookup_table (id TEXT PRIMARY KEY, data TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0);
+             CREATE INDEX lookup_contact_idx ON lookup_table
+                (deleted, json_extract(data, '$.contact_id'), id);
+             INSERT INTO lookup_table (id, data) VALUES
+                ('text', '{\"contact_id\":\"123\",\"updated_at_ms\":4}'),
+                ('number', '{\"contact_id\":123,\"updated_at_ms\":3}'),
+                ('other', '{\"contact_id\":1234,\"updated_at_ms\":5}');",
+        )?;
+        let rows =
+            sellify_lookup_field_rows(&conn, "lookup_table", "contact_id", "123", false, 10)?;
+        assert_eq!(
+            rows.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["text", "number"]
+        );
+        assert_eq!(rows[0].1["id"], "text");
+        let sql = super::super::store::rxdb_string_field_lookup_sql("lookup_table", "contact_id");
+        let mut statement = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+        let plan = statement
+            .query_map(params!["123", Some(123_i64), 10_i64], |row| {
+                row.get::<_, String>(3)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .join("\n");
+        assert!(
+            plan.contains("lookup_contact_idx"),
+            "lookup must retain expression index: {plan}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_campaign_groups_share_the_required_read_snapshot() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root,
+            "sellify_campaigns",
+        )?;
+        let writer = Connection::open(super::super::store::rxdb_store_path(root))?;
+        writer.execute_batch("PRAGMA journal_mode=WAL;")?;
+        let table = "ctox_business_os__sellify_campaigns__v0";
+        for (id, name, deleted, is_deleted) in [
+            ("a", "Chemie%_CH", 0, false),
+            ("b", "Chemie%_CH", 0, false),
+            ("tombstone", "Chemie%_CH", 1, false),
+            ("deleted_import", "Chemie%_CH", 0, true),
+            ("wildcard_decoy", "ChemieZZCH", 0, false),
+        ] {
+            writer.execute(
+                &format!("INSERT INTO {table} (id,data,deleted,lastWriteTime) VALUES (?1,?2,?3,1)"),
+                params![
+                    id,
+                    serde_json::json!({"name":name,"is_deleted":is_deleted}).to_string(),
+                    deleted
+                ],
+            )?;
+        }
+        let (snapshot, snapshot_table) =
+            super::super::store::required_rxdb_collection_read_connection(
+                root,
+                "sellify_campaigns",
+                &[],
+            )?;
+        assert_eq!(
+            snapshot.query_row(
+                &format!("SELECT COUNT(*) FROM {snapshot_table}"),
+                [],
+                |row| row.get::<_, i64>(0)
+            )?,
+            5
+        );
+        writer.execute(
+            &format!("INSERT INTO {table} (id,data,deleted,lastWriteTime) VALUES ('later',?1,0,2)"),
+            [serde_json::json!({"name":"Chemie%_CH"}).to_string()],
+        )?;
+        let request = serde_json::json!({"entity":"campaign","group_by":"name",
+            "fuzzy_selectors":[{"field":"name","value":"Chemie%_"}]});
+        let old =
+            outbound_sellify_campaign_name_groups(&snapshot, &snapshot_table, &["name"], &request)?;
+        assert_eq!(
+            old["groups"],
+            serde_json::json!([{"name":"Chemie%_CH","count":2}])
+        );
+        assert_eq!(old["scanned"], 2);
+        assert!(
+            snapshot
+                .execute(&format!("DELETE FROM {snapshot_table}"), [])
+                .is_err(),
+            "required lookup must remain read-only"
+        );
+        let fresh = outbound_sellify_lookup(root, &request)?;
+        assert_eq!(
+            fresh["groups"],
+            serde_json::json!([{"name":"Chemie%_CH","count":3}])
+        );
+        assert_eq!(fresh["scanned"], 3);
+        Ok(())
+    }
+
+    #[test]
+    fn sellify_campaign_grouping_never_calls_an_unavailable_projection_empty() -> anyhow::Result<()>
+    {
+        for state in ["missing", "no_collection", "corrupt", "empty"] {
+            let temp = tempdir()?;
+            let root = temp.path();
+            let path = super::super::store::rxdb_store_path(root);
+            match state {
+                "missing" => {}
+                "no_collection" => {
+                    std::fs::create_dir_all(path.parent().context("fixture parent")?)?;
+                    drop(Connection::open(&path)?);
+                }
+                "corrupt" => {
+                    std::fs::create_dir_all(path.parent().context("fixture parent")?)?;
+                    std::fs::write(&path, b"not SQLite")?;
+                }
+                "empty" => {
+                    super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+                        root,
+                        "sellify_campaigns",
+                    )?
+                }
+                _ => unreachable!(),
+            }
+            let result = outbound_sellify_lookup(
+                root,
+                &serde_json::json!({"entity":"campaign",
+                "group_by":"name","fuzzy_selectors":[{"field":"name","value":"Chemie"}]}),
+            );
+            if state == "empty" {
+                assert_eq!(result?["groups"], serde_json::json!([]));
+            } else {
+                assert!(
+                    result.is_err(),
+                    "unavailable campaign projection became empty: {state}"
+                );
+            }
+            if state == "missing" {
+                assert!(!path.exists());
+            }
+        }
+        Ok(())
+    }
+
     fn create_adapter_reconciliation_rxdb_fixture(root: &Path) -> anyhow::Result<()> {
         let path = super::super::store::rxdb_store_path(root);
         std::fs::create_dir_all(path.parent().context("RxDB fixture parent")?)?;
@@ -6734,6 +7098,30 @@ mod tests {
         assert!(rows
             .iter()
             .all(|row| row.get("note_text").is_none() && row["contact_id"].is_number()));
+        let (conn, table) = super::super::store::required_rxdb_collection_read_connection(
+            root,
+            "sellify_campaigns",
+            &[],
+        )?;
+        let mut statement = conn.prepare(&format!(
+            "EXPLAIN QUERY PLAN {}",
+            super::super::store::rxdb_string_field_lookup_sql(&table, "name")
+        ))?;
+        let plan = statement
+            .query_map(
+                params![
+                    "Beauty - Welle 5 – 10.09.2026",
+                    Option::<i64>::None,
+                    2000_i64
+                ],
+                |row| row.get::<_, String>(3),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .join("\n");
+        assert!(
+            plan.contains("_lookup_name_idx"),
+            "required import lost main's index preparation: {plan}"
+        );
         Ok(())
     }
 
@@ -13135,6 +13523,228 @@ mod registry_last_run_detail_tests {
         );
         assert_eq!(ok.as_ref().expect("last success")["run_id"], "run-ok");
         assert!(ok.as_ref().expect("last success")["detail"].is_null());
+        Ok(())
+    }
+
+    #[test]
+    fn registry_projects_the_provider_account_state() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        assert!(
+            outbound_registry_account_states(temp.path()).is_err(),
+            "an unreadable database is not an empty account state"
+        );
+        let db = crate::paths::core_db(temp.path());
+        std::fs::create_dir_all(db.parent().expect("core db parent"))?;
+        let conn = Connection::open(&db)?;
+        assert!(
+            outbound_registry_account_states(temp.path())?.is_empty(),
+            "a readable legacy database can legitimately lack the optional state table"
+        );
+        conn.execute_batch(
+            "CREATE TABLE scrape_account_state (
+                target_id TEXT PRIMARY KEY, generation INTEGER NOT NULL, reason TEXT NOT NULL,
+                causal_run_id TEXT NOT NULL, last_probe_run_id TEXT NOT NULL,
+                credential_ref TEXT, credential_version TEXT, failed_probes INTEGER NOT NULL,
+                next_probe_at_ms INTEGER NOT NULL, probe_lease_owner TEXT,
+                probe_lease_until_ms INTEGER NOT NULL DEFAULT 0, updated_at_ms INTEGER NOT NULL);
+             INSERT INTO scrape_account_state VALUES
+               ('t-li', 2, 'Bright Data antwortete mit HTTP 400: Customer is not active',
+                'run-causal', 'run-probe', 'credentials/BRIGHTDATA_API_KEY', 'v1', 2,
+                1790600000000, NULL, 0, 1790514000000);",
+        )?;
+        drop(conn);
+        let states = outbound_registry_account_states(temp.path())?;
+        let state = states.get("t-li").expect("account state");
+        assert_eq!(state["status"], "provider_account_inactive");
+        assert_eq!(state["causal_run_id"], "run-causal");
+        assert_eq!(state["last_probe_run_id"], "run-probe");
+        assert_eq!(state["failed_probes"], 2);
+        assert_eq!(state["next_probe_at_ms"], 1790600000000_i64);
+        assert_eq!(state["probe_in_progress"], false);
+        assert!(
+            state.get("credential_version").is_none(),
+            "no credential details"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn registry_target_list_never_uses_an_error_or_unrelated_array() -> anyhow::Result<()> {
+        let targets = serde_json::json!([{ "target_key": "linkedin-com" }]);
+        assert_eq!(outbound_registry_target_list(&targets)?.len(), 1);
+        assert_eq!(
+            outbound_registry_target_list(&serde_json::json!({"ok": true, "targets": targets}))?
+                .len(),
+            1
+        );
+        assert!(outbound_registry_target_list(&serde_json::json!([]))?.is_empty());
+        assert!(
+            outbound_registry_target_list(&serde_json::json!({"ok": true, "targets": []}))?
+                .is_empty()
+        );
+        for invalid in [
+            serde_json::json!({"ok": false, "targets": []}),
+            serde_json::json!({"ok": true, "errors": []}),
+            serde_json::json!({"ok": true, "errors": [], "targets": "bad"}),
+            serde_json::json!({"targets": []}),
+            serde_json::json!({"ok": "true", "targets": []}),
+            serde_json::json!([{}]),
+            serde_json::json!([{ "target_key": " " }]),
+        ] {
+            assert!(
+                outbound_registry_target_list(&invalid).is_err(),
+                "{invalid}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn registry_read_rejects_unreadable_run_or_account_projection() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        scrape::dispatch_capturing(root, &["list-targets".to_string()])?;
+        let command = BusinessCommand {
+            id: Some("cmd-registry-read-integrity".to_string()),
+            module: "outbound-lead-generation".to_string(),
+            command_type: "outbound.research_source.registry_read".to_string(),
+            record_id: None,
+            payload: serde_json::json!({}),
+            client_context: serde_json::json!({}),
+            origin: super::super::store::CommandOrigin::TrustedLocal,
+        };
+        assert_eq!(
+            outbound_handle_research_source_registry_read(root, &command)?["ok"],
+            true
+        );
+        let conn = Connection::open(crate::paths::core_db(root))?;
+        conn.execute_batch(
+            "INSERT INTO scrape_target
+               (target_id, target_key, display_name, start_url, workspace_dir, created_at, updated_at)
+             VALUES
+               ('t-invalid', 'fixture-registry-integrity', 'Registry Integrity Fixture',
+                'https://fixture.invalid/', 'fixture', '2026-10-02T00:00:00Z', '2026-10-02T00:00:00Z');
+             INSERT INTO scrape_account_state VALUES
+               ('t-invalid', 1, 'Customer is not active', 'run-causal', 'run-causal',
+                NULL, NULL, 'not-a-number', 0, NULL, 0, 0);",
+        )?;
+        assert!(outbound_registry_account_states(root).is_err());
+        let account_error = outbound_handle_research_source_registry_read(root, &command)
+            .expect_err("a malformed account row must not become a successful empty registry");
+        assert!(
+            format!("{account_error:#}").contains("provider account states could not be read"),
+            "{account_error:#}"
+        );
+        conn.execute_batch(
+            "DELETE FROM scrape_account_state;
+             DROP TABLE scrape_run;
+             CREATE TABLE scrape_run (run_id TEXT PRIMARY KEY, target_id TEXT, started_at TEXT);",
+        )?;
+        assert!(outbound_registry_last_runs(root).is_err());
+        let run_error = outbound_handle_research_source_registry_read(root, &command)
+            .expect_err("an unreadable run projection must not become a successful empty registry");
+        assert!(
+            format!("{run_error:#}").contains("run records could not be read"),
+            "{run_error:#}"
+        );
+        Ok(())
+    }
+
+    // The source test's probe grant comes from the real authorization path:
+    // a signed capability session and the module policy, never from the
+    // claimed actor or the command type alone.
+    #[test]
+    fn source_test_probe_grant_follows_the_signed_session_and_policy() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let now = chrono::Utc::now().timestamp_millis();
+        let (admin_capability, _) =
+            super::super::store::issue_business_os_capability_token_for_managed_user(
+                root, "operator", "Operator", "admin", now,
+            )?;
+        // A signed team member (role "user") with no module assignment and no
+        // explicit grant: the session is valid, module policy denies data.write.
+        let (member_capability, _) =
+            super::super::store::issue_business_os_capability_token_for_managed_user(
+                root, "member", "Member", "user", now,
+            )?;
+        let command = |command_type: &str, client_context: Value| BusinessCommand {
+            id: Some("cmd-source-test-grant".to_string()),
+            module: "outbound-lead-generation".to_string(),
+            command_type: command_type.to_string(),
+            record_id: Some("adapter-linkedin".to_string()),
+            payload: serde_json::json!({}),
+            client_context,
+            origin: super::super::store::CommandOrigin::ReplicatedPeer,
+        };
+        let source_test = |capability: &str| {
+            command(
+                "outbound.research_source.test",
+                serde_json::json!({ "capability_token": capability }),
+            )
+        };
+        // Both premises are established through the real session and policy
+        // functions, not assumed from test-root defaults.
+        let policy = |cmd: &BusinessCommand| -> anyhow::Result<(bool, bool)> {
+            let session = super::super::store::rxdb_authenticated_session(root, cmd)?;
+            let decision = super::super::store_policy::module_policy_decision(
+                root,
+                &session,
+                super::super::policy::BusinessOsPermission::DataWrite,
+                &cmd.module,
+            )?;
+            Ok((session.authenticated, decision.allowed))
+        };
+        let admin_command = source_test(&admin_capability);
+        assert_eq!(
+            policy(&admin_command)?,
+            (true, true),
+            "admin: valid signed session, module policy allows data.write"
+        );
+        assert!(
+            outbound_source_test_probe_grant(root, &admin_command).is_some(),
+            "allowed policy on a signed session yields a grant"
+        );
+        let member_command = source_test(&member_capability);
+        assert_eq!(
+            policy(&member_command)?,
+            (true, false),
+            "member: valid signed session, module policy denies data.write"
+        );
+        assert!(
+            outbound_source_test_probe_grant(root, &member_command).is_none(),
+            "a denied policy yields no grant even with a valid session"
+        );
+        assert!(
+            outbound_source_test_probe_grant(
+                root,
+                &command("outbound.research_source.test", serde_json::json!({})),
+            )
+            .is_none(),
+            "no session, no grant"
+        );
+        assert!(
+            outbound_source_test_probe_grant(
+                root,
+                &command(
+                    "outbound.research_source.test",
+                    serde_json::json!({ "actor": { "id": "operator", "role": "admin" } }),
+                ),
+            )
+            .is_none(),
+            "a claimed actor without a signed session is not authority"
+        );
+        assert!(
+            outbound_source_test_probe_grant(
+                root,
+                &command(
+                    "business_os.chat.task",
+                    serde_json::json!({ "capability_token": admin_capability }),
+                ),
+            )
+            .is_none(),
+            "only the source test grants a probe"
+        );
         Ok(())
     }
 }

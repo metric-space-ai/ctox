@@ -8,7 +8,7 @@ const loader = source.match(/async function loadPackagedModuleCatalog\(\)[\s\S]*
 const catalogLoader = source.match(/async function loadModuleCatalog\([^]*?\n\}/)?.[0] || '';
 const injectedCatalogLoader = source.match(/function injectedModuleCatalogSnapshot\([^]*?\n\}/)?.[0] || '';
 const catalogRevision = source.match(/function moduleCatalogProjectionRevisionMs\([^]*?\n\}/)?.[0] || '';
-const initialOpen = source.match(/try \{\n\s+const workspaceSession[\s\S]*?flushDeferredCatalogRefresh\(\);\n\s+\}/)?.[0] || '';
+const initialOpen = source.match(/try \{\n\s+const workspaceSession[\s\S]*?\n\s+\} finally \{[\s\S]*?\n\s+\}/)?.[0] || '';
 const ensurePackaged = source.match(/async function ensurePackagedModuleList\([^]*?\n\}/)?.[0] || '';
 const embeddedPackaged = source.match(/function loadEmbeddedPackagedModuleCatalog\([^]*?\n\}/)?.[0] || '';
 const embeddedCatalogSource = source.match(/const OFFLINE_FALLBACK_CATALOG = (\{[\s\S]*?\});\n\/\/ END GENERATED/)?.[1];
@@ -25,6 +25,7 @@ assert.match(
   /const explicitlyAllowedIds = resolveModuleAllowlist\(\)/,
   'the tenant allowlist must make selected packaged apps available without a runtime install',
 );
+assert.ok(initialOpen, 'the real initial workspace try/catch/finally block must be selected');
 assert.match(
   initialOpen,
   /state\.initialModuleOpened = true;[\s\S]*flushDeferredCatalogRefresh\(\);/,
@@ -35,6 +36,39 @@ assert.doesNotMatch(
   /state\.initialModuleOpened = Boolean\(state\.activeModule\?\.id\)/,
   'catalog refresh readiness describes shell construction, not whether the first requested app already existed',
 );
+
+for (const rejectOpen of [false, true]) {
+  const startupState = { initialModuleOpened: false, activeModule: null };
+  let flushes = 0;
+  let diagnostics = 0;
+  const start = runInNewContext(`(async () => { ${initialOpen} })`, {
+    state: startupState,
+    location: { hash: '#runtime-arrives-later' },
+    readWorkspaceSessionSnapshot: () => ({ activeModuleId: 'runtime-arrives-later' }),
+    beginPreferredDesktopAppFocus() {},
+    scheduleBusinessCompanions() {},
+    traceShellPhase: async (_phase, operation) => operation(),
+    openModule: async () => { if (rejectOpen) throw new Error('injected unavailable module'); },
+    restoreWorkspaceSession: async () => {},
+    markBootTiming() {},
+    setWorkspaceStatus() {},
+    console: { error() {} },
+    isManagedCollectionAuthorizationError: () => false,
+    showStartupError() {},
+    setStatus() {},
+    syncConfig: {},
+    flushDeferredCatalogRefresh: () => {
+      assert.equal(startupState.initialModuleOpened, true, 'construction readiness must precede deferred catalog release');
+      flushes++;
+    },
+    reportPreservedLocalReplicas: async () => { diagnostics++; },
+  });
+  await start();
+  assert.equal(startupState.activeModule, null, 'the fixture must not fabricate an opened app');
+  assert.equal(startupState.initialModuleOpened, true, 'late app arrivals must not strand catalog refreshes');
+  assert.equal(flushes, 1, 'both absent and failed first apps must release deferred catalog refresh once');
+  assert.equal(diagnostics, 1, 'the following preservation diagnostics must not invalidate startup selection');
+}
 assert.match(
   loader,
   /canonicalSystemIds\.has\(id\) \|\| explicitlyAllowedIds\.has\(id\)/,
