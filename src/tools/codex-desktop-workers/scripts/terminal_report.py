@@ -274,6 +274,10 @@ def rework_iterations(row, model=None):
     return None
 
 
+def harness_label(value):
+    return "codex" if value in ("Codex Desktop", "Codex") else value
+
+
 def leaderboard_data(records):
     groups = {}
     seen = set()
@@ -287,7 +291,7 @@ def leaderboard_data(records):
             continue
         stages = ("parent_completion",) if row["role"] == "parent" and rubric == RUBRIC else ("first", "corrected")
         for model in {stage_model(row, stage) for stage in stages}:
-            groups.setdefault((row["role"], row.get("harness"), model, rubric), []).append(row)
+            groups.setdefault((row["role"], harness_label(row.get("harness")), model, rubric), []).append(row)
     result = []
     for (role, harness, model, rubric), rows in sorted(groups.items(), key=lambda x: str(x[0])):
         def score(row, stage):
@@ -295,17 +299,20 @@ def leaderboard_data(records):
                 return None
             value = row.get(stage)
             return value.get("weighted_total") if isinstance(value, dict) else value
+        independent_rows = rows
+        if role == "worker" and rubric == RUBRIC:
+            rows = [r for r in rows if score(r,"first") is not None and score(r,"corrected") is not None]
         historical_parent = role == "parent" and rubric == RUBRIC
         first = [None if historical_parent else score(r, "first") for r in rows]
         corrected = [None if historical_parent else score(r, "corrected") for r in rows]
         completion = [score(r, "parent_completion") for r in rows]
         rework = [rework_iterations(r, model) for r in rows]
         known_rework = [v for v in rework if v is not None]
-        result.append(dict(role=role, harness=harness, model=model, rubric=rubric, deliveries=len(rows),
+        result.append(dict(role=role, harness=harness, model=model, rubric=rubric, deliveries=len(independent_rows), comparison_excluded=len(independent_rows)-len(rows),
                            prs=len({r["pr_url"] for r in rows if any(score(r,s) is not None for s in (("parent_completion",) if role == "parent" and rubric == RUBRIC else ("first", "corrected")))}),
                            score=stats(completion),
                            first=stats(first), corrected=stats(corrected),
-                           rework=dict(iterations=sum(known_rework) if len(known_rework) == len(rows) else None,
+                           rework=dict(iterations=sum(known_rework) if rows and len(known_rework) == len(rows) else None,
                                        observed_iterations=sum(known_rework) if known_rework else None,
                                        known=len(known_rework), unknown=len(rows)-len(known_rework))))
     return result
@@ -330,14 +337,15 @@ def parent_worker_pairs(records, prs):
             if not pm or (first is None and end is None):
                 continue
             pr = prs[worker["pr_url"]]
-            ph, wh = parent.get("harness") or "—", worker.get("harness") or "—"
+            ph, wh = harness_label(parent.get("harness")) or "—", harness_label(worker.get("harness")) or "—"
+            worker_models = list(dict.fromkeys(m for m in (fm, em) if m))
             pairs.append(dict(pr_url=pr["url"], repository=pr["repository"], number=pr["number"],
                 parent_id=parent["actor_id"], worker_id=worker["actor_id"],
                 parent_record_id=parent["record_id"], worker_record_id=worker["record_id"],
                 parent_model=pm, worker_first_model=fm, worker_end_model=em,
                 parent_harness=ph, worker_harness=wh,
                 parent_score=parent["parent_completion"]["weighted_total"], worker_first=first, worker_end=end,
-                combination=json.dumps([ph, pm, wh, fm, em], ensure_ascii=False)))
+                combination=json.dumps([ph, pm, wh, worker_models], ensure_ascii=False)))
     return pairs
 
 def build(base):

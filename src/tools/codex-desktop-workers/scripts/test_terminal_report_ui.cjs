@@ -69,13 +69,16 @@ assert.ok(api.getPairs().length>0,'Actual report must exercise paired scores');
 const realPairs=api.getPairs().filter(p=>p.worker_first!=null&&p.worker_end!=null);
 assert.equal((svg.match(/class="plotpoint"/g)||[]).length,realPairs.length*2);
 assert.equal((svg.match(/class="arrow"/g)||[]).length,realPairs.filter(p=>p.worker_first!==p.worker_end).length);
-const legend=document.getElementById('legend'),colors=legend.querySelectorAll('[data-color]');
-assert.equal(colors.length,api.getStyles().size);
-if(colors.length){
- colors[0].value='#123456';colors[0].oninput();assert.ok(document.getElementById('scatter').innerHTML.includes('#123456'));
- const visibility=legend.querySelectorAll('[data-pair]');visibility[0].checked=false;visibility[0].onchange();
- assert.ok((document.getElementById('scatter').innerHTML.match(/class="plotpoint"/g)||[]).length<realPairs.length*2);
-}
+const selector=document.getElementById('pair'),color=document.getElementById('pair-color');
+const options=[...selector.innerHTML.matchAll(/<option value="[^"]+">([^<]+)<\/option>/g)].map(m=>m[1]);
+assert.equal(new Set(options).size,options.length,'Identical visible model/harness pairs must share one classification');
+assert.equal(options.length,api.getStyles().size);
+assert.ok(!html.includes('id="legend"'));
+assert.ok(options.every(label=>label.includes('(@codex)')));
+if(options.length){color.value='#123456';color.oninput();assert.ok(document.getElementById('scatter').innerHTML.includes('#123456'))}
+assert.ok(!document.getElementById('parentboard').innerHTML.includes('Codex Desktop'));
+assert.ok(!document.getElementById('workerboard').innerHTML.includes('Codex Desktop'));
+assert.ok(!document.getElementById('prlist').innerHTML.includes('Codex Desktop'));
 const query=document.getElementById('query');query.value='NO_SUCH_PR_987654321';api.refresh();assert.equal(api.getVisible().length,0);assert.match(document.getElementById('page').textContent,/0–0 von 0/);query.value='';api.refresh();
 console.log('PASS: sortable 4/5/7 columns, numeric and null ordering, full-list sorting before pagination, score bars, filtered chart with real edges and first/end/arrows/color controls.');
 

@@ -39,10 +39,12 @@ class ReportTests(unittest.TestCase):
                  first={"model":"gpt-6-astra","weighted_total":4},
                  corrected={"model":"gpt-6.1-sol","weighted_total":8},rework="bounded")
         groups={g["model"]:g for g in r.leaderboard_data([row,copy.deepcopy(row)])}
-        self.assertEqual(groups["gpt-6-astra"]["first"]["mean"],4)
+        self.assertEqual(r.stage_model(row,"first"),"gpt-6-astra")
+        self.assertIsNone(groups["gpt-6-astra"]["first"]["mean"])
         self.assertIsNone(groups["gpt-6-astra"]["corrected"]["mean"])
         self.assertIsNone(groups["gpt-6.1-sol"]["first"]["mean"])
-        self.assertEqual(groups["gpt-6.1-sol"]["corrected"]["mean"],8)
+        self.assertEqual(r.stage_model(row,"corrected"),"gpt-6.1-sol")
+        self.assertIsNone(groups["gpt-6.1-sol"]["corrected"]["mean"])
         self.assertEqual(groups["gpt-6.1-sol"]["deliveries"],1)
     def test_parent_completion_replaces_historical_parent_stages(self):
         row=dict(pr_url="pr",role="parent",actor_id="p",schema=r.RUBRIC,model="old",
@@ -77,6 +79,25 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(r.rework_iterations(row,"b"),2)
         row["iteration_evidence"].pop()
         self.assertIsNone(r.rework_iterations(row,"b"))
+    def test_worker_comparison_uses_identical_pr_cohort(self):
+        paired=dict(pr_url="paired",role="worker",actor_id="a",schema=r.RUBRIC,model="m",
+                    first={"weighted_total":4},corrected={"weighted_total":8},rework_iterations=2)
+        firstonly=copy.deepcopy(paired);firstonly.update(pr_url="first-only",actor_id="b",corrected=None)
+        endonly=copy.deepcopy(paired);endonly.update(pr_url="end-only",actor_id="c",first=None)
+        g=r.leaderboard_data([paired,firstonly,endonly])[0]
+        self.assertEqual((g["prs"],g["first"]["n"],g["corrected"]["n"]),(1,1,1))
+        self.assertEqual((g["first"]["mean"],g["corrected"]["mean"]),(4,8))
+        self.assertEqual((g["deliveries"],g["comparison_excluded"]),(3,2))
+        self.assertEqual(g["rework"]["iterations"],2)
+    def test_pair_classification_ignores_missing_model_endpoint(self):
+        parent=dict(pr_url="pr",role="parent",actor_id="p",record_id="p",
+                    model="pm",harness="Codex Desktop",parent_completion={"weighted_total":8})
+        worker=dict(pr_url="pr",role="worker",actor_id="w",parent_id="p",record_id="w",
+                    model="wm",harness="Codex",first={"weighted_total":4},corrected={"weighted_total":7})
+        other=copy.deepcopy(worker);other["actor_id"]="w2";other["first"]={"model":None,"weighted_total":None}
+        pairs=r.parent_worker_pairs([parent,worker,other],{"pr":{"url":"pr","repository":"r","number":1}})
+        self.assertEqual(pairs[0]["combination"],pairs[1]["combination"])
+        self.assertEqual(pairs[0]["parent_harness"],"codex")
     def test_immutable_revisions_and_reject_self_score_live_stop(self):
         with tempfile.TemporaryDirectory() as temp:
             base=Path(temp)
