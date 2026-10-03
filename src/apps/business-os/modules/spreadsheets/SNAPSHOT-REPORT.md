@@ -55,8 +55,10 @@ requires a nonempty source module, collection and record ID list.
 
 `spreadsheets.test.mjs` exercises the public file opening through the existing
 Office bridge with controlled shell collections and source push acknowledgments.
-It covers valid reports, reopening, context-separated deduplication, invalid
-metadata/hash, unresolved source IDs and forged evidence eligibility. The fixture
+It covers valid reports, exact persisted source bytes, source acknowledgment
+before record/version references, opening from fresh app state, context-separated
+deduplication, invalid metadata/hash, unresolved source IDs and forged evidence
+eligibility. The fixture
 contains a placeholder XLSX payload; it does not test parsing, the real editor,
 WebRTC durability or native commit.
 

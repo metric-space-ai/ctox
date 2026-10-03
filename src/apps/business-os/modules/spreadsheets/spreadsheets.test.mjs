@@ -522,6 +522,7 @@ function snapshotReportState(initialRecords = []) {
   ]);
   const writes = [];
   const acknowledged = [];
+  const events = [];
   const collections = new Map(Array.from(rows, ([name, records]) => [name, {
     find: () => ({ exec: async () => records.map((row) => ({ toJSON: () => ({ ...row }) })) }),
     findOne: (query) => ({ exec: async () => {
@@ -530,6 +531,7 @@ function snapshotReportState(initialRecords = []) {
       return row ? { toJSON: () => ({ ...row }) } : null;
     } }),
     async insert(row) {
+      events.push(`insert:${name}`);
       writes.push({ name, row });
       records.push({ ...row });
       return { toJSON: () => ({ ...row }) };
@@ -554,13 +556,30 @@ function snapshotReportState(initialRecords = []) {
       sync: { async leaseCollection() { return {
         bridge: { state: {
           async waitForOpenPeerId() { return 'native'; },
-          async pushDocumentsToPeer(_peer, documents) { acknowledged.push(...documents); return true; },
+          async pushDocumentsToPeer(_peer, documents) {
+            events.push('source-ack');
+            acknowledged.push(...documents);
+            return true;
+          },
         } },
         async release() {},
       }; } },
     },
   };
-  return { state, rows, writes, acknowledged };
+  return {
+    state, rows, writes, acknowledged, events,
+    remount() {
+      return {
+        ...state,
+        spreadsheets: structuredClone(rows.get('spreadsheets')),
+        selectedVersion: null,
+        editorHandle: null,
+        dirty: false,
+        saving: false,
+        ctx: { ...state.ctx },
+      };
+    },
+  };
 }
 
 test('explicit saved-state XLSX report persists its exact bytes and non-evidence origin', async () => {
@@ -578,8 +597,20 @@ test('explicit saved-state XLSX report persists its exact bytes and non-evidence
     assert.equal(record.knowledge_lineage.evidence_eligible, false);
   }
   assert.equal(opened.source_sha256, input.report_snapshot.file_sha256);
-  assert.ok(fixture.acknowledged.length > 0, 'source bytes acknowledged before publishing references');
-  const reopened = await hooks.openSpreadsheetFile(fixture.state, input);
+  const version = fixture.rows.get('spreadsheet_versions')[0];
+  const sourceChunks = fixture.rows.get('spreadsheet_blob_chunks')
+    .filter((chunk) => chunk.blob_id === version.blob_id)
+    .sort((a, b) => a.idx - b.idx);
+  const persistedBytes = Buffer.concat(sourceChunks.map((chunk) => Buffer.from(chunk.data, 'base64')));
+  assert.deepEqual(persistedBytes, Buffer.from(await input.file.arrayBuffer()));
+  assert.deepEqual(fixture.acknowledged.map((chunk) => chunk.id), sourceChunks.map((chunk) => chunk.id));
+  const ackIndex = fixture.events.indexOf('source-ack');
+  assert.ok(ackIndex >= 0);
+  for (const name of ['spreadsheet_versions', 'spreadsheets']) {
+    assert.ok(fixture.events.indexOf(`insert:${name}`) > ackIndex,
+      `${name} must not publish a source reference before acknowledgement`);
+  }
+  const reopened = await hooks.openSpreadsheetFile(fixture.remount(), input);
   assert.equal(reopened.id, opened.id);
   assert.equal(fixture.rows.get('spreadsheets').length, 1, 'same file and report origin reuse the record');
   assert.deepEqual(reopened.knowledge_lineage.report_snapshot, input.report_snapshot);
@@ -610,6 +641,8 @@ test('snapshot reports reject missing or mismatched descriptors before persisten
     { ...input.report_snapshot, file_sha256: '' },
     { ...input.report_snapshot, file_sha256: '0'.repeat(64) },
     { ...input.report_snapshot, source_record_ids: [] },
+    { ...input.report_snapshot, source_module: '' },
+    { ...input.report_snapshot, source_collection: '' },
     { ...input.report_snapshot, captured_at_ms: -1 },
   ]) {
     const fixture = snapshotReportState();
