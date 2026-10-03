@@ -221,6 +221,11 @@ pub(super) fn session_expiry_reauthorization(
     payload: &Value,
     classification: &Classification,
 ) -> Option<Value> {
+    // Expired subscriptions and disabled provider accounts need account repair,
+    // not a fresh browser login. Keep the classifier's account verdict intact.
+    if classification.status == ScrapeRunStatus::ProviderAccountInactive {
+        return None;
+    }
     let explicit = payload
         .get("failure_mode")
         .and_then(Value::as_str)
