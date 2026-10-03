@@ -1969,7 +1969,16 @@ adds the device id and proof-key thumbprint to the invite row. Later reconnects
 require that exact active Device-to-Instance edge; revoke disables both the row
 and actor epoch. This keeps the QR compact without an online reference service.
 
+Background transfer ACKs wake the existing high-priority control drain directly,
+before its awaited drain can lose an enqueue. This lets simultaneous bulk pull
+and command push progress without a page polling timer. Frame/queue budgets,
+ACK windows, retries and the WebRTC-only data boundary remain unchanged.
+`hidden-transfer-smoke.mjs` verifies both directions with all page progress
+timers held. Transport diagnostics report page visibility and a bounded,
+expiring observed timer-delay sample; visibility alone does not prove throttling.
+
 ## 10. Build & release
+
 
 `dist/ctox-rxdb-js.mjs` is **built** from `src/index.mjs` with a pinned
 esbuild. The exact command (pinned in
