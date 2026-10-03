@@ -27,7 +27,7 @@ pub use strip::strip_thinking_config;
 pub use suffix::{parse_level_suffix, parse_numeric_suffix, parse_special_suffix, parse_suffix};
 pub use summary::{
     apply_summary_config, apply_summary_config_for_model, apply_summary_config_for_resolved_model,
-    extract_explicit_summary_config, extract_summary_config,
+    extract_explicit_summary_config, extract_summary_config, extract_translated_summary_config,
     strip_inferred_claude_summary_activation, SummaryConfig, SummaryMode,
 };
 pub use text::get_thinking_text;

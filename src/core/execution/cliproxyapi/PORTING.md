@@ -39,8 +39,14 @@
   regression; explicit retryable HTTP responses keep their existing behavior.
   SDK registry/envelope and pipeline now carry request-scoped configuration
   update intent, using exact ordered update-item bytes around plugin
-  normalization. Seven prepared regressions distinguish native conversion,
-  normalizer edits and ordinary message edits and preserve transform metadata.
+  normalization. Nine prepared regressions distinguish native conversion,
+  normalizer edits, ordered raw bytes, duplicate-key first-match behavior,
+  ordinary message edits and preserved transform metadata. Snapshot scanning
+  uses the same GJSON semantics as upstream. Source/target summary extraction
+  now keeps OpenAI Chat reasoning depth separate from Claude display visibility.
+  The xAI subscription client-version header is updated from0.2.93 to upstream
+  1.0.44, with a literal header assertion; endpoint/identity and live xAI parity
+  still require completion and actual inference acceptance.
   Compilation/Rust/Go execution, live executor compatibility/update-intent
   callers and full candidate parity remain pending. No pin or release gate
   was promoted.

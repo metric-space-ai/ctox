@@ -6,7 +6,7 @@ use super::{
     Format, PluginHooks, RequestEnvelope, RequestEnvelopeTransform, RequestTransform,
     ResponseTransform, TranslationContext, TranslationState,
 };
-use crate::internal::thinking::{apply_summary_config_for_model, extract_summary_config};
+use crate::internal::thinking::{apply_summary_config_for_model, extract_translated_summary_config};
 use crate::internal::translator::common::set_top_level_string;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
@@ -156,7 +156,7 @@ impl Registry {
         };
 
         if let Some(transform) = transform {
-            let summary = extract_summary_config(&request.body, from.as_str());
+            let summary = extract_translated_summary_config(&request.body, from.as_str(), to.as_str());
             request = transform(context, request);
             request.body = apply_summary_config_for_model(
                 &request.body,
@@ -182,7 +182,7 @@ impl Registry {
                 context, from, to, &request.model, request.body, request.stream,
             );
             request.configuration_updates_changed |= before != configuration_updates(&request.body);
-            let summary = extract_summary_config(&request.body, from.as_str());
+            let summary = extract_translated_summary_config(&request.body, from.as_str(), to.as_str());
             if let Some(translated) = hooks.translate_request(
                 context, from, to, &request.model, &request.body, request.stream,
             ) {
@@ -393,31 +393,18 @@ fn wrap_request_transform(transform: RequestTransform) -> RequestEnvelopeTransfo
 /// Preserve exact update item bytes and their order, matching gjson item.Raw;
 /// changes to ordinary messages or surrounding array whitespace do not count.
 fn configuration_updates(body: &[u8]) -> Vec<String> {
-    if body.iter().copied().find(|byte| !byte.is_ascii_whitespace()) != Some(b'{') {
+    let input = crate::internal::util::get_gjson_bytes_no_copy(body, "input");
+    if input.kind() != gjson::Kind::Array {
         return Vec::new();
     }
-
-    #[derive(serde::Deserialize)]
-    struct Input<'a> {
-        #[serde(borrow)]
-        input: Option<&'a serde_json::value::RawValue>,
-    }
-    #[derive(serde::Deserialize)]
-    struct ItemType {
-        #[serde(rename = "type")]
-        kind: Option<String>,
-    }
-    let Ok(root) = serde_json::from_slice::<Input<'_>>(body) else {
-        return Vec::new();
-    };
-    let Some(input) = root.input else { return Vec::new() };
-    let Ok(items) = serde_json::from_str::<Vec<&serde_json::value::RawValue>>(input.get()) else {
-        return Vec::new();
-    };
-    items.into_iter().filter_map(|item| {
-        let tag = serde_json::from_str::<ItemType>(item.get()).ok()?;
-        (tag.kind.as_deref() == Some("configuration_update")).then(|| item.get().to_owned())
-    }).collect()
+    let mut updates = Vec::new();
+    input.each(|_, item| {
+        if item.get("type").str() == "configuration_update" {
+            updates.push(item.json().to_owned());
+        }
+        true
+    });
+    updates
 }
 
 fn normalize_model(raw_json: &[u8], model: &str) -> Vec<u8> {

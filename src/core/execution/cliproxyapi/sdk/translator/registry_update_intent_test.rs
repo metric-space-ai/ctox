@@ -182,3 +182,51 @@ fn non_object_bodies_do_not_expose_positional_struct_updates() {
     );
     assert!(!result.configuration_updates_changed);
 }
+
+#[test]
+fn duplicate_keys_use_the_first_gjson_match_for_update_intent() {
+    let format = openai_response();
+    for (before, after, changed) in [
+        (
+            r#"{"input":[{"type":"configuration_update","type":"message","a":1}]}"#,
+            r#"{"input":[{"type":"configuration_update","type":"message","a":2}]}"#,
+            true,
+        ),
+        (
+            r#"{"input":[{"type":"configuration_update","a":1}],"input":[]}"#,
+            r#"{"input":[{"type":"configuration_update","a":2}],"input":[]}"#,
+            true,
+        ),
+        (
+            r#"{"input":[],"input":[{"type":"configuration_update","a":1}]}"#,
+            r#"{"input":[],"input":[{"type":"configuration_update","a":2}]}"#,
+            false,
+        ),
+    ] {
+        let registry = Registry::new();
+        registry.register(
+            format.clone(), format.clone(),
+            Some(Arc::new(|_, body, _| body.to_vec())), response(),
+        );
+        registry.set_plugin_hooks(Some(Arc::new(ReplaceBody(after.as_bytes().to_vec()))));
+        let result = registry.translate_request_envelope(
+            &TranslationContext::default(), &format, &format,
+            envelope(&format, before.as_bytes()),
+        );
+        assert_eq!(result.configuration_updates_changed, changed);
+    }
+}
+
+#[test]
+fn chat_reasoning_depth_does_not_imply_claude_display_visibility() {
+    use crate::internal::thinking::{extract_translated_summary_config, SummaryMode};
+    for (body, target, expected) in [
+        (br#"{"reasoning_effort":"high"}"#.as_slice(), " Claude ", SummaryMode::Unspecified),
+        (br#"{"reasoning_effort":"none"}"#.as_slice(), "claude", SummaryMode::Unspecified),
+        (br#"{"reasoning_effort":"high"}"#.as_slice(), "codex", SummaryMode::Enabled),
+        (br#"{"reasoning_effort":"none"}"#.as_slice(), "gemini", SummaryMode::Disabled),
+    ] {
+        let actual = extract_translated_summary_config(body, " OPENAI ", target);
+        assert_eq!(actual.mode, expected);
+    }
+}

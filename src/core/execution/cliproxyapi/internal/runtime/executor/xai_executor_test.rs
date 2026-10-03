@@ -127,7 +127,7 @@ fn api_and_chat_headers_remain_distinct() {
     assert_eq!(chat[XAI_TOKEN_AUTH_HEADER], vec![XAI_TOKEN_AUTH_VALUE]);
     assert_eq!(
         chat[XAI_CLIENT_VERSION_HEADER],
-        vec![XAI_CLIENT_VERSION_VALUE]
+        vec!["1.0.44"]
     );
     auth.attributes.insert("using_api".into(), "true".into());
     let mut official = Headers::new();

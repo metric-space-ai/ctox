@@ -176,6 +176,22 @@ pub fn extract_explicit_summary_config(body: &[u8], format: &str) -> SummaryConf
     extract_openai_explicit_summary_config(&document).unwrap_or_default()
 }
 
+/// ref: internal/thinking/summary.go:133-144 @ e2bff010
+/// Chat reasoning effort controls depth, not Claude display visibility.
+pub fn extract_translated_summary_config(
+    body: &[u8],
+    source_format: &str,
+    target_format: &str,
+) -> SummaryConfig {
+    if source_format.trim().eq_ignore_ascii_case("openai")
+        && target_format.trim().eq_ignore_ascii_case("claude")
+    {
+        extract_explicit_summary_config(body, source_format)
+    } else {
+        extract_summary_config(body, source_format)
+    }
+}
+
 pub fn apply_summary_config(body: &[u8], format: &str, config: &SummaryConfig) -> Vec<u8> {
     apply_summary_config_for_model(body, format, "", config)
 }
