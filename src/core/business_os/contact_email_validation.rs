@@ -919,7 +919,7 @@ fn validate_lead_contacts(root: &Path, record_id: &str) -> anyhow::Result<usize>
         return Ok(0);
     }
     if changed > 0 {
-        super::person_research_gap_closure::complete_after_native_email_validation(&mut lead);
+        super::person_research_gap_closure::complete_after_native_email_validation_with_native_reviews(root, record_id, &mut lead)?;
     }
     let now = super::person_research_command::now_ms();
     // The daemon's stderr goes nowhere on a managed tenant, so every pass

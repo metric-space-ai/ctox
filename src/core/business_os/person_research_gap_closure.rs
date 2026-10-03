@@ -1470,6 +1470,21 @@ fn research_field_is_answered(status: &Value) -> bool {
 /// field after the research writeback has already set `needs_review`. Only a
 /// writeback that recorded its complete requested scope and zero rejections
 /// may be promoted; older leads without that receipt remain for review.
+pub(super) fn complete_after_native_email_validation_with_native_reviews(
+    root: &Path,
+    record_id: &str,
+    lead: &mut Value,
+) -> anyhow::Result<bool> {
+    let mut view = super::outbound_field_review::native_review_view(root, record_id, lead)?;
+    if !complete_after_native_email_validation(&mut view) {
+        return Ok(false);
+    }
+    lead["research_status"] = view["research_status"].clone();
+    lead["payload"]["native_research_terminal_status"] =
+        view["payload"]["native_research_terminal_status"].clone();
+    Ok(true)
+}
+
 pub(super) fn complete_after_native_email_validation(lead: &mut Value) -> bool {
     if lead.get("research_status").and_then(Value::as_str) != Some("needs_review")
         || lead
@@ -1849,8 +1864,10 @@ pub(super) fn handle_research_writeback(
     // Person fields with keyed contacts are judged per person: A answered
     // and B still open is open; every person answered is answered even when
     // the single lead-level entry was a filler (no pointless retry).
+    let reviewed_lead =
+        super::outbound_field_review::native_review_view(root, &request.record_id, &lead)?;
     let lead_level_answered = |field: &str| {
-        lead["field_status"]
+        reviewed_lead["field_status"]
             .get(field)
             .map(research_field_is_answered)
             .unwrap_or(false)
@@ -1858,13 +1875,13 @@ pub(super) fn handle_research_writeback(
     let open_person_fields = requested_fields
         .iter()
         .flat_map(|field| {
-            open_persons_for_field(&lead, field)
+            open_persons_for_field(&reviewed_lead, field)
                 .unwrap_or_default()
                 .into_iter()
                 .map(move |person_key| format!("{person_key}:{field}"))
         })
         .collect::<Vec<String>>();
-    let field_answered = |field: &str| match open_persons_for_field(&lead, field) {
+    let field_answered = |field: &str| match open_persons_for_field(&reviewed_lead, field) {
         Some(open) => open.is_empty(),
         None => lead_level_answered(field),
     };
@@ -1929,7 +1946,36 @@ pub(super) fn handle_research_writeback(
     lead["payload"]["research_finished_at_ms"] = Value::Number(now.into());
     lead["research_error"] = Value::Null;
     lead["research_updated_at_ms"] = Value::Number(now.into());
-    store::upsert_rxdb_collection_record(root, LEAD_COLLECTION, &request.record_id, now, lead)?;
+    let mut issued_keys = request
+        .field_status
+        .keys()
+        .map(|field| ("lead".to_string(), String::new(), field.clone()))
+        .collect::<BTreeSet<_>>();
+    for (person, fields) in request
+        .result
+        .person_field_status
+        .as_object()
+        .into_iter()
+        .flatten()
+    {
+        for field in fields
+            .as_object()
+            .into_iter()
+            .flatten()
+            .map(|(field, _)| field)
+        {
+            issued_keys.insert(("person".into(), person.clone(), field.clone()));
+            issued_keys.insert(("contact".into(), person.clone(), field.clone()));
+        }
+    }
+    store::upsert_native_research_writeback_record(
+        root,
+        &request.record_id,
+        now,
+        lead,
+        &serde_json::to_value(&revision)?,
+        &issued_keys,
+    )?;
     super::contact_email_validation::spawn_contact_email_validation(root, &request.record_id);
 
     Ok(serde_json::json!({
@@ -5594,6 +5640,24 @@ mod tests {
             assert!(status["revision"]["written_at_ms"].as_i64().unwrap() > 0);
             assert_eq!(status.get("review"), Some(&Value::Null));
             assert_eq!(lead["field_status"]["firma_name"], untouched);
+            let conn = rusqlite::Connection::open(store::rxdb_store_path(temp.path()))?;
+            let raw: String = conn.query_row(
+                "SELECT status_json FROM outbound_native_field_status_witnesses WHERE record_id=?1 AND scope='lead' AND person_key='' AND field='firma_telefon'",
+                [record_id], |row| row.get(0))?;
+            assert_eq!(
+                serde_json::from_str::<Value>(&raw)?,
+                *status,
+                "the actual native handler must issue the exact stored status atomically"
+            );
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM outbound_native_field_status_witnesses WHERE record_id=?1",
+                [record_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(
+                count, 1,
+                "untouched legacy fields get no synthetic issuance"
+            );
             previous_id = Some(id.to_string());
         }
         let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
