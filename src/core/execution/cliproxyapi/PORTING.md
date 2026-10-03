@@ -95,12 +95,17 @@
   catalog, including business/go aliases, and never from another account's API-key
   snapshot. Each rebind clears stale API-key/OAuth authority; configured model
   snapshots retain complete static model metadata and configured overrides.
+  Direct Codex API-key models now use the same private typed-config generation
+  when no alias-table entry matches, keeping configured flags or bounded static
+  defaults. Credential/base-URL validation and source-aware index/prefix/proxy
+  selection follow the pinned resolver. Six more regressions cover this fallback,
+  config reload, redaction, shared Vertex selection and legacy Home execution.
   Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
   account-kind collisions, legacy Home execution, public JSON boundaries, native
-  capability refresh and built-in metadata. There are90 prepared candidate test
+  capability refresh and built-in metadata. There are96 prepared candidate test
   functions in total; none of the current candidate Cargo/Go checks has executed.
   Narrow formatting and whitespace checks passed. Other executor consumers,
-  unlisted Codex API-key capability fallback, hard-coded Devin model definitions,
+  hard-coded Devin model definitions,
   remaining v8 semantic deltas and live thinking update-intent propagation remain open;
   this is not runtime or promotion acceptance.
   Source/target summary extraction

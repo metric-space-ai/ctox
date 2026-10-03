@@ -231,6 +231,10 @@ fn candidate_codex_oauth_never_uses_same_id_api_key_routing_snapshot() {
     api.attributes.insert("config_index".into(), "0".into());
     let api = register(&manager, api);
     let snapshot = manager.api_key_model_routing_snapshot();
+    let (oauth_models, oauth_alias, _) =
+        manager.execution_model_candidates_with_alias(&oauth_auth("codex", "plus"), "public");
+    assert_eq!(oauth_models, ["public"]);
+    assert_eq!(oauth_alias.upstream_model, "public");
     let previous = attach_resolved_api_key_model_info(
         &snapshot,
         Request::default(),

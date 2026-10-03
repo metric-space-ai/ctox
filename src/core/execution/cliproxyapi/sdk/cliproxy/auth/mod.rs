@@ -272,4 +272,6 @@ mod selector_test;
 #[cfg(test)]
 mod types_test;
 #[cfg(test)]
+mod unlisted_codex_api_key_model_test;
+#[cfg(test)]
 mod weight_test;
