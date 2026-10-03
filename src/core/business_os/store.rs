@@ -13017,6 +13017,97 @@ pub fn upsert_projection_record(
     upsert_rxdb_collection_record(root, collection, record_id, updated_at_ms, payload)
 }
 
+/// External app-record permission does not issue native research receipts.
+/// Guard the effective patch under the same IMMEDIATE transaction as its RxDB
+/// write. Native projections and typed writebacks keep their trusted path.
+pub(super) fn upsert_external_projection_record(
+    root: &Path,
+    collection: &str,
+    record_id: &str,
+    updated_at_ms: i64,
+    payload: Value,
+) -> anyhow::Result<()> {
+    if collection != "outbound_lead_generation_leads" {
+        return upsert_projection_record(root, collection, record_id, updated_at_ms, payload);
+    }
+    let writer = RxdbCollectionWriter::open(root, collection)?
+        .context("external record collection unavailable")?;
+    let tx = rusqlite::Transaction::new_unchecked(&writer.conn, TransactionBehavior::Immediate)?;
+    let deleted_expression = ["deleted", "_deleted"]
+        .into_iter()
+        .find(|column| writer.columns.contains(*column))
+        .unwrap_or("0");
+    let raw = tx
+        .query_row(
+            &format!(
+                "SELECT data, {deleted_expression} FROM {} WHERE id = ?1",
+                writer.table
+            ),
+            [record_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let master = raw
+        .map(|(raw, deleted)| -> anyhow::Result<Value> {
+            let value: Value = serde_json::from_str(&raw)?;
+            anyhow::ensure!(
+                deleted == 0 && !is_rxdb_deleted_document(&value),
+                "external record write cannot resurrect a deleted lead"
+            );
+            Ok(value)
+        })
+        .transpose()?;
+    let mut effective = master.clone().unwrap_or_else(|| serde_json::json!({}));
+    merge_json_object_values(&mut effective, &payload);
+    anyhow::ensure!(
+        super::outbound_field_review::peer_preserves_native_field_status(
+            collection,
+            &effective,
+            master.as_ref(),
+        ),
+        "external record write cannot change native-owned field status"
+    );
+    upsert_rxdb_collection_record_with_writer(
+        &tx,
+        &writer.table,
+        &writer.columns,
+        record_id,
+        updated_at_ms,
+        updated_at_ms,
+        effective.clone(),
+        writer.demand_file_storage,
+        false,
+        false,
+    )?;
+    // Normalization and the existing wire-budget clamp run inside the writer.
+    // Validate the actual staged document as well, not only its input patch.
+    let staged: String = tx.query_row(
+        &format!("SELECT data FROM {} WHERE id = ?1", writer.table),
+        [record_id],
+        |row| row.get(0),
+    )?;
+    let staged: Value = serde_json::from_str(&staged)?;
+    anyhow::ensure!(
+        super::outbound_field_review::peer_preserves_native_field_status(
+            collection,
+            &staged,
+            master.as_ref(),
+        ),
+        "external record projection would change native-owned field status"
+    );
+    tx.commit()?;
+    writer.notify_committed_change();
+    // The existing core projection mirror follows the accepted RxDB write.
+    // Never write caller-supplied native metadata there before the guard.
+    upsert_business_record(
+        &open_store(root)?,
+        collection,
+        record_id,
+        updated_at_ms,
+        effective,
+    )
+}
+
 fn rxdb_table_has_column(conn: &Connection, table: &str, column: &str) -> anyhow::Result<bool> {
     Ok(rxdb_table_columns(conn, table)?.contains(column))
 }
@@ -14172,6 +14263,9 @@ pub(crate) fn detach_secret_from_replicated_document(collection: &str, document:
 pub(crate) fn install_replicated_secret_sanitizer() {
     rxdb::replication_protocol::index_mod::set_master_write_sanitizer(Arc::new(
         detach_secret_from_replicated_document,
+    ));
+    rxdb::replication_protocol::index_mod::set_master_write_validator(Arc::new(
+        super::outbound_field_review::peer_preserves_native_field_status,
     ));
 }
 

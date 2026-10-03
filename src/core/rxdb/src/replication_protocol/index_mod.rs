@@ -224,6 +224,20 @@ pub fn set_master_write_sanitizer(sanitizer: MasterWriteSanitizer) -> bool {
     MASTER_WRITE_SANITIZER.set(sanitizer).is_ok()
 }
 
+/// Host-owned fields may only be preserved by a remote writer. The validator
+/// sees the actual master snapshot used as `BulkWriteRow.previous`, including
+/// tombstones. Storage's previous-state CAS fences a concurrent native write.
+/// It must not perform another store read or modify either document.
+pub type MasterWriteValidator =
+    Arc<dyn Fn(&str, &serde_json::Value, Option<&serde_json::Value>) -> bool + Send + Sync>;
+
+static MASTER_WRITE_VALIDATOR: std::sync::OnceLock<MasterWriteValidator> =
+    std::sync::OnceLock::new();
+
+pub fn set_master_write_validator(validator: MasterWriteValidator) -> bool {
+    MASTER_WRITE_VALIDATOR.set(validator).is_ok()
+}
+
 // ref: rxdb/src/replication-protocol/index.ts:170-318
 /// Adapt a storage instance + conflict handler into a `RxReplicationHandler`.
 /// The handler exposes the master-side surface used by the upstream replication
@@ -240,6 +254,7 @@ pub fn rx_storage_instance_to_replication_handler(
         conflict_handler,
         database_instance_token,
         keep_meta,
+        master_write_validator: MASTER_WRITE_VALIDATOR.get().cloned(),
     })
 }
 
@@ -248,6 +263,7 @@ struct StorageReplicationHandler {
     conflict_handler: Arc<dyn crate::types::RxConflictHandler>,
     database_instance_token: String,
     keep_meta: bool,
+    master_write_validator: Option<MasterWriteValidator>,
 }
 
 #[async_trait::async_trait]
@@ -412,6 +428,25 @@ impl crate::types::RxReplicationHandler for StorageReplicationHandler {
 
         for (id, row) in row_by_id.into_iter() {
             let master_state = master_docs_state.get(&id).cloned();
+            if self
+                .master_write_validator
+                .as_ref()
+                .is_some_and(|validate| {
+                    !validate(
+                        self.instance.collection_name(),
+                        &row.new_document_state,
+                        master_state.as_ref(),
+                    )
+                })
+            {
+                return Err(crate::rx_error::new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(serde_json::json!({
+                        "collection": self.instance.collection_name(),
+                        "message": "peer cannot change native-owned document fields",
+                    })),
+                ));
+            }
             match (master_state, row.assumed_master_state.as_ref()) {
                 (None, _) => {
                     let doc = doc_state_to_write_doc(
@@ -601,10 +636,235 @@ mod tests {
     use crate::rxjs_compat::DEFAULT_SUBJECT_BUFFER;
     use crate::types::{
         BulkWriteRow, DocumentsWithCheckpoint, FirstSyncDone, ReplicationEvents, ReplicationStats,
-        RxReplicationMasterChange, RxStorageInstance, RxStorageInstanceCreationParams,
-        RxStorageInstanceReplicationInput, RxStorageInstanceReplicationState,
-        RxStorageReplicationDirection, StreamQueue,
+        RxConflictHandler, RxReplicationMasterChange, RxStorageInstance,
+        RxStorageInstanceCreationParams, RxStorageInstanceReplicationInput,
+        RxStorageInstanceReplicationState, RxStorageReplicationDirection, StreamQueue,
     };
+
+    async fn guarded_master_test_instance(name: &str) -> Arc<dyn RxStorageInstance> {
+        get_rx_storage_memory(())
+            .create_storage_instance(
+                RxStorageInstanceCreationParams {
+                    database_instance_token: "db-token".into(),
+                    database_name: name.into(),
+                    collection_name: "guarded".into(),
+                    schema: test_schema_variant(TestSchemaVariant::ProtocolIndex),
+                    options: HashMap::new(),
+                    multi_instance: false,
+                    dev_mode: false,
+                    password: None,
+                },
+                (),
+            )
+            .await
+            .unwrap()
+    }
+
+    fn test_master_guard() -> MasterWriteValidator {
+        Arc::new(|_, incoming, master| match master {
+            Some(master) => incoming["native_status"] == master["native_status"],
+            None => incoming["native_status"].is_null(),
+        })
+    }
+
+    fn test_master_document() -> Value {
+        json!({"id": "lead-a", "native_status": {"receipt": "wb-a"},
+            "title": "Before", "_rev": "1-native", "_meta": {"lwt": 1},
+            "_deleted": false, "_attachments": {}})
+    }
+
+    #[tokio::test]
+    async fn master_write_validator_rejects_forgery_and_preserves_ordinary_edits() {
+        use crate::types::{RxReplicationHandler, RxReplicationWriteToMasterRow};
+        let instance = guarded_master_test_instance("master-validator-controls").await;
+        let master = test_master_document();
+        assert!(instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: master.clone(),
+                }],
+                "native"
+            )
+            .await
+            .unwrap()
+            .error
+            .is_empty());
+        let handler = StorageReplicationHandler {
+            instance: instance.clone(),
+            conflict_handler: Arc::new(DefaultConflictHandler),
+            database_instance_token: "db-token".into(),
+            keep_meta: false,
+            master_write_validator: Some(test_master_guard()),
+        };
+        for (id, native_status) in [
+            ("lead-a", Value::Null),
+            ("lead-a", json!({"receipt": "forged"})),
+            ("new-lead", json!({"receipt": "forged"})),
+        ] {
+            let mut incoming = master.clone();
+            incoming["id"] = json!(id);
+            incoming["native_status"] = native_status;
+            assert!(handler
+                .master_write(vec![RxReplicationWriteToMasterRow {
+                    new_document_state: incoming,
+                    assumed_master_state: Some(
+                        crate::replication_protocol::helper::write_doc_to_doc_state(
+                            &master, false, false
+                        )
+                    ),
+                }])
+                .await
+                .is_err());
+        }
+        assert_eq!(
+            instance
+                .find_documents_by_id(&["lead-a".into()], true)
+                .await
+                .unwrap(),
+            vec![master.clone()]
+        );
+        assert!(instance
+            .find_documents_by_id(&["new-lead".into()], true)
+            .await
+            .unwrap()
+            .is_empty());
+        let mut incoming = master.clone();
+        incoming["title"] = json!("Ordinary edit");
+        assert!(handler
+            .master_write(vec![RxReplicationWriteToMasterRow {
+                new_document_state: incoming,
+                assumed_master_state: Some(
+                    crate::replication_protocol::helper::write_doc_to_doc_state(
+                        &master, false, false
+                    )
+                ),
+            }])
+            .await
+            .unwrap()
+            .is_empty());
+        let edited = instance
+            .find_documents_by_id(&["lead-a".into()], true)
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(edited["title"], "Ordinary edit");
+        let mut tombstone = edited.clone();
+        tombstone["_deleted"] = json!(true);
+        assert!(handler
+            .master_write(vec![RxReplicationWriteToMasterRow {
+                new_document_state: tombstone,
+                assumed_master_state: Some(
+                    crate::replication_protocol::helper::write_doc_to_doc_state(
+                        &edited, false, false
+                    )
+                ),
+            }])
+            .await
+            .unwrap()
+            .is_empty());
+        let deleted = instance
+            .find_documents_by_id(&["lead-a".into()], true)
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(deleted["_deleted"], true);
+        assert_eq!(deleted["native_status"]["receipt"], "wb-a");
+        instance.close().await.unwrap();
+    }
+
+    struct NativeWriteDuringComparison {
+        instance: Arc<dyn RxStorageInstance>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::types::RxConflictHandler for NativeWriteDuringComparison {
+        async fn is_equal(&self, a: &Value, b: &Value, _: &str) -> bool {
+            let before = self
+                .instance
+                .find_documents_by_id(&["lead-a".into()], true)
+                .await
+                .unwrap()
+                .remove(0);
+            let mut newer = before.clone();
+            newer["native_status"] = json!({"receipt": "wb-new"});
+            newer["_rev"] = json!("2-native");
+            newer["_meta"]["lwt"] = json!(2);
+            assert!(self
+                .instance
+                .bulk_write(
+                    vec![BulkWriteRow {
+                        previous: Some(before),
+                        document: newer,
+                    }],
+                    "native-concurrent"
+                )
+                .await
+                .unwrap()
+                .error
+                .is_empty());
+            let matches = DefaultConflictHandler.is_equal(a, b, "race").await;
+            assert!(
+                matches,
+                "race fixture must pass the wire-state optimistic comparison"
+            );
+            matches
+        }
+        async fn resolve(&self, input: &crate::types::RxConflictHandlerInput, _: &str) -> Value {
+            input.real_master_state.clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn master_write_validator_cas_preserves_a_concurrent_native_receipt() {
+        use crate::types::{RxReplicationHandler, RxReplicationWriteToMasterRow};
+        let instance = guarded_master_test_instance("master-validator-native-race").await;
+        let master = test_master_document();
+        assert!(instance
+            .bulk_write(
+                vec![BulkWriteRow {
+                    previous: None,
+                    document: master.clone(),
+                }],
+                "native"
+            )
+            .await
+            .unwrap()
+            .error
+            .is_empty());
+        let handler = StorageReplicationHandler {
+            instance: instance.clone(),
+            conflict_handler: Arc::new(NativeWriteDuringComparison {
+                instance: instance.clone(),
+            }),
+            database_instance_token: "db-token".into(),
+            keep_meta: false,
+            master_write_validator: Some(test_master_guard()),
+        };
+        let mut incoming = master.clone();
+        incoming["title"] = json!("Stale browser edit");
+        let conflicts = handler
+            .master_write(vec![RxReplicationWriteToMasterRow {
+                new_document_state: incoming,
+                assumed_master_state: Some(
+                    crate::replication_protocol::helper::write_doc_to_doc_state(
+                        &master, false, false,
+                    ),
+                ),
+            }])
+            .await
+            .unwrap();
+        assert_eq!(conflicts.len(), 1);
+        assert_eq!(conflicts[0]["native_status"]["receipt"], "wb-new");
+        let stored = instance
+            .find_documents_by_id(&["lead-a".into()], true)
+            .await
+            .unwrap()
+            .remove(0);
+        assert_eq!(stored["native_status"]["receipt"], "wb-new");
+        assert_eq!(stored["title"], "Before");
+        instance.close().await.unwrap();
+    }
 
     async fn idle_test_state(database_name: &str) -> Arc<RxStorageInstanceReplicationState> {
         let storage = get_rx_storage_memory(());

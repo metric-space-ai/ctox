@@ -2042,7 +2042,7 @@ pub fn upsert_record(
     ensure_non_empty("record_id", &record_id)?;
 
     let updated_at_ms = now_ms() as i64;
-    store::upsert_projection_record(root, &collection, &record_id, updated_at_ms, record)?;
+    store::upsert_external_projection_record(root, &collection, &record_id, updated_at_ms, record)?;
 
     let record = get_record(root, context, &collection, &record_id)?.record;
     Ok(BusinessOsMcpMutationResponse {
@@ -9418,6 +9418,123 @@ mod tests {
             projected.get("status").and_then(Value::as_str),
             Some("active")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn upsert_record_cannot_issue_or_change_native_research_receipts() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let collection = "outbound_lead_generation_leads";
+        write_module(root, "outbound-lead-generation", "Outbound", &[collection])?;
+        seed_default_mcp_admin(root)?;
+        super::super::person_research_gap_closure::seed_rxdb_collection_table_for_tests(
+            root, collection,
+        )?;
+        let status = serde_json::json!({"status": "no_match", "value": null,
+            "reason": "native evidence ".repeat(160),
+            "revision": {"writeback_id": "native-a", "command_id": "research-a"}});
+        store::upsert_projection_record(
+            root,
+            collection,
+            "lead-a",
+            1,
+            serde_json::json!({"id": "lead-a", "field_status": {"firma_prokura": status.clone()}}),
+        )?;
+        let call = |id: &str, record: Value| {
+            call_tool(
+                root,
+                "business_os.upsert_record",
+                serde_json::json!({"collection": collection, "record_id": id, "record": record,
+                "_context": {"actor": "chatgpt:test-user", "workspace": "test"}}),
+            )
+        };
+        let before = store::load_rxdb_collection_record(root, collection, "lead-a")?.unwrap();
+        let mirror_snapshot = || -> anyhow::Result<Vec<(String, String, i64, i64, String)>> {
+            let conn = store::open_store(root)?;
+            let mut query = conn.prepare("SELECT record_id, rev, deleted, updated_at_ms, payload_json FROM business_records WHERE collection = ?1 ORDER BY record_id")?;
+            let rows = query
+                .query_map([collection], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        };
+        let mirror_before = mirror_snapshot()?;
+        assert_eq!(mirror_before.len(), 1);
+        for patch in [
+            serde_json::json!({"field_status": {"firma_prokura": {"revision": null}}}),
+            serde_json::json!({"field_status": {"firma_prokura": {"review": {"verdict": "refuted"}}}}),
+            serde_json::json!({"field_status": {"firma_prokura": {"value": "fabricated"}}}),
+            serde_json::json!({"person_field_status": {"person-a": {"person_email": status.clone()}}}),
+            serde_json::json!({"contacts": [{"person_key": "person-a", "field_status": {"person_email": status.clone()}}]}),
+        ] {
+            assert!(call("lead-a", patch).is_err());
+            assert_eq!(
+                store::load_rxdb_collection_record(root, collection, "lead-a")?.unwrap(),
+                before
+            );
+            assert_eq!(mirror_snapshot()?, mirror_before);
+        }
+        // The patch preserves native status, but the existing projection
+        // clamp would trim that >1KiB field before committing the document.
+        // Small ordinary fields are deliberately ineligible for trimming.
+        let mut oversized = serde_json::json!({});
+        let mut projected = before.clone();
+        for index in 0..1000 {
+            let key = format!("ordinary_{index}");
+            let value = serde_json::json!("x".repeat(900));
+            oversized[&key] = value.clone();
+            projected[&key] = value;
+            if serde_json::to_vec(&projected)?.len() > store::MAX_PROJECTED_DOCUMENT_BYTES + 128 {
+                break;
+            }
+        }
+        assert!(
+            super::super::outbound_field_review::peer_preserves_native_field_status(
+                collection,
+                &projected,
+                Some(&before),
+            )
+        );
+        let mut clamped = projected.clone();
+        store::clamp_projected_document_to_wire_budget(
+            "ctox_business_os__outbound_lead_generation_leads__v0",
+            "lead-a",
+            &mut clamped,
+        )?;
+        assert_eq!(clamped["field_status"]["_omitted"], true);
+        assert!(call("lead-a", oversized).is_err());
+        assert_eq!(
+            store::load_rxdb_collection_record(root, collection, "lead-a")?.unwrap(),
+            before
+        );
+        assert_eq!(mirror_snapshot()?, mirror_before);
+        assert!(call(
+            "new-lead",
+            serde_json::json!({"field_status": {"firma_prokura": status}})
+        )
+        .is_err());
+        assert!(store::load_rxdb_collection_record(root, collection, "new-lead")?.is_none());
+        assert_eq!(mirror_snapshot()?, mirror_before);
+        assert!(call("legacy", serde_json::json!({"name": "Legacy", "field_status": {"firma_prokura": {"status": "pending"}}})).is_ok());
+        assert!(call(
+            "lead-a",
+            serde_json::json!({"campaign_id": "ordinary-edit"})
+        )
+        .is_ok());
+        let edited = store::load_rxdb_collection_record(root, collection, "lead-a")?.unwrap();
+        assert_eq!(edited["campaign_id"], "ordinary-edit");
+        assert_eq!(edited["field_status"], before["field_status"]);
+        let conn = rusqlite::Connection::open(store::rxdb_store_path(root))?;
+        conn.execute("UPDATE ctox_business_os__outbound_lead_generation_leads__v0 SET deleted=1 WHERE id='lead-a'", [])?;
+        assert!(call("lead-a", serde_json::json!({"campaign_id": "resurrect"})).is_err());
         Ok(())
     }
 
