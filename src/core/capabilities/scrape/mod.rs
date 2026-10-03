@@ -395,6 +395,7 @@ impl ScrapeRunStatus {
         match self {
             Self::Succeeded => "succeeded",
             Self::CompletedEmpty => "completed_empty",
+            Self::InvalidInput => "invalid_input",
             Self::TemporaryUnreachable => "temporary_unreachable",
             Self::PortalDrift => "portal_drift",
             Self::Blocked => "blocked",
