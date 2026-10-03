@@ -1,5 +1,57 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Browser live-query single-flight
+
+Each `RxQuery.$` subscription keeps at most one executing snapshot and one
+coalesced follow-up. Storage changes during a slow read no longer start a new
+materialization on every debounce tick. The first available snapshot still
+paints before the follow-up; ordinary writes must not starve initial rendering.
+Only genuinely unbounded local queries without a demand loader/revision token
+retain their delta path. Loader-backed ordinary, eager and strict subscriptions
+re-execute their actual window: appending raw eager-pull deltas had expanded a
+200-row live chat query to all871 fixture rows. A loader attached after subscribe
+also establishes this boundary. Primary-key deltas cannot replace strict native
+authority either. Re-execution is bounded by the same single-flight mechanism.
+
+Replacing a control-plane demand loader still clears the visible result and
+fences its old authority generation. Replacement and unsubscribe abort only
+that subscription's read, never an imperative consumer or the caller's signal.
+A storage adapter that cannot cancel an in-progress read must finish it before
+the next snapshot starts; its late result cannot publish after unsubscribe.
+Strict revision tokens and permission checks remain on the existing loader.
+
+The global Shell chat consumes its bounded live-query snapshot directly;
+receiving that snapshot does not start another storage/demand read. During a
+pending merge it retains only the newest window (at most200 rows). Explicit
+hydration without a snapshot still executes the bounded query. Disposal releases
+the pending snapshot. Existing ownership/deletion filters, merge semantics and
+local drafts/history remain unchanged; this is not a native acceptance signal.
+
+Shared Browser surface validators require explicit native `ok:true` before
+confirming an image or input result. Input acknowledgements use each native
+result's submitted-event `index`, not its position in the result array. Missing,
+duplicate, noninteger or out-of-range indices prove no acknowledgement; valid
+partial results confirm only their matching successful events. These helpers
+still require Browser-module integration and real click/type/scroll acceptance.
+
+The deferred-storage regression proves the concurrency bound and generation
+fence, not tenant startup latency, Windows memory behavior or installed OOM
+resolution. Those require retained-profile browser measurements on the exact
+delivered source and independent installed acceptance.
+
+The Shell's bounded performance trace separates asset imports, local database
+open/preflight, cache migration, core schema registration, catalog, first module
+mount and restored windows from WebRTC readiness milestones. Heap values are
+browser-exposed samples; the observed maximum is not process RSS or a certified
+memory peak. Missing metrics remain unknown. No URLs, record payloads, actor
+credentials or error bodies enter the trace. Long-task counters and at most 64
+phase records bound retention; the existing Shell diagnostics expose them.
+`firstModuleMountedMs` is a mount milestone, not proof of usable interaction.
+
+Legacy/superseded replica inventory runs after initial module/restore handling,
+outside the critical startup wait. It still preserves all old primaries and
+recovery journals; slow metadata enumeration is not a deletion authorization.
+
 ### Fresh native schema initialization
 
 Before dispatching native Business OS commands into a fresh root, run
