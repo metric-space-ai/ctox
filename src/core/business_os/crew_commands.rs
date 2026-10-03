@@ -40,6 +40,8 @@ fn audit_payload(payload: &Value) -> Value {
         "name",
         "shape",
         "color",
+        "kind",
+        "mode",
     ] {
         if let Some(value) = payload.get(key).and_then(Value::as_str) {
             if crew::safe_prose(value, 200) {
@@ -88,7 +90,8 @@ pub(super) fn control(
                 );
                 let color = text(p, "color")?;
                 ensure!(
-                    ["#1685ee", "#00aa9a", "#7d7f84", "#7c6df2", "#e97255", "#34a26f"]
+                    // No neutral grey: it is the "no member yet" creature.
+                    ["#1685ee", "#00aa9a", "#e0a82e", "#7c6df2", "#e97255", "#34a26f"]
                         .contains(&color),
                     "color is not a CREW_COLOR"
                 );
@@ -130,21 +133,68 @@ pub(super) fn control(
                 tx.execute("UPDATE crew_members SET name=?2,soul_json=?3,specialties_json=?4,archived=?5,updated_at=?6 WHERE id=?1",params![id,member.name,serde_json::to_string(&member.soul)?,serde_json::to_string(&member.specialties)?,member.archived,now])?;
                 json!({"member_id":id})
             }
+            "ctox.crew.memory.update" => {
+                // The owner curates a member's memory through the same LCM
+                // continuity documents the harness reads and refreshes.
+                let id = text(p, "member_id")?;
+                // The LCM engine commits the memory on its own connection. A
+                // read on `tx` before that pinned a WAL snapshot, and the member
+                // touch below then failed with "database is locked" although the
+                // memory was already written (thesen, 11.09.2026). The check runs
+                // on a separate connection so `tx` starts with the touch.
+                let check = Connection::open(crate::paths::core_db(root))?;
+                check.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+                ensure!(
+                    crew::members(&check)?.iter().any(|m| m.id == id),
+                    "member not found"
+                );
+                drop(check);
+                let kind_label = text(p, "kind")?;
+                let kind = match kind_label {
+                    "anchors" => crate::lcm::ContinuityKind::Anchors,
+                    "narrative" => crate::lcm::ContinuityKind::Narrative,
+                    _ => anyhow::bail!("kind must be anchors or narrative"),
+                };
+                let engine = crew::open_engine(root)?;
+                let conversation = crew::member_conversation_id(id);
+                engine.continuity_init_documents(conversation)?;
+                // Not `text()`: its 200-character cap made the 8 000 here
+                // unreachable, so no whole memory entry could be replaced.
+                let bounded = |key: &str| -> Result<&str> {
+                    let value = p
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .filter(|s| !s.trim().is_empty())
+                        .with_context(|| format!("{key} is required"))?;
+                    ensure!(value.chars().count() <= 8_000, "{key} is too long");
+                    Ok(value)
+                };
+                let document = match text(p, "mode")? {
+                    "diff" => engine.continuity_apply_diff(conversation, kind, bounded("diff")?)?,
+                    "replace" => engine.continuity_string_replace_document(
+                        conversation,
+                        kind,
+                        bounded("find")?,
+                        p.get("replace").and_then(Value::as_str).unwrap_or(""),
+                    )?,
+                    "full" => engine.continuity_full_replace_document(
+                        conversation,
+                        kind,
+                        bounded("body")?,
+                    )?,
+                    _ => anyhow::bail!("mode must be diff, replace or full"),
+                };
+                // Touch the member so the projection re-reads its memory.
+                tx.execute(
+                    "UPDATE crew_members SET updated_at=?2 WHERE id=?1",
+                    params![id, now],
+                )?;
+                json!({"member_id":id,"kind":kind_label,"head_commit_id":document.head_commit_id})
+            }
             "ctox.crew.assign" => {
                 let task = text(p, "task_id")?;
                 let member = text(p, "member_id")?;
-                let exists: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM crew_members WHERE id=?1 AND archived=0)",
-                    [member],
-                    |r| r.get(0),
-                )?;
-                ensure!(exists, "active member not found");
-                let changed=tx.execute("UPDATE communication_routing_state SET crew_assigned_member_id=?2,updated_at=?3
-                WHERE message_key=?1 AND route_status IN ('pending','blocked') AND lease_owner IS NULL",params![task,member,now])?;
-                ensure!(
-                    changed == 1,
-                    "assignment requires an unleased pending or blocked task"
-                );
+                crew::assign_member_before_lease(&tx, task, member, &now)?;
                 json!({"task_id":task,"member_id":member})
             }
             "ctox.crew.learning.confirm"

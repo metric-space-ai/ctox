@@ -25,12 +25,7 @@
     "default_width": 1120,
     "default_height": 760,
     "min_width": 640,
-    "min_height": 480,
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/threads.jpg",
-    "icon_asset_sha256": "b4cf784881d8c5463837688755795dffbd66b5082333bf1508357df3a10d28ed",
-    "icon_selection_sha256": "b4cf784881d8c5463837688755795dffbd66b5082333bf1508357df3a10d28ed",
-    "icon_selection_candidate": "candidate-01",
-    "icon_asset_kind": "raster-reference"
+    "min_height": 480
   },
   "category": "System",
   "version": "0.2.4",

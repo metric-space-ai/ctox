@@ -1,0 +1,57 @@
+{
+  "schema": "ctox.incident.file_preservation_comparison.v1",
+  "expectedRelease": "branch-main-aece8a4f-20260906",
+  "checkedAt": "2026-09-06T22:13:58.347741+00:00",
+  "baseline": "/home/ctox/.local/state/ctox-incident-pre-shell-beta14-20260906T212338Z/file-chunk-manifest.json",
+  "releaseBefore": "/home/ctox/.local/lib/ctox/releases/branch-main-aece8a4f-20260906",
+  "tables": {
+    "ctox_business_os__business_module_source_blob_chunks__v0": {
+      "baselineRows": 0,
+      "currentRows": 0,
+      "unchangedData": 0,
+      "newRows": 0,
+      "missing": [],
+      "changedData": [],
+      "newlyOmitted": [],
+      "deletionStateChanged": [],
+      "omittedTotal": 0
+    },
+    "ctox_business_os__desktop_file_chunks__v0": {
+      "baselineRows": 988,
+      "currentRows": 988,
+      "unchangedData": 988,
+      "newRows": 0,
+      "missing": [],
+      "changedData": [],
+      "newlyOmitted": [],
+      "deletionStateChanged": [],
+      "omittedTotal": 0
+    },
+    "ctox_business_os__document_blob_chunks__v0": {
+      "baselineRows": 42,
+      "currentRows": 42,
+      "unchangedData": 42,
+      "newRows": 0,
+      "missing": [],
+      "changedData": [],
+      "newlyOmitted": [],
+      "deletionStateChanged": [],
+      "omittedTotal": 7
+    },
+    "ctox_business_os__spreadsheet_blob_chunks__v0": {
+      "baselineRows": 29,
+      "currentRows": 29,
+      "unchangedData": 29,
+      "newRows": 0,
+      "missing": [],
+      "changedData": [],
+      "newlyOmitted": [],
+      "deletionStateChanged": [],
+      "omittedTotal": 0
+    }
+  },
+  "releaseAfter": "/home/ctox/.local/lib/ctox/releases/branch-main-aece8a4f-20260906",
+  "targetReleaseActive": true,
+  "stableReleaseDuringRead": true,
+  "allBaselineDataUnchanged": true
+}

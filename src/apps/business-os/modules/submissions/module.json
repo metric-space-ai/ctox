@@ -16,12 +16,7 @@
     "shell_contract": "v2",
     "shell_geometry_contract": "business-os-v2-global-1",
     "left": "Filter",
-    "center": "Vorstellungen",
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/submissions.jpg",
-    "icon_asset_sha256": "8cbfd230fafe8eacc84752410f1e1321024378125bb17189b9fcb7b7b39bfc13",
-    "icon_selection_sha256": "8cbfd230fafe8eacc84752410f1e1321024378125bb17189b9fcb7b7b39bfc13",
-    "icon_selection_candidate": "candidate-08",
-    "icon_asset_kind": "raster-reference"
+    "center": "Vorstellungen"
   },
   "category": "Recruiting",
   "version": "0.2.1",

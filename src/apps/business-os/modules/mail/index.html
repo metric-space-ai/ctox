@@ -6,7 +6,7 @@
       <div class="ctox-pane-title-row" data-shell-v2-header-row="1">
         <div class="ctox-pane-titles">
           <span class="ctox-pane-kicker">Mail</span>
-          <h2 class="ctox-pane-title" data-mail-navigation-title>E-Mail-Queues</h2>
+          <h2 class="ctox-pane-title" data-mail-navigation-title>Postfach</h2>
         </div>
         <div class="ctox-pane-actions">
           <button type="button" class="ctox-pane-icon" data-mail-compose aria-label="Neue Mail" title="Neue Mail"></button>
@@ -40,13 +40,14 @@
         </div>
       </div>
     </header>
-    <nav class="ctox-view-switch" aria-label="Mail-Queues" data-shell-v2-header-row="3">
+    <nav class="ctox-view-switch" aria-label="Mail-Bereiche" data-shell-v2-header-row="3">
       <div class="ctox-pane-tabs">
-        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="queues" aria-selected="true">Queues<span class="view-count" data-pg-count="queues"></span></button>
+        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="queues" aria-selected="true">Ordner<span class="view-count" data-pg-count="queues"></span></button>
         <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="campaigns" aria-selected="false">E-Mail-Gruppen<span class="view-count" data-pg-count="campaigns"></span></button>
       </div>
     </nav>
       <div class="ctox-pane-body ctox-well mail-nav-body">
+        <button type="button" class="mail-compose-primary" data-mail-compose-primary>Neue Mail</button>
         <div class="mail-scope-list" data-mail-scope-list></div>
         <div data-mail-group-list hidden></div>
       </div>
@@ -95,7 +96,7 @@
       <div class="ctox-pane-tabs">
         <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="all" aria-selected="true">Alle<span class="view-count" data-pg-count="all"></span></button>
         <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="inbound" aria-selected="false">Eingang<span class="view-count" data-pg-count="inbound"></span></button>
-        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="outbound" aria-selected="false">Ausgang<span class="view-count" data-pg-count="outbound"></span></button>
+        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="outbound" aria-selected="false">Gesendet<span class="view-count" data-pg-count="outbound"></span></button>
         <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="attention" aria-selected="false">Aktion nötig<span class="view-count" data-pg-count="attention"></span></button>
       </div>
     </nav>
@@ -115,9 +116,10 @@
            track, so the head only ever labels these three. -->
       <div class="mail-table-head" role="row">
         <label class="mail-table-check"><input type="checkbox" data-mail-select-page aria-label="Sichtbare Seite auswählen" /></label>
-        <span class="mail-table-head-subject" data-mail-head-subject>Betreff</span>
+        <span class="mail-table-head-subject" data-mail-head-subject>Nachrichten</span>
         <span class="mail-table-head-time" data-mail-head-time>Zeit</span>
       </div>
+      <div class="mail-read-error" data-mail-read-error role="status" hidden><span data-mail-read-error-text></span><button type="button" data-mail-retry-read>Erneut versuchen</button></div>
       <div class="mail-record-list" data-mail-record-list role="listbox" aria-label="E-Mails"></div>
       <div class="ctox-empty mail-list-empty" data-mail-list-empty>
         <strong data-mail-empty-title>Keine E-Mails</strong>

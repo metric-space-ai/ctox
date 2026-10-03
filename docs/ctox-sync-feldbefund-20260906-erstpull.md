@@ -243,3 +243,38 @@ Threads-Modul (Refresh-Schleife, zwei 200er-Abfragen je Lauf) und/oder in die Be
   mit (`previous_release` bleibt für Rollback).
 - Nicht adressiert (Sync-Engine, für die Engineure): Bedarfsabfragen dürfen Befehls-Frames nicht
   verdrängen (Priorität/eigene Bahn); `user_thread_states` wird nie `live`.
+
+## 22:20 UTC: Zweiter Defekt gefunden — der Worker schreibt nicht über das MCP-Werkzeug zurück
+
+Der erste erfolgreiche Recherchestart (DrinkStar, Task `db0d595d155…`, geleast 20:45:49) endete
+21:08:51 `failed`: „Business command writeback failed: no successful outbound.lead.research_writeback
+receipt for record lead_1bunxnh and originating research …". Der Guard aus Befund 5 hat korrekt
+gefeuert — es gab **keinen einzigen** Writeback-Versuch für den Lead. Spur des Workers
+(`ctox_harness_flow_events`): 93× Terminal, 6× `business_os.execute_action` (alle `success:false`),
+4× `propose_action` (false), 0× `business_os.execute_writeback`; um 20:54 „Work outcome: Success".
+Ursache: **Skill §7** (`src/skills/system/research/outbound-lead-generation-research/SKILL.md`)
+schrieb den Writeback als `ctox business-os commands dispatch --json …` vor — CLI, in der Sandbox
+gesperrt. Das MCP-Werkzeug war der Session angeboten (Vertrag unterstützt → gebundene Session), der
+Skill zeigte woanders hin.
+
+Fix: Skill §7 auf `business_os.execute_writeback(record_id, payload)` umgestellt, CLI/Shell/SQLite
+und execute_action/propose_action ausdrücklich als Nicht-Writeback benannt — `3cf70ee05` auf
+origin/main. Dazu App **1.0.102**: der Auftragstext nennt das Werkzeug. Auslieferung des Skills nur
+per Binary (System-Skills sind eingebettet, `skill_store.rs`, Import bei jedem Start) → zweites
+Upgrade direkt nach dem laufenden.
+
+## 07.09. 00:00–01:00 UTC: Upgrade 3 gemessen — Latenz gelöst, zwei neue Defekte (Wartungssperre, Werkzeug-Allowlist)
+
+Ergebnis und Belege in `docs/thesen-outbound-abnahme-nach-upgrade-20260905.md`
+(Abschnitt „Upgrade 3"). Kurz: Threads-Fix wirkt (Befehl in 77 s statt 15–20 min beim
+Server, Worker-Lease 7 s nach Anlage), Phantome 7 → 0. Neu: (1) die Instanz bleibt nach
+einem Upgrade für alle Nutzer schreibgeschützt, bis irgendein sichtbarer Browser
+`ctox.maintenance.client_ready` sendet — verdeckte Tabs pollen nicht, der Server wartet
+unbegrenzt; (2) `business_os.execute_writeback` fehlte in der Sitzungs-Allowlist des
+Workers (`direct_session.rs`), deshalb schlug jeder Writeback-Guard an. Beide Fixes auf
+main, Upgrade 4 folgt.
+
+Für die Sync-Ingenieure unverändert offen: `ctox_webrtc_incoming_transfer_stalled` in
+Serie für 15 Kollektionen direkt nach dem Reload (84 Fehler, danach Selbstheilung),
+`peer_connect_timeout user_thread_states`, `business_commands` bleibt
+`collectionReadinessState=never-synced` obwohl `initialReplicationState=complete`.

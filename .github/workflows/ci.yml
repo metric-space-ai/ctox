@@ -169,6 +169,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             bubblewrap libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3 ripgrep
+          rg --version
 
       - name: Business OS JS dependency bootstrap
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -179,6 +180,13 @@ jobs:
       - name: Install Business OS browser test runtime
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: npm --prefix src/apps/business-os exec playwright install --with-deps chromium
+
+      - name: Business OS Office mobile height
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: npm --prefix src/apps/business-os run qa:shell-office-height -- --output-dir "${RUNNER_TEMP}/ctox-shell-office-height"
+      - name: Guard Office notification contract
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: npm --prefix src/apps/business-os run qa:office-notifications -- --output-dir "${RUNNER_TEMP}/ctox-office-notifications"
 
       - name: Business OS JS tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -202,7 +210,9 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           bash -n install.sh
+          bash tests/install-release-staging.sh
           bash tests/install_greppy_shim_smoke.sh
+          python3 tests/test_build_cache.py
 
       - name: AppSec non-network fixture gates
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -273,14 +283,15 @@ jobs:
           node --check src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
           node --check src/apps/business-os/scripts/assert-business-chat-layout.mjs
           node --check src/apps/business-os/scripts/assert-business-chat-behavior.mjs
-          # deferred until shell-chat composition files land on main:
-          # node --check src/apps/business-os/scripts/assert-shell-chat-composition.mjs
+          node --check src/apps/business-os/scripts/assert-shell-chat-composition.mjs
           node --check src/apps/business-os/scripts/assert-module-conformance.mjs
           node --check src/apps/business-os/scripts/assert-command-consumer-inventory.mjs
           node --check src/apps/business-os/scripts/assert-production-release-docs.mjs
           node --check src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
           node --check src/apps/business-os/scripts/audit-business-os-content.mjs
           node src/apps/business-os/scripts/assert-rxdb-only.mjs
+          node src/apps/business-os/scripts/generate-module-registry.mjs --check
+          node src/apps/business-os/scripts/assert-module-collection-allowlists.mjs
           node src/apps/business-os/scripts/assert-module-conformance.mjs
           node src/apps/business-os/scripts/assert-command-consumer-inventory.mjs
           node src/apps/business-os/scripts/assert-production-release-docs.mjs
@@ -291,8 +302,7 @@ jobs:
           node src/apps/business-os/scripts/assert-module-context-contract.mjs
           node src/apps/business-os/scripts/assert-file-viewer-integrity.mjs
           node src/apps/business-os/scripts/assert-business-chat-layout.mjs
-          # deferred until shell-chat composition files land on main:
-          # node --test src/apps/business-os/shared/shell-chat-composition.test.mjs
+          node --test src/apps/business-os/shared/shell-chat-composition.test.mjs
           node src/core/rxdb/tools/assert_rxdb_soak_workflow.js
           node src/core/rxdb/tools/assert_sync_production_readiness_95.js
           node src/core/rxdb/tools/audit_sync_production_readiness_95_evidence.js --self-test
@@ -366,6 +376,16 @@ jobs:
             src/apps/business-os/rxdb/tests/storage-index-smoke.mjs
           if-no-files-found: error
 
+      - name: Update backup credential and SQLite recovery
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox --jobs 2 state_backup -- --test-threads=2
+
+      - name: Managed release switch guards
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo test --locked --bin ctox --jobs 2 watchdog_ -- --test-threads=2
+          cargo test --locked --bin ctox --jobs 2 legacy_global_real_binary_tracks_activation_and_rollback -- --test-threads=2
+
       - name: Business OS command idempotency
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --locked --bin ctox native_peer_consumes_pending_business_command
@@ -386,6 +406,10 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --locked --bin ctox sync_desktop_file_from_path_prunes_stale_chunk_generations
 
+      - name: Business OS deletion projection regressions
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: cargo test --locked --bin ctox projection_tombstone_tests
+
       - name: Business OS file tombstones
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: cargo test --locked --bin ctox sync_desktop_files_from_workspace_root_tombstones_renamed_files
@@ -394,8 +418,7 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           npm --prefix src/apps/business-os run qa:design-gates
-          # deferred until shell-chat composition files land on main:
-          # node src/apps/business-os/scripts/assert-shell-chat-composition.mjs
+          node src/apps/business-os/scripts/assert-shell-chat-composition.mjs
           cargo build --locked --bin ctox --no-default-features --target-dir runtime/build/core-rxdb-integration-target
           SMOKE_MODES="$(node -e "const { businessOsProductionSmokeModes } = require('./src/core/rxdb/tools/business_os_production_smoke_registry'); process.stdout.write(businessOsProductionSmokeModes.join(','));")"
           SMOKE_MODES="$SMOKE_MODES" \

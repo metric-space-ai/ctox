@@ -225,19 +225,69 @@ pub fn render_runtime_prompt(
     })
 }
 
-/// Append crew context only after the full runtime and execution rules.
-/// Identity is prepared after admission, never read from ambient thread state.
-pub(crate) fn attach_crew_soul(prompt: &mut RenderedRuntimePrompt, block: Option<&str>) {
-    // Identity cannot make an otherwise empty task invocable.
+/// Crew memory is runtime context (the developer lane), appended after the
+/// marked runtime snapshot and any bound skill: the decision it changes is how
+/// the member approaches this task with what it already knows; its source is
+/// the member's continuity documents; it is omitted when empty (`None`).
+/// The persona travels in the base-instruction lane instead (see
+/// `compose_base_instructions`); the user message stays the task itself.
+pub(crate) fn attach_crew_memory(prompt: &mut RenderedRuntimePrompt, block: Option<&str>) {
+    // Memory cannot make an otherwise empty task invocable.
     if prompt.latest_user_prompt.trim().is_empty() {
         return;
     }
-    if let Some(block) = block {
-        let block = format!("\n\n{block}");
-        // The execution rules are carried in the user task. Keep identity after
-        // those rules as well as after the system/CTO context on the actual wire.
-        prompt.latest_user_prompt.push_str(&block);
-        prompt.prompt.push_str(&block);
+    if let Some(block) = block.map(str::trim).filter(|block| !block.is_empty()) {
+        prompt.context_instructions.push_str("\n\n");
+        prompt.context_instructions.push_str(block);
+        prompt.prompt.push_str("\n\n");
+        prompt.prompt.push_str(block);
+    }
+}
+
+#[cfg(test)]
+mod crew_lane_tests {
+    use super::*;
+
+    #[test]
+    fn crew_memory_lands_in_the_runtime_context_lane_only() {
+        let mut rendered = RenderedRuntimePrompt {
+            prompt: "Diagnostic".into(),
+            latest_user_prompt: "Execution rules: validate evidence.".into(),
+            context_instructions:
+                "<ctox_runtime_context version=\"1\">safety</ctox_runtime_context>".into(),
+            rendered_context_items: 0,
+            omitted_context_items: 0,
+        };
+        let user = rendered.latest_user_prompt.clone();
+        attach_crew_memory(
+            &mut rendered,
+            Some("<ctox_crew_memory member=\"Milo\">x</ctox_crew_memory>"),
+        );
+        assert_eq!(
+            rendered.latest_user_prompt, user,
+            "the user lane is the task, nothing else"
+        );
+        assert!(rendered
+            .context_instructions
+            .starts_with("<ctox_runtime_context"));
+        assert!(rendered
+            .context_instructions
+            .ends_with("</ctox_crew_memory>"));
+        attach_crew_memory(&mut rendered, None);
+        assert_eq!(
+            rendered
+                .context_instructions
+                .matches("ctox_crew_memory")
+                .count(),
+            2
+        );
+        rendered.latest_user_prompt.clear();
+        let before = rendered.context_instructions.clone();
+        attach_crew_memory(&mut rendered, Some("more"));
+        assert_eq!(
+            rendered.context_instructions, before,
+            "memory must not bypass empty-task admission"
+        );
     }
 }
 

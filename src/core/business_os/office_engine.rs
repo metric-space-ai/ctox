@@ -12580,7 +12580,8 @@ fn rewrite_document_paragraph_xml(
     } else {
         paragraph_xml
     };
-    let run_pattern = Regex::new(r"(?s)<w:r(?:\s[^>]*)?>.*?</w:r>")?;
+    // A self-closing empty run must not consume the following populated run.
+    let run_pattern = Regex::new(r"(?s)<w:r(?:\s+|\s[^>]*[^/])?>.*?</w:r>")?;
     let run_matches = run_pattern
         .find_iter(paragraph_xml)
         .filter(|found| original_document_run_has_decoded_content(found.as_str()))
@@ -12596,14 +12597,20 @@ fn rewrite_document_paragraph_xml(
                 || run.tab
         })
         .collect::<Vec<_>>();
-    // An initially blank document has no original runs to rewrite. Allow its
-    // first plain text runs, but never discard unmodelled OOXML (bookmarks,
-    // fields, revisions, etc.) to make a run-count mismatch disappear.
+    // Empty paragraphs can retain formatting-only runs after an autosave.
+    // Append their first visible runs without removing those empty templates.
+    // Never discard unmodelled OOXML (bookmarks, fields, revisions, etc.) to
+    // make a run-count mismatch disappear.
     let insert_into_empty = run_matches.is_empty()
         && !decoded_runs.is_empty()
-        && Regex::new(
-            r"(?s)^<w:p(?:\s[^>]*)?>\s*(?:<w:pPr(?:\s[^>]*)?(?:/>|>.*?</w:pPr>)\s*)?</w:p>\s*$",
-        )?
+        && Regex::new(concat!(
+            r"(?s)^<w:p(?:\s[^>]*)?>\s*",
+            r"(?:<w:pPr(?:\s[^>]*)?(?:/>|>.*?</w:pPr>)\s*)?",
+            r"(?:<w:r(?:\s[^>]*)?(?:/>|>\s*",
+            r"(?:<w:rPr(?:\s[^>]*)?(?:/>|>.*?</w:rPr>)\s*)?",
+            r"(?:<w:t(?:\s[^>]*)?(?:/>|></w:t>)\s*)?",
+            r"</w:r>)\s*)*</w:p>\s*$",
+        ))?
         .is_match(paragraph_xml)
         && paragraph.runs.iter().all(|run| {
             run.drawing.is_none()
@@ -13612,13 +13619,35 @@ fn primary_text_for(kind: OfficeKind, bytes: &[u8]) -> anyhow::Result<String> {
     let mut values = Vec::new();
     match kind {
         OfficeKind::Document => {
-            for node in document.descendants().filter(|node| node.is_element()) {
-                if node.tag_name().name() == "t" {
-                    if let Some(text) = node.text().filter(|value| !value.is_empty()) {
-                        values.push(text);
+            // A run is a formatting boundary, not a line boundary. Preserve
+            // the document's explicit breaks and paragraph structure instead.
+            let mut text = String::new();
+            let mut pending = vec![(document.root(), false)];
+            while let Some((node, closing)) = pending.pop() {
+                if closing {
+                    if node.is_element() && node.tag_name().name() == "p" {
+                        text.push('\n');
+                    }
+                    continue;
+                }
+                if node.is_element() {
+                    match node.tag_name().name() {
+                        "t" => text.push_str(node.text().unwrap_or_default()),
+                        "tab" => text.push('\t'),
+                        "br" | "cr" => text.push('\n'),
+                        _ => {}
                     }
                 }
+                pending.push((node, true));
+                let children: Vec<_> = node.children().collect();
+                for child in children.into_iter().rev() {
+                    pending.push((child, false));
+                }
             }
+            if text.ends_with('\n') {
+                text.pop();
+            }
+            return Ok(text);
         }
         OfficeKind::Spreadsheet => {
             for node in document.descendants().filter(|node| node.is_element()) {
@@ -13640,6 +13669,24 @@ mod tests {
     use std::{fs, path::Path};
     use zip::result::ZipError;
     use zip::write::SimpleFileOptions;
+
+    #[test]
+    fn primary_text_document_preserves_paragraphs_not_formatting_runs() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t xml:space="preserve">Office CLI Word </w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t>verified</w:t></w:r><w:r><w:t xml:space="preserve"> 20260908</w:t></w:r></w:p><w:p><w:r><w:t>Second paragraph</w:t></w:r></w:p></w:body></w:document>"#;
+        assert_eq!(
+            primary_text_for(OfficeKind::Document, xml).unwrap(),
+            "Office CLI Word verified 20260908\nSecond paragraph"
+        );
+    }
+
+    #[test]
+    fn primary_text_document_preserves_explicit_breaks_tabs_and_blank_paragraphs() {
+        let xml = br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Before</w:t><w:tab/><w:t>tab</w:t><w:br/><w:t>line</w:t><w:cr/><w:t>return</w:t></w:r></w:p><w:p/><w:p><w:r><w:t>After</w:t></w:r></w:p></w:body></w:document>"#;
+        assert_eq!(
+            primary_text_for(OfficeKind::Document, xml).unwrap(),
+            "Before\ttab\nline\nreturn\n\nAfter"
+        );
+    }
 
     fn office_fixture(relative: &str) -> std::path::PathBuf {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -14228,6 +14275,12 @@ mod tests {
             "<w:p/>",
             "<w:p></w:p>",
             r#"<w:p w:rsidR="123"><w:pPr><w:spacing w:before="240"/></w:pPr></w:p>"#,
+            "<w:p><w:r/></w:p>",
+            r#"<w:p><w:r w:rsidR="123"/></w:p>"#,
+            "<w:p><w:r></w:r></w:p>",
+            r#"<w:p><w:r><w:rPr><w:b/><w:sz w:val="20"/></w:rPr></w:r></w:p>"#,
+            r#"<w:p><w:r><w:t xml:space="preserve"></w:t></w:r></w:p>"#,
+            "<w:p><w:r><w:t/></w:r></w:p>",
         ] {
             let rewritten = rewrite_document_paragraph_xml(
                 original,
@@ -14243,10 +14296,28 @@ mod tests {
                 assert!(rewritten.contains(r#"w:rsidR="123""#));
                 assert!(rewritten.contains(r#"<w:pPr><w:spacing w:before="240"/></w:pPr>"#));
             }
+            if original.contains("<w:r") {
+                assert!(rewritten.starts_with(original.strip_suffix("</w:p>").unwrap()));
+            }
+            assert_eq!(
+                rewrite_document_paragraph_xml(
+                    &rewritten,
+                    &paragraph,
+                    &BTreeMap::new(),
+                    &Default::default(),
+                )
+                .unwrap(),
+                rewritten,
+                "a second save must preserve the inserted runs and empty template"
+            );
         }
         for original in [
             r#"<w:p><w:bookmarkStart w:id="1" w:name="keep"/></w:p>"#,
             "<w:p><w:r><w:t>Existing</w:t></w:r></w:p>",
+            r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:p>"#,
+            r#"<w:p><w:r><w:commentReference w:id="1"/></w:r></w:p>"#,
+            r#"<w:p><w:r><w:t xml:space="preserve"> </w:t></w:r></w:p>"#,
+            "<w:p><w:r><w:tab/></w:r></w:p>",
         ] {
             assert!(rewrite_document_paragraph_xml(
                 original,

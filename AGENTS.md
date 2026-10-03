@@ -183,7 +183,25 @@ as the public installer entry point.
   contract plus its harnesses: `scripts/shell-v2-geometry-lab.mjs` and
   `scripts/assert-shell-v2-contract.mjs`; run them for shell-affecting
   changes). A fix that is deployed but not on `main`, or on `main` but not in
-  the active slot, is not landed.
+  the active slot, is not landed. Landing a shell change on a managed tenant
+  means, in this order: push to `main`; push a release tag
+  `business-os-shell-v<semver>` (the release workflow builds the slot in about
+  two minutes); on the tenant `ctox business-os shell-update stage --version
+  <semver>`, `activate`, then restart the service (the phase stays `restart`
+  until then); verify in a browser that `app.js?v=` carries the new revision.
+- Shell data plumbing that is easy to miss: a module's `module.json`
+  collections only reach the shell after `node
+  src/apps/business-os/scripts/generate-module-registry.mjs` (the generated
+  block in `app.js` is merged over the native catalog row); a system module and
+  the chat/reporter companions read only the collections listed in
+  `SCOPED_SYSTEM_MODULE_DB_COLLECTIONS`, `BUSINESS_CHAT_DB_COLLECTIONS` and
+  `BUSINESS_REPORTER_DB_COLLECTIONS` in `app.js` (mirrored in
+  `docs/business-os-db-isolation-inventory.json`) — anything else returns
+  `null` from `ctx.db.collection()` without an error; every `app.js` change
+  needs a new cache revision (`APP_BUILD` plus the loader busters, see the
+  data-plane guard). Gates: `scripts/generate-module-registry.mjs --check`,
+  `scripts/assert-db-isolation-inventory.mjs`,
+  `scripts/assert-module-collection-allowlists.mjs`.
 - There is deliberately **no vendor-CLI wrapper** any more. Installing and
   authenticating external `codex`/`claude`/`agy` binaries from here was removed
   once nothing dispatched to it; provider authentication belongs to the

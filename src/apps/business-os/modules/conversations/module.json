@@ -22,12 +22,7 @@
     "left": "Conversation list filtered by channel and search",
     "center": "Selected conversation timeline with channel-aware messages",
     "right": "Contact card, related business records, and CTOX agent attribution",
-    "third_pane_justification": "The contact and linked-record inspector must stay visible beside long communication timelines in wide mode; compact mode moves it into the shared drawer.",
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/conversations.jpg",
-    "icon_asset_sha256": "1656adf1e387e7db50c4b7f6ea99998de43ecd6373fc1bedeb760e3cd109941b",
-    "icon_selection_sha256": "1656adf1e387e7db50c4b7f6ea99998de43ecd6373fc1bedeb760e3cd109941b",
-    "icon_selection_candidate": "candidate-01",
-    "icon_asset_kind": "raster-reference"
+    "third_pane_justification": "The contact and linked-record inspector must stay visible beside long communication timelines in wide mode; compact mode moves it into the shared drawer."
   },
   "category": "Collaboration",
   "version": "1.0.2",

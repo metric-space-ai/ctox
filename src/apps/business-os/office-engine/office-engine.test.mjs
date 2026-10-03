@@ -31,7 +31,10 @@ test('blob helper rejects incomplete chunks and rebuilds valid bytes', async () 
   const bytes = new TextEncoder().encode('office-data');
   const rows = [];
   const chunks = {
-    async bulkUpsert(next) { rows.push(...next); },
+    async bulkUpsert(next) {
+      rows.push(...next);
+      return next.map((row) => ({ toJSON: () => ({ ...row, _meta: { lwt: Date.now() } }) }));
+    },
     find({ selector }) {
       return { async exec() { return rows.filter((row) => row.blob_id === selector.blob_id); } };
     },
@@ -235,7 +238,10 @@ test('Business OS bridge reads versions and dispatches typed office commands', a
   const collection = (name) => ({
     findOne(id) { return { async exec() { return docs.get(id) || null; } }; },
     find({ selector }) { return { async exec() { return name === 'document_blob_chunks' ? chunks.filter((row) => row.blob_id === selector.blob_id) : []; } }; },
-    async bulkUpsert(rows) { chunks.push(...rows); },
+    async bulkUpsert(rows) {
+      chunks.push(...rows);
+      return rows.map((row) => ({ toJSON: () => ({ ...row, _meta: { lwt: Date.now() } }) }));
+    },
   });
   const ctx = {
     db: { collection },
@@ -244,7 +250,17 @@ test('Business OS bridge reads versions and dispatches typed office commands', a
       async leaseCollection(name, reason) {
         leases.push(`lease:${name}:${reason}`);
         return {
-          bridge: { state: { async awaitInSync() {}, async pushToRemotePeers() { leases.push(`push:${name}`); } } },
+          bridge: { state: {
+            async awaitInSync() {},
+            async pushToRemotePeers() { leases.push(`push:${name}`); },
+            async waitForOpenPeerId() { return 'native-peer'; },
+            async pushDocumentsToPeer(peerId, rows) {
+              assert.equal(peerId, 'native-peer');
+              assert.ok(rows.length > 0);
+              assert.ok(rows.every((row) => row._meta.lwt > 0));
+              leases.push(`push:${name}`);
+            },
+          } },
           async release() { leases.push(`release:${name}`); },
         };
       },
@@ -492,6 +508,59 @@ test('prepare result is immediately readable before the native version projectio
   assert.deepEqual(streamed, ['editor_1']);
 });
 
+test('prepared CSV opens the canonical XLSX before its version projection arrives', async () => {
+  const sourceBytes = new TextEncoder().encode(',,,,,,,,,');
+  const canonicalBytes = new TextEncoder().encode('PK-canonical-xlsx');
+  const editorBytes = new TextEncoder().encode('XLSY;v10;0;editor');
+  const sha = (bytes) => createHash('sha256').update(bytes).digest('hex');
+  const documents = new Map([
+    ['sheet_1', { id: 'sheet_1', current_version_id: 'sheet_1_v1' }],
+    ['sheet_1_v1', {
+      id: 'sheet_1_v1', spreadsheet_id: 'sheet_1', blob_id: 'sheet_source',
+      source_sha256: sha(sourceBytes),
+    }],
+  ]);
+  const fetched = [];
+  const chunks = [{
+    id: 'sheet_source_0000', blob_id: 'sheet_source', spreadsheet_id: 'sheet_1',
+    version_id: 'sheet_1_v1', idx: 0, total: 1,
+    data: Buffer.from(sourceBytes).toString('base64'),
+  }];
+  const bridge = createBusinessOsOfficeBridge({
+    db: { collection(name) {
+      return {
+        findOne(id) { return { async exec() { return documents.get(id) || null; } }; },
+        find({ selector }) { return { async exec() {
+          return name === 'spreadsheet_blob_chunks'
+            ? chunks.filter((row) => row.blob_id === selector.blob_id) : [];
+        } }; },
+      };
+    } },
+    sync: { async leaseCollection() {
+      return { bridge: { state: {
+        demandFileLoader: { async fetchFile(blobId) {
+          fetched.push(blobId);
+          const bytes = blobId === 'sheet_canonical' ? canonicalBytes : editorBytes;
+          return [{ sequence: 0, bytesBase64: Buffer.from(bytes).toString('base64') }];
+        } },
+        async pushToRemotePeers() {},
+      } }, async release() {} };
+    } },
+    commandBus: { async dispatch() { return { status: 'completed', result: {
+      ok: true, version_id: 'sheet_1_v1', blob_id: 'sheet_canonical',
+      source_sha256: sha(canonicalBytes), editor_blob_id: 'sheet_editor',
+      editor_sha256: sha(editorBytes),
+    } }; } },
+  }, 'spreadsheet');
+
+  await bridge.prepare({ recordId: 'sheet_1', versionId: 'sheet_1_v1' });
+  const loaded = await bridge.loadVersion({ recordId: 'sheet_1', versionId: 'sheet_1_v1' });
+  assert.equal(loaded.version.blob_id, 'sheet_canonical');
+  assert.deepEqual(loaded.canonicalBytes, canonicalBytes);
+  assert.deepEqual(loaded.editorBytes, editorBytes);
+  assert.deepEqual(fetched, ['sheet_canonical', 'sheet_editor']);
+});
+
 test('demand-file chunk leases do not wait for complete collection replication', async () => {
   let awaitedFullReplication = 0;
   let dispatched = 0;
@@ -693,13 +762,25 @@ test('spreadsheet commit stages XLSX bytes and carries the conflict base through
   const ctx = {
     db: { collection(name) {
       if (name !== 'spreadsheet_blob_chunks') return {};
-      return { async bulkUpsert(rows) { staged.push(...rows); } };
+      return { async bulkUpsert(rows) {
+        staged.push(...rows);
+        return rows.map((row) => ({ toJSON: () => ({ ...row, _meta: { lwt: Date.now() } }) }));
+      } };
     } },
     permissions: { canWriteCollection: () => true },
     sync: {
       async leaseCollection() {
         return {
-          bridge: { state: { async awaitInSync() {}, async pushToRemotePeers() {} } },
+          bridge: { state: {
+            async awaitInSync() {},
+            async pushToRemotePeers() {},
+            async waitForOpenPeerId() { return 'native-peer'; },
+            async pushDocumentsToPeer(peerId, rows) {
+              assert.equal(peerId, 'native-peer');
+              assert.equal(rows.length, staged.length);
+              assert.deepEqual(rows.map(({ _meta, ...row }) => row), staged);
+            },
+          } },
           async release() {},
         };
       },

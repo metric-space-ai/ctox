@@ -70,14 +70,15 @@ use protocol_contract_generated::{
     CTOX_PROTOCOL_ERROR_CAPABILITY_MISSING, CTOX_PROTOCOL_ERROR_COLLECTION_MISMATCH,
     CTOX_PROTOCOL_ERROR_MISMATCH, CTOX_PROTOCOL_ERROR_MISSING,
     CTOX_PROTOCOL_ERROR_SCHEMA_HASH_MISMATCH, CTOX_PROTOCOL_ERROR_SCHEMA_VERSION_MISMATCH,
-    CTOX_QUERY_FETCH_CAPABILITY, CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_RXDB_PROTOCOL,
-    CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
+    CTOX_QUERY_FETCH_CAPABILITY, CTOX_REQUIRED_PROTOCOL_CAPABILITIES, CTOX_ROWS_FETCH_CAPABILITY,
+    CTOX_RXDB_PROTOCOL, CTOX_RXDB_RS_SCHEMA_HASH_SOURCE,
 };
 
 const FORK_RESYNC_INTERVAL: Duration = Duration::from_secs(5);
 const PROTOCOL_ROOM_PAYLOAD_CACHE_TTL: Duration = Duration::from_secs(5);
 const MAX_CONCURRENT_MASTER_PULLS: usize = 4;
 const MAX_CONCURRENT_REQUEST_TASKS: usize = 32;
+const MAX_CONCURRENT_HANDSHAKE_REQUESTS: usize = 4;
 const MAX_CONCURRENT_AUXILIARY_REQUESTS: usize = 8;
 const BROWSER_LIVE_METHOD: &str = "ctox.browser.live.v1";
 const OUTBOUND_SELLIFY_LOOKUP_METHOD: &str = "ctox.outbound.sellify_lookup.v1";
@@ -121,6 +122,12 @@ pub type AuxiliaryRequestFuture =
     Pin<Box<dyn Future<Output = Result<Value, String>> + Send + 'static>>;
 pub type AuxiliaryRequestHandler =
     Arc<dyn Fn(String, String, Vec<Value>) -> AuxiliaryRequestFuture + Send + Sync + 'static>;
+
+#[derive(Clone)]
+struct RegisteredAuxiliaryRequest {
+    handler: AuxiliaryRequestHandler,
+    public_identity: bool,
+}
 const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-rxdb-native-v1",
     "ctox-file-chunks-v1",
@@ -263,10 +270,11 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     pub error_subject: RxSubject<RxError>,
     pub query_fetch_registry: Arc<super::query_fetch_handler::QueryFetchRegistry>,
     pub file_fetch_registry: Arc<super::file_fetch_handler::FileFetchRegistry>,
+    pub rows_fetch_registry: Arc<super::rows_fetch_handler::RowsFetchRegistry>,
     /// Typed, explicitly registered request methods that share the authenticated
     /// WebRTC DataChannel without becoming RxDB documents. This is reserved for
     /// latency-sensitive ephemeral control planes such as the live Browser.
-    auxiliary_request_handlers: Mutex<HashMap<String, AuxiliaryRequestHandler>>,
+    auxiliary_request_handlers: Mutex<HashMap<String, RegisteredAuxiliaryRequest>>,
     /// Room admission is also required before sending auxiliary control RPCs.
     authenticated_peers: Arc<Mutex<HashSet<H::Peer>>>,
     outbound_ready_peers: Mutex<HashSet<H::Peer>>,
@@ -291,10 +299,13 @@ pub struct RxWebRTCReplicationPool<H: WebRTCConnectionHandler> {
     /// Historical pulls perform synchronous SQLite work below an async
     /// boundary. Bound them so command writes retain a runnable Tokio worker.
     master_pull_semaphore: Semaphore,
-    /// Bounds concurrently executing inbound request futures across protocol,
-    /// replication, query, and file-fetch methods.
+    /// Bounds replication, query, and file-fetch request futures.
     request_semaphore: Arc<Semaphore>,
+    /// Protocol admission must remain runnable when data transfers back up.
+    handshake_request_semaphore: Arc<Semaphore>,
     auxiliary_request_semaphore: Arc<Semaphore>,
+    pub(super) native_query_semaphore: Arc<Semaphore>,
+    query_cancelled: tokio::sync::Notify,
     /// Per-peer sub-tasks (the master-change relay tasks, one per collection).
     peer_states: Mutex<HashMap<H::Peer, PeerState>>,
     /// Fork replication states keyed by (collection, peer). One entry per
@@ -340,8 +351,12 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         let file_registry = Arc::new(super::file_fetch_handler::FileFetchRegistry::new(
             protocol_contract_generated::CTOX_QUERY_MAX_IN_FLIGHT_STREAMS as u64,
         ));
+        let rows_registry = Arc::new(super::rows_fetch_handler::RowsFetchRegistry::new(
+            protocol_contract_generated::CTOX_QUERY_MAX_IN_FLIGHT_STREAMS as u64,
+        ));
         registry.set_auth_check(Arc::new(|_peer_identity, _collection| true));
         file_registry.set_auth_check(Arc::new(|_peer_identity, _collection| true));
+        rows_registry.set_auth_check(Arc::new(|_peer_identity, _collection| true));
         let mut master_replication_handlers: HashMap<String, Arc<dyn RxReplicationHandler>> =
             HashMap::new();
         let mut collection_map: HashMap<String, Arc<RxCollection>> = HashMap::new();
@@ -367,6 +382,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             error_subject: RxSubject::new(),
             query_fetch_registry: registry,
             file_fetch_registry: file_registry,
+            rows_fetch_registry: rows_registry,
             auxiliary_request_handlers: Mutex::new(HashMap::new()),
             authenticated_peers: Arc::new(Mutex::new(HashSet::new())),
             outbound_ready_peers: Mutex::new(HashSet::new()),
@@ -376,10 +392,17 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
             protocol_room_payload_build: AsyncMutex::new(()),
             master_pull_semaphore: Semaphore::new(MAX_CONCURRENT_MASTER_PULLS),
             request_semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_REQUEST_TASKS)),
+            handshake_request_semaphore: Arc::new(Semaphore::new(
+                MAX_CONCURRENT_HANDSHAKE_REQUESTS,
+            )),
             auxiliary_request_semaphore: Arc::new(Semaphore::new(
                 MAX_CONCURRENT_AUXILIARY_REQUESTS,
             )),
             peer_states: Mutex::new(HashMap::new()),
+            native_query_semaphore: Arc::new(Semaphore::new(
+                protocol_contract_generated::CTOX_QUERY_MAX_IN_FLIGHT_STREAMS as usize,
+            )),
+            query_cancelled: tokio::sync::Notify::new(),
             fork_states: Mutex::new(HashMap::new()),
             fork_state_lifecycle: AsyncMutex::new(()),
             tasks: Mutex::new(Vec::new()),
@@ -424,9 +447,13 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         method: impl Into<String>,
         handler: AuxiliaryRequestHandler,
     ) {
-        self.auxiliary_request_handlers
-            .lock()
-            .insert(method.into(), handler);
+        self.auxiliary_request_handlers.lock().insert(
+            method.into(),
+            RegisteredAuxiliaryRequest {
+                handler,
+                public_identity: false,
+            },
+        );
     }
 
     /// Register a lifecycle-owned control contract without silently replacing
@@ -436,7 +463,37 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         method: impl Into<String>,
         handler: AuxiliaryRequestHandler,
     ) -> Result<(), RxError> {
+        self.register_auxiliary(method.into(), handler, false)
+    }
+
+    /// Register a public source-key challenge responder before room admission.
+    /// It may prove server identity but must never expose user/business data.
+    /// Unauthenticated callers receive no capability from the pool. Only the
+    /// explicit CTOX identity namespace can precede session authentication;
+    /// collection, file, protocol and authority methods cannot opt into it.
+    pub fn register_identity_request_handler(
+        &self,
+        method: impl Into<String>,
+        handler: AuxiliaryRequestHandler,
+    ) -> Result<(), RxError> {
         let method = method.into();
+        if !method.starts_with("ctox.") || !method.ends_with(".identity.v1") {
+            return Err(new_rx_error(
+                "RC_WEBRTC_CONTROL",
+                Some(serde_json::json!({
+                    "message": "pre-session handlers must use the public identity namespace"
+                })),
+            ));
+        }
+        self.register_auxiliary(method, handler, true)
+    }
+
+    fn register_auxiliary(
+        &self,
+        method: String,
+        handler: AuxiliaryRequestHandler,
+        public_identity: bool,
+    ) -> Result<(), RxError> {
         let mut handlers = self.auxiliary_request_handlers.lock();
         if handlers.contains_key(&method) {
             return Err(new_rx_error(
@@ -447,7 +504,13 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
                 })),
             ));
         }
-        handlers.insert(method, handler);
+        handlers.insert(
+            method,
+            RegisteredAuxiliaryRequest {
+                handler,
+                public_identity,
+            },
+        );
         Ok(())
     }
 
@@ -541,8 +604,61 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
+        self.spawn_limited(Arc::clone(&self.request_semaphore), future);
+    }
+
+    /// Apply the host's peer filter on both directions, before any RPC handler
+    /// or credential provider. Closing only an outbound handshake leaves the
+    /// shared incoming stream reachable by the same excluded transport.
+    async fn enforce_peer_filter(
+        &self,
+        peer: &H::Peer,
+        validator: Option<&WebRTCPeerValidator<H::Peer>>,
+        request: Option<&WebRTCMessage>,
+    ) -> bool {
+        if validator.is_none_or(|check| check(peer)) {
+            return true;
+        }
+        self.authenticated_peers.lock().remove(peer);
+        self.outbound_ready_peers.lock().remove(peer);
+        self.error_subject.next(new_rx_error(
+            "RC_WEBRTC_PEER",
+            Some(serde_json::json!({"code": "peer_not_allowed"})),
+        ));
+        if let Some(request) = request {
+            let _ = self
+                .connection_handler
+                .send(
+                    peer,
+                    WebRTCWireFrame::Response(WebRTCResponse {
+                        id: request.id.clone(),
+                        result: Value::Null,
+                        error: Some("peer_not_allowed".into()),
+                        collection: request.collection.clone(),
+                    }),
+                )
+                .await;
+        }
+        self.connection_handler.close_peer(peer).await;
+        false
+    }
+
+    fn spawn_replication_request<F>(self: &Arc<Self>, method: &str, future: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
+        if matches!(method, "token" | "ctoxProtocol") {
+            self.spawn_limited(Arc::clone(&self.handshake_request_semaphore), future);
+        } else {
+            self.spawn_tracked(future);
+        }
+    }
+
+    fn spawn_limited<F>(self: &Arc<Self>, request_semaphore: Arc<Semaphore>, future: F)
+    where
+        F: std::future::Future<Output = ()> + Send + 'static,
+    {
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
-        let request_semaphore = Arc::clone(&self.request_semaphore);
         let task = tokio::spawn(async move {
             if start_rx.await.is_err() {
                 return;
@@ -568,30 +684,11 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
     /// workspace can occupy every ordinary request permit with collection
     /// pulls; queuing interactive work behind those pulls turns a healthy
     /// DataChannel into a deterministic 30-second UI timeout.
-    fn spawn_auxiliary_tracked<F>(self: &Arc<Self>, future: F)
+    pub(super) fn spawn_auxiliary_tracked<F>(self: &Arc<Self>, future: F)
     where
         F: std::future::Future<Output = ()> + Send + 'static,
     {
-        let (start_tx, start_rx) = tokio::sync::oneshot::channel();
-        let semaphore = Arc::clone(&self.auxiliary_request_semaphore);
-        let task = tokio::spawn(async move {
-            if start_rx.await.is_err() {
-                return;
-            }
-            let Ok(_permit) = semaphore.acquire_owned().await else {
-                return;
-            };
-            future.await;
-        });
-        let mut tasks = self.tasks.lock();
-        tasks.retain(|task| !task.is_finished());
-        if self.canceled.load(std::sync::atomic::Ordering::SeqCst) {
-            task.abort();
-            return;
-        }
-        tasks.push(task);
-        drop(tasks);
-        let _ = start_tx.send(());
+        self.spawn_limited(Arc::clone(&self.auxiliary_request_semaphore), future);
     }
 
     /// Record a per-(collection, peer) fork replication state so cancel
@@ -663,6 +760,7 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         let peer_identity = self.connection_handler.connection_identity(peer);
         self.query_fetch_registry.cancel_peer(&peer_identity);
         self.file_fetch_registry.cancel_peer(&peer_identity);
+        self.rows_fetch_registry.cancel_peer(&peer_identity);
         for task in &sub_tasks {
             task.abort();
         }
@@ -683,6 +781,17 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         }
     }
 
+    /// Wait for this pool's shutdown request without polling. Safe to await
+    /// before, during or after cancellation; this does not initiate shutdown.
+    pub async fn cancelled(&self) {
+        let notified = self.query_cancelled.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if !self.canceled.load(std::sync::atomic::Ordering::SeqCst) {
+            notified.await;
+        }
+    }
+
     pub async fn cancel(&self) {
         let _cancel_lifecycle = self.cancel_lifecycle.lock().await;
         if self
@@ -691,6 +800,9 @@ impl<H: WebRTCConnectionHandler + 'static> RxWebRTCReplicationPool<H> {
         {
             return;
         }
+
+        self.native_query_semaphore.close();
+        self.query_cancelled.notify_waiters();
 
         self.authenticated_peers.lock().clear();
         self.outbound_ready_peers.lock().clear();
@@ -1144,6 +1256,7 @@ where
         let peer_session_id = peer_session_id.clone();
         let is_peer_session_valid = is_peer_session_valid.clone();
         let authenticated_peers = Arc::clone(&authenticated_peers);
+        let is_peer_valid = is_peer_valid.clone();
         let mut msg_stream = connection_handler.message_stream();
         let t = tokio::spawn(async move {
             while let Some(item) = msg_stream.next().await {
@@ -1153,9 +1266,24 @@ where
                 {
                     break;
                 }
+                if !pool_clone
+                    .enforce_peer_filter(&item.peer, is_peer_valid.as_ref(), Some(&item.message))
+                    .await
+                {
+                    continue;
+                }
+                let auxiliary = pool_clone
+                    .auxiliary_request_handlers
+                    .lock()
+                    .get(&item.message.method)
+                    .cloned();
+                let peer_authenticated = authenticated_peers.lock().contains(&item.peer);
                 if is_peer_session_valid.is_some()
                     && !matches!(item.message.method.as_str(), "ctoxProtocol" | "token")
-                    && !authenticated_peers.lock().contains(&item.peer)
+                    && !auxiliary
+                        .as_ref()
+                        .is_some_and(|entry| entry.public_identity)
+                    && !peer_authenticated
                 {
                     let response = WebRTCResponse {
                         id: item.message.id,
@@ -1230,16 +1358,40 @@ where
                     }
                     continue;
                 }
+                if item.message.method == super::rows_fetch_handler::rows_fetch_method() {
+                    let registry = Arc::clone(&pool_clone.rows_fetch_registry);
+                    let handler_clone = Arc::clone(&handler);
+                    let peer = item.peer.clone();
+                    let peer_identity = handler.peer_identity(&peer);
+                    let message = item.message.clone();
+                    pool_clone.spawn_tracked(async move {
+                        let _ = super::rows_fetch_handler::run_rows_fetch(
+                            registry,
+                            handler_clone,
+                            peer,
+                            peer_identity,
+                            message,
+                        )
+                        .await;
+                    });
+                    continue;
+                }
+                if item.message.method == super::rows_fetch_handler::rows_cancel_method() {
+                    if let Ok(request_id) =
+                        super::rows_fetch_handler::parse_rows_cancel_request(&item.message)
+                    {
+                        let peer_identity = handler.connection_identity(&item.peer);
+                        pool_clone
+                            .rows_fetch_registry
+                            .cancel(&peer_identity, &request_id);
+                    }
+                    continue;
+                }
                 let is_browser_live = item.message.method == BROWSER_LIVE_METHOD;
                 if is_browser_live {
                     BROWSER_LIVE_WIRE_RECEIVED.fetch_add(1, Ordering::Relaxed);
                 }
-                if let Some(auxiliary_handler) = pool_clone
-                    .auxiliary_request_handlers
-                    .lock()
-                    .get(&item.message.method)
-                    .cloned()
-                {
+                if let Some(auxiliary) = auxiliary {
                     if is_browser_live {
                         BROWSER_LIVE_HANDLER_FOUND.fetch_add(1, Ordering::Relaxed);
                     }
@@ -1257,10 +1409,14 @@ where
                     let response_collection =
                         auxiliary_response_collection(&request.method, &browser_operation);
                     let peer_identity = handler.peer_identity(&peer);
-                    let capability_token = handler.peer_capability_token(&peer).unwrap_or_default();
+                    let capability_token = if auxiliary.public_identity && !peer_authenticated {
+                        String::new()
+                    } else {
+                        handler.peer_capability_token(&peer).unwrap_or_default()
+                    };
                     pool_clone.spawn_auxiliary_tracked(async move {
                         let answer =
-                            auxiliary_handler(peer_identity, capability_token, request.params)
+                            (auxiliary.handler)(peer_identity, capability_token, request.params)
                                 .await;
                         let (result, error) = match answer {
                             Ok(result) => (result, None),
@@ -1325,7 +1481,9 @@ where
                 let storage_token = storage_token.clone();
                 let peer_session_id = peer_session_id.clone();
                 let is_peer_session_valid = is_peer_session_valid.clone();
-                pool_clone.spawn_tracked(async move {
+                let request_method = item.message.method.clone();
+                let is_peer_valid = is_peer_valid.clone();
+                pool_clone.spawn_replication_request(&request_method, async move {
                     if pool_task
                         .canceled
                         .load(std::sync::atomic::Ordering::SeqCst)
@@ -1333,8 +1491,9 @@ where
                         return;
                     }
                     let frame_collection = item.message.collection.clone();
+                    let mut may_capture_capability = false;
                     if item.message.method == "ctoxProtocol" {
-                        let mut may_capture_capability = true;
+                        may_capture_capability = true;
                         if let Some(check) = &is_peer_session_valid {
                             let remote_protocol = item
                                 .message
@@ -1342,9 +1501,7 @@ where
                                 .first()
                                 .unwrap_or(&Value::Null);
                             match check(remote_protocol, None) {
-                                WebRTCPeerSessionValidation::Accept => {
-                                    pool_task.mark_peer_admitted(&item.peer, false);
-                                }
+                                WebRTCPeerSessionValidation::Accept => {}
                                 WebRTCPeerSessionValidation::Defer => {
                                     may_capture_capability = false;
                                 }
@@ -1366,24 +1523,13 @@ where
                                 }
                             }
                         }
-                        if may_capture_capability {
-                            if let Some(token) = item
-                            .message
-                            .params
-                            .first()
-                            .and_then(|payload| payload.pointer("/peerSession/capabilityToken"))
-                            .and_then(Value::as_str)
-                            .map(str::trim)
-                            .filter(|token| !token.is_empty())
-                        {
-                            handler_task.set_peer_capability_token(&item.peer, token.to_string());
-                            }
-                        }
                     }
                     let result = match item.message.method.as_str() {
                         "token" => Value::String(storage_token),
                         "ctoxProtocol" => {
                             let flag = pool_task.query_fetch_registry.is_feature_enabled();
+                            let rows_fetch_registered =
+                                pool_task.rows_fetch_registry.has_any_source();
                             // Resolve the protocol payload for the collection
                             // the remote asked about (if it tagged one);
                             // otherwise the representative. This keeps the
@@ -1394,16 +1540,47 @@ where
                                 .and_then(|name| pool_task.collection_by_name(name))
                                 .or_else(|| representative_task.clone());
                             let room_payload = pool_task.protocol_room_payload().await;
-                            ctox_protocol_response_with_flag(
+                            let mut protocol = ctox_protocol_response_with_flag(
                                 target.as_ref(),
                                 peer_session_id.as_deref(),
                                 flag,
+                                rows_fetch_registered,
                                 room_payload.collection_schemas,
                                 room_payload.collection_checkpoints,
                                 Some(&storage_token),
-                                handler_task.local_peer_role(),
+                                handler_task.as_ref(),
                             )
-                            .await
+                            .await;
+                            let challenge = item.message.params.first()
+                                .and_then(|p| p.pointer("/peerSession/deviceProofNonce"));
+                            if let Err(error) = super::local_session::attach_local_session(
+                                handler_task.as_ref(), &item.peer, &mut protocol, challenge,
+                                is_peer_valid.as_ref(),
+                            ).await {
+                                pool_task.error_subject.next(error);
+                                let _ = handler_task.send(&item.peer, WebRTCWireFrame::Response(WebRTCResponse {
+                                    id: item.message.id,
+                                    result: Value::Null,
+                                    error: Some("local_session_credentials_unavailable".into()),
+                                    collection: frame_collection,
+                                })).await;
+                                handler_task.close_peer(&item.peer).await;
+                                return;
+                            }
+                            // Do not grant data access while local credentials
+                            // are pending or after their provider failed.
+                            if may_capture_capability {
+                                if let Some(token) = item.message.params.first()
+                                    .and_then(|p| p.pointer("/peerSession/capabilityToken"))
+                                    .and_then(Value::as_str).map(str::trim)
+                                    .filter(|token| !token.is_empty()) {
+                                    handler_task.set_peer_capability_token(&item.peer, token.to_string());
+                                }
+                                if is_peer_session_valid.is_some() {
+                                    pool_task.mark_peer_admitted(&item.peer, false);
+                                }
+                            }
+                            protocol
                         }
                         // masterChangesSince | masterWrite — route to the
                         // frame's collection master handler. An unknown
@@ -1565,11 +1742,6 @@ where
                 {
                     break;
                 }
-                if let Some(check) = &is_peer_valid {
-                    if !check(&peer) {
-                        continue;
-                    }
-                }
                 // FIX 5: spawn the per-peer handshake + master/fork build in
                 // its own task. The handshake performs two full request/answer
                 // round-trips (`ctoxProtocol`, then `token`) plus the fork
@@ -1591,10 +1763,17 @@ where
                 let is_peer_session_valid = is_peer_session_valid.clone();
                 let tuning = tuning.clone();
                 let peer_for_tracking = peer.clone();
+                let is_peer_valid = is_peer_valid.clone();
                 let handshake_task = tokio::spawn(async move {
                     if pool_clone
                         .canceled
                         .load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        return;
+                    }
+                    if !pool_clone
+                        .enforce_peer_filter(&peer, is_peer_valid.as_ref(), None)
+                        .await
                     {
                         return;
                     }
@@ -1609,21 +1788,36 @@ where
                         format!("{}|{}|{}", database.token, request_flag, n)
                     };
                     let local_flag = pool_clone.query_fetch_registry.is_feature_enabled();
+                    let rows_fetch_registered = pool_clone.rows_fetch_registry.has_any_source();
                     let local_room_payload = pool_clone.protocol_room_payload().await;
                     let local_collection_schemas = local_room_payload.collection_schemas.clone();
                     let mut local_protocol = ctox_protocol_response_with_flag(
                         representative.as_ref(),
                         peer_session_id.as_deref(),
                         local_flag,
+                        rows_fetch_registered,
                         local_room_payload.collection_schemas,
                         local_room_payload.collection_checkpoints,
                         Some(&storage_token),
-                        handler.local_peer_role(),
+                        handler.as_ref(),
                     )
                     .await;
                     let device_proof_nonce = fresh_device_proof_nonce();
                     local_protocol["peerSession"]["deviceProofNonce"] =
                         Value::String(device_proof_nonce.clone());
+                    if let Err(error) = super::local_session::attach_local_session(
+                        handler.as_ref(),
+                        &peer,
+                        &mut local_protocol,
+                        None,
+                        is_peer_valid.as_ref(),
+                    )
+                    .await
+                    {
+                        pool_clone.error_subject.next(error);
+                        handler.close_peer(&peer).await;
+                        return;
+                    }
                     let protocol_response = match send_message_and_await_answer(
                         Arc::clone(&handler),
                         peer.clone(),
@@ -1650,6 +1844,12 @@ where
                             return;
                         }
                     };
+                    if !pool_clone
+                        .enforce_peer_filter(&peer, is_peer_valid.as_ref(), None)
+                        .await
+                    {
+                        return;
+                    }
                     if let Some(check) = &is_peer_session_valid {
                         if check(&protocol_response.result, Some(&device_proof_nonce))
                             != WebRTCPeerSessionValidation::Accept
@@ -1772,6 +1972,12 @@ where
                             return;
                         }
                     };
+                    if !pool_clone
+                        .enforce_peer_filter(&peer, is_peer_valid.as_ref(), None)
+                        .await
+                    {
+                        return;
+                    }
                     let peer_token = token_response
                         .result
                         .as_str()
@@ -1795,7 +2001,9 @@ where
                     let hash_fn = Arc::clone(&database.hash_function);
                     let elected_master =
                         is_master_in_webrtc_replication(hash_fn, &storage_token, &peer_token).await;
-                    let is_master = if remote_peer_role == "browser" {
+                    let is_master = if handler.is_data_client() {
+                        false
+                    } else if remote_peer_role == "browser" {
                         true
                     } else {
                         elected_master
@@ -2048,14 +2256,15 @@ async fn collection_checkpoints_payload(collections: &[Arc<RxCollection>]) -> Va
     Value::Object(map)
 }
 
-async fn ctox_protocol_response_with_flag(
+async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     collection: Option<&Arc<RxCollection>>,
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
+    rows_fetch_registered: bool,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
-    peer_role: NativePeerRole,
+    handler: &H,
 ) -> Value {
     let collection_payload = if let Some(collection) = collection {
         let checkpoint = collection
@@ -2075,15 +2284,22 @@ async fn ctox_protocol_response_with_flag(
     } else {
         Value::Null
     };
-    ctox_protocol_response_payload_with_flag(
+    let mut payload = ctox_protocol_response_payload_with_flag(
         collection_payload,
         peer_session_id,
         query_demand_loading_enabled,
+        rows_fetch_registered,
         collection_schemas,
         collection_checkpoints,
         storage_generation,
-        peer_role,
-    )
+        handler.local_peer_role(),
+    );
+    if handler.is_data_client() {
+        // Reuse the canonical browser/replica role from the existing protocol.
+        // No execution identity, membership or master authority is advertised.
+        payload["peerSession"]["role"] = Value::String("browser".into());
+    }
+    payload
 }
 
 #[cfg(test)]
@@ -2092,6 +2308,7 @@ fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&st
         collection,
         peer_session_id,
         true,
+        false,
         None,
         None,
         None,
@@ -2103,6 +2320,7 @@ fn ctox_protocol_response_payload_with_flag(
     collection: Value,
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
+    rows_fetch_registered: bool,
     collection_schemas: Option<Value>,
     collection_checkpoints: Option<Value>,
     storage_generation: Option<&str>,
@@ -2116,7 +2334,7 @@ fn ctox_protocol_response_payload_with_flag(
     // is currently enabled. Browsers that see `queryDemandLoadingEnabled: false`
     // MUST fall back to the V1 replication path even when they themselves
     // carry the capability. This is the runtime feature-flag handshake.
-    let advertised_capabilities: Vec<&str> = CTOX_RXDB_NATIVE_CAPABILITIES
+    let mut advertised_capabilities: Vec<&str> = CTOX_RXDB_NATIVE_CAPABILITIES
         .iter()
         .copied()
         .filter(|cap| {
@@ -2125,6 +2343,12 @@ fn ctox_protocol_response_payload_with_flag(
             *cap != CTOX_QUERY_FETCH_CAPABILITY || query_demand_loading_enabled
         })
         .collect();
+    // Rows fetch is optional and independent of query demand-loading. Advertise
+    // it only when a row-window source is already registered. The check is the
+    // same moment as the query feature flag: handshake build, not pool create.
+    if rows_fetch_registered {
+        advertised_capabilities.push(CTOX_ROWS_FETCH_CAPABILITY);
+    }
     let mut payload = serde_json::json!({
         "protocol": CTOX_RXDB_PROTOCOL,
         "capabilities": advertised_capabilities,
@@ -3333,6 +3557,7 @@ mod tests {
             collection_payload,
             Some("rxdb-rs-run-a"),
             true,
+            false,
             None,
             Some(checkpoints_map.clone()),
             Some(storage_generation),
@@ -3605,6 +3830,7 @@ mod tests {
                 Value::Null,
                 Some("session"),
                 true,
+                false,
                 None,
                 None,
                 None,
@@ -3633,6 +3859,7 @@ mod tests {
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
             true,
+            false,
             None,
             None,
             Some("storage-generation-1"),
@@ -3646,6 +3873,7 @@ mod tests {
             serde_json::json!({ "name": "documents" }),
             Some("rxdb-rs-session"),
             true,
+            false,
             Some(local_schemas_two()),
             Some(serde_json::json!({
                 "documents": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "documents" },
@@ -3688,6 +3916,9 @@ mod tests {
     struct MockPeer(String, u64);
 
     struct MockHandler {
+        role: NativePeerRole,
+        local_provider: PlMutex<Option<super::super::LocalSessionProvider<MockPeer>>>,
+        retired: PlMutex<HashSet<MockPeer>>,
         connect: crate::rxjs_compat::RxSubject<MockPeer>,
         disconnect: crate::rxjs_compat::RxSubject<MockPeer>,
         message: crate::rxjs_compat::RxSubject<PeerWithMessage<MockPeer>>,
@@ -3700,7 +3931,14 @@ mod tests {
 
     impl MockHandler {
         fn new() -> StdArc<Self> {
+            Self::with_role(NativePeerRole::CtoxInstance)
+        }
+
+        fn with_role(role: NativePeerRole) -> StdArc<Self> {
             StdArc::new(Self {
+                role,
+                local_provider: PlMutex::new(None),
+                retired: PlMutex::new(HashSet::new()),
                 connect: crate::rxjs_compat::RxSubject::new(),
                 disconnect: crate::rxjs_compat::RxSubject::new(),
                 message: crate::rxjs_compat::RxSubject::new(),
@@ -3735,6 +3973,25 @@ mod tests {
 
     #[async_trait::async_trait]
     impl WebRTCConnectionHandler for MockHandler {
+        fn local_peer_role(&self) -> NativePeerRole {
+            self.role
+        }
+        async fn local_session_credentials(
+            &self,
+            peer: &Self::Peer,
+            nonce: Option<String>,
+        ) -> Result<Option<super::super::LocalSessionCredentials>, RxError> {
+            let provider = self.local_provider.lock().clone();
+            match provider {
+                Some(provider) => provider(peer.clone(), nonce).await.map(Some),
+                None => Ok(None),
+            }
+        }
+
+        fn is_peer_current(&self, peer: &Self::Peer) -> bool {
+            !self.retired.lock().contains(peer)
+        }
+
         // This fixture has no private document fields.
         fn document_fields_for_peer(&self, _: &Self::Peer, _: &str) -> Option<Vec<String>> {
             None
@@ -3777,6 +4034,14 @@ mod tests {
         }
     }
 
+    mod local_session_tests {
+        include!("local_session_tests.rs");
+    }
+
+    mod query_fetch_client_tests {
+        include!("query_fetch_client_tests.rs");
+    }
+
     #[tokio::test]
     async fn lifecycle_owned_auxiliary_contract_cannot_be_registered_twice() {
         let collection =
@@ -3798,11 +4063,38 @@ mod tests {
             .unwrap()
             .clone();
         assert_eq!(
-            installed(String::new(), String::new(), vec![])
+            (installed.handler)(String::new(), String::new(), vec![])
                 .await
                 .unwrap(),
             serde_json::json!("first")
         );
+    }
+
+    #[tokio::test]
+    async fn data_protocol_and_authority_methods_cannot_be_registered_as_public_identity() {
+        let collection =
+            crate::rx_collection::test_support::test_collection_named("identity_namespace").await;
+        let pool = RxWebRTCReplicationPool::new(collection, MockHandler::new());
+        for method in [
+            "masterWrite",
+            "masterChangesSince",
+            "ctoxProtocol",
+            "token",
+            "rxdb.query.fetch",
+            "rxdb.file.fetch",
+            "ctox.sync.authority.v1",
+        ] {
+            assert!(
+                pool.register_identity_request_handler(
+                    method,
+                    Arc::new(|_, _, _| Box::pin(async { Ok(Value::Null) }))
+                )
+                .is_err(),
+                "{method}"
+            );
+        }
+        assert!(pool.auxiliary_request_handlers.lock().is_empty());
+        pool.cancel().await;
     }
 
     #[tokio::test]
@@ -4075,10 +4367,11 @@ mod tests {
             None,
             Some("worker-session"),
             false,
+            false,
             payload.collection_schemas,
             payload.collection_checkpoints,
             Some("worker-storage"),
-            NativePeerRole::WorkjetExecutor,
+            MockHandler::with_role(NativePeerRole::WorkjetExecutor).as_ref(),
         )
         .await;
         assert_eq!(protocol["collection"], Value::Null);
@@ -4136,10 +4429,11 @@ mod tests {
                 None,
                 Some("control-session"),
                 false,
+                false,
                 Some(serde_json::json!({})),
                 Some(serde_json::json!({})),
                 Some(remote_token),
-                NativePeerRole::WorkjetExecutor,
+                MockHandler::with_role(NativePeerRole::WorkjetExecutor).as_ref(),
             )
             .await;
             let mut requests = handler.sent_subject.subscribe();
@@ -4474,6 +4768,44 @@ mod tests {
                 break;
             }
         }
+        pool.register_identity_request_handler(
+            "ctox.business_data.identity.v1",
+            Arc::new(|_, token, _| {
+                Box::pin(async move {
+                    assert!(
+                        token.is_empty(),
+                        "unaccepted peer must not inherit a capability"
+                    );
+                    Ok(serde_json::json!({"publicIdentity":"fixture-key"}))
+                })
+            }),
+        )
+        .unwrap();
+        let mut responses = handler.sent_subject.subscribe();
+        handler.inject_message(
+            "bound-peer",
+            WebRTCMessage {
+                id: "public-identity".into(),
+                method: "ctox.business_data.identity.v1".into(),
+                params: vec![],
+                collection: None,
+            },
+        );
+        let identity = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if let WebRTCWireFrame::Response(response) = responses.next().await.unwrap() {
+                    if response.id == "public-identity" {
+                        break response;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("public identity must not wait for credential admission");
+        assert!(identity.error.is_none());
+        assert_eq!(identity.result["publicIdentity"], "fixture-key");
+        assert!(pool.authenticated_peers.lock().is_empty());
+        assert!(pool.outbound_ready_peers.lock().is_empty());
         handler.inject_message(
             "bound-peer",
             master_changes_since_frame("premature-read", "deferred_bound"),
@@ -4636,6 +4968,45 @@ mod tests {
             ghost.result["collection"],
             serde_json::json!("does_not_exist")
         );
+
+        // An unknown write must not look like an empty conflict list: the
+        // browser would otherwise advance its push checkpoint without storing
+        // this document on the native master.
+        handler.inject_message(
+            "browser-1",
+            WebRTCMessage {
+                id: "req-ghost-write".to_string(),
+                method: "masterWrite".to_string(),
+                params: vec![serde_json::json!([{
+                    "newDocumentState": { "id": "ghost-doc", "_deleted": false },
+                    "assumedMasterState": null
+                }])],
+                collection: Some("does_not_exist".to_string()),
+            },
+        );
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            if handler
+                .sent_responses()
+                .iter()
+                .any(|response| response.id == "req-ghost-write")
+            {
+                break;
+            }
+        }
+        let responses = handler.sent_responses();
+        let ghost_write = responses
+            .iter()
+            .find(|response| response.id == "req-ghost-write")
+            .expect("ghost write answer present");
+        assert_eq!(ghost_write.collection.as_deref(), Some("does_not_exist"));
+        assert_eq!(ghost_write.result["type"], serde_json::json!("ctoxError"));
+        assert_eq!(
+            ghost_write.result["code"],
+            serde_json::json!("RC_WEBRTC_PEER")
+        );
+        assert!(!ghost_write.result.is_array(), "unknown write must not ACK");
 
         pool.cancel().await;
     }
@@ -5022,6 +5393,139 @@ mod tests {
         assert_eq!(storage_touches.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(responses.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert!(pool.tasks.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn inbound_handshakes_progress_while_data_and_auxiliary_capacity_is_full() {
+        let collection =
+            crate::rx_collection::test_support::test_collection_named("handshake-priority").await;
+        let handler = MockHandler::new();
+        let pool = replicate_web_rtc_multi_with_validators(
+            Arc::clone(&collection.database),
+            vec![collection],
+            handler.clone(),
+            None,
+            None,
+            Some("handshake-room".into()),
+            Some(StdArc::<str>::from("native-session")),
+        )
+        .await
+        .unwrap();
+        let data_permits = Arc::clone(&pool.request_semaphore)
+            .acquire_many_owned(MAX_CONCURRENT_REQUEST_TASKS as u32)
+            .await
+            .unwrap();
+        let auxiliary_permits = Arc::clone(&pool.auxiliary_request_semaphore)
+            .acquire_many_owned(MAX_CONCURRENT_AUXILIARY_REQUESTS as u32)
+            .await
+            .unwrap();
+        let mut sent = handler.sent_subject.subscribe();
+        handler.inject_message(
+            "browser",
+            master_changes_since_frame("bulk", "handshake-priority"),
+        );
+        handler.inject_message(
+            "browser",
+            ctox_protocol_frame("protocol", "handshake-priority"),
+        );
+        handler.inject_message(
+            "browser",
+            WebRTCMessage {
+                id: "token".into(),
+                method: "token".into(),
+                params: vec![],
+                collection: None,
+            },
+        );
+        let handshakes = tokio::time::timeout(Duration::from_secs(2), async {
+            let mut received = std::collections::HashSet::new();
+            while received.len() < 2 {
+                if let WebRTCWireFrame::Response(response) = sent.next().await.unwrap() {
+                    assert_ne!(
+                        response.id, "bulk",
+                        "data requests must retain their capacity limit"
+                    );
+                    assert!(response.error.is_none());
+                    match response.id.as_str() {
+                        "protocol" => assert_eq!(response.result["protocol"], CTOX_RXDB_PROTOCOL),
+                        "token" => assert!(response
+                            .result
+                            .as_str()
+                            .is_some_and(|token| !token.is_empty())),
+                        other => panic!("unexpected response {other}"),
+                    }
+                    received.insert(response.id);
+                }
+            }
+        })
+        .await;
+        drop(data_permits);
+        let bulk = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let WebRTCWireFrame::Response(response) = sent.next().await.unwrap() {
+                    if response.id == "bulk" {
+                        break;
+                    }
+                }
+            }
+        })
+        .await;
+        pool.cancel().await;
+        drop(auxiliary_permits);
+        assert!(
+            handshakes.is_ok(),
+            "protocol/token must not wait behind full data capacity"
+        );
+        assert!(
+            bulk.is_ok(),
+            "queued replication must resume after capacity is returned"
+        );
+    }
+
+    #[tokio::test]
+    async fn reserved_handshake_capacity_preserves_session_rejection() {
+        let collection =
+            crate::rx_collection::test_support::test_collection_named("handshake-denial").await;
+        let handler = MockHandler::new();
+        let pool = replicate_web_rtc_multi_with_validators(
+            Arc::clone(&collection.database),
+            vec![collection],
+            handler.clone(),
+            None,
+            Some(StdArc::new(|_, _| WebRTCPeerSessionValidation::Reject)),
+            Some("handshake-room".into()),
+            Some(StdArc::<str>::from("native-session")),
+        )
+        .await
+        .unwrap();
+        let permits = Arc::clone(&pool.request_semaphore)
+            .acquire_many_owned(MAX_CONCURRENT_REQUEST_TASKS as u32)
+            .await
+            .unwrap();
+        let mut sent = handler.sent_subject.subscribe();
+        handler.inject_message(
+            "rejected-browser",
+            ctox_protocol_frame("rejected", "handshake-denial"),
+        );
+        let response = tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if let WebRTCWireFrame::Response(response) = sent.next().await.unwrap() {
+                    if response.id == "rejected" {
+                        break response;
+                    }
+                }
+            }
+        })
+        .await;
+        pool.cancel().await;
+        drop(permits);
+        let response = response.expect("session rejection must not wait for bulk capacity");
+        assert_eq!(
+            response.error.as_deref(),
+            Some("peer_authentication_failed")
+        );
+        assert!(response.result.is_null());
+        assert!(pool.authenticated_peers.lock().is_empty());
     }
 
     #[tokio::test]

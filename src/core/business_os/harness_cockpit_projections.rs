@@ -1,4 +1,6 @@
 //! Lossy delivery, durable sources: no cockpit write participates in admission or finalization.
+#[path = "harness_cockpit_schedule.rs"]
+mod schedule;
 #[cfg(test)]
 #[path = "harness_cockpit_projection_tests.rs"]
 mod tests;
@@ -13,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-#[derive(Clone, Default, serde::Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, serde::Deserialize)]
 #[serde(default)]
 pub(crate) struct WorkerSnapshot {
     pub service_running: bool,
@@ -32,6 +34,9 @@ struct BusinessProjectionWriter {
     payloads: BTreeMap<(String, String), Value>,
     crew_sources: BTreeMap<String, (String, Option<String>, bool)>,
     crew_maintenance_warned: bool,
+    // Append-only ledger position, advanced only after successful delivery.
+    // Periodic replay repairs dropped notifications and in-place source repairs.
+    event_cursor: Option<i64>,
 }
 impl BusinessProjectionWriter {
     fn open(root: &Path) -> Result<Self> {
@@ -78,6 +83,7 @@ impl BusinessProjectionWriter {
             payloads: BTreeMap::new(),
             crew_sources: BTreeMap::new(),
             crew_maintenance_warned: false,
+            event_cursor: None,
         })
     }
     fn upsert_source_projection(
@@ -131,7 +137,48 @@ fn persisted_snapshot(root: &Path) -> Result<WorkerSnapshot> {
 
 struct Pump {
     wake: mpsc::SyncSender<(PathBuf, u8)>,
-    latest: Arc<Mutex<BTreeMap<PathBuf, WorkerSnapshot>>>,
+    latest: Arc<Mutex<BTreeMap<PathBuf, PublishedSnapshot>>>,
+}
+
+struct PublishedSnapshot {
+    snapshot: WorkerSnapshot,
+    publications: u64,
+    changes: u64,
+}
+
+fn record_snapshot(
+    latest: &mut BTreeMap<PathBuf, PublishedSnapshot>,
+    root: &Path,
+    snapshot: WorkerSnapshot,
+) -> bool {
+    use std::collections::btree_map::Entry;
+    match latest.entry(root.to_path_buf()) {
+        Entry::Vacant(entry) => {
+            entry.insert(PublishedSnapshot {
+                snapshot,
+                publications: 1,
+                changes: 1,
+            });
+            true
+        }
+        Entry::Occupied(mut entry) => {
+            let published = entry.get_mut();
+            published.publications += 1;
+            if published.snapshot == snapshot {
+                return false;
+            }
+            published.snapshot = snapshot;
+            published.changes += 1;
+            true
+        }
+    }
+}
+
+#[derive(Default)]
+struct PumpWork {
+    wakes: u64,
+    passes: u64,
+    elapsed: Duration,
 }
 
 const STATUS: u8 = 1;
@@ -147,63 +194,98 @@ fn pump() -> Option<&'static Pump> {
     static PUMP: OnceLock<Option<Pump>> = OnceLock::new();
     PUMP.get_or_init(|| {
         let (wake, receive) = mpsc::sync_channel::<(PathBuf, u8)>(128);
-        let latest = Arc::new(Mutex::new(BTreeMap::<PathBuf, WorkerSnapshot>::new()));
+        let latest = Arc::new(Mutex::new(BTreeMap::<PathBuf, PublishedSnapshot>::new()));
         let snapshots = latest.clone();
         let worker = std::thread::Builder::new()
             .name("cockpit-projections".into())
             .spawn(move || {
                 let mut roots = BTreeSet::<PathBuf>::new();
                 let mut writers = BTreeMap::<PathBuf, BusinessProjectionWriter>::new();
+                let mut schedule = schedule::Schedule::default();
+                let mut work = BTreeMap::<PathBuf, PumpWork>::new();
+                let mut measured_since = Instant::now();
                 let mut next_sweep = Instant::now() + Duration::from_secs(60);
                 loop {
-                    let mut dirty = BTreeMap::<PathBuf, u8>::new();
-                    match receive.recv_timeout(next_sweep.saturating_duration_since(Instant::now()))
+                    match receive.recv_timeout(schedule.wait(Instant::now(), next_sweep))
                     {
                         Ok((root, flags)) => {
-                            dirty.insert(root, flags);
+                            work.entry(root.clone()).or_default().wakes += 1;
+                            schedule.mark(root, flags);
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => {}
                         Err(mpsc::RecvTimeoutError::Disconnected) => break,
                     }
-                    for (root, flags) in receive.try_iter() {
-                        *dirty.entry(root).or_default() |= flags;
+                    // A producer may keep refilling the queue. Bound the drain so
+                    // ready roots and maintenance cannot starve under that load.
+                    for (root, flags) in receive.try_iter().take(128) {
+                        work.entry(root.clone()).or_default().wakes += 1;
+                        schedule.mark(root, flags);
                     }
                     if Instant::now() >= next_sweep {
                         for root in &roots {
-                            dirty.insert(root.clone(), ALL | MAINTENANCE);
+                            schedule.mark(root.clone(), ALL | MAINTENANCE);
                         }
-                        for root in snapshots.lock().unwrap_or_else(|e| e.into_inner()).keys() {
-                            dirty.insert(root.clone(), ALL | MAINTENANCE);
+                        // Never hold the publication lock while logging: worker
+                        // snapshot publication must not wait on the log sink.
+                        let mut publications = {
+                            let mut snapshots = snapshots.lock().unwrap_or_else(|e| e.into_inner());
+                            snapshots.iter_mut().map(|(root, published)| {
+                                let counts = (root.clone(), (published.publications, published.changes));
+                                published.publications = 0;
+                                published.changes = 0;
+                                counts
+                            }).collect::<BTreeMap<_, _>>()
+                        };
+                        for root in roots.iter().chain(work.keys()) {
+                            publications.entry(root.clone()).or_default();
                         }
+                        for (root, (publication_count, change_count)) in publications {
+                            schedule.mark(root.clone(), ALL | MAINTENANCE);
+                            let stats = work.entry(root.clone()).or_default();
+                            eprintln!("[ctox cockpit] root={} interval_ms={} snapshot_publications={} snapshot_changes={} wakes={} passes={} projection_ms={}",
+                                root.display(), measured_since.elapsed().as_millis(),
+                                publication_count, change_count, stats.wakes, stats.passes, stats.elapsed.as_millis());
+                        }
+                        work.clear();
+                        measured_since = Instant::now();
                         next_sweep = Instant::now() + Duration::from_secs(60);
                     }
-                    for (root, mut flags) in dirty {
+                    for (root, mut flags) in schedule.take_ready(Instant::now()) {
                         if !crate::paths::core_db(&root).is_file() {
+                            schedule.forget(&root);
+                            work.remove(&root);
                             continue;
                         }
                         if roots.insert(root.clone()) {
-                            flags |= ALL;
+                            flags |= ALL | MAINTENANCE;
                         }
                         let snapshot = snapshots
                             .lock()
                             .unwrap_or_else(|e| e.into_inner())
                             .get(&root)
-                            .cloned();
+                            .map(|published| published.snapshot.clone());
+                        let started = Instant::now();
+                        let mut timing = ProjectionTiming::new(&root, flags);
                         let outcome = (|| -> Result<()> {
-                            let snapshot = snapshot
+                            let snapshot = timing.phase("snapshot", || snapshot
                                 .map(Ok)
-                                .unwrap_or_else(|| persisted_snapshot(&root))?;
+                                .unwrap_or_else(|| persisted_snapshot(&root)))?;
                             if !writers.contains_key(&root) {
                                 writers
-                                    .insert(root.clone(), BusinessProjectionWriter::open(&root)?);
+                                    .insert(root.clone(), timing.phase("writer_open", || BusinessProjectionWriter::open(&root))?);
                             }
-                            refresh_selected(
+                            refresh_measured(
                                 &root,
                                 &snapshot,
                                 writers.get_mut(&root).expect("inserted writer"),
                                 flags,
+                                &mut timing,
                             )
                         })();
+                        let stats = work.entry(root.clone()).or_default();
+                        stats.passes += 1;
+                        stats.elapsed += started.elapsed();
+                        schedule.completed(root.clone(), Instant::now());
                         if let Err(error) = outcome {
                             eprintln!(
                                 "[ctox cockpit] projection deferred for {}: {error:#}",
@@ -218,6 +300,10 @@ fn pump() -> Option<&'static Pump> {
                         .collect::<BTreeSet<_>>();
                     roots.retain(|root| !removed.contains(root));
                     writers.retain(|root, _| !removed.contains(root));
+                    for root in &removed {
+                        schedule.forget(root);
+                        work.remove(root);
+                    }
                     snapshots
                         .lock()
                         .unwrap_or_else(|e| e.into_inner())
@@ -247,6 +333,13 @@ fn wake(root: &Path, flags: u8) {
     }
 }
 pub(crate) fn schedule_flow_refresh(root: &Path, kind: &str) {
+    let flags = flow_refresh_flags(kind);
+    if flags != 0 {
+        wake(root, flags);
+    }
+}
+
+fn flow_refresh_flags(kind: &str) -> u8 {
     let chat = matches!(
         kind,
         "worker.plan_updated" | "worker.turn_started" | "cockpit.review"
@@ -255,10 +348,10 @@ pub(crate) fn schedule_flow_refresh(root: &Path, kind: &str) {
         kind,
         "crew_selected" | "crew.selected" | "crew_selection_unavailable"
     );
-    wake(
-        root,
-        EVENTS | if chat { CHAT } else { 0 } | if crew { STATUS | QUEUE } else { 0 },
-    );
+    if event_kind(kind).is_none() && !chat && !crew {
+        return 0;
+    }
+    EVENTS | if chat { CHAT } else { 0 } | if crew { STATUS | QUEUE } else { 0 }
 }
 pub(crate) fn schedule_runs_refresh(root: &Path) {
     wake(root, RUNS | STATUS);
@@ -293,14 +386,22 @@ pub(crate) fn schedule_refresh(root: &Path) {
     wake(root, STATUS | QUEUE | CHAT);
 }
 
+// Continue a bounded chat page through the same per-root pump throttle.
+pub(super) fn schedule_chat_refresh(root: &Path) {
+    wake(root, CHAT);
+}
+
 /// Only a short in-memory update and a nonblocking wake, including when called under SharedState.
 pub(crate) fn publish_worker_snapshot(root: &Path, snapshot: WorkerSnapshot) {
     if let Some(pump) = pump() {
-        pump.latest
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(root.to_path_buf(), snapshot);
-        wake(root, STATUS);
+        let changed = record_snapshot(
+            &mut pump.latest.lock().unwrap_or_else(|e| e.into_inner()),
+            root,
+            snapshot,
+        );
+        if changed {
+            wake(root, STATUS);
+        }
     }
 }
 
@@ -378,13 +479,69 @@ fn core(root: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+#[cfg(test)]
 fn refresh_selected(
     root: &Path,
     snapshot: &WorkerSnapshot,
     writer: &mut BusinessProjectionWriter,
     flags: u8,
 ) -> Result<()> {
-    let conn = core(root)?;
+    let mut timing = ProjectionTiming::new(root, flags);
+    refresh_measured(root, snapshot, writer, flags, &mut timing)
+}
+
+/// Pump-thread wall time, including failed phases. No payloads or task content
+/// enter diagnostics. Coalesced passes report every phase, rather than blaming the
+/// event cursor for work done by status, run joins or store initialization.
+struct ProjectionTiming<'a> {
+    root: &'a Path,
+    flags: u8,
+    started: Instant,
+    phases: Vec<(&'static str, Duration)>,
+}
+impl<'a> ProjectionTiming<'a> {
+    fn new(root: &'a Path, flags: u8) -> Self {
+        Self {
+            root,
+            flags,
+            started: Instant::now(),
+            phases: Vec::new(),
+        }
+    }
+    fn phase<T>(&mut self, name: &'static str, work: impl FnOnce() -> Result<T>) -> Result<T> {
+        let started = Instant::now();
+        let result = work();
+        self.phases.push((name, started.elapsed()));
+        result
+    }
+}
+impl Drop for ProjectionTiming<'_> {
+    fn drop(&mut self) {
+        // The per-root scheduler bounds this to one line per three seconds;
+        // record fast passes too so field measurements have a denominator.
+        let phases = self
+            .phases
+            .iter()
+            .map(|(name, elapsed)| format!("{name}_us={}", elapsed.as_micros()))
+            .collect::<Vec<_>>()
+            .join(" ");
+        eprintln!(
+            "[ctox cockpit phases] root={} flags={} total_us={} {phases}",
+            self.root.display(),
+            self.flags,
+            self.started.elapsed().as_micros()
+        );
+    }
+}
+
+fn refresh_measured(
+    root: &Path,
+    snapshot: &WorkerSnapshot,
+    writer: &mut BusinessProjectionWriter,
+    flags: u8,
+    timing: &mut ProjectionTiming<'_>,
+) -> Result<()> {
+    let conn = timing.phase("core_open", || core(root))?;
     if !has_table(&conn, "communication_routing_state")? {
         return Ok(());
     }
@@ -392,7 +549,7 @@ fn refresh_selected(
         // Maintenance must never suppress unrelated cockpit projections. Older
         // databases have attempts but no tombstone outbox until their migration.
         let maintenance =
-            (|| -> Result<()> {
+            timing.phase("retain_attempts", || -> Result<()> {
                 if !has_table(&conn, "crew_attempts")?
                     || !has_table(&conn, "crew_projection_tombstones")?
                 {
@@ -417,7 +574,7 @@ fn refresh_selected(
                     }
                 }
                 Ok(())
-            })();
+            });
         match maintenance {
             Ok(()) => writer.crew_maintenance_warned = false,
             Err(_) if !writer.crew_maintenance_warned => {
@@ -428,45 +585,54 @@ fn refresh_selected(
         }
     }
     if flags & STATUS != 0 {
-        project_status(root, &conn, writer, snapshot)?;
+        timing.phase("project_status", || {
+            project_status(root, &conn, writer, snapshot)
+        })?;
     }
     if flags & EVENTS != 0 {
         // The outbox also marks the lifecycle migration: PR-59 attempts do not
         // yet have started_at. Their existing events can still be projected.
-        if has_table(&conn, "crew_attempts")?
+        if flags & MAINTENANCE != 0
+            && has_table(&conn, "crew_attempts")?
             && has_table(&conn, "crew_projection_tombstones")?
             && has_table(&conn, "ctox_harness_flow_events")?
         {
-            crate::crew::repair_selection_events(root, &conn)?;
+            timing.phase("repair_selection_events", || {
+                crate::crew::repair_selection_events(root, &conn)
+            })?;
         }
-        project_events(root, &conn, writer)?;
+        timing.phase("project_events", || {
+            project_events_since(root, &conn, writer, flags & MAINTENANCE != 0)
+        })?;
     }
     if flags & RUNS != 0 {
-        project_runs(root, &conn, writer)?;
+        timing.phase("project_runs", || project_runs(root, &conn, writer))?;
     }
     if flags & (STATUS | QUEUE) != 0 && has_table(&conn, "crew_members")? {
-        project_crew(root, &conn, writer)?;
+        timing.phase("project_crew", || project_crew(root, &conn, writer))?;
     }
     if flags & CHAT != 0 && has_table(&conn, "ctox_harness_flow_events")? {
-        super::chat::project(root, &conn)?;
+        timing.phase("project_chat", || super::chat::project(root, &conn))?;
     }
     let mut collections = Vec::new();
     if flags & QUEUE != 0 {
         collections.push("ctox_queue_tasks");
     }
-    if flags & EVENTS != 0 {
+    if flags & EVENTS != 0 && flags & MAINTENANCE != 0 {
         collections.push("ctox_harness_events");
     }
     if flags & RUNS != 0 {
         collections.push("ctox_runs");
     }
-    retain_selected(
-        root,
-        &conn,
-        writer,
-        Utc::now().timestamp_millis(),
-        &collections,
-    )?;
+    timing.phase("retain_selected", || {
+        retain_selected(
+            root,
+            &conn,
+            writer,
+            Utc::now().timestamp_millis(),
+            &collections,
+        )
+    })?;
     Ok(())
 }
 
@@ -599,6 +765,8 @@ fn event_kind(kind: &str) -> Option<&'static str> {
         "worker.phase" | "worker.turn_started" => "phase",
         "crew.selected" | "crew_selected" => "crew_selected",
         "crew_selection_unavailable" => "crew_selection_unavailable",
+        "crew.memory_read" => "memory_read",
+        "crew.learning" => "learning",
         _ => return None,
     })
 }
@@ -607,20 +775,68 @@ fn event_kind(kind: &str) -> Option<&'static str> {
 // all active tasks/runs when their count exceeds the terminal retention limit.
 const PROJECTION_PAGE_SIZE: i64 = 128;
 
+// Drive from the rowid range, then probe routing by its primary key. Selecting
+// the task/time index to satisfy message-key ordering would rescan history on
+// empty deltas; NOT INDEXED still permits SQLite's integer-primary-key lookup.
+const CHANGED_EVENT_TASKS_SQL: &str =
+    "SELECT DISTINCT e.message_key FROM ctox_harness_flow_events e NOT INDEXED
+     CROSS JOIN communication_routing_state r ON r.message_key=e.message_key
+     WHERE e.rowid>?1 AND e.rowid<=?2 AND e.message_key>?3
+       AND (r.route_status NOT IN ('handled','failed','cancelled')
+            OR julianday(r.updated_at)>=julianday('now','-1 day'))
+     ORDER BY e.message_key LIMIT ?4";
+
+const EXCESS_TASK_EVENTS_SQL: &str =
+    "SELECT record_id FROM business_records INDEXED BY idx_cockpit_event_task_time
+     WHERE collection='ctox_harness_events' AND deleted=0
+       AND json_extract(payload_json,'$.task_id')=?1
+     ORDER BY json_extract(payload_json,'$.created_at_ms') DESC,record_id DESC
+     LIMIT 128 OFFSET 200";
+
+#[cfg(test)]
 fn project_events(
     root: &Path,
     conn: &Connection,
     writer: &mut BusinessProjectionWriter,
 ) -> Result<()> {
+    project_events_since(root, conn, writer, true)
+}
+
+fn project_events_since(
+    root: &Path,
+    conn: &Connection,
+    writer: &mut BusinessProjectionWriter,
+    replay: bool,
+) -> Result<()> {
     if !has_table(conn, "ctox_harness_flow_events")? {
         return Ok(());
     }
+    // Rowid tracks insertion order, not source timestamps: late/backdated
+    // events are still seen. Capture before reading; concurrent inserts remain
+    // eligible on the next pass. A regressed high-water mark forces replay;
+    // periodic replay also covers same-size ledger replacement/source repairs.
+    let high_water: i64 = conn.query_row(
+        "SELECT COALESCE(MAX(rowid),0) FROM ctox_harness_flow_events",
+        [],
+        |row| row.get(0),
+    )?;
+    let since = writer
+        .event_cursor
+        .filter(|previous| !replay && *previous <= high_water);
+    let mut delivered = true;
     let mut cursor = String::new();
     loop {
         // Short turns may finish before the pump wakes. Replay recent terminal
         // tasks as well; explicit false eligibility always excludes an event.
-        let tasks = conn
-            .prepare(
+        let tasks = if let Some(since) = since {
+            conn.prepare(CHANGED_EVENT_TASKS_SQL)?
+                .query_map(
+                    params![since, high_water, cursor, PROJECTION_PAGE_SIZE],
+                    |row| row.get::<_, String>(0),
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?
+        } else {
+            conn.prepare(
                 "SELECT message_key FROM communication_routing_state
              WHERE message_key > ?1
                AND (route_status NOT IN ('handled','failed','cancelled')
@@ -630,7 +846,8 @@ fn project_events(
             .query_map(params![cursor, PROJECTION_PAGE_SIZE], |row| {
                 row.get::<_, String>(0)
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+            .collect::<rusqlite::Result<Vec<_>>>()?
+        };
         if tasks.is_empty() {
             break;
         }
@@ -645,7 +862,8 @@ fn project_events(
                        'worker.turn_started','worker.tool_started','worker.tool_completed',
                        'worker.thinking_started','worker.thinking','worker.plan_updated',
                        'worker.token_usage','worker.turn_completed','worker.phase',
-                       'crew.selected','crew_selected','crew_selection_unavailable')
+                       'crew.selected','crew_selected','crew_selection_unavailable',
+                       'crew.memory_read','crew.learning')
                  ORDER BY created_at DESC, event_id DESC LIMIT 200",
             )?;
             let events = statement
@@ -701,10 +919,45 @@ fn project_events(
                         "created_at_ms":created_at_ms,"updated_at_ms":created_at_ms
                     }),
                 )?;
+                delivered &= writer.inner.delivered_to_rxdb("ctox_harness_events");
             }
+            // Enforce the per-task cap immediately with the task/time index.
+            // The expensive cross-task age/window sweep stays on maintenance.
+            delivered &= retain_task_events(writer, &task)?;
         }
     }
+    if delivered {
+        writer.event_cursor = Some(high_water);
+    }
     Ok(())
+}
+
+fn retain_task_events(writer: &mut BusinessProjectionWriter, task: &str) -> Result<bool> {
+    let mut delivered = true;
+    loop {
+        let ids = writer
+            .inner
+            .source_connection()
+            .prepare(EXCESS_TASK_EVENTS_SQL)?
+            .query_map([task], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        if ids.is_empty() {
+            break;
+        }
+        // Keep the source rows retryable if the collection is not ready yet.
+        if !writer.inner.delivered_to_rxdb("ctox_harness_events") {
+            return Ok(false);
+        }
+        for id in ids {
+            writer.tombstone_source_projection(
+                "ctox_harness_events",
+                &id,
+                Utc::now().timestamp_millis(),
+            )?;
+            delivered &= writer.inner.delivered_to_rxdb("ctox_harness_events");
+        }
+    }
+    Ok(delivered)
 }
 
 /// Resolve the plan at the event's time, not the task's newest revision. This
@@ -749,6 +1002,41 @@ fn event_step_position(
         .map(|position| position + 1)))
 }
 
+fn finalized_runs_sql(crew: bool) -> String {
+    let pending_crew = if crew {
+        "EXISTS(SELECT 1 FROM crew_attempts c WHERE c.attempt_id=f.attempt_id AND c.finalized_at IS NULL) OR"
+    } else {
+        ""
+    };
+    // json_extract has no affinity. The unary + removes the outer TEXT
+    // column's affinity (without changing its value), matching bound-string
+    // attempt lookups and letting SQLite seek idx_cockpit_flow_attempt.
+    // Without it each correlated subquery scans the entire flow ledger.
+    format!(
+        "SELECT f.attempt_id,
+                    (SELECT e.work_id FROM ctox_harness_flow_events e
+                     WHERE json_extract(e.metadata_json,'$.attempt_id')=+f.attempt_id
+                       AND e.work_id IS NOT NULL ORDER BY e.created_at LIMIT 1),
+                    f.status, f.agent_outcome, f.created_at,
+                    COALESCE(f.terminal_at,f.updated_at), f.error_text, f.resumable,
+                    (SELECT e.message_key FROM ctox_harness_flow_events e
+                     WHERE json_extract(e.metadata_json,'$.attempt_id')=+f.attempt_id
+                       AND e.message_key IS NOT NULL ORDER BY e.created_at LIMIT 1)
+             FROM worker_attempt_finalizations f
+             WHERE f.attempt_id>?1 AND f.status!='finalizing'
+               AND ({pending_crew} f.attempt_id IN (
+                        SELECT attempt_id FROM worker_attempt_finalizations
+                        WHERE status!='finalizing'
+                        ORDER BY COALESCE(terminal_at,updated_at) DESC, attempt_id DESC LIMIT 500)
+                    OR EXISTS (
+                        SELECT 1 FROM ctox_harness_flow_events e
+                        JOIN communication_routing_state r ON r.message_key=e.message_key
+                        WHERE json_extract(e.metadata_json,'$.attempt_id')=+f.attempt_id
+                          AND r.route_status NOT IN ('handled','failed','cancelled')))
+             ORDER BY f.attempt_id LIMIT ?2"
+    )
+}
+
 fn project_runs(
     root: &Path,
     conn: &Connection,
@@ -765,34 +1053,8 @@ fn project_runs(
         // The bounded recent set plus an indexed EXISTS retains every active run.
         // Pending identity accounting is independent of the 500 visible-run cap.
         // A long offline interval must not silently lose crew statistics.
-        let pending_crew = if has_table(conn, "crew_attempts")? {
-            "EXISTS(SELECT 1 FROM crew_attempts c WHERE c.attempt_id=f.attempt_id AND c.finalized_at IS NULL) OR"
-        } else {
-            ""
-        };
-        let mut statement = conn.prepare(&format!(
-            "SELECT f.attempt_id,
-                    (SELECT e.work_id FROM ctox_harness_flow_events e
-                     WHERE json_extract(e.metadata_json,'$.attempt_id')=f.attempt_id
-                       AND e.work_id IS NOT NULL ORDER BY e.created_at LIMIT 1),
-                    f.status, f.agent_outcome, f.created_at,
-                    COALESCE(f.terminal_at,f.updated_at), f.error_text, f.resumable,
-                    (SELECT e.message_key FROM ctox_harness_flow_events e
-                     WHERE json_extract(e.metadata_json,'$.attempt_id')=f.attempt_id
-                       AND e.message_key IS NOT NULL ORDER BY e.created_at LIMIT 1)
-             FROM worker_attempt_finalizations f
-             WHERE f.attempt_id>?1 AND f.status!='finalizing'
-               AND ({pending_crew} f.attempt_id IN (
-                        SELECT attempt_id FROM worker_attempt_finalizations
-                        WHERE status!='finalizing'
-                        ORDER BY COALESCE(terminal_at,updated_at) DESC, attempt_id DESC LIMIT 500)
-                    OR EXISTS (
-                        SELECT 1 FROM ctox_harness_flow_events e
-                        JOIN communication_routing_state r ON r.message_key=e.message_key
-                        WHERE json_extract(e.metadata_json,'$.attempt_id')=f.attempt_id
-                          AND r.route_status NOT IN ('handled','failed','cancelled')))
-             ORDER BY f.attempt_id LIMIT ?2"
-        ))?;
+        let sql = finalized_runs_sql(has_table(conn, "crew_attempts")?);
+        let mut statement = conn.prepare(&sql)?;
         let rows = statement
             .query_map(params![cursor, PROJECTION_PAGE_SIZE], |r| {
                 Ok((
@@ -958,6 +1220,28 @@ fn project_crew(
         } else {
             "home"
         };
+        // Memory (LCM continuity of the member) and the derived field of work:
+        // the modules it succeeded in most, from its finalized attempts.
+        // Read through the pump's own connection: no LCM engine (and no
+        // migration write lock) inside the projection pass.
+        let memory = crate::crew::load_member_memory_from_conn(conn, &member.id);
+        let domain = conn
+            .prepare(
+                "SELECT module FROM crew_attempts
+                 WHERE member_id=?1 AND finalized_at IS NOT NULL AND succeeded=1 AND module IS NOT NULL AND module!=''
+                 GROUP BY module ORDER BY COUNT(*) DESC, module LIMIT 3",
+            )?
+            .query_map([&member.id], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        // Expression stamps: read at attempt start, learned after the tick.
+        let (last_memory_read_at, last_learning_at): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT last_memory_read_at,last_learning_at FROM crew_members WHERE id=?1",
+                [&member.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap_or((None, None));
+        let stamp_ms = |value: Option<String>| value.as_deref().and_then(millis);
         writer.upsert_source_projection(
             "ctox_crew_members",
             &member.id,
@@ -966,6 +1250,13 @@ fn project_crew(
                 "id":member.id,"name":member.name,"shape":member.shape,"color":member.color,
                 "archived":member.archived,"state":state,"active_task_id":active,
                 "soul":member.soul,"specialties":member.specialties,"stats":member.stats,
+                "memory":{"anchors":memory.anchors,"narrative":memory.narrative,
+                    "anchor_count":crate::crew::anchor_lines(&memory.anchors).len(),
+                    "experience_count":crate::crew::narrative_lines(&memory.narrative).len(),
+                    "updated_at":memory.updated_at},
+                "domain":domain,
+                "last_memory_read_at_ms":stamp_ms(last_memory_read_at),
+                "last_learning_at_ms":stamp_ms(last_learning_at),
                 "updated_at_ms":updated
             }),
         )?;
@@ -1111,6 +1402,11 @@ fn retain_selected(
     now: i64,
     collections: &[&str],
 ) -> Result<()> {
+    // STATUS-only wakes have nothing to retain. In particular, do not open and
+    // initialize another Business OS store merely to iterate an empty list.
+    if collections.is_empty() {
+        return Ok(());
+    }
     let business = store::open_store(root)?;
     // Function-local, unpooled connection: Drop detaches cockpit_core on every
     // return path, including errors. No attachment survives into another sweep.

@@ -23,6 +23,12 @@ exists because an agent broke it in good faith and shipped a regression.
    master election or execution ownership. The signed Sync control contract
    authenticates the configured key after connection.
 
+   A query-only native data consumer may explicitly use `connect_data_peer`
+   in data-client mode with the existing browser/replica protocol role. It
+   requires current browser signaling admission and a CTOX-instance target;
+   only this client offers, without changing the passive native responder or
+   execution lower-ID rule. It cannot attach execution or become master.
+
 3. **Native is always master toward `role=browser` peers.** The hash election
    applies only between non-browser peers; an empty token answer is a
    handshake failure. Do not "simplify" the election.

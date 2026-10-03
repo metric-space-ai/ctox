@@ -1,9 +1,10 @@
 {
   "id": "ctox",
-  "title": "CTOX",
-  "description": "Native control surface for queues, runs, sync state, and agent context.",
+  "title": "Crew",
+  "description": "Deine Crew, ihre Aufgaben, Fortschritte und Ergebnisse.",
   "entry": "modules/ctox/index.html",
   "collections": [
+    "communication_accounts",
     "business_commands",
     "business_chats",
     "ctox_runtime_settings",
@@ -22,6 +23,9 @@
     "business_module_commits",
     "business_module_source_blob_chunks",
     "workjet_projects",
+    "workjet_project_chats",
+    "workjet_project_workers",
+    "workjet_worker_profile_bindings",
     "workjet_working_copies",
     "workjet_computers",
     "workjet_sessions",
@@ -37,12 +41,7 @@
     "default_width": 1320,
     "default_height": 860,
     "min_width": 640,
-    "min_height": 480,
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/ctox.jpg",
-    "icon_asset_sha256": "595492dd0ab23f3db59a0ebe9a6ec8062b1b2a80cbc54f566ee32b0501bcf0ce",
-    "icon_selection_sha256": "595492dd0ab23f3db59a0ebe9a6ec8062b1b2a80cbc54f566ee32b0501bcf0ce",
-    "icon_selection_candidate": "candidate-02",
-    "icon_asset_kind": "raster-reference"
+    "min_height": 480
   },
   "category": "System",
   "version": "1.1.2",
@@ -55,7 +54,7 @@
     "governance"
   ],
   "store": {
-    "summary": "Native CTOX control surface for queue tasks, runs, module reports, releases, and source evidence.",
+    "summary": "Aufgaben an die Crew übergeben, ihre Arbeit verfolgen und Ergebnisse prüfen.",
     "repository": "metric-space-ai/ctox",
     "source_path": "modules/ctox",
     "installable": false,

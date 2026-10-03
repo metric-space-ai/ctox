@@ -1,0 +1,98 @@
+{
+  "mode": "multiplex-reload-browser-to-rust",
+  "commandId": "source_lossless_1788768432681",
+  "documents": 21,
+  "verifiedBytes": 11130431,
+  "commandMs": 347,
+  "totalMs": 1069.1999999284744,
+  "nativeVerifiedBeforeRestart": 21,
+  "nativeVerifiedAfterRestart": 21,
+  "nativeRestartMs": 3286,
+  "multiplexReload": {
+    "names": [
+      "sync_reload_probe_00",
+      "sync_reload_probe_01",
+      "sync_reload_probe_02",
+      "sync_reload_probe_03",
+      "sync_reload_probe_04",
+      "sync_reload_probe_05",
+      "sync_reload_probe_06",
+      "sync_reload_probe_07",
+      "sync_reload_probe_08",
+      "sync_reload_probe_09",
+      "sync_reload_probe_10",
+      "sync_reload_probe_11",
+      "sync_reload_probe_12",
+      "sync_reload_probe_13",
+      "sync_reload_probe_14",
+      "sync_reload_probe_15",
+      "sync_reload_probe_16",
+      "sync_reload_probe_17",
+      "sync_reload_probe_18",
+      "sync_reload_probe_19",
+      "sync_reload_probe_20"
+    ],
+    "samples": [
+      {
+        "completedCollections": 21,
+        "leads": 36,
+        "revision": 1,
+        "threadStates": 3911,
+        "commandTimings": [
+          847,
+          847.6999999284744,
+          472.5,
+          320.60000002384186,
+          374.10000002384186,
+          266.89999997615814,
+          365.7999999523163,
+          510.60000002384186,
+          343.39999997615814,
+          332.8000000715256
+        ],
+        "reloadMs": 15292,
+        "round": 0
+      },
+      {
+        "completedCollections": 21,
+        "leads": 19,
+        "revision": 23,
+        "threadStates": 3911,
+        "commandTimings": [
+          1090.1000000238419,
+          805.2999999523163,
+          425.5,
+          469,
+          569,
+          473.3000000715256,
+          374.10000002384186,
+          466.7999999523163,
+          367,
+          329.7999999523163
+        ],
+        "reloadMs": 18290,
+        "round": 1
+      },
+      {
+        "completedCollections": 21,
+        "leads": 19,
+        "revision": 23,
+        "threadStates": 3911,
+        "commandTimings": [
+          1120.5,
+          834.7999999523163,
+          414.89999997615814,
+          551.2000000476837,
+          589.7000000476837,
+          385.6999999284744,
+          397.7000000476837,
+          357.89999997615814,
+          500.5,
+          455.5
+        ],
+        "reloadMs": 19397,
+        "round": 2
+      }
+    ]
+  }
+}

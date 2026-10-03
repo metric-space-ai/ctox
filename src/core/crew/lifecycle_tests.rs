@@ -38,6 +38,7 @@ fn crew_migration_keeps_flow_ledger_lazy_until_admission() -> Result<()> {
         &json!({}),
         None,
         "Inspect",
+        None,
     )?;
     assert!(conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='idx_crew_selection_event_attempt')",
@@ -69,7 +70,8 @@ fn crew_unavailable_continues_without_retry_or_identity_and_warns_once() -> Resu
             None,
             &json!({}),
             None,
-            "Inspect"
+            "Inspect",
+            None,
         )
         .is_none());
     }
@@ -113,7 +115,8 @@ fn crew_corrupt_profile_is_skipped_and_other_members_can_work() -> Result<()> {
             None,
             &json!({}),
             None,
-            "Inspect"
+            "Inspect",
+            None,
         )
         .is_some());
     }
@@ -150,6 +153,7 @@ fn crew_retry_scores_again_and_consumes_assignment_once() -> Result<()> {
         &metadata,
         None,
         "Inspect",
+        None,
     )?;
     let columns:(String,Option<String>)=conn.query_row("SELECT crew_member_id,crew_assigned_member_id FROM communication_routing_state WHERE message_key=?1", [&task],|r|Ok((r.get(0)?,r.get(1)?)))?;
     assert_eq!(columns, ("crew-milo".into(), None));
@@ -177,6 +181,7 @@ fn crew_retry_scores_again_and_consumes_assignment_once() -> Result<()> {
         &metadata,
         None,
         "Inspect",
+        None,
     )?;
     let second: String = conn.query_row(
         "SELECT member_id FROM crew_attempts WHERE attempt_id='retry'",
@@ -210,9 +215,10 @@ fn crew_continuity_ignores_never_started_attempts() -> Result<()> {
         &json!({}),
         None,
         "Inspect",
+        None,
     )?
     .unwrap();
-    assert!(!block.contains("Name: Pico"));
+    assert_ne!(block.member_name, "Pico");
     Ok(())
 }
 
@@ -229,6 +235,7 @@ fn crew_continuity_kind_and_reason_survive_event_repair() -> Result<()> {
         &json!({}),
         None,
         "Inspect",
+        None,
     )?;
     let audit = || -> Result<(String, String)> {
         Ok(conn.query_row("SELECT title,json_extract(metadata_json,'$.selection_kind') FROM ctox_harness_flow_events WHERE event_kind='crew_selected' AND json_extract(metadata_json,'$.attempt_id')='continued'", [], |r|Ok((r.get(0)?,r.get(1)?)))?)
@@ -361,25 +368,101 @@ fn crew_prose_normalizes_injection_and_rejects_credential_and_path_patterns() {
 }
 
 #[test]
-fn crew_unconfirmed_context_never_crosses_thread_or_becomes_global() -> Result<()> {
-    let conn = super::tests::fixture();
-    for (id, scope) in [
-        ("global", "{}"),
-        ("thread-a", "{\"thread_key\":\"A\"}"),
-        ("module", "{\"module\":\"reports\"}"),
-    ] {
-        conn.execute("INSERT INTO crew_member_learnings(id,member_id,text,normalized_text,kind,scope_json,evidence_run_id,created_at)
-            VALUES(?1,'crew-milo',?1,?1,'pitfall',?2,'run','2026')",params![id,scope])?;
-    }
-    let task = TaskTraits {
-        thread_key: Some("B".into()),
-        module: Some("reports".into()),
-        ..Default::default()
-    };
-    assert_eq!(
-        load_context_learnings(&conn, "crew-milo", &task)?,
-        vec![("module".into(), false)]
+fn crew_learning_tick_writes_anchors_and_experience_into_member_memory() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    std::fs::create_dir_all(root.path().join("runtime"))?;
+    let conn = Connection::open(crate::paths::core_db(root.path()))?;
+    conn.execute_batch("CREATE TABLE communication_routing_state(message_key TEXT PRIMARY KEY,route_status TEXT,leased_at TEXT)")?;
+    ensure_schema(&conn)?;
+    let learnings = serde_json::json!([{"text":"Vor dem Import das Schema prüfen.","kind":"insight","scope":{"module":"reports"}}]).to_string();
+    conn.execute(
+        "INSERT INTO crew_attempts(attempt_id,task_id,member_id,module,selected_at,finalized_at,succeeded,review_passed,elapsed_ms,retrospective,learning_json,learning_due,task_summary)
+         VALUES('attempt','task','crew-milo','reports','2026-09-05T12:00:00Z','2026-09-05T12:01:00Z',1,1,60000,'Schema geprüft.',?1,1,'[reports] Kundenliste importieren')",
+        [&learnings],
+    )?;
+    let settings = std::collections::BTreeMap::new();
+    let outcome = run_learning_tick(root.path(), &settings)?.expect("one due attempt");
+    assert_eq!(outcome.member_id, "crew-milo");
+    assert_eq!(outcome.anchors_added, 1);
+    assert!(
+        outcome.error.is_some(),
+        "tests skip the model refresh honestly"
     );
+    assert!(
+        run_learning_tick(root.path(), &settings)?.is_none(),
+        "claimed once"
+    );
+    let engine = open_engine(root.path())?;
+    let memory = load_member_memory(&engine, "crew-milo");
+    let lines = anchor_lines(&memory.anchors);
+    assert_eq!(
+        lines,
+        vec!["[hypothesis] Vor dem Import das Schema prüfen.".to_string()]
+    );
+    assert!(memory.anchors.contains("scope: module=reports"));
+    let messages = engine
+        .snapshot(member_conversation_id("crew-milo"))?
+        .messages;
+    assert!(messages
+        .iter()
+        .any(|m| m.content.contains("Kundenliste importieren")
+            && m.content.contains("Review bestanden")));
+    let due: i64 = conn.query_row(
+        "SELECT learning_due FROM crew_attempts WHERE attempt_id='attempt'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(due, 0);
+    let recent = recent_attempts(&conn, "crew-milo", 6)?;
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0].task_summary, "[reports] Kundenliste importieren");
+    Ok(())
+}
+
+#[test]
+fn crew_legacy_learnings_move_into_member_anchors_once() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    std::fs::create_dir_all(root.path().join("runtime"))?;
+    let conn = Connection::open(crate::paths::core_db(root.path()))?;
+    conn.execute_batch("CREATE TABLE communication_routing_state(message_key TEXT PRIMARY KEY,route_status TEXT,leased_at TEXT)")?;
+    ensure_schema(&conn)?;
+    for (id, scope, confirmed) in [
+        ("global", "{}", 1),
+        ("thread-a", "{\"thread_key\":\"A\"}", 0),
+        ("module", "{\"module\":\"reports\"}", 0),
+    ] {
+        conn.execute("INSERT INTO crew_member_learnings(id,member_id,text,normalized_text,kind,scope_json,evidence_run_id,created_at,confirmed_by_owner)
+            VALUES(?1,'crew-milo',?1,?1,'pitfall',?2,'run','2026',?3)",params![id,scope,confirmed])?;
+    }
+    let engine = open_engine(root.path())?;
+    assert_eq!(
+        migrate_learnings_into_memory(&conn, &engine, "crew-milo")?,
+        3
+    );
+    assert_eq!(
+        migrate_learnings_into_memory(&conn, &engine, "crew-milo")?,
+        0
+    );
+    let memory = load_member_memory(&engine, "crew-milo");
+    let lines = anchor_lines(&memory.anchors);
+    assert_eq!(lines.len(), 3, "{}", memory.anchors);
+    assert!(
+        lines.iter().any(|line| line == "[owner_confirmed] global"),
+        "{lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "[hypothesis] module"),
+        "{lines:?}"
+    );
+    assert!(memory.anchors.contains("scope: module=reports"));
+    assert!(memory.anchors.contains("scope: thread=A"));
+    let member = members(&conn)?
+        .into_iter()
+        .find(|m| m.id == "crew-milo")
+        .unwrap();
+    let block = render_memory_block(&member, &memory, &[]).unwrap();
+    assert!(block.contains("[owner_confirmed] global"));
+    assert!(block.starts_with("<ctox_crew_memory member=\"Milo\">"));
     Ok(())
 }
 

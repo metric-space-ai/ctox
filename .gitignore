@@ -63,6 +63,7 @@ tmp_intersolar_*.js
 # Exceptions: the Pages site, legal notices, and files required by
 # the build (include_str!), CI contract scripts, and the release gate.
 /docs/*
+!/docs/domain-effect-recovery.md
 !/docs/dev/
 /docs/dev/*
 !/docs/dev/REFACTORING-SYNC-PERFORMANCE-PLAN.md

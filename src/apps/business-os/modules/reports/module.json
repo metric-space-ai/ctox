@@ -24,12 +24,7 @@
     "default_width": 1120,
     "default_height": 760,
     "min_width": 640,
-    "min_height": 480,
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/reports.jpg",
-    "icon_asset_sha256": "f83ec81f7954a899490a63d02af84fc4d145f49184b7884b97a749a8bd373275",
-    "icon_selection_sha256": "f83ec81f7954a899490a63d02af84fc4d145f49184b7884b97a749a8bd373275",
-    "icon_selection_candidate": "candidate-01",
-    "icon_asset_kind": "raster-reference"
+    "min_height": 480
   },
   "category": "Governance",
   "version": "1.1.2",

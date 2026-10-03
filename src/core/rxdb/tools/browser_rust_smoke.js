@@ -101,6 +101,10 @@ const fs = require('fs');
 const os = require('os');
 const zlib = require('zlib');
 const { spawn, spawnSync } = require('child_process');
+const { forwardNativeLogLines } = require('./native_log_lines.js');
+const { startNativeCpuProfile } = require('./native_cpu_profile.js');
+const { startNativeSymbolProfile } = require('./native_symbol_profile.js');
+const { runThreadsRightClickPeers } = require('./threads_rightclick_peers.js');
 const {
   businessOsProductionSmokeModes,
   businessOsProductionSmokeModeSet,
@@ -192,6 +196,10 @@ const nativeBusinessOsSqlitePath = path.join(runtimeRoot, 'runtime/business-os.s
 // it produced a silent 404 boot and a misleading timeout 30s later.
 const pagePath = process.env.SMOKE_PAGE_PATH || '/index.html';
 const smokeMode = process.env.SMOKE_MODE || 'browser-to-rust';
+const nativeSymbolPerf = process.argv.find(arg => arg.startsWith('--native-symbol-perf='))?.slice('--native-symbol-perf='.length) || '';
+if (nativeSymbolPerf && (smokeMode !== 'business-os-threads-rightclick-ui' || !smokeProcessLifecyclePath)) {
+  throw new Error('native symbol profiling requires the isolated context fixture and a process evidence path');
+}
 const SELLIFY_SCALE_POPULATIONS = Object.freeze({
   sellify_activities: 139804,
   sellify_campaigns: 86551,
@@ -338,6 +346,9 @@ const supportedSmokeModes = [
   'workspace-large-file-viewer-restart-rust-to-browser',
   'command-browser-to-rust',
   'command-roundtrip-timing-browser-to-rust',
+  'critical-browser-reload-timing',
+  'module-source-lossless-browser-to-rust',
+  'multiplex-reload-browser-to-rust',
   'tickets-browser-to-rust',
   'tickets-clarification-browser-to-rust',
   'outbound-active-ui',
@@ -387,6 +398,7 @@ if ([
   'tickets-browser-to-rust',
   'tickets-clarification-browser-to-rust',
   'outbound-active-ui',
+  'critical-browser-reload-timing',
   'spreadsheets-active-ui',
   'documents-active-ui',
   'invoices-active-ui',
@@ -2639,6 +2651,16 @@ function pollSqliteFileAndChunk(id, ms = 30000) {
   throw new Error(`sqlite file/chunk rows not replicated for ${id}`);
 }
 
+function nativeCollectionTable(collectionName) {
+  const schemaPath = path.join(root, 'src/core/business_os/business_os_schema_contract.json');
+  const contract = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+  const version = contract[collectionName]?.version;
+  if (!/^[a-z][a-z0-9_]*$/.test(collectionName) || !Number.isInteger(version) || version < 0) {
+    throw new Error('No canonical native collection schema for ' + collectionName);
+  }
+  return 'ctox_business_os__' + collectionName + '__v' + version;
+}
+
 function pollSqliteJson(tableName, id, ms = 30000) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
@@ -4100,6 +4122,7 @@ function staleRustSeedChunkGeneration(seed) {
 }
 
 async function stopChild(child) {
+  if (child?.__ctoxNativeSymbolProfile) await child.__ctoxNativeSymbolProfile.stop('fixture-finalizer');
   if (!child || child.exitCode !== null) return;
   terminateOwnedSmokeChild(child, 'SIGINT', 'smoke-finalizer', 'graceful-stop');
   await new Promise((resolve) => {
@@ -4138,6 +4161,21 @@ function startCtoxServer() {
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
   }), 'ctox-business-os');
+  if (smokeProcessLifecyclePath) {
+    startNativeCpuProfile(child, {
+      outputPath: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-cpu-' + child.pid + '.jsonl',
+      phase: () => smokeProcessLifecycle.startupPhase,
+    });
+  }
+  if (nativeSymbolPerf) {
+    child.__ctoxNativeSymbolProfile = startNativeSymbolProfile(child, {
+      outputPrefix: smokeProcessLifecyclePath.replace(/\.json$/, '') + '.native-symbols-' + child.pid,
+      perfExecutable: nativeSymbolPerf,
+    }, {
+      spawnRecord: (executable, args, options) => trackSmokeChild(spawn(executable, args, options), 'native-symbol-profiler'),
+      signalRecord: (recorder, signal, reason) => terminateOwnedSmokeChild(recorder, signal, 'native-symbol-profiler', reason),
+    });
+  }
   let resolveListening;
   let rejectListening;
   let sawListening = false;
@@ -4145,16 +4183,14 @@ function startCtoxServer() {
     resolveListening = resolve;
     rejectListening = reject;
   });
-  child.stdout.on('data', (d) => {
-    const text = d.toString();
-    process.stdout.write(`[ctox] ${d}`);
-    if (text.includes('CTOX Business OS listening')) {
+  forwardNativeLogLines(child.stdout, process.stdout, '[ctox] ', (line) => {
+    if (line.includes('CTOX Business OS listening')) {
       sawListening = true;
       setSmokeStartupPhase('ctox-listening-output');
       resolveListening?.();
     }
   });
-  child.stderr.on('data', (d) => process.stderr.write(`[ctox:err] ${d}`));
+  forwardNativeLogLines(child.stderr, process.stderr, '[ctox:err] ');
   globalThis.__ctoxProcess = child;
   child.on('exit', (code, signal) => {
     if (!sawListening) rejectListening?.(new Error(`ctox exited before listening: code=${code} signal=${signal}`));
@@ -4271,6 +4307,24 @@ function ensureCtoxSmokeBinary() {
   if (nativeSchemaDriftFixture) {
     console.log(`native_schema_drift_seed=${JSON.stringify(nativeSchemaDriftFixture)}`);
   }
+  if (smokeMode === 'module-source-lossless-browser-to-rust' || smokeMode === 'multiplex-reload-browser-to-rust') {
+    // Fixture files only: never edit the signed shell or production records.
+    const sourceRoot = path.join(runtimeRoot, 'runtime/business-os/installed-modules/lossless-source-probe');
+    fs.mkdirSync(sourceRoot, { recursive: true });
+    fs.writeFileSync(path.join(sourceRoot, 'module.json'), JSON.stringify({
+      id: 'lossless-source-probe', title: 'Source transport fixture',
+      entry: 'installed-modules/lossless-source-probe/index.html',
+      source: 'installed', install_scope: 'installed', version: '1.0.0',
+    }));
+    fs.writeFileSync(path.join(sourceRoot, 'index.html'), '<!doctype html><title>Source transport fixture</title>');
+    for (let index = 0; index < 21; index += 1) {
+      const content = `// source fixture ${index}\n` + '// Großes Quelltextstück mit Unicode und "Quotes".\n'.repeat(10000);
+      fs.writeFileSync(path.join(sourceRoot, `source-${String(index).padStart(2, '0')}.js`), content);
+    }
+    if (smokeMode === 'multiplex-reload-browser-to-rust') {
+      require('./multiplex_reload_probe.js').seed(sourceRoot, sqlite);
+    }
+  }
   if (smokeMode === 'business-os-app-release-ui') {
     await seedBusinessOsReleaseNativeSetup();
   }
@@ -4306,6 +4360,9 @@ function ensureCtoxSmokeBinary() {
     threadsScaleSeed = await seedBusinessOsThreadsScaleNativeSetup();
     console.log(`business_os_threads_rightclick_scale_seed_ms=${Date.now() - scaleSeedStartedAt}`);
   }
+  const uiCatalogFixture = smokeMode === 'business-os-ui-regression'
+    ? require('./business_os_ui_catalog_fixture.js').prepareUiCatalogFixture(root, runtimeRoot)
+    : null;
   let ctox = startCtoxServer();
   const browserDiagnostics = {
     warnings: 0,
@@ -4454,6 +4511,7 @@ function ensureCtoxSmokeBinary() {
     page.on('framenavigated', (frame) => {
       if (frame === page.mainFrame()) console.log(`[browser:navigation] ${frame.url()}`);
     });
+    let recoveryConsoleMarks = 0;
     page.on('console', (msg) => {
       const type = msg.type();
       const text = msg.text();
@@ -4478,7 +4536,22 @@ function ensureCtoxSmokeBinary() {
           browserDiagnostics.errors += 1;
         }
       }
+      // Keep existing log records byte-for-byte; the preceding bounded mark
+      // timestamps their observation on the same host clock as process events.
+      // No polling, extra query, receipt write, or production timeout change.
+      if (smokeMode === 'command-midflight-restart-browser-to-rust') {
+        if (recoveryConsoleMarks < 500) {
+          console.log('command_restart_console_mark=' + JSON.stringify({
+            index: recoveryConsoleMarks++, atMs: Date.now(), type,
+            clock: 'node-console-observed',
+          }));
+        } else if (recoveryConsoleMarks === 500) {
+          recoveryConsoleMarks++;
+          console.log('command_restart_console_marks_truncated=true');
+        }
+      }
       console.log(`[browser:${type}] ${text}`);
+
     });
     page.on('pageerror', (err) => {
       if (smokeMode === 'business-os-ui-regression' && isExpectedBusinessOsPermissionConsole(err?.stack || err?.message || '')) {
@@ -7435,7 +7508,10 @@ function ensureCtoxSmokeBinary() {
               const taskDoc = await db.ctox_queue_tasks.findOne(taskId).exec();
               const task = taskDoc?.toJSON?.();
               if (task) {
-                const queueTasksForCommand = (await db.ctox_queue_tasks.find().exec())
+                const queueTasksForCommand = (await db.ctox_queue_tasks.find({
+                selector: { command_id: id },
+                requireRevision: `command-link:${id}`,
+              }).exec())
                   .map((doc) => doc.toJSON?.() || doc)
                   .filter((doc) => doc.command_id === id);
                 if (queueTasksForCommand.length !== 1) {
@@ -7460,8 +7536,8 @@ function ensureCtoxSmokeBinary() {
             queueCount: queueDocs.length,
           })}`);
         }, dispatched);
-        const commandTable = 'ctox_business_os__business_commands__v1';
-        const taskTable = 'ctox_business_os__ctox_queue_tasks__v0';
+        const commandTable = nativeCollectionTable('business_commands');
+        const taskTable = nativeCollectionTable('ctox_queue_tasks');
         const commandRow = pollSqliteJson(commandTable, result.id);
         const taskRow = pollSqliteJson(taskTable, result.taskId);
         if (commandRow.command_id !== result.id || taskRow.command_id !== result.id) {
@@ -7616,9 +7692,45 @@ function ensureCtoxSmokeBinary() {
       ? await runPresenceMergeTwoBrowsersMode(page)
       : smokeMode === 'concurrent-writers-convergence-browser-to-rust'
       ? await runConcurrentWritersConvergenceMode(page)
+      : smokeMode === 'business-os-threads-rightclick-ui'
+      ? await runThreadsRightClickPeers({
+        chromium, launchOptions: chromiumLaunchOptions(), runtimeRoot, smokeUrl,
+        capabilities: threadsRightClickCapabilities, smokeMode, threadsScaleSeed, browserDiagnostics,
+        evidenceDir: smokeProcessLifecyclePath ? path.dirname(smokeProcessLifecyclePath) : runtimeRoot,
+        readNativeSyncState: async () => {
+          const filename = path.join(runtimeRoot, 'runtime/business-os-rxdb-peer.status.json');
+          const stat = await fs.promises.stat(filename);
+          if (stat.size > 4 * 1024 * 1024) {
+            return { available: false, reason: 'native-status-size-limit', bytes: stat.size };
+          }
+          return {
+            available: true, file: path.basename(filename), fileMtimeMs: stat.mtimeMs,
+            status: JSON.parse(await fs.promises.readFile(filename, 'utf8')),
+          };
+        },
+        readNativeAuthorizationState: () => JSON.parse(sqlite(`
+          SELECT json_group_array(json_object(
+            'userId',user_id,'role',role,'active',active,'epoch',capability_epoch))
+          FROM business_users
+          WHERE user_id IN ('threads-requester','threads-reviewer')
+          ORDER BY user_id;
+        `, nativeBusinessOsSqlitePath).trim()),
+      })
+      : smokeMode === 'critical-browser-reload-timing'
+      ? await require('./critical_browser_reload_probe.js').runCriticalBrowserReloads({
+        page, requiredCollections: BUSINESS_OS_SHELL_STATUS_COLLECTIONS,
+        waitForHealthyCompleteStatus, assertHealthyAdvancedStatusContract,
+        readNativeLayout: () => {
+          const table = nativeCollectionTable('desktop_layout');
+          const row = sqlite(`SELECT data FROM ${quoteSqlIdentifier(table)} WHERE id='layout' AND deleted=0 LIMIT 1;`).trim();
+          return row ? JSON.parse(row) : null;
+        },
+        outputPath: path.join(smokeProcessLifecyclePath ? path.dirname(smokeProcessLifecyclePath) : runtimeRoot,
+          'critical-browser-reload.json'),
+      })
       : await browserEvaluationTarget.evaluate(async (stateOrArgs, maybeArgs) => {
       const sellifyScaleAppState = maybeArgs ? stateOrArgs : null;
-      const { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, threadsRightClickCapabilities, officeRestartFixtureBytes } = maybeArgs || stateOrArgs;
+      const { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes, uiCatalogFixture } = maybeArgs || stateOrArgs;
       if (!globalThis.process) globalThis.process = {};
       if (typeof globalThis.process.nextTick !== 'function') {
         globalThis.process.nextTick = (callback, ...args) => Promise.resolve().then(() => callback(...args));
@@ -7747,6 +7859,8 @@ function ensureCtoxSmokeBinary() {
       const businessOsSellifyScaleUiSmokeMode = smokeMode === 'business-os-sellify-scale-ui';
       const commandSmokeMode = smokeMode === 'command-browser-to-rust'
         || smokeMode === 'command-roundtrip-timing-browser-to-rust'
+        || smokeMode === 'module-source-lossless-browser-to-rust'
+        || smokeMode === 'multiplex-reload-browser-to-rust'
         || smokeMode === 'migration-version-browser-to-rust'
         || smokeMode === 'command-burst-browser-to-rust'
         || smokeMode === 'command-reload-browser-to-rust'
@@ -7763,6 +7877,7 @@ function ensureCtoxSmokeBinary() {
       const backgroundIndexerSmokeMode = smokeMode === 'workspace-agent-artifacts-background-rust-to-browser';
       const deferInitialFileCollections = smokeMode === 'file-chunk-tombstone-error-browser-status';
       const needsCommandCollections = commandSmokeMode
+        || smokeMode === 'business-os-ui-regression'
         || materializeSmokeMode
         || ticketSmokeMode
         || outboundActiveUiSmokeMode
@@ -8173,7 +8288,9 @@ function ensureCtoxSmokeBinary() {
               const contiguous = demandChunks.length > 0
                 && demandChunks.every((chunk, index) => Number(chunk.sequence) === index);
               if (contiguous) {
-                const payload = atob(demandChunks.map((chunk) => chunk.bytesBase64 ?? chunk.bytes_base64 ?? '').join(''));
+                // Demand frames encode their own byte slices. Padding in an
+                // intermediate frame is valid; decode before joining bytes.
+                const payload = demandChunks.map((chunk) => atob(chunk.bytesBase64 ?? chunk.bytes_base64 ?? '')).join('');
                 lastSeen = {
                   file,
                   chunks: demandChunks,
@@ -8449,6 +8566,34 @@ function ensureCtoxSmokeBinary() {
           'support',
           'threads',
         ];
+        if (!uiCatalogFixture?.installs?.length || !appState?.commandBus?.dispatch) {
+          throw new Error('Business OS UI regression catalog installation prerequisite is missing');
+        }
+        const catalogInstallReceipts = [];
+        const installDeadline = Date.now() + 120000;
+        for (const item of uiCatalogFixture.installs) {
+          if (!expectedSecondaryModules.includes(item.moduleId)) {
+            throw new Error(`Unexpected UI catalog prerequisite: ${item.moduleId}`);
+          }
+          const remaining = installDeadline - Date.now();
+          if (remaining <= 0) throw new Error('UI catalog installation prerequisite timed out');
+          const receipt = await appState.commandBus.dispatch({
+            id: `cmd_ui_catalog_${crypto.randomUUID()}`,
+            module: 'app-store',
+            type: 'ctox.module.install_template',
+            record_id: item.moduleId,
+            payload: { template_id: item.templateId, module_id: item.moduleId, title: item.title },
+            client_context: smokeClientContext({ source: 'business-os-ui-catalog-fixture' }),
+          }, { until: 'terminal', timeoutMs: Math.min(30000, remaining), sync_queue_tasks: false });
+          if (!receipt?.ok || receipt.status !== 'completed' || receipt.result?.module_id !== item.moduleId) {
+            throw new Error(`UI catalog installation failed for ${item.moduleId}: ${JSON.stringify(receipt)}`);
+          }
+          catalogInstallReceipts.push({ moduleId: item.moduleId, commandId: receipt.command_id, status: receipt.status });
+        }
+        // Use the same shell refresh event as App Store after a completed install.
+        window.dispatchEvent(new CustomEvent('ctox-business-os-modules-changed', {
+          detail: { source: 'app-store', command_type: 'ctox.module.install_template' },
+        }));
         const moduleCatalog = await waitFor(() => {
           const moduleIds = Array.isArray(appState?.modules)
             ? appState.modules.map((mod) => mod?.id).filter(Boolean)
@@ -9067,24 +9212,46 @@ function ensureCtoxSmokeBinary() {
             await delay(100);
             evidence.actions.push('notes-nav-filter');
           } else if (moduleId === 'reports') {
-            const kind = document.querySelector('[data-report-kind]');
-            const status = document.querySelector('[data-report-status]');
-            if (!kind || !status) throw new Error('Reports filter controls are missing');
-            kind.value = 'bug';
-            kind.dispatchEvent(new Event('change', { bubbles: true }));
+            const root = document.querySelector('[data-reports-root]');
+            const kind = root?.querySelector('[data-pg-band="bug"]');
+            const all = root?.querySelector('[data-pg-band="all"]');
+            const status = root?.querySelector('[data-pg-filter][data-pg-name="status"]');
+            const trayToggle = root?.querySelector('[data-pg-tray-toggle]');
+            const tray = root?.querySelector('[data-pg-tray]');
+            const reset = root?.querySelector('[data-pg-reset]');
+            if (!kind || !all || !status || !trayToggle || !tray || !reset) {
+              throw new Error('Reports shell filter controls are missing');
+            }
+            kind.click();
             await waitFor(() => ({
-              ok: document.querySelector('[data-report-kind]')?.value === 'bug',
-              kind: document.querySelector('[data-report-kind]')?.value || '',
-            }), 5000, 'reports kind filter');
+              ok: kind.getAttribute('aria-selected') === 'true'
+                && all.getAttribute('aria-selected') === 'false',
+            }), 5000, 'reports bug band selected');
+            if (tray.hidden) trayToggle.click();
+            await waitFor(() => ({
+              ok: !tray.hidden && trayToggle.getAttribute('aria-expanded') === 'true'
+                && status.getBoundingClientRect().height > 0,
+            }), 5000, 'reports status filter visible');
             status.value = 'open';
             status.dispatchEvent(new Event('change', { bubbles: true }));
-            kind.value = 'all';
-            kind.dispatchEvent(new Event('change', { bubbles: true }));
-            status.value = 'all';
-            status.dispatchEvent(new Event('change', { bubbles: true }));
-            evidence.actions.push('reports-filter-controls');
+            reset.click();
+            await waitFor(() => ({
+              ok: status.value === 'all',
+              status: status.value,
+            }), 5000, 'reports status filter reset by shell');
+            all.click();
+            await waitFor(() => ({
+              ok: all.getAttribute('aria-selected') === 'true'
+                && kind.getAttribute('aria-selected') === 'false',
+            }), 5000, 'reports all band restored');
+            trayToggle.click();
+            await waitFor(() => ({
+              ok: tray.hidden && trayToggle.getAttribute('aria-expanded') === 'false',
+            }), 5000, 'reports filter tray closed');
+            evidence.actions.push('reports-shell-filter-controls');
           } else if (moduleId === 'spreadsheets') {
             const search = document.querySelector('[data-spreadsheets-search]');
+
             if (!search) throw new Error('Spreadsheets search control is missing');
             search.value = 'regression-smoke';
             search.dispatchEvent(new Event('input', { bubbles: true }));
@@ -9347,6 +9514,7 @@ function ensureCtoxSmokeBinary() {
           mode: smokeMode,
           moduleCount: moduleIds.length,
           moduleIds,
+          catalogInstallReceipts,
           startMenuItemCount: startMenu.itemCount,
           openedModules,
           secondaryOpenedModules,
@@ -10871,674 +11039,6 @@ function ensureCtoxSmokeBinary() {
           advancedStatusVersion: advancedStatusVersion || '',
           advancedStatusRuntime: advancedStatusRuntime || null,
         };
-      }
-
-      async function runBusinessOsThreadsRightClickUiSmoke() {
-        const waitFor = async (predicate, ms, label) => {
-          const deadline = Date.now() + ms;
-          let last = null;
-          while (Date.now() < deadline) {
-            last = await predicate();
-            if (last?.ok) return last;
-            await delay(100);
-          }
-          throw new Error(`${label} timed out: ${JSON.stringify(last)}`);
-        };
-        const css = (value) => {
-          if (globalThis.CSS?.escape) return globalThis.CSS.escape(String(value));
-          return String(value).replace(/["\\]/g, '\\$&');
-        };
-        const docsToJson = (docs) => (Array.isArray(docs) ? docs : [])
-          .map((doc) => doc?.toJSON?.() || doc)
-          .filter((doc) => doc && doc._deleted !== true && doc.is_deleted !== true);
-        const smoke = globalThis.ctoxBusinessOsSmoke;
-        const state = globalThis.CTOX_BUSINESS_OS_APP || smoke?.state || appState;
-        if (!state) throw new Error('Business OS app state is unavailable for threads right-click UI smoke');
-        if (typeof smoke?.renderTabs !== 'function') throw new Error('Business OS smoke renderTabs hook is unavailable');
-        if (typeof state.openModule !== 'function') throw new Error('Business OS state.openModule is unavailable for threads right-click UI smoke');
-        if (typeof state.commandBus?.dispatch !== 'function') throw new Error('Business OS command bus is unavailable for threads right-click UI smoke');
-        appState = state;
-
-        const targetModule = {
-          id: 'tickets',
-          title: 'Tickets',
-          glyph: 'T',
-        };
-        const requesterSession = {
-          authenticated: true,
-          user: {
-            id: 'threads-requester',
-            display_name: 'Threads Requester',
-            role: 'user',
-            is_admin: false,
-          },
-        };
-        const reviewerSession = {
-          authenticated: true,
-          user: {
-            id: 'threads-reviewer',
-            display_name: 'Threads Reviewer',
-            role: 'admin',
-            is_admin: true,
-          },
-        };
-        const reviewerId = reviewerSession.user.id;
-        const targetRecordId = 'tickets_seed_ops_review';
-        const appTargetRecordId = 'tickets';
-        const threadsCollections = [
-          'user_threads',
-          'user_thread_messages',
-          'user_thread_links',
-          'user_notifications',
-          'ctox_task_approval_requests',
-        ];
-        const dataPrompt = `Threads right-click data change ${Date.now()}`;
-        const askPrompt = `Threads right-click question ${Date.now()}`;
-        const appPrompt = `Threads right-click app change ${Date.now()}`;
-        const reviewerPickerEvidence = [];
-        let scaleFirstRenderEvidence = null;
-        const originalState = {
-          session: state.session,
-          governance: state.governance,
-          activeModule: state.activeModule,
-          modules: state.modules,
-          taskbarPins: state.taskbarPins,
-          moduleAllowlist: state.moduleAllowlist,
-          globalSession: globalThis.CTOX_BUSINESS_OS_SESSION,
-          bodyAuthState: document.body?.dataset?.authState || '',
-        };
-        const applyThreadsSmokeState = async (session, capability) => {
-          const nextSession = {
-            ...session,
-            capability_token: capability?.token || '',
-            capability_expires_at_ms: capability?.expiresAtMs || 0,
-          };
-          state.session = nextSession;
-          globalThis.CTOX_BUSINESS_OS_SESSION = nextSession;
-          document.body.dataset.authState = 'authenticated';
-          const commandBusResource = performance.getEntriesByType('resource')
-            .map((entry) => entry.name)
-            .find((name) => /\/shared\/command-bus\.js\?v=/.test(name));
-          if (!commandBusResource) throw new Error('loaded command-bus module URL is unavailable for capability switch');
-          const commandBusModule = await import(commandBusResource);
-          commandBusModule.resetBusinessOsCapabilityTokenCacheForTests?.();
-        };
-        const ensureThreadsModuleCollections = async () => {
-          await applyThreadsSmokeState(requesterSession, threadsRightClickCapabilities?.requester);
-          const renderStartedAt = performance.now();
-          await state.openModule('threads', { force: true, asModule: true });
-          await waitFor(() => {
-            const raw = state.db?.raw || {};
-            return {
-              ok: threadsCollections.every((name) => Boolean(raw[name])),
-              activeModule: state.activeModule?.id || '',
-              missing: threadsCollections.filter((name) => !raw[name]),
-            };
-          }, 30000, 'threads module collections registered');
-          await Promise.all(threadsCollections.map((name) => (
-            state.sync?.startCollection?.(name).catch(() => null)
-          )));
-          if (threadsScaleSeed) {
-            scaleFirstRenderEvidence = await waitFor(() => {
-              const root = document.querySelector('[data-threads-root]');
-              const visibleThreadRows = root?.querySelectorAll?.('[data-thread-id]')?.length || 0;
-              return {
-                ok: Boolean(root && visibleThreadRows > 0 && visibleThreadRows <= 200),
-                visibleThreadRows,
-                renderMs: Math.round(performance.now() - renderStartedAt),
-              };
-            }, 30000, 'threads scale first bounded render');
-          }
-        };
-        const openTargetModule = async () => {
-          await applyThreadsSmokeState(requesterSession, threadsRightClickCapabilities?.requester);
-          await state.openModule(targetModule.id, { force: true, asModule: true });
-          return waitFor(() => {
-            const host = document.querySelector('[data-module-content], [data-module-root], [data-ctox-chat-root]')
-              || document.querySelector('main')
-              || document.body;
-            let marker = document.querySelector('[data-threads-rightclick-fixture]');
-            if (!marker && host) {
-              marker = document.createElement('section');
-              marker.dataset.threadsRightclickFixture = 'true';
-              marker.dataset.moduleRoot = targetModule.id;
-              marker.dataset.contextRecordId = targetRecordId;
-              marker.dataset.contextRecordType = 'smoke-record';
-              marker.dataset.contextLabel = 'Threads Right-Click Smoke Record';
-              marker.style.position = 'relative';
-              marker.style.padding = '8px';
-              marker.style.margin = '8px';
-              marker.style.border = '1px solid transparent';
-              marker.textContent = 'Threads Right-Click Smoke Record';
-              host.append(marker);
-            }
-            return {
-              ok: state.activeModule?.id === targetModule.id && Boolean(marker),
-              activeModule: state.activeModule?.id || '',
-              hasMarker: Boolean(marker),
-            };
-          }, 30000, 'threads right-click target module open');
-        };
-        const openGlobalContextMenu = async () => {
-          const target = document.querySelector('[data-threads-rightclick-fixture]');
-          if (!target) throw new Error('threads right-click fixture DOM target is missing');
-          const rect = target.getBoundingClientRect();
-          target.dispatchEvent(new MouseEvent('contextmenu', {
-            bubbles: true,
-            cancelable: true,
-            button: 2,
-            clientX: Math.max(24, Math.round(rect.left + 12)),
-            clientY: Math.max(24, Math.round(rect.top + 12)),
-          }));
-          return waitFor(() => {
-            const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
-            const form = menu?.querySelector('form') || null;
-            const modes = menu ? [...menu.querySelectorAll('input[name="contextMode"]')].map((input) => input.value) : [];
-            return {
-              ok: Boolean(menu && form && ['data', 'ask', 'app'].every((mode) => modes.includes(mode))),
-              modes,
-              text: menu?.textContent?.trim().slice(0, 1000) || '',
-            };
-          }, 5000, 'threads right-click global context menu');
-        };
-        const waitForReviewerOption = async () => waitFor(() => {
-          const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
-          const options = menu
-            ? [...menu.querySelectorAll('[data-ctox-context-user-options] option')].map((option) => ({
-              value: option.getAttribute('value') || '',
-              label: option.getAttribute('label') || '',
-            }))
-            : [];
-          return {
-            ok: options.some((option) => option.value === reviewerId && /Threads Reviewer/.test(option.label)),
-            options,
-          };
-        }, 5000, 'threads right-click reviewer option');
-        const submitContextMode = async ({ mode, message, userId, contextRecordId = targetRecordId }) => {
-          await openTargetModule();
-          const contextTarget = document.querySelector('[data-threads-rightclick-fixture]');
-          contextTarget.dataset.contextRecordId = contextRecordId;
-          contextTarget.dataset.contextLabel = contextRecordId === appTargetRecordId
-            ? 'Threads Right-Click App Smoke Record'
-            : 'Threads Right-Click Smoke Record';
-          await openGlobalContextMenu();
-          const reviewerOption = await waitForReviewerOption().catch((error) => ({
-            ok: false,
-            error: String(error?.message || error),
-          }));
-          reviewerPickerEvidence.push({
-            mode,
-            visible: reviewerOption.ok === true,
-            optionCount: Array.isArray(reviewerOption.options) ? reviewerOption.options.length : 0,
-            error: reviewerOption.error || '',
-          });
-          const menu = document.querySelector('.ctox-global-context-menu:not([hidden])');
-          const form = menu?.querySelector('form');
-          const input = menu?.querySelector(`input[name="contextMode"][value="${css(mode)}"]`);
-          const label = input?.closest('label') || null;
-          const textarea = menu?.querySelector('.ctox-context-textarea');
-          const userInput = menu?.querySelector('.ctox-context-user-input');
-          if (!form || !input || !label || !textarea || !userInput) {
-            throw new Error(`threads right-click context form missing controls for ${mode}`);
-          }
-          label.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-          const needsApproval = mode === 'data' || mode === 'app';
-          await waitFor(() => {
-            const row = userInput.closest('.ctox-context-user-row');
-            const visible = row?.hidden === false && getComputedStyle(row).display !== 'none';
-            return {
-              ok: visible === needsApproval,
-              hidden: row?.hidden ?? null,
-              display: getComputedStyle(row).display,
-            };
-          }, 5000, `threads right-click ${mode} delegation state`);
-          if (needsApproval) {
-            userInput.value = userId;
-            userInput.dispatchEvent(new Event('input', { bubbles: true }));
-          }
-          textarea.value = message;
-          textarea.dispatchEvent(new Event('input', { bubbles: true }));
-          form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-          await waitFor(() => ({
-            ok: !document.querySelector('.ctox-global-context-menu:not([hidden])'),
-            status: document.querySelector('.ctox-global-context-menu .ctox-context-status')?.textContent?.trim() || '',
-          }), 70000, `threads right-click ${mode} submit accepted`);
-          const commandCollection = state.db?.raw?.business_commands || state.db?.collection?.('business_commands');
-          return waitFor(async () => {
-            const expectedCommandType = needsApproval
-              ? 'threads.ctox_approval.request'
-              : 'business_os.context.ask';
-            const docs = docsToJson(await commandCollection.find({
-              selector: { command_type: expectedCommandType },
-              sort: [{ updated_at_ms: 'desc' }],
-              limit: 50,
-            }).exec());
-            const command = docs.find((doc) => {
-                if (needsApproval) {
-                  return doc.command_type === 'threads.ctox_approval.request'
-                    && doc.payload?.prompt === message
-                    && doc.payload?.reviewer_user_id === userId
-                    && doc.payload?.target_command_type === (mode === 'app'
-                      ? 'ctox.business_os.app.modify'
-                      : 'business_os.data.modify')
-                    && doc.payload?.source_context?.record_id === contextRecordId;
-                }
-                return doc.command_type === 'business_os.context.ask'
-                  && doc.record_id === contextRecordId;
-              });
-            return {
-              ok: Boolean(command),
-              command: command || null,
-              commandCount: docs.length,
-              sample: command ? null : (docs[0] || null),
-            };
-          }, 30000, `threads right-click ${mode} command persisted`);
-        };
-
-        try {
-          await ensureThreadsModuleCollections();
-          await waitFor(() => {
-            const raw = state.db?.raw || {};
-            const names = [
-              'business_commands',
-              'business_users',
-              ...threadsCollections,
-            ];
-            return {
-              ok: names.every((name) => Boolean(raw[name])),
-              missing: names.filter((name) => !raw[name]),
-            };
-          }, 30000, 'threads right-click collections available');
-          await Promise.all([
-            'business_commands',
-            'business_users',
-            ...threadsCollections,
-            'ctox_queue_tasks',
-          ].map((name) => state.sync?.startCollection?.(name).catch(() => null)));
-
-          await applyThreadsSmokeState(requesterSession, threadsRightClickCapabilities?.requester);
-          const deniedCommandId = `cmd_${crypto.randomUUID()}`;
-          let deniedDispatchError = '';
-          try {
-            await state.commandBus.dispatch({
-              id: deniedCommandId,
-              module: targetModule.id,
-              command_type: 'business_os.data.modify',
-              record_id: targetRecordId,
-              inbound_channel: targetModule.id,
-              payload: {
-                prompt: `Denied direct data change ${Date.now()}`,
-                instruction: 'This direct mutation must be denied before delegation.',
-                context: {
-                  module: targetModule.id,
-                  record_type: 'smoke-record',
-                  record_id: targetRecordId,
-                  label: 'Threads Right-Click Smoke Record',
-                },
-              },
-              client_context: {
-                action: 'context-data-modify-direct-denial-smoke',
-                module: targetModule.id,
-                module_id: targetModule.id,
-                app_id: targetModule.id,
-                actor: requesterSession.user,
-                record_id: targetRecordId,
-              },
-            }, { until: 'local' });
-          } catch (error) {
-            deniedDispatchError = String(error?.message || error);
-          }
-          const deniedDirectCommand = await waitFor(async () => {
-            const docs = docsToJson(await state.db.raw.business_commands.find({
-              selector: { command_id: deniedCommandId },
-              limit: 5,
-            }).exec());
-            const command = docs.find((item) => (
-              item.command_id === deniedCommandId || item.id === deniedCommandId
-            )) || null;
-            const serialized = JSON.stringify(command || {});
-            return {
-              ok: Boolean(command && command.status === 'failed' && serialized.includes('role_or_scope_denied')),
-              command,
-              deniedDispatchError,
-            };
-          }, 30000, 'threads right-click direct native denial');
-
-          const dataCommand = await submitContextMode({ mode: 'data', message: dataPrompt, userId: reviewerId });
-          const askCommand = await submitContextMode({ mode: 'ask', message: askPrompt, userId: reviewerId });
-          const appCommand = await submitContextMode({
-            mode: 'app',
-            message: appPrompt,
-            userId: reviewerId,
-            contextRecordId: appTargetRecordId,
-          });
-          const contextCaptured = [
-            [dataCommand, targetRecordId],
-            [askCommand, targetRecordId],
-            [appCommand, appTargetRecordId],
-          ].every(([entry, expectedRecordId]) => {
-            const command = entry.command || {};
-            const context = command.payload?.source_context || {};
-            const contextV2 = context.context_v2 || command.client_context?.context || {};
-            const pointer = contextV2.pointer || {};
-            return command.record_id === expectedRecordId
-              && (context.record_id === expectedRecordId || contextV2.entity?.id === expectedRecordId)
-              && Number.isFinite(pointer.x)
-              && Number.isFinite(pointer.y);
-          });
-          if (!contextCaptured) {
-            throw new Error('threads right-click commands lost their exact record or pointer context');
-          }
-          const commandStatus = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
-            includeCounts: false,
-            requiredCollections: ['business_commands', 'business_users'],
-          });
-          if (commandStatus?.version !== 'business-os-advanced-status-v1' || commandStatus.ok !== true) {
-            throw new Error(`threads right-click command status unhealthy: ${JSON.stringify(commandStatus)}`);
-          }
-          const rawDb = state.db.raw;
-          const expectedThreadId = `thread_${targetModule.id}_smoke-record_${targetRecordId}`;
-          const projectionUpdatedAfterMs = Date.now() - 5 * 60 * 1000;
-          let projectionPollAttempt = 0;
-          let projectedThread = null;
-          let projectedMessages = [];
-          let projectedNotifications = [];
-          let projectedApprovals = [];
-          let projectedAppApprovals = [];
-          const projections = await waitFor(async () => {
-            const currentProjectionAttempt = projectionPollAttempt++;
-            const threadDocs = projectedThread ? [projectedThread] : docsToJson(await rawDb.user_threads.find({
-              // Demand-query windows are intentionally stale-while-revalidate.
-              // Vary the lower bound so a previously completed empty window
-              // cannot mask a projection created just after the first poll.
-              selector: {
-                id: expectedThreadId,
-                updated_at_ms: { $gte: projectionUpdatedAfterMs + currentProjectionAttempt },
-              },
-              limit: 1,
-            }).exec());
-            const thread = threadDocs.find((item) => item.id === expectedThreadId) || null;
-            if (thread) projectedThread = thread;
-            const relatedUpdatedAfterMs = projectionUpdatedAfterMs + currentProjectionAttempt;
-            const relatedQuery = thread ? {
-              selector: {
-                thread_id: thread.id,
-                updated_at_ms: { $gte: relatedUpdatedAfterMs },
-              },
-              sort: [{ updated_at_ms: 'desc' }],
-              limit: 50,
-            } : null;
-            const [messages, notifications, approvals, appApprovals] = relatedQuery
-              ? await Promise.all([
-                projectedMessages.length
-                  ? projectedMessages
-                  : rawDb.user_thread_messages.find(relatedQuery).exec().then(docsToJson),
-                projectedNotifications.length
-                  ? projectedNotifications
-                  : rawDb.user_notifications.find(relatedQuery).exec().then(docsToJson),
-                projectedApprovals.length
-                  ? projectedApprovals
-                  : rawDb.ctox_task_approval_requests.find(relatedQuery).exec().then(docsToJson),
-                projectedAppApprovals.length
-                  ? projectedAppApprovals
-                  : rawDb.ctox_task_approval_requests.find({
-                  selector: {
-                    source_record_id: appTargetRecordId,
-                    reviewer_user_id: reviewerId,
-                    status: 'pending',
-                    updated_at_ms: { $gte: relatedUpdatedAfterMs },
-                  },
-                  sort: [{ updated_at_ms: 'desc' }],
-                  limit: 20,
-                }).exec().then(docsToJson),
-              ])
-              : [[], [], [], []];
-            if (messages.length) projectedMessages = messages;
-            if (notifications.length) projectedNotifications = notifications;
-            if (approvals.length) projectedApprovals = approvals;
-            if (appApprovals.length) projectedAppApprovals = appApprovals;
-            const threadMessages = thread
-              ? messages.filter((item) => item.thread_id === thread.id)
-              : [];
-            const threadNotifications = thread
-              ? notifications.filter((item) => item.thread_id === thread.id)
-              : [];
-            const threadApprovals = thread
-              ? approvals.filter((item) => item.thread_id === thread.id)
-              : [];
-            const dataApproval = threadApprovals.find((item) => (
-              item.prompt === dataPrompt
-              && item.reviewer_user_id === reviewerId
-              && item.status === 'pending'
-            )) || null;
-            const appApproval = appApprovals.find((item) => (
-              item.prompt === appPrompt
-              && item.reviewer_user_id === reviewerId
-              && item.status === 'pending'
-            )) || null;
-            const reviewerNotification = threadNotifications.find((item) => item.user_id === reviewerId) || null;
-            return {
-              ok: Boolean(thread && dataApproval && reviewerNotification),
-              thread,
-              dataApproval,
-              appApproval,
-              reviewerNotification,
-              counts: {
-                threads: thread ? 1 : 0,
-                messages: messages.length,
-                notifications: notifications.length,
-                approvals: approvals.length,
-              },
-            };
-          }, 150000, 'threads right-click native projections');
-
-          await applyThreadsSmokeState(reviewerSession, threadsRightClickCapabilities?.reviewer);
-          await state.openModule('threads', { force: true, asModule: true });
-          const rendered = await waitFor(() => {
-            const root = document.querySelector('[data-threads-root]');
-            const row = root?.querySelector(`[data-thread-id="${css(projections.thread.id)}"]`) || null;
-            row?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-            const timeline = root?.querySelector('[data-thread-timeline]') || null;
-            const dataApprovalCard = root?.querySelector(`[data-approval-id="${css(projections.dataApproval.id)}"]`) || null;
-            const timelineText = timeline?.innerText || timeline?.textContent || '';
-            const contextText = root?.querySelector('[data-thread-context]')?.innerText || '';
-            return {
-              ok: Boolean(
-                root
-                  && row
-                  && timelineText.includes(dataPrompt)
-                  && dataApprovalCard
-                  && dataApprovalCard.querySelector('[data-approve-approval]')
-                  && /Threads Reviewer|threads-reviewer/.test(timelineText)
-              ),
-              activeModule: state.activeModule?.id || '',
-              hasRoot: Boolean(root),
-              hasRow: Boolean(row),
-              hasApprovalCard: Boolean(dataApprovalCard),
-              hasApproveButton: Boolean(dataApprovalCard?.querySelector('[data-approve-approval]')),
-              timelineText: timelineText.slice(0, 1200),
-              contextText: contextText.slice(0, 600),
-            };
-          }, 30000, 'threads right-click hub render');
-
-          const approvalButton = document.querySelector(
-            `[data-approval-id="${css(projections.dataApproval.id)}"] [data-approve-approval]`,
-          );
-          if (!approvalButton) throw new Error('threads right-click approval button disappeared before reviewer decision');
-          approvalButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-          const decisionUpdatedAfterMs = Date.now() - 5 * 60 * 1000;
-          let approvalDecisionAttempt = 0;
-          const approvalDecision = await waitFor(async () => {
-            const approvalDocs = docsToJson(await rawDb.ctox_task_approval_requests.find({
-              selector: {
-                id: projections.dataApproval.id,
-                updated_at_ms: { $gte: decisionUpdatedAfterMs + approvalDecisionAttempt++ },
-              },
-              limit: 1,
-            }).exec());
-            const approval = approvalDocs.find((item) => item.id === projections.dataApproval.id) || null;
-            const approvedCommandId = approval?.approved_command_id || '';
-            const commandDocs = approvedCommandId
-              ? docsToJson(await rawDb.business_commands.find({
-                selector: {
-                  id: approvedCommandId,
-                  updated_at_ms: { $gte: decisionUpdatedAfterMs + approvalDecisionAttempt },
-                },
-                limit: 1,
-              }).exec())
-              : [];
-            const approvedCommand = commandDocs.find((item) => (
-              item.command_id === approvedCommandId || item.id === approvedCommandId
-            )) || null;
-            const approvalLink = approvedCommand?.payload?.approval?.approval_request_id
-              || approvedCommand?.client_context?.approval_request_id
-              || '';
-            return {
-              ok: Boolean(
-                approval?.status === 'approved'
-                && approvedCommandId
-                && approvedCommand
-                && approvedCommand.status !== 'failed'
-                && approvalLink === projections.dataApproval.id
-              ),
-              approval,
-              approvedCommand,
-              approvalLink,
-            };
-          }, 60000, 'threads reviewer decision and approved target reauthorization');
-
-          const status = await globalThis.CTOX_BUSINESS_OS_STATUS?.snapshot?.({
-            includeCounts: false,
-            requiredCollections: [
-              'business_commands',
-              'business_users',
-              'user_threads',
-              'user_thread_messages',
-              'user_notifications',
-              'ctox_task_approval_requests',
-            ],
-          });
-          if (status?.version !== 'business-os-advanced-status-v1') {
-            throw new Error(`threads right-click UI smoke lost advanced status evidence: ${JSON.stringify(status)}`);
-          }
-          const requiredInitialSyncEntries = Array.isArray(status?.sync?.initialSync?.entries)
-            ? status.sync.initialSync.entries
-            : [];
-          const incompleteInitialSync = requiredInitialSyncEntries.filter((entry) => (
-            entry?.state !== 'complete'
-            || !entry?.initialReplicationAt
-            || entry?.checkpointEpochAdvertised !== true
-            || !entry?.checkpointEpoch
-          ));
-          const missingRequiredCollections = Array.isArray(status?.sync?.missingRequiredCollections)
-            ? status.sync.missingRequiredCollections
-            : [];
-          const unhealthyFrameCollections = Array.isArray(status?.sync?.frameTransport?.unhealthyCollections)
-            ? status.sync.frameTransport.unhealthyCollections
-            : [];
-          if (
-            status.ok !== true
-            || Number(status.health?.errorTotal || 0) !== 0
-            || missingRequiredCollections.length
-            || incompleteInitialSync.length
-            || unhealthyFrameCollections.length
-          ) {
-            throw new Error(`threads right-click UI smoke advanced status target collections unhealthy: ${JSON.stringify({
-              ok: status.ok,
-              health: status.health || null,
-              missingRequiredCollections,
-              incompleteInitialSync,
-              unhealthyFrameCollections,
-              requiredCollections: status.sync?.requiredCollections || null,
-            }, null, 2)}`);
-          }
-
-          const scale = threadsScaleSeed || {};
-          const scaleBudgetPassed = !threadsScaleSeed || (Number(scale.commands || 0) >= 10000
-            && Number(scale.threads || 0) >= 10000
-            && Number(scale.messages || 0) >= 10000
-            && Number(scale.notifications || 0) >= 10000
-            && Number(scaleFirstRenderEvidence?.visibleThreadRows || 0) >= 1
-            && Number(scaleFirstRenderEvidence?.visibleThreadRows || 0) <= 200
-            && Number(scaleFirstRenderEvidence?.renderMs || 0) <= 30000);
-          if (threadsScaleSeed && !scaleBudgetPassed) {
-            throw new Error(`threads right-click scale budget failed: ${JSON.stringify({
-              scale,
-              scaleFirstRenderEvidence,
-            }, null, 2)}`);
-          }
-
-          return {
-            mode: smokeMode,
-            targetModuleId: targetModule.id,
-            reviewerId,
-            threadId: projections.thread.id,
-            dataCommandId: dataCommand.command?.command_id || dataCommand.command?.id || '',
-            askCommandId: askCommand.command?.command_id || askCommand.command?.id || '',
-            appCommandId: appCommand.command?.command_id || appCommand.command?.id || '',
-            dataApprovalCommandPersisted: dataCommand.command?.command_type === 'threads.ctox_approval.request',
-            directDenialCommandId: deniedCommandId,
-            directDenialReason: deniedDirectCommand.command?.result?.reason_code
-              || deniedDirectCommand.command?.result?.decision?.reason_code
-              || 'role_or_scope_denied',
-            dataApprovalId: projections.dataApproval.id || '',
-            appApprovalId: projections.appApproval?.id || '',
-            dataApprovalProjected: Boolean(projections.dataApproval),
-            askCommandPersisted: Boolean(askCommand.command),
-            appApprovalCommandPersisted: appCommand.command?.command_type === 'threads.ctox_approval.request',
-            appApprovalProjected: Boolean(projections.appApproval),
-            sourceContextCaptured: [
-              [dataCommand, targetRecordId],
-              [askCommand, targetRecordId],
-              [appCommand, appTargetRecordId],
-            ].every(([entry, expectedRecordId]) => {
-              const command = entry.command || {};
-              const context = command.payload?.source_context || {};
-              const contextV2 = context.context_v2 || command.client_context?.context || {};
-              const pointer = contextV2.pointer || {};
-              return command.record_id === expectedRecordId
-                && (context.record_id === expectedRecordId || contextV2.entity?.id === expectedRecordId)
-                && Number.isFinite(pointer.x)
-                && Number.isFinite(pointer.y);
-            }),
-            reviewerNotificationProjected: Boolean(projections.reviewerNotification),
-            hubRendered: rendered.ok === true,
-            approvalActionRendered: rendered.hasApproveButton === true,
-            approvalDecision: approvalDecision.approval?.status || '',
-            approvedCommandId: approvalDecision.approval?.approved_command_id || '',
-            approvedCommandStatus: approvalDecision.approvedCommand?.status || '',
-            reauthorizationLinked: approvalDecision.approvalLink === projections.dataApproval.id,
-            authState: 'authenticated',
-            browserContext: 'clean',
-            tenantScope: 'local-workspace',
-            actorRole: requesterSession.user.role,
-            reviewerRole: reviewerSession.user.role,
-            reviewerPickerVisible: reviewerPickerEvidence.some((item) => item.visible),
-            reviewerPickerEvidence,
-            scaleCommands: Number(scale.commands || 0),
-            scaleThreads: Number(scale.threads || 0),
-            scaleMessages: Number(scale.messages || 0),
-            scaleNotifications: Number(scale.notifications || 0),
-            scaleVisibleThreadRows: Number(scaleFirstRenderEvidence?.visibleThreadRows || 0),
-            scaleFirstRenderMs: Number(scaleFirstRenderEvidence?.renderMs || 0),
-            scaleBudgetPassed,
-            advancedStatusVersion: status.version || '',
-            advancedStatusRuntime: status.rxdbRuntime || null,
-          };
-        } finally {
-          state.modules = originalState.modules;
-          state.taskbarPins = originalState.taskbarPins;
-          state.moduleAllowlist = originalState.moduleAllowlist;
-          state.session = originalState.session;
-          state.governance = originalState.governance;
-          globalThis.CTOX_BUSINESS_OS_SESSION = originalState.globalSession;
-          if (originalState.bodyAuthState) {
-            document.body.dataset.authState = originalState.bodyAuthState;
-          } else {
-            delete document.body.dataset.authState;
-          }
-          smoke.renderTabs();
-        }
       }
 
       async function runBusinessOsDynamicAppsUiSmoke() {
@@ -13182,6 +12682,8 @@ function ensureCtoxSmokeBinary() {
         }, 8000, `app audience ${label} tabs`);
 
         let result = null;
+        let tamperedScopedTaskbarPinsKey = '';
+        let storedScopedTaskbarPins = null;
         try {
           const helperPrivateHiddenForTeam = !canSeeModuleForAppVersion(privateModule, {
             session: outsideSession,
@@ -13552,6 +13054,44 @@ function ensureCtoxSmokeBinary() {
           document.body.dataset.authState = 'authenticated';
           return catalog;
         };
+        const ensureAppStoreCardsGrid = async (label) => {
+          await waitFor(() => {
+            const root = document.querySelector('[data-app-store-root]');
+            const center = root?.querySelector('.store-center');
+            const toggle = root?.querySelector('[data-store-view-toggle]');
+            return {
+              ok: Boolean(root && center && toggle
+                && visible('[data-app-store-root]')
+                && visible('[data-store-view-toggle]')
+                && center.dataset.pgWired === 'true'),
+              activeModule: state.activeModule?.id || document.body?.dataset?.activeModule || '',
+              paneGrammarWired: center?.dataset?.pgWired || '',
+              toggleMode: toggle?.dataset?.viewMode || '',
+              text: root?.innerText?.slice(0, 500) || '',
+            };
+          }, 30000, `${label} opened`);
+          // Card actions (release/versions/...) render only on the
+          // shard-card grid of the CARDS view: the list view renders compact
+          // rows without action buttons (Karten/Listen-Differenzierung), so
+          // forcing list view makes every data-card-action query structurally
+          // empty. The cards view hides the DOM grid only while the WebGL
+          // shelf is live; the smoke environment falls back to DOM shard
+          // cards, which keep the grid visible and actionable.
+          const toggle = document.querySelector('[data-app-store-root] [data-store-view-toggle]');
+          if (toggle?.dataset?.viewMode === 'list') {
+            click('[data-app-store-root] [data-store-view-toggle]', `${label} cards toggle`);
+          }
+          await waitFor(() => {
+            const grid = document.querySelector('[data-app-store-root] [data-apps-grid]');
+            return {
+              ok: Boolean(toggle?.dataset?.viewMode === 'cards'
+                && visible('[data-app-store-root] [data-apps-grid]')
+                && grid && !grid.hidden),
+              toggleMode: toggle?.dataset?.viewMode || '',
+              gridHidden: grid?.hidden ?? null,
+            };
+          }, 10000, `${label} cards grid`);
+        };
 
         await syncBusinessCollections();
         const initialCatalog = await applyReleaseSession();
@@ -13576,26 +13116,25 @@ function ensureCtoxSmokeBinary() {
             session: releaseSession,
             governance: initialCatalog.governance,
           });
+        // Fail fast with the actual projection gap instead of an opaque card
+        // timeout downstream: the release button needs the founder assignment
+        // (governance.founders) and the private lifecycle in the catalog doc.
+        if (!privateBeforeRelease) {
+          throw new Error(`release fixture must be private and founder-visible before release: ${JSON.stringify({
+            lifecycle: initialModule.lifecycle || null,
+            version: initialModule.version || '',
+            governanceFounders: Object.keys(initialCatalog.governance?.founders || {}),
+            founderAssignment: initialCatalog.governance?.founders?.[moduleId] || null,
+          })}`);
+        }
 
         await state.openModule('app-store', { force: true, asModule: true });
-        await waitFor(() => ({
-          ok: visible('[data-app-store-root]')
-            && visible('[data-pg-view="list"]')
-            && document.querySelector('[data-pg-view="list"]')?.closest('.ctox-pane')?.dataset?.pgWired === 'true',
-          activeModule: state.activeModule?.id || document.body?.dataset?.activeModule || '',
-          paneGrammarWired: document.querySelector('[data-pg-view="list"]')?.closest('.ctox-pane')?.dataset?.pgWired || '',
-          text: document.querySelector('[data-app-store-root]')?.innerText?.slice(0, 500) || '',
-        }), 30000, 'App Store opened for release smoke');
-        click('[data-pg-view="list"]', 'App Store list view');
-        await waitFor(() => ({
-          ok: visible('[data-apps-grid]'),
-          listViewPressed: document.querySelector('[data-pg-view="list"]')?.getAttribute('aria-pressed') || '',
-          gridHidden: document.querySelector('[data-apps-grid]')?.hidden ?? null,
-        }), 10000, 'App Store list view opened for release smoke');
+        await ensureAppStoreCardsGrid('App Store for release smoke');
         click('[data-scope="installed"]', 'installed scope');
         await waitFor(() => {
           const card = document.querySelector(`[data-apps-grid] [data-app-id="${css(moduleId)}"]`);
           const releaseButton = card?.querySelector('[data-card-action="release"]');
+          const deniedButton = card?.querySelector('button.denied[data-disabled-reason]');
           const lifecycleBadge = card?.querySelector('.app-card-version-row .ctox-badge[data-state]');
           return {
             ok: Boolean(card
@@ -13605,6 +13144,8 @@ function ensureCtoxSmokeBinary() {
             hasCard: Boolean(card),
             hasReleaseButton: Boolean(releaseButton),
             releaseDisabled: releaseButton?.disabled ?? null,
+            deniedReason: deniedButton?.dataset?.disabledReason || '',
+            viewMode: document.querySelector('[data-app-store-root] [data-store-view-toggle]')?.dataset?.viewMode || '',
             lifecycleText: lifecycleBadge?.textContent?.trim() || '',
             cardText: card?.innerText?.slice(0, 500) || '',
           };
@@ -13703,18 +13244,7 @@ function ensureCtoxSmokeBinary() {
         localStorage.removeItem(storageKey);
 
         await state.openModule('app-store', { force: true, asModule: true });
-        if (!visible('[data-apps-grid]')) {
-          await waitFor(() => ({
-            ok: document.querySelector('[data-pg-view="list"]')?.closest('.ctox-pane')?.dataset?.pgWired === 'true',
-            paneGrammarWired: document.querySelector('[data-pg-view="list"]')?.closest('.ctox-pane')?.dataset?.pgWired || '',
-          }), 10000, 'App Store pane grammar before versions');
-          click('[data-pg-view="list"]', 'App Store list view before versions');
-          await waitFor(() => ({
-            ok: visible('[data-apps-grid]'),
-            listViewPressed: document.querySelector('[data-pg-view="list"]')?.getAttribute('aria-pressed') || '',
-            gridHidden: document.querySelector('[data-apps-grid]')?.hidden ?? null,
-          }), 10000, 'App Store list view before versions');
-        }
+        await ensureAppStoreCardsGrid('App Store before versions');
         const versionStateReady = await waitFor(async () => {
           await syncBusinessCollections(5000);
           const catalog = await catalogSnapshot();
@@ -15472,10 +15002,6 @@ function ensureCtoxSmokeBinary() {
         return await runBusinessOsAgentScopeUiSmoke();
       }
 
-      if (smokeMode === 'business-os-threads-rightclick-ui') {
-        return await runBusinessOsThreadsRightClickUiSmoke();
-      }
-
       if (smokeMode === 'business-os-threads-scale-ui') {
         return await runBusinessOsThreadsScaleUiSmoke();
       }
@@ -15687,6 +15213,47 @@ function ensureCtoxSmokeBinary() {
       }
 
       if (commandSmokeMode) {
+        if (smokeMode === 'module-source-lossless-browser-to-rust' || smokeMode === 'multiplex-reload-browser-to-rust') {
+          const state = globalThis.ctoxBusinessOsSmoke?.state;
+          if (!state?.commandBus?.dispatch || !state?.sync?.startCollection) {
+            throw new Error('source fixture requires the real shell command and sync runtime');
+          }
+          await state.sync.startCollection('business_module_source_files');
+          const startedAt = performance.now();
+          const id = `source_lossless_${Date.now()}`;
+          const receipt = await state.commandBus.dispatch({
+            id, module: 'ctox', type: 'ctox.source.load', command_type: 'ctox.source.load',
+            record_id: 'lossless-source-probe', payload: { module_id: 'lossless-source-probe' },
+            client_context: smokeClientContext({ source: 'module-source-lossless-smoke' }),
+          }, { until: 'terminal', timeoutMs: 60000 });
+          if (receipt?.status !== 'completed') throw new Error('source load did not complete');
+          const commandMs = performance.now() - startedAt;
+          const collection = state.db.raw.business_module_source_files;
+          const deadline = performance.now() + 60000;
+          let documents = [];
+          while (performance.now() < deadline) {
+            documents = (await collection.find({ selector: { module_id: 'lossless-source-probe' } }).exec())
+              .map((doc) => doc.toJSON?.() || doc)
+              .filter((doc) => /^source-\d{2}\.js$/.test(doc.path));
+            if (documents.length === 21) break;
+            await delay(100);
+          }
+          if (documents.length !== 21) throw new Error(`missing source records: ${documents.length}/21`);
+          let verifiedBytes = 0;
+          for (const doc of documents) {
+            const index = Number(doc.path.slice(7, 9));
+            const expected = `// source fixture ${index}\n` + '// Großes Quelltextstück mit Unicode und "Quotes".\n'.repeat(10000);
+            if (doc.content !== expected) throw new Error(`source content changed: ${doc.id}`);
+            const bytes = new TextEncoder().encode(doc.content);
+            const hash = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))]
+              .map((byte) => byte.toString(16).padStart(2, '0')).join('');
+            if (doc.sha256 !== hash) throw new Error(`source hash mismatch: ${doc.id}`);
+            verifiedBytes += bytes.length;
+          }
+          if (verifiedBytes <= 8 * 1024 * 1024) throw new Error('fixture does not exceed one wire transfer');
+          return { mode: smokeMode, commandId: id, documents: documents.length, verifiedBytes,
+            commandMs, totalMs: performance.now() - startedAt };
+        }
         if (smokeMode === 'command-roundtrip-timing-browser-to-rust') {
           const commandBus = globalThis.ctoxBusinessOsSmoke?.state?.commandBus;
           if (!commandBus?.dispatch) {
@@ -15771,7 +15338,10 @@ function ensureCtoxSmokeBinary() {
               const taskDoc = await db.ctox_queue_tasks.findOne(taskId).exec();
               const task = taskDoc?.toJSON?.();
               if (!task) continue;
-              const queueTasksForCommand = (await db.ctox_queue_tasks.find().exec())
+              const queueTasksForCommand = (await db.ctox_queue_tasks.find({
+                selector: { command_id: id },
+                requireRevision: `command-link:${id}`,
+              }).exec())
                 .map((doc) => doc.toJSON?.() || doc)
                 .filter((doc) => doc.command_id === id);
               if (queueTasksForCommand.length !== 1) {
@@ -15900,12 +15470,65 @@ function ensureCtoxSmokeBinary() {
           await waitForNativePeerOpen(appCommandReplicationState, 'business_commands');
           await waitForNativePeerOpen(appQueueReplicationState, 'ctox_queue_tasks');
         }
-        if (smokeMode === 'command-midflight-restart-browser-to-rust' || officeRestartSmokeMode) {
+        let commandRestartEvidence = null;
+        if (smokeMode === 'command-midflight-restart-browser-to-rust') {
+          const commandBus = globalThis.ctoxBusinessOsSmoke?.state?.commandBus;
+          if (!useAppDb || !commandBus?.dispatch
+            || !globalThis.__ctoxStopNativePeerForRestoreSmoke
+            || !globalThis.__ctoxStartNativePeerForRestoreSmoke) {
+            throw new Error('Mid-flight command acceptance requires the real shell and native process controls');
+          }
+          commandRestartEvidence = {
+            schema: 'ctox.command_restart_acceptance.v1',
+            dispatchCount: 0, resubmissionCount: 0, collectionRepairCount: 0,
+            nativeStoppedBeforeDispatch: false,
+            stopMs: null, nativeStartMs: null, dispatchToReceiptMs: null,
+            receiptStatus: null, codingHarnessVerified: false,
+          };
+          let deadlineTimer;
+          try {
+            const stopStartedAt = performance.now();
+            await globalThis.__ctoxStopNativePeerForRestoreSmoke();
+            commandRestartEvidence.stopMs = performance.now() - stopStartedAt;
+            commandRestartEvidence.nativeStoppedBeforeDispatch = true;
+            const dispatchStartedAt = performance.now();
+            commandRestartEvidence.dispatchCount++;
+            // Exactly one production dispatch while the native host is down.
+            // Keep every active collection running through the outage.
+            const dispatch = commandBus.dispatch({
+              id, module: 'ctox', type: 'business_os.smoke', record_id: '',
+              inbound_channel: 'ctox',
+              payload: { title: 'WebRTC command restart smoke', instruction: 'smoke test only' },
+              client_context: smokeClientContext({ source: 'rxdb-smoke', restart: 'midflight' }),
+            }, { until: 'accepted', timeoutMs: 60000 }).then(receipt => {
+              commandRestartEvidence.dispatchToReceiptMs = performance.now() - dispatchStartedAt;
+              commandRestartEvidence.receiptStatus = receipt?.status || null;
+              return receipt;
+            });
+            const nativeStartAt = performance.now();
+            const restart = globalThis.__ctoxStartNativePeerForRestoreSmoke().then(() => {
+              commandRestartEvidence.nativeStartMs = performance.now() - nativeStartAt;
+            });
+            const [, receipt] = await Promise.race([
+              Promise.all([restart, dispatch]),
+              new Promise((_, reject) => {
+                deadlineTimer = setTimeout(() => reject(new Error('Single command dispatch did not recover within 60000 ms')), 60000);
+              }),
+            ]);
+            if (!receipt?.ok || !receipt.status || ['pending_sync', 'error', 'failed', 'cancelled'].includes(receipt.status)
+              || commandRestartEvidence.dispatchToReceiptMs >= 60000) {
+              throw new Error('Native restart did not produce an accepted command receipt');
+            }
+          } finally {
+            clearTimeout(deadlineTimer);
+            console.log('command_restart_dispatch=' + JSON.stringify(commandRestartEvidence));
+          }
+        } else if (officeRestartSmokeMode) {
           const commandBus = globalThis.ctoxBusinessOsSmoke?.state?.commandBus;
           if (!commandBus?.dispatch) throw new Error('Business OS command bus is not available for mid-flight restart smoke');
           const restartPromise = globalThis.__ctoxRestartNativePeer?.();
           await delay(50);
-          const midflightCommand = officeRestartSmokeMode ? {
+          const midflightCommand = {
             id,
             module: officeRestartFixture.config.module,
             type: `office.${officeRestartFixture.kind}.commit`,
@@ -15923,14 +15546,6 @@ function ensureCtoxSmokeBinary() {
               reason: 'native-peer-restart-smoke',
             },
             client_context: { source: 'ctox-office-esm', surface: `business-os-${officeRestartFixture.config.module}`, transport: 'rxdb-webrtc' },
-          } : {
-            id,
-            module: 'ctox',
-            type: 'business_os.smoke',
-            record_id: '',
-            inbound_channel: 'ctox',
-            payload: { title: 'WebRTC command restart smoke', instruction: 'smoke test only' },
-            client_context: { source: 'rxdb-smoke', restart: 'midflight' },
           };
           const firstDispatch = commandBus.dispatch(midflightCommand).catch((error) => ({ error }));
           await restartPromise;
@@ -16008,7 +15623,10 @@ function ensureCtoxSmokeBinary() {
             const taskDoc = taskId ? await db.ctox_queue_tasks.findOne(taskId).exec() : null;
             const task = taskDoc?.toJSON?.() || null;
             if (task || officeTerminal) {
-              const queueTasksForCommand = (await db.ctox_queue_tasks.find().exec())
+              const queueTasksForCommand = (await db.ctox_queue_tasks.find({
+                selector: { command_id: id },
+                requireRevision: `command-link:${id}`,
+              }).exec())
                 .map((doc) => doc.toJSON?.() || doc)
                 .filter((doc) => doc.command_id === id);
               const expectedQueueTasks = officeRestartSmokeMode ? 0 : 1;
@@ -16058,6 +15676,7 @@ function ensureCtoxSmokeBinary() {
                 taskId,
                 taskStatus: command.task_status || task?.status || command.status || '',
                 taskCountForCommand: queueTasksForCommand.length,
+                commandRestartEvidence,
                 officeCommit,
               };
             }
@@ -17206,14 +16825,16 @@ function ensureCtoxSmokeBinary() {
           desktop_file_chunks: describeReplicationPool(appChunkReplicationState),
         },
       };
-    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, threadsRightClickCapabilities, officeRestartFixtureBytes });
+    }, { signalingUrl, smokeMode, rustSeed, useAppDb, browserPayload, backgroundQueueTask, advancedStatusEvidenceVersion, advancedStatusEvidenceRuntime, codingAgentSmoke, rolesPermissionsReloadVerified, dynamicAppsReloadVerified, appReleaseReloadVerified, appAudienceReloadVerified, threadsScaleSeed, sellifyScaleSeed, sellifyScaleProvisionOnly, officeRestartFixtureBytes, uiCatalogFixture });
     outerPhaseTimings.pageEvaluateMs = Date.now() - pageEvaluateStartedAt;
 
     if (result.mode === 'business-os-ui-regression') {
       result.screenshotEvidence = await captureBusinessOsVisualScreenshotEvidence(page);
     }
 
-    if (result.mode === 'workspace-agent-artifacts-rust-to-browser'
+    if (result.mode === 'critical-browser-reload-timing') {
+      console.log(`critical_browser_reload_passed=${result.report.sampleCount}`);
+    } else if (result.mode === 'workspace-agent-artifacts-rust-to-browser'
       || result.mode === 'workspace-agent-artifacts-stress-rust-to-browser'
       || result.mode === 'workspace-agent-artifacts-churn-rust-to-browser'
       || result.mode === 'workspace-agent-artifacts-background-rust-to-browser') {
@@ -17708,6 +17329,33 @@ function ensureCtoxSmokeBinary() {
       console.log(`business_os_client_lifecycle_tenant_scope=${result.tenantScope}`);
       if (result.advancedStatusVersion) console.log(`advanced_status=${result.advancedStatusVersion}`);
       if (result.advancedStatusRuntime) console.log(`rxdb_runtime=${JSON.stringify(result.advancedStatusRuntime)}`);
+    } else if (result.mode === 'module-source-lossless-browser-to-rust' || result.mode === 'multiplex-reload-browser-to-rust') {
+      const verifyNativeSources = () => {
+        const records = JSON.parse(sqlite("SELECT json_group_array(json(data)) FROM ctox_business_os__business_module_source_files__v0 WHERE deleted=0 AND id LIKE 'lossless-source-probe:source-%';"));
+        if (records.length !== 21) throw new Error(`native source count changed: ${records.length}`);
+        for (const doc of records) {
+          if (typeof doc.content !== 'string') throw new Error(`native source truncated after restart: ${doc.id}`);
+          if (crypto.createHash('sha256').update(doc.content).digest('hex') !== doc.sha256) {
+            throw new Error(`native source hash mismatch after restart: ${doc.id}`);
+          }
+        }
+        return records.length;
+      };
+      result.nativeVerifiedBeforeRestart = verifyNativeSources();
+      const restartStartedAt = Date.now();
+      await stopChild(ctox);
+      ctox = startCtoxServer();
+      await waitForCtoxServerListening(ctox, serverReadyTimeoutMs);
+      await waitForNativePeerSyncConfig(60000);
+      result.nativeVerifiedAfterRestart = verifyNativeSources();
+      result.nativeRestartMs = Date.now() - restartStartedAt;
+      if (result.mode === 'multiplex-reload-browser-to-rust') {
+        result.multiplexReload = await require('./multiplex_reload_probe.js').run(page, sqlite);
+      }
+      const output = path.join(runtimeRoot, 'module-source-lossless-report.json');
+      fs.writeFileSync(output, JSON.stringify(result, null, 2) + '\n');
+      console.log(`module_source_lossless=${JSON.stringify(result)}`);
+      console.log(`module_source_lossless_report=${output}`);
     } else if (result.mode === 'command-roundtrip-timing-browser-to-rust') {
       const marksOutput = process.env.SMOKE_COMMAND_TIMING_OUTPUT
         || path.join(runtimeRoot, 'command-roundtrip-marks.json');
@@ -17739,24 +17387,65 @@ function ensureCtoxSmokeBinary() {
       || result.mode === 'command-midflight-restart-browser-to-rust'
       || result.mode === 'office-document-midflight-restart-browser-to-rust'
       || result.mode === 'office-spreadsheet-midflight-restart-browser-to-rust') {
-      if (result.mode === 'migration-version-browser-to-rust') {
-        const commandTable = 'ctox_business_os__business_commands__v1';
-        const staleCommandTable = 'ctox_business_os__business_commands__v0';
-        const taskTable = 'ctox_business_os__ctox_queue_tasks__v0';
+      if (result.mode === 'command-midflight-restart-browser-to-rust') {
+        const commandTable = nativeCollectionTable('business_commands');
+        const taskTable = nativeCollectionTable('ctox_queue_tasks');
         const commandRow = pollSqliteJson(commandTable, result.id);
         const taskRow = pollSqliteJson(taskTable, result.taskId);
+        const commandCount = sqliteRowCount(commandTable, `json_extract(data, '$.command_id')='${sqlString(result.id)}'`);
+        const taskCount = sqliteRowCount(taskTable, `json_extract(data, '$.command_id')='${sqlString(result.id)}'`);
+        const evidence = {
+          ...result.commandRestartEvidence,
+          commandTable, taskTable,
+          commandId: result.id, taskId: result.taskId,
+          nativeCommandCount: commandCount, nativeQueueTaskCount: taskCount,
+          browserQueueTaskCount: result.taskCountForCommand,
+          commandTaskMatches: commandRow.task_id === result.taskId,
+          taskCommandMatches: taskRow.command_id === result.id,
+        };
+        const reportDirectory = smokeProcessLifecyclePath ? path.dirname(smokeProcessLifecyclePath) : runtimeRoot;
+        fs.mkdirSync(reportDirectory, { recursive: true });
+        fs.writeFileSync(path.join(reportDirectory, 'command-restart.json'), JSON.stringify(evidence, null, 2) + '\n');
+        console.log('command_restart_native=' + JSON.stringify(evidence));
+        if (commandCount !== 1 || taskCount !== 1 || result.taskCountForCommand !== 1
+          || !evidence.commandTaskMatches || !evidence.taskCommandMatches) {
+          throw new Error('Native SQLite does not confirm exactly one durable command-to-queue handoff');
+        }
+      }
+      if (result.mode === 'migration-version-browser-to-rust') {
+        // This checks current-schema routing, not preservation of an old store.
+        // Both active tables follow the same checked-in native wire contract.
+        const commandTable = nativeCollectionTable('business_commands');
+        const taskTable = nativeCollectionTable('ctox_queue_tasks');
+        const schemaVersion = Number(commandTable.split('__v').at(-1));
+        const staleCommandTable = 'ctox_business_os__business_commands__v0';
+        const commandRow = pollSqliteJson(commandTable, result.id);
+        const taskRow = pollSqliteJson(taskTable, result.taskId);
+        const staleTables = Array.from({ length: schemaVersion }, (_, version) =>
+          'ctox_business_os__business_commands__v' + version).filter(sqliteTableExists);
+        if (staleTables.length) {
+          throw new Error('Obsolete command schema tables remain after native startup: ' + JSON.stringify(staleTables));
+        }
         const staleRows = sqliteRowCount(staleCommandTable, `id='${sqlString(result.id)}'`);
         if (staleRows !== 0) {
           throw new Error(`business_commands stale schema table received command rows: ${staleRows}`);
         }
-        if (commandRow.command_id !== result.id || taskRow.command_id !== result.id) {
+        const commandCount = sqliteRowCount(commandTable, `json_extract(data, '$.command_id')='${sqlString(result.id)}'`);
+        const taskCount = sqliteRowCount(taskTable, `json_extract(data, '$.command_id')='${sqlString(result.id)}'`);
+        if (commandRow.command_id !== result.id || taskRow.command_id !== result.id
+          || commandRow.task_id !== result.taskId || commandCount !== 1 || taskCount !== 1
+          || result.taskCountForCommand !== 1) {
           throw new Error(`migration-version command/task rows mismatch: ${JSON.stringify({ commandRow, taskRow })}`);
         }
         console.log(`schema_collection=business_commands`);
-        console.log(`schema_version=1`);
+        console.log(`schema_version=${schemaVersion}`);
         console.log(`schema_table=${commandTable}`);
         console.log(`stale_schema_table=${staleCommandTable}`);
         console.log(`stale_schema_table_rows=${staleRows}`);
+        console.log(`stale_schema_table_count=${staleTables.length}`);
+        console.log(`native_command_count=${commandCount}`);
+        console.log(`native_task_count=${taskCount}`);
+        console.log('command_task_link_verified=1');
         console.log(`task_table=${taskTable}`);
       }
       console.log(`command_id=${result.id}`);

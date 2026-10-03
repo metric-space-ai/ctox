@@ -52,6 +52,13 @@
       "target_field": "target_task_id or a domain-specific queue reference"
     },
     {
+      "file": "src/core/business_os/store_outbound_commands.rs",
+      "function": "outbound_research_scrape_test_input",
+      "occurrence": 1,
+      "semantics": "command_correlation",
+      "target_field": "command_id; adapter input task_id is correlation only, never execution authority"
+    },
+    {
       "file": "src/core/business_os/store_projections.rs",
       "function": "business_chat_payload",
       "occurrence": 1,
@@ -172,7 +179,7 @@
     },
     {
       "file": "src/core/business_os/store.rs",
-      "function": "record_command",
+      "function": "record_command_inner",
       "occurrence": 1,
       "semantics": "execution_link",
       "target_field": "execution_task_id"

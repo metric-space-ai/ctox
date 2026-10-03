@@ -24,10 +24,16 @@ use crate::service;
 
 const INSTALL_MANIFEST_FILE_NAME: &str = "install_manifest.json";
 const UPDATE_STATE_FILE_NAME: &str = "update_state.json";
+const WATCHDOG_RELEASE_SWITCH_LOCK_FILE_NAME: &str = "watchdog-release-switch.lock";
 const MAINTENANCE_STORE_FILE_NAME: &str = "ctox-maintenance.sqlite3";
 const MAINTENANCE_STATE_ID: &str = "business-os-upgrade";
 const MAINTENANCE_SCHEMA_VERSION: u32 = 1;
 const MAINTENANCE_LEASE_TTL_MS: i64 = 90_000;
+/// How long the post-restart `waiting_collections` phase may wait for a browser
+/// acknowledgement before the instance releases its write protection on its own.
+/// Befund 07.09.2026: a single hidden tab stopped polling, no other client was
+/// open, and the whole customer instance stayed read-only for every user.
+const MAINTENANCE_CLIENT_ACK_GRACE_MS: i64 = 10 * 60 * 1000;
 const MAINTENANCE_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 const MAINTENANCE_READ_BUSY_TIMEOUT: Duration = Duration::from_millis(250);
 const DEFAULT_INSTALL_ROOT_RELATIVE_PATH: &str = ".local/lib/ctox";
@@ -359,6 +365,10 @@ pub struct MaintenanceState {
     pub service_active: bool,
     pub replication_up: bool,
     pub initial_replication_complete: bool,
+    /// Wall-clock start of the post-restart wait for a browser acknowledgement
+    /// (`waiting_collections`). Zero for states persisted before this field existed.
+    #[serde(default)]
+    pub waiting_collections_since_ms: i64,
     #[serde(default)]
     pub client_readiness: Vec<MaintenanceClientReadiness>,
     pub retryable: bool,
@@ -744,6 +754,7 @@ fn begin_maintenance(layout: &InstallLayout, target_release: &str) -> Result<Mai
         service_active: false,
         replication_up: false,
         initial_replication_complete: false,
+        waiting_collections_since_ms: 0,
         client_readiness: Vec::new(),
         retryable: false,
         retry_action: None,
@@ -957,6 +968,9 @@ fn reconcile_maintenance_runtime(
             } else {
                 "waiting_replication".to_string()
             };
+            if replication_up && state.waiting_collections_since_ms <= 0 {
+                state.waiting_collections_since_ms = current_utc().timestamp_millis();
+            }
             state.progress = MaintenanceProgress {
                 percent: if replication_up { 96 } else { 92 },
                 message: if replication_up {
@@ -992,6 +1006,9 @@ fn reconcile_maintenance_runtime(
         state = update_maintenance(&layout.state_root, &lease_id, |state| {
             state.replication_up = true;
             state.phase = "waiting_collections".to_string();
+            if state.waiting_collections_since_ms <= 0 {
+                state.waiting_collections_since_ms = current_utc().timestamp_millis();
+            }
             state.progress = MaintenanceProgress {
                 percent: 96,
                 message: "App-Daten werden nach dem Update synchronisiert".to_string(),
@@ -1018,6 +1035,40 @@ fn reconcile_maintenance_runtime(
                 state.progress.message = "Upgrade unterbrochen · Wiederholen möglich".to_string();
             })?
         };
+    }
+    // The browser acknowledgement is a courtesy signal for the banner, not a
+    // safety requirement for writes: the service is active and replication is
+    // up. Without any visible client it never arrives, and a stuck
+    // `waiting_collections` phase keeps EVERY user's apps read-only
+    // (`CTOX_MAINTENANCE_READ_ONLY`) - observed on the customer instance on
+    // 07.09.2026 for 32 minutes after a finished upgrade. Release after a
+    // bounded grace period instead.
+    if state.status == "active"
+        && state.phase == "waiting_collections"
+        && state.service_active
+        && state.replication_up
+    {
+        let now_ms = current_utc().timestamp_millis();
+        let lease_id = state.lease_id.clone();
+        if state.waiting_collections_since_ms <= 0 {
+            state = update_maintenance(&layout.state_root, &lease_id, |state| {
+                state.waiting_collections_since_ms = now_ms;
+            })?;
+        } else if now_ms - state.waiting_collections_since_ms > MAINTENANCE_CLIENT_ACK_GRACE_MS {
+            state = update_maintenance(&layout.state_root, &lease_id, |state| {
+                state.phase = "completed".to_string();
+                state.status = "completed".to_string();
+                state.progress = MaintenanceProgress {
+                    percent: 100,
+                    message: "Upgrade abgeschlossen · Freigabe ohne Browser-Bestätigung"
+                        .to_string(),
+                };
+                state.retryable = false;
+                state.retry_action = None;
+                state.last_error = None;
+                state.finished_at = Some(now_rfc3339());
+            })?;
+        }
     }
     Ok(Some(state))
 }
@@ -2014,6 +2065,17 @@ fn apply_update(
         "CTOX wechselt auf das neue Release",
     )?;
     progress_step("switching current symlink and restarting service if required");
+    let _watchdog_switch_guard = match acquire_watchdog_release_switch_guard(&install_root) {
+        Ok(guard) => guard,
+        Err(err) => {
+            persist_update_phase(
+                &layout.update_state_path(),
+                "failed",
+                Some(err.to_string().as_str()),
+            )?;
+            return Err(err);
+        }
+    };
     if let Err(err) = stop_background_for_release_switch(&layout.active_root) {
         let error_message = err.to_string();
         persist_update_phase(
@@ -2032,9 +2094,11 @@ fn apply_update(
         )?;
         return Err(err);
     }
-    sync_managed_launch_binaries(&install_root, &current_link, &layout.state_root)?;
-    write_managed_wrapper(&install_root, &layout.state_root)?;
-    if let Err(err) = refresh_service_unit(&current_link, &layout.state_root, Some(&install_root)) {
+    if let Err(err) = (|| {
+        sync_managed_launch_binaries(&install_root, &current_link, &layout.state_root)?;
+        write_managed_wrapper(&install_root, &layout.state_root)?;
+        refresh_service_unit(&current_link, &layout.state_root, Some(&install_root))
+    })() {
         rollback_to_previous_release(
             &install_root,
             &current_link,
@@ -2099,7 +2163,7 @@ fn apply_update(
     // process keeps serving the OLD release's UI — the daemon restart above only
     // covers `ctox.service`, which is exactly why `ctox upgrade --dev` appeared
     // to "not take effect" for the Business OS frontend.
-    restart_business_os_web_shell();
+    restart_release_bound_units();
     manifest.previous_release = previous_release.clone();
     manifest.current_release = Some(release.to_string());
     manifest.updated_at = now_rfc3339();
@@ -2153,6 +2217,7 @@ fn rollback_update(root: &Path) -> Result<RollbackResult> {
     let should_restart = service::service_status_snapshot(&layout.active_root)
         .map(|status| status.running || status.autostart_enabled || has_runnable_queue_work)
         .unwrap_or(false);
+    let _watchdog_switch_guard = acquire_watchdog_release_switch_guard(&install_root)?;
     stop_background_for_release_switch(&layout.active_root)?;
     if let Some(backup_path) = update_state.and_then(|entry| entry.state_backup_path) {
         restore_state_backup(&backup_path, &layout.state_root)?;
@@ -2398,19 +2463,29 @@ fn maybe_restart_service(previous_release_root: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// Best-effort restart of the Business OS web shell after a release switch, so
-/// it serves the new release's on-disk static assets (`app.js` / `app.css` /
-/// `index.html`).
+/// Every user unit besides `ctox.service` that execs the CTOX binary from the
+/// `current/` release (directly or via `~/.local/bin/ctox`). After a release
+/// switch such a process keeps running the previous release's executable —
+/// deleted by `prune_old_releases` — until it is restarted: observed on
+/// welsch and thesen 28.09.2026, where `cto-jami-daemon.service` had run a
+/// deleted binary since 31.08. and `ctox-business-os-mcp.service` since 06.09.
+/// across several upgrades. `ctox.service` itself is restarted by the upgrade.
+const RELEASE_BOUND_UNITS: &[&str] = &[
+    "ctox-business-os-web.service",
+    "ctox-business-os.service",
+    "cto-jami-daemon.service",
+    "ctox-business-os-mcp.service",
+];
+
+/// Best-effort restart of the release-bound units after a release switch, so
+/// the web shell serves the new release's on-disk assets and the Jami daemon
+/// and managed MCP connector run the new binary.
 ///
-/// No-op on installs that do not run the web shell (the unit is absent/inactive),
-/// so we never spuriously start it. The daemon restart in the upgrade flow only
-/// covers `ctox.service`; without this, `ctox upgrade --dev` switches the release
-/// but the web shell keeps serving the previous release's UI until a manual
-/// `systemctl --user restart`.
-fn restart_business_os_web_shell() {
-    const WEB_UNITS: &[&str] = &["ctox-business-os-web.service", "ctox-business-os.service"];
+/// No-op for units an install does not run (absent/inactive and not enabled),
+/// so we never spuriously start one.
+fn restart_release_bound_units() {
     let mut restarted = false;
-    for unit in WEB_UNITS {
+    for unit in RELEASE_BOUND_UNITS {
         let is_active = Command::new("systemctl")
             .args(["--user", "is-active", unit])
             .output()
@@ -2429,7 +2504,7 @@ fn restart_business_os_web_shell() {
             continue;
         }
         if !restarted {
-            progress_step("restarting Business OS web shell onto the new release");
+            progress_step("restarting release-bound units onto the new release");
             restarted = true;
         }
         let _ = Command::new("systemctl")
@@ -3616,6 +3691,46 @@ fn backup_sqlite_database(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+fn backup_secret_master_key(state_root: &Path, backup_root: &Path) -> Result<()> {
+    let source = state_root.join(secrets::SECRET_MASTER_KEY_FILE);
+    let metadata = match fs::symlink_metadata(&source) {
+        Ok(metadata) => metadata,
+        // Older stores may still carry their key inside the SQLite snapshot.
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).context("failed to inspect secret master key for backup"),
+    };
+    anyhow::ensure!(
+        metadata.file_type().is_file(),
+        "state backup aborted: secret master key must be a regular file"
+    );
+    let mut source_options = OpenOptions::new();
+    source_options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        source_options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut source_file = source_options
+        .open(&source)
+        .context("failed to open secret master key for backup")?;
+    let destination = backup_root.join(secrets::SECRET_MASTER_KEY_FILE);
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut destination_file = options
+        .open(destination)
+        .context("failed to create backup secret master key")?;
+    copy(&mut source_file, &mut destination_file).context("failed to back up secret master key")?;
+    destination_file
+        .sync_all()
+        .context("failed to sync backup secret master key")?;
+    Ok(())
+}
+
 fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
     let backup_root = state_root
         .join("backups")
@@ -3722,6 +3837,10 @@ fn backup_state_root(state_root: &Path) -> Result<PathBuf> {
             }
         }
     }
+    // Copy the protected key after the databases: migrating a legacy embedded
+    // key writes this file before deleting the database value. A failed key
+    // copy must abort before the backup is marked complete.
+    backup_secret_master_key(state_root, &backup_root)?;
     let manifest_path = backup_root.join("backup_manifest.json");
     let manifest = json!({
         "created_at": now_rfc3339(),
@@ -3959,14 +4078,26 @@ fn sync_managed_launch_binaries(
         state_root,
         &current_binary,
     )?;
+    // First installs exposed this copy directly and their release-local
+    // wrappers still refer to it. Never leave a failed candidate's binary at
+    // that legacy path: publish the active release only after `current` moves,
+    // and republish the previous release on every rollback path.
+    let global_wrapper = wrapper_path()?;
+    sync_global_real_binary(&current_binary, &global_wrapper)?;
     let current_desktop_host = current_root.join("bin/ctox-desktop-host");
     if current_desktop_host.is_file() {
         copy_launch_binary(&current_desktop_host, &bin_dir.join("ctox-desktop-host"))?;
     }
-    if let Ok(wrapper) = wrapper_path() {
-        ensure_global_command_shim(&wrapper);
-    }
+    ensure_global_command_shim(&global_wrapper);
     Ok(())
+}
+
+fn sync_global_real_binary(current_binary: &Path, global_wrapper: &Path) -> Result<()> {
+    let global_real = global_wrapper.with_file_name("ctox-real");
+    if let Some(parent) = global_real.parent() {
+        ensure_dir(parent)?;
+    }
+    copy_launch_binary(current_binary, &global_real)
 }
 
 fn select_launch_binary(current_root: &Path) -> Result<Option<PathBuf>> {
@@ -4007,17 +4138,32 @@ fn write_launch_wrapper(
         install_root.display(),
         launcher_binary.display()
     );
-    let mut file = fs::File::create(destination)
-        .with_context(|| format!("failed to write {}", destination.display()))?;
+    let temporary_destination = destination.with_extension("new");
+    let mut file = fs::File::create(&temporary_destination)
+        .with_context(|| format!("failed to write {}", temporary_destination.display()))?;
     file.write_all(script.as_bytes())
-        .with_context(|| format!("failed to populate {}", destination.display()))?;
+        .with_context(|| format!("failed to populate {}", temporary_destination.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let mut permissions = file.metadata()?.permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(destination, permissions)?;
+        fs::set_permissions(&temporary_destination, permissions)?;
     }
+    file.sync_all()
+        .with_context(|| format!("failed to sync {}", temporary_destination.display()))?;
+    drop(file);
+    #[cfg(windows)]
+    if destination.exists() {
+        fs::remove_file(destination)?;
+    }
+    fs::rename(&temporary_destination, destination).with_context(|| {
+        format!(
+            "failed to publish launcher {} as {}",
+            temporary_destination.display(),
+            destination.display()
+        )
+    })?;
     Ok(())
 }
 
@@ -4109,7 +4255,7 @@ fn refresh_service_unit(
     }
     fs::write(&marker, "").with_context(|| format!("failed to update {}", marker.display()))?;
 
-    install_ctox_watchdog_units(&service_dir)?;
+    install_ctox_watchdog_units(&service_dir, install_root.unwrap_or(state_root))?;
 
     let _ = Command::new("systemctl")
         .args(["--user", "daemon-reload"])
@@ -4358,7 +4504,87 @@ fn run_launchctl_required_with_retry<const N: usize>(
 /// the service and never re-started it). The watchdog closes that loop with
 /// a minutely guard: `is-active --quiet || start`. ConditionPathExists ensures
 /// the timer stays dormant if the user uninstalled ctox.service entirely.
-fn install_ctox_watchdog_units(service_dir: &Path) -> Result<()> {
+fn systemd_quoted_argument(path: &Path) -> Result<String> {
+    let value = path
+        .to_str()
+        .context("watchdog lock path is not valid UTF-8")?;
+    if value.chars().any(|ch| matches!(ch, '\n' | '\r' | '\0')) {
+        anyhow::bail!("watchdog lock path contains a control character");
+    }
+    // systemd expands percent specifiers and dollar variables even in quoted
+    // ExecStart arguments. Keep the lock path one literal argument.
+    Ok(format!(
+        "\"{}\"",
+        value
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('%', "%%")
+            .replace('$', "$$")
+    ))
+}
+
+fn acquire_watchdog_release_switch_guard(install_root: &Path) -> Result<Option<fs::File>> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+
+        let Some(home_dir) = home_dir() else {
+            return Ok(None);
+        };
+        let service_dir = env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| home_dir.join(".config"))
+            .join("systemd/user");
+        if !service_dir.join("ctox.service").is_file() {
+            return Ok(None);
+        }
+        if !Path::new("/usr/bin/flock").is_file() {
+            anyhow::bail!("/usr/bin/flock is required for a guarded CTOX release switch");
+        }
+        ensure_dir(install_root)?;
+        // Upgrade the installed unit before stopping ctox.service. Draining
+        // an already-running old watchdog service closes the transition race.
+        install_ctox_watchdog_units(&service_dir, install_root)?;
+        for args in [
+            &["--user", "daemon-reload"][..],
+            &["--user", "stop", "ctox-watchdog.service"][..],
+        ] {
+            let output = Command::new("systemctl")
+                .args(args)
+                .output()
+                .context("failed to run systemctl before CTOX release switch")?;
+            if !output.status.success() {
+                anyhow::bail!(
+                    "systemctl {} failed before CTOX release switch: {}",
+                    args.join(" "),
+                    String::from_utf8_lossy(&output.stderr).trim()
+                );
+            }
+        }
+        let lock_path = install_root.join(WATCHDOG_RELEASE_SWITCH_LOCK_FILE_NAME);
+        let lock = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&lock_path)
+            .with_context(|| format!("failed to open {}", lock_path.display()))?;
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err(std::io::Error::last_os_error()).with_context(|| {
+                format!(
+                    "watchdog still owns {}; CTOX release switch was not started",
+                    lock_path.display()
+                )
+            });
+        }
+        Ok(Some(lock))
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = install_root;
+        Ok(None)
+    }
+}
+
+fn install_ctox_watchdog_units(service_dir: &Path, lock_root: &Path) -> Result<()> {
     let watchdog_service = service_dir.join("ctox-watchdog.service");
     let watchdog_timer = service_dir.join("ctox-watchdog.timer");
 
@@ -4366,13 +4592,15 @@ fn install_ctox_watchdog_units(service_dir: &Path) -> Result<()> {
     // start it. We use `bash -c` because systemd ExecStart does not natively
     // chain `||`. We do not use `RemainAfterExit` since this is one-shot per
     // tick; the timer keeps re-firing.
-    let watchdog_service_contents = "[Unit]\n\
+    let lock_path = lock_root.join(WATCHDOG_RELEASE_SWITCH_LOCK_FILE_NAME);
+    let lock_arg = systemd_quoted_argument(&lock_path)?;
+    let watchdog_service_contents = format!("[Unit]\n\
 Description=CTOX Background Service Watchdog\n\
 ConditionPathExists=%h/.config/systemd/user/ctox.service\n\
 \n\
 [Service]\n\
 Type=oneshot\n\
-ExecStart=/bin/bash -c 'systemctl --user is-active --quiet ctox.service || systemctl --user start ctox.service'\n";
+ExecStart=/usr/bin/flock -n -E 0 {lock_arg} /bin/bash -c 'systemctl --user is-active --quiet ctox.service || systemctl --user start ctox.service'\n");
 
     let watchdog_timer_contents = "[Unit]\n\
 Description=CTOX Background Service Watchdog Timer\n\
@@ -4640,6 +4868,83 @@ mod tests {
     use std::sync::mpsc;
     use tempfile::tempdir;
 
+    #[test]
+    fn watchdog_unit_skips_ticks_during_release_switch() {
+        let root = tempdir().expect("temporary watchdog directory");
+        let service_dir = root.path().join("units");
+        let state_root = root.path().join("state with % and $ spaces");
+        fs::create_dir_all(&service_dir).expect("unit directory");
+        install_ctox_watchdog_units(&service_dir, &state_root).expect("watchdog units");
+        let unit = fs::read_to_string(service_dir.join("ctox-watchdog.service"))
+            .expect("watchdog service");
+        assert!(unit.contains("ExecStart=/usr/bin/flock -n -E 0 "));
+        assert!(unit.contains("state with %% and $$ spaces/watchdog-release-switch.lock"));
+        assert!(unit.contains("systemctl --user start ctox.service"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn watchdog_tick_cannot_start_while_release_switch_holds_lock() {
+        use std::os::fd::AsRawFd;
+
+        let root = tempdir().expect("temporary watchdog directory");
+        let lock_path = root.path().join(WATCHDOG_RELEASE_SWITCH_LOCK_FILE_NAME);
+        let lock = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .open(&lock_path)
+            .expect("release switch lock");
+        assert_eq!(unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) }, 0);
+        let blocked = Command::new("/usr/bin/flock")
+            .args(["-n", "-E", "42"])
+            .arg(&lock_path)
+            .args(["/bin/sh", "-c", "exit 99"])
+            .status()
+            .expect("watchdog probe");
+        assert_eq!(blocked.code(), Some(42));
+        drop(lock);
+        let released = Command::new("/usr/bin/flock")
+            .args(["-n", "-E", "42"])
+            .arg(&lock_path)
+            .args(["/bin/sh", "-c", "exit 99"])
+            .status()
+            .expect("watchdog probe after release");
+        assert_eq!(released.code(), Some(99));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn legacy_global_real_binary_tracks_activation_and_rollback() {
+        let root = tempdir().expect("temporary managed install");
+        let releases = root.path().join("releases");
+        let old = releases.join("old");
+        let next = releases.join("next");
+        fs::create_dir_all(old.join("bin")).expect("old release");
+        fs::create_dir_all(next.join("bin")).expect("next release");
+        fs::write(old.join("bin/ctox-real"), b"old release binary").expect("old binary");
+        fs::write(next.join("bin/ctox-real"), b"next release binary").expect("next binary");
+        let current = root.path().join("current");
+        switch_current_release(&current, &old).expect("activate old release");
+        let global_wrapper = root.path().join("global-bin/ctox");
+
+        for (release, expected) in [
+            (&old, &b"old release binary"[..]),
+            (&next, &b"next release binary"[..]),
+            (&old, &b"old release binary"[..]),
+        ] {
+            switch_current_release(&current, release).expect("switch active release");
+            let active_binary = select_launch_binary(&current)
+                .expect("inspect active release")
+                .expect("active binary");
+            sync_global_real_binary(&active_binary, &global_wrapper)
+                .expect("publish active legacy binary");
+            assert_eq!(
+                fs::read(global_wrapper.with_file_name("ctox-real")).expect("global binary"),
+                expected
+            );
+        }
+    }
+
     fn maintenance_test_layout(root: &Path) -> InstallLayout {
         InstallLayout {
             workspace_root: root.to_path_buf(),
@@ -4648,6 +4953,41 @@ mod tests {
             state_root: root.join("state"),
             cache_root: root.join("cache"),
         }
+    }
+
+    #[test]
+    fn every_installed_unit_running_the_ctox_binary_is_restarted_on_upgrade() {
+        // install.sh writes the user units; every one whose ExecStart runs the
+        // CTOX binary must follow a release switch (ctox.service is restarted
+        // by the upgrade itself). A new unit without an entry here would keep
+        // running the deleted previous binary after the next upgrade.
+        let script = include_str!("../../../install.sh");
+        let mut units = Vec::new();
+        let mut current: Option<String> = None;
+        for line in script.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("cat > \"$service_dir/") {
+                current = rest.split('"').next().map(str::to_string);
+            } else if line.starts_with("ExecStart=") && line.contains("ctox") {
+                if let Some(unit) = current.take() {
+                    units.push(unit);
+                }
+            } else if line == "SVCEOF" {
+                current = None;
+            }
+        }
+        assert!(
+            units.iter().any(|unit| unit == "cto-jami-daemon.service"),
+            "parsed units: {units:?}"
+        );
+        for unit in units.iter().filter(|unit| unit.as_str() != "ctox.service") {
+            assert!(
+                RELEASE_BOUND_UNITS.contains(&unit.as_str()),
+                "{unit} runs the CTOX binary but is not restarted after a release switch"
+            );
+        }
+        // Units created outside install.sh (managed MCP connector) follow too.
+        assert!(RELEASE_BOUND_UNITS.contains(&"ctox-business-os-mcp.service"));
     }
 
     #[test]
@@ -4863,6 +5203,79 @@ mod tests {
             .unwrap();
         assert_eq!(reconciled.status, "stale");
         assert!(reconciled.retryable);
+    }
+
+    #[test]
+    fn waiting_collections_without_browser_ack_completes_after_grace() {
+        let temp = tempdir().unwrap();
+        // Same root resolution as the status endpoint, so the reconcile and the
+        // projection below read the same persisted state.
+        let layout = InstallLayout::resolve(temp.path()).unwrap();
+        let started = begin_maintenance(&layout, "branch:main").unwrap();
+        let now_ms = current_utc().timestamp_millis();
+        let mut waiting = load_maintenance_state_from_root(&layout.state_root)
+            .unwrap()
+            .unwrap();
+        waiting.service_active = true;
+        waiting.replication_up = true;
+        waiting.phase = "waiting_collections".to_string();
+        waiting.lease_expires_at_ms = now_ms + MAINTENANCE_LEASE_TTL_MS;
+        waiting.waiting_collections_since_ms = now_ms - MAINTENANCE_CLIENT_ACK_GRACE_MS + 30_000;
+        persist_maintenance_state_to_root(&layout.state_root, &waiting).unwrap();
+
+        // Inside the grace period the instance keeps waiting for the browser.
+        let still_waiting = reconcile_maintenance_runtime(temp.path(), &layout)
+            .unwrap()
+            .unwrap();
+        assert_eq!(still_waiting.lease_id, started.lease_id);
+        assert_eq!(still_waiting.status, "active");
+        assert_eq!(still_waiting.phase, "waiting_collections");
+        assert_eq!(
+            business_os_maintenance_status(temp.path()).unwrap()["active"],
+            true
+        );
+
+        let mut overdue = load_maintenance_state_from_root(&layout.state_root)
+            .unwrap()
+            .unwrap();
+        overdue.waiting_collections_since_ms = now_ms - MAINTENANCE_CLIENT_ACK_GRACE_MS - 1;
+        persist_maintenance_state_to_root(&layout.state_root, &overdue).unwrap();
+
+        let released = reconcile_maintenance_runtime(temp.path(), &layout)
+            .unwrap()
+            .unwrap();
+        assert_eq!(released.status, "completed");
+        assert_eq!(released.phase, "completed");
+        assert!(released.finished_at.is_some());
+        // Honest projection: no client ever acknowledged its collections.
+        assert!(!released.initial_replication_complete);
+        assert!(released.client_readiness.is_empty());
+        let payload = business_os_maintenance_status(temp.path()).unwrap();
+        assert_eq!(payload["active"], false);
+        assert_eq!(payload["message"], "");
+    }
+
+    #[test]
+    fn waiting_collections_grace_starts_at_first_observation() {
+        let temp = tempdir().unwrap();
+        let layout = InstallLayout::resolve(temp.path()).unwrap();
+        begin_maintenance(&layout, "branch:main").unwrap();
+        let mut waiting = load_maintenance_state_from_root(&layout.state_root)
+            .unwrap()
+            .unwrap();
+        waiting.service_active = true;
+        waiting.replication_up = true;
+        waiting.phase = "waiting_collections".to_string();
+        waiting.lease_expires_at_ms = current_utc().timestamp_millis() + MAINTENANCE_LEASE_TTL_MS;
+        // A state persisted by an older binary carries no start timestamp.
+        waiting.waiting_collections_since_ms = 0;
+        persist_maintenance_state_to_root(&layout.state_root, &waiting).unwrap();
+
+        let observed = reconcile_maintenance_runtime(temp.path(), &layout)
+            .unwrap()
+            .unwrap();
+        assert_eq!(observed.status, "active");
+        assert!(observed.waiting_collections_since_ms > 0);
     }
 
     #[test]
@@ -5453,6 +5866,86 @@ mod tests {
         assert!(err
             .to_string()
             .contains("ChatGPT subscription auth backup missing"));
+    }
+
+    #[test]
+    fn state_backup_restores_encrypted_credentials_without_original_store() {
+        let temp = tempdir().unwrap();
+        let original = temp.path().join("original");
+        let state = original.join("runtime");
+        ensure_dir(&state).unwrap();
+        secrets::write_secret_record(
+            &original,
+            "fixture",
+            "token",
+            "synthetic-backup-secret",
+            None,
+            json!({}),
+        )
+        .unwrap();
+        let key_name = secrets::SECRET_MASTER_KEY_FILE;
+        assert!(state.join(key_name).is_file());
+        let db = rusqlite::Connection::open(secrets::secret_store_path(&original)).unwrap();
+        let embedded: i64 = db
+            .query_row(
+                "SELECT count(*) FROM ctox_secret_kv WHERE key = 'secret_master_key_b64'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(embedded, 0);
+        drop(db);
+        fs::write(state.join("unrelated.key"), "excluded fixture").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(state.join(key_name), fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        let backup = backup_state_root(&state).unwrap();
+        assert!(!backup.join("unrelated.key").exists());
+        let isolated = temp.path().join("backup-only");
+        fs::rename(backup, &isolated).unwrap();
+        fs::remove_dir_all(&original).unwrap();
+        assert!(!original.exists());
+        let restored = temp.path().join("restored");
+        restore_state_backup(&isolated, &restored.join("runtime")).unwrap();
+        // Check permissions before reading secrets: that API also repairs modes.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            for key in [
+                isolated.join(key_name),
+                restored.join("runtime").join(key_name),
+            ] {
+                assert_eq!(
+                    fs::metadata(key).unwrap().permissions().mode() & 0o777,
+                    0o600
+                );
+            }
+        }
+        assert_eq!(
+            secrets::read_secret_value(&restored, "fixture", "token").unwrap(),
+            "synthetic-backup-secret"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_backup_rejects_master_key_symlink() {
+        let temp = tempdir().unwrap();
+        let state = temp.path().join("state");
+        ensure_dir(&state).unwrap();
+        let outside = temp.path().join("outside-key");
+        fs::write(&outside, "synthetic key").unwrap();
+        std::os::unix::fs::symlink(&outside, state.join(secrets::SECRET_MASTER_KEY_FILE)).unwrap();
+        assert!(backup_state_root(&state)
+            .unwrap_err()
+            .to_string()
+            .contains("regular file"));
+        for entry in fs::read_dir(state.join("backups")).unwrap() {
+            assert!(!entry.unwrap().path().join("backup_manifest.json").exists());
+        }
+        assert_eq!(fs::read_to_string(outside).unwrap(), "synthetic key");
     }
 
     #[test]

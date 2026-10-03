@@ -1,6 +1,6 @@
 {
   "schema_version": "business-os-db-isolation-inventory-v1",
-  "updated_at": "2026-09-06",
+  "updated_at": "2026-09-09",
   "owner": "business-os-platform",
   "purpose": "Phase 13A inventory plus Phase 13D drift guard for packaged/core module data-isolation migration, unscoped facade exceptions, and tested scoped system/internal module exceptions.",
   "modules": {
@@ -130,10 +130,10 @@
       "install_scope": "core",
       "distribution": "system-module",
       "default_installed": true,
-      "classification": "catalog-user-module",
+      "classification": "system-user-module",
       "isolation_status": "guarded-facade-migrated",
       "owner": "business-os-platform",
-      "review_by": "2026-07-31",
+      "review_by": "2026-09-09",
       "db_access": {
         "uses_raw_db": false,
         "uses_collection_property_access": false,
@@ -187,10 +187,10 @@
       "install_scope": "store",
       "distribution": "catalog-module",
       "default_installed": false,
-      "classification": "system-collaboration-module",
+      "classification": "catalog-collaboration-module",
       "isolation_status": "guarded-facade-migrated",
       "owner": "business-os-platform",
-      "review_by": "2026-08-06",
+      "review_by": "2026-09-09",
       "db_access": {
         "uses_raw_db": false,
         "uses_collection_property_access": false,
@@ -219,7 +219,7 @@
       "notes": "ATS catalog module: Credentials does not unwrap the Shell DB facade or cache DB handles. Credential storage and release actions stay server-authoritative through command dispatch and scoped Business OS permissions."
     },
     "ctox": {
-      "title": "CTOX",
+      "title": "Crew",
       "manifest_path": "src/apps/business-os/modules/ctox/module.json",
       "source_path": "src/apps/business-os/modules/ctox",
       "install_scope": "core",
@@ -228,7 +228,7 @@
       "classification": "system-control-module",
       "isolation_status": "system-scoped-exception-tested",
       "owner": "business-os-platform",
-      "review_by": "2026-07-31",
+      "review_by": "2026-09-09",
       "db_access": {
         "uses_raw_db": false,
         "uses_collection_property_access": false,
@@ -236,9 +236,16 @@
         "uses_cached_db_handle": false
       },
       "scoped_collections": [
+        "business_chats",
         "business_commands",
+        "communication_accounts",
         "ctox_bug_reports",
+        "ctox_crew_learnings",
+        "ctox_crew_members",
+        "ctox_harness_events",
+        "ctox_harness_status",
         "ctox_queue_tasks",
+        "ctox_runs",
         "ctox_runtime_settings"
       ],
       "notes": "Scoped system exception: CTOX resolves business_commands, ctox_runtime_settings, ctox_queue_tasks and ctox_bug_reports through the scoped system facade. Browser/Rust dynamic-app smoke denies the registered foreign business_module_catalog collection through collection(), property, raw and collections access and checks the permission/capability facade contract."
@@ -312,10 +319,10 @@
       "install_scope": "core",
       "distribution": "system-module",
       "default_installed": true,
-      "classification": "catalog-user-module",
+      "classification": "system-user-module",
       "isolation_status": "guarded-facade-migrated",
       "owner": "business-os-platform",
-      "review_by": "2026-07-31",
+      "review_by": "2026-09-09",
       "db_access": {
         "uses_raw_db": false,
         "uses_collection_property_access": false,
@@ -426,10 +433,10 @@
       "install_scope": "core",
       "distribution": "system-module",
       "default_installed": true,
-      "classification": "catalog-user-module",
+      "classification": "system-user-module",
       "isolation_status": "guarded-facade-migrated",
       "owner": "business-os-platform",
-      "review_by": "2026-07-31",
+      "review_by": "2026-09-09",
       "db_access": {
         "uses_raw_db": false,
         "uses_collection_property_access": false,
@@ -508,10 +515,10 @@
       "install_scope": "core",
       "distribution": "system-module",
       "default_installed": true,
-      "classification": "catalog-user-module",
+      "classification": "system-user-module",
       "isolation_status": "guarded-facade-migrated",
       "owner": "business-os-platform",
-      "review_by": "2026-07-31",
+      "review_by": "2026-09-09",
       "db_access": {
         "uses_raw_db": false,
         "uses_collection_property_access": false,
@@ -591,10 +598,10 @@
       "install_scope": "core",
       "distribution": "system-module",
       "default_installed": true,
-      "classification": "catalog-user-module",
+      "classification": "system-user-module",
       "isolation_status": "guarded-facade-migrated",
       "owner": "business-os-platform",
-      "review_by": "2026-07-31",
+      "review_by": "2026-09-09",
       "db_access": {
         "uses_raw_db": false,
         "uses_collection_property_access": false,
@@ -629,10 +636,10 @@
       "install_scope": "core",
       "distribution": "system-module",
       "default_installed": true,
-      "classification": "catalog-user-module",
+      "classification": "system-user-module",
       "isolation_status": "guarded-facade-migrated",
       "owner": "business-os-platform",
-      "review_by": "2026-07-31",
+      "review_by": "2026-09-09",
       "db_access": {
         "uses_raw_db": false,
         "uses_collection_property_access": false,
@@ -703,6 +710,7 @@
         "user_notifications",
         "user_thread_links",
         "user_thread_messages",
+        "user_thread_states",
         "user_threads"
       ],
       "notes": "Scoped system exception: Threads resolves user thread, notification, task approval, command and queue projections through the scoped system facade. Browser/Rust dynamic-app smoke denies foreign collections through collection(), property, raw and collections access."
@@ -726,6 +734,8 @@
       },
       "scoped_collections": [
         "business_commands",
+        "ctox_crew_members",
+        "ctox_queue_tasks",
         "ctox_ticket_approvals",
         "ctox_ticket_cases",
         "ctox_ticket_clarification_requests",
@@ -749,16 +759,16 @@
       "distribution": "system-module",
       "default_installed": true,
       "classification": "system-control-module",
-      "isolation_status": "guarded-facade-migrated",
+      "isolation_status": "facade-source-reviewed",
       "owner": "business-os-platform",
-      "review_by": "2026-09-06",
+      "review_by": "2026-09-09",
       "db_access": {
         "uses_raw_db": false,
         "uses_collection_property_access": false,
         "uses_collections_proxy": false,
         "uses_cached_db_handle": false
       },
-      "notes": "App Creator resolves its manifest-declared collections through ctx.db.collection(name). Creation and installation use the native command bus."
+      "notes": "Uses ctx.db.collection(name) and the existing creator shell allowlist for business_commands/business_module_catalog. Source access reviewed; this inventory does not claim a new runtime isolation acceptance."
     },
     "explorer": {
       "title": "Explorer",
@@ -768,16 +778,16 @@
       "distribution": "system-module",
       "default_installed": true,
       "classification": "system-desktop-module",
-      "isolation_status": "guarded-facade-migrated",
+      "isolation_status": "facade-source-reviewed",
       "owner": "business-os-platform",
-      "review_by": "2026-09-06",
+      "review_by": "2026-09-09",
       "db_access": {
         "uses_raw_db": false,
         "uses_collection_property_access": false,
         "uses_collections_proxy": false,
         "uses_cached_db_handle": false
       },
-      "notes": "Explorer uses the shell-supplied collection facade and file helpers for manifest-declared records and file chunks. It does not unwrap or globally cache the database."
+      "notes": "Module counterpart of desktop-apps/explorer. Uses ctx.db.collection(name) and passes the shell-provided facade into filesystem helpers. No raw/property/proxy/global database access found; runtime isolation acceptance remains separate."
     },
     "file-viewer": {
       "title": "Datei-Viewer",
@@ -787,16 +797,16 @@
       "distribution": "system-module",
       "default_installed": true,
       "classification": "system-desktop-module",
-      "isolation_status": "guarded-facade-migrated",
+      "isolation_status": "facade-source-reviewed",
       "owner": "business-os-platform",
-      "review_by": "2026-09-06",
+      "review_by": "2026-09-09",
       "db_access": {
         "uses_raw_db": false,
         "uses_collection_property_access": false,
         "uses_collections_proxy": false,
         "uses_cached_db_handle": false
       },
-      "notes": "File Viewer reads desktop_files and business_commands through the shell-supplied collection facade. Native commands prepare file projections; business data stays on the sync transport."
+      "notes": "Module counterpart of desktop-apps/file-viewer. Reads desktop_files through ctx.db.collection and command projections through the supplied facade. No raw/property/proxy/global database access found; runtime isolation acceptance remains separate."
     },
     "kundenpipeline": {
       "title": "Decision Hub",
@@ -806,16 +816,16 @@
       "distribution": "system-module",
       "default_installed": true,
       "classification": "system-control-module",
-      "isolation_status": "guarded-facade-migrated",
+      "isolation_status": "facade-source-reviewed",
       "owner": "business-os-platform",
-      "review_by": "2026-09-06",
+      "review_by": "2026-09-09",
       "db_access": {
         "uses_raw_db": false,
         "uses_collection_property_access": false,
         "uses_collections_proxy": false,
         "uses_cached_db_handle": false
       },
-      "notes": "Decision Hub resolves collections through state.ctx.db.collection(name) and reads sync readiness from the shell. Workflow actions use the native command bus."
+      "notes": "Decision Hub reads its three kundenpipeline collections through state.ctx.db.collection(name) and uses shell commands for actions. No raw/property/proxy/global database access found; runtime isolation acceptance remains separate."
     }
   },
   "desktop_apps": {

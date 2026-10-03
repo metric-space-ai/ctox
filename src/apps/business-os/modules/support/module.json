@@ -43,12 +43,7 @@
     "left": "Support queue, saved views, and channel filters",
     "center": "Selected support conversation timeline and composer",
     "right": "Customer context, ticket links, SLA, macros, and CTOX Agent suggestions",
-    "third_pane_justification": "Support operators need customer identity, linked tickets, SLA state, and CTOX suggestions visible while reading and replying; moving this context into drawers would force repeated context switches during every conversation.",
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/support.jpg",
-    "icon_asset_sha256": "d5058006ec868a0ea19378ea477e16f8ddb51bb92c7817c1c39c390291e26235",
-    "icon_selection_sha256": "d5058006ec868a0ea19378ea477e16f8ddb51bb92c7817c1c39c390291e26235",
-    "icon_selection_candidate": "candidate-02",
-    "icon_asset_kind": "raster-reference"
+    "third_pane_justification": "Support operators need customer identity, linked tickets, SLA state, and CTOX suggestions visible while reading and replying; moving this context into drawers would force repeated context switches during every conversation."
   },
   "category": "Operations",
   "version": "0.1.2",

@@ -45,7 +45,12 @@ const server = http.createServer((req, res) => {
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
-const browser = await chromium.launch({ headless: true });
+const browser = await chromium.launch({
+  headless: true,
+  ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH
+    ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH }
+    : {}),
+});
 const errors = [],
   results = [];
 try {
@@ -156,7 +161,10 @@ try {
         await page.screenshot({ path: path.join(output, `cached-offline-${theme}.png`) });
         await page.evaluate(() => window.fixtureSetState("working"));
         await page.waitForFunction(() => !document.querySelector("[data-ctox-data-state]"));
+        // A real mouse click on the creature opens its task (the canvas' pan
+        // capture used to swallow it, 28.09.2026).
         await page.locator(".ctox-flow-creature-slot").first().click();
+        await page.locator('[data-fixture-drawer="open"]').waitFor({ state: "visible" });
         await page.screenshot({
           path: path.join(output, `task-detail-${theme}.png`),
         });

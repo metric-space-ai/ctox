@@ -39,7 +39,9 @@ fn selection_warning(root: &Path, task: Option<&str>, attempt: &str, cause: &str
         due
     };
     if first {
-        eprintln!("[ctox crew] selection unavailable: {cause}; execution continues without requiring crew identity");
+        eprintln!(
+            "[ctox crew] selection unavailable: {cause}; execution continues without requiring crew identity"
+        );
         crate::service::harness_flow::record_harness_flow_event_lossy(
             root,
             crate::service::harness_flow::RecordHarnessFlowEventRequest {
@@ -61,6 +63,8 @@ fn selection_kind(reason: &str) -> &'static str {
         "assigned"
     } else if reason.starts_with("continuity:") {
         "continuity"
+    } else if reason.starts_with("routed:") {
+        "routed"
     } else {
         "selected"
     }
@@ -105,7 +109,8 @@ pub(crate) fn prepare_attempt_or_continue(
     metadata: &Value,
     skill: Option<&str>,
     prompt: &str,
-) -> Option<String> {
+    judge: Option<&dyn RouterJudge>,
+) -> Option<CrewTurnContext> {
     diagnostics()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -121,6 +126,7 @@ pub(crate) fn prepare_attempt_or_continue(
         metadata,
         skill,
         prompt,
+        judge,
     ) {
         Ok(block) => {
             let mut all = diagnostics().lock().unwrap_or_else(|e| e.into_inner());
@@ -154,8 +160,21 @@ pub(crate) fn prepare_attempt_or_continue(
     }
 }
 
+/// What a turn receives for its member: identity for the base-instruction
+/// lane, memory for the runtime-context lane, and the reason for the cockpit.
+#[derive(Clone, Debug)]
+pub(crate) struct CrewTurnContext {
+    pub member_id: String,
+    pub member_name: String,
+    pub selection_reason: String,
+    pub persona: String,
+    pub memory_block: Option<String>,
+}
+
 /// Called once before invoking a slice, never from a progress callback. The
-/// transaction pins identity to the immutable attempt and its still-held lease.
+/// judgment (router) happens before the write transaction; the transaction
+/// pins identity to the immutable attempt and its still-held lease.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn prepare_attempt(
     root: &Path,
     task_ids: &[String],
@@ -165,7 +184,8 @@ pub(crate) fn prepare_attempt(
     metadata: &Value,
     skill: Option<&str>,
     prompt: &str,
-) -> Result<Option<String>> {
+    judge: Option<&dyn RouterJudge>,
+) -> Result<Option<CrewTurnContext>> {
     let Some(task_id) = task_ids.first() else {
         return Ok(None);
     };
@@ -176,15 +196,15 @@ pub(crate) fn prepare_attempt(
     // independently since then. No extra reads are added to progress emissions.
     crate::service::harness_flow::ensure_event_schema(&conn)?;
     ensure_selection_event_index(&conn)?;
-    let tx = conn.unchecked_transaction()?;
-    let existing: Option<String> = tx
+    ensure_schema(&conn)?;
+    let existing: Option<String> = conn
         .query_row(
             "SELECT member_id FROM crew_attempts WHERE attempt_id=?1",
             [attempt],
             |r| r.get(0),
         )
         .optional()?;
-    let (all, warnings) = members_with_errors(&tx)?;
+    let (all, warnings) = members_with_errors(&conn)?;
     let mut task = TaskTraits {
         thread_key: thread_key.map(String::from),
         module: metadata
@@ -214,7 +234,7 @@ pub(crate) fn prepare_attempt(
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
-    task.manual_member = tx
+    task.manual_member = conn
         .query_row(
             "SELECT crew_assigned_member_id FROM communication_routing_state
          WHERE message_key=?1 AND route_status='leased' AND lease_owner=?2",
@@ -223,9 +243,26 @@ pub(crate) fn prepare_attempt(
         )
         .optional()?
         .context("crew attachment requires the held lease")?;
+    if let Some(member) = crate::business_os::project_crew_member_for_task(root, task_id)? {
+        anyhow::ensure!(
+            task_ids.len() == 1,
+            "private project Crew cannot share a batch attempt"
+        );
+        anyhow::ensure!(
+            task.manual_member
+                .as_ref()
+                .is_none_or(|assigned| assigned == &member),
+            "manual Crew assignment conflicts with the project worker"
+        );
+        anyhow::ensure!(
+            existing.as_ref().is_none_or(|assigned| assigned == &member),
+            "resumed Crew identity differs from the current project binding"
+        );
+        task.manual_member = Some(member);
+    }
     // A retry is scored again; its own previous selection is not a manual pin
     // or evidence of continuity with a different task in the conversation.
-    task.continuity_member = tx
+    task.continuity_member = conn
         .query_row(
             "SELECT member_id FROM crew_attempts
         WHERE thread_key=?1 AND task_id!=?2 AND (started_at IS NOT NULL OR finalized_at IS NOT NULL)
@@ -234,24 +271,94 @@ pub(crate) fn prepare_attempt(
             |r| r.get(0),
         )
         .optional()?;
-    let history=tx.prepare("SELECT member_id,module,thread_key,succeeded,finalized_at FROM crew_attempts WHERE finalized_at IS NOT NULL ORDER BY finalized_at DESC,attempt_id DESC LIMIT 1000")?
+    let history=conn.prepare("SELECT member_id,module,thread_key,succeeded,finalized_at FROM crew_attempts WHERE finalized_at IS NOT NULL ORDER BY finalized_at DESC,attempt_id DESC LIMIT 1000")?
         .query_map([],|r|Ok((r.get::<_,String>(0)?,r.get::<_,Option<String>>(1)?,r.get::<_,Option<String>>(2)?,r.get::<_,bool>(3)?,r.get::<_,String>(4)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?.into_iter().filter_map(|(member_id,module,thread_key,succeeded,at)| Some(History{member_id,module,thread_key,succeeded,finished_at_ms:chrono::DateTime::parse_from_rfc3339(&at).ok()?.timestamp_millis()})).collect::<Vec<_>>();
+    let summary = task_summary_from_prompt(prompt, task.module.as_deref());
+    let engine = open_engine(root).ok();
     let selection = if let Some(id) = existing {
         Selection {
             member_id: id,
             reason: "Identität des wiederaufgenommenen Versuchs bleibt erhalten".into(),
         }
     } else {
-        select(&all, &task, &history, chrono::Utc::now().timestamp_millis())
-            .context("no active crew member available")?
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let memories = all
+            .iter()
+            .map(|member| {
+                engine
+                    .as_ref()
+                    .map(|engine| load_member_memory(engine, &member.id))
+                    .unwrap_or_default()
+            })
+            .collect::<Vec<_>>();
+        let recents = all
+            .iter()
+            .map(|member| recent_attempts(&conn, &member.id, 6).unwrap_or_default())
+            .collect::<Vec<_>>();
+        let candidates = all
+            .iter()
+            .enumerate()
+            .filter(|(_, member)| !member.archived)
+            .map(|(index, member)| RouterCandidate {
+                member,
+                memory: &memories[index],
+                recent: &recents[index],
+                failures_24h: history
+                    .iter()
+                    .filter(|h| {
+                        h.member_id == member.id
+                            && !h.succeeded
+                            && task.module.is_some()
+                            && h.module == task.module
+                            && h.finished_at_ms >= now_ms.saturating_sub(86_400_000)
+                    })
+                    .count(),
+            })
+            .collect::<Vec<_>>();
+        let router_task = RouterTask {
+            summary: &summary,
+            module: task.module.as_deref(),
+            command_type: task.command_type.as_deref(),
+            skills: &task.skills,
+            thread_key: task.thread_key.as_deref(),
+        };
+        route(
+            &all,
+            &task,
+            &history,
+            &router_task,
+            &candidates,
+            judge,
+            now_ms,
+        )
+        .context("no active crew member available")?
     };
     let member = all
         .iter()
         .find(|m| m.id == selection.member_id)
         .context("attempt member no longer exists")?;
     let now = chrono::Utc::now().to_rfc3339();
-    let inserted=tx.execute("INSERT OR IGNORE INTO crew_attempts(attempt_id,task_id,member_id,module,thread_key,selected_at,started_at,selection_reason) VALUES(?1,?2,?3,?4,?5,?6,?6,?7)",params![attempt,task_id,member.id,task.module,thread_key,now,selection.reason])?;
+    let tx = conn.unchecked_transaction()?;
+    let inserted=tx.execute("INSERT OR IGNORE INTO crew_attempts(attempt_id,task_id,member_id,module,thread_key,selected_at,started_at,selection_reason,task_summary) VALUES(?1,?2,?3,?4,?5,?6,?6,?7,?8)",params![attempt,task_id,member.id,task.module,thread_key,now,selection.reason,summary])?;
+    // Check the durable identity after INSERT OR IGNORE, inside the same write
+    // transaction as attachment. A replay must not borrow another task's member
+    // or revive an already finalized attempt. Checking only the earlier member
+    // lookup would also miss a concurrent insertion or finalization.
+    let (bound_task, bound_member, finalized): (String, String, Option<String>) = tx.query_row(
+        "SELECT task_id,member_id,finalized_at FROM crew_attempts WHERE attempt_id=?1",
+        [attempt],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    anyhow::ensure!(
+        bound_task == *task_id,
+        "crew attempt belongs to another task"
+    );
+    anyhow::ensure!(
+        bound_member == member.id,
+        "crew attempt member changed during admission"
+    );
+    anyhow::ensure!(finalized.is_none(), "crew attempt is already finalized");
     for id in task_ids {
         let changed = tx.execute(
             "UPDATE communication_routing_state SET crew_member_id=?2,crew_assigned_member_id=NULL,updated_at=?3
@@ -263,9 +370,22 @@ pub(crate) fn prepare_attempt(
     if inserted > 0 {
         tx.execute("UPDATE crew_members SET stats_json=json_set(stats_json,'$.last_active_at',?2),updated_at=?2 WHERE id=?1",params![member.id,now])?;
     }
-    let learnings = load_context_learnings(&tx, &member.id, &task)?;
-    let block = render_soul_block(member, &learnings);
     tx.commit()?;
+    // Memory after the commit: the legacy learnings table is folded into the
+    // member's anchors once, then the documents are read as they are.
+    let mut member_memory = MemberMemory::default();
+    if let Some(engine) = engine.as_ref() {
+        if let Err(error) = migrate_learnings_into_memory(&conn, engine, &member.id) {
+            eprintln!(
+                "[ctox crew] legacy learnings migration deferred for {}: {error}",
+                member.id
+            );
+        }
+        member_memory = load_member_memory(engine, &member.id);
+    }
+    let recent = recent_attempts(&conn, &member.id, 6).unwrap_or_default();
+    let persona = render_persona(member);
+    let memory_block = render_memory_block(member, &member_memory, &recent);
     for warning in &warnings {
         selection_warning(root, Some(task_id), attempt, warning);
     }
@@ -283,8 +403,43 @@ pub(crate) fn prepare_attempt(
                 metadata: json!({"attempt_id":attempt,"crew_member_id":selection.member_id,"reason":selection.reason,"selection_kind":selection_kind(&selection.reason),"selection_error":warnings.first(),"cockpit_eligible":true}),
             },
         );
+        if memory_block.is_some() {
+            // The member is reading now: the projection shows it for a moment.
+            let _ = conn.execute(
+                "UPDATE crew_members SET last_memory_read_at=?2,updated_at=?2 WHERE id=?1",
+                params![member.id, now],
+            );
+            let anchors = anchor_lines(&member_memory.anchors).len();
+            let experiences = narrative_lines(&member_memory.narrative).len();
+            let title = format!(
+                "{} liest sein Gedächtnis: {} Wissenseinträge, {} Erfahrungen, {} letzte Einsätze",
+                member.name,
+                anchors,
+                experiences,
+                recent.len()
+            );
+            crate::service::harness_flow::record_harness_flow_event_lossy(
+                root,
+                crate::service::harness_flow::RecordHarnessFlowEventRequest {
+                    event_kind: "crew.memory_read",
+                    title: &title,
+                    body_text: "",
+                    message_key: Some(task_id),
+                    work_id: None,
+                    ticket_key: None,
+                    attempt_index: None,
+                    metadata: json!({"attempt_id":attempt,"crew_member_id":member.id,"anchors":anchors,"experiences":experiences,"recent_attempts":recent.len(),"cockpit_eligible":true}),
+                },
+            );
+        }
     }
-    Ok(Some(block))
+    Ok(Some(CrewTurnContext {
+        member_id: member.id.clone(),
+        member_name: member.name.clone(),
+        selection_reason: selection.reason,
+        persona,
+        memory_block,
+    }))
 }
 
 /// Repair a lost notification from durable selection evidence on the pump.
@@ -322,149 +477,6 @@ pub(crate) fn repair_selection_events(root: &Path, conn: &Connection) -> Result<
         }
     }
     Ok(())
-}
-
-pub(crate) fn load_context_learnings(
-    conn: &Connection,
-    member: &str,
-    task: &TaskTraits,
-) -> Result<Vec<(String, bool)>> {
-    let mut statement=conn.prepare("SELECT text,confirmed_by_owner,scope_json FROM crew_member_learnings
-        WHERE member_id=?1 AND archived=0 ORDER BY confirmed_by_owner DESC,created_at DESC,id LIMIT 200")?;
-    let rows = statement.query_map([member], |r| {
-        Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, bool>(1)?,
-            r.get::<_, String>(2)?,
-        ))
-    })?;
-    let mut ranked = vec![];
-    for row in rows {
-        let (text, confirmed, scope) = row?;
-        let scope: LearningScope = serde_json::from_str(&scope)?;
-        if !confirmed && scope == LearningScope::default() {
-            continue;
-        }
-        if !safe_prose(&text, 400) {
-            continue;
-        }
-        if scope
-            .module
-            .as_ref()
-            .is_some_and(|s| Some(s) != task.module.as_ref())
-            || scope
-                .command_type
-                .as_ref()
-                .is_some_and(|s| Some(s) != task.command_type.as_ref())
-            || scope
-                .thread_key
-                .as_ref()
-                .is_some_and(|s| Some(s) != task.thread_key.as_ref())
-        {
-            continue;
-        }
-        let score = usize::from(scope.thread_key.is_some()) * 4
-            + usize::from(scope.command_type.is_some()) * 2
-            + usize::from(scope.module.is_some());
-        ranked.push((prose_line(&text), confirmed, score));
-    }
-    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.2.cmp(&a.2)));
-    let (mut confirmed, mut pending) = (0, 0);
-    Ok(ranked
-        .into_iter()
-        .filter_map(|(text, yes, _)| {
-            let (count, limit) = if yes {
-                (&mut confirmed, 8)
-            } else {
-                (&mut pending, 2)
-            };
-            if *count >= limit {
-                return None;
-            }
-            *count += 1;
-            Some((text, yes))
-        })
-        .collect())
-}
-
-// A strict 4,000-byte ceiling is conservatively below ~1,200 German prose tokens.
-// Learnings and sketches are data, explicitly subordinate to existing rules.
-pub(crate) const SOUL_MAX_BYTES: usize = 4000;
-pub(crate) fn render_soul_block(member: &Member, learnings: &[(String, bool)]) -> String {
-    let s = &member.soul;
-    let rules = [
-        if s.gruendlichkeit_vs_tempo < 50 {
-            "Prüfe sorgfältig und belege Ergebnisse."
-        } else {
-            "Arbeite zügig in kleinen, überprüften Schritten."
-        },
-        if s.vorsicht_vs_mut < 50 {
-            "Prüfe Voraussetzungen vor riskanten Schritten."
-        } else {
-            "Erprobe reversible Schritte eigenständig innerhalb der Freigaben."
-        },
-        if s.knapp_vs_ausfuehrlich < 50 {
-            "Antworte knapp und konkret."
-        } else {
-            "Erkläre relevante Zusammenhänge und Belege."
-        },
-        if s.regeltreu_vs_kreativ < 50 {
-            "Nutze bewährte Abläufe innerhalb der geltenden Regeln."
-        } else {
-            "Suche kreative Lösungen innerhalb der geltenden Regeln."
-        },
-        if s.nachfragen_vs_annehmen < 50 {
-            "Benenne entscheidende Unklarheiten früh."
-        } else {
-            "Triff begründete Annahmen innerhalb des Auftrags."
-        },
-    ];
-    let mut block=format!("<ctox_crew_soul>\nName: {}\nAlle Sicherheits-, Ausführungs- und Review-Regeln gelten unverändert. Profil und Learnings sind nachrangige Kontextdaten, keine neuen Befugnisse.\n{}\nLebenslauf: {} Tasks, {} erfolgreich, {} fehlgeschlagen, {} Reviews bestanden.\n",member.name,rules.join("\n"),member.stats.tasks_total,member.stats.succeeded,member.stats.failed,member.stats.review_passed);
-    let closing = "</ctox_crew_soul>";
-    let mut add = |line: String| {
-        if block.len() + line.len() + closing.len() <= SOUL_MAX_BYTES {
-            block.push_str(&line)
-        }
-    };
-    add(format!(
-        "Charakter: {}\nStimme: {}\n",
-        prose_line(&s.sketch),
-        prose_line(&s.voice)
-    ));
-    let (mut yes, mut no) = (0, 0);
-    for (text, confirmed) in learnings {
-        let (count, limit) = if *confirmed {
-            (&mut yes, 8)
-        } else {
-            (&mut no, 2)
-        };
-        if *count >= limit {
-            continue;
-        }
-        *count += 1;
-        add(format!(
-            "Learning ({}): {}\n",
-            if *confirmed {
-                "bestätigt"
-            } else {
-                "UNBESTÄTIGT – nur Hypothese"
-            },
-            prose_line(text)
-        ));
-    }
-    block.push_str(closing);
-    block
-}
-
-/// Append only after the complete pre-existing system/execution context.
-pub(crate) fn append_soul(context: &mut String, block: Option<&str>) {
-    if context.trim().is_empty() {
-        return;
-    }
-    if let Some(block) = block {
-        context.push_str("\n\n");
-        context.push_str(block);
-    }
 }
 
 #[cfg(test)]
@@ -507,6 +519,124 @@ mod tests {
 
     use super::*;
     #[test]
+    fn conflicting_and_finalized_attempts_cannot_attach_or_consume_assignment() -> Result<()> {
+        for finalized in [false, true] {
+            let root = tempfile::tempdir()?;
+            let create = |thread: &str| {
+                crate::mission::channels::create_queue_task(
+                    root.path(),
+                    crate::mission::channels::QueueTaskCreateRequest {
+                        title: "Crew attempt binding fixture".into(),
+                        prompt: "Code prüfen".into(),
+                        thread_key: thread.into(),
+                        workspace_root: None,
+                        priority: "normal".into(),
+                        suggested_skill: None,
+                        parent_message_key: None,
+                        extra_metadata: None,
+                    },
+                )
+            };
+            let original =
+                create("original-thread").context("create original Crew fixture task")?;
+            let other = create("other-thread").context("create competing Crew fixture task")?;
+            let conn = Connection::open(crate::paths::core_db(root.path()))?;
+            conn.execute(
+                "UPDATE communication_routing_state SET route_status='leased',
+                 lease_owner='crew-worker',crew_assigned_member_id='crew-pico'
+                 WHERE message_key IN (?1,?2)",
+                params![original.message_key, other.message_key],
+            )?;
+            prepare_attempt(
+                root.path(),
+                &[original.message_key.clone()],
+                "crew-worker",
+                "immutable-attempt",
+                Some("original-thread"),
+                &json!({}),
+                None,
+                "Code prüfen",
+                None,
+            )
+            .context("prepare initial Crew fixture attempt")?
+            .context("initial crew context missing")?;
+            let target = if finalized { &original } else { &other };
+            if finalized {
+                crate::crew::finalization::finalize_attempt(
+                    &conn,
+                    "immutable-attempt",
+                    "failed",
+                    None,
+                    "2026-09-09T12:00:00Z",
+                    None,
+                    "Attempt failed",
+                    None,
+                )
+                .context("finalize original Crew fixture attempt")?;
+            }
+            conn.execute(
+                "UPDATE communication_routing_state SET crew_member_id=NULL,
+                 crew_assigned_member_id='crew-nori' WHERE message_key=?1",
+                [&target.message_key],
+            )?;
+            let stats_before: String = conn.query_row(
+                "SELECT stats_json FROM crew_members WHERE id='crew-pico'",
+                [],
+                |r| r.get(0),
+            )?;
+            let events_before: i64 =
+                conn.query_row("SELECT COUNT(*) FROM ctox_harness_flow_events", [], |r| {
+                    r.get(0)
+                })?;
+            let error = prepare_attempt(
+                root.path(),
+                &[target.message_key.clone()],
+                "crew-worker",
+                "immutable-attempt",
+                Some("original-thread"),
+                &json!({}),
+                None,
+                "Code prüfen",
+                None,
+            )
+            .expect_err("an incompatible replay must be rejected");
+            assert_eq!(
+                error.to_string(),
+                if finalized {
+                    "crew attempt is already finalized"
+                } else {
+                    "crew attempt belongs to another task"
+                }
+            );
+            let binding: (Option<String>, Option<String>) = conn.query_row(
+                "SELECT crew_member_id,crew_assigned_member_id FROM communication_routing_state
+                 WHERE message_key=?1",
+                [&target.message_key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )?;
+            assert_eq!(binding, (None, Some("crew-nori".into())));
+            let stored: (String, String, i64) = conn.query_row(
+                "SELECT task_id,member_id,COUNT(*) FROM crew_attempts",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            assert_eq!(stored, (original.message_key, "crew-pico".into(), 1));
+            let stats_after: String = conn.query_row(
+                "SELECT stats_json FROM crew_members WHERE id='crew-pico'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(stats_after, stats_before);
+            let events_after: i64 =
+                conn.query_row("SELECT COUNT(*) FROM ctox_harness_flow_events", [], |r| {
+                    r.get(0)
+                })?;
+            assert_eq!(events_after, events_before);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn lease_identity_and_literal_reason_survive_replay() -> Result<()> {
         let root = tempfile::tempdir()?;
         let task = crate::mission::channels::create_queue_task(
@@ -533,6 +663,7 @@ mod tests {
             &json!({}),
             None,
             "Code prüfen",
+            None,
         )?;
         let second = prepare_attempt(
             root.path(),
@@ -543,9 +674,10 @@ mod tests {
             &json!({}),
             None,
             "Code prüfen",
+            None,
         )?;
-        assert!(first.unwrap().contains("Pico"));
-        assert!(second.unwrap().contains("Pico"));
+        assert_eq!(first.unwrap().member_name, "Pico");
+        assert_eq!(second.unwrap().member_name, "Pico");
         let (count,title,metadata):(i64,String,String)=conn.query_row(
             "SELECT COUNT(*),title,metadata_json FROM ctox_harness_flow_events WHERE event_kind='crew_selected' AND message_key=?1",[&task.message_key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
         assert_eq!(count, 1);
@@ -569,7 +701,8 @@ mod tests {
             Some("crew-thread"),
             &json!({}),
             None,
-            "Code prüfen"
+            "Code prüfen",
+            None,
         )
         .is_err());
         let count: i64 = conn.query_row("SELECT COUNT(*) FROM crew_attempts", [], |r| r.get(0))?;
@@ -582,52 +715,5 @@ mod tests {
             Some("crew-pico")
         );
         Ok(())
-    }
-    #[test]
-    fn actual_runtime_attachment_preserves_safety_and_execution_order() {
-        let conn = super::super::tests::fixture();
-        let member = members(&conn).unwrap().remove(0);
-        let block = render_soul_block(&member, &[]);
-        let mut rendered = crate::context::live_context::RenderedRuntimePrompt {
-            prompt: "Diagnostic execution rules".into(),
-            latest_user_prompt: "Execution rules: validate evidence; never bypass reviews.".into(),
-            context_instructions: "CTO operating mode; mandatory safety rules.".into(),
-            rendered_context_items: 0,
-            omitted_context_items: 0,
-        };
-        let safety = rendered.context_instructions.clone();
-        let execution = rendered.latest_user_prompt.clone();
-        crate::context::live_context::attach_crew_soul(&mut rendered, Some(&block));
-        assert_eq!(rendered.context_instructions, safety);
-        assert!(rendered.latest_user_prompt.starts_with(&execution));
-        assert!(rendered.latest_user_prompt.ends_with(&block));
-        assert!(crate::context::lcm::estimate_tokens(&block) <= 1200);
-        rendered.latest_user_prompt.clear();
-        crate::context::live_context::attach_crew_soul(&mut rendered, Some(&block));
-        assert!(
-            rendered.latest_user_prompt.is_empty(),
-            "identity must not bypass empty-task admission"
-        );
-        let mut empty = String::new();
-        append_soul(&mut empty, Some(&block));
-        assert!(empty.is_empty());
-    }
-    #[test]
-    fn soul_is_bounded_deterministic_and_subordinate() {
-        let conn = super::super::tests::fixture();
-        let member = members(&conn).unwrap().remove(0);
-        let learnings = (0..20)
-            .map(|i| (format!("{i}: {}", "Ä".repeat(390)), i < 15))
-            .collect::<Vec<_>>();
-        let block = render_soul_block(&member, &learnings);
-        assert!(block.len() <= SOUL_MAX_BYTES);
-        assert_eq!(block, render_soul_block(&member, &learnings));
-        let original =
-            "CTO-Operating-Mode\nSafety: keep all review gates.\nExecution: validate evidence.";
-        let mut context = original.to_string();
-        append_soul(&mut context, Some(&block));
-        assert!(context.starts_with(original));
-        assert!(context.find("ctox_crew_soul").unwrap() > original.len());
-        assert!(context.matches("UNBESTÄTIGT").count() <= 2);
     }
 }

@@ -1,6 +1,60 @@
 use super::*;
 
 #[test]
+fn adapter_reconciliation_intake_preserves_superseded_outcome() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let command = |id: &str| BusinessCommand {
+        id: Some(id.into()),
+        module: "outbound".into(),
+        command_type: "outbound.research.adapters.reconcile".into(),
+        record_id: Some("research-policy".into()),
+        payload: serde_json::json!({"configuration_digest":"fixture-v1","prompt":"Reconcile fixture adapters"}),
+        client_context: serde_json::json!({"source":"business-os"}),
+        origin: CommandOrigin::TrustedLocal,
+    };
+    let first = record_command(root.path(), command("adapter-intake-first"))?;
+    let original_task = first.task_id.expect("first task");
+    let duplicate = record_command(root.path(), command("adapter-intake-duplicate"))?;
+    assert_eq!(duplicate.status, "cancelled");
+    let duplicate_task = duplicate
+        .task_id
+        .expect("duplicate task keeps its own identity");
+    assert_ne!(duplicate_task, original_task);
+    assert_eq!(
+        channels::load_queue_task(root.path(), &duplicate_task)?
+            .unwrap()
+            .route_status,
+        "cancelled"
+    );
+    let conn = open_store(root.path())?;
+    let status: String = conn.query_row(
+        "SELECT status FROM business_commands WHERE command_id='adapter-intake-duplicate'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(
+        status, "cancelled",
+        "compatibility intake must not overwrite the canonical cancellation"
+    );
+    let raw: String = conn.query_row(
+        "SELECT payload_json FROM business_records WHERE collection='business_commands' AND record_id='adapter-intake-duplicate'",
+        [], |r| r.get(0),
+    )?;
+    let projected: Value = serde_json::from_str(&raw)?;
+    assert_eq!(projected["status"], "cancelled");
+    assert_eq!(
+        channels::business_command_projection(root.path(), "adapter-intake-duplicate")?["result"]
+            ["superseded_by_task_id"],
+        original_task
+    );
+    assert_eq!(
+        record_command(root.path(), command("adapter-intake-duplicate"))?.status,
+        "cancelled"
+    );
+    Ok(())
+}
+
+#[test]
 fn incident_queue_cancel_child() -> anyhow::Result<()> {
     let Ok(root) = std::env::var("CTOX_TEST_incident_CANCEL_ROOT") else {
         return Ok(());

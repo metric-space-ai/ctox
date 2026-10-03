@@ -4,7 +4,7 @@
 use super::classify::{classify_outcome, Classification, ScrapeRunStatus};
 use super::registry::{load_registered_target, open_db};
 use super::{
-    bind_scrape_record_provenance, build_repair_prompt, build_run_artifacts,
+    artifact_record, bind_scrape_record_provenance, build_repair_prompt, build_run_artifacts,
     contains_human_verification, default_entry_command, emit_reauthorization_handoff,
     extracted_record_fields, find_flag_value, latest_source_revision_map, load_last_successful_run,
     materialize_latest_records, maybe_record_template_from_target, maybe_run_llm_enrichment,
@@ -57,15 +57,340 @@ pub(super) fn execute_scrape(root: &Path, args: &[String]) -> Result<()> {
     print_json(&serde_json::to_value(outcome)?)
 }
 
+fn bind_scrape_input_to_command(
+    input: &mut Value,
+    session: &Value,
+    command_context: &Value,
+    target_key: &str,
+) -> Result<String> {
+    anyhow::ensure!(
+        session.get("crew_only").and_then(Value::as_bool) != Some(true),
+        "Crew-only command session cannot execute scrape targets"
+    );
+    let command_id = session
+        .get("command_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("scrape command session has no command id")?;
+    let actor = session
+        .get("actor")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("scrape command session has no actor")?;
+    let command = &command_context["command"];
+    anyhow::ensure!(
+        command.get("command_id").and_then(Value::as_str) == Some(command_id)
+            && command.get("module").and_then(Value::as_str) == Some("outbound-lead-generation"),
+        "scrape execute requires its own Outbound research command"
+    );
+    let record_id = command.get("record_id").and_then(Value::as_str);
+    match command.get("command_type").and_then(Value::as_str) {
+        Some("web_stack.person_research") => {
+            anyhow::ensure!(
+                record_id.is_some_and(|value| !value.is_empty() && !value.starts_with("campaign:")),
+                "scrape person-research command is not scoped to one lead"
+            );
+        }
+        Some("business_os.chat.task") => {
+            let lead_id = command["payload"]["lead_id"]
+                .as_str()
+                .filter(|value| !value.is_empty() && !value.starts_with("campaign:"))
+                .context("scrape chat session is not scoped to one lead")?;
+            anyhow::ensure!(
+                record_id == Some(lead_id),
+                "scrape chat command record differs from its lead"
+            );
+            let contract = &command["payload"]["writeback_contract"];
+            anyhow::ensure!(
+                crate::business_os::mcp_channel::supports_command_writeback(contract)
+                    && contract["record_ids"]
+                        .as_array()
+                        .is_some_and(|ids| ids.len() == 1 && ids[0].as_str() == Some(lead_id)),
+                "scrape chat command lacks a matching lead writeback contract"
+            );
+        }
+        _ => anyhow::bail!("scrape execute requires a bound Outbound research command"),
+    }
+    let source_id = command["payload"]["source_policy"]["sources"]
+        .as_array()
+        .and_then(|sources| {
+            sources
+                .iter()
+                .find(|source| source.get("target_key").and_then(Value::as_str) == Some(target_key))
+        })
+        .and_then(|source| source.get("id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .context("scrape target is not in the bound research command source policy")?;
+    let object = input
+        .as_object_mut()
+        .context("scrape execute input must be a JSON object")?;
+    for (field, expected) in [
+        ("source_id", source_id),
+        ("task_id", command_id),
+        ("owner_user_id", actor),
+        (
+            "company",
+            command["payload"]["company"]
+                .as_str()
+                .context("person-research command has no company")?,
+        ),
+        (
+            "country",
+            command["payload"]["country"]
+                .as_str()
+                .context("person-research command has no country")?,
+        ),
+    ] {
+        if let Some(provided) = object.get(field) {
+            anyhow::ensure!(
+                provided
+                    .as_str()
+                    .is_some_and(|value| value.trim() == expected),
+                "scrape execute input {field} differs from its bound command"
+            );
+        }
+        object.insert(field.to_string(), Value::String(expected.to_string()));
+    }
+    if let Some(record_id) = record_id {
+        if let Some(provided) = object.get("record_id") {
+            anyhow::ensure!(
+                provided
+                    .as_str()
+                    .is_some_and(|value| value.trim() == record_id),
+                "scrape execute input record_id differs from its bound command"
+            );
+        }
+        object.insert(
+            "record_id".to_string(),
+            Value::String(record_id.to_string()),
+        );
+    } else {
+        anyhow::ensure!(
+            !object.contains_key("record_id"),
+            "scrape execute input record_id has no bound command record"
+        );
+    }
+    Ok(actor.to_string())
+}
+
+#[cfg(test)]
+mod command_binding_tests {
+    use super::*;
+
+    fn session() -> Value {
+        json!({
+            "command_id": "research-1",
+            "actor": "user-1",
+            "crew_only": false
+        })
+    }
+
+    fn command() -> Value {
+        json!({"command": {
+            "command_id": "research-1",
+            "command_type": "web_stack.person_research",
+            "module": "outbound-lead-generation",
+            "record_id": "lead-1",
+            "payload": {
+                "company": "X GmbH", "country": "DE",
+                "source_policy": {"sources": [{"id": "northdata-de", "target_key": "northdata-de"}]}
+            }
+        }})
+    }
+
+    fn chat_command() -> Value {
+        json!({"command": {
+            "command_id": "research-1",
+            "command_type": "business_os.chat.task",
+            "module": "outbound-lead-generation",
+            "record_id": "lead-1",
+            "payload": {
+                "lead_id": "lead-1", "company": "X GmbH", "country": "DE",
+                "source_policy": {"sources": [{"id": "northdata-de", "target_key": "northdata-de"}]},
+                "writeback_contract": {
+                    "mechanism": "business_command",
+                    "command_type": "outbound.lead.research_writeback",
+                    "collection": "outbound_lead_generation_leads",
+                    "record_ids": ["lead-1"]
+                }
+            }
+        }})
+    }
+
+    #[test]
+    fn scrape_input_uses_bound_command_and_actor() {
+        let mut input = json!({"source_id": "northdata-de"});
+        let owner =
+            bind_scrape_input_to_command(&mut input, &session(), &command(), "northdata-de")
+                .expect("person research binding");
+        assert_eq!(owner, "user-1");
+        assert_eq!(input["task_id"], "research-1");
+        assert_eq!(input["record_id"], "lead-1");
+        assert_eq!(input["owner_user_id"], "user-1");
+        assert_eq!(input["company"], "X GmbH");
+        assert_eq!(input["country"], "DE");
+        assert_eq!(input["source_id"], "northdata-de");
+    }
+
+    #[test]
+    fn scrape_input_rejects_foreign_task_owner_and_lead() {
+        for input in [
+            json!({"task_id": "research-2"}),
+            json!({"owner_user_id": "user-2"}),
+            json!({"company": "Y GmbH"}),
+            json!({"country": "AT"}),
+            json!({"record_id": "lead-2"}),
+            json!({"source_id": "other-source"}),
+        ] {
+            let mut input = input;
+            assert!(bind_scrape_input_to_command(
+                &mut input,
+                &session(),
+                &command(),
+                "northdata-de"
+            )
+            .is_err());
+        }
+        let mut input = json!({});
+        let mut foreign = command();
+        foreign["command"]["command_type"] = json!("ctox.delegate_task");
+        assert!(
+            bind_scrape_input_to_command(&mut input, &session(), &foreign, "northdata-de").is_err()
+        );
+        let mut crew_only = session();
+        crew_only["crew_only"] = json!(true);
+        assert!(
+            bind_scrape_input_to_command(&mut input, &crew_only, &command(), "northdata-de")
+                .is_err()
+        );
+        assert!(
+            bind_scrape_input_to_command(&mut input, &session(), &command(), "other-target")
+                .is_err()
+        );
+        let mut without_record = command();
+        without_record["command"]
+            .as_object_mut()
+            .unwrap()
+            .remove("record_id");
+        let mut input = json!({"record_id": "lead-2"});
+        assert!(bind_scrape_input_to_command(
+            &mut input,
+            &session(),
+            &without_record,
+            "northdata-de"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn scrape_input_accepts_only_a_single_lead_writeback_chat() {
+        let mut input = json!({"source_id": "northdata-de"});
+        assert_eq!(
+            bind_scrape_input_to_command(&mut input, &session(), &chat_command(), "northdata-de")
+                .expect("signed lead chat"),
+            "user-1"
+        );
+        assert_eq!(input["record_id"], "lead-1");
+        assert_eq!(input["company"], "X GmbH");
+
+        let mut wrong_lead = chat_command();
+        wrong_lead["command"]["payload"]["lead_id"] = json!("lead-2");
+        assert!(bind_scrape_input_to_command(
+            &mut json!({}),
+            &session(),
+            &wrong_lead,
+            "northdata-de"
+        )
+        .is_err());
+
+        let mut campaign = chat_command();
+        campaign["command"]["record_id"] = json!("campaign:1");
+        campaign["command"]["payload"]["lead_id"] = json!("campaign:1");
+        campaign["command"]["payload"]["writeback_contract"]["record_ids"] = json!(["campaign:1"]);
+        assert!(bind_scrape_input_to_command(
+            &mut json!({}),
+            &session(),
+            &campaign,
+            "northdata-de"
+        )
+        .is_err());
+
+        let mut foreign_contract = chat_command();
+        foreign_contract["command"]["payload"]["writeback_contract"]["record_ids"] =
+            json!(["lead-2"]);
+        assert!(bind_scrape_input_to_command(
+            &mut json!({}),
+            &session(),
+            &foreign_contract,
+            "northdata-de"
+        )
+        .is_err());
+    }
+}
+
+/// Authority for one probe of a provider account that the account state
+/// holds as inactive. It is built only from a Business OS command
+/// authorization that the server-side policy allowed for a trusted, logged-in
+/// user (the Outbound source test). The CLI and worker command sessions
+/// cannot create one; a `--probe-account` flag carries no authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AccountProbeGrant {
+    command_id: String,
+    actor_id: String,
+}
+
+impl AccountProbeGrant {
+    /// `authorization` is the `ctox-business-command-authorization-v1`
+    /// record of the command (allowed data.write, actor.trusted, actor.id).
+    pub(crate) fn from_command_authorization(
+        command_id: &str,
+        authorization: &Value,
+    ) -> Option<Self> {
+        let command_id = command_id.trim();
+        let actor = authorization.get("actor")?;
+        let actor_id = actor.get("id").and_then(Value::as_str)?.trim();
+        let valid = !command_id.is_empty()
+            && !actor_id.is_empty()
+            && authorization.get("contract").and_then(Value::as_str)
+                == Some("ctox-business-command-authorization-v1")
+            && authorization.get("allowed").and_then(Value::as_bool) == Some(true)
+            && authorization.get("permission").and_then(Value::as_str) == Some("data.write")
+            && actor.get("trusted").and_then(Value::as_bool) == Some(true);
+        valid.then(|| Self {
+            command_id: command_id.to_string(),
+            actor_id: actor_id.to_string(),
+        })
+    }
+}
+
+/// An early operator probe needs a grant and cannot be authorized inside a
+/// worker command session. Ordinary credential-change/backoff probes are
+/// governed separately by the durable account state.
+pub(super) fn account_probe_authorized(
+    grant: Option<&AccountProbeGrant>,
+    session_owner_user_id: Option<&str>,
+) -> bool {
+    grant.is_some() && session_owner_user_id.is_none()
+}
+
 pub(crate) fn execute_scrape_with_outcome(
     root: &Path,
     args: &[String],
+) -> Result<ScrapeExecutionOutcome> {
+    execute_scrape_with_probe_grant(root, args, None)
+}
+
+pub(crate) fn execute_scrape_with_probe_grant(
+    root: &Path,
+    args: &[String],
+    probe_grant: Option<&AccountProbeGrant>,
 ) -> Result<ScrapeExecutionOutcome> {
     let execution_started = Instant::now();
     let target_key = required_flag_value(args, "--target-key")
         .context("usage: ctox scrape execute --target-key <key> [--trigger-kind <manual|scheduled|repair>] [--scheduled-for <iso>] [--timeout-seconds <n>] [--runtime-root <path>] [--allow-heal] [--input-json <text>] [--input-file <path>] [--thread-key <key>] [--owner-user-id <id>] [--queue-priority <urgent|high|normal|low>]")?;
     let trigger_kind = find_flag_value(args, "--trigger-kind").unwrap_or("manual");
-    let owner_user_id = find_flag_value(args, "--owner-user-id")
+    let claimed_owner_user_id = find_flag_value(args, "--owner-user-id")
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let timeout_seconds = find_flag_value(args, "--timeout-seconds")
@@ -79,7 +404,7 @@ pub(crate) fn execute_scrape_with_outcome(
     // CTOX_SCRAPE_INPUT_JSON. Lets one registered target serve per-call
     // queries (e.g. person-research handing the company name to a Northdata
     // extractor) without registering a new target per query.
-    let input_json: Option<String> = if let Some(text) = find_flag_value(args, "--input-json") {
+    let mut input_json: Option<String> = if let Some(text) = find_flag_value(args, "--input-json") {
         Some(text.to_string())
     } else if let Some(path) = find_flag_value(args, "--input-file") {
         Some(
@@ -93,6 +418,33 @@ pub(crate) fn execute_scrape_with_outcome(
         serde_json::from_str::<Value>(text)
             .context("--input-json / --input-file must be valid JSON")?;
     }
+    let session_owner_user_id = if let Some(token) = find_flag_value(args, "--command-session") {
+        let session =
+            crate::business_os::mcp_channel::verify_internal_command_session_token(root, token)?;
+        let command_id = session
+            .get("command_id")
+            .and_then(Value::as_str)
+            .context("scrape command session has no command id")?;
+        let command = crate::mission::channels::inspect_business_command(root, command_id)?
+            .context("scrape command session has no current command")?;
+        let mut input = input_json
+            .as_deref()
+            .map(serde_json::from_str::<Value>)
+            .transpose()?
+            .unwrap_or_else(|| json!({}));
+        let owner = bind_scrape_input_to_command(&mut input, &session, &command, target_key)?;
+        if let Some(claimed) = claimed_owner_user_id {
+            anyhow::ensure!(
+                claimed == owner,
+                "scrape owner differs from bound command actor"
+            );
+        }
+        input_json = Some(input.to_string());
+        Some(owner)
+    } else {
+        None
+    };
+    let owner_user_id = session_owner_user_id.as_deref().or(claimed_owner_user_id);
     let conn = open_db(root)?;
     let target =
         load_registered_target(root, &conn, target_key)?.context("target_key not found")?;
@@ -109,6 +461,41 @@ pub(crate) fn execute_scrape_with_outcome(
             run_started_at
         ))
     );
+    // Provider account state (account_state.rs): while the provider refuses
+    // the account, calls are answered from the stored state without
+    // contacting it; one probe runs per credential change, per policy-granted
+    // operator request (AccountProbeGrant, never from a worker session) or
+    // when the backoff is due.
+    let credential = target_credential(root, &target);
+    let authorized_probe = account_probe_authorized(probe_grant, session_owner_user_id.as_deref());
+    anyhow::ensure!(
+        !args.iter().any(|arg| arg == "--probe-account") || authorized_probe,
+        "--probe-account is refused: a provider account probe needs a policy-granted operator request (Outbound source test); the CLI and worker sessions cannot authorize it"
+    );
+    if let Some(grant) = probe_grant.filter(|_| authorized_probe) {
+        eprintln!(
+            "[scrape] account probe granted for {} by command {} (actor {})",
+            target.view.target_key, grant.command_id, grant.actor_id
+        );
+    }
+    let probe_generation = match super::account_state::admit(
+        &conn,
+        &target.view.target_id,
+        credential.as_ref(),
+        authorized_probe,
+        now_millis(),
+        &run_id,
+    )? {
+        super::account_state::Admission::Suppress(state) => {
+            return Ok(suppressed_account_outcome(
+                &target,
+                &workspace_dir,
+                state,
+                execution_started,
+            ));
+        }
+        super::account_state::Admission::Run { probe_generation } => probe_generation,
+    };
     let run_dir = workspace_dir.join("runs").join(&run_id);
     let output_dir = run_dir.join("outputs");
     fs::create_dir_all(&output_dir).with_context(|| {
@@ -185,6 +572,47 @@ pub(crate) fn execute_scrape_with_outcome(
             reason: format!("session_expired_login_landing:{host}"),
         };
     }
+    let mut query_completion = None;
+    let mut query_evidence_bytes = None;
+    if payload.get("query_completion").is_some() {
+        let validation = super::query_completion::validate_query_completion(
+            &payload,
+            &run_dir,
+            &run_id,
+            &target.view.target_key,
+            &target.view.start_url,
+            input_json.as_deref(),
+            &probe,
+            &execution,
+        );
+        match validation {
+            Ok((receipt, bytes))
+                if classification.reason == "empty_record_set_on_reachable_portal"
+                    && reauthorization.is_none() =>
+            {
+                query_completion = Some(serde_json::to_value(receipt)?);
+                query_evidence_bytes = Some(bytes);
+                classification = Classification {
+                    status: ScrapeRunStatus::CompletedEmpty,
+                    should_queue_repair: false,
+                    reason: "current_query_completed_without_matches".to_string(),
+                };
+            }
+            Err(error)
+                if classification.reason == "empty_record_set_on_reachable_portal"
+                    || classification.status == ScrapeRunStatus::Succeeded =>
+            {
+                classification = Classification {
+                    status: ScrapeRunStatus::PortalDrift,
+                    should_queue_repair: true,
+                    reason: format!("invalid_query_completion:{error}"),
+                };
+            }
+            // Existing authentication, probe, timeout and partial-output failures
+            // outrank a receipt and retain their existing recovery disposition.
+            _ => {}
+        }
+    }
     let run_finished_at = now_iso_string();
     let default_schema_key = target
         .view
@@ -259,6 +687,8 @@ pub(crate) fn execute_scrape_with_outcome(
     };
     let failure_mode = if classification.status == ScrapeRunStatus::AuthorizationRequired {
         Some("authorization_required")
+    } else if classification.status == ScrapeRunStatus::ProviderAccountInactive {
+        Some("provider_account_inactive")
     } else {
         payload.get("failure_mode").and_then(Value::as_str)
     };
@@ -280,6 +710,16 @@ pub(crate) fn execute_scrape_with_outcome(
     }
     if let Some(enrichment) = &enrichment {
         artifacts.extend(enrichment.artifacts.clone());
+    }
+    if let Some(bytes) = query_evidence_bytes {
+        let path = output_dir.join("verified-query-evidence.json");
+        fs::write(&path, bytes)?;
+        artifacts.push(artifact_record(
+            "query_completion_evidence",
+            &path,
+            Some("ctox.scrape.query_completion.v1"),
+            Some(0),
+        )?);
     }
     record_run(
         root,
@@ -306,6 +746,7 @@ pub(crate) fn execute_scrape_with_outcome(
             }),
             result: json!({
                 "records_found": records_found,
+                "query_completion": query_completion,
                 "enriched_records_found": materialized_records.map(|items| items.len() as i64),
                 "source_count": target_sources(&target.view).len(),
                 "failure_mode": failure_mode,
@@ -322,6 +763,28 @@ pub(crate) fn execute_scrape_with_outcome(
             output_dir: run_dir.clone(),
             artifacts: artifacts.clone(),
         },
+    )?;
+    super::account_state::record(
+        &conn,
+        &target.view.target_id,
+        &run_id,
+        probe_generation,
+        match classification.status {
+            ScrapeRunStatus::ProviderAccountInactive => {
+                super::account_state::RunResult::AccountInactive(
+                    payload
+                        .get("detail")
+                        .and_then(Value::as_str)
+                        .unwrap_or("provider_account_inactive"),
+                )
+            }
+            ScrapeRunStatus::Succeeded | ScrapeRunStatus::CompletedEmpty => {
+                super::account_state::RunResult::Succeeded
+            }
+            _ => super::account_state::RunResult::OtherFailure,
+        },
+        credential.as_ref(),
+        now_millis(),
     )?;
 
     let template_event = if classification.status == ScrapeRunStatus::Succeeded {
@@ -383,7 +846,9 @@ pub(crate) fn execute_scrape_with_outcome(
     // output still delivered records, so it counts as ok-with-reason.
     let run_ok = matches!(
         classification.status,
-        ScrapeRunStatus::Succeeded | ScrapeRunStatus::PartialOutput
+        ScrapeRunStatus::Succeeded
+            | ScrapeRunStatus::CompletedEmpty
+            | ScrapeRunStatus::PartialOutput
     );
     Ok(ScrapeExecutionOutcome {
         ok: run_ok,
@@ -398,6 +863,7 @@ pub(crate) fn execute_scrape_with_outcome(
             .min(u64::MAX as u128) as u64,
         reason: classification.reason,
         error,
+        query_completion,
         probe: probe_to_json(&probe),
         should_queue_repair: classification.should_queue_repair,
         repair_request_path: repair_request_path
@@ -409,6 +875,117 @@ pub(crate) fn execute_scrape_with_outcome(
         materialization: materialization.as_ref().map(|item| item.summary.clone()),
         run_manifest_path: run_dir.join("run.json"),
     })
+}
+
+fn now_millis() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// The stored credential the target depends on, by name: `credential_secret_name`
+/// in the target config, else the config's `credential_ref`
+/// (`ctox-secret://<scope>/<NAME>`, the form installed Outbound manifests
+/// carry, e.g. the LinkedIn target's Bright Data key), else the name the
+/// source's recipe or id implies (as for protected capture). Never the value.
+pub(super) fn target_credential_name(config: &Value) -> Option<String> {
+    let text = |key: &str| {
+        config
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    };
+    if let Some(name) = text("credential_secret_name") {
+        return Some(name.to_string());
+    }
+    if let Some(reference) = text("credential_ref") {
+        if super::reauth::valid_credential_reference(reference) {
+            let prefix = format!("ctox-secret://{}/", crate::secrets::credential_scope());
+            return reference.strip_prefix(prefix.as_str()).map(str::to_string);
+        }
+    }
+    let provider = text("expected_provider")?;
+    Some(
+        ctox_web_stack::sources::find(provider)
+            .and_then(|module| module.browser_recipe())
+            .and_then(|recipe| recipe.required_secret_name.map(str::to_string))
+            .unwrap_or_else(|| super::reauth::derived_secret_name(provider)),
+    )
+}
+
+/// Version of the named secret: its record's `updated_at`, `absent` when the
+/// store has no such record. A store that cannot be read yields `None`, which
+/// is NOT "absent": an unreadable store must neither look like a credential
+/// change (and trigger a probe) nor overwrite the version the state recorded.
+pub(super) fn credential_version(
+    records: Result<Vec<crate::secrets::SecretRecordView>>,
+    name: &str,
+) -> Option<String> {
+    let records = records.ok()?;
+    Some(
+        records
+            .into_iter()
+            .find(|record| record.secret_name == name)
+            .map(|record| record.updated_at)
+            .unwrap_or_else(|| "absent".to_string()),
+    )
+}
+
+fn target_credential(
+    root: &Path,
+    target: &RegisteredTarget,
+) -> Option<super::account_state::Credential> {
+    let name = target_credential_name(&target.view.config)?;
+    let scope = crate::secrets::credential_scope();
+    let version = credential_version(
+        crate::secrets::list_secret_records(root, Some(scope)),
+        &name,
+    );
+    Some(super::account_state::Credential {
+        reference: format!("{scope}/{name}"),
+        version,
+    })
+}
+
+/// The answer for a suppressed call: no provider call and no new run; it
+/// names the run that caused the state and the last probe.
+fn suppressed_account_outcome(
+    target: &RegisteredTarget,
+    workspace_dir: &Path,
+    state: super::account_state::AccountState,
+    started: Instant,
+) -> ScrapeExecutionOutcome {
+    let next_probe = chrono::DateTime::from_timestamp_millis(state.next_probe_at_ms)
+        .map(|at| at.to_rfc3339())
+        .unwrap_or_default();
+    ScrapeExecutionOutcome {
+        ok: false,
+        target_key: target.view.target_key.clone(),
+        run_id: state.last_probe_run_id.clone(),
+        status: ScrapeRunStatus::ProviderAccountInactive,
+        records_found: 0,
+        fields_extracted: Vec::new(),
+        latency_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        reason: "provider_account_inactive_suppressed".to_string(),
+        error: Some(format!(
+            "Konto beim Anbieter inaktiv: {} (erfasst in {}, zuletzt geprüft in {}); kein Anbieteraufruf. Automatische Wiederprüfung beim nächsten Abruf ab {next_probe}, früher nach geänderten Zugangsdaten oder autorisierter Prüfung.",
+            state.reason, state.causal_run_id, state.last_probe_run_id
+        )),
+        query_completion: None,
+        probe: Value::Null,
+        should_queue_repair: false,
+        repair_request_path: None,
+        repair_queue_task: None,
+        reauthorization: None,
+        template_event: None,
+        materialization: None,
+        run_manifest_path: workspace_dir
+            .join("runs")
+            .join(&state.last_probe_run_id)
+            .join("run.json"),
+    }
 }
 
 pub(super) fn is_preserved_runner_env_key(key: &str) -> bool {

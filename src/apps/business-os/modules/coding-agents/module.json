@@ -17,12 +17,7 @@
     "left": "Projects: Business OS apps the agent can work on",
     "center": "Chat with the pi agent (transcript + composer)",
     "right": "Live task artifact: free HTML the agent maintains about its run",
-    "third_pane_justification": "The agent's self-published progress artifact must stay visible while chatting — hiding it would blind the user to the running task.",
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/coding-agents.jpg",
-    "icon_asset_sha256": "1cf4cc4fd8e785f1b557be6dbbc3d0d8f02ab7462f9c16b17b163fc023c0bae3",
-    "icon_selection_sha256": "1cf4cc4fd8e785f1b557be6dbbc3d0d8f02ab7462f9c16b17b163fc023c0bae3",
-    "icon_selection_candidate": "candidate-09",
-    "icon_asset_kind": "raster-reference"
+    "third_pane_justification": "The agent's self-published progress artifact must stay visible while chatting — hiding it would blind the user to the running task."
   },
   "category": "Development",
   "version": "0.2.6",

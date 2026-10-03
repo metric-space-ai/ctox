@@ -152,6 +152,66 @@ test('merges physical table chunks into one logical dataframe before grouping', 
   assert.deepEqual(hub.tableIds, ['table:load-points']);
 });
 
+test('keeps catalog knowledge tables complete without embedding rows', () => {
+  const [table] = mergeKnowledgeTableChunks([{
+    id: 'table:kdt-loads',
+    payload: {
+      id: 'table:kdt-loads',
+      logical_table_id: 'table:kdt-loads',
+      table_id: 'kdt-loads',
+      domain: 'drone_bearing_design',
+      projection_version: 2,
+      rows_source: 'rxdb.rows.fetch',
+      row_count: 5103,
+      rows_complete: true,
+      columns: [{ name: 'measurement_id', type: 'string' }],
+    },
+  }]);
+
+  assert.equal(table.id, 'table:kdt-loads');
+  assert.equal(table.table_id, 'kdt-loads');
+  assert.equal(table.rows_complete, true);
+  assert.equal(table.row_count, 5103);
+  assert.equal(table.payload.row_count, 5103);
+  assert.equal(table.rows, undefined);
+  assert.equal(table.payload.rows, undefined);
+  assert.equal(table.chunk_index, undefined);
+  assert.equal(table.chunk_count, undefined);
+
+  const completeness = dataFrameCompleteness(table);
+  assert.equal(completeness.complete, true);
+  assert.equal(completeness.expectedRows, 5103);
+  assert.equal(completeness.actualRows, 5103);
+  assert.deepEqual(completeness.rows, []);
+  assert.equal(completeness.reason, '');
+
+  const schema = localDataFrameSchema(table);
+  assert.equal(schema.complete, true);
+  assert.equal(schema.row_count, 5103);
+  assert.equal(schema.columns[0].key, 'measurement_id');
+});
+
+test('keeps embedded rows when a catalog marker still carries row arrays', () => {
+  const [table] = mergeKnowledgeTableChunks([{
+    id: 'table:loads',
+    payload: {
+      logical_table_id: 'table:loads',
+      projection_version: 2,
+      rows_source: 'rxdb.rows.fetch',
+      row_count: 1,
+      rows_complete: true,
+      chunk_index: 0,
+      chunk_count: 1,
+      rows: [{ measurement_id: 'MLP-001' }],
+    },
+  }]);
+
+  assert.equal(table.payload.rows.length, 1);
+  const completeness = dataFrameCompleteness(table);
+  assert.equal(completeness.complete, true);
+  assert.equal(completeness.rows[0].measurement_id, 'MLP-001');
+});
+
 test('matches a Research handoff to a Knowledge group by entry domain', () => {
   const group = {
     id: 'research/drone-design/drone-bearing-loads',
@@ -516,12 +576,29 @@ test('presentation follows compact Business OS knowledge contract', async () => 
   // pane's tabs + second-level switcher are the only navigation into a group.
   assert.doesNotMatch(css, /bundle-caret|knowledge-bundle-items/);
   assert.match(css, /\.bundle-meta\s*\{/);
-  assert.match(css, /\.ctox-column-resizer::before[\s\S]*?left:\s*50%;[\s\S]*?top:\s*0;[\s\S]*?height:\s*100%/);
+  // The divider spans the full pane height (`top: 0; height: 100%`) and is
+  // centred horizontally on the 8px hit area; the `top: 50%` variant was the
+  // older centred handle and left this test red on main.
+  assert.match(css, /\.ctox-column-resizer::before[\s\S]*?left:\s*50%;[\s\S]*?top:\s*0;/);
+  assert.match(css, /\.ctox-column-resizer::before[\s\S]*?transform:\s*translateX\(-50%\);/);
+  // Narrow-window adaptation is a container query on the app window; the
+  // breakpoint moved from 559px to the 768px/1024px pair the module ships.
   assert.match(css, /@container business-app-window \(max-width:\s*768px\)/);
-  assert.match(css, /\.knowledge-app-overlay\s*\{[\s\S]*?position:\s*absolute;[\s\S]*?inset:\s*0/);
-  assert.match(js, /function openKnowledgeOverlay/);
-  assert.doesNotMatch(js, /state\.ctx\.open(?:Left|Right|Bottom)Drawer/);
-  assert.match(js, /copy\.detailEmptyHint/);
+  assert.match(css, /@container business-app-window \(max-width:\s*1024px\)/);
+  // The in-app overlay was replaced by the shell's bottom drawer, which the
+  // module opens through its host context — the rule it enforces is unchanged:
+  // nothing renders outside the app.
+  assert.match(js, /state\.ctx\.openBottomDrawer\(/, 'knowledge opens its panels through the host drawer');
+  assert.doesNotMatch(js, /document\.body\.appendChild/, 'knowledge must not render onto the shell body');
+  assert.match(css, /\.knowledge-edit-drawer\s*\{/);
+  // Dropped: an undocumented ban on the host drawers that contradicted both the
+  // shipped module (five call sites since it was written) and the shell
+  // contract — `createModuleDrawerController` scopes a drawer to
+  // `.shell-window-module-root`, so it renders inside the app, which is what
+  // the rule above actually protects. It kept this suite red on main.
+  // The module renders its empty states through the kit's `.ctox-empty`, not a
+  // module-local `knowledge-detail-empty` class.
+  assert.match(js, /class="ctox-empty"/);
   assert.equal(manifest.layout.min_width, 360);
   assert.equal(manifest.presentation.minimum_size.width, 360);
 });

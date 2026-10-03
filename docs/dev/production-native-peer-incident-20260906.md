@@ -1,5 +1,245 @@
 # Production incident: native peer recovery, 2026-09-06
 
+## Verified native candidate and deployment in progress, 2026-09-07
+
+Main fcce197633914c313b8765454c3afcfe75017d83 preserves complete
+module-source content and bounds live replication events through the existing
+Resync/byte-bounded pull contract. Historical source documents are excluded
+from destructive startup clamping. A real SQLite startup regression preserves
+a 2 MiB source document, revision and write timestamp (1 passed).
+
+The verified source artifact covers all 9,846 tracked Git blobs and modes.
+Its optimized binary SHA256 is
+`705d66d3e487b54f48f5a41cae9f2960e342565300ff96530d8e45e9190b1f26`.
+With signed beta17, actual browser/command/native/WebRTC execution preserved
+21 source files and 11,130,431 bytes both before and after native restart.
+Source command: 341.5 ms; complete transfer and hash verification: 1,160.9 ms;
+native restart: 3,170 ms. This is not a production boot-p95 claim.
+[Source flow measurements](beweise/raw/module-source-lossless-final-20260907.json).
+
+The final warm-command run completed 30/30 commands: p50 274.5 ms,
+p95 341.5 ms, min 214 ms, max 379 ms, with no reported issues.
+[Warm-command measurements](beweise/raw/warm-command-final-20260907.json).
+The first sequential warm runner failed its port reservation after the source
+runner exited; no listener remained. The unchanged workload then used fresh
+ports 28987/28986. This setup failure is not hidden as a product pass.
+The earlier debug p50 380 ms remains a failed performance run.
+
+The full JS suite subsequently passed 119/119 with the rebuilt wire daemon and
+no skips, superseding the intermediate 115/4 timeout result below. The native
+RxDB suite passed 430 tests; the source writer and five staging/replay tests
+also passed. These do not certify all live application workflows.
+
+The safe managed updater (SHA256 580887fe…) was launched as
+`ctox-sync-native-fcce19763-update-20260907.service`. It revalidated the
+source tree, test evidence and immutable backups, saved a fresh read-only chunk
+manifest, and is rebuilding the managed release before switching. Production
+activation and the fourteen source-projection repairs are pending at this
+checkpoint. Source backup:
+`/home/ctox/.local/state/ctox-incident-lossless-source-20260907`.
+
+Real beta17 browser checks still fail Office opening with
+`CTOX product sync push timed out: spreadsheet_blob_chunks`. After an own-tab
+reload, lists were empty at a sampled 54 seconds and populated at a sampled
+153 seconds. This is sparse observation, not an exact bootstrap percentile.
+Several schema imports had previously failed; the exact Support schema URL
+subsequently returned HTTP 200 with JavaScript content type. Neither cache
+clearing nor the removal of user application data was used to claim recovery.
+
+
+## Applied staging cleanup and subsequent replay failure
+
+At 2026-09-07T00:37:42Z, maintenance unit
+`ctox-sync-office-staging-apply-20260907.service` completed with exit 0.
+It backed up all three stores under
+`/home/ctox/.local/state/ctox-incident-office-staging-20260907`;
+each SQLite quick_check returned ok. The exact candidate digest was
+`ae3f82c8d17337c443032d9e5bf004b335a6fcf2263fbcf42ee31165d8564984`.
+The audited sixteen canonical DOCX/editor payloads remained intact.
+
+A read-only comparison against that fresh backup covered every stored chunk:
+988 desktop, 42 document, 29 spreadsheet records. There were no missing rows;
+only the seven intended staging records changed, from active to deleted.
+All other complete payload hashes were unchanged. The original staging records
+also have a separate durable repair backup.
+
+**This did not yet complete replication acceptance.** After restart the live
+projection loop rejected the historical tombstone's `data` object with schema
+error 422. The direct writer preserved the invalid `_omitted` object when
+deleting; the initial four real-store tests did not exercise the subsequent
+schema-validating native replay. A follow-up now sanitizes this invalid byte
+field only for deleted file chunks, includes invalid historical tombstones in
+the audit, and adds a real native RxDB projection replay test. That follow-up's
+build and operational reapplication completed in a second guarded maintenance
+window at 2026-09-07T02:01:30Z. Its five real-store/native-replay tests and all
+429 RxDB crate tests passed. The exact second candidate digest was
+`fd3dad8f973626ad636d219109a5f5337e1152a5c708453b49aec7ccb8af5d17`.
+The second store backup is
+`/home/ctox/.local/state/ctox-incident-office-staging-v2-20260907`.
+After application all seven deleted chunks have string data, and a fresh audit
+reports zero candidates, including invalid historical tombstones. Service PID
+2717185 was active with NRestarts=0. No validator is weakened and no live
+document payload is rewritten.
+
+Six complementary required-field/schema helper tests also passed. The full
+JavaScript suite did **not** pass: 115 passed, four failed by timeout
+(cross-process wire seeding, demand-cache migration browser, initial-sync stale
+browser, multi-tab browser). These remain failures, not production acceptance.
+The own browser tab loaded beta16 and Harness after cleanup, but the new
+spreadsheet still showed an editor loading skeleton at the next visual check;
+no save/reopen success or boot percentile is claimed.
+
+A whole-store recursive marker audit also found fourteen active omitted
+`business_module_source_files` records: thirteen
+`black-hole-studio:vendor/chunks/chunk-00.mjs` through `chunk-12.mjs`,
+and `research:index.js`. Each complete canonical content string exists in
+native `business_records` and matches the projected SHA256. These are
+recoverable source projections, not abandoned Office uploads; they have not
+been deleted or repaired yet.
+
+Signed beta16 is now active (separate rollout, activation
+2026-09-07T00:38:02.029726874Z). Only this task's own browser tab was reloaded.
+The new test spreadsheet's missing chunk subsequently reached native RxDB;
+its editor still failed with `Office RPC timed out: editor.open`.
+No save or all-app success is claimed. The service subsequently reported
+NRestarts=0 and approximately 6 GB resident memory; the earlier OOM cause
+remains unresolved.
+
+## Follow-up, 2026-09-07: font routing, upload failure and guarded cleanup
+
+The independent Office task fixed the gateway classifier for extensionless
+signed-slot font files (ctox-dev main
+`1cebb53e0cf081fceeec7633f67e17223d31b31b`, promoted deployment
+`dpl_FaJ91rpY4RaJoaoez7Lt4TPRPQ31`). Before promotion, the beta15 font
+`vendor/ctox-office/upstream/fonts/000` returned HTTP 200 login HTML
+(3,877 bytes). Afterwards it returned 708,920 binary bytes with SHA256
+`2a6bc04169fc1e273ede5e55ec7c666eb4ebf6da438202cdf61d415a77f83a69`.
+Independent fetches took 11.600 s and 7.425 s; these are not a latency pass.
+The existing spreadsheet grid then visibly rendered in this task's browser.
+
+Creating one blank test spreadsheet through the UI remains reproducibly broken:
+`sheet_4a27209b-66e3-47cf-b147-8a67a2f8230e` (Neue Tabelle 4).
+Its record and v1 metadata reached native RxDB, but none of its blob chunks did.
+The editor reports `CTOX product sync push timed out: spreadsheet_blob_chunks`,
+while the header incorrectly says Gespeichert. Opening another sheet and
+reopening this record repeated the failure. No cell edits were made. This
+test record still requires cleanup through the supported application path.
+
+The production daemon is still aece8a4f, PID 2694536, NRestarts=2. The
+independent task found OOM/SIGKILL entries; current read-only checks confirm
+roughly 10 GB RSS / 11.35 GB cgroup memory. This does not by itself establish
+the cause of Office saving failures. At 2026-09-07T00:24:32Z the native
+command counters showed 263 observations, average observation latency
+30,813 ms and maximum 876,605 ms. These cumulative counters are not the
+isolated warm-command percentile fixture and do not meet production acceptance.
+
+Seven omitted document chunks were identified as old `office_document_*`
+staging uploads belonging to three existing documents. Four versions retain
+staged-upload references; their canonical DOCX and editor blob hashes were
+independently verified. No canonical blob_id/editor_blob_id points at an
+omitted upload. All corresponding persisted commands are terminal.
+
+The new [offline staging repair](office-staging-repair.md) requires an exact
+candidate digest, checks all affected canonical history, excludes a running
+peer, writes a durable backup, and uses normal projection tombstones. Its four
+real-store integration tests passed on the isolated remote source build in
+0.20 s (test compilation 9m33s). Production dry-run/application and replicated
+tombstone verification are still pending at this checkpoint.
+
+Build attempts are not production evidence: the first lacked the generated
+Pi bundle; the second failed linking with SIGBUS and left only 2.3 GB disk
+free. Only this task's failed incremental compiler cache was removed,
+restoring 20 GB. The third build uses no incremental cache and passed the
+four repair tests. No production database was deleted or overwritten.
+
+## Subsequent live follow-up: beta15 and remaining UI latency
+
+A separate Office rollout activated signed beta15 at
+2026-09-06T22:16:10.982981761Z, keeping native aece8a4f unchanged.
+Read-only shell status confirmed active beta15, phase=current, health=healthy,
+administrable=true, recoveryShell=false. After navigating only this task's
+test tab, a screenshot confirmed beta15 and the rendered CTOX Harness flow,
+task list, timeline and token metrics.
+
+This is not an all-app acceptance: Browser automation encountered CDP
+dispatch/Runtime.evaluate timeouts while opening apps. A CTOX navigation
+that reported a timeout subsequently appeared completed in the screenshot.
+An earlier unscoped close selector was also ambiguous across six windows;
+no successful close was claimed. The Tickets navigation succeeded but showed
+a continuing sync message. Read-only native inspection found all twelve
+ticket projection collections empty, so zero visible tickets alone is not
+evidence of lost records.
+
+The operator machine simultaneously showed a Codex renderer at 119.8% CPU
+and several other busy applications/build processes. That snapshot does not
+identify the test tab's process or establish the cause of the delay.
+End-to-end UI responsiveness, cold boot, and the Office flows therefore remain
+open. No process was killed, store changed, or timeout weakened to claim a pass.
+
+## Production rollout completed: native aece8a4f and signed beta14
+
+Current checkpoint: 2026-09-06 22:14 UTC. The authentication failure and
+not-yet-deployed statements below describe earlier phases and are superseded
+by this section.
+
+All runtime fixes were merged and pushed to main at
+`aece8a4f28999885b4fe788f2c3bf4559a4bcf38`. Signed release
+`business-os-shell-v0.1.46-beta.14` was built from that exact commit by
+GitHub Actions run `34059620173`. The managed source archive was independently
+checked against all 9,820 Git blobs and executable modes.
+
+The safe managed updater completed successfully (exit 0) in 26m26s:
+`ctox-sync-welsch-native-aece8a4f-update-20260906.service`,
+invocation `6526028848594260993f923a39c46614`.
+Welsch now runs `branch-main-aece8a4f-20260906`; the deployed binary SHA256 is
+`d2832ec31e002a8fec46390f68384921e34f8d6c6ad38bedc22505e3eb2f2e9e`.
+This managed rebuild is distinct from the isolated optimized test binary
+`580887fe…`; do not conflate their binary hashes or performance results.
+The previous `branch-main-490f1ab80-20260906` release is retained.
+
+Beta14 activation and the service restart succeeded through
+`ctox-sync-welsch-beta14-activate-20260907.service`,
+invocation `6bb49d2265e14b53b16dd54748389d35`.
+At the checkpoint, shell status reported active beta14, healthy, administrable,
+and no recovery shell. A separately prepared beta15 was desired/ready; this
+report does not claim to have activated that subsequent release.
+Native peer status reported running=true, replicationUp=true, fresh heartbeat,
+and errorTotal=0.
+
+A fresh SQLite backup of all three stores passed quick_check before this
+update. The postflight at 22:13:58 UTC compared all 1,059 baseline chunk payloads
+under a read-only transaction: 988 desktop, 42 document, 29 spreadsheet.
+Every payload hash and deletion state was unchanged; none disappeared or became
+newly omitted. Seven historically omitted document chunks remain unresolved.
+This verifies preservation during this rollout, not recovery of those bytes.
+
+In the real signed-in browser test tab, the shell visibly displayed beta14.
+Opening CTOX rendered the Harness task list, flow diagram, timeline, and token
+metrics. Existing tasks still displayed error states. This confirms restored
+rendering, not successful new task execution. The user's original tab was
+preserved. Spreadsheet loading/reopening remains a separate unresolved flow
+at this checkpoint; the next scoped fix is handled separately.
+
+The final isolated signed-beta14 Browser/WebRTC/native/browser test completed
+30 commands with p50 **250 ms**, p95 **290.55 ms**, min 206 ms, max 292 ms.
+No missing assets, request failures, cache repair or startup reload occurred.
+Unit `ctox-sync-shell-beta14-browser-20260906.service`, invocation
+`b2d4c0a5fd124a0f887f7553d065ca67`, exit 0.
+The warm fixture passes. Critical-collection boot p95, managed-production
+command latency, fleet-wide instances, desktop/mobile, and complete Office
+editing/reopening are not certified by this result.
+
+Evidence:
+- `beweise/raw/shell-native-beta14-roundtrip-marks.json`
+- `beweise/raw/shell-native-beta14-stage-report.json`
+- `beweise/raw/main-shell-aece8a4f-source-report.json`
+- `beweise/raw/welsch-shell-beta14-pre-backup.json`
+- `beweise/raw/welsch-beta14-postflight.json`
+
+The shell artifact package check now also runs the actual-helper browser asset
+routing regression (commit `04affc635`); 16 artifact checks and all six browser
+cases passed. No production behavior was changed by that CI wiring.
+
 ## Final root-path and app-asset regressions
 
 The follow-up fixes `/business-os/`: its empty relative path previously skipped

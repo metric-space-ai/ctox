@@ -16,12 +16,7 @@
     "shell_contract": "v2",
     "shell_geometry_contract": "business-os-v2-global-1",
     "left": "Subjekt- und Statusfilter",
-    "center": "Nachweise mit Ablauf und Verifikationsstatus",
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/nachweise.jpg",
-    "icon_asset_sha256": "cd43c8c297a229317fab2d9cd399e889e7377a6dcf16025bf52a1ce325f6d76a",
-    "icon_selection_sha256": "cd43c8c297a229317fab2d9cd399e889e7377a6dcf16025bf52a1ce325f6d76a",
-    "icon_selection_candidate": "candidate-11",
-    "icon_asset_kind": "raster-reference"
+    "center": "Nachweise mit Ablauf und Verifikationsstatus"
   },
   "category": "Operations",
   "version": "0.2.1",

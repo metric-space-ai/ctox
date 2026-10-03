@@ -47,6 +47,19 @@
      window surfaces so stacked windows read as physical layers. Consumed
      only by the :root[data-shell-style="ctox"] chrome layer at file end. */
   --shell-desktop-bg: #fcfcfc;
+  /* Depth ladder (desktop < app window < floating crew surfaces). A floating
+     panel is always lighter than what it floats over and carries an inner
+     edge plus an outer outline, so chat windows and the crew bar never melt
+     into the app below them and app windows never melt into the desktop. */
+  --elev-float: #ffffff;
+  --elev-float-2: #f5f6f8;
+  --elev-float-3: #eceef2;
+  --elev-inner-line: rgb(15 23 42 / 0.08);
+  --elev-edge: rgb(15 23 42 / 0.14);
+  --elev-outline: rgb(255 255 255 / 0.9);
+  --elev-float-shadow: 0 0 0 1px rgb(15 23 42 / 0.05), 0 20px 50px oklch(0.22 0.015 235 / 0.2), 0 4px 12px oklch(0.22 0.015 235 / 0.12);
+  --elev-bar-shadow: 0 0 0 1px rgb(15 23 42 / 0.05), 0 10px 30px oklch(0.22 0.015 235 / 0.18);
+  --elev-window-shadow: 0 0 0 1px rgb(15 23 42 / 0.1), 0 30px 80px oklch(0.22 0.015 235 / 0.26);
   --win-radius: 16px;
   --win-border: color-mix(in srgb, var(--line) 92%, transparent);
   --win-border-focus: color-mix(in srgb, var(--accent) 62%, var(--line));
@@ -116,6 +129,17 @@
   --shell-control-bg: var(--surface-2);
   --shell-topbar-shadow: none;
   --shell-desktop-bg: #0a0a0a;
+  /* Dark depth reads through lightness and light edges, not black shadows:
+     a black shadow on a near-black desktop is invisible. */
+  --elev-float: #1c1f25;
+  --elev-float-2: #252a32;
+  --elev-float-3: #2e343d;
+  --elev-inner-line: rgb(255 255 255 / 0.08);
+  --elev-edge: rgb(255 255 255 / 0.15);
+  --elev-outline: rgb(0 0 0 / 0.85);
+  --elev-float-shadow: 0 0 0 1px var(--elev-outline), 0 24px 60px rgb(0 0 0 / 0.62), 0 6px 18px rgb(0 0 0 / 0.5);
+  --elev-bar-shadow: 0 0 0 1px var(--elev-outline), 0 14px 38px rgb(0 0 0 / 0.58);
+  --elev-window-shadow: 0 0 0 1px rgb(255 255 255 / 0.17), 0 0 0 2px rgb(0 0 0 / 0.75), 0 32px 90px rgb(0 0 0 / 0.72);
   --win-radius: 16px;
   --win-border: #343434;
   --win-border-focus: color-mix(in srgb, var(--accent) 68%, #343434);
@@ -217,6 +241,14 @@ body[data-maintenance-active="true"] .app-shell {
   grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
 }
 
+.app-shell:has(> .collection-freshness-warning:not([hidden])) {
+  grid-template-rows: var(--shell-topbar-height) auto minmax(0, 1fr);
+}
+
+body[data-maintenance-active="true"] .app-shell:has(> .collection-freshness-warning:not([hidden])) {
+  grid-template-rows: var(--shell-topbar-height) auto auto minmax(0, 1fr);
+}
+
 .ctox-maintenance-banner {
   position: relative;
   z-index: 8;
@@ -292,6 +324,20 @@ body[data-maintenance-active="true"] .app-shell {
   color: var(--text);
   font-size: var(--fs-meta);
   font-weight: 700;
+}
+
+.collection-freshness-warning {
+  display: block;
+  padding: var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--line);
+  background: var(--warning-soft);
+  color: var(--warning);
+  font-size: var(--fs-meta);
+  white-space: normal;
+}
+
+.collection-freshness-warning[hidden] {
+  display: none;
 }
 
 body[data-maintenance-status="failed"] .ctox-maintenance-banner,
@@ -485,6 +531,10 @@ body[data-maintenance-status="stale"] .ctox-maintenance-banner {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.ctox-backend-version-line {
+  max-width: 240px;
 }
 
 .shell-release-line {
@@ -6594,6 +6644,11 @@ body[data-shell-chat-dock-compact] .ctox-chat-stage {
    neutralized by the Operational Instrument contract below and is replaced
    by the scoped CTOX shell chrome at the end of this file. */
 
+/* Keep shell menus above the loading workspace; modal drawers remain above both. */
+body[data-module-loading] .topbar {
+  z-index: 20;
+}
+
 /* Startup loader follows the active shell theme. */
 .workspace-startup-loader {
   display: flex;
@@ -7742,7 +7797,7 @@ button.shell-window-header-meta:focus-visible,
 
   .shell-window.is-mobile-sheet .shell-window-content > .shell-window-module-root {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(200px, auto) auto;
+    grid-template-rows: auto minmax(auto, 1fr) auto;
     align-content: start;
     height: 100%;
     padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
@@ -8400,7 +8455,7 @@ button.shell-window-header-meta:focus-visible,
     linear-gradient(180deg, var(--shell-v2-frame-left-joint) 0 var(--shell-v2-icon-frame-span), var(--shell-v2-frame-left-joint) 100%) top left / 6px 100% no-repeat border-box,
     linear-gradient(var(--shell-v2-frame-end), var(--shell-v2-frame-end)) top right / 6px 100% no-repeat border-box,
     linear-gradient(90deg, var(--shell-v2-frame-left-joint), var(--shell-v2-frame-end)) bottom left / 100% 6px no-repeat border-box !important;
-  box-shadow: 0 24px 72px rgb(0 0 0 / 0.62) !important;
+  box-shadow: var(--elev-window-shadow, 0 24px 72px rgb(0 0 0 / 0.62)) !important;
   color: #eef3f7;
 }
 
@@ -8465,7 +8520,87 @@ button.shell-window-header-meta:focus-visible,
   right: 0;
   z-index: 3;
   pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
 }
+
+.shell-window-layout-control {
+  position: relative;
+}
+
+.shell-window[data-shell-contract="v2"] .shell-window-control--layout {
+  width: var(--shell-v2-close-size);
+  height: var(--shell-v2-close-size);
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: #030507;
+  color: #fff;
+  font-size: 0;
+}
+
+.shell-window[data-shell-contract="v2"] .shell-window-control--layout:hover,
+.shell-window[data-shell-contract="v2"] .shell-window-control--layout:focus-visible {
+  color: var(--shell-v2-local-accent, var(--shell-v2-frame-end));
+  outline: 2px solid var(--shell-v2-local-accent, var(--shell-v2-frame-end));
+  outline-offset: 2px;
+}
+
+.shell-window-layout-glyph {
+  display: block;
+  position: relative;
+  width: 16px;
+  height: 14px;
+  margin: auto;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+.shell-window-layout-glyph::after {
+  content: '';
+  position: absolute;
+  background: currentColor;
+  opacity: .9;
+}
+
+.shell-window-layout-glyph--free::after { inset: 3px; background: transparent; border: 1px solid currentColor; }
+.shell-window-layout-glyph--maximize::after { inset: 3px; }
+.shell-window-layout-glyph--minimize::after { left: 3px; right: 3px; bottom: 3px; height: 2px; }
+.shell-window-layout-glyph--left::after { left: 2px; top: 2px; bottom: 2px; width: 4px; }
+.shell-window-layout-glyph--right::after { right: 2px; top: 2px; bottom: 2px; width: 4px; }
+.shell-window-layout-glyph--top::after { left: 2px; right: 2px; top: 2px; height: 4px; }
+.shell-window-layout-glyph--bottom::after { left: 2px; right: 2px; bottom: 2px; height: 4px; }
+
+.shell-window-layout-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: repeat(4, 34px);
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--shell-v2-local-accent, var(--shell-v2-frame-end)) 55%, #252b34);
+  border-radius: 10px;
+  background: #090c11;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .42);
+}
+
+.shell-window-layout-menu[hidden] { display: none; }
+.shell-window-layout-menu button {
+  width: 34px;
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #dce5eb;
+}
+.shell-window-layout-menu button:hover,
+.shell-window-layout-menu button:focus-visible {
+  background: color-mix(in srgb, var(--shell-v2-local-accent, var(--shell-v2-frame-end)) 20%, #151a22);
+  color: var(--shell-v2-local-accent, var(--shell-v2-frame-end));
+  outline: none;
+}
+.shell-window-layout-menu .shell-window-layout-glyph { transform: scale(.82); }
 
 .shell-window[data-shell-contract="v2"] .shell-window-control--close,
 :root[data-shell-style] .shell-window[data-shell-contract="v2"] .shell-window-control--close {
@@ -9042,7 +9177,7 @@ button.shell-window-header-meta:focus-visible,
     linear-gradient(180deg, var(--shell-v2-frame-left-joint) 0 var(--shell-v2-icon-frame-span), var(--shell-v2-frame-left-joint) 100%) top left / 6px 100% no-repeat border-box,
     linear-gradient(var(--shell-v2-frame-end), var(--shell-v2-frame-end)) top right / 6px 100% no-repeat border-box,
     linear-gradient(90deg, var(--shell-v2-frame-left-joint), var(--shell-v2-frame-end)) bottom left / 100% 6px no-repeat border-box !important;
-  box-shadow: 0 24px 72px rgb(0 0 0 / 0.62) !important;
+  box-shadow: var(--elev-window-shadow, 0 24px 72px rgb(0 0 0 / 0.62)) !important;
 }
 
 :root [data-workjet-category].shell-window[data-shell-contract="v2"] > .shell-window-header,
@@ -9324,7 +9459,7 @@ button.shell-window-header-meta:focus-visible,
 
   .shell-window-layer > .shell-window .shell-window-content > .shell-window-module-root {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(200px, auto) auto;
+    grid-template-rows: auto minmax(auto, 1fr) auto;
     align-content: start;
     height: 100%;
     padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
@@ -9410,21 +9545,25 @@ button.shell-window-header-meta:focus-visible,
     width: max-content !important;
     max-width: calc(100vw - 16px) !important;
     gap: 6px !important;
-    grid-template-columns: 76px var(--ctox-date-pill-width) 44px !important;
+    /* Keep every portrait inside Crew's own track. On the narrowest screens
+       scroll the bounded dock instead of painting over the date controls. */
+    overflow-x: auto;
+    overflow-y: hidden;
+    grid-template-columns: max-content var(--ctox-date-pill-width) 44px !important;
   }
 
   .ctox-chat-dock.is-collapsed {
     width: auto !important;
-    grid-template-columns: 76px var(--ctox-date-pill-width) !important;
+    grid-template-columns: max-content var(--ctox-date-pill-width) !important;
   }
 
   .ctox-chat-dock.has-visible-chats {
-    grid-template-columns: 76px var(--ctox-date-pill-width) minmax(0, 1fr) 44px !important;
+    grid-template-columns: max-content var(--ctox-date-pill-width) minmax(0, 1fr) 44px !important;
   }
 
   .ctox-chat-dock.has-nav,
   .ctox-chat-dock.has-many-chats {
-    grid-template-columns: 76px var(--ctox-date-pill-width) 32px minmax(0, 1fr) 32px 44px !important;
+    grid-template-columns: max-content var(--ctox-date-pill-width) 32px minmax(0, 1fr) 32px 44px !important;
     width: min(860px, calc(100vw - 16px)) !important;
   }
 
@@ -9435,14 +9574,14 @@ button.shell-window-header-meta:focus-visible,
   }
 
   .ctox-chat-fab {
-    width: 76px !important;
+    width: max-content !important;
     min-width: 0 !important;
     height: 44px !important;
   }
 
   .ctox-chat-date-pill {
     height: 44px !important;
-    min-width: 0 !important;
+    min-width: var(--ctox-date-pill-width) !important;
   }
 
   .ctox-date-nav-btn {
@@ -9629,4 +9768,31 @@ button.shell-window-header-meta:focus-visible,
    der statische Waechter (Regel body-overlay). */
 .shell-window[data-shell-contract="v2"] > .shell-window-content {
   contain: paint;
+}
+
+/* Crew hand-off: the member the owner dragged onto a record stands by in the
+   CTOX context menu (same creature as in the chat bar and the CTOX app). */
+.ctox-context-header.has-crew {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ctox-context-crew {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+}
+.ctox-context-crew .ctox-crew-creature {
+  width: 100%;
+  height: 100%;
+}
+body.ctox-crew-dragging iframe {
+  pointer-events: none;
+}
+body.ctox-crew-dragging,
+body.ctox-crew-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
 }

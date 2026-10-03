@@ -32,12 +32,7 @@
     "shell_geometry_contract": "business-os-v2-global-1",
     "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-outbound\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-outbound\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#ec4899\" /><stop offset=\"100%\" stop-color=\"#f43f5e\" /></linearGradient></defs><line x1=\"22\" y1=\"2\" x2=\"11\" y2=\"13\" stroke=\"url(#grad-outbound)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><polygon points=\"22 2 15 22 11 13 2 9 22 2\" fill=\"url(#grad-outbound)\" fill-opacity=\"0.12\" stroke=\"url(#grad-outbound)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></polygon><path d=\"M6 19c3-1 6-1 9-3\" stroke=\"url(#grad-outbound)\" stroke-width=\"1.5\" stroke-dasharray=\"2 2\" stroke-linecap=\"round\"></path></svg>",
     "left": "campaign and sequence selection",
-    "center": "campaign, sequence, qualification, and sending workbench",
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/outbound.jpg",
-    "icon_asset_sha256": "a47a0a7e7e42acf918ae7e8a64304566b62ce94d31513a33894e163fda735c5a",
-    "icon_selection_sha256": "a47a0a7e7e42acf918ae7e8a64304566b62ce94d31513a33894e163fda735c5a",
-    "icon_selection_candidate": "candidate-05",
-    "icon_asset_kind": "raster-reference"
+    "center": "campaign, sequence, qualification, and sending workbench"
   },
   "category": "Sales",
   "version": "0.2.3",

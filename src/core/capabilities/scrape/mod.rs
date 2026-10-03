@@ -1,11 +1,14 @@
 mod registry;
+pub(crate) use registry::target_script_registration;
 use registry::{
     count_rows, list_targets, open_db, register_script, register_source_module, resolve_db_path,
     show_api, show_target, upsert_target,
 };
 mod execute;
-pub(crate) use execute::execute_scrape_with_outcome;
 use execute::{execute_scrape, CommandExecution, ProbeResult};
+pub(crate) use execute::{
+    execute_scrape_with_outcome, execute_scrape_with_probe_grant, AccountProbeGrant,
+};
 mod semantic_enrichment;
 pub(crate) use semantic_enrichment::service_semantic_search;
 use semantic_enrichment::{
@@ -26,9 +29,15 @@ pub(crate) use queries::{service_query_records, service_show_api, show_latest};
 mod cli;
 pub(crate) use cli::dispatch_capturing;
 pub use cli::handle_scrape_command;
+mod account_state;
 mod classify;
+mod query_completion;
 use classify::Classification;
 pub(crate) use classify::ScrapeRunStatus;
+
+pub(crate) fn registered_target_summary(root: &Path, target_key: &str) -> Result<Option<Value>> {
+    show_target(root, target_key)
+}
 
 use anyhow::Context;
 use anyhow::Result;
@@ -71,7 +80,11 @@ use crate::inference::runtime_state;
 use crate::inference::supervisor;
 
 const DEFAULT_RUNTIME_ROOT: &str = "runtime/scraping";
-const DEFAULT_QUEUE_PRIORITY: &str = "high";
+// Scrape repairs are maintenance behind the work that triggered them. At
+// "high" ten repair tasks spawned by one adapter reconciliation held four
+// customer research tasks (priority normal) for half an hour (thesen,
+// 07.09.2026), so repairs queue below normal work.
+const DEFAULT_QUEUE_PRIORITY: &str = "low";
 const DEFAULT_REPAIR_SKILL: &str = "universal-scraping";
 const DEFAULT_ENRICHMENT_MAX_RECORDS: usize = 50;
 const MIN_TEMPLATE_TARGETS: i64 = 2;
@@ -167,6 +180,23 @@ CREATE TABLE IF NOT EXISTS scrape_template_promoted (
     is_active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+-- Provider account refused (e.g. Bright Data "Customer is not active"):
+-- durable per target, see account_state.rs.
+CREATE TABLE IF NOT EXISTS scrape_account_state (
+    target_id TEXT PRIMARY KEY REFERENCES scrape_target(target_id) ON DELETE CASCADE,
+    generation INTEGER NOT NULL,
+    reason TEXT NOT NULL,
+    causal_run_id TEXT NOT NULL,
+    last_probe_run_id TEXT NOT NULL,
+    credential_ref TEXT,
+    credential_version TEXT,
+    failed_probes INTEGER NOT NULL,
+    next_probe_at_ms INTEGER NOT NULL,
+    probe_lease_owner TEXT,
+    probe_lease_until_ms INTEGER NOT NULL DEFAULT 0,
+    updated_at_ms INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS scrape_run (
@@ -364,11 +394,13 @@ impl ScrapeRunStatus {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Succeeded => "succeeded",
+            Self::CompletedEmpty => "completed_empty",
             Self::TemporaryUnreachable => "temporary_unreachable",
             Self::PortalDrift => "portal_drift",
             Self::Blocked => "blocked",
             Self::PartialOutput => "partial_output",
             Self::AuthorizationRequired => "authorization_required",
+            Self::ProviderAccountInactive => "provider_account_inactive",
         }
     }
 }
@@ -384,6 +416,7 @@ pub(crate) struct ScrapeExecutionOutcome {
     pub(crate) latency_ms: u64,
     pub(crate) reason: String,
     pub(crate) error: Option<String>,
+    pub(crate) query_completion: Option<Value>,
     probe: Value,
     should_queue_repair: bool,
     repair_request_path: Option<String>,
@@ -1104,7 +1137,10 @@ fn scrape_error_diagnostic(
     probe: &ProbeResult,
     execution: &CommandExecution,
 ) -> Option<String> {
-    if classification.status == ScrapeRunStatus::Succeeded {
+    if matches!(
+        classification.status,
+        ScrapeRunStatus::Succeeded | ScrapeRunStatus::CompletedEmpty
+    ) {
         return None;
     }
     let mut details = vec![format!(

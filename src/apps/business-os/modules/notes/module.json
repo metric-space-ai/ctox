@@ -15,12 +15,7 @@
     "left": "Folders and note list",
     "center": "Markdown editor and rich text live preview",
     "right": "Command dashboard and formatting shortcuts",
-    "third_pane_justification": "Editor-type app (IA-Karte): left = books/tags nav + note list, main = rich-text editor; the third pane is the justified reference/metadata surface of the editor layout.",
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/notes.jpg",
-    "icon_asset_sha256": "aa1aafef932cb21d16611927780be82d4a5d68c9b474b70308aaeda83be5cf8b",
-    "icon_selection_sha256": "aa1aafef932cb21d16611927780be82d4a5d68c9b474b70308aaeda83be5cf8b",
-    "icon_selection_candidate": "candidate-06",
-    "icon_asset_kind": "raster-reference"
+    "third_pane_justification": "Editor-type app (IA-Karte): left = books/tags nav + note list, main = rich-text editor; the third pane is the justified reference/metadata surface of the editor layout."
   },
   "category": "Productivity",
   "version": "1.0.2",

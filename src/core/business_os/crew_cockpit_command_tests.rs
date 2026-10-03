@@ -365,7 +365,32 @@ fn pause_preserves_current_lease_until_normal_acknowledgement() -> anyhow::Resul
 #[test]
 fn cockpit_collections_are_founder_readable_but_user_denied() {
     use crate::business_os::policy::{role_may_read_collection, BusinessOsRole};
-    for collection in ["ctox_harness_events", "ctox_harness_status", "ctox_runs"] {
+    // Harness status (pause, capacity, who is on duty) is user-readable since
+    // 08.09.2026; runs and event streams stay admin/founder.
+    let status_scope =
+        crate::business_os::policy::BusinessOsScope::collection("ctox_harness_status");
+    let user = crate::business_os::policy::BusinessOsActor::new(None, "user");
+    assert!(
+        crate::business_os::policy::evaluate(
+            &user,
+            crate::business_os::policy::BusinessOsPermission::DataRead,
+            &status_scope
+        )
+        .allowed
+    );
+    assert!(
+        !crate::business_os::policy::evaluate(
+            &user,
+            crate::business_os::policy::BusinessOsPermission::DataWrite,
+            &status_scope
+        )
+        .allowed
+    );
+    assert!(role_may_read_collection(
+        BusinessOsRole::User,
+        "ctox_harness_status"
+    ));
+    for collection in ["ctox_harness_events", "ctox_runs", "ctox_crew_learnings"] {
         let scope = crate::business_os::policy::BusinessOsScope::collection(collection);
         for role in ["admin", "founder", "user"] {
             let actor = crate::business_os::policy::BusinessOsActor::new(None, role);

@@ -213,10 +213,7 @@ pub fn browser_session_automation(
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     runtime.block_on(async move {
         let database = open_database(database_path).await?;
-        database
-            .add_collections(collection_creators())
-            .await
-            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        register_collections_tolerant(&database, collection_creators()).await?;
         let session_id = request.session_id.trim().to_string();
         let output = browser_session_automation_with_database(root, &database, request).await;
         browser_runtime_manager().stop(&session_id).await;

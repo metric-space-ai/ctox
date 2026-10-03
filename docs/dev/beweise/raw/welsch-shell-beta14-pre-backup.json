@@ -1,0 +1,18 @@
+{
+  "backupRoot": "/home/ctox/.local/state/ctox-incident-pre-shell-beta14-20260906T212338Z",
+  "databases": {
+    "ctox.sqlite3": {
+      "quickCheck": "ok",
+      "bytes": 408944640
+    },
+    "business-os.sqlite3": {
+      "quickCheck": "ok",
+      "bytes": 130101248
+    },
+    "business-os-rxdb.sqlite3": {
+      "quickCheck": "ok",
+      "bytes": 217681920
+    }
+  },
+  "chunkRows": 1059
+}

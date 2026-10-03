@@ -5,9 +5,13 @@ pub(crate) use finalization::*;
 mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
+mod memory;
+mod router;
 mod runtime;
 use anyhow::{bail, Context, Result};
 pub(crate) use lifecycle::*;
+pub(crate) use memory::*;
+pub(crate) use router::*;
 pub(crate) use runtime::*;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -141,6 +145,16 @@ pub(crate) fn ensure_schema(conn: &Connection) -> Result<()> {
     for (table, column) in [
         ("communication_routing_state", "crew_assigned_member_id"),
         ("crew_attempts", "started_at"),
+        // Memory in the LCM (2026-09-06): the task summary feeds routing and
+        // experience; learnings travel as JSON until the learner has written
+        // them into the member's anchors; legacy rows are migrated once.
+        ("crew_attempts", "task_summary"),
+        ("crew_attempts", "learning_json"),
+        ("crew_member_learnings", "migrated_to_lcm"),
+        // Expression stamps (2026-09-07): when a member last read its memory
+        // and last learned; the app shows "liest"/"lernt" from them.
+        ("crew_members", "last_memory_read_at"),
+        ("crew_members", "last_learning_at"),
     ] {
         let exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
@@ -151,8 +165,20 @@ pub(crate) fn ensure_schema(conn: &Connection) -> Result<()> {
             conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} TEXT;"))?;
         }
     }
+    let has_learning_due: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_table_info('crew_attempts') WHERE name='learning_due')",
+        [],
+        |r| r.get(0),
+    )?;
+    if !has_learning_due {
+        conn.execute_batch(
+            "ALTER TABLE crew_attempts ADD COLUMN learning_due INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
     conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_crew_attempt_unstarted
+        "CREATE INDEX IF NOT EXISTS idx_crew_attempt_learning_due
+            ON crew_attempts(finalized_at, attempt_id) WHERE learning_due=1;
+         CREATE INDEX IF NOT EXISTS idx_crew_attempt_unstarted
             ON crew_attempts(started_at,finalized_at,selected_at,attempt_id)
             WHERE started_at IS NULL AND finalized_at IS NULL;
          CREATE TABLE IF NOT EXISTS crew_projection_tombstones(event_id TEXT PRIMARY KEY);",
@@ -204,7 +230,7 @@ pub(crate) fn ensure_schema(conn: &Connection) -> Result<()> {
             "crew-lumi",
             "Lumi",
             "triangle",
-            "#7d7f84",
+            "#e97255",
             [20, 20, 40, 20, 30],
             "Ich prüfe Daten sorgfältig und halte Strukturen konsistent.",
             vec!["reports"],
@@ -243,6 +269,14 @@ pub(crate) fn ensure_schema(conn: &Connection) -> Result<()> {
             VALUES (?1,?2,?3,?4,?5,0,?6,?7,?8,?5)",
             params![id,name,shape,color,now,serde_json::to_string(&soul)?,serde_json::to_string(&specialties)?,serde_json::to_string(&Stats::default())?])?;
     }
+    // Lumi was seeded in the neutral "no member" grey, so its tasks looked
+    // unassigned and colourless. Recolour only the untouched seed; an owner's
+    // own colour choice stays.
+    conn.execute(
+        "UPDATE crew_members SET color='#e97255', updated_at=?1
+         WHERE id='crew-lumi' AND color='#7d7f84'",
+        params![now],
+    )?;
     Ok(())
 }
 
@@ -317,6 +351,33 @@ pub(crate) struct Selection {
     pub member_id: String,
     pub reason: String,
 }
+/// Owner assignment before the lease: the router honours it first. Works on
+/// the transaction or connection the caller holds; the task must be unleased.
+pub(crate) fn assign_member_before_lease(
+    conn: &Connection,
+    task_id: &str,
+    member_id: &str,
+    now: &str,
+) -> Result<()> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM crew_members WHERE id=?1 AND archived=0)",
+        [member_id],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        bail!("active member not found");
+    }
+    let changed = conn.execute(
+        "UPDATE communication_routing_state SET crew_assigned_member_id=?2,updated_at=?3
+         WHERE message_key=?1 AND route_status IN ('pending','blocked') AND lease_owner IS NULL",
+        params![task_id, member_id, now],
+    )?;
+    if changed != 1 {
+        bail!("assignment requires an unleased pending or blocked task");
+    }
+    Ok(())
+}
+
 /// No I/O or clock access: every scheduling input is explicit and replayable.
 pub(crate) fn select(
     candidates: &[Member],
@@ -539,6 +600,55 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn seed_grey_lumi_gets_a_colour_but_owner_colours_stay() {
+        let conn = fixture();
+        conn.execute(
+            "UPDATE crew_members SET color='#7d7f84' WHERE id='crew-lumi'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE crew_members SET color='#7d7f84' WHERE id='crew-pico'",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        let all = members(&conn).unwrap();
+        let color = |id: &str| all.iter().find(|m| m.id == id).unwrap().color.clone();
+        assert_eq!(color("crew-lumi"), "#e97255");
+        assert_eq!(
+            color("crew-pico"),
+            "#7d7f84",
+            "an owner colour is not rewritten"
+        );
+        assert_eq!(
+            all.iter()
+                .filter(|m| m.id != "crew-pico")
+                .map(|m| m.color.as_str())
+                .collect::<BTreeSet<_>>()
+                .len(),
+            3,
+            "the seeded crew wears distinct colours"
+        );
+        conn.execute(
+            "UPDATE crew_members SET color='#34a26f' WHERE id='crew-lumi'",
+            [],
+        )
+        .unwrap();
+        ensure_schema(&conn).unwrap();
+        assert_eq!(
+            members(&conn)
+                .unwrap()
+                .iter()
+                .find(|m| m.id == "crew-lumi")
+                .unwrap()
+                .color,
+            "#34a26f",
+            "an owner's later colour for Lumi stays"
+        );
+    }
+
     #[test]
     fn migration_preserves_existing_rows_and_seed_edits() {
         let conn = fixture();

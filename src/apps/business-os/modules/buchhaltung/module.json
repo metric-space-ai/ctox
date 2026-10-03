@@ -22,12 +22,7 @@
     "left": "Fibu-Navigationsstruktur & Kontenrahmen-Wähler",
     "center": "Aktiver Arbeitsbereich & Journale",
     "right": "Zugeordnete Belege, AI-Vorschläge & Begleitaktionen",
-    "third_pane_justification": "Belegvorschau, Kontierungshilfen und zugehörige Aktionen müssen bei breiten Finanzarbeitsplätzen neben Journal und Konten sichtbar bleiben; in kompakten Fenstern verschiebt die Shell sie in den gemeinsamen Drawer.",
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/buchhaltung.jpg",
-    "icon_asset_sha256": "56b558dd0dbc5210bf6b0472ccef3df5602ce582b987ae04ee4c5f762d14eb0a",
-    "icon_selection_sha256": "56b558dd0dbc5210bf6b0472ccef3df5602ce582b987ae04ee4c5f762d14eb0a",
-    "icon_selection_candidate": "candidate-14",
-    "icon_asset_kind": "raster-reference"
+    "third_pane_justification": "Belegvorschau, Kontierungshilfen und zugehörige Aktionen müssen bei breiten Finanzarbeitsplätzen neben Journal und Konten sichtbar bleiben; in kompakten Fenstern verschiebt die Shell sie in den gemeinsamen Drawer."
   },
   "category": "Finance",
   "version": "1.0.2",

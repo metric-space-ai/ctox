@@ -476,3 +476,46 @@
 .tickets-module .ctox-view-switch {
   border-bottom: 1px solid var(--line);
 }
+
+/* Crew on tickets (H5): the member holding the ticket's work, named by its
+   reference badge; the creature itself exists once (crew bar, CTOX map). */
+.ticket-row-crew {
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  vertical-align: middle;
+}
+.ticket-row--list .ticket-row-crew {
+  margin-right: 6px;
+}
+.tickets-crew-body {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.tickets-crew-portrait {
+  display: grid;
+  place-items: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+}
+.tickets-crew-facts {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.tickets-crew-facts small {
+  color: var(--muted);
+}
+.tickets-crew-assign {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: var(--fs-meta, 12px);
+}

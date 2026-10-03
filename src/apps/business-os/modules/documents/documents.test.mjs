@@ -21,6 +21,71 @@ async function importBrowserBundle(relativePath) {
 
 const { __documentsTestHooks: hooks } = await importBrowserBundle('./index.js');
 
+test('native Word dirty events never republish a stale persisted version head', t => {
+  const scheduled = [];
+  const cancelled = [];
+  t.mock.method(globalThis, 'setTimeout', (callback, delay) => {
+    scheduled.push({ callback, delay });
+    return scheduled.length;
+  });
+  t.mock.method(globalThis, 'clearTimeout', id => cancelled.push(id));
+  const persisted = { id: 'word', current_version_id: 'v2', status: 'Final' };
+  const record = { ...persisted, current_version_id: 'v3' };
+  const handle = { kind: 'ctox-documents', recordId: 'word', activity: 7 };
+  const state = { editorHandle: handle, selectedId: 'word', selectedVersion: { id: 'v3' },
+    dirty: false, needsFinalSave: false, superdocSaveTimer: null,
+    ctx: { db: { collection() { assert.fail('dirty event must not read or write replicated records'); } } },
+  };
+  hooks.markCtoxDocumentsDraft(state, record, handle);
+  hooks.markCtoxDocumentsDraft(state, record, handle);
+  assert.equal(handle.activity, 9);
+  assert.equal(state.dirty, true);
+  assert.equal(state.needsFinalSave, true);
+  assert.equal(record.status, 'Draft');
+  assert.equal(record.current_version_id, 'v3');
+  assert.equal(state.selectedVersion.id, 'v3');
+  assert.deepEqual(persisted, { id: 'word', current_version_id: 'v2', status: 'Final' });
+  assert.deepEqual(scheduled.map(item => item.delay), [900, 900]);
+  assert.deepEqual(cancelled, [1]);
+});
+
+for (const scenario of ['missing-head', 'missing-history', 'head-after-recovery', 'no-head']) {
+  test(`Word version loading ${scenario} never rewrites the authoritative head`, async () => {
+    const record = { id: 'word', title: 'Word', document_type: 'word_document',
+      current_version_id: scenario === 'no-head' ? '' : 'v3' };
+    let reads = 0;
+    let fallbackReads = 0;
+    const exactId = scenario === 'missing-history' ? 'history-v1' : 'v3';
+    const state = { documents: [record], selectedId: 'word', selectedVersion: null,
+      editorHandle: null, dirty: false,
+      requestedVersionId: scenario === 'missing-history' ? exactId : '',
+      requestedVersionDocumentId: 'word',
+      ctx: {
+        db: { collection(name) {
+          assert.equal(name, 'document_versions', 'reading a version cannot write the documents collection');
+          return {
+            findOne(id) { assert.equal(id, exactId); return { async exec() {
+              reads += 1;
+              return scenario === 'head-after-recovery' && reads > 1
+                ? { toJSON: () => ({ id: 'v3', document_id: 'word' }) } : null;
+            } }; },
+            find() {
+              fallbackReads += 1;
+              assert.equal(scenario, 'no-head', 'missing exact version must not fall back to another version');
+              return { exec: async () => [{ toJSON: () => ({ id: 'v2', document_id: 'word' }) }] };
+            },
+          };
+        } },
+        sync: { startCollection: async () => ({ state: { waitForOpenPeerId: async () => 'native' } }) },
+      },
+    };
+    const loaded = await hooks.loadSelectedVersion(state);
+    assert.equal(loaded?.id || null, scenario === 'no-head' ? 'v2' : scenario === 'head-after-recovery' ? 'v3' : null);
+    assert.equal(record.current_version_id, scenario === 'no-head' ? '' : 'v3');
+    assert.equal(fallbackReads, scenario === 'no-head' ? 1 : 0);
+  });
+}
+
 test('document chunk refresh does not re-query the file library, runbooks or Knowledge', async () => {
   const queried = [];
   const state = { documents: [], selectedId: '', ctx: {
@@ -31,6 +96,100 @@ test('document chunk refresh does not re-query the file library, runbooks or Kno
   assert.deepEqual(queried, []);
   await hooks.refreshDocumentsFromLocal(state, new Set(['documents']));
   assert.deepEqual(queried, ['documents']);
+});
+
+test('document library distinguishes pending sync, a completed empty read, and a failed read', async () => {
+  const state = {
+    documents: [],
+    documentsReadComplete: false,
+    documentsReadError: null,
+    documentsReadiness: { state: 'catching-up', ready: false },
+    selectedId: '',
+    ctx: {
+      host: { querySelector: () => null },
+      db: { collection: () => ({ find: () => ({ exec: async () => [] }) }) },
+    },
+  };
+  assert.equal(hooks.documentListState(state, []), 'loading');
+  state.documentsReadiness = { state: 'offline-pending', ready: false };
+  assert.equal(hooks.documentListState(state, []), 'offline-pending');
+
+  state.documentsReadiness = { state: 'live', ready: true };
+  assert.equal(hooks.documentListState(state, []), 'loading', 'readiness alone cannot prove an empty local read');
+  await hooks.refreshDocuments(state);
+  assert.equal(state.documentsReadComplete, true);
+  assert.equal(hooks.documentListState(state, []), 'empty');
+  state.ctx.sync = { collectionReadiness: () => null };
+  state.documentsReadiness = null;
+  assert.equal(hooks.documentListState(state, []), 'loading', 'a readiness-capable shell must affirm live before empty');
+  state.documentsReadiness = { state: 'live', ready: true };
+
+  state.ctx.db = { collection: () => ({ find: () => ({ exec: async () => { throw new Error('local read failed'); } }) }) };
+  await assert.rejects(hooks.refreshDocuments(state), /local read failed/);
+  assert.equal(hooks.documentListState(state, []), 'error');
+  state.documents = [{ id: 'cached' }];
+  assert.equal(hooks.documentListState(state, [{ id: 'cached' }]), 'rows', 'cached rows stay usable while a refresh fails');
+  assert.equal(hooks.documentListState(state, []), 'filtered', 'filters describe existing local rows');
+});
+
+test('readiness event recovers a collection missing at mount and stops after disposal', async () => {
+  let collectionPresent = false;
+  let reads = 0;
+  let listener;
+  let unsubscribed = false;
+  let localCleanups = 0;
+  const doc = { id: 'doc1', title: 'Recovered', filename: 'recovered.md', current_version_id: 'v1' };
+  const state = {
+    documents: [], documentsReadComplete: false, documentsReadiness: null,
+    selectedId: '', selectedVersion: null, disposed: false,
+    localSubscriptionCleanup: () => { localCleanups += 1; },
+    ctx: {
+      host: { querySelector: () => null },
+      db: { collection(name) {
+        return name === 'documents' && collectionPresent
+          ? { find: () => ({ exec: async () => { reads += 1; return [{ toJSON: () => doc }]; } }) }
+          : null;
+      } },
+      sync: {
+        collectionReadiness: () => ({ state: 'never-synced', ready: false }),
+        subscribeCollectionReadiness: (_name, callback) => {
+          listener = callback;
+          return () => { unsubscribed = true; };
+        },
+      },
+    },
+  };
+  await hooks.refreshDocuments(state);
+  assert.equal(state.documentsReadComplete, false);
+  const cleanup = hooks.wireDocumentReadiness(state);
+  state.selectedId = 'doc1';
+  state.selectedVersion = { id: 'v1' };
+  collectionPresent = true;
+  listener({ state: 'live', ready: true });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(state.documentsReadComplete, true);
+  assert.equal(state.documents[0]?.id, 'doc1');
+  assert.equal(reads, 1);
+  assert.equal(localCleanups, 1, 'the old subscription is replaced when the collection arrives');
+
+  state.disposed = true;
+  cleanup();
+  listener({ state: 'offline-pending', ready: false });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(unsubscribed, true);
+  assert.equal(reads, 1, 'disposed modules cannot trigger another read');
+});
+
+test('missing documents collection is never reported as an empty library', async () => {
+  const state = {
+    documents: [], documentsReadComplete: false, selectedId: '',
+    ctx: { host: { querySelector: () => null }, db: { collection: () => null } },
+  };
+  await hooks.refreshDocuments(state);
+  assert.equal(hooks.documentListState(state, []), 'loading');
+  state.documents = [{ id: 'cached' }];
+  await hooks.refreshDocuments(state);
+  assert.equal(state.documents[0].id, 'cached', 'a missing collection cannot erase previously visible rows');
 });
 
 test('Knowledge refresh reads only changed collections and preserves other cached context', async () => {
@@ -489,6 +648,53 @@ test('document knowledge aggregation marks inconsistent counts and offsets incom
   assert.ok(table.chunk_validation_errors.includes('inconsistent_chunk_offset'));
   assert.ok(table.chunk_validation_errors.includes('inconsistent_total_rows'));
   assert.ok(table.chunk_validation_errors.includes('inconsistent_projected_row_count'));
+});
+
+test('document knowledge catalog references keep catalog fields and do not embed rows', () => {
+  const [table] = hooks.mergeKnowledgeTableReferences([{
+    id: 'table:kdt-loads',
+    payload: {
+      id: 'table:kdt-loads',
+      logical_table_id: 'table:kdt-loads',
+      table_id: 'kdt-loads',
+      domain: 'drone_bearing_design',
+      projection_version: 2,
+      rows_source: 'rxdb.rows.fetch',
+      row_count: 5103,
+      rows_complete: true,
+      columns: [{ name: 'measurement_id', type: 'string' }],
+    },
+  }]);
+
+  assert.equal(table.id, 'table:kdt-loads');
+  assert.equal(table.table_id, 'kdt-loads');
+  assert.equal(table.domain, 'drone_bearing_design');
+  assert.equal(table.row_count, 5103);
+  assert.equal(table.rows_source, 'rxdb.rows.fetch');
+  assert.equal(table.projection_version, 2);
+  assert.equal(table.rows_complete, true);
+  assert.equal(table.chunk_status, 'complete');
+  assert.deepEqual(table.chunk_validation_errors, []);
+  assert.equal(table.rows, undefined);
+  assert.equal(table.payload.rows, undefined);
+  assert.equal(table.chunk_lineage, undefined);
+  assert.equal(table.payload.chunk_lineage, undefined);
+  assert.deepEqual(table.columns.map((column) => column.name), ['measurement_id']);
+
+  const context = hooks.resolveKnowledgeContext({
+    knowledgeItems: [],
+    knowledgeRunbooks: [],
+    knowledgeTables: [table],
+  }, table.id, '');
+  assert.equal(context.id, table.id);
+  assert.equal(context.selection_type, 'table');
+  assert.deepEqual(context.table_lineage, [{
+    id: table.id,
+    table_id: 'kdt-loads',
+    domain: 'drone_bearing_design',
+    row_count: 5103,
+    columns: table.columns,
+  }]);
 });
 
 test('table-only Knowledge is selectable as data context, never as a procedural skill', () => {
@@ -1096,11 +1302,19 @@ test('file-open deduplication reuses the imported document with the same source 
 
 test('document blob chunks are persisted with one bulk write', async () => {
   const bulkWrites = [];
+  let acknowledged = false;
   const blobChunks = {
-    bulkUpsert: async (docs) => { bulkWrites.push(docs); },
+    bulkUpsert: async (docs) => {
+      bulkWrites.push(docs);
+      return docs.map(row => ({ toJSON: () => ({ ...row, _meta: { lwt: Date.now() } }) }));
+    },
     insert: async () => { throw new Error('document_blob_chunks insert must not run per chunk'); },
   };
   const ctx = {
+    sync: { async leaseCollection() { return { bridge: { state: {
+      async waitForOpenPeerId() { return 'native'; },
+      async pushDocumentsToPeer(_peer, rows) { assert.equal(rows.length, bulkWrites[0].length); acknowledged = true; },
+    } }, async release() {} }; } },
     db: {
       collection(name) {
         if (name === 'document_blob_chunks') return blobChunks;
@@ -1122,4 +1336,5 @@ test('document blob chunks are persisted with one bulk write', async () => {
 
   assert.equal(bulkWrites.length, 1, 'blob chunks are written through one bulkUpsert call');
   assert.ok(bulkWrites[0].length > 1, 'test payload spans multiple chunk documents');
+  assert.equal(acknowledged, true, 'source bytes are acknowledged before exposing references');
 });

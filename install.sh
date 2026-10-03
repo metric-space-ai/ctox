@@ -242,7 +242,12 @@ run_build_module() {
   printf '  %bcmd:%b' "$C_GREY" "$C_RESET" >&2
   printf ' %q' "$@" >&2
   printf '\n' >&2
-  (cd "$workdir" && "$@")
+  local helper="${BUILD_CACHE_HELPER:-${SCRIPT_DIR}/src/scripts/build-cache.py}"
+  if [[ ! -f "$helper" ]] || ! command -v python3 >/dev/null 2>&1; then
+    printf "Error: build admission requires python3 and src/scripts/build-cache.py from the source checkout.\\n" >&2
+    return 1
+  fi
+  python3 "$helper" --cache-root "$CACHE_ROOT" run --installer --cwd "$workdir" -- "$@" || return $?
   tui_module_done "$label" "$started"
 }
 
@@ -264,26 +269,13 @@ prepare_cargo_target_cache() {
       ;;
   esac
 
-  local cache_dir="$CACHE_ROOT/cargo-target/$cache_key"
-  mkdir -p "$cache_dir"
-
-  if [[ -L "$link_path" ]]; then
-    ln -sfn "$cache_dir" "$link_path"
-    return 0
+  local helper="${BUILD_CACHE_HELPER:-${SCRIPT_DIR}/src/scripts/build-cache.py}"
+  if [[ ! -f "$helper" ]] || ! command -v python3 >/dev/null 2>&1; then
+    printf 'Error: tracked target preparation requires python3 and build-cache.py.\n' >&2
+    return 1
   fi
-  if [[ ! -e "$link_path" ]]; then
-    mkdir -p "$(dirname "$link_path")"
-    ln -s "$cache_dir" "$link_path" 2>/dev/null || true
-    return 0
-  fi
-  if [[ -d "$link_path" ]] && [[ -z "$(find "$link_path" -mindepth 1 -maxdepth 1 -print -quit 2>/dev/null)" ]]; then
-    rmdir "$link_path" 2>/dev/null || true
-    ln -s "$cache_dir" "$link_path" 2>/dev/null || true
-    return 0
-  fi
-
-  printf '  %b%breusing local cargo target at %s; cache link skipped because it already exists%b\n' \
-    "$C_BOLD" "$C_GREY" "$link_path" "$C_RESET" >&2
+  python3 "$helper" --cache-root "$CACHE_ROOT" prepare \
+    --link-path "$link_path" --cache-key "$cache_key"
 }
 
 remove_tree_with_retry() {
@@ -1519,20 +1511,18 @@ populate_rebuild_release_layout() {
   ctox_binary="$(resolve_ctox_binary_path "$release_root" 2>/dev/null || true)"
   ctox_desktop_host_binary="$(resolve_ctox_desktop_host_binary_path "$release_root" 2>/dev/null || true)"
 
-  mkdir -p "$release_root/bin" "$release_root/tools/model-runtime/bin" "$INSTALL_ROOT/bin"
+  # --rebuild prepares an inactive release. Only ctox update may publish the
+  # managed/global launchers after the current symlink has switched.
+  mkdir -p "$release_root/bin" "$release_root/tools/model-runtime/bin"
 
   if [[ -n "$ctox_binary" && -x "$ctox_binary" ]]; then
     cp "$ctox_binary" "$release_root/bin/ctox-real"
     codesign_binary "$release_root/bin/ctox-real"
     write_managed_launch_wrapper "$release_root/bin/ctox" "$release_root" "$release_root/bin/ctox-real"
-    cp "$release_root/bin/ctox-real" "$BIN_DIR/ctox-real" 2>/dev/null || true
-    codesign_binary "$BIN_DIR/ctox-real"
-    write_managed_launch_wrapper "$INSTALL_ROOT/bin/ctox" "$release_root" "$BIN_DIR/ctox-real"
   fi
 
   if [[ -n "$ctox_desktop_host_binary" && -x "$ctox_desktop_host_binary" ]]; then
     cp "$ctox_desktop_host_binary" "$release_root/bin/ctox-desktop-host"
-    cp "$release_root/bin/ctox-desktop-host" "$INSTALL_ROOT/bin/ctox-desktop-host" 2>/dev/null || true
   fi
 
   if [[ -x "$TOOLS_ROOT/model-runtime/bin/ctox-engine" ]]; then
@@ -1816,6 +1806,7 @@ CUDASRC
 # ── Build ────────────────────────────────────────────────────────────────────
 build_ctox() {
   local source_root="$1"
+  BUILD_CACHE_HELPER="$source_root/src/scripts/build-cache.py"
   local cargo
   # Fleet guests install from prebuilt releases and have no toolchain; under
   # `set -e` an unguarded resolve_cargo kills the whole installer without a
@@ -2666,20 +2657,8 @@ run_rebuild() {
   setup_browser_runtime "$root" || true
   build_google_fetch_helper "$root" || true
 
-  # Ensure ctox is available as a command everywhere
-  write_wrapper_script "$root"
-  ensure_command_shim
-
-  # Ensure BIN_DIR is in PATH for future shells
-  local shell_rc=""
-  case "${SHELL:-}" in
-    */zsh)  shell_rc="$HOME/.zshrc" ;;
-    */bash) shell_rc="$HOME/.bashrc" ;;
-    */fish) shell_rc="$HOME/.config/fish/config.fish" ;;
-  esac
-  if [[ -n "$shell_rc" ]] && ! grep -q "$BIN_DIR" "$shell_rc" 2>/dev/null; then
-    printf '\nexport PATH="%s:$PATH"\n' "$BIN_DIR" >> "$shell_rc"
-  fi
+  # The active command, shim and shell profile remain untouched. The updater
+  # publishes launchers only after switching the current-release symlink.
 }
 
 ensure_web_runtime_defaults() {
@@ -2822,7 +2801,7 @@ parse_args() {
         printf '  --tools-root=<path>         Canonical install root for helper tools (default: <state>/tools)\n'
         printf '  --dependencies-root=<path>  Canonical install root for dependencies (default: <state>/dependencies)\n'
         printf '  --no-business-os-autostart  Do not autostart Business OS web or local MCP with ctox start\n'
-        printf '  --rebuild                   Rebuild in-place (used by ctox update)\n'
+        printf '  --rebuild                   Build an inactive release; ctox update activates it\n'
         printf '  --help                      Show this help\n\n'
         printf 'Environment:\n'
         printf '  CTOX_BACKEND                Same as --backend\n'

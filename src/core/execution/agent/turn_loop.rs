@@ -53,7 +53,10 @@ pub(crate) struct ChatTurnSessionOptions {
     pub(crate) base_instructions: Option<String>,
     pub(crate) plain_prompt: bool,
     /// Prepared once at the lease boundary; rendering performs no SQLite reads.
-    pub(crate) crew_soul_block: Option<String>,
+    /// The persona is identity (base-instruction lane, part of the session
+    /// contract); the memory block is runtime context (developer lane).
+    pub(crate) crew_persona: Option<String>,
+    pub(crate) crew_memory_block: Option<String>,
     pub(crate) turn_timeout_secs_override: Option<u64>,
     pub(crate) required_initial_tool: Option<String>,
     /// App-authoring turns may write only their exact runtime module target.
@@ -791,6 +794,7 @@ where
                     .business_os_mcp_command_session
                     .as_deref()
                     .context("Business OS MCP session is missing its signed command scope")?,
+                options.crew_persona.as_deref(),
             )?)
         } else if options.disable_mcp_servers || options.base_instructions.is_some() {
             emit("session-mcp-servers-disabled");
@@ -799,13 +803,24 @@ where
                     root,
                     &operator_settings,
                     options.base_instructions.as_deref(),
+                    options.crew_persona.as_deref(),
                 )?,
             )
         } else if options.force_isolated_session {
             emit("session-isolated");
-            Some(PersistentSession::start_isolated(root, &operator_settings)?)
+            Some(PersistentSession::start_isolated(
+                root,
+                &operator_settings,
+                options.crew_persona.as_deref(),
+            )?)
         } else {
-            Some(PersistentSession::start(root, &operator_settings)?)
+            // Persistent start binds the named durable thread or fails closed.
+            // Do not fall back to an isolated/fresh thread from this caller.
+            Some(PersistentSession::start(
+                root,
+                &operator_settings,
+                options.crew_persona.as_deref(),
+            )?)
         }
     } else {
         None
@@ -857,8 +872,17 @@ where
     persist_lcm_message_with_retry(db_path, conversation_id, "user", prompt, &mut emit)
         .context("failed to persist user message into LCM")?;
     if options.plain_prompt {
+        // A plain prompt has no runtime-context lane; memory rides with the
+        // task text here, still after it, never above the base instructions.
         let mut crew_prompt = prompt.to_string();
-        crate::crew::append_soul(&mut crew_prompt, options.crew_soul_block.as_deref());
+        if let Some(block) = options
+            .crew_memory_block
+            .as_deref()
+            .filter(|b| !b.trim().is_empty())
+        {
+            crew_prompt.push_str("\n\n");
+            crew_prompt.push_str(block);
+        }
         let prompt = crew_prompt.as_str();
         emit("plain-prompt-context");
         let preflight_base_instructions = session
@@ -1012,7 +1036,7 @@ where
         &health,
         &mut emit,
     )?;
-    live_context::attach_crew_soul(&mut rendered_prompt, options.crew_soul_block.as_deref());
+    live_context::attach_crew_memory(&mut rendered_prompt, options.crew_memory_block.as_deref());
     emit(&format!(
         "context-selection rendered={} omitted={}",
         rendered_prompt.rendered_context_items, rendered_prompt.omitted_context_items
@@ -1131,7 +1155,10 @@ where
             &health,
             &mut emit,
         )?;
-        live_context::attach_crew_soul(&mut rendered_prompt, options.crew_soul_block.as_deref());
+        live_context::attach_crew_memory(
+            &mut rendered_prompt,
+            options.crew_memory_block.as_deref(),
+        );
         emit(&format!(
             "context-selection rendered={} omitted={}",
             rendered_prompt.rendered_context_items, rendered_prompt.omitted_context_items
@@ -1376,10 +1403,10 @@ fn persist_successful_assistant_with_retry(
                 {
                     anyhow::bail!("durable task progress failed: {error}");
                 }
-                // A service-owned queue task may only enter native review
-                // after its durable, model-authored plan is fully complete.
-                // This is intentionally before the finalization marker so a
-                // planless completion remains retryable.
+                // Persist the actual plan before review, including unfinished
+                // steps in a blocked result. Review admission is not terminal
+                // success; only validated completion may reach 100 percent.
+                // A planless completion remains retryable.
                 lcm::run_prepare_task_execution_review(db_path, &worker_attempt.work_key)?;
                 let durable = lcm::run_begin_worker_attempt_finalization(
                     db_path,
@@ -1514,6 +1541,64 @@ fn ensure_rendered_prompt_is_invocable(
 #[cfg(test)]
 #[path = "turn_loop_boundary_tests.rs"]
 mod boundary_tests;
+
+/// Crew memory refresh: the same tool-based continuity refresh, run on a
+/// member conversation. Returns the kinds whose head actually advanced.
+pub(crate) fn refresh_member_memory(
+    root: &Path,
+    settings: &BTreeMap<String, String>,
+    engine: &lcm::LcmEngine,
+    conversation_id: i64,
+    due_kinds: &HashSet<String>,
+    session: &mut PersistentSession,
+    emit: &mut impl FnMut(&str),
+) -> Result<Vec<String>> {
+    let db_path = crate::paths::core_db(root);
+    let kinds = [
+        ("narrative", lcm::ContinuityKind::Narrative),
+        ("anchors", lcm::ContinuityKind::Anchors),
+    ];
+    let heads_before = kinds
+        .iter()
+        .map(|(label, kind)| {
+            (
+                *label,
+                engine
+                    .continuity_show(conversation_id, *kind)
+                    .map(|doc| doc.head_commit_id)
+                    .unwrap_or_default(),
+            )
+        })
+        .collect::<Vec<_>>();
+    refresh_continuity_documents(
+        root,
+        settings,
+        &db_path,
+        engine,
+        conversation_id,
+        due_kinds,
+        session,
+        emit,
+    )?;
+    Ok(heads_before
+        .into_iter()
+        .filter(|(label, before)| {
+            due_kinds.contains(*label)
+                && engine
+                    .continuity_show(
+                        conversation_id,
+                        if *label == "narrative" {
+                            lcm::ContinuityKind::Narrative
+                        } else {
+                            lcm::ContinuityKind::Anchors
+                        },
+                    )
+                    .map(|doc| doc.head_commit_id != *before)
+                    .unwrap_or(false)
+        })
+        .map(|(label, _)| label.to_string())
+        .collect())
+}
 
 /// Tool-based continuity refresh. Sends the model a prompt describing the
 /// `ctox continuity-update` CLI (three modes: full / replace / diff) and
@@ -2043,6 +2128,13 @@ pub fn hard_runtime_blocker_retry_cooldown_secs(content: &str) -> Option<u64> {
         || lower.contains("connection reset by peer")
         || lower.contains("max_output_tokens")
         || lower.contains("incomplete response returned")
+        // A worker turn that ends with an incomplete durable plan, or whose
+        // plan bookkeeping failed, has not produced a result: the attempt is
+        // recoverable and the plan is durable, so the next attempt continues
+        // the work. Classifying these as terminal killed two customer research
+        // runs on 07.09.2026 after two minutes each.
+        || lower.contains("task execution plan is incomplete")
+        || lower.contains("durable task progress failed")
     {
         return Some(60);
     }
@@ -2568,6 +2660,22 @@ mod tests {
         let large = lcm::estimate_tokens(&"x".repeat(8_000));
         assert!(large > small);
         assert!(large >= 2_000); // ~8000 chars / 4
+    }
+
+    #[test]
+    fn incomplete_or_failed_task_plan_bookkeeping_is_retried() {
+        assert_eq!(
+            hard_runtime_blocker_retry_cooldown_secs(
+                "task execution plan is incomplete (1/3 steps completed)"
+            ),
+            Some(60)
+        );
+        assert_eq!(
+            hard_runtime_blocker_retry_cooldown_secs(
+                "durable task progress failed: task execution steps must be a completed prefix, one active step, then pending steps"
+            ),
+            Some(60)
+        );
     }
 
     #[test]

@@ -30,7 +30,10 @@ pub(crate) fn claim_business_command_with_queue(
     let mut conn = open_channel_db(&db_path)?;
     ensure_queue_account(&mut conn)?;
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    // Admission reads and writes one aggregate. Reserve the writer before
+    // reading so concurrent admissions cannot both observe no active work,
+    // or fail upgrading a stale deferred snapshot with SQLITE_BUSY.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing = tx
         .query_row(
             "SELECT idempotency_key, payload_hash, execution_phase, projection_version
@@ -61,6 +64,13 @@ pub(crate) fn claim_business_command_with_queue(
                 )
                 .optional()?;
             if let Some(task_id) = task_id {
+                if claim.command_type == super::auth_assist::REQUEST_TYPE
+                    && super::auth_assist::preserve_request(&tx, &task_id, &claim.command_id)?
+                {
+                    let task = load_queue_task_from_conn(&tx, &task_id)?
+                        .context("auth-assist task missing")?;
+                    refresh_queue_projection_tasks(root, &tx, std::slice::from_ref(&task))?;
+                }
                 let task = load_queue_task_from_conn(&tx, &task_id)?
                     .context("claimed queue command task link points to a missing task")?;
                 tx.commit()?;
@@ -78,6 +88,48 @@ pub(crate) fn claim_business_command_with_queue(
             (false, "local".to_string(), 1)
         };
 
+    let superseded_by = if claim.command_type == "outbound.research.adapters.reconcile" {
+        let digest = claim
+            .intent
+            .pointer("/payload/configuration_digest")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty());
+        match digest {
+            Some(digest) => tx
+                .query_row(
+                    "SELECT a.command_id, l.task_id
+                 FROM business_command_aggregates a
+                 JOIN business_command_task_links l ON l.command_id=a.command_id
+                 JOIN communication_routing_state r ON r.message_key=l.task_id
+                 WHERE a.command_type='outbound.research.adapters.reconcile'
+                   AND a.module=?1 AND a.record_id=?2 AND a.execution_phase!='terminal'
+                   AND json_extract(a.intent_json,'$.payload.configuration_digest')=?3
+                   AND COALESCE(json_extract(a.intent_json,'$.native_authorization'),'null')=?4
+                   AND COALESCE(json_extract(a.intent_json,'$.client_context'),'null')=?5
+                   AND r.route_status IN ('pending','leased','review_rework','blocked')
+                 ORDER BY a.created_at_ms,a.command_id LIMIT 1",
+                    params![
+                        claim.module,
+                        claim.record_id,
+                        digest,
+                        serde_json::to_string(
+                            claim
+                                .intent
+                                .get("native_authorization")
+                                .unwrap_or(&Value::Null)
+                        )?,
+                        serde_json::to_string(
+                            claim.intent.get("client_context").unwrap_or(&Value::Null)
+                        )?
+                    ],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?,
+            None => None,
+        }
+    } else {
+        None
+    };
     let now_ms = epoch_millis();
     if from_phase != "local" {
         crate::command_lifecycle::validate_execution_phase_transition(&from_phase, "accepted")?;
@@ -130,7 +182,7 @@ pub(crate) fn claim_business_command_with_queue(
         }),
         now_ms,
     )?;
-    let task = create_queue_task_with_metadata_tx(&tx, request)?;
+    let mut task = create_queue_task_with_metadata_tx(&tx, request)?;
     let queued_version = accepted_version.saturating_add(1);
     tx.execute(
         "INSERT INTO business_command_task_links (command_id, task_id, created_at_ms)
@@ -180,6 +232,26 @@ pub(crate) fn claim_business_command_with_queue(
         }),
         now_ms,
     )?;
+    if claim.command_type == super::auth_assist::REQUEST_TYPE
+        && super::auth_assist::preserve_request(&tx, &task.message_key, &claim.command_id)?
+    {
+        task = load_queue_task_from_conn(&tx, &task.message_key)?
+            .context("auth-assist task missing")?;
+    }
+    if let Some((command_id, task_id)) = superseded_by {
+        let reason = format!("Adapterabgleich bereits offen: {task_id}");
+        transition_business_command_for_task_in_transaction(
+            &tx,
+            &task.message_key,
+            "cancelled",
+            Some(&json!({"superseded_by_command_id":command_id,"superseded_by_task_id":task_id})),
+            Some("adapter_reconciliation_superseded"),
+            Some(&reason),
+            &reason,
+        )?;
+        task = load_queue_task_from_conn(&tx, &task.message_key)?
+            .context("superseded task missing")?;
+    }
     refresh_queue_projection_tasks(root, &tx, std::slice::from_ref(&task))?;
     tx.commit()?;
     Ok(BusinessCommandQueueClaim {
@@ -261,7 +333,7 @@ pub(crate) fn start_runtime_business_command_saga(
     );
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let now_ms = epoch_millis();
     let saga_id = format!("saga:{command_id}");
     tx.execute(
@@ -383,7 +455,7 @@ pub(crate) fn start_business_command_saga(
     );
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     register_business_command_saga_tx(&tx, command_id, command_type, epoch_millis())?;
     tx.commit()?;
     Ok(())
@@ -397,7 +469,7 @@ pub(crate) fn claim_business_command_saga_step(
 ) -> Result<bool> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let saga_id = format!("saga:{command_id}");
     let column = if compensation {
         "compensation_status"
@@ -528,7 +600,7 @@ pub(crate) fn complete_business_command_saga_step(
 ) -> Result<()> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let saga_id = format!("saga:{command_id}");
     let column = if compensation {
         "compensation_status"
@@ -574,7 +646,7 @@ pub(crate) fn fail_business_command_saga_step(
 ) -> Result<()> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let saga_id = format!("saga:{command_id}");
     let column = if compensation {
         "compensation_status"
@@ -619,7 +691,7 @@ pub(crate) fn claim_business_command_waiting_dependencies(
 ) -> Result<()> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing = tx
         .query_row(
             "SELECT idempotency_key, payload_hash FROM business_command_aggregates WHERE command_id = ?1",
@@ -685,7 +757,7 @@ pub(crate) fn claim_business_control_command(
 ) -> Result<BusinessCommandControlClaim> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing = tx
         .query_row(
             "SELECT idempotency_key, payload_hash, terminal_status, result_json, execution_phase
@@ -794,8 +866,7 @@ pub(crate) fn complete_business_control_command(
     );
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let (phase, version, command_type) = tx.query_row(
         "SELECT execution_phase, projection_version, command_type
          FROM business_command_aggregates WHERE command_id = ?1",
@@ -843,6 +914,10 @@ pub(crate) fn complete_business_control_command(
         )
         .optional()?
     {
+        // Only a linked queue task needs the attached projection stores.
+        // Keep this decision under the same transaction as the link lookup
+        // and queue settlement; unrelated control commands stay core-only.
+        attach_queue_projection_store(root, &tx)?;
         linked_task_id = Some(task_id.clone());
         let current_route =
             canonical_queue_route_status(&current_queue_route_status(&tx, &task_id)?)?;
@@ -961,7 +1036,7 @@ pub(crate) fn progress_business_control_command(
     );
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let (phase, version) = tx.query_row(
         "SELECT execution_phase, projection_version
          FROM business_command_aggregates WHERE command_id = ?1",
@@ -1035,7 +1110,11 @@ pub(crate) fn transition_business_command_for_task(
     let mut conn = open_channel_db(&db_path)?;
     ensure_queue_account(&mut conn)?;
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    // Immediate: the transaction reads, then writes across the attached queue
+    // projection store the RxDB peer writes constantly. A deferred read cannot be
+    // promoted once the peer committed (SQLite 517, "database is locked" at once,
+    // without the busy timeout): 15 of 43 worker starts failed so on 11.09.2026.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let transitioned = transition_business_command_for_task_in_transaction(
         &tx,
         task_id,
@@ -1308,7 +1387,11 @@ pub(crate) fn retry_failed_app_create_business_command(
     let mut conn = open_channel_db(&db_path)?;
     ensure_queue_account(&mut conn)?;
     attach_queue_projection_store(root, &conn)?;
-    let tx = conn.transaction()?;
+    // Immediate: the transaction reads, then writes across the attached queue
+    // projection store the RxDB peer writes constantly. A deferred read cannot be
+    // promoted once the peer committed (SQLite 517, "database is locked" at once,
+    // without the busy timeout): 15 of 43 worker starts failed so on 11.09.2026.
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let (task_id, command_type, from_phase, terminal_status, projection_version) = tx
         .query_row(
             "SELECT link.task_id, aggregate.command_type, aggregate.execution_phase,
@@ -1440,7 +1523,7 @@ pub(crate) fn persist_business_command_worker_result(
 ) -> Result<bool> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let row = tx
         .query_row(
             "SELECT aggregate_row.command_id, aggregate_row.execution_phase,
@@ -1557,6 +1640,27 @@ pub(crate) fn record_business_command_review(
     validation_status: &str,
     evidence: &Value,
 ) -> Result<bool> {
+    let db_path = resolve_db_path(root, None);
+    let mut conn = open_channel_db(&db_path)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let recorded = record_business_command_review_in_transaction(
+        &tx,
+        task_id,
+        review_status,
+        validation_status,
+        evidence,
+    )?;
+    tx.commit()?;
+    Ok(recorded)
+}
+
+pub(super) fn record_business_command_review_in_transaction(
+    tx: &Transaction<'_>,
+    task_id: &str,
+    review_status: &str,
+    validation_status: &str,
+    evidence: &Value,
+) -> Result<bool> {
     anyhow::ensure!(
         matches!(review_status, "passed" | "failed" | "held"),
         "invalid command review status"
@@ -1565,9 +1669,6 @@ pub(crate) fn record_business_command_review(
         matches!(validation_status, "passed" | "failed" | "pending"),
         "invalid command validation status"
     );
-    let db_path = resolve_db_path(root, None);
-    let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
     let row = tx
         .query_row(
             "SELECT aggregate_row.command_id, aggregate_row.execution_phase,
@@ -1587,7 +1688,6 @@ pub(crate) fn record_business_command_review(
         )
         .optional()?;
     let Some((command_id, from_phase, version, attempt)) = row else {
-        tx.commit()?;
         return Ok(false);
     };
     anyhow::ensure!(from_phase != "terminal", "cannot review a terminal command");
@@ -1658,7 +1758,6 @@ pub(crate) fn record_business_command_review(
         }),
         now_ms,
     )?;
-    tx.commit()?;
     Ok(true)
 }
 
@@ -1723,6 +1822,17 @@ pub(crate) fn pending_business_command_outbox(
 pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Result<Value> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
+    let mut command = business_command_projection_from_conn(&conn, command_id)?;
+    enrich_command_execution_progress(&db_path, &mut command)?;
+    Ok(command)
+}
+
+/// Canonical stored command snapshot. The path-based wrapper additionally
+/// enriches runtime progress, which is not part of reference authorization.
+pub(crate) fn business_command_projection_from_conn(
+    conn: &Connection,
+    command_id: &str,
+) -> Result<Value> {
     let (
         module,
         command_type,
@@ -1836,13 +1946,7 @@ pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Resu
         Value::String(task_id.clone()),
     );
     object.insert("task_id".to_string(), Value::String(task_id.clone()));
-    if !task_id.is_empty() {
-        if let Some(progress) =
-            crate::lcm::run_task_execution_progress_for_task(&db_path, &task_id)?
-        {
-            object.insert("execution_progress".to_string(), progress);
-        }
-    }
+
     if let Some((saga_id, saga_phase, saga_step, saga_total_steps, compensation_status)) = saga {
         object.insert("saga_id".to_string(), Value::String(saga_id));
         object.insert("saga_phase".to_string(), Value::String(saga_phase));
@@ -1914,6 +2018,28 @@ pub(crate) fn business_command_projection(root: &Path, command_id: &str) -> Resu
 pub(crate) fn inspect_business_command(root: &Path, command_id: &str) -> Result<Option<Value>> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
+    let mut context = inspect_business_command_from_conn(&conn, command_id)?;
+    if let Some(context) = context.as_mut() {
+        enrich_command_execution_progress(&db_path, &mut context["command"])?;
+        redact_command_secrets(&mut context["command"]);
+    }
+    Ok(context)
+}
+
+fn enrich_command_execution_progress(db_path: &Path, command: &mut Value) -> Result<()> {
+    if let Some(task_id) = command["task_id"].as_str().filter(|id| !id.is_empty()) {
+        if let Some(progress) = crate::lcm::run_task_execution_progress_for_task(db_path, task_id)?
+        {
+            command["execution_progress"] = progress;
+        }
+    }
+    Ok(())
+}
+
+fn inspect_business_command_from_conn(
+    conn: &Connection,
+    command_id: &str,
+) -> Result<Option<Value>> {
     let exists = conn
         .query_row(
             "SELECT 1 FROM business_command_aggregates WHERE command_id = ?1",
@@ -1925,7 +2051,7 @@ pub(crate) fn inspect_business_command(root: &Path, command_id: &str) -> Result<
     if !exists {
         return Ok(None);
     }
-    let mut command = business_command_projection(root, command_id)?;
+    let mut command = business_command_projection_from_conn(conn, command_id)?;
     redact_command_secrets(&mut command);
     let task_id = conn
         .query_row(
@@ -1980,6 +2106,18 @@ pub(crate) fn inspect_business_command_for_task(
 ) -> Result<Option<Value>> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
+    let mut context = inspect_business_command_for_task_from_conn(&conn, task_id)?;
+    if let Some(context) = context.as_mut() {
+        enrich_command_execution_progress(&db_path, &mut context["command"])?;
+        redact_command_secrets(&mut context["command"]);
+    }
+    Ok(context)
+}
+
+pub(crate) fn inspect_business_command_for_task_from_conn(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<Option<Value>> {
     let command_id = conn
         .query_row(
             "SELECT command_id FROM business_command_task_links WHERE task_id = ?1",
@@ -1989,7 +2127,7 @@ pub(crate) fn inspect_business_command_for_task(
         .optional()?;
     command_id
         .as_deref()
-        .map(|command_id| inspect_business_command(root, command_id))
+        .map(|command_id| inspect_business_command_from_conn(conn, command_id))
         .transpose()
         .map(Option::flatten)
 }
@@ -2040,7 +2178,7 @@ pub(crate) fn mark_business_command_outbox_failed(
 ) -> Result<()> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let attempts = tx.query_row(
         "SELECT attempts + 1 FROM business_command_outbox WHERE event_id = ?1",
         params![event_id],
@@ -2182,9 +2320,30 @@ pub(crate) fn record_business_command_intake_failure(
     error_message: &str,
     retry_budget: u32,
 ) -> Result<Value> {
+    record_business_command_intake_failure_inner(root, claim, error_message, retry_budget, true)
+}
+
+/// The domain owner has proved application in its own transaction. Delivery
+/// exhaustion is still journaled here, but cannot fail that committed effect.
+pub(crate) fn record_business_command_applied_effect_delivery_failure(
+    root: &Path,
+    claim: BusinessCommandClaimRequest,
+    error_message: &str,
+    retry_budget: u32,
+) -> Result<Value> {
+    record_business_command_intake_failure_inner(root, claim, error_message, retry_budget, false)
+}
+
+fn record_business_command_intake_failure_inner(
+    root: &Path,
+    claim: BusinessCommandClaimRequest,
+    error_message: &str,
+    retry_budget: u32,
+    allow_terminal_failure: bool,
+) -> Result<Value> {
     let db_path = resolve_db_path(root, None);
     let mut conn = open_channel_db(&db_path)?;
-    let tx = conn.transaction()?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     let existing_exhausted_attempt = tx
         .query_row(
             "SELECT attempt
@@ -2261,11 +2420,29 @@ pub(crate) fn record_business_command_intake_failure(
     let mut canonical_failure_created = false;
     let mut next_projection_version = 1_i64;
     let mut prior_phase = "native_observed".to_string();
-    if exhausted && !idempotency_conflict && !canonical_already_terminal {
+    if allow_terminal_failure && exhausted && !idempotency_conflict && !canonical_already_terminal {
+        // A claimed control command is not executed again after an uncertain
+        // handler failure. Later intake attempts can therefore report only a
+        // nonterminal replay. Keep that last observation and the first durable
+        // failure together, without changing replay or retry-budget semantics.
+        let first_error_message: String = tx.query_row(
+            "SELECT error_message FROM business_command_intake_failures
+             WHERE command_id = ?1 AND resolved_at_ms IS NULL
+             ORDER BY attempt ASC LIMIT 1",
+            params![claim.command_id],
+            |row| row.get(0),
+        )?;
+        let terminal_error_message = if first_error_message == error_message {
+            error_message.to_string()
+        } else {
+            format!("{error_message}; first intake failure: {first_error_message}")
+        };
         let failure_result = json!({
             "ok": false,
             "error_code": "native_unavailable",
-            "error_message": error_message,
+            "error_message": terminal_error_message,
+            "first_intake_error": first_error_message,
+            "last_intake_error": error_message,
         });
         if let Some((_, _, phase, _, projection_version)) = canonical.as_ref() {
             prior_phase = phase.clone();
@@ -2282,7 +2459,7 @@ pub(crate) fn record_business_command_intake_failure(
                     attempt,
                     next_projection_version,
                     serde_json::to_string(&failure_result)?,
-                    error_message,
+                    terminal_error_message,
                     now_ms,
                 ],
             )?;
@@ -2305,7 +2482,7 @@ pub(crate) fn record_business_command_intake_failure(
                     attempt,
                     serde_json::to_string(&claim.intent)?,
                     serde_json::to_string(&failure_result)?,
-                    error_message,
+                    terminal_error_message,
                     claim.created_at_ms,
                     now_ms,
                 ],
@@ -2321,7 +2498,9 @@ pub(crate) fn record_business_command_intake_failure(
                 prior_phase,
                 serde_json::to_string(&json!({
                     "attempt": attempt,
-                    "error_message": error_message,
+                    "error_message": terminal_error_message,
+                    "first_intake_error": first_error_message,
+                    "last_intake_error": error_message,
                 }))?,
                 now_ms,
             ],
@@ -2343,8 +2522,12 @@ pub(crate) fn record_business_command_intake_failure(
     }
     tx.commit()?;
     let terminal_projection_ready = exhausted
-        && (canonical_failure_created || canonical_already_terminal || idempotency_conflict);
+        && (canonical_failure_created
+            || canonical_already_terminal
+            || (allow_terminal_failure && idempotency_conflict));
     let failure_document = if canonical_failure_created || canonical_already_terminal {
+        business_command_projection(root, &claim.command_id)?
+    } else if !allow_terminal_failure && canonical_exists {
         business_command_projection(root, &claim.command_id)?
     } else if idempotency_conflict {
         intake_failure_projection(
@@ -2364,6 +2547,7 @@ pub(crate) fn record_business_command_intake_failure(
         "exhausted": exhausted,
         "canonical_exists": canonical_exists,
         "canonical_failure_created": canonical_failure_created,
+        "domain_effect_applied": !allow_terminal_failure,
         "canonical_already_terminal": canonical_already_terminal,
         "idempotency_conflict": idempotency_conflict,
         "terminal_projection_ready": terminal_projection_ready,
@@ -2462,7 +2646,7 @@ pub(crate) fn business_command_retention_maintenance(root: &Path, apply: bool) -
     let mut externalized = 0_u64;
     if apply && !candidates.is_empty() {
         fs::create_dir_all(&artifact_root)?;
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         for (command_id, result_json) in &candidates {
             let digest = sha256_hex(result_json.as_bytes());
             let file_name = format!(
@@ -2675,7 +2859,7 @@ pub(crate) fn audit_and_migrate_business_command_storage(
     let resolvable_intake_failures = resolvable_transient_intake_failures(&conn)?;
     let mut resolved_intake_failures = 0_u64;
     if apply && !resolvable_intake_failures.is_empty() {
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let resolved_at_ms = epoch_millis();
         for command_id in &resolvable_intake_failures {
             resolved_intake_failures = resolved_intake_failures.saturating_add(tx.execute(
@@ -2695,7 +2879,7 @@ pub(crate) fn audit_and_migrate_business_command_storage(
     let mut cancelled_queue_command_drift = Vec::new();
     let mut repaired_cancelled_queue_commands = 0_u64;
     if apply && !migration_already_applied {
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         tx.execute_batch(
             "CREATE TABLE IF NOT EXISTS business_command_data_migrations (
                 migration_id TEXT PRIMARY KEY,
@@ -2749,7 +2933,7 @@ pub(crate) fn audit_and_migrate_business_command_storage(
     let mut terminal_failure_queue_command_drift = terminal_failure_queue_command_rows(&conn)?;
     let mut repaired_terminal_failure_queue_commands = 0_u64;
     if apply && !terminal_failure_queue_command_drift.is_empty() {
-        let tx = conn.transaction()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         for (_, task_id, _, route_status, last_error) in &terminal_failure_queue_command_drift {
             let failure_reason = last_error
                 .as_deref()

@@ -26,12 +26,7 @@
     "drawers": {
       "right": "task setup, scoring model, and selected source detail",
       "bottom": "Knowledge table diagnostics and raw row evidence"
-    },
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/research.jpg",
-    "icon_asset_sha256": "a888d0b6ca2053cd15030286577951004fb449a97e79980df76ffaf643e796fb",
-    "icon_selection_sha256": "a888d0b6ca2053cd15030286577951004fb449a97e79980df76ffaf643e796fb",
-    "icon_selection_candidate": "candidate-14",
-    "icon_asset_kind": "raster-reference"
+    }
   },
   "category": "Research",
   "version": "1.0.16",

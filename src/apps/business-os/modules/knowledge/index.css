@@ -1573,19 +1573,3 @@
     transform: translate(-50%, 0);
   }
 }
-
-/* Editing and command feedback belong to this app window. */
-.knowledge-app-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 30;
-  overflow: auto;
-  padding: 20px;
-  background: var(--surface);
-  color: var(--text);
-}
-.knowledge-app-overlay > .drawer-body {
-  width: min(100%, 760px);
-  min-width: 0;
-  margin-inline: auto;
-}

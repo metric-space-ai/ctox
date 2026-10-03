@@ -28,12 +28,7 @@
     "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-iot\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-iot\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"url(#grad-iot)\" fill-opacity=\"0.18\" stroke=\"url(#grad-iot)\" stroke-width=\"2\"></circle><path d=\"M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4\" stroke=\"url(#grad-iot)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14\" stroke=\"url(#grad-iot)\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-opacity=\"0.7\"></path></svg>",
     "left": "Realm scope, asset/signal tree; right-click a signal to create an order or a webhook source",
     "center": "Dashboards of automation widgets (the three CTOX-programmed parts: trigger logic, widget code, order prompt), Karten ⇄ Liste",
-    "right": "",
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/iot.jpg",
-    "icon_asset_sha256": "47e1a59d94e34baa238268a4eb5ec8190b8211e885ac418e106bb0de25bd2e43",
-    "icon_selection_sha256": "47e1a59d94e34baa238268a4eb5ec8190b8211e885ac418e106bb0de25bd2e43",
-    "icon_selection_candidate": "candidate-14",
-    "icon_asset_kind": "raster-reference"
+    "right": ""
   },
   "category": "Operations",
   "version": "1.0.2",

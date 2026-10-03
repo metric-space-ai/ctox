@@ -1,5 +1,7 @@
 #![cfg(feature = "webrtc")]
 //! Actual localhost WebRTC/UDP channels; only signaling is an isolated fixture.
+#[path = "support/authority_ipc.rs"]
+mod authority_ipc_fixture;
 #[path = "support/checkpoint.rs"]
 mod checkpoint_fixture;
 #[cfg(unix)]
@@ -132,6 +134,7 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
         };
         let mut sessions = BTreeMap::new();
         let mut nodes = BTreeMap::new();
+        let mut handoff_endpoints = BTreeMap::new();
         let mut databases = Vec::new();
         let mut peer_errors = BTreeMap::new();
         for id in 1..=4 {
@@ -201,6 +204,7 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
                     .await
                     .unwrap();
                 nodes.insert(id, group.node().clone());
+                handoff_endpoints.insert(id, group.ipc_endpoint().to_path_buf());
             }
             sessions.insert(id, session);
             databases.push((directory, database));
@@ -304,6 +308,45 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
             command: Command::AdmitWorker { worker: member.clone() }
         }).await.unwrap_or_else(|error| panic!("worker admission was not confirmed: {error}; {:?}", diagnostics()));
         assert!(matches!(admission, Receipt::WorkerApplied(_)), "{admission:?}; {:?}", diagnostics());
+        if reconnect.is_none() {
+            let mut handoff_spec = spec.clone();
+            handoff_spec.job_id = "additional-worker-handoff".into();
+            handoff_spec.session_id = "additional-worker-checkpoint".into();
+            let initial = call(&handoff_endpoints[&1], "create-for-worker-handoff",
+                SyncIpcOperation::Create { spec: handoff_spec.clone() }).await;
+            let SyncIpcResult::Applied { ownership: initial_owner, .. } = initial else {
+                panic!("{initial:?}");
+            };
+            let copies = |ids: [u64; 2]| ids.into_iter().map(|id|
+                checkpoint_fixture::copy_receipt(root.path(), id, &keys[&id],
+                    &handoff_spec, &initial_owner, 1)).collect::<Vec<_>>();
+            assert!(matches!(call(&handoff_endpoints[&1], "coordination-vote-is-not-data",
+                SyncIpcOperation::ProtectCheckpoint {
+                    job_id: handoff_spec.job_id.clone(), ownership: initial_owner.clone(),
+                    receipts: copies([1, 3]),
+                }).await, SyncIpcResult::Rejected { ref reason } if reason == "CheckpointUnavailable"));
+            let receipts = copies([1, 4]);
+            let digest = receipts[0].checkpoint_digest.clone();
+            assert!(matches!(call(&handoff_endpoints[&1], "protect-on-additional-worker",
+                SyncIpcOperation::ProtectCheckpoint {
+                    job_id: handoff_spec.job_id.clone(), ownership: initial_owner.clone(), receipts,
+                }).await, SyncIpcResult::Applied { .. }));
+            let operation = SyncIpcOperation::TakeOver {
+                job_id: handoff_spec.job_id.clone(), expected: initial_owner,
+                checkpoint_digest: digest,
+            };
+            let transferred = call(worker.ipc_endpoint(), "additional-worker-takeover", operation.clone()).await;
+            let SyncIpcResult::Applied { ownership: transferred_owner, .. } = transferred else {
+                panic!("{transferred:?}");
+            };
+            assert_eq!(transferred_owner.node_id, 4);
+            assert_eq!(transferred_owner.generation, 2);
+            assert!(matches!(call(worker.ipc_endpoint(), "additional-worker-takeover", operation).await,
+                SyncIpcResult::Replayed { ownership, .. } if ownership == transferred_owner));
+            assert!(matches!(call(worker.ipc_endpoint(), "validate-additional-worker-handoff",
+                SyncIpcOperation::Validate { job_id: handoff_spec.job_id, ownership: transferred_owner }).await,
+                SyncIpcResult::Authorized { .. }));
+        }
         let membership = call(
             worker.ipc_endpoint(),
             "current-membership",
@@ -325,29 +368,36 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
         assert_eq!(ownership.node_id, 4);
         assert_eq!(ownership.generation, 1);
         if reconnect == Some(4) {
+            // Capture old generations BEFORE rejoining. Looking them up after
+            // signaling announces the new address can select a replacement.
+            let retired: Vec<_> = routes.values().map(|route| {
+                session.pool().connection_handler.connection_for_peer(route)
+                    .expect("old worker channel is open")
+            }).collect();
             let reopened = signal.disconnect_and_wait_for_rejoin("native000004").await;
             assert_eq!(reopened, "native000005");
-            // Tear down the old P2P edges as well: continued use of an old open
-            // DataChannel is insufficient proof of a successful reconnect.
-            let reconnects: Vec<_> = (1..=3).map(|id| {
-                diagnostic_pools[&id].upgrade().unwrap().connection_handler.connect_stream()
-            }).collect();
-            for route in routes.values() {
-                let handler = &session.pool().connection_handler;
-                let connection = handler.connection_for_peer(route).expect("old worker channel is open");
-                handler.close_peer(&connection).await;
-            }
+            // Leave the old DataChannels open. A fresh offer to the new local
+            // signaling identity must replace them without a manual reset.
             tokio::time::timeout(Duration::from_secs(15), async {
-                for mut connected in reconnects {
-                    loop {
-                        let peer = connected.next().await.expect("voter connection stream ended");
-                        if peer.peer_id() == reopened { break; }
-                    }
-                }
-                while !routes.values().all(|route| route_ready(session.pool(), route)) {
+                while !retired.iter().all(|old| {
+                    let pool = session.pool();
+                    pool.connection_handler.connection_for_peer(old.peer_id())
+                        .is_some_and(|current| current != *old && pool.is_peer_ready_for_control(&current))
+                }) || !(1..=3).all(|id| {
+                    route_ready(&diagnostic_pools[&id].upgrade().unwrap(), &reopened)
+                }) {
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             }).await.unwrap_or_else(|error| panic!("worker did not establish three admitted channels from its new signaling route: {error}; {:?}", diagnostics()));
+            // Delayed teardown must target the retired generation, never the
+            // replacement sharing the same remote signaling address.
+            for old in retired {
+                let handler = &session.pool().connection_handler;
+                let replacement = handler.connection_for_peer(old.peer_id()).unwrap();
+                handler.close_peer(&old).await;
+                assert_eq!(handler.connection_for_peer(old.peer_id()), Some(replacement));
+                assert!(route_ready(session.pool(), old.peer_id()));
+            }
             let restored = call(worker.ipc_endpoint(), "after-reconnect", SyncIpcOperation::Validate {
                 job_id: "worker-job".into(), ownership: ownership.clone(),
             }).await;
@@ -361,15 +411,18 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
                     if current == &member), "{membership:?}; {:?}", diagnostics());
         }
         if reconnect == Some(3) {
+            let pool = sessions[&3].pool();
+            let retired: Vec<_> = ["native000001", "native000002", "native000004"]
+                .into_iter().map(|route| {
+                    pool.connection_handler.connection_for_peer(route)
+                        .expect("old voter channel is open")
+                }).collect();
             let reopened = signal.disconnect_and_wait_for_rejoin("native000003").await;
             assert_eq!(reopened, "native000005");
-            let pool = sessions[&3].pool();
-            // Remove every old edge, so neither a surviving DataChannel nor the
-            // old configured address can satisfy the following quorum checks.
-            for route in ["native000001", "native000002", "native000004"] {
-                if let Some(connection) = pool.connection_handler.connection_for_peer(route) {
-                    pool.connection_handler.close_peer(&connection).await;
-                }
+            // Tear down precisely the pre-reconnect generations. A fresh offer
+            // may already have installed a replacement at the same remote route.
+            for connection in &retired {
+                pool.connection_handler.close_peer(connection).await;
             }
             tokio::time::timeout(Duration::from_secs(15), async {
                 loop {
@@ -438,7 +491,7 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
                 }
             )
             .await,
-            SyncIpcResult::Unavailable { .. }
+            SyncIpcResult::Rejected { .. }
         ));
         // A replayed admission is historical. Reusing the same read request ID
         // must still return the current tombstone over the worker's DataChannel.
@@ -488,6 +541,8 @@ async fn exercise_worker_session(reconnect: Option<u64>) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
+    use authority_ipc_fixture::call as ipc_call;
+    use ctox_sync::contracts::{SyncIpcOperation, SyncIpcResult};
     tokio::time::timeout(Duration::from_secs(60), async {
         let signal = SignalingFixture::start().await;
         let root = tempfile::tempdir().unwrap();
@@ -684,22 +739,89 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             })
             .collect();
         let checkpoint_digest = receipts[0].checkpoint_digest.clone();
+        let protect = SyncIpcOperation::ProtectCheckpoint {
+            job_id: "job".into(),
+            ownership: job.ownership.clone(),
+            receipts: receipts.clone(),
+        };
+        // The local IPC cannot impersonate the checkpoint's current owner.
         assert!(matches!(
-            nodes[&1]
-                .submit(Request {
-                    request_id: "protect".into(),
-                    actor: 1,
-                    command: Command::ProtectCheckpoint {
-                        job_id: "job".into(),
-                        ownership: job.ownership.clone(),
-                        receipts
-                    },
-                })
-                .await
-                .unwrap(),
-            Receipt::Applied(_)
+            ipc_call(nodes[&2].clone(), "foreign-protect", protect.clone()).await,
+            SyncIpcResult::Rejected { .. }
+        ));
+        let mut tampered = receipts;
+        tampered[1].signature.push('0');
+        assert!(matches!(
+            ipc_call(
+                nodes[&1].clone(),
+                "tampered-copy",
+                SyncIpcOperation::ProtectCheckpoint {
+                    job_id: "job".into(),
+                    ownership: job.ownership.clone(),
+                    receipts: tampered,
+                }
+            )
+            .await,
+            SyncIpcResult::Rejected { .. }
+        ));
+        let protect_started = std::time::Instant::now();
+        assert!(matches!(
+            ipc_call(nodes[&1].clone(), "protect", protect.clone()).await,
+            SyncIpcResult::Applied { .. }
+        ));
+        println!(
+            "checkpoint_protect_private_ipc_ms={}",
+            protect_started.elapsed().as_millis()
+        );
+        assert!(matches!(
+            ipc_call(nodes[&1].clone(), "protect", protect).await,
+            SyncIpcResult::Replayed { .. }
+        ));
+        let takeover = SyncIpcOperation::TakeOver {
+            job_id: "job".into(),
+            expected: job.ownership.clone(),
+            checkpoint_digest: checkpoint_digest.clone(),
+        };
+        assert!(
+            matches!(ipc_call(nodes[&3].clone(), "coordination-peer-cannot-takeover", takeover.clone()).await,
+            SyncIpcResult::Rejected { ref reason } if reason == "UnknownPeer")
+        );
+        assert!(matches!(ipc_call(nodes[&2].clone(), "wrong-digest",
+            SyncIpcOperation::TakeOver { job_id: "job".into(),
+                expected: job.ownership.clone(), checkpoint_digest: "0".repeat(64) }).await,
+            SyncIpcResult::Rejected { ref reason } if reason == "CheckpointUnavailable"));
+        assert!(matches!(
+            ipc_call(
+                nodes[&1].clone(),
+                "begin-unknown-effect",
+                SyncIpcOperation::BeginEffect {
+                    job_id: "job".into(),
+                    ownership: job.ownership.clone(),
+                    effect_id: "external".into()
+                }
+            )
+            .await,
+            SyncIpcResult::Applied { .. }
+        ));
+        assert!(
+            matches!(ipc_call(nodes[&2].clone(), "blocked-takeover", takeover.clone()).await,
+            SyncIpcResult::Rejected { ref reason } if reason == "ReconciliationRequired")
+        );
+        assert!(matches!(
+            ipc_call(
+                nodes[&1].clone(),
+                "reconcile-effect",
+                SyncIpcOperation::CompleteEffect {
+                    job_id: "job".into(),
+                    ownership: job.ownership.clone(),
+                    effect_id: "external".into()
+                }
+            )
+            .await,
+            SyncIpcResult::Applied { .. }
         ));
         // Sever actual DataChannels, not a mock transport flag.
+        let outage_started = std::time::Instant::now();
         let previous_leader = nodes[&2].leader().unwrap();
         let source_peer = clients[&1].own_peer_id().unwrap();
         for id in [2, 3] {
@@ -720,36 +842,28 @@ async fn three_native_peers_commit_over_real_webrtc_without_http_data() {
             .validate_ownership("job", &job.ownership)
             .await
             .is_err());
-        let taken = nodes[&2]
-            .submit(Request {
-                request_id: "takeover".into(),
-                actor: 2,
-                command: Command::TakeOver {
-                    job_id: "job".into(),
-                    expected: job.ownership.clone(),
-                    checkpoint_digest,
-                    owner: 2,
-                },
-            })
-            .await
-            .unwrap_or_else(|error| {
-                panic!(
-                    "takeover was not confirmed: {error}; {:?}",
-                    nodes
-                        .iter()
-                        .map(|(id, node)| (id, node.diagnostics()))
-                        .collect::<BTreeMap<_, _>>()
-                )
-            });
+        let taken = ipc_call(nodes[&2].clone(), "takeover", takeover.clone()).await;
         let new_owner = match taken {
-            Receipt::Applied(job) => job.ownership,
+            SyncIpcResult::Applied { ownership, .. } => ownership,
             other => panic!("{other:?}"),
         };
+        assert_eq!(
+            new_owner.node_id, 2,
+            "target is derived from the native IPC owner"
+        );
         assert_eq!(new_owner.generation, 2);
         nodes[&2]
             .validate_ownership("job", &new_owner)
             .await
             .unwrap();
+        println!(
+            "partition_to_quorum_authorized_private_ipc_ms={}",
+            outage_started.elapsed().as_millis()
+        );
+        assert!(
+            matches!(ipc_call(nodes[&2].clone(), "takeover", takeover).await,
+            SyncIpcResult::Replayed { ownership, .. } if ownership == new_owner)
+        );
         // Rejoin using the explicit native setup. The old owner remains fenced.
         for id in [2, 3] {
             handlers[&1]
@@ -1063,11 +1177,31 @@ async fn exercise_native_session_group(scenario: NativeGroupScenario) {
             let mut client_spec = job.spec.clone();
             client_spec.job_id = "workjet-job".into();
             client_spec.session_id = "workjet-session".into();
+            let mut handoff_spec = client_spec.clone();
+            handoff_spec.job_id = "workjet-handoff-job".into();
+            handoff_spec.session_id = "workjet-handoff-session".into();
+            let receipts: Vec<_> = [1, 2]
+                .into_iter()
+                .map(|id| {
+                    checkpoint_fixture::copy_receipt(
+                        root.path(),
+                        id,
+                        &keys[&id],
+                        &handoff_spec,
+                        &job.ownership,
+                        1,
+                    )
+                })
+                .collect();
+            let handoff = json!({
+                "target": endpoints[&2], "spec": handoff_spec, "receipts": receipts,
+            });
             let mut client = tokio::process::Command::new("node")
                 .arg(source.join("tests/support/workjet_ipc_client.mjs"))
                 .arg(workjet.join("apps/server/src/workjet/sync/WorkjetSyncIpc.ts"))
                 .arg(&endpoints[&1])
                 .arg(serde_json::to_string(&client_spec).unwrap())
+                .arg(handoff.to_string())
                 .current_dir(&workjet)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())

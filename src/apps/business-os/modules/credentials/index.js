@@ -706,13 +706,27 @@ export async function mount(ctx) {
   // business_commands collection (own writes + peer writes). The selector
   // excludes ctox.secret.list so our own listing never re-triggers a refresh.
   let subscription = null;
+  let lastCommandSignature = null;
   if (canManage) {
     const col = collection();
     if (col?.find) {
       try {
         subscription = col
           .find({ selector: { command_type: { $in: [PUT_COMMAND, DELETE_COMMAND] } } })
-          .$?.subscribe?.(() => { refresh(); });
+          .$?.subscribe?.((docs) => {
+            // Only a changed put/delete set re-lists. The query stream also
+            // re-emits for unrelated writes to business_commands — including
+            // this module's own ctox.secret.list — which made every listing
+            // trigger the next one (a list every 2-6 s while the window was
+            // open; field report 11.09.2026, thesen).
+            const signature = JSON.stringify((Array.isArray(docs) ? docs : []).map((doc) => {
+              const row = typeof doc?.toJSON === 'function' ? doc.toJSON() : doc;
+              return [row?.id || row?.command_id || '', row?.status || '', row?.execution_phase || ''];
+            }));
+            if (signature === lastCommandSignature) return;
+            lastCommandSignature = signature;
+            refresh();
+          });
       } catch { /* live sync optional; explicit refresh after writes still runs */ }
     }
   }

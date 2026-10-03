@@ -57,12 +57,15 @@ pub(super) use super::rxdb_peer_desktop_files::{
 use super::rxdb_peer_intake::consume_business_commands_loop;
 pub(super) use super::rxdb_peer_intake::{
     accept_pending_business_command, business_command_poll_sleep_secs,
-    business_commands_source_change, business_commands_source_stamp, business_commands_table_stamp,
+    business_commands_source_change, business_commands_source_stamp,
     consume_pending_business_commands, enrich_native_command_lifecycle,
-    pending_business_command_documents, pending_business_command_documents_sync,
-    refresh_business_commands_source_stamp, schedule_business_command_intake_retry,
-    transient_business_command_retry_document, wait_for_business_command_wake,
-    BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET, BUSINESS_COMMAND_RETRY_CANDIDATE_SQL,
+    pending_business_command_documents, refresh_business_commands_source_stamp,
+    schedule_business_command_intake_retry, transient_business_command_retry_document,
+    wait_for_business_command_wake, BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET,
+};
+#[cfg(test)]
+pub(super) use super::rxdb_peer_intake::{
+    business_commands_table_stamp, pending_business_command_documents_sync,
 };
 pub(super) use super::rxdb_peer_projections::{
     bulk_upsert_business_record_projection_documents, find_projection_documents_by_id,
@@ -705,6 +708,10 @@ const NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS: u64 = 20;
 const OUTBOUND_SELLIFY_LOOKUP_WEBRTC_METHOD: &str = "ctox.outbound.sellify_lookup.v1";
 const DEVICE_PROOF_VERSION: &str = "ctox-device-proof-v1";
 
+#[cfg(test)]
+#[path = "rxdb_peer_admission_tests.rs"]
+mod peer_admission_tests;
+
 fn validate_device_bound_peer_session(
     root: &Path,
     protocol: &Value,
@@ -720,7 +727,7 @@ fn validate_device_bound_peer_session(
     else {
         return Reject;
     };
-    if store::is_business_peer_revoked(root, session_id) {
+    if !matches!(store::is_business_peer_revoked(root, session_id), Ok(false)) {
         return Reject;
     }
     let Some(token) = protocol
@@ -1906,6 +1913,7 @@ fn native_peer_health_error(
 }
 
 pub fn ensure_native_peer(root: &Path) -> anyhow::Result<()> {
+    store::install_replicated_secret_sanitizer();
     let config = store::sync_config(root)?;
     spawn_native_peer(
         root,
@@ -1951,6 +1959,7 @@ pub fn restart_native_peer(root: &Path) -> anyhow::Result<Value> {
 }
 
 pub fn run_native_peer_foreground(root: &Path) -> anyhow::Result<()> {
+    store::install_replicated_secret_sanitizer();
     let config = store::sync_config(root)?;
     let root = root.to_path_buf();
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1979,6 +1988,7 @@ pub fn spawn_native_peer(
     signaling_urls: Vec<String>,
     signaling_room_password: String,
 ) {
+    store::install_replicated_secret_sanitizer();
     let claimed = with_native_peer_lifecycle_mut(NativePeerLifecycle::supervisor_start);
     match claimed {
         Ok(true) => {}
@@ -2236,10 +2246,7 @@ where
     }
     runtime.block_on(async move {
         let database = open_database(database_path).await?;
-        database
-            .add_collections(collection_creators())
-            .await
-            .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+        register_collections_tolerant(&database, collection_creators()).await?;
         let output = operation(None, Arc::clone(&database)).await?;
         database
             .close()
@@ -2247,6 +2254,34 @@ where
             .map_err(|err| anyhow::anyhow!("close temporary Business OS RxDB database: {err}"))?;
         Ok(output)
     })
+}
+
+/// Register the canonical native schemas without starting sync or seeding records.
+pub fn initialize_business_os_rxdb(root: &Path) -> anyhow::Result<Value> {
+    with_business_os_database(
+        root,
+        "failed to create Business OS schema initialization runtime",
+        true,
+        TemporaryDatabaseLockScope::TemporaryOnly,
+        |_peer, database| async move {
+            let collections = business_os_collections()
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>();
+            for name in &collections {
+                anyhow::ensure!(
+                    database.collection(name).is_some(),
+                    "canonical Business OS RxDB collection `{name}` did not register"
+                );
+            }
+            Ok(json!({
+                "database": store::rxdb_store_path(root).display().to_string(),
+                "collections": collections,
+                "records_seeded": 0,
+                "starts_peer": false,
+            }))
+        },
+    )
 }
 
 pub fn sync_desktop_file_from_path(root: &Path, path: &Path) -> anyhow::Result<()> {
@@ -2661,12 +2696,27 @@ async fn run_native_peer(
     if repaired_revisions > 0 {
         eprintln!("[business-os] repaired {repaired_revisions} legacy business_commands revisions");
     }
-    let clamped_documents = clamp_oversized_projected_documents(&root, &database_path)
-        .context("clamp oversized projected Business OS documents")?;
-    if clamped_documents > 0 {
-        eprintln!(
+    for collection in ["business_commands", "business_chats"] {
+        let repaired_envelopes = store::repair_missing_rxdb_envelopes(&root, collection)
+            .with_context(|| format!("repair malformed Business OS {collection} envelopes"))?;
+        if repaired_envelopes > 0 {
+            eprintln!(
+                "[business-os] repaired {repaired_envelopes} malformed {collection} envelopes"
+            );
+        }
+    }
+    // A legacy repair must not decide whether the peer comes up. It failed with
+    // SQLITE_BUSY_SNAPSHOT (517) under concurrent writes after every restart on
+    // thesen (25.09.2026: 12 failed bring-ups, five in a row after one release,
+    // replication down for ~2.5 min each time). Skip it for this start instead.
+    match clamp_oversized_projected_documents(&root, &database_path) {
+        Ok(clamped_documents) if clamped_documents > 0 => eprintln!(
             "[business-os] trimmed {clamped_documents} oversized projected documents that were stalling replication"
-        );
+        ),
+        Ok(_) => {}
+        Err(error) => eprintln!(
+            "[business-os] clamp oversized projected Business OS documents skipped for this start: {error:#}"
+        ),
     }
     let database = open_database(database_path.clone()).await?;
     let database_write_lock = Arc::new(AsyncMutex::new(()));
@@ -2733,9 +2783,11 @@ async fn run_native_peer(
             }
         }
         Err(err) => {
-            eprintln!(
-                "[business-os] stale RxDB schema table repair failed after verified migration: {err:#}"
-            );
+            return Err(release_database_after_failed_bring_up(
+                &database,
+                err.context("verify native RxDB migration before schema cleanup"),
+            )
+            .await);
         }
     }
     match compact_desktop_file_index_store(&root).await {
@@ -2770,6 +2822,14 @@ async fn run_native_peer(
     {
         return Err(release_database_after_failed_bring_up(&database, err).await);
     }
+    if let Err(err) = store::ensure_first_party_catalog_collection_grants(
+        &root,
+        &resolve_business_os_installed_app_root_for_native_peer(&root),
+    ) {
+        // Optional: a missing grant only leaves a first-party app without
+        // data, it must not take the peer down.
+        eprintln!("[business-os] first-party catalog collection grants skipped: {err:#}");
+    }
     let collection_list: Vec<Arc<RxCollection>> = collections
         .into_iter()
         .map(|(_, collection)| collection)
@@ -2792,7 +2852,10 @@ async fn run_native_peer(
         let signaling_revocation_root = root.clone();
         let is_peer_valid: std::sync::Arc<dyn Fn(&String) -> bool + Send + Sync> =
             std::sync::Arc::new(move |peer_id: &String| {
-                !store::is_business_peer_revoked(&signaling_revocation_root, peer_id)
+                matches!(
+                    store::is_business_peer_revoked(&signaling_revocation_root, peer_id),
+                    Ok(false)
+                )
             });
         let session_validation_root = root.clone();
         let is_peer_session_valid: WebRTCPeerSessionValidator =
@@ -2864,9 +2927,10 @@ async fn run_native_peer(
                 },
             ))
         };
-        let bringup =
-            ctox_sync::native::NativeSyncSession::start(ctox_sync::native::NativeSyncOptions {
+        let bringup = ctox_sync::native::NativeSyncSession::start_with_pool_setup(
+            ctox_sync::native::NativeSyncOptions {
                 peer_role: ctox_sync::native::NativePeerRole::CtoxInstance,
+                local_session_provider: None,
                 database: Arc::clone(&database),
                 collections: collection_list,
                 signaling_urls: multi_signaling_url_provider,
@@ -2884,22 +2948,8 @@ async fn run_native_peer(
                     live_change: collection_live_change,
                 },
                 bringup_timeout: Duration::from_secs(NATIVE_COLLECTION_BRINGUP_TIMEOUT_SECS),
-            });
-        // Bring-up failure is FATAL for this run: returning the error hands
-        // control to the supervision loop, which respawns with backoff. The
-        // previous behavior — log and keep running with an empty pool list —
-        // produced the canonical zombie: heartbeat "running", zero
-        // replication, no retry, until a manual daemon restart.
-        match bringup.await {
-            Ok(session) => {
-                let pool = session.pool();
-                if let Ok(mut breaker) = native_peer_circuit_breaker().lock() {
-                    breaker.record_success();
-                }
-                eprintln!(
-                    "[business-os] multiplexed WebRTC replication up for {collection_count} \
-                     collections on one connection (room `{sync_room}`)"
-                );
+            },
+            |pool| {
                 // Phase 4: register demand-fetch file SOURCES on the pool's file
                 // fetch registry so `rxdb.file.fetch` actually serves bytes for
                 // the file-bearing chunk collections (without a source the
@@ -2907,9 +2957,10 @@ async fn run_native_peer(
                 // already auto-registers every multiplexed collection inside
                 // `RxWebRTCReplicationPool::new_multi`.
                 register_demand_file_sources(pool, &database, &root);
+                super::rxdb_peer_knowledge_rows::register_knowledge_row_source(pool, &root);
                 let browser_live_root = root.clone();
                 let browser_live_database = Arc::clone(&database);
-                pool.set_auxiliary_request_handler(
+                pool.register_auxiliary_request_handler(
                     BROWSER_LIVE_WEBRTC_METHOD,
                     Arc::new(move |_peer_identity, capability_token, params| {
                         let root = browser_live_root.clone();
@@ -2924,9 +2975,9 @@ async fn run_native_peer(
                             .await
                         })
                     }),
-                );
+                )?;
                 let outbound_lookup_root = root.clone();
-                pool.set_auxiliary_request_handler(
+                pool.register_auxiliary_request_handler(
                     OUTBOUND_SELLIFY_LOOKUP_WEBRTC_METHOD,
                     Arc::new(move |_peer_identity, capability_token, params| {
                         let root = outbound_lookup_root.clone();
@@ -2947,9 +2998,38 @@ async fn run_native_peer(
                                 .map_err(|error| error.to_string())
                         })
                     }),
-                );
+                )?;
                 let workjet_device_root = root.clone();
-                pool.set_auxiliary_request_handler(
+                let business_data_root = root.clone();
+                let identity_transport = pool.connection_handler.clone();
+                pool.register_identity_request_handler(
+                    ctox_sync::business_data_contract::CTOX_BUSINESS_DATA_IDENTITY_METHOD,
+                    Arc::new(move |peer_identity, capability_token, params| {
+                        let root = business_data_root.clone();
+                        let transport = identity_transport.clone();
+                        Box::pin(async move {
+                            let connection = transport
+                                .connection_for_peer(&peer_identity)
+                                .ok_or_else(|| "BusinessData connection retired".to_string())?;
+                            let channel_binding =
+                                transport.channel_binding(&connection).await.map_err(|_| {
+                                    "BusinessData channel binding unavailable".to_string()
+                                })?;
+                            // Native key/store reads stay off the transport executor.
+                            tokio::task::spawn_blocking(move || {
+                                super::rxdb_peer_business_data::identity_response(
+                                    &root,
+                                    &capability_token,
+                                    &channel_binding,
+                                    params,
+                                )
+                            })
+                            .await
+                            .map_err(|_| "BusinessData identity task failed".to_string())?
+                        })
+                    }),
+                )?;
+                pool.register_auxiliary_request_handler(
                     WORKJET_DEVICE_WEBRTC_METHOD,
                     Arc::new(move |_peer_identity, capability_token, params| {
                         let root = workjet_device_root.clone();
@@ -2958,6 +3038,23 @@ async fn run_native_peer(
                                 .await
                         })
                     }),
+                )?;
+                Ok(())
+            },
+        );
+        // Bring-up failure is FATAL for this run: returning the error hands
+        // control to the supervision loop, which respawns with backoff. The
+        // previous behavior — log and keep running with an empty pool list —
+        // produced the canonical zombie: heartbeat "running", zero
+        // replication, no retry, until a manual daemon restart.
+        match bringup.await {
+            Ok(session) => {
+                if let Ok(mut breaker) = native_peer_circuit_breaker().lock() {
+                    breaker.record_success();
+                }
+                eprintln!(
+                    "[business-os] multiplexed WebRTC replication up for {collection_count} \
+                     collections on one connection (room `{sync_room}`)"
                 );
                 pools.push(session);
             }
@@ -3885,7 +3982,7 @@ fn open_native_peer_lock_file(root: &Path) -> anyhow::Result<File> {
         })
 }
 
-fn acquire_native_peer_process_lock(root: &Path) -> anyhow::Result<Option<File>> {
+pub(super) fn acquire_native_peer_process_lock(root: &Path) -> anyhow::Result<Option<File>> {
     let lock_file = open_native_peer_lock_file(root)?;
     match lock_file.try_lock() {
         Ok(()) => Ok(Some(lock_file)),
@@ -4242,6 +4339,7 @@ async fn sync_business_record_projections_background_loop(
     let mut next_collection_index = persisted_progress.next_collection_index;
     let mut chat_tracking_repair_stamp = None;
     let mut last_source_stamp = None;
+    let mut last_rewound_communication_stamp = None::<channels::CommunicationIntakeSourceStamp>;
     let mut consecutive_idle_rounds = 0u32;
     let mut consecutive_failure_rounds = 0u32;
     loop {
@@ -4251,6 +4349,20 @@ async fn sync_business_record_projections_background_loop(
             let source_stamp = business_record_projection_source_stamp(&root).await?;
             if last_source_stamp.as_ref() == Some(&source_stamp) {
                 return Ok(0);
+            }
+
+            // Message bodies and routing state can change without advancing
+            // observed_at. Revisit the bounded message pages when their source
+            // changes, including once after loading a persisted cursor. Finish
+            // an in-progress slice first so a busy mailbox cannot starve it.
+            if next_collection_index == 0
+                && last_rewound_communication_stamp.as_ref() != Some(&source_stamp.communication)
+            {
+                since_by_collection.remove("communication_messages");
+                after_record_id_by_collection.remove("communication_messages");
+                clock_version_by_collection.remove("communication_messages");
+                next_collection_index = 0;
+                last_rewound_communication_stamp = Some(source_stamp.communication.clone());
             }
 
             let (synced, caught_up) = sync_business_record_projections_slice_with_database(
@@ -4266,7 +4378,11 @@ async fn sync_business_record_projections_background_loop(
             )
             .await?;
             if caught_up {
-                last_source_stamp = Some(source_stamp);
+                // A resumed partial slice has not rewound its persisted
+                // message cursor yet; keep the loop active for that pass.
+                last_source_stamp = (last_rewound_communication_stamp.as_ref()
+                    == Some(&source_stamp.communication))
+                .then_some(source_stamp);
             } else {
                 slice_incomplete = true;
             }
@@ -4708,33 +4824,29 @@ pub(super) async fn sync_ticket_state_with_database(
     .await
     .context("join native ticket state projection load")??;
 
-    let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
     let mut count = 0usize;
     for collection_name in tickets::BUSINESS_OS_TICKET_COLLECTIONS {
         let collection = database
             .collection(collection_name)
             .with_context(|| format!("{collection_name} collection is not registered"))?;
-        for mut document in projection
+        let mut documents = projection
             .get(*collection_name)
             .cloned()
-            .unwrap_or_default()
-        {
+            .unwrap_or_default();
+        for document in &mut documents {
             if let Some(object) = document.as_object_mut() {
                 object.remove("_rev");
                 object.remove("_meta");
                 object.insert("_deleted".to_string(), Value::Bool(false));
                 object.insert("is_deleted".to_string(), Value::Bool(false));
             }
-            if incremental_upsert_projection_if_changed(
-                &collection,
-                document,
-                &format!("{collection_name} ticket"),
-            )
-            .await?
-            {
-                count += 1;
-            }
         }
+        count += super::rxdb_peer_projections::upsert_background_projection_pages(
+            &collection,
+            collection_name,
+            documents,
+        )
+        .await?;
     }
     Ok(count)
 }
@@ -4764,21 +4876,64 @@ pub(super) async fn ticket_state_source_stamp(
         .context("join native ticket state source stamp")
 }
 
+/// Drop legacy row and chunk keys from a catalog document before replace.
+///
+/// `bulk_upsert` merges and would keep a previous top-level `rows` array.
+/// Knowledge sync therefore uses `incremental_upsert`, which replaces the
+/// document body. Stripping here makes the replacement explicit even if a
+/// caller still attached those keys. Nested `payload` is an object, so
+/// `payload.data` (a legacy row alias) is removed; a top-level `data` key
+/// is not, because that name is not a row field on this collection.
+fn strip_knowledge_table_embedded_rows(document: &mut Value) {
+    let Some(object) = document.as_object_mut() else {
+        return;
+    };
+    for key in [
+        "rows",
+        "records",
+        "chunk_index",
+        "chunk_count",
+        "chunk_row_offset",
+        "chunk_row_count",
+        "projected_row_count",
+    ] {
+        object.remove(key);
+    }
+    if let Some(payload) = object.get_mut("payload").and_then(Value::as_object_mut) {
+        for key in [
+            "rows",
+            "records",
+            "data",
+            "chunk_index",
+            "chunk_count",
+            "chunk_row_offset",
+            "chunk_row_count",
+            "projected_row_count",
+        ] {
+            payload.remove(key);
+        }
+    }
+}
+
 /// Project the record-shape knowledge catalog (`knowledge_data_tables`) into
-/// the `knowledge_tables` RxDB collection, embedding the parquet rows directly
-/// in each doc's payload.
+/// the `knowledge_tables` RxDB collection as one small catalog document per
+/// active table.
 ///
-/// This is the SINGLE native writer of the `knowledge_tables` collection.
-/// `knowledge_tables` is therefore excluded from the generic business-record
-/// projection in [`business_record_projection_collections`] so the two paths do
-/// not fight over the same docs.
+/// Rows are not embedded. Browsers read them from Parquet through
+/// `rxdb.rows.fetch`. This is the SINGLE native writer of the
+/// `knowledge_tables` collection. `knowledge_tables` is therefore excluded
+/// from the generic business-record projection in
+/// [`business_record_projection_collections`] so the two paths do not fight
+/// over the same docs.
 ///
-/// Business OS Web Research / Knowledge modules read rows exclusively from the
-/// synced doc payload over RxDB/WebRTC — there is no HTTP data path — so the
-/// rows must ride inside the doc, which is exactly what
-/// [`crate::knowledge::knowledge_tables_rxdb_documents`] produces (with the
-/// parquet path re-resolved to the live state dir, not the possibly-stale path
-/// persisted in the catalog).
+/// Upserts use [`incremental_upsert_projection_if_changed`], which replaces
+/// the stored document body. The paged `bulk_upsert` helper merges keys and
+/// would keep a legacy top-level `rows` array (and chunk metadata) on the
+/// historical `table:<id>` document. After the new set is written, every
+/// stored id outside that set is tombstoned, including legacy chunk ids
+/// `table:<id>:chunk:NNNN`. The reconcile query still uses `find` with a
+/// limit of 10_000: catalog documents are small, and the first run is the
+/// only one that still loads the previous heavy documents.
 pub(super) async fn sync_knowledge_tables_with_database(
     root: &Path,
     database: &Arc<RxDatabase>,
@@ -4790,13 +4945,13 @@ pub(super) async fn sync_knowledge_tables_with_database(
     .await
     .context("join native knowledge tables projection load")??;
 
-    let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
     let collection = database
         .collection("knowledge_tables")
         .context("knowledge_tables collection is not registered")?;
     let mut count = 0usize;
     let mut current_ids = HashSet::new();
-    for mut document in documents {
+    let mut documents = documents;
+    for document in &mut documents {
         if let Some(id) = document
             .get("id")
             .and_then(Value::as_str)
@@ -4810,39 +4965,69 @@ pub(super) async fn sync_knowledge_tables_with_database(
             object.insert("_deleted".to_string(), Value::Bool(false));
             object.insert("is_deleted".to_string(), Value::Bool(false));
         }
-        if incremental_upsert_projection_if_changed(&collection, document, "knowledge table")
-            .await?
-        {
-            count += 1;
+        strip_knowledge_table_embedded_rows(document);
+    }
+    {
+        let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+        for document in documents {
+            if incremental_upsert_projection_if_changed(&collection, document, "knowledge_tables")
+                .await?
+            {
+                count += 1;
+            }
         }
     }
-    let existing = collection
-        .find(Some(MangoQuery {
-            limit: Some(10_000),
-            ..Default::default()
-        }))
-        .map_err(|err| anyhow::anyhow!("query stale knowledge_tables projections: {err}"))?
-        .exec(false)
-        .await
-        .map_err(|err| anyhow::anyhow!("exec stale knowledge_tables projection query: {err}"))?;
-    for mut stale in existing.as_array().cloned().unwrap_or_default() {
-        let Some(id) = stale.get("id").and_then(Value::as_str).map(str::to_string) else {
-            continue;
-        };
-        if current_ids.contains(&id) {
-            continue;
+    // Collect every stale id before writing: tombstoning while paging would
+    // shift the skip window. Legacy row chunks can outnumber a single page.
+    let mut stale_documents = Vec::new();
+    let mut skip = 0u64;
+    loop {
+        let page = collection
+            .find(Some(MangoQuery {
+                sort: Some(vec![HashMap::from([("id".to_string(), "asc".to_string())])]),
+                limit: Some(KNOWLEDGE_TABLES_RECONCILE_PAGE),
+                skip: Some(skip),
+                ..Default::default()
+            }))
+            .map_err(|err| anyhow::anyhow!("query stale knowledge_tables projections: {err}"))?
+            .exec(false)
+            .await
+            .map_err(|err| {
+                anyhow::anyhow!("exec stale knowledge_tables projection query: {err}")
+            })?;
+        let page = page.as_array().cloned().unwrap_or_default();
+        let page_len = page.len() as u64;
+        for stale in page {
+            let is_stale = stale
+                .get("id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !current_ids.contains(id));
+            if is_stale {
+                stale_documents.push(stale);
+            }
         }
+        if page_len < KNOWLEDGE_TABLES_RECONCILE_PAGE {
+            break;
+        }
+        skip += page_len;
+    }
+    for mut stale in stale_documents {
         if let Some(object) = stale.as_object_mut() {
             object.remove("_rev");
             object.remove("_meta");
         }
-        upsert_business_record_projection_tombstone(&collection, stale)
+        let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+        // Tombstones keep their body in storage and replicate it to every
+        // browser, so a legacy chunk must lose its rows before it is deleted.
+        upsert_projection_tombstone_with(&collection, stale, strip_knowledge_table_embedded_rows)
             .await
             .map_err(|err| anyhow::anyhow!("tombstone stale knowledge_tables projection: {err}"))?;
         count += 1;
     }
     Ok(count)
 }
+
+const KNOWLEDGE_TABLES_RECONCILE_PAGE: u64 = 1_000;
 
 async fn sync_knowledge_tables_with_database_if_changed(
     root: &Path,
@@ -4895,7 +5080,6 @@ async fn sync_knowledge_catalog_with_database(
         .cloned()
         .unwrap_or_default();
 
-    let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
     let mut count = 0usize;
     count += sync_knowledge_catalog_collection(database, "knowledge_items", item_documents).await?;
     count += sync_knowledge_catalog_collection(database, "knowledge_runbooks", runbook_documents)
@@ -4940,6 +5124,7 @@ async fn sync_knowledge_catalog_collection(
         .with_context(|| format!("{collection_name} collection is not registered"))?;
     let mut count = 0usize;
     let mut current_ids = HashSet::new();
+    let mut projected = Vec::new();
     for mut document in documents {
         let Some(id) = document
             .get("id")
@@ -4962,12 +5147,14 @@ async fn sync_knowledge_catalog_collection(
                 .unwrap_or(0);
             object.insert("updated_at_ms".to_string(), Value::from(updated_at_ms));
         }
-        if incremental_upsert_projection_if_changed(&collection, document, "procedural knowledge")
-            .await?
-        {
-            count += 1;
-        }
+        projected.push(document);
     }
+    count += super::rxdb_peer_projections::upsert_background_projection_pages(
+        &collection,
+        collection_name,
+        projected,
+    )
+    .await?;
 
     let existing = collection
         .find(Some(MangoQuery {
@@ -4999,6 +5186,7 @@ async fn sync_knowledge_catalog_collection(
             object.remove("_rev");
             object.remove("_meta");
         }
+        let _write_guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
         upsert_business_record_projection_tombstone(&collection, stale)
             .await
             .map_err(|err| {
@@ -5020,6 +5208,11 @@ async fn sync_business_record_projections_with_database_if_changed(
     let source_stamp = business_record_projection_source_stamp(root).await?;
     if last_source_stamp.as_ref() == Some(&source_stamp) {
         return Ok(0);
+    }
+    if last_source_stamp.as_ref().map(|stamp| &stamp.communication)
+        != Some(&source_stamp.communication)
+    {
+        since_by_collection.remove("communication_messages");
     }
 
     let synced = sync_business_record_projections_with_database(
@@ -5273,15 +5466,23 @@ async fn sync_business_record_projections_slice_with_database(
             .as_ref()
             .and_then(|clocks| clocks.get(&collection_name).copied());
         let stored_clock_version = clock_version_by_collection.get(&collection_name).copied();
-        let clock_proves_collection_unchanged = projection_clocks.is_some()
-            && after_record_id.is_empty()
-            && match current_clock {
-                None => true,
-                Some((version, latest_updated_at_ms)) => {
-                    stored_clock_version == Some(version)
-                        || (stored_clock_version.is_none() && since_ms > latest_updated_at_ms)
-                }
-            };
+        let clock_proves_collection_unchanged =
+            !is_channel_backed_projection_collection(&collection_name)
+                && projection_clocks.is_some()
+                && after_record_id.is_empty()
+                && match current_clock {
+                    // Channel-backed collections (mail, threads, accounts) live in
+                    // the channel store and never get a row in
+                    // `business_records_projection_clock`. "No clock" meant
+                    // "unchanged" for them, so from 19.08.2026 on no new mail
+                    // reached the Mail app (thesen: newest projected message
+                    // 19.08, 38 newer inbound mails in the channel store).
+                    None => !is_channel_backed_projection_collection(&collection_name),
+                    Some((version, latest_updated_at_ms)) => {
+                        stored_clock_version == Some(version)
+                            || (stored_clock_version.is_none() && since_ms > latest_updated_at_ms)
+                    }
+                };
         if clock_proves_collection_unchanged {
             clock_version_by_collection.insert(
                 collection_name,
@@ -6166,6 +6367,16 @@ pub(super) async fn upsert_business_record_projection_tombstone(
     collection: &Arc<RxCollection>,
     document: Value,
 ) -> anyhow::Result<()> {
+    upsert_projection_tombstone_with(collection, document, |_| {}).await
+}
+
+/// Tombstone `document`, letting `finalize` reshape the merged body (for
+/// example drop payload fields) right before it is marked deleted.
+pub(super) async fn upsert_projection_tombstone_with(
+    collection: &Arc<RxCollection>,
+    document: Value,
+    finalize: impl FnOnce(&mut Value),
+) -> anyhow::Result<()> {
     let schema = collection
         .schema_required()
         .map_err(|err| anyhow::anyhow!("{err}"))?;
@@ -6187,7 +6398,8 @@ pub(super) async fn upsert_business_record_projection_tombstone(
 
     let Some(previous) = existing else {
         let mut write_data = document;
-        prepare_projection_tombstone_document(schema, &mut write_data);
+        finalize(&mut write_data);
+        prepare_projection_tombstone_document(&schema.json_schema, &mut write_data);
         let write_data = fill_object_data_before_insert(schema, write_data)
             .map_err(|err| anyhow::anyhow!("fill projection tombstone envelope: {err}"))?;
         collection
@@ -6211,7 +6423,8 @@ pub(super) async fn upsert_business_record_projection_tombstone(
     } else {
         next = document;
     }
-    prepare_projection_tombstone_document(schema, &mut next);
+    finalize(&mut next);
+    prepare_projection_tombstone_document(&schema.json_schema, &mut next);
 
     let result = collection
         .storage_instance
@@ -6230,23 +6443,34 @@ pub(super) async fn upsert_business_record_projection_tombstone(
     Ok(())
 }
 
-fn prepare_projection_tombstone_document(schema: &rxdb::rx_schema::RxSchema, document: &mut Value) {
+fn prepare_projection_tombstone_document(schema: &RxJsonSchema, document: &mut Value) {
     let Some(object) = document.as_object_mut() else {
         return;
     };
     object.insert("_deleted".to_string(), Value::Bool(true));
-    if schema.json_schema.properties.contains_key("is_deleted") {
+    if schema.properties.contains_key("is_deleted") {
         object.insert("is_deleted".to_string(), Value::Bool(true));
     }
-    for field in &schema.json_schema.required {
+    for field in &schema.required {
         if field.starts_with('_') {
             continue;
         }
         let missing = object.get(field).map(Value::is_null).unwrap_or(true);
-        if missing {
+        // Legacy wire-budget clamping could leave an omission object where
+        // a deleted chunk requires a string. Keeping that invalid value makes
+        // the tombstone fail validation on every projection pass. Repair only
+        // this deletion representation; valid stored values stay unchanged.
+        let invalid_type = object.get(field).is_some_and(|value| {
+            schema
+                .properties
+                .get(field)
+                .and_then(|property| property.schema_type.as_ref())
+                .is_some_and(|declared| !declared.matches_value(value))
+        });
+        if missing || invalid_type {
             object.insert(
                 field.clone(),
-                projection_tombstone_required_default(&schema.json_schema, field),
+                projection_tombstone_required_default(schema, field),
             );
         }
     }
@@ -6347,6 +6571,10 @@ mod projection_schema_union_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "rxdb_peer_projection_tombstone_tests.rs"]
+mod projection_tombstone_tests;
 
 #[derive(Debug)]
 struct ChannelStateProjection {
@@ -8080,7 +8308,12 @@ fn clamp_oversized_projected_documents(root: &Path, database_path: &Path) -> any
             .into_iter()
             .map(|source| source.storage_collection)
             .collect();
-    let mut conn = Connection::open(database_path)?;
+    let conn = Connection::open(database_path)?;
+    // Wait for a concurrent writer instead of failing at once, and scan outside
+    // a write transaction: the old deferred transaction read every table and
+    // then tried to upgrade to a writer, which WAL refuses (517) as soon as any
+    // other connection committed in between.
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
     let tables = {
         let mut statement = conn.prepare(
             "SELECT name FROM sqlite_master
@@ -8089,14 +8322,19 @@ fn clamp_oversized_projected_documents(root: &Path, database_path: &Path) -> any
         let mapped = statement.query_map([], |row| row.get::<_, String>(0))?;
         mapped.collect::<rusqlite::Result<Vec<_>>>()?
     };
-    let transaction = conn.transaction()?;
+    let transaction = &conn;
     let mut clamped = 0usize;
     for table in tables {
         let collection = table
             .strip_prefix("ctox_business_os__")
             .and_then(|name| name.rsplit_once("__v"))
             .map(|(collection, _)| collection);
-        if collection.is_some_and(|name| file_storage_collections.contains(name)) {
+        // Legacy startup repair must never rewrite typed source text or make an
+        // oversized historical source record fatal to peer bring-up. New source
+        // writes have explicit admission; existing bytes remain recoverable.
+        if collection.is_some_and(|name| {
+            file_storage_collections.contains(name) || name == "business_module_source_files"
+        }) {
             continue;
         }
         let quoted = sqlite_quote_identifier(&table);
@@ -8126,7 +8364,7 @@ fn clamp_oversized_projected_documents(root: &Path, database_path: &Path) -> any
             let Ok(mut document) = serde_json::from_str::<Value>(&raw) else {
                 continue;
             };
-            store::clamp_projected_document_to_wire_budget(&table, &id, &mut document);
+            store::clamp_projected_document_to_wire_budget(&table, &id, &mut document)?;
             let trimmed = serde_json::to_string(&document)?;
             if trimmed.len() >= raw.len() {
                 continue;
@@ -8135,14 +8373,23 @@ fn clamp_oversized_projected_documents(root: &Path, database_path: &Path) -> any
             if let Some(object) = document.as_object_mut() {
                 object.insert("_rev".to_string(), Value::String(revision.clone()));
             }
-            transaction.execute(
-                &format!("UPDATE {quoted} SET revision = ?1, data = ?2 WHERE id = ?3"),
-                params![revision, serde_json::to_string(&document)?, id],
+            // One short autocommit write per row, guarded by the revision it was
+            // read at: a document changed in the meantime is left for the next
+            // start instead of being overwritten with a stale trim.
+            let updated = transaction.execute(
+                &format!(
+                    "UPDATE {quoted} SET revision = ?1, data = ?2 WHERE id = ?3 AND revision = ?4"
+                ),
+                params![
+                    revision,
+                    serde_json::to_string(&document)?,
+                    id,
+                    stored_revision
+                ],
             )?;
-            clamped += 1;
+            clamped += updated;
         }
     }
-    transaction.commit()?;
     Ok(clamped)
 }
 
@@ -8766,11 +9013,60 @@ fn migrate_additive_native_rxdb_collection_versions(root: &Path) -> anyhow::Resu
     let mut migrated_tables = 0usize;
     let mut migrated_rows = 0usize;
     let mut verified_rows = 0usize;
+    let entries = native_rxdb_version_migration_entries(root)?;
+    for entry in entries {
+        let target_version = i64::from(entry.schema.version);
+        let target_table = rxdb_collection_version_table_name(&entry.name, target_version);
+        let version_tables = rxdb_collection_version_tables(&conn, &entry.name)?;
+        for (source_version, source_table) in version_tables {
+            if source_version == target_version {
+                continue;
+            }
+            let source_rows = sqlite_table_row_count(&conn, &source_table)?;
+            if source_rows == 0 {
+                continue;
+            }
+            let operation_steps = native_rxdb_version_migration_steps(
+                &entry.name,
+                source_version,
+                target_version,
+                Some(&entry.migration_strategies),
+            )?;
+            anyhow::ensure!(
+                sqlite_table_exists(&conn, &target_table)?,
+                "runtime migration fail-closed for collection `{}`: target version {} table `{}` was not registered while source version {} contains {} row(s)",
+                entry.name, target_version, target_table, source_version, source_rows
+            );
+            let copied = migrate_native_rxdb_version_table(
+                &mut conn,
+                &entry.name,
+                source_version,
+                &source_table,
+                target_version,
+                &target_table,
+                &operation_steps,
+            )?;
+            migrated_tables += 1;
+            migrated_rows += copied;
+            verified_rows += source_rows as usize;
+        }
+    }
+    Ok(json!({
+        "ok": true,
+        "migrated_tables": migrated_tables,
+        "migrated_rows": migrated_rows,
+        "verified_rows": verified_rows
+    }))
+}
+
+fn native_rxdb_version_migration_entries(
+    root: &Path,
+) -> anyhow::Result<Vec<RuntimeModuleCollectionEntry>> {
     let mut entries = runtime_module_collection_entries_for_root(root);
     entries.retain(|entry| {
         !matches!(
             entry.name.as_str(),
-            "business_commands" | "ctox_queue_tasks" | "ctox_runs"
+            "business_commands" | "ctox_queue_tasks" | "ctox_runs" | "workjet_computers"
         )
     });
     // Packaged cockpit schema upgrades use the same copy/verify transaction as installed modules.
@@ -8778,7 +9074,12 @@ fn migrate_additive_native_rxdb_collection_versions(root: &Path) -> anyhow::Resu
     let packaged: Value = serde_json::from_str(include_str!(
         "../../apps/business-os/modules/ctox/collections.schema.json"
     ))?;
-    for name in ["business_commands", "ctox_queue_tasks", "ctox_runs"] {
+    for name in [
+        "business_commands",
+        "ctox_queue_tasks",
+        "ctox_runs",
+        "workjet_computers",
+    ] {
         let schema = schema_from_json(
             business_os_schema_contract()
                 .get(name)
@@ -8800,77 +9101,31 @@ fn migrate_additive_native_rxdb_collection_versions(root: &Path) -> anyhow::Resu
             migration_strategies,
         });
     }
-    for entry in entries {
-        let target_version = i64::from(entry.schema.version);
-        let target_table = rxdb_collection_version_table_name(&entry.name, target_version);
-        let version_tables = rxdb_collection_version_tables(&conn, &entry.name)?;
-        for (source_version, source_table) in version_tables {
-            if source_version == target_version {
-                continue;
-            }
-            let source_rows = sqlite_table_row_count(&conn, &source_table)?;
-            if source_rows == 0 {
-                continue;
-            }
-            anyhow::ensure!(
-                source_version < target_version,
-                "runtime migration fail-closed for collection `{}`: source version {} has {} row(s), but registered target version {} cannot apply a reverse migration",
-                entry.name,
-                source_version,
-                source_rows,
-                target_version
-            );
-            anyhow::ensure!(
-                sqlite_table_exists(&conn, &target_table)?,
-                "runtime migration fail-closed for collection `{}`: target version {} table `{}` was not registered while source version {} contains {} row(s)",
-                entry.name,
-                target_version,
-                target_table,
-                source_version,
-                source_rows
-            );
+    Ok(entries)
+}
 
-            let mut operation_steps = Vec::new();
-            for step in (source_version + 1)..=target_version {
-                let spec = entry.migration_strategies.get(&step).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "runtime migration fail-closed for collection `{}` from version {} to {}: missing migration_strategies.{}.{}",
-                        entry.name,
-                        source_version,
-                        target_version,
-                        entry.name,
-                        step
-                    )
-                })?;
-                let operations = native_declarative_migration_operations(spec).with_context(|| {
-                    format!(
-                        "runtime migration fail-closed for collection `{}`: invalid migration_strategies.{}.{}",
-                        entry.name, entry.name, step
-                    )
-                })?;
-                operation_steps.push(operations);
-            }
-
-            let copied = migrate_native_rxdb_version_table(
-                &mut conn,
-                &entry.name,
-                source_version,
-                &source_table,
-                target_version,
-                &target_table,
-                &operation_steps,
-            )?;
-            migrated_tables += 1;
-            migrated_rows += copied;
-            verified_rows += source_rows as usize;
-        }
+fn native_rxdb_version_migration_steps(
+    collection: &str,
+    source_version: i64,
+    target_version: i64,
+    strategies: Option<&BTreeMap<i64, Value>>,
+) -> anyhow::Result<Vec<Vec<Value>>> {
+    anyhow::ensure!(
+        source_version < target_version,
+        "runtime migration fail-closed for collection `{collection}`: source version {source_version} contains rows, but target version {target_version} cannot apply a reverse migration"
+    );
+    let mut steps = Vec::new();
+    for step in (source_version + 1)..=target_version {
+        let spec = strategies.and_then(|map| map.get(&step)).ok_or_else(|| {
+            anyhow::anyhow!(
+                "runtime migration fail-closed for collection `{collection}` from version {source_version} to {target_version}: missing migration_strategies.{collection}.{step}"
+            )
+        })?;
+        steps.push(native_declarative_migration_operations(spec).with_context(|| {
+            format!("runtime migration fail-closed for collection `{collection}`: invalid migration_strategies.{collection}.{step}")
+        })?);
     }
-    Ok(json!({
-        "ok": true,
-        "migrated_tables": migrated_tables,
-        "migrated_rows": migrated_rows,
-        "verified_rows": verified_rows
-    }))
+    Ok(steps)
 }
 
 fn rxdb_collection_version_tables(
@@ -8905,6 +9160,32 @@ fn migrate_native_rxdb_version_table(
     target_table: &str,
     operation_steps: &[Vec<Value>],
 ) -> anyhow::Result<usize> {
+    let transaction = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let copied = copy_and_verify_native_rxdb_version_table(
+        &transaction,
+        collection,
+        source_version,
+        source_table,
+        target_version,
+        target_table,
+        operation_steps,
+    )?;
+    transaction.commit().with_context(|| {
+        format!("commit verified runtime migration for collection `{collection}` v{source_version}->v{target_version}")
+    })?;
+    Ok(copied)
+}
+
+fn copy_and_verify_native_rxdb_version_table(
+    transaction: &Connection,
+    collection: &str,
+    source_version: i64,
+    source_table: &str,
+    target_version: i64,
+    target_table: &str,
+    operation_steps: &[Vec<Value>],
+) -> anyhow::Result<usize> {
+    let conn = transaction;
     let source_revision = if sqlite_table_has_column(conn, source_table, "revision")? {
         "revision"
     } else {
@@ -8933,9 +9214,6 @@ fn migrate_native_rxdb_version_table(
         );
     }
 
-    let transaction = conn.transaction().with_context(|| {
-        format!("begin runtime migration for `{collection}` v{source_version}->v{target_version}")
-    })?;
     let source_sql = format!(
         "SELECT id, {source_revision}, {source_deleted}, {source_lwt}, data FROM {} ORDER BY id",
         sqlite_quote_identifier(source_table)
@@ -8949,8 +9227,12 @@ fn migrate_native_rxdb_version_table(
              deleted = excluded.deleted,
              lastWriteTime = excluded.lastWriteTime,
              data = excluded.data
-         WHERE COALESCE(excluded.lastWriteTime, 0) >= COALESCE({quoted_target_table}.lastWriteTime, 0)"
+         WHERE COALESCE(excluded.lastWriteTime, 0) > COALESCE({quoted_target_table}.lastWriteTime, 0)"
     );
+    let mut equal_time_target = transaction.prepare(&format!(
+        "SELECT revision, deleted, data FROM {quoted_target_table}
+         WHERE id = ?1 AND COALESCE(lastWriteTime, 0) = ?2"
+    ))?;
     let mut source_statement = transaction
         .prepare(&source_sql)
         .with_context(|| format!("prepare runtime migration source table `{source_table}`"))?;
@@ -8980,6 +9262,32 @@ fn migrate_native_rxdb_version_table(
             last_write_time: row.get(3)?,
             data: migrated,
         };
+        // Equal clocks do not establish which version owns the truth. Never
+        // resurrect a tombstone or erase a target update based on table age.
+        // Exact retries are safe; divergence rolls back this table and prevents
+        // the startup cleanup from deleting the remaining source evidence.
+        let existing = equal_time_target
+            .query_row(
+                params![migration_row.id, migration_row.last_write_time],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((revision, deleted, data)) = existing {
+            let data: Value = serde_json::from_str(&data)?;
+            anyhow::ensure!(
+                revision == migration_row.revision
+                    && deleted == migration_row.deleted
+                    && data == migration_row.data,
+                "runtime migration conflict for collection `{collection}` document `{}` v{source_version}->v{target_version}: equal lastWriteTime with divergent revision, deletion marker or document; source retained, explicit reconciliation required",
+                migration_row.id
+            );
+        }
         copied += transaction.execute(
             &target_sql,
             params![
@@ -8993,6 +9301,7 @@ fn migrate_native_rxdb_version_table(
     }
     drop(source_rows);
     drop(source_statement);
+    drop(equal_time_target);
 
     let missing_or_older: i64 = transaction
         .query_row(
@@ -9017,11 +9326,6 @@ fn migrate_native_rxdb_version_table(
         missing_or_older == 0,
         "runtime migration verification failed for collection `{collection}` v{source_version}->v{target_version}: {missing_or_older} source id(s) are absent or older in `{target_table}`"
     );
-    transaction.commit().with_context(|| {
-        format!(
-            "commit verified runtime migration for collection `{collection}` v{source_version}->v{target_version}"
-        )
-    })?;
     Ok(copied)
 }
 
@@ -9125,6 +9429,16 @@ fn business_record_projection_collections() -> Vec<String> {
         .collect()
 }
 
+/// Collections whose source rows live in the communication channel store, not
+/// in `business_records`; they have no projection clock and must be pulled by
+/// their own `updated_at_ms` cursor.
+fn is_channel_backed_projection_collection(collection: &str) -> bool {
+    matches!(
+        collection,
+        "communication_accounts" | "communication_threads" | "communication_messages"
+    )
+}
+
 fn business_record_projection_collections_for_root(root: &Path) -> Vec<String> {
     let mut collections = business_record_projection_collections();
     collections.extend(
@@ -9148,6 +9462,34 @@ fn business_record_projection_collections_for_root(root: &Path) -> Vec<String> {
 /// log and skip it instead of tearing down the whole peer. This mirrors the
 /// required-vs-optional knowledge already encoded in
 /// `repair_optional_rxdb_collection_schema_drift`.
+/// Same registration policy as the live peer (FIX 4): a drifted or failing
+/// OPTIONAL collection is logged and skipped, a failing REQUIRED collection
+/// aborts. The temporary databases opened by CLI commands (worker tools such
+/// as `auth-assist-request`, browser automation) used the strict
+/// all-or-nothing registration and failed on the customer instance with RxDB
+/// error DB6 for `workjet_computers` from 02.09.2026 on — no worker could
+/// request a login for a credential source since then.
+pub(crate) async fn register_collections_tolerant(
+    database: &Arc<RxDatabase>,
+    creators: HashMap<String, RxCollectionCreator>,
+) -> anyhow::Result<()> {
+    let (_collections, failed_collections) = database
+        .add_collections_tolerant(creators)
+        .await
+        .map_err(|err| anyhow::anyhow!("register Business OS RxDB collections: {err}"))?;
+    for (collection_name, err) in &failed_collections {
+        anyhow::ensure!(
+            !is_required_native_collection(collection_name),
+            "required Business OS RxDB collection `{collection_name}` failed to register: {err}"
+        );
+        eprintln!(
+            "[business-os] skipping optional Business OS RxDB collection `{collection_name}` \
+            (registration failed: {err})"
+        );
+    }
+    Ok(())
+}
+
 fn is_required_native_collection(collection: &str) -> bool {
     matches!(
         collection,
@@ -9210,6 +9552,7 @@ fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<V
     let mut results = Vec::new();
     let mut repaired_tables = 0usize;
     let mut repaired_triggers = 0usize;
+    let migration_entries = native_rxdb_version_migration_entries(root)?;
     let mut collections = business_os_collections()
         .into_iter()
         .map(|(collection, _)| {
@@ -9228,6 +9571,10 @@ fn repair_stale_rxdb_collection_schema_versions(root: &Path) -> anyhow::Result<V
             expected_version,
             false,
             true,
+            migration_entries
+                .iter()
+                .find(|entry| entry.name == collection)
+                .map(|entry| &entry.migration_strategies),
         )?;
         repaired_tables += result
             .get("repaired_tables")
@@ -9291,6 +9638,7 @@ fn repair_rxdb_collection_schema_version_drift(
     repair_rxdb_collection_schema_version_drift_with_connection(
         &conn,
         &database_path,
+        root,
         collection,
         dry_run,
         force,
@@ -9300,10 +9648,12 @@ fn repair_rxdb_collection_schema_version_drift(
 fn repair_rxdb_collection_schema_version_drift_with_connection(
     conn: &Connection,
     database_path: &Path,
+    root: &Path,
     collection: &str,
     dry_run: bool,
     force: bool,
 ) -> anyhow::Result<Value> {
+    let entries = native_rxdb_version_migration_entries(root)?;
     repair_rxdb_collection_schema_version_drift_at_version_with_connection(
         conn,
         database_path,
@@ -9311,6 +9661,10 @@ fn repair_rxdb_collection_schema_version_drift_with_connection(
         expected_rxdb_collection_version(collection),
         dry_run,
         force,
+        entries
+            .iter()
+            .find(|entry| entry.name == collection)
+            .map(|entry| &entry.migration_strategies),
     )
 }
 
@@ -9321,7 +9675,16 @@ fn repair_rxdb_collection_schema_version_drift_at_version_with_connection(
     expected_version: i64,
     dry_run: bool,
     force: bool,
+    migration_strategies: Option<&BTreeMap<i64, Value>>,
 ) -> anyhow::Result<Value> {
+    // Discovery, copy, verification and DDL share the same write reservation.
+    // Neither startup nor the forced CLI repair may discard an unverified row.
+    let transaction = if dry_run {
+        conn.unchecked_transaction()?
+    } else {
+        rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?
+    };
+    let conn = &transaction;
     let active_version = active_rxdb_collection_version(conn, collection)?;
     let expected_table = rxdb_collection_version_table_name(collection, expected_version);
     let expected_table_exists = sqlite_table_exists(conn, &expected_table)?;
@@ -9339,7 +9702,32 @@ fn repair_rxdb_collection_schema_version_drift_at_version_with_connection(
         active_version,
         expected_table_exists,
     )?;
+    let mut migrated_rows = 0usize;
+    let mut verified_rows = 0usize;
     if !dry_run {
+        // A prior copy pass is not a receipt: another writer may have changed a
+        // source, or the operator may invoke repair directly after a crash.
+        for table in &stale_tables {
+            if table.row_count == 0 {
+                continue;
+            }
+            let operations = native_rxdb_version_migration_steps(
+                collection,
+                table.version,
+                expected_version,
+                migration_strategies,
+            )?;
+            migrated_rows += copy_and_verify_native_rxdb_version_table(
+                conn,
+                collection,
+                table.version,
+                &table.name,
+                expected_version,
+                &expected_table,
+                &operations,
+            )?;
+            verified_rows += table.row_count as usize;
+        }
         for trigger in &stale_triggers {
             conn.execute(
                 &format!(
@@ -9388,8 +9776,11 @@ fn repair_rxdb_collection_schema_version_drift_at_version_with_connection(
     } else if dry_run {
         "Dry-run only; stale versioned RxDB tables/triggers were detected but not dropped."
     } else {
-        "Dropped stale versioned RxDB tables/triggers for this collection."
+        "Copied and verified persisted source rows before dropping stale versioned RxDB tables/triggers in one transaction."
     };
+    transaction
+        .commit()
+        .context("commit verified RxDB schema cleanup")?;
     Ok(json!({
         "ok": true,
         "code": "ctox_optional_schema_drift",
@@ -9407,6 +9798,8 @@ fn repair_rxdb_collection_schema_version_drift_at_version_with_connection(
         "repaired": repaired,
         "repaired_tables": if dry_run { 0 } else { stale_tables.len() },
         "repaired_triggers": if dry_run { 0 } else { stale_triggers.len() },
+        "migrated_rows": migrated_rows,
+        "verified_rows": verified_rows,
         "message": message
     }))
 }
@@ -9654,6 +10047,20 @@ fn sqlite_table_latest_updated_at_ms(
 
 #[cfg(test)]
 pub(in crate::business_os) mod tests {
+    #[test]
+    fn channel_backed_collections_are_never_skipped_for_a_missing_clock() {
+        for name in [
+            "communication_accounts",
+            "communication_threads",
+            "communication_messages",
+        ] {
+            assert!(super::is_channel_backed_projection_collection(name));
+        }
+        assert!(!super::is_channel_backed_projection_collection(
+            "business_commands"
+        ));
+    }
+
     use super::*;
     use crate::business_os::rxdb_peer_intake::{
         BusinessCommandsSourceStamp, BusinessCommandsTableStamp,
@@ -9664,6 +10071,72 @@ pub(in crate::business_os) mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_RXDB_DATABASE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn initialize_rxdb_registers_empty_canonical_schemas_idempotently() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let first = initialize_business_os_rxdb(root.path())?;
+        let second = initialize_business_os_rxdb(root.path())?;
+        assert_eq!(first, second);
+        assert_eq!(first["starts_peer"], false);
+        assert_eq!(first["records_seeded"], 0);
+        let connection = Connection::open(store::rxdb_store_path(root.path()))?;
+        for (name, schema) in business_os_schema_contract() {
+            let version = schema["version"]
+                .as_u64()
+                .expect("canonical schema version");
+            let table = format!("ctox_business_os__{name}__v{version}");
+            let count: i64 = connection.query_row(
+                &format!("SELECT COUNT(*) FROM {}", sqlite_quote_identifier(&table)),
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(count, 0, "schema initialization seeded {name}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn initialize_rxdb_refuses_skipped_optional_schema_instead_of_claiming_success(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        {
+            let _guard = TEMPORARY_RXDB_DATABASE_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            runtime.block_on(async {
+                let database = open_database(store::rxdb_store_path(root.path())).await?;
+                let mut creators = collection_creators();
+                let mut creator = creators
+                    .remove("user_threads")
+                    .expect("canonical user_threads");
+                let mut schema = serde_json::to_value(&creator.schema)?;
+                schema["properties"]["incompatible_fixture_only"] = json!({"type": "string"});
+                creator.schema = schema_from_json(schema);
+                let (_, failed) = database
+                    .add_collections_tolerant(HashMap::from([(
+                        "user_threads".to_string(),
+                        creator,
+                    )]))
+                    .await?;
+                anyhow::ensure!(failed.is_empty(), "negative fixture registration failed");
+                database.close().await?;
+                Ok::<_, anyhow::Error>(())
+            })?;
+        }
+        let error = initialize_business_os_rxdb(root.path())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("user_threads") && error.contains("did not register"),
+            "{error}"
+        );
+        Ok(())
+    }
 
     #[test]
     fn projection_union_types_preserve_values_and_use_valid_repair_defaults() {
@@ -11275,6 +11748,11 @@ pub(in crate::business_os) mod tests {
             message.contains(&format!("migration_strategies.{collection}.1")),
             "error names missing step: {message}"
         );
+        let cleanup_error = repair_stale_rxdb_collection_schema_versions(root.path())
+            .expect_err("cleanup must independently reject a missing migration strategy");
+        assert!(
+            format!("{cleanup_error:#}").contains(&format!("migration_strategies.{collection}.1"))
+        );
         let conn = Connection::open(store::rxdb_store_path(root.path()))?;
         let source_table = rxdb_collection_version_table_name(collection, 0);
         assert!(sqlite_table_exists(&conn, &source_table)?);
@@ -11303,13 +11781,194 @@ pub(in crate::business_os) mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn workjet_computer_schema_migration_reopens_the_deployed_v0_database(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = store::rxdb_store_path(root.path());
+        fs::create_dir_all(path.parent().unwrap())?;
+        let name = RXDB_SQLITE_DATABASE_NAME.to_string();
+        let creator = |schema| {
+            HashMap::from([(
+                "workjet_computers".to_string(),
+                RxCollectionCreator {
+                    schema,
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )])
+        };
+        let old_schema: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/workjet-computers-v0-67e44b11d.json"
+        ))?;
+        let legacy = json!({
+            "id": "retained-workstation", "display_name": "Existing workstation",
+            "hosting_mode": "workstation", "status": "assigned", "capabilities": ["coding"],
+            "self_hosted_colocation": false, "owner_user_id": "owner",
+            "created_at_ms": 100, "updated_at_ms": 100
+        });
+        let old = open_test_database_with_name(path.clone(), name.clone()).await?;
+        old.add_collections(creator(schema_from_json(old_schema)))
+            .await?;
+        let old_collection = old.collection("workjet_computers").unwrap();
+        // 67e44b11d introduced the deployed v0 schema. Welsch retained this
+        // hash in RxDB metadata while later source changed v0 in place (DB6).
+        assert_eq!(
+            old_collection.schema.as_ref().unwrap().hash().await,
+            "039a86246af89f137f1a9646cd6f58b9200c1203175a7c9671a440f8919c2250"
+        );
+        old_collection.insert(legacy.clone()).await?;
+        drop(old_collection);
+        old.close().await?;
+        drop(old);
+
+        // Reproduce the deployed failure: changed fields at the original version.
+        let current_schema = business_os_schema("workjet_computers", "id");
+        let mut drifted = current_schema.clone();
+        drifted.version = 0;
+        let broken = open_test_database_with_name(path.clone(), name.clone()).await?;
+        let (_, failures) = broken.add_collections_tolerant(creator(drifted)).await?;
+        assert_eq!(failures.len(), 1);
+        assert!(failures
+            .iter()
+            .any(|(name, error)| name == "workjet_computers" && error.to_string().contains("DB6")));
+        assert!(broken.collection("workjet_computers").is_none());
+        broken.close().await?;
+        drop(broken);
+
+        let upgraded = open_test_database_with_name(path.clone(), name.clone()).await?;
+        register_collections_tolerant(&upgraded, creator(current_schema.clone())).await?;
+        let migration = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(migration["verified_rows"], 1);
+        repair_stale_rxdb_collection_schema_versions(root.path())?;
+        upgraded.close().await?;
+        drop(upgraded);
+
+        let reopened = open_test_database_with_name(path, name).await?;
+        register_collections_tolerant(&reopened, creator(current_schema)).await?;
+        let document = reopened
+            .collection("workjet_computers")
+            .unwrap()
+            .find_one(Some(MangoQuery {
+                selector: Some(json!({"id": {"$eq": "retained-workstation"}})),
+                ..Default::default()
+            }))?
+            .exec(false)
+            .await?;
+        assert_eq!(
+            document.get("display_name"),
+            Some(&json!("Existing workstation"))
+        );
+        assert_eq!(document.get("owner_user_id"), Some(&json!("owner")));
+        assert_eq!(document.get("device_binding_id"), Some(&json!("")));
+        assert_eq!(document.get("replication_up"), Some(&json!(false)));
+        reopened.close().await?;
+        Ok(())
+    }
+
+    #[test]
+    fn workjet_computer_schema_migration_preserves_rows_and_binding_authority() -> anyhow::Result<()>
+    {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        let collection = "workjet_computers";
+        let version = expected_rxdb_collection_version(collection);
+        assert_eq!(version, 1);
+        create_runtime_migration_source_table(root.path(), collection, 0)?;
+        let legacy = json!({
+            "id": "legacy-computer", "display_name": "Existing workstation",
+            "hosting_mode": "workstation", "status": "assigned", "capabilities": ["coding"],
+            "self_hosted_colocation": false, "owner_user_id": "owner",
+            "created_at_ms": 100, "updated_at_ms": 100
+        });
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "legacy-computer",
+            100.0,
+            legacy.clone(),
+        )?;
+        let bound = json!({
+            "id": "bound-computer", "display_name": "Bound workstation",
+            "hosting_mode": "workstation", "status": "unassigned", "capabilities": ["coding"],
+            "self_hosted_colocation": false, "owner_user_id": "owner",
+            "created_at_ms": 100, "updated_at_ms": 200, "unassigned_at_ms": 200,
+            "device_binding_id": "existing-binding", "actor_epoch": 7,
+            "last_seen_at_ms": 190, "replication_up": true, "is_deleted": true
+        });
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "bound-computer",
+            200.0,
+            bound.clone(),
+        )?;
+
+        // Bring-up must fail before cleanup when the destination was not registered.
+        let error = migrate_additive_native_rxdb_collection_versions(root.path()).unwrap_err();
+        assert!(format!("{error:#}").contains("was not registered"));
+        create_runtime_migration_source_table(root.path(), collection, version)?;
+        let migration = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(migration["verified_rows"], 2);
+        let target = rxdb_collection_version_table_name(collection, version);
+        let read = |id: &str| -> anyhow::Result<Value> {
+            // A fresh connection proves the committed copy survives reopening.
+            let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+            let raw: String = conn.query_row(
+                &format!(
+                    "SELECT data FROM {} WHERE id = ?1",
+                    sqlite_quote_identifier(&target)
+                ),
+                params![id],
+                |row| row.get(0),
+            )?;
+            Ok(serde_json::from_str(&raw)?)
+        };
+        let migrated = read("legacy-computer")?;
+        for (key, value) in legacy.as_object().unwrap() {
+            assert_eq!(&migrated[key], value, "legacy field {key} is retained");
+        }
+        assert_eq!(migrated["device_binding_id"], "");
+        assert_eq!(migrated["actor_epoch"], 0);
+        assert_eq!(migrated["last_seen_at_ms"], 0);
+        assert_eq!(migrated["replication_up"], false);
+        assert_eq!(migrated["is_deleted"], false);
+        assert_eq!(read("bound-computer")?, bound);
+
+        // Replaying a retained source after a restart must not overwrite a newer destination.
+        let mut newer = migrated.clone();
+        newer["display_name"] = json!("Renamed after migration");
+        newer["updated_at_ms"] = json!(300);
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        conn.execute(
+            &format!(
+                "UPDATE {} SET data = ?1, lastWriteTime = 300 WHERE id = 'legacy-computer'",
+                sqlite_quote_identifier(&target)
+            ),
+            params![newer.to_string()],
+        )?;
+        drop(conn);
+        let retry = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(retry["verified_rows"], 2);
+        assert_eq!(read("legacy-computer")?, newer);
+        assert_eq!(read("bound-computer")?, bound);
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        assert_eq!(
+            sqlite_table_row_count(&conn, &rxdb_collection_version_table_name(collection, 0))?,
+            2
+        );
+        Ok(())
+    }
+
     #[test]
     fn packaged_cockpit_schema_migration_preserves_existing_documents() -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         std::fs::create_dir_all(root.path().join("runtime"))?;
         for (collection, old, new) in [
             ("business_commands", 1, 2),
-            ("ctox_queue_tasks", 1, 2),
+            ("ctox_queue_tasks", 1, 3),
             ("ctox_runs", 0, 1),
         ] {
             create_runtime_migration_source_table(root.path(), collection, old)?;
@@ -11327,7 +11986,7 @@ pub(in crate::business_os) mod tests {
         assert_eq!(migration["verified_rows"], 3);
         for (collection, version) in [
             ("business_commands", 2),
-            ("ctox_queue_tasks", 2),
+            ("ctox_queue_tasks", 3),
             ("ctox_runs", 1),
         ] {
             let conn = Connection::open(store::rxdb_store_path(root.path()))?;
@@ -11345,6 +12004,110 @@ pub(in crate::business_os) mod tests {
                 "Existing evidence"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn native_schema_migration_equal_clock_conflicts_preserve_both_stores() -> anyhow::Result<()> {
+        for (revision, deleted, target_data) in [
+            (
+                "23-target",
+                0,
+                json!({"id":"z-conflict", "title":"original"}),
+            ),
+            (
+                "1-source",
+                1,
+                json!({"id":"z-conflict", "title":"original"}),
+            ),
+            (
+                "1-source",
+                0,
+                json!({"id":"z-conflict", "title":"researched"}),
+            ),
+        ] {
+            let root = tempfile::tempdir()?;
+            std::fs::create_dir_all(root.path().join("runtime"))?;
+            let collection = "migration_conflict_probe";
+            for version in [0, 1] {
+                create_runtime_migration_source_table(root.path(), collection, version)?;
+            }
+            let source = rxdb_collection_version_table_name(collection, 0);
+            let target = rxdb_collection_version_table_name(collection, 1);
+            let mut conn = Connection::open(store::rxdb_store_path(root.path()))?;
+            for id in ["a-copy-before-conflict", "z-conflict"] {
+                conn.execute(
+                    &format!("INSERT INTO {source} VALUES (?1, '1-source', 0, 100, ?2)"),
+                    params![id, json!({"id":id,"title":"original"}).to_string()],
+                )?;
+            }
+            conn.execute(
+                &format!("INSERT INTO {target} VALUES ('z-conflict', ?1, ?2, 100, ?3)"),
+                params![revision, deleted, target_data.to_string()],
+            )?;
+            let error = migrate_native_rxdb_version_table(
+                &mut conn,
+                collection,
+                0,
+                &source,
+                1,
+                &target,
+                &[],
+            )
+            .expect_err("ambiguous equal-clock documents require reconciliation");
+            assert!(error.to_string().contains("equal lastWriteTime"));
+            assert_eq!(sqlite_table_row_count(&conn, &source)?, 2);
+            assert_eq!(
+                sqlite_table_row_count(&conn, &target)?,
+                1,
+                "earlier copies must roll back"
+            );
+            let retained: (String, i64, String) = conn.query_row(
+                &format!("SELECT revision, deleted, data FROM {target} WHERE id='z-conflict'"),
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            assert_eq!(retained.0, revision);
+            assert_eq!(retained.1, deleted);
+            assert_eq!(serde_json::from_str::<Value>(&retained.2)?, target_data);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_schema_migration_exact_retry_preserves_tombstones_without_rewrites(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        std::fs::create_dir_all(root.path().join("runtime"))?;
+        let collection = "migration_retry_probe";
+        for version in [0, 1] {
+            create_runtime_migration_source_table(root.path(), collection, version)?;
+        }
+        let source = rxdb_collection_version_table_name(collection, 0);
+        let target = rxdb_collection_version_table_name(collection, 1);
+        let mut conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        let document = json!({"id":"deleted", "_deleted":true, "history":["kept"]});
+        conn.execute(
+            &format!("INSERT INTO {source} VALUES ('deleted', '23-source', 1, 100, ?1)"),
+            params![document.to_string()],
+        )?;
+        assert_eq!(
+            migrate_native_rxdb_version_table(&mut conn, collection, 0, &source, 1, &target, &[],)?,
+            1
+        );
+        assert_eq!(
+            migrate_native_rxdb_version_table(&mut conn, collection, 0, &source, 1, &target, &[],)?,
+            0
+        );
+        let retained: (String, i64, String) = conn.query_row(
+            &format!("SELECT revision, deleted, data FROM {target} WHERE id='deleted'"),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(retained.0, "23-source");
+        assert_eq!(retained.1, 1);
+        assert_eq!(serde_json::from_str::<Value>(&retained.2)?, document);
+        assert_eq!(sqlite_table_row_count(&conn, &source)?, 1);
         Ok(())
     }
 
@@ -11535,6 +12298,93 @@ pub(in crate::business_os) mod tests {
             )?;
             assert_eq!(after, before, "{table}: restart changed stored file bytes");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn startup_clamp_waits_for_a_concurrent_writer_instead_of_failing() -> anyhow::Result<()> {
+        // thesen 25.09.2026: the clamp ran inside a deferred transaction and
+        // failed with 517 whenever another connection wrote during the scan,
+        // which aborted peer bring-up. It must wait and still trim.
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("busy.sqlite3");
+        let conn = Connection::open(&path)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             CREATE TABLE ctox_business_os__ctox_crew_members__v0
+             (id TEXT PRIMARY KEY, revision TEXT, data TEXT NOT NULL,
+              lastWriteTime REAL NOT NULL, deleted INTEGER);
+             CREATE TABLE other_writes (n INTEGER)",
+        )?;
+        let raw = serde_json::to_string(&json!({
+            "id": "crew-big",
+            "name": "Lumi",
+            "memory": "m".repeat(store::MAX_PROJECTED_DOCUMENT_BYTES + 100_000),
+            "_rev": "3-before",
+            "_meta": {"lwt": 1.0},
+            "_deleted": false
+        }))?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__ctox_crew_members__v0
+             VALUES ('crew-big', '3-before', ?1, 1.0, 0)",
+            params![raw],
+        )?;
+        drop(conn);
+        let writer = Connection::open(&path)?;
+        writer.execute_batch("BEGIN IMMEDIATE; INSERT INTO other_writes VALUES (1);")?;
+        let release = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            writer
+                .execute_batch("COMMIT;")
+                .expect("commit concurrent writer");
+        });
+        let clamped = clamp_oversized_projected_documents(temp.path(), &path)?;
+        release.join().expect("writer thread");
+        assert_eq!(clamped, 1);
+        let conn = Connection::open(&path)?;
+        let (data, revision): (String, String) = conn.query_row(
+            "SELECT data, revision FROM ctox_business_os__ctox_crew_members__v0",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert!(data.len() < store::MAX_PROJECTED_DOCUMENT_BYTES);
+        assert_ne!(revision, "3-before");
+        Ok(())
+    }
+
+    #[test]
+    fn startup_repair_preserves_oversized_historical_source_without_aborting() -> anyhow::Result<()>
+    {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("legacy-source.sqlite3");
+        let conn = Connection::open(&path)?;
+        conn.execute_batch(
+            "CREATE TABLE ctox_business_os__business_module_source_files__v0
+             (id TEXT PRIMARY KEY, revision TEXT, data TEXT NOT NULL,
+              lastWriteTime REAL NOT NULL, deleted INTEGER)",
+        )?;
+        let raw = serde_json::to_string(&json!({
+            "id": "legacy:large.js",
+            "content": "x".repeat(2 * 1024 * 1024),
+            "_rev": "7-preserved",
+            "_meta": {"lwt": 1234.0},
+            "_deleted": false
+        }))?;
+        conn.execute(
+            "INSERT INTO ctox_business_os__business_module_source_files__v0
+             VALUES (?1, '7-preserved', ?2, 1234.0, 0)",
+            params!["legacy:large.js", raw],
+        )?;
+        drop(conn);
+        assert_eq!(clamp_oversized_projected_documents(temp.path(), &path)?, 0);
+        let conn = Connection::open(&path)?;
+        let after: (String, String, f64) = conn.query_row(
+            "SELECT data, revision, lastWriteTime
+             FROM ctox_business_os__business_module_source_files__v0",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(after, (raw, "7-preserved".to_owned(), 1234.0));
         Ok(())
     }
 
@@ -11990,7 +12840,7 @@ pub(in crate::business_os) mod tests {
     }
 
     #[test]
-    fn rxdb_schema_drift_repair_drops_stale_version_table_after_active_meta_upgrade() {
+    fn rxdb_schema_drift_repair_preserves_source_rows_before_dropping_stale_tables() {
         let root = tempfile::tempdir().expect("temp root");
         std::fs::create_dir_all(root.path().join("runtime")).expect("runtime dir");
         let path = store::rxdb_store_path(root.path());
@@ -12015,7 +12865,10 @@ pub(in crate::business_os) mod tests {
         conn.execute(
             "CREATE TABLE ctox_business_os__business_commands__v2 (
                 id TEXT PRIMARY KEY,
-                data TEXT NOT NULL
+                data TEXT NOT NULL,
+                revision TEXT,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                lastWriteTime REAL NOT NULL DEFAULT 0
             )",
             [],
         )
@@ -12103,6 +12956,19 @@ pub(in crate::business_os) mod tests {
         assert!(!sqlite_table_exists(&conn, "ctox_business_os__business_commands__v0").unwrap());
         assert!(sqlite_table_exists(&conn, "ctox_business_os__business_commands__v2").unwrap());
         assert!(!sqlite_trigger_exists(&conn, "sync_commands_v2_to_v0_insert").unwrap());
+        // This row existed ONLY in v0. Active v2 metadata is no permission to
+        // discard it, even for the explicitly forced operator repair.
+        let retained: String = conn
+            .query_row(
+                "SELECT data FROM ctox_business_os__business_commands__v2 WHERE id = 'cmd_stale'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("forced repair must retain the unique legacy command");
+        let retained: Value = serde_json::from_str(&retained).unwrap();
+        assert_eq!(retained["id"], "cmd_stale");
+        assert_eq!(retained["status"], "accepted");
+        assert_eq!(retained["updated_at_ms"], 100);
         conn.execute(
             "INSERT INTO ctox_business_os__business_commands__v2 (id, data)
              VALUES ('cmd_after_repair', ?1)",
@@ -12112,6 +12978,156 @@ pub(in crate::business_os) mod tests {
             ],
         )
         .expect("active v2 write must not reference removed stale v0 table");
+    }
+
+    #[test]
+    fn native_schema_migration_cleanup_conflict_rolls_back_copy_and_preserves_source(
+    ) -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let collection = "runtime_cleanup_conflict_records";
+        write_runtime_migration_test_module(
+            root.path(),
+            collection,
+            1,
+            json!({(collection): {"1": {"operations": []}}}),
+        )?;
+        register_runtime_migration_test_collection(root.path())?;
+        create_runtime_migration_source_table(root.path(), collection, 0)?;
+        let history =
+            json!({"messages": ["retained history"], "attachment": {"sha256": "fixture-hash"}});
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "a-copy",
+            100.0,
+            json!({"id": "a-copy", "title": "unique legacy row", "history": history, "updated_at_ms": 100}),
+        )?;
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "z-conflict",
+            200.0,
+            json!({"id": "z-conflict", "title": "live source", "updated_at_ms": 200}),
+        )?;
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            1,
+            "z-conflict",
+            200.0,
+            json!({"id": "z-conflict", "title": "target tombstone", "_deleted": true, "updated_at_ms": 200}),
+        )?;
+        let source = rxdb_collection_version_table_name(collection, 0);
+        let target = rxdb_collection_version_table_name(collection, 1);
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        conn.execute(
+            &format!(
+                "UPDATE {} SET deleted = 1 WHERE id = 'z-conflict'",
+                sqlite_quote_identifier(&target)
+            ),
+            [],
+        )?;
+        conn.execute_batch(&format!(
+            "CREATE TRIGGER retain_legacy_reference AFTER UPDATE ON {}
+             BEGIN SELECT id FROM {} LIMIT 1; END;",
+            sqlite_quote_identifier(&target),
+            sqlite_quote_identifier(&source),
+        ))?;
+        drop(conn);
+
+        let error = repair_stale_rxdb_collection_schema_versions(root.path())
+            .expect_err("direct cleanup must not bypass an equal-clock tombstone conflict");
+        assert!(format!("{error:#}").contains("equal lastWriteTime"));
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        assert!(sqlite_table_exists(&conn, &source)?);
+        assert_eq!(sqlite_table_row_count(&conn, &source)?, 2);
+        assert_eq!(
+            sqlite_table_row_count(&conn, &target)?,
+            1,
+            "earlier copy rolled back"
+        );
+        assert!(sqlite_trigger_exists(&conn, "retain_legacy_reference")?);
+        let (deleted, data): (i64, String) = conn.query_row(
+            &format!(
+                "SELECT deleted, data FROM {} WHERE id = 'z-conflict'",
+                sqlite_quote_identifier(&target)
+            ),
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(deleted, 1);
+        assert_eq!(
+            serde_json::from_str::<Value>(&data)?["title"],
+            "target tombstone"
+        );
+        let data: String = conn.query_row(
+            &format!(
+                "SELECT data FROM {} WHERE id = 'a-copy'",
+                sqlite_quote_identifier(&source)
+            ),
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(serde_json::from_str::<Value>(&data)?["history"], history);
+        Ok(())
+    }
+
+    #[test]
+    fn native_schema_migration_cleanup_rechecks_rows_written_after_copy() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let collection = "runtime_cleanup_late_records";
+        write_runtime_migration_test_module(
+            root.path(),
+            collection,
+            1,
+            json!({(collection): {"1": {"operations": [{
+                "op": "set_from_first_truthy", "field": "inbound_channel",
+                "paths": ["inbound_channel", "module"], "default": ""
+            }]}}}),
+        )?;
+        register_runtime_migration_test_collection(root.path())?;
+        create_runtime_migration_source_table(root.path(), collection, 0)?;
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "before",
+            100.0,
+            json!({"id": "before", "title": "before copy", "module": "fixture", "updated_at_ms": 100}),
+        )?;
+        let copied = migrate_additive_native_rxdb_collection_versions(root.path())?;
+        assert_eq!(copied["verified_rows"], 1);
+        insert_runtime_migration_row(
+            root.path(),
+            collection,
+            0,
+            "after",
+            200.0,
+            json!({"id": "after", "title": "after copy", "module": "fixture", "updated_at_ms": 200}),
+        )?;
+
+        repair_stale_rxdb_collection_schema_versions(root.path())?;
+        let conn = Connection::open(store::rxdb_store_path(root.path()))?;
+        assert!(!sqlite_table_exists(
+            &conn,
+            &rxdb_collection_version_table_name(collection, 0)
+        )?);
+        let target = rxdb_collection_version_table_name(collection, 1);
+        assert_eq!(sqlite_table_row_count(&conn, &target)?, 2);
+        let data: String = conn.query_row(
+            &format!(
+                "SELECT data FROM {} WHERE id = 'after'",
+                sqlite_quote_identifier(&target)
+            ),
+            [],
+            |row| row.get(0),
+        )?;
+        let data: Value = serde_json::from_str(&data)?;
+        assert_eq!(data["title"], "after copy");
+        assert_eq!(data["inbound_channel"], "fixture");
+        Ok(())
     }
 
     #[test]
@@ -13414,12 +14430,77 @@ pub(in crate::business_os) mod tests {
         assert_eq!(String::from_utf8(spreadsheet_bytes).unwrap(), "sheet data");
     }
 
+    /// Native projection writers address the production database namespace.
+    /// Use this on an isolated file when testing the writer + RxDB integration.
+    pub(in crate::business_os) async fn open_test_business_os_database(
+        database_path: PathBuf,
+    ) -> anyhow::Result<Arc<RxDatabase>> {
+        open_test_database_with_name(database_path, RXDB_SQLITE_DATABASE_NAME.to_string()).await
+    }
+
     pub(in crate::business_os) async fn open_test_database(
         database_path: PathBuf,
     ) -> anyhow::Result<Arc<RxDatabase>> {
         let test_id = TEST_RXDB_DATABASE_COUNTER.fetch_add(1, Ordering::Relaxed);
         open_test_database_with_name(database_path, format!("ctox-business-os-test-{test_id}"))
             .await
+    }
+
+    #[tokio::test]
+    async fn background_projection_releases_writer_between_pages() -> anyhow::Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = store::rxdb_store_path(root.path());
+        fs::create_dir_all(path.parent().unwrap())?;
+        let database = open_test_database(path).await?;
+        database
+            .add_collections(HashMap::from([(
+                "knowledge_tables".to_string(),
+                RxCollectionCreator {
+                    schema: business_os_schema("knowledge_tables", "id"),
+                    conflict_handler: None,
+                    options: HashMap::new(),
+                },
+            )]))
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let collection = database.collection("knowledge_tables").unwrap();
+        let documents = (0..48)
+            .map(|n| json!({"id":format!("table-{n:03}"),"title":"Fixture","updated_at_ms":1}))
+            .collect();
+        let guard = NATIVE_RXDB_WRITE_LOCK.lock().await;
+        let mut projection = Box::pin(
+            super::super::rxdb_peer_projections::upsert_background_projection_pages(
+                &collection,
+                "knowledge_tables",
+                documents,
+            ),
+        );
+        assert!(futures_util::poll!(&mut projection).is_pending());
+        // Queue an intake writer behind the first projection page, before
+        // allowing it to run. Tokio's FIFO mutex must admit it before page 2.
+        let mut intake = Box::pin(NATIVE_RXDB_WRITE_LOCK.lock());
+        assert!(futures_util::poll!(&mut intake).is_pending());
+        drop(guard);
+        let inspect = async {
+            let _guard = intake.await;
+            let ids = (0..48).map(|n| format!("table-{n:03}")).collect::<Vec<_>>();
+            collection
+                .storage_instance
+                .find_documents_by_id(&ids, false)
+                .await
+                .unwrap()
+                .len()
+        };
+        let (written, observed) = tokio::join!(projection, inspect);
+        assert_eq!(written?, 48);
+        assert_eq!(
+            observed, 16,
+            "intake must run before the remaining 32 documents"
+        );
+        assert_eq!(super::super::rxdb_peer_projections::upsert_background_projection_pages(
+            &collection,"knowledge_tables",(0..48).map(|n|json!({"id":format!("table-{n:03}"),"title":"Fixture","updated_at_ms":1})).collect(),
+        ).await?,0,"unchanged documents do not create new revisions");
+        Ok(())
     }
 
     async fn open_test_database_with_name(
@@ -13464,8 +14545,14 @@ pub(in crate::business_os) mod tests {
         });
         let (collections, failures) = database.add_collections_tolerant(creators).await?;
         assert!(failures.is_empty(), "{failures:?}");
-        assert_eq!(collections.len(), 4);
-        for name in ["ctox_harness_events", "ctox_harness_status", "ctox_runs"] {
+        assert_eq!(collections.len(), 6);
+        for name in [
+            "ctox_harness_events",
+            "ctox_harness_status",
+            "ctox_runs",
+            "ctox_crew_members",
+            "ctox_crew_learnings",
+        ] {
             assert!(names.iter().any(|entry| entry == name), "missing {name}");
         }
         let conn = store::open_store(root.path())?;
@@ -13473,7 +14560,8 @@ pub(in crate::business_os) mod tests {
             store::ensure_legacy_collection_grants(root.path(), &names)?;
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM business_permission_grants
-                 WHERE scope_id LIKE 'ctox_harness_%' OR scope_id = 'ctox_runs'",
+                 WHERE scope_id LIKE 'ctox_harness_%'
+                    OR scope_id IN ('ctox_runs', 'ctox_crew_members', 'ctox_crew_learnings')",
                 [],
                 |row| row.get(0),
             )?;
@@ -14924,6 +16012,126 @@ pub(in crate::business_os) mod tests {
     }
 
     #[test]
+    fn knowledge_tables_sync_tombstones_legacy_chunks_and_strips_base_rows() {
+        let root = tempfile::tempdir().expect("temp root");
+        assert_eq!(
+            sync_knowledge_tables(root.path()).expect("initial empty knowledge sync"),
+            0
+        );
+        crate::knowledge::seed_knowledge_table_for_test(
+            root.path(),
+            "kdt-legacy",
+            "legacy_domain",
+            "notes",
+            &[json!({"n": 0}), json!({"n": 1})],
+            None,
+        )
+        .expect("seed legacy catalog parquet");
+
+        let conn = Connection::open(store::rxdb_store_path(root.path())).expect("open rxdb sqlite");
+        let insert = |id: &str, revision: &str, body: Value| {
+            conn.execute(
+                "INSERT INTO ctox_business_os__knowledge_tables__v0 \
+                 (id, revision, deleted, lastWriteTime, data) VALUES (?1, ?2, 0, ?3, ?4)",
+                params![
+                    id,
+                    revision,
+                    1.0_f64,
+                    serde_json::to_string(&body).expect("legacy knowledge json")
+                ],
+            )
+            .expect("seed legacy knowledge document");
+        };
+        insert(
+            "table:kdt-legacy",
+            "1-legacybase",
+            json!({
+                "id": "table:kdt-legacy",
+                "kind": "dataframe",
+                "title": "Old Heavy",
+                "updated_at_ms": 1,
+                "rows": [{"n": 0}, {"n": 1}],
+                "payload": {"rows": [{"n": 0}], "domain": "legacy_domain", "table_key": "notes"},
+                "chunk_index": 0,
+                "chunk_count": 4,
+                "_deleted": false,
+                "_meta": { "lwt": 1.0 },
+                "_rev": "1-legacybase",
+                "_attachments": {}
+            }),
+        );
+        for index in 1..=3 {
+            let id = format!("table:kdt-legacy:chunk:{index:04}");
+            let revision = format!("1-legacychunk{index}");
+            insert(
+                &id,
+                &revision,
+                json!({
+                    "id": id,
+                    "kind": "dataframe",
+                    "title": "Legacy Chunk",
+                    "updated_at_ms": 1,
+                    "rows": [{"n": index}],
+                    "payload": {"rows": [{"n": index}]},
+                    "chunk_index": index,
+                    "chunk_count": 4,
+                    "_deleted": false,
+                    "_meta": { "lwt": 1.0 },
+                    "_rev": revision,
+                    "_attachments": {}
+                }),
+            );
+        }
+        drop(conn);
+
+        let synced = sync_knowledge_tables(root.path()).expect("replace legacy knowledge rows");
+        assert_eq!(synced, 4);
+
+        let conn =
+            Connection::open(store::rxdb_store_path(root.path())).expect("reopen rxdb sqlite");
+        for index in 1..=3 {
+            let id = format!("table:kdt-legacy:chunk:{index:04}");
+            let (deleted, data): (i64, String) = conn
+                .query_row(
+                    "SELECT deleted, data FROM ctox_business_os__knowledge_tables__v0 WHERE id = ?1",
+                    [id.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .expect("legacy chunk row");
+            assert_eq!(deleted, 1, "{id}");
+            // Tombstones keep their body in storage and replicate it, so the
+            // deleted chunk must not carry its rows any more.
+            let chunk: Value = serde_json::from_str(&data).expect("legacy chunk json");
+            assert!(chunk.get("rows").is_none(), "{chunk}");
+            assert!(chunk.get("chunk_index").is_none(), "{chunk}");
+            assert!(chunk.pointer("/payload/rows").is_none(), "{chunk}");
+        }
+        let (deleted, data): (i64, String) = conn
+            .query_row(
+                "SELECT deleted, data FROM ctox_business_os__knowledge_tables__v0 WHERE id = 'table:kdt-legacy'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("legacy base row");
+        assert_eq!(deleted, 0);
+        let table: Value = serde_json::from_str(&data).expect("legacy base json");
+        // bulk_upsert would have kept top-level rows and chunk_index. Their
+        // absence is the proof that incremental_upsert replaced the body.
+        // payload.rows disappearing alone is not, because a shallow merge
+        // replaces the whole payload value.
+        assert!(table.get("rows").is_none(), "{table}");
+        assert!(table.get("chunk_index").is_none(), "{table}");
+        assert!(table.get("chunk_count").is_none(), "{table}");
+        assert!(table["payload"].get("rows").is_none(), "{table}");
+        assert_eq!(table["id"], json!("table:kdt-legacy"));
+        assert_eq!(table["row_count"], json!(2));
+        assert_eq!(table["projection_version"], json!(2));
+        assert_eq!(table["rows_source"], json!("rxdb.rows.fetch"));
+        assert_eq!(table["rows_complete"], json!(true));
+        assert_eq!(table["title"], json!("Window Table"));
+    }
+
+    #[test]
     fn business_record_projection_progress_migrates_v2_cursors() {
         let root = tempfile::tempdir().expect("temp root");
         let path = business_record_projection_progress_path(root.path());
@@ -15081,6 +16289,17 @@ pub(in crate::business_os) mod tests {
         )
         .expect("create runbook item");
 
+        let source = super::super::server::knowledge_index_payload(root.path())
+            .expect("load authoritative procedural knowledge catalog");
+        let source_markdown = |collection: &str, id: &str| {
+            source[collection]
+                .as_array()
+                .expect("source catalog collection")
+                .iter()
+                .find(|document| document["id"].as_str() == Some(id))
+                .and_then(|document| document["markdown"].as_str())
+                .expect("source catalog markdown")
+        };
         let synced = sync_business_record_projections(root.path())
             .expect("sync procedural knowledge projections");
         assert!(synced >= 3);
@@ -15104,14 +16323,14 @@ pub(in crate::business_os) mod tests {
             Some("skillbook")
         );
         let skillbook_markdown = skillbook
-            .pointer("/payload/markdown")
+            .get("markdown")
             .and_then(Value::as_str)
             .expect("projected skillbook markdown");
         assert!(skillbook_markdown.contains("## Mission"));
         assert!(skillbook_markdown.contains("Fail closed when evidence is missing."));
         assert_eq!(
-            skillbook.get("markdown").and_then(Value::as_str),
-            Some(skillbook_markdown)
+            skillbook_markdown,
+            source_markdown("items", "skillbook:projection.skillbook.v1")
         );
 
         let runbook_json: String = conn
@@ -15131,14 +16350,14 @@ pub(in crate::business_os) mod tests {
             Some("projection.skillbook.v1")
         );
         let runbook_markdown = runbook
-            .pointer("/payload/markdown")
+            .get("markdown")
             .and_then(Value::as_str)
             .expect("projected runbook markdown");
         assert!(runbook_markdown.contains("## VERIFY · Verify source receipt"));
         assert!(runbook_markdown.contains("verify its receipt and hash"));
         assert_eq!(
-            runbook.get("markdown").and_then(Value::as_str),
-            Some(runbook_markdown)
+            runbook_markdown,
+            source_markdown("runbooks", "runbook:projection.runbook.v1")
         );
     }
 
@@ -15467,6 +16686,116 @@ pub(in crate::business_os) mod tests {
             )
             .expect("count paged document projections");
         assert_eq!(projected_count, record_count);
+    }
+
+    #[test]
+    fn hydrated_communication_body_reaches_rxdb_without_new_observation_time() {
+        let root = tempfile::tempdir().expect("temp root");
+        channels::list_communication_accounts_for_business_os(root.path())
+            .expect("initialize channel schema");
+        let channel_path = root.path().join("runtime/ctox.sqlite3");
+        let conn = Connection::open(&channel_path).expect("open channel sqlite");
+        conn.execute_batch(
+            r#"
+            INSERT INTO communication_accounts
+                (account_key, channel, address, provider, profile_json, created_at, updated_at)
+            VALUES ('email:mail@example.test', 'email', 'mail@example.test', 'owa', '{}',
+                    '2026-09-21T08:00:00Z', '2026-09-21T08:00:00Z');
+            INSERT INTO communication_threads
+                (thread_key, channel, account_key, subject, participant_keys_json,
+                 last_message_key, last_message_at, message_count, unread_count,
+                 metadata_json, updated_at)
+            VALUES ('hydrated-thread', 'email', 'email:mail@example.test', 'Mail projection',
+                    '[]', 'hydrated-message', '2026-09-21T08:00:00Z', 1, 1, '{}',
+                    '2026-09-21T08:00:00Z');
+            INSERT INTO communication_messages
+                (message_key, channel, account_key, thread_key, remote_id, direction,
+                 folder_hint, sender_display, sender_address, recipient_addresses_json,
+                 cc_addresses_json, bcc_addresses_json, subject, preview, body_text,
+                 body_html, raw_payload_ref, trust_level, status, seen, has_attachments,
+                 external_created_at, observed_at, metadata_json)
+            VALUES ('hydrated-message', 'email', 'email:mail@example.test', 'hydrated-thread',
+                    'remote-hydration', 'inbound', 'INBOX', 'Sender', 'sender@example.test',
+                    '[]', '[]', '[]', 'Mail projection', 'Preview', '', '', '', 'normal',
+                    'received', 0, 0, '2026-09-21T08:00:00Z', '2026-09-21T08:00:00Z', '{}');
+            "#,
+        )
+        .expect("insert channel message with missing body");
+        drop(conn);
+
+        let projection_root = root.path().to_path_buf();
+        with_business_os_database(
+            root.path(),
+            "failed to create Mail body projection test runtime",
+            true,
+            TemporaryDatabaseLockScope::EntireOperation,
+            move |_peer, database| async move {
+                let database_write_lock = Arc::new(AsyncMutex::new(()));
+                let mut since_by_collection = HashMap::new();
+                let mut chat_tracking_repair_stamp = None;
+                let mut last_source_stamp = None;
+                sync_business_record_projections_with_database_if_changed(
+                    &projection_root,
+                    &database,
+                    &database_write_lock,
+                    &mut since_by_collection,
+                    &mut chat_tracking_repair_stamp,
+                    &mut last_source_stamp,
+                )
+                .await?;
+                let cursor = since_by_collection
+                    .get("communication_messages")
+                    .copied()
+                    .unwrap_or_default();
+                assert!(cursor > 0, "initial message projection must retain a cursor");
+
+                let conn = Connection::open(projection_root.join("runtime/ctox.sqlite3"))?;
+                conn.execute(
+                    "UPDATE communication_messages SET body_text = 'Hydrated body' WHERE message_key = 'hydrated-message'",
+                    [],
+                )?;
+                let observed_at: String = conn.query_row(
+                    "SELECT observed_at FROM communication_messages WHERE message_key = 'hydrated-message'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(observed_at, "2026-09-21T08:00:00Z");
+                drop(conn);
+
+                let changed = sync_business_record_projections_with_database_if_changed(
+                    &projection_root,
+                    &database,
+                    &database_write_lock,
+                    &mut since_by_collection,
+                    &mut chat_tracking_repair_stamp,
+                    &mut last_source_stamp,
+                )
+                .await?;
+                assert!(changed >= 1, "body hydration must update RxDB");
+                let rxdb = Connection::open(store::rxdb_store_path(&projection_root))?;
+                let data: String = rxdb.query_row(
+                    "SELECT data FROM ctox_business_os__communication_messages__v0 WHERE id = 'hydrated-message'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let message: Value = serde_json::from_str(&data)?;
+                assert_eq!(message["body_text"], "Hydrated body");
+                assert_eq!(message["observed_at"], observed_at);
+
+                let unchanged = sync_business_record_projections_with_database_if_changed(
+                    &projection_root,
+                    &database,
+                    &database_write_lock,
+                    &mut since_by_collection,
+                    &mut chat_tracking_repair_stamp,
+                    &mut last_source_stamp,
+                )
+                .await?;
+                assert_eq!(unchanged, 0);
+                Ok(())
+            },
+        )
+        .expect("project newly hydrated Mail text");
     }
 
     #[test]
@@ -19239,9 +20568,35 @@ pub(in crate::business_os) mod tests {
                     .expect("insert invalid ticket command");
             }
 
-            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
-                .await
-                .expect("consume invalid ticket commands");
+            let mut accept_failures = HashMap::new();
+            // Intake failures become canonical terminal outcomes after the
+            // persisted retry budget; retain the exact terminal/error guards.
+            for attempt in 1..=BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                consume_pending_business_commands(root.path(), &database, &mut accept_failures)
+                    .await
+                    .expect("consume invalid ticket commands");
+                for id in ["cmd_ticket_unsupported", "cmd_ticket_missing_title"] {
+                    let current = commands
+                        .find_one(Some(MangoQuery {
+                            selector: Some(json!({ "id": { "$eq": id } })),
+                            ..Default::default()
+                        }))
+                        .expect("intake lifecycle query")
+                        .exec(false)
+                        .await
+                        .expect("intake lifecycle document");
+                    let expected = if attempt < BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                        "pending_sync"
+                    } else {
+                        "failed"
+                    };
+                    assert_eq!(
+                        current.get("status").and_then(Value::as_str),
+                        Some(expected),
+                        "command {id} at persisted intake attempt {attempt}"
+                    );
+                }
+            }
 
             let unsupported = commands
                 .find_one(Some(MangoQuery {
@@ -19258,7 +20613,7 @@ pub(in crate::business_os) mod tests {
             );
             assert!(
                 unsupported
-                    .get("error")
+                    .get("error_message")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .contains("unsupported Business OS ticket command"),
@@ -19280,7 +20635,7 @@ pub(in crate::business_os) mod tests {
             );
             assert!(
                 missing_title
-                    .get("error")
+                    .get("error_message")
                     .and_then(Value::as_str)
                     .unwrap_or_default()
                     .contains("title is required"),
@@ -19437,6 +20792,7 @@ pub(in crate::business_os) mod tests {
                 .add_collections(collection_creators())
                 .await
                 .expect("register collections");
+            let capability_token = issue_test_capability(root.path(), "knowledge-user", "admin");
             let commands = database
                 .collection("business_commands")
                 .expect("business_commands collection");
@@ -19450,7 +20806,11 @@ pub(in crate::business_os) mod tests {
                     "status": "pending_sync",
                     "inbound_channel": "business_os.outbound",
                     "payload": { "title": "Knowledge help", "args": ["help"] },
-                    "client_context": { "source_module": "outbound" },
+                    "client_context": {
+                        "source_module": "outbound",
+                        "capability_token": capability_token,
+                        "actor": { "id": "knowledge-user", "role": "admin", "is_admin": true }
+                    },
                     "updated_at_ms": now_ms() as u64
                 }))
                 .await
@@ -20164,9 +21524,33 @@ pub(in crate::business_os) mod tests {
                 }))
                 .await
                 .expect("insert module save command");
-            consume_pending_business_commands(root.path(), &database, &mut HashMap::new())
-                .await
-                .expect("consume module save command");
+            let mut accept_failures = HashMap::new();
+            for attempt in 1..=BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                consume_pending_business_commands(root.path(), &database, &mut accept_failures)
+                    .await
+                    .expect("consume module save command");
+                for id in ["cmd_gov_module_save"] {
+                    let current = commands
+                        .find_one(Some(MangoQuery {
+                            selector: Some(json!({ "id": { "$eq": id } })),
+                            ..Default::default()
+                        }))
+                        .expect("intake lifecycle query")
+                        .exec(false)
+                        .await
+                        .expect("intake lifecycle document");
+                    let expected = if attempt < BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET {
+                        "pending_sync"
+                    } else {
+                        "failed"
+                    };
+                    assert_eq!(
+                        current.get("status").and_then(Value::as_str),
+                        Some(expected),
+                        "command {id} at persisted intake attempt {attempt}"
+                    );
+                }
+            }
             let failed_module_save = commands
                 .find_one(Some(MangoQuery {
                     selector: Some(json!({ "id": { "$eq": "cmd_gov_module_save" } })),

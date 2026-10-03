@@ -69,6 +69,40 @@ const MAX_SUMMARY_RATIO: f64 = 0.8;
 #[cfg(test)]
 static TEMP_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// A deterministic completion rejection, distinct from a retryable store error.
+#[derive(Debug, Clone)]
+pub struct IncompleteTaskExecutionPlan {
+    pub work_key: String,
+    pub revision: i64,
+    pub completed: i64,
+    pub total: i64,
+}
+
+impl IncompleteTaskExecutionPlan {
+    pub fn from_progress(work_key: &str, progress: &serde_json::Value) -> Option<Self> {
+        let completed = progress["completed_steps"].as_i64()?;
+        let total = progress["total_steps"].as_i64()?;
+        (total > 0 && completed != total).then(|| Self {
+            work_key: work_key.to_string(),
+            revision: progress["revision"].as_i64().unwrap_or(0),
+            completed,
+            total,
+        })
+    }
+}
+
+impl std::fmt::Display for IncompleteTaskExecutionPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "task execution plan is incomplete ({}/{} steps completed); work_key={} revision={}",
+            self.completed, self.total, self.work_key, self.revision
+        )
+    }
+}
+
+impl std::error::Error for IncompleteTaskExecutionPlan {}
+
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum SummaryKind {
@@ -1617,6 +1651,15 @@ impl LcmEngine {
         &self,
         input: TaskExecutionPlanUpdate<'_>,
     ) -> Result<serde_json::Value> {
+        self.record_task_execution_plan_guarded(input, |_| Ok(()))
+    }
+
+    /// Check execution authority under the same write lock as the update.
+    pub(crate) fn record_task_execution_plan_guarded(
+        &self,
+        input: TaskExecutionPlanUpdate<'_>,
+        authorize: impl FnOnce(&Connection) -> Result<()>,
+    ) -> Result<serde_json::Value> {
         let (steps, completed_steps) = validate_task_execution_steps(input.steps)?;
         let total_steps = i64::try_from(steps.len()).unwrap_or(i64::MAX);
         let signature = task_execution_plan_signature(&steps);
@@ -1627,6 +1670,7 @@ impl LcmEngine {
             rusqlite::TransactionBehavior::Immediate,
         )
         .context("failed to begin task execution plan transaction")?;
+        authorize(&tx)?;
         let latest = tx
             .query_row(
                 "SELECT revision, plan_signature, review_status, created_at_ms
@@ -1779,10 +1823,6 @@ impl LcmEngine {
         let latest = self
             .task_execution_progress(work_key)?
             .with_context(|| format!("task {work_key} has no durable execution plan"))?;
-        let completed = latest
-            .get("completed_steps")
-            .and_then(serde_json::Value::as_i64)
-            .unwrap_or(0);
         let total = latest
             .get("total_steps")
             .and_then(serde_json::Value::as_i64)
@@ -1791,10 +1831,8 @@ impl LcmEngine {
             total > 0,
             "task execution plan must contain at least one step"
         );
-        anyhow::ensure!(
-            completed == total,
-            "task execution plan is incomplete ({completed}/{total} steps completed)"
-        );
+        // Review must also be able to reject an honestly incomplete or blocked
+        // result. Only the terminal-success transition requires every step.
         self.set_task_execution_review_status(work_key, "in_progress")
     }
 
@@ -1807,21 +1845,43 @@ impl LcmEngine {
             matches!(review_status, "in_progress" | "completed" | "failed"),
             "invalid task review status {review_status}"
         );
+        let progress = self
+            .task_execution_progress(work_key)?
+            .with_context(|| format!("task {work_key} has no durable execution plan"))?;
+        let completed = progress["completed_steps"].as_i64().unwrap_or(0);
+        let total = progress["total_steps"].as_i64().unwrap_or(0);
+        anyhow::ensure!(
+            total > 0,
+            "task execution plan must contain at least one step"
+        );
+        if review_status == "completed" {
+            if let Some(incomplete) =
+                IncompleteTaskExecutionPlan::from_progress(work_key, &progress)
+            {
+                return Err(incomplete.into());
+            }
+        }
         let (phase, percent) = if review_status == "completed" {
             ("completed", 100)
         } else {
-            ("review", 90)
+            (
+                "review",
+                (90.0 * completed as f64 / total as f64).round() as i64,
+            )
         };
         let changed = self.conn.execute(
             "UPDATE task_execution_plan_revisions
              SET review_status = ?2, phase = ?3, percent = ?4, updated_at_ms = ?5
              WHERE work_key = ?1
-               AND revision = (SELECT MAX(revision) FROM task_execution_plan_revisions WHERE work_key = ?1)",
-            params![work_key, review_status, phase, percent, epoch_millis_i64()],
+               AND revision = (SELECT MAX(revision) FROM task_execution_plan_revisions WHERE work_key = ?1)
+               AND revision = ?6
+               AND completed_steps = ?7 AND total_steps = ?8",
+            params![work_key, review_status, phase, percent, epoch_millis_i64(),
+                progress["revision"].as_i64().unwrap_or(0), completed, total],
         )?;
         anyhow::ensure!(
             changed == 1,
-            "task {work_key} has no durable execution plan"
+            "task {work_key} execution plan changed during review"
         );
         self.task_execution_progress(work_key)?
             .context("task execution progress vanished after review update")
@@ -5755,41 +5815,117 @@ fn validate_task_execution_steps(
         "task execution plan must contain at least one step"
     );
     let mut steps = Vec::with_capacity(input.len());
-    let mut completed = 0_i64;
-    let mut in_progress = 0_i64;
-    let mut last_rank = 0_i64;
     for step in input {
         let label = collapse_whitespace(&step.label);
         anyhow::ensure!(!label.is_empty(), "task execution step label is required");
         let status = step.status.trim().to_ascii_lowercase();
-        let rank = match status.as_str() {
-            "completed" => {
-                completed = completed.saturating_add(1);
-                0
-            }
-            "in_progress" => {
-                in_progress = in_progress.saturating_add(1);
-                1
-            }
-            "pending" => 2,
-            _ => anyhow::bail!("invalid task execution step status {}", step.status),
-        };
         anyhow::ensure!(
-            rank >= last_rank,
-            "task execution steps must be a completed prefix, one active step, then pending steps"
+            matches!(status.as_str(), "completed" | "in_progress" | "pending"),
+            "invalid task execution step status {}",
+            step.status
         );
-        last_rank = rank;
         steps.push(TaskExecutionPlanStepInput { label, status });
     }
-    anyhow::ensure!(
-        in_progress <= 1,
-        "task execution plan may contain at most one in-progress step"
-    );
-    anyhow::ensure!(
-        completed == i64::try_from(steps.len()).unwrap_or(i64::MAX) || in_progress == 1,
-        "an incomplete task execution plan must contain exactly one in-progress step"
-    );
-    Ok((steps, completed))
+    // Models report progress out of order: a later step finished before an
+    // earlier one, two steps active at once, or nothing active while work is
+    // still open. The plan's meaning is the per-step status; the invariants
+    // "at most one active step" and "an incomplete plan has exactly one active
+    // step" are restored by demotion and promotion. They must never fail the
+    // durable task: on 07.09.2026 a customer research run died after two
+    // minutes with "steps must be a completed prefix" while the worker was
+    // still working.
+    let mut seen_active = false;
+    for step in &mut steps {
+        if step.status == "in_progress" {
+            if seen_active {
+                step.status = "pending".to_string();
+            } else {
+                seen_active = true;
+            }
+        }
+    }
+    let completed = steps
+        .iter()
+        .filter(|step| step.status == "completed")
+        .count();
+    if !seen_active && completed < steps.len() {
+        if let Some(next) = steps.iter_mut().find(|step| step.status == "pending") {
+            next.status = "in_progress".to_string();
+        }
+    }
+    Ok((steps, i64::try_from(completed).unwrap_or(i64::MAX)))
+}
+
+#[cfg(test)]
+mod task_execution_step_tests {
+    use super::{validate_task_execution_steps, TaskExecutionPlanStepInput};
+
+    fn step(label: &str, status: &str) -> TaskExecutionPlanStepInput {
+        TaskExecutionPlanStepInput {
+            label: label.to_string(),
+            status: status.to_string(),
+        }
+    }
+
+    #[test]
+    fn out_of_order_progress_is_accepted_and_counted() {
+        let (steps, completed) = validate_task_execution_steps(&[
+            step("Sellify prüfen", "completed"),
+            step("Quellen sammeln", "pending"),
+            step("Personen recherchieren", "completed"),
+            step("Rückschreiben", "in_progress"),
+        ])
+        .expect("out-of-order progress is normalized, not rejected");
+        assert_eq!(completed, 2);
+        assert_eq!(
+            steps.iter().map(|s| s.status.as_str()).collect::<Vec<_>>(),
+            ["completed", "pending", "completed", "in_progress"]
+        );
+    }
+
+    #[test]
+    fn a_second_active_step_is_demoted_to_pending() {
+        let (steps, completed) = validate_task_execution_steps(&[
+            step("a", "in_progress"),
+            step("b", "in_progress"),
+            step("c", "pending"),
+        ])
+        .unwrap();
+        assert_eq!(completed, 0);
+        assert_eq!(
+            steps.iter().map(|s| s.status.as_str()).collect::<Vec<_>>(),
+            ["in_progress", "pending", "pending"]
+        );
+    }
+
+    #[test]
+    fn an_incomplete_plan_without_active_step_promotes_the_first_pending_step() {
+        let (steps, completed) = validate_task_execution_steps(&[
+            step("a", "completed"),
+            step("b", "pending"),
+            step("c", "pending"),
+        ])
+        .unwrap();
+        assert_eq!(completed, 1);
+        assert_eq!(steps[1].status, "in_progress");
+        assert_eq!(steps[2].status, "pending");
+    }
+
+    #[test]
+    fn a_fully_completed_plan_stays_completed() {
+        let (steps, completed) =
+            validate_task_execution_steps(&[step("a", "completed"), step("b", "completed")])
+                .unwrap();
+        assert_eq!(completed, 2);
+        assert!(steps.iter().all(|s| s.status == "completed"));
+    }
+
+    #[test]
+    fn invalid_status_and_empty_labels_are_still_rejected() {
+        assert!(validate_task_execution_steps(&[step("a", "done")]).is_err());
+        assert!(validate_task_execution_steps(&[step("   ", "pending")]).is_err());
+        assert!(validate_task_execution_steps(&[]).is_err());
+    }
 }
 
 fn task_execution_plan_signature(steps: &[TaskExecutionPlanStepInput]) -> String {

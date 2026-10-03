@@ -2144,7 +2144,10 @@ pub(super) async fn browser_runtime_maintenance_loop(
                 Ok(rows) => rows > 0,
                 Err(err) => {
                     eprintln!("[business-os] browser runtime maintenance failed: {err:#}");
-                    true
+                    // A failed GC pass made no progress. Counting it as work
+                    // keeps the active 10ms cadence and retries a persistent
+                    // query error indefinitely while holding the DB write lock.
+                    false
                 }
             }
         };
@@ -3982,6 +3985,54 @@ mod tests {
         assert_eq!(deleted_state("old_failed"), 1);
         assert_eq!(deleted_state("old_pending"), 0);
         assert_eq!(deleted_state("recent_consumed"), 0);
+    }
+
+    #[test]
+    fn auth_assist_recovery_browser_confirmation_settles_preserved_request_once() {
+        let root = tempfile::tempdir().unwrap();
+        let claimed = crate::mission::channels::claim_business_command_with_queue(
+            root.path(),
+            crate::mission::channels::BusinessCommandClaimRequest {
+                command_id: "auth-confirm".into(),
+                idempotency_key: "auth-confirm".into(),
+                payload_hash: "sha256:auth-confirm".into(),
+                module: "ctox".into(),
+                command_type: "web_stack.auth_assist.request".into(),
+                record_id: "handelsregister.de".into(),
+                intent: json!({"payload":{"purpose":"web_stack_auth","owner_user_id":"owner-a"}}),
+                created_at_ms: 1_700_000_000_000,
+            },
+            crate::mission::channels::QueueTaskCreateRequest {
+                title: "Confirm login".into(),
+                prompt: "Owner completes login".into(),
+                thread_key: "business-os/ctox/auth-confirm".into(),
+                workspace_root: None,
+                priority: "normal".into(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )
+        .unwrap();
+        assert_eq!(claimed.task.route_status, "blocked");
+        // Settlement runs after explicit confirmation and the existing
+        // browser-session/controller checks in the command handler.
+        let result =
+            settle_auth_assist_queue_task(root.path(), "auth-confirm", &claimed.task.message_key);
+        assert_eq!(result["status"], "cancelled_after_user_confirmation");
+        assert_eq!(
+            settle_auth_assist_queue_task(root.path(), "auth-confirm", &claimed.task.message_key,)
+                ["status"],
+            "already_terminal",
+        );
+        assert_eq!(
+            crate::mission::channels::recover_auth_assist_requests(root.path()).unwrap(),
+            0,
+        );
+        let command =
+            crate::mission::channels::business_command_projection(root.path(), "auth-confirm")
+                .unwrap();
+        assert_eq!(command["terminal_status"], "cancelled");
     }
 
     #[tokio::test]

@@ -55,7 +55,9 @@ pub(crate) fn upsert_communication_message(
     conn: &mut Connection,
     message: UpsertMessage<'_>,
 ) -> Result<()> {
-    let tx = conn.unchecked_transaction()?;
+    // IMMEDIATE: read-then-write must not start as a WAL reader (see
+    // channels::ensure_account).
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     upsert_communication_message_tx(&tx, message)?;
     tx.commit()?;
     Ok(())
@@ -134,7 +136,9 @@ pub(crate) fn upsert_communication_message_tx(
 }
 
 pub(crate) fn refresh_thread(conn: &mut Connection, thread_key: &str) -> Result<()> {
-    let tx = conn.unchecked_transaction()?;
+    // IMMEDIATE: read-then-write must not start as a WAL reader (see
+    // channels::ensure_account).
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     refresh_thread_tx(&tx, thread_key)?;
     tx.commit()?;
     Ok(())

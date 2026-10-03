@@ -583,7 +583,7 @@ impl Cluster {
 async fn local_ipc_uses_committed_authority_and_never_reauthorizes_a_replay() {
     use ctox_sync::{
         contracts::{SyncIpcOperation, SyncIpcRequest, SyncIpcResponse, SyncIpcResult},
-        local_host::LocalAuthorityHost,
+        local_host::LocalIpcHost,
     };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
@@ -591,11 +591,11 @@ async fn local_ipc_uses_committed_authority_and_never_reauthorizes_a_replay() {
     };
     let cluster = Cluster::new().await;
     let directory = cluster.root.path().join("ipc");
-    let server = LocalAuthorityHost::start(directory.clone(), cluster.nodes[&1].clone())
+    let server = LocalIpcHost::start_authority(directory.clone(), cluster.nodes[&1].clone())
         .await
         .unwrap();
     let mut client = UnixStream::connect(server.endpoint()).await.unwrap();
-    let duplicate = LocalAuthorityHost::start(directory, cluster.nodes[&1].clone()).await;
+    let duplicate = LocalIpcHost::start_authority(directory, cluster.nodes[&1].clone()).await;
     assert_eq!(duplicate.err().unwrap().kind(), io::ErrorKind::AddrInUse);
     async fn exchange(
         client: &mut UnixStream,
@@ -672,17 +672,42 @@ async fn local_ipc_uses_committed_authority_and_never_reauthorizes_a_replay() {
 #[cfg(unix)]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
-    use ctox_sync::local_host::LocalAuthorityHost;
+    use ctox_sync::local_host::LocalIpcHost;
     use std::process::Stdio;
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     tokio::time::timeout(Duration::from_secs(30), async {
         let cluster = Cluster::new().await;
-        let host = LocalAuthorityHost::start(
+        let host = LocalIpcHost::start_authority(
             cluster.root.path().join("workjet-ipc"),
             cluster.nodes[&1].clone(),
         )
         .await
         .unwrap();
+        let target_host = LocalIpcHost::start_authority(
+            cluster.root.path().join("handoff-ipc"),
+            cluster.nodes[&2].clone(),
+        )
+        .await
+        .unwrap();
+        let mut handoff_spec = spec();
+        handoff_spec.job_id = "workjet-handoff-job".into();
+        handoff_spec.session_id = "workjet-handoff-session".into();
+        let receipts: Vec<_> = [1, 2]
+            .into_iter()
+            .map(|id| {
+                checkpoint_fixture::copy_receipt(
+                    cluster.root.path(),
+                    id,
+                    &cluster.keys[&id],
+                    &handoff_spec,
+                    &ownership(1, 1),
+                    1,
+                )
+            })
+            .collect();
+        let handoff = serde_json::json!({
+            "target": target_host.endpoint(), "spec": handoff_spec, "receipts": receipts,
+        });
         let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let workjet = source
             .join("../../../../workjet")
@@ -693,6 +718,7 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
             .arg(workjet.join("apps/server/src/workjet/sync/WorkjetSyncIpc.ts"))
             .arg(host.endpoint())
             .arg(serde_json::to_string(&spec()).unwrap())
+            .arg(handoff.to_string())
             .current_dir(&workjet)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -720,6 +746,7 @@ async fn workjet_client_uses_native_quorum_and_observes_host_loss() {
         );
         drop(input);
         assert!(child.wait().await.unwrap().success());
+        target_host.shutdown().await.unwrap();
         cluster.close().await;
     })
     .await
@@ -1255,8 +1282,28 @@ async fn additional_worker_requires_committed_membership_but_never_gets_a_vote()
         )
         .await
         .is_err());
+    // A pinned revoked worker gets a quorum-confirmed denial, never a job.
+    assert!(matches!(
+        transport
+            .exchange(&c.peers[&leader], validate.clone())
+            .await
+            .unwrap(),
+        Reply::Validate(Err(
+            ctox_sync::authority::network::AuthorityFailure::Rejected { .. }
+        ))
+    ));
+    assert!(c.nodes[&leader]
+        .handle(&c.peers[&1].identity, validate.clone())
+        .await
+        .is_err());
     assert!(transport
-        .exchange(&c.peers[&leader], validate.clone())
+        .exchange(
+            &c.peers[&leader],
+            packet(Rpc::Validate {
+                job_id: "job".into(),
+                ownership: ownership(1, 5),
+            })
+        )
         .await
         .is_err());
     assert!(transport.exchange(&c.peers[&leader], create).await.is_err());
@@ -1283,15 +1330,32 @@ async fn additional_worker_requires_committed_membership_but_never_gets_a_vote()
         .wait_for_leader(Duration::from_secs(10))
         .await
         .unwrap();
-    assert!(transport
-        .exchange(&c.peers[&leader], validate)
-        .await
-        .is_err());
+    assert!(matches!(
+        transport
+            .exchange(&c.peers[&leader], validate.clone())
+            .await
+            .unwrap(),
+        Reply::Validate(Err(
+            ctox_sync::authority::network::AuthorityFailure::Rejected { .. }
+        ))
+    ));
     let reopened = SqliteStore::open(&c.root.path().join(format!("{leader}.sqlite"))).unwrap();
     assert_eq!(
         c.nodes[&leader].worker_membership(4).await.unwrap(),
         Some(revoked.clone())
     );
+    // The same durable tombstone cannot claim a confirmed denial without quorum.
+    c.bus.isolated.write().unwrap().insert(leader);
+    assert!(matches!(
+        c.nodes[&leader]
+            .handle(&revoked.identity, validate)
+            .await
+            .unwrap(),
+        Reply::Validate(Err(
+            ctox_sync::authority::network::AuthorityFailure::Unavailable { .. }
+                | ctox_sync::authority::network::AuthorityFailure::NotLeader { .. }
+        ))
+    ));
     assert_eq!(reopened.worker(4).await.unwrap(), Some(revoked));
     c.close().await;
 }

@@ -1,0 +1,10 @@
+import { chromium } from 'playwright';
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9222');
+const page = browser.contexts()[0].pages().find((p) => p.url().startsWith('http://127.0.0.1:8765'));
+const lines = [];
+page.on('console', (m) => { if (['error', 'warning'].includes(m.type())) lines.push(m.type() + ': ' + m.text().slice(0, 220)); });
+await page.reload({ waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(45000);
+const r = await page.evaluate(() => { const d = window.CTOX_BUSINESS_OS_APP.sync.diagnostics; const c = d.collections || {}; const by = {}; for (const e of Object.values(c)) { const k = `${e.status}/${e.initialReplicationState}`; by[k] = (by[k] || 0) + 1; } return { phase: d.phase, by }; });
+console.log(JSON.stringify(r)); console.log(lines.slice(0, 25).join('\n'));
+await browser.close();

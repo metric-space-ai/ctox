@@ -1,0 +1,130 @@
+{
+  "schema": "ctox.office_staging_repair.v1",
+  "candidate_count": 7,
+  "candidate_sha256": "fd3dad8f973626ad636d219109a5f5337e1152a5c708453b49aec7ccb8af5d17",
+  "chunk_ids": [
+    "office_document_17283f3c-5473-4bde-b446-e68a686d6fa8_0000",
+    "office_document_66f73256-6e61-49eb-bebc-6a7e6a172488_0000",
+    "office_document_75217be9-ecc8-457f-b6cc-36f08021e241_0000",
+    "office_document_9f3cd127-87a3-4c90-99d4-3fbd1e2cb823_0000",
+    "office_document_bdef977b-2a80-4a1c-942a-1693f80ee5eb_0000",
+    "office_document_d394c9ea-b196-4115-a15d-17ad4bc16d41_0000",
+    "office_document_dde59449-c4ef-4e98-932d-415271a2b940_0000"
+  ],
+  "verified_canonical_files": [
+    {
+      "version": "doc_0d1190f0-d6e1-482a-844c-754331fcf528_office_v2_m18x5HoHOu",
+      "field": "blob_id",
+      "blob_id": "doc_0d1190f0-d6e1-482a-844c-754331fcf528_office_v2_m18x5HoHOu_blob",
+      "sha256": "2a5e6321fb9e2cf011a4c3969fde17c2474635790b6968c40631214c6b0e253e",
+      "bytes": 1131
+    },
+    {
+      "version": "doc_0d1190f0-d6e1-482a-844c-754331fcf528_office_v2_m18x5HoHOu",
+      "field": "editor_blob_id",
+      "blob_id": "doc_0d1190f0-d6e1-482a-844c-754331fcf528_office_v2_m18x5HoHOu_editor_f584bb2df46e",
+      "sha256": "f584bb2df46e9ebcf048d2b6ff385ef2255b8d42832aa73cc50992fdf142eb04",
+      "bytes": 100
+    },
+    {
+      "version": "doc_0d1190f0-d6e1-482a-844c-754331fcf528_v1",
+      "field": "blob_id",
+      "blob_id": "doc_0d1190f0-d6e1-482a-844c-754331fcf528_v1_blob",
+      "sha256": "a53ff538d35dae455b5d0a91bca2580ac357f3c42a2db89d2586dd5ce7a0210c",
+      "bytes": 1096
+    },
+    {
+      "version": "doc_0d1190f0-d6e1-482a-844c-754331fcf528_v1",
+      "field": "editor_blob_id",
+      "blob_id": "doc_0d1190f0-d6e1-482a-844c-754331fcf528_v1_editor_6a9086a59337",
+      "sha256": "6a9086a593371784279a43e0bb747704f912a7c8bcaf59907b392c2f4df6f775",
+      "bytes": 64
+    },
+    {
+      "version": "doc_0d4889d0-fe96-453f-85b7-9f01a2f62eae_office_v2_-z9gChy2PR",
+      "field": "blob_id",
+      "blob_id": "doc_0d4889d0-fe96-453f-85b7-9f01a2f62eae_office_v2_-z9gChy2PR_blob",
+      "sha256": "214c1da6cdbbb67a7d8e6ffb2b8c68b356deb3a26828d934f4f3ee3560aeb811",
+      "bytes": 1163
+    },
+    {
+      "version": "doc_0d4889d0-fe96-453f-85b7-9f01a2f62eae_office_v2_-z9gChy2PR",
+      "field": "editor_blob_id",
+      "blob_id": "doc_0d4889d0-fe96-453f-85b7-9f01a2f62eae_office_v2_-z9gChy2PR_editor_5586951b7a39",
+      "sha256": "5586951b7a3957ded8c2ef5896a5e9b1f5568148902b1d0eabb3b23c7631df37",
+      "bytes": 222
+    },
+    {
+      "version": "doc_0d4889d0-fe96-453f-85b7-9f01a2f62eae_office_v3_RDwUEoRItd",
+      "field": "blob_id",
+      "blob_id": "doc_0d4889d0-fe96-453f-85b7-9f01a2f62eae_office_v3_RDwUEoRItd_blob",
+      "sha256": "52a6477fb766d1d4f54790edba8c7f34a7e0808ccd966c5dd397e1503200fc5f",
+      "bytes": 1188
+    },
+    {
+      "version": "doc_0d4889d0-fe96-453f-85b7-9f01a2f62eae_office_v3_RDwUEoRItd",
+      "field": "editor_blob_id",
+      "blob_id": "doc_0d4889d0-fe96-453f-85b7-9f01a2f62eae_office_v3_RDwUEoRItd_editor_19c9ec423f14",
+      "sha256": "19c9ec423f14d95d693873a50128e66fdc024f50df20c07e8d1455d72f119560",
+      "bytes": 280
+    },
+    {
+      "version": "doc_0d4889d0-fe96-453f-85b7-9f01a2f62eae_v1",
+      "field": "blob_id",
+      "blob_id": "doc_0d4889d0-fe96-453f-85b7-9f01a2f62eae_v1_blob",
+      "sha256": "a53ff538d35dae455b5d0a91bca2580ac357f3c42a2db89d2586dd5ce7a0210c",
+      "bytes": 1096
+    },
+    {
+      "version": "doc_0d4889d0-fe96-453f-85b7-9f01a2f62eae_v1",
+      "field": "editor_blob_id",
+      "blob_id": "doc_0d4889d0-fe96-453f-85b7-9f01a2f62eae_v1_editor_6a9086a59337",
+      "sha256": "6a9086a593371784279a43e0bb747704f912a7c8bcaf59907b392c2f4df6f775",
+      "bytes": 64
+    },
+    {
+      "version": "doc_25e4549b-c56a-4660-a829-8dab4805cf76_office_v2_Sc6VLXk_uT",
+      "field": "blob_id",
+      "blob_id": "doc_25e4549b-c56a-4660-a829-8dab4805cf76_office_v2_Sc6VLXk_uT_blob",
+      "sha256": "f1f019964e4d117638d4ae783270a16212fcce56e05d81a45a4b3c28526a980b",
+      "bytes": 1151
+    },
+    {
+      "version": "doc_25e4549b-c56a-4660-a829-8dab4805cf76_office_v2_Sc6VLXk_uT",
+      "field": "editor_blob_id",
+      "blob_id": "office_document_a44b9afb-fb8a-45cd-8e54-2236529f39f8",
+      "sha256": "885b9eb0181b264a1cd5ad9c3834fe818c5143a2338eef2b5057aca4082bdb9e",
+      "bytes": 243236
+    },
+    {
+      "version": "doc_25e4549b-c56a-4660-a829-8dab4805cf76_office_v3_uz5tx-DOqZ",
+      "field": "blob_id",
+      "blob_id": "doc_25e4549b-c56a-4660-a829-8dab4805cf76_office_v3_uz5tx-DOqZ_blob",
+      "sha256": "abee6ea2ec2d3ef3aa3a2f6244c440f8b944657afa5fc699db024732968d9d53",
+      "bytes": 1151
+    },
+    {
+      "version": "doc_25e4549b-c56a-4660-a829-8dab4805cf76_office_v3_uz5tx-DOqZ",
+      "field": "editor_blob_id",
+      "blob_id": "doc_25e4549b-c56a-4660-a829-8dab4805cf76_office_v3_uz5tx-DOqZ_editor_365801381e01",
+      "sha256": "365801381e01c1d8a14a4faeef75eda988482d677085396467bd4cf7002f82cd",
+      "bytes": 182
+    },
+    {
+      "version": "doc_25e4549b-c56a-4660-a829-8dab4805cf76_v1",
+      "field": "blob_id",
+      "blob_id": "doc_25e4549b-c56a-4660-a829-8dab4805cf76_v1_blob",
+      "sha256": "a53ff538d35dae455b5d0a91bca2580ac357f3c42a2db89d2586dd5ce7a0210c",
+      "bytes": 1096
+    },
+    {
+      "version": "doc_25e4549b-c56a-4660-a829-8dab4805cf76_v1",
+      "field": "editor_blob_id",
+      "blob_id": "doc_25e4549b-c56a-4660-a829-8dab4805cf76_v1_editor_6a9086a59337",
+      "sha256": "6a9086a593371784279a43e0bb747704f912a7c8bcaf59907b392c2f4df6f775",
+      "bytes": 64
+    }
+  ],
+  "applied": true,
+  "backup": "/home/ctox/.local/lib/ctox/releases/branch-main-aece8a4f-20260906/runtime/office-staging-repair/fd3dad8f973626ad636d219109a5f5337e1152a5c708453b49aec7ccb8af5d17.json"
+}

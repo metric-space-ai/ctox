@@ -17,11 +17,11 @@
 //     --outfile=src/apps/business-os/rxdb/dist/ctox-rxdb-js.mjs \
 //     "--banner:js=// CTOX Sync Engine app-local bundle. Generated from src/apps/business-os/rxdb/src/index.mjs."
 //
-// and bump the cache-buster (`ctox-rxdb-js.mjs?v=...`) in shared/db.js,
-// shared/sync.js and modules/matching/ui/businessOsDataSource.js.
+// and bump the sole bundle cache-buster in shared/rxdb-runtime.js.
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -31,6 +31,7 @@ const BANNER = '// CTOX Sync Engine app-local bundle. Generated from src/apps/bu
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = resolve(testDir, '..');
+const repositoryRoot = resolve(appRoot, '../../../..');
 const entry = resolve(appRoot, 'src/index.mjs');
 const distPath = resolve(appRoot, 'dist/ctox-rxdb-js.mjs');
 
@@ -40,20 +41,43 @@ const outfile = join(workDir, 'ctox-rxdb-js.mjs');
 try {
   try {
     execFileSync('npx', ['-y', ESBUILD_PIN, entry, '--bundle', '--format=esm', `--outfile=${outfile}`, `--banner:js=${BANNER}`], {
+      // esbuild's source comments are relative to cwd. Reproduce the canonical
+      // root command even when a developer starts the suite from the app folder.
+      cwd: repositoryRoot,
       stdio: 'pipe',
       timeout: 180_000,
     });
   } catch (error) {
-    // Offline / npx unavailable: skip LOUDLY (exit 0 so air-gapped dev works),
-    // but never skip silently — CI has network and will enforce this.
-    console.error('bundle-reproducible-smoke SKIPPED: could not run pinned esbuild via npx.');
-    console.error(String(error?.message || error).slice(0, 300));
-    console.log('ctox-rxdb bundle reproducibility guard SKIPPED (esbuild unavailable)');
-    process.exit(0);
+    // The suite treats exit 0 as PASS and does not display successful stderr.
+    // Missing tooling, download failures and build errors leave this unverified.
+    throw new Error('bundle reproducibility guard could not run pinned esbuild; verification is incomplete', { cause: error });
   }
 
   const rebuilt = readFileSync(outfile, 'utf8');
   const committed = readFileSync(distPath, 'utf8');
+  // CI already builds this candidate. Preserve its exact bytes for recovery
+  // without changing the committed bundle or the drift verdict below.
+  const evidenceDir = process.env.CTOX_RXDB_BUNDLE_EVIDENCE_DIR;
+  if (evidenceDir) {
+    const sha256 = (value) => createHash('sha256').update(value).digest('hex');
+    const sourceRevision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repositoryRoot, encoding: 'utf8' }).trim();
+    const sourceTree = execFileSync('git', ['rev-parse', 'HEAD:src/apps/business-os/rxdb/src'], { cwd: repositoryRoot, encoding: 'utf8' }).trim();
+    const sourceChanges = execFileSync('git', ['status', '--porcelain', '--', 'src/apps/business-os/rxdb/src'], { cwd: repositoryRoot, encoding: 'utf8' });
+    mkdirSync(evidenceDir, { recursive: true });
+    copyFileSync(outfile, join(evidenceDir, 'ctox-rxdb-js.mjs'));
+    writeFileSync(join(evidenceDir, 'provenance.json'), JSON.stringify({
+      schema: 'ctox.rxdb.bundle-build.v1',
+      sourceRevision,
+      sourceTree,
+      sourceChanges,
+      tool: ESBUILD_PIN,
+      args: ['src/apps/business-os/rxdb/src/index.mjs', '--bundle', '--format=esm', '--outfile=ctox-rxdb-js.mjs', `--banner:js=${BANNER}`],
+      generatedSha256: sha256(rebuilt),
+      generatedBytes: Buffer.byteLength(rebuilt),
+      committedSha256: sha256(committed),
+      matchesCommitted: rebuilt === committed,
+    }, null, 2) + '\n');
+  }
   if (rebuilt !== committed) {
     const rebuiltLines = rebuilt.split('\n');
     const committedLines = committed.split('\n');
@@ -68,7 +92,7 @@ try {
     console.error(`  rebuild: ${String(rebuiltLines[firstDiff] ?? '<EOF>').slice(0, 160)}`);
     console.error('Either src was changed without rebuilding dist, or dist was patched directly.');
     console.error('Fix src and rebuild dist with the pinned command in this file’s header.');
-    process.exit(1);
+    throw new Error('bundle reproducibility guard failed: source/bundle drift');
   }
 } finally {
   rmSync(workDir, { recursive: true, force: true });

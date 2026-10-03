@@ -1,0 +1,11 @@
+{
+  "mode": "module-source-lossless-browser-to-rust",
+  "commandId": "source_lossless_1788755629511",
+  "documents": 21,
+  "verifiedBytes": 11130431,
+  "commandMs": 213.09999990463257,
+  "totalMs": 16039.699999928474,
+  "nativeVerifiedBeforeRestart": 21,
+  "nativeVerifiedAfterRestart": 21,
+  "nativeRestartMs": 3789
+}

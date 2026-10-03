@@ -121,3 +121,63 @@ fn crew_controls_enforce_roles_even_with_explicit_grants_and_replay_receipts() -
     assert_eq!(count, 1);
     Ok(())
 }
+
+#[test]
+fn crew_memory_update_replaces_a_long_entry_and_reports_the_success() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    channels::create_queue_task(
+        root.path(),
+        channels::QueueTaskCreateRequest {
+            title: "Crew memory".into(),
+            prompt: "Read-only fixture".into(),
+            thread_key: "crew-memory-fixture".into(),
+            workspace_root: None,
+            priority: "normal".into(),
+            suggested_skill: None,
+            parent_message_key: None,
+            extra_metadata: None,
+        },
+    )?;
+    let actor_id = "crew-memory-admin";
+    let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+        root.path(),
+        actor_id,
+        "admin",
+        "admin",
+        now_ms() as i64,
+    )?;
+    let dispatch = |id: &str, payload: serde_json::Value| {
+        accept_rxdb_business_command_with_origin(
+            root.path(),
+            json!({"id":id,"command_id":id,"module":"ctox","command_type":"ctox.crew.memory.update",
+                "payload":payload,
+                "client_context":{"capability_token":token,"actor":{"id":actor_id,"role":"admin"}}}),
+            CommandOrigin::ReplicatedPeer,
+        )
+    };
+    // Longer than the 200 characters `text()` allows: whole entries must be
+    // replaceable, and the member touch after the LCM write must not fail.
+    let long = format!(
+        "statement: {}",
+        "Ohne Werkzeugaufruf keine Blocker-Antwort. ".repeat(8)
+    );
+    let added = dispatch(
+        "crew-memory-add",
+        json!({"member_id":"crew-milo","kind":"anchors","mode":"diff","diff":format!("## Entries\n+ {long}")}),
+    )?;
+    assert_eq!(added["ok"], true, "{added}");
+    let replaced = dispatch(
+        "crew-memory-replace",
+        json!({"member_id":"crew-milo","kind":"anchors","mode":"replace","find":long.trim(),"replace":"statement: korrigiert"}),
+    )?;
+    assert_eq!(replaced["ok"], true, "{replaced}");
+    let engine = crate::crew::open_engine(root.path())?;
+    let memory = crate::crew::load_member_memory(&engine, "crew-milo");
+    assert!(
+        memory.anchors.contains("statement: korrigiert"),
+        "{}",
+        memory.anchors
+    );
+    assert!(!memory.anchors.contains(long.trim()), "{}", memory.anchors);
+    Ok(())
+}

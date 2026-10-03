@@ -19,6 +19,45 @@
 
 import { createCommandBus } from '../../shared/command-bus.js';
 
+import { createQueryDemandLoader, createSidecarWithMemoryBackend } from '../src/index.mjs';
+import { replicationWebRtcTestInternals } from '../src/replication-webrtc.mjs';
+
+// Join the real peer-close -> removePeer -> demand-loader cancellation path
+// to the real command tracker, without opening a network connection.
+async function peerCancelledCommandRead(id, reason) {
+  const loader = createQueryDemandLoader({
+    collectionName: 'business_commands', schemaVersion: 1,
+    storageCollection: {
+      databaseName: 'command-peer-cancel',
+      async findDocumentsById() { return {}; },
+      async queryDocuments() { return []; },
+      async bulkWrite() {},
+    },
+    sidecar: createSidecarWithMemoryBackend({ databaseName: 'cancel-' + id }),
+    requestQueryFetch: () => new Promise(() => {}),
+    queryGeneration: () => 'old-connection',
+    readPermissionDigest: () => 'actor',
+  });
+  const pending = loader.resolveQuery({ selector: { id }, requireRevision: 'native-receipt' });
+  const observed = pending.catch(error => {
+    assert(error.code === 'QUERY_CANCELLED' && error.message === 'QUERY_CANCELLED: ' + reason,
+      'real peer cancellation must retain its exact reason');
+    throw error;
+  });
+  await Promise.resolve();
+  const State = replicationWebRtcTestInternals.getReplicationStateClass();
+  const state = Object.assign(Object.create(State.prototype), {
+    peerStates$: { getValue: () => new Map([['native', {}]]), next() {} },
+    checkpointValidityKeyForPeer: () => null,
+    pullCheckpointsByPeer: new Map(), pushCheckpointsByPeer: new Map(),
+    publishTransportStatus() {}, demandStatus: {}, active$: { next() {} },
+    demandLoader: loader,
+  });
+  state.onSharedEvent('peer-close', { peerId: 'native', reason: reason.slice('peer-'.length) });
+  return observed;
+}
+
+
 globalThis.CTOX_BUSINESS_OS_SESSION = {
   capability_token: 'projection-smoke-capability-token',
   capability_expires_at_ms: Date.now() + 60 * 60 * 1000,
@@ -26,6 +65,11 @@ globalThis.CTOX_BUSINESS_OS_SESSION = {
 
 function mockCollection(docsById, events = null, name = '') {
   return {
+    storageCollection: {
+      async findDocumentsById(ids) {
+        return Object.fromEntries(ids.filter((id) => docsById.has(id)).map((id) => [id, docsById.get(id)]));
+      },
+    },
     async insert(doc) {
       events?.push(`insert:${name}`);
       docsById.set(doc.id, doc);
@@ -106,6 +150,36 @@ const assert = (condition, message) => {
   assert(result.ok === true, 'queue command: ok');
   assert(result.task_id === 'queue:system::abc', 'queue command: task id projected');
   assert(result.task_status === 'accepted', 'queue command: admission does not require queue projection detail');
+}
+
+// Auth-assist is admitted as an open human wait, not a failed command.
+{
+  const db = makeDb({
+    commandAck: {
+      status: 'accepted',
+      replication_phase: 'native_observed',
+      execution_mode: 'queue',
+      execution_phase: 'blocked',
+      terminal_status: 'none',
+      execution_task_id: 'queue:system::auth-assist',
+      task_id: 'queue:system::auth-assist',
+    },
+    queueTask: {
+      id: 'queue:system::auth-assist',
+      status: 'blocked',
+      hold_reason: 'waiting_external',
+    },
+  });
+  const bus = createCommandBus({ db });
+  const result = await bus.dispatch({
+    type: 'web_stack.auth_assist.request',
+    module: 'ctox',
+    payload: { purpose: 'web_stack_auth', session_id: 'auth-session' },
+  });
+  assert(result.ok === true, 'human login wait: command was accepted');
+  assert(result.status === 'blocked', 'human login wait remains open');
+  assert(result.task_id === 'queue:system::auth-assist', 'human login wait keeps its task');
+  assert(result.payload.session_id === 'auth-session', 'human login wait keeps its browser session');
 }
 
 // --- 2. control command: terminal completed WITHOUT task_id is success -----
@@ -311,6 +385,189 @@ const assert = (condition, message) => {
     String(thrown.message).includes('multi-tab command failover'),
     'multi-tab follower: failure describes the complete failover rather than only the stale leader',
   );
+}
+
+// Reconnect readiness must not invalidate a durable native receipt. Exercise
+// the complete dispatch path first: push succeeds, reconnect would fail, but
+// the native acknowledgement was already replicated before tracking starts.
+{
+  const db = makeDb({ commandAck: {
+    status: 'accepted', replication_phase: 'native_observed',
+    execution_phase: 'running', execution_task_id: 'queue:system::dispatch-receipt',
+  } });
+  let commandLeases = 0;
+  const events = [];
+  const sync = makeSync(events);
+  const originalLease = sync.leaseCollection;
+  sync.leaseCollection = async (name, reason) => {
+    if (name === 'business_commands' && ++commandLeases > 1) {
+      throw new Error('WebRTC native peer did not open for business_commands within 25000ms');
+    }
+    return originalLease(name, reason);
+  };
+  const receipt = await createCommandBus({ db, sync }).dispatch({ type: 'business_os.chat.task', module: 'ctox' });
+  assert(receipt.task_id === 'queue:system::dispatch-receipt', 'dispatch: preserves acknowledged queue task');
+  assert(commandLeases === 1, 'dispatch: does not reopen an already acknowledged command bridge');
+}
+
+// Exercise reconnect races independently through
+// the public tracker with a local storage read, not a network query fallback.
+for (const arrival of ['before', 'during', 'absent', 'deleted', 'wrong-id', 'failed', 'terminal-wait']) {
+  const id = `cmd-reconnect-${arrival}`;
+  const native = {
+    id, status: 'accepted', replication_phase: 'native_observed',
+    execution_phase: 'running', execution_task_id: 'queue:system::receipt',
+  };
+  let doc = arrival === 'during' || arrival === 'absent'
+    ? { id, status: 'pending', replication_phase: 'local_only' }
+    : { ...native };
+  if (arrival === 'deleted') doc._deleted = true;
+  if (arrival === 'wrong-id') doc.id = 'another-command';
+  if (arrival === 'failed') Object.assign(doc, {
+    execution_phase: 'terminal', terminal_status: 'failed',
+    error_code: 'permission_denied', error_message: 'native permission denied',
+  });
+  let readinessCalls = 0;
+  let localReads = 0;
+  const timeout = Object.assign(new Error('WebRTC native peer did not open for business_commands within 25000ms'), {
+    code: 'peer_connect_timeout',
+  });
+  const bus = createCommandBus({
+    db: { raw: { business_commands: {
+      storageCollection: { async findDocumentsById(ids) {
+        localReads++;
+        assert(ids.length === 1 && ids[0] === id, 'reconnect: reads only the tracked id');
+        return { [id]: doc };
+      } },
+    } } },
+    sync: { async leaseCollection() {
+      readinessCalls++;
+      if (arrival === 'during') doc = native;
+      throw timeout;
+    } },
+  });
+  let receipt;
+  let failure;
+  try {
+    receipt = arrival === 'terminal-wait'
+      ? await bus.waitForTerminal(id)
+      : await bus.waitForAccepted(id);
+  } catch (error) { failure = error; }
+  if (arrival === 'before' || arrival === 'during') {
+    assert(!failure && receipt?.task_id === native.execution_task_id,
+      `reconnect ${arrival}: real native acceptance survives readiness failure`);
+    assert(receipt.status === 'running', 'reconnect: native execution state is retained');
+  } else if (arrival === 'failed') {
+    assert(failure?.code === 'permission_denied', 'reconnect: native rejection is never hidden');
+    assert(failure?.message === 'native permission denied', 'reconnect: native failure reason is retained');
+  } else {
+    assert(!receipt && failure === timeout, `reconnect ${arrival}: no premature acceptance or terminal success`);
+  }
+  assert(readinessCalls === (['before', 'failed'].includes(arrival) ? 0 : 1),
+    `reconnect ${arrival}: already observed outcomes do not reopen the bridge`);
+  assert(localReads <= 2, 'reconnect: bounded cache reads');
+}
+
+// A native schema reconfiguration closes the current peer while an accepted
+// command is being tracked. Keep the same id and finite deadline; never dispatch
+// again, fabricate success from local intent, or swallow other cancellations.
+for (const closeReason of ['peer-peer-close', 'peer-capability-authority-changed']) {
+for (const scenario of ['completed', 'failed', 'never-arrives', 'explicit-cancel', 'other-peer-cancel']) {
+  const id = 'cmd-' + closeReason + '-' + scenario;
+  let queries = 0;
+  let unsubscribed = 0;
+  const local = { id, status: 'pending_sync', replication_phase: 'local_only' };
+  const closed = Object.assign(new Error(scenario === 'explicit-cancel'
+    ? 'QUERY_CANCELLED: user-cancelled' : scenario === 'other-peer-cancel'
+      ? 'QUERY_CANCELLED: peer-unknown-reason' : 'QUERY_CANCELLED: ' + closeReason), { code: 'QUERY_CANCELLED' });
+  const commands = {
+    storageCollection: { async findDocumentsById(ids) {
+      assert(ids.length === 1 && ids[0] === id, 'peer-close: exact local id only');
+      return { [id]: local };
+    } },
+    async insert() { throw new Error('tracking must never redispatch'); },
+    findOne(selector) {
+      const selectedId = typeof selector === 'string' ? selector : selector.selector.id;
+      assert(selectedId === id, 'peer-close: exact remote id only');
+      return {
+        $: { subscribe() { return { unsubscribe() { unsubscribed++; } }; } },
+        async exec() {
+          queries++;
+          if (['explicit-cancel', 'other-peer-cancel'].includes(scenario)) throw closed;
+          if (queries === 1 || scenario === 'never-arrives') return peerCancelledCommandRead(id, closeReason);
+          return {
+            id, status: scenario, replication_phase: 'native_observed',
+            execution_phase: 'terminal', terminal_status: scenario,
+            ...(scenario === 'failed' ? { error_code: 'permission_denied', error_message: 'native rejected' } : {}),
+          };
+        },
+      };
+    },
+  };
+  const bus = createCommandBus({ db: { raw: { business_commands: commands } } });
+  let receipt;
+  let failure;
+  try { receipt = await bus.waitForTerminal(id, { timeoutMs: ['completed', 'failed'].includes(scenario) ? 5000 : 1000 }); }
+  catch (error) { failure = error; }
+  if (scenario === 'completed') {
+    assert(!failure && receipt?.status === 'completed', 'peer-close: authoritative later result survives reconnect ' + JSON.stringify({ closeReason, queries, code: failure?.code, message: failure?.message }));
+  } else if (scenario === 'failed') {
+    assert(!receipt && failure?.code === 'permission_denied', 'peer-close: native denial is retained ' + JSON.stringify({ code: failure?.code, message: failure?.message, receipt, queries }));
+  } else if (scenario === 'never-arrives') {
+    assert(!receipt && failure?.code === 'projection_delayed', 'peer-close: missing receipt keeps original deadline');
+    assert(queries > 1 && queries < 10, 'peer-close: bounded exact-id revalidation');
+  } else {
+    assert(!receipt && failure === closed && queries === 1, 'peer-close: unrelated cancellation is not hidden');
+  }
+  assert(unsubscribed >= 1, 'peer-close: watcher is released');
+}
+}
+
+// During peer replacement strict reads have no generation. Wait for the
+// existing exact-ID revalidation; never convert that missing authority into a
+// local-cache read or extend the caller's deadline.
+for (const scenario of ['completed', 'failed', 'never-arrives']) {
+  const id = 'cmd-generation-gap-' + scenario;
+  let queries = 0;
+  let localReads = 0;
+  let unsubscribed = 0;
+  const commands = {
+    storageCollection: { async findDocumentsById() {
+      // The existing pre-readiness lookup precedes any strict read. Only a
+      // subsequent cache lookup could bypass the generation failure.
+      if (queries === 0) return {};
+      localReads++;
+      throw new Error('missing generation must not fall back to local storage');
+    } },
+    async insert() { throw new Error('tracking must never redispatch'); },
+    findOne(selector) {
+      assert((typeof selector === 'string' ? selector : selector.selector.id) === id,
+        'generation gap: exact command ID');
+      return {
+        $: { subscribe() { return { unsubscribe() { unsubscribed++; } }; } },
+        async exec() {
+          queries++;
+          if (queries <= 2 || scenario === 'never-arrives') {
+            throw new Error('QUERY_GENERATION_REQUIRED: strict demand read has no bridge generation');
+          }
+          assert(Boolean(selector.requireRevision), 'recovered result requires an authoritative revision');
+          return { id, status: scenario, replication_phase: 'native_observed',
+            execution_phase: 'terminal', terminal_status: scenario,
+            ...(scenario === 'failed' ? { error_code: 'permission_denied', error_message: 'native rejected' } : {}) };
+        },
+      };
+    },
+  };
+  const bus = createCommandBus({ db: { raw: { business_commands: commands } } });
+  let receipt;
+  let failure;
+  try { receipt = await bus.waitForTerminal(id, { timeoutMs: scenario === 'never-arrives' ? 1000 : 5000 }); }
+  catch (error) { failure = error; }
+  if (scenario === 'completed') assert(!failure && receipt?.status === 'completed', 'generation recovers before receipt');
+  else assert(!receipt && failure?.code === (scenario === 'failed' ? 'permission_denied' : 'projection_delayed'),
+    'generation gap preserves denial or original deadline');
+  assert(localReads === 0, 'strict generation guard is never bypassed with cached data');
+  assert(queries > 1 && queries < 10 && unsubscribed >= 1, 'bounded revalidation and watcher cleanup');
 }
 
 console.log('ctox-rxdb command-bus projection smoke OK');

@@ -11,6 +11,8 @@ const appPath = resolve(businessOsRoot, 'app.js');
 const appStorePath = resolve(businessOsRoot, 'modules/app-store/index.js');
 const desktopPath = resolve(businessOsRoot, 'modules/desktop/index.js');
 const desktopLauncherPath = resolve(businessOsRoot, 'modules/desktop/ctoxLauncher.js');
+const desktopLayoutAuthorityPath = resolve(businessOsRoot, 'modules/desktop/layout-authority.js');
+const desktopMenuActionsPath = resolve(businessOsRoot, 'modules/desktop/desktopMenuActions.js');
 
 const registry = JSON.parse(readFileSync(registryPath, 'utf8'));
 const systemApps = JSON.parse(readFileSync(systemAppsPath, 'utf8'));
@@ -18,6 +20,8 @@ const appSource = readFileSync(appPath, 'utf8');
 const appStoreSource = readFileSync(appStorePath, 'utf8');
 const desktopSource = readFileSync(desktopPath, 'utf8');
 const desktopLauncherSource = readFileSync(desktopLauncherPath, 'utf8');
+const desktopLayoutAuthoritySource = readFileSync(desktopLayoutAuthorityPath, 'utf8');
+const desktopMenuActionsSource = readFileSync(desktopMenuActionsPath, 'utf8');
 
 const modules = Array.isArray(registry.modules) ? registry.modules : [];
 const moduleIds = modules.map((mod) => mod.id).filter(Boolean);
@@ -121,8 +125,18 @@ assert.ok(
   'Desktop icon drag must write the local position cache before async RxDB persistence'
 );
 assert.ok(
-  desktopSource.includes('docs.forEach((doc, index) => {'),
-  'Desktop icon auto-arrange must update the per-user position cache'
+  desktopSource.includes('await arrangeDesktopIcons({')
+    && desktopMenuActionsSource.includes('await doc.incrementalPatch({ ...position, sort_index: index, updated_at_ms: updatedAt });')
+    && desktopMenuActionsSource.includes('rememberPosition(doc.id, position, updatedAt);'),
+  'Desktop icon auto-arrange must persist positions before updating the per-user cache'
+);
+assert.ok(
+  desktopSource.includes('await existing.incrementalPatch({ hidden: true, updated_at_ms: Date.now() });'),
+  'Removing a desktop icon must keep a tombstone so startup does not re-seed it'
+);
+assert.ok(
+  desktopSource.includes("const confirmed = await showBusinessConfirm(t('resetConfirm')"),
+  'Resetting the desktop must confirm before deleting custom shortcuts'
 );
 assert.ok(
   desktopSource.includes('if (!usingFallbackDocs)'),
@@ -133,19 +147,30 @@ assert.ok(
   'Desktop icons must not render persisted targets outside the current launcher scope'
 );
 assert.ok(
-  desktopSource.includes('icon read skipped during database restart'),
-  'Desktop initial icon rendering must tolerate transient IndexedDB connection shutdown'
+  desktopSource.includes('await readLocalDesktopIcons({')
+    && desktopLayoutAuthoritySource.includes('isDatabaseClosingError(error)')
+    && desktopLayoutAuthoritySource.includes('QUERY_CANCELLED:'),
+  'Desktop initial icon rendering must tolerate IndexedDB shutdown and replication-cancel reads'
 );
 assert.ok(
-  desktopSource.includes('layout read skipped during database restart'),
-  'Desktop initial layout loading must tolerate transient IndexedDB connection shutdown'
+  desktopSource.includes('withDesktopIconReconciliationRead(collection, async (existing) => {')
+    && desktopLayoutAuthoritySource.includes('if (isReplicationCancelledIconRead(error)) return false;'),
+  'Desktop background icon reconciliation must skip a cancelled read before any seed writes'
+);
+assert.ok(
+  desktopSource.includes('ensureDesktopLayoutWithAuthority({')
+    && desktopLayoutAuthoritySource.includes('authority = await readNativeDocument();')
+    && desktopLayoutAuthoritySource.includes('return defaultLayout();'),
+  'Desktop layout loading must leave replicated state untouched when authority is unavailable'
 );
 assert.ok(
   desktopSource.includes('icon seed skipped during database restart'),
   'Desktop initial icon seeding must tolerate transient IndexedDB connection shutdown'
 );
 assert.ok(
-  desktopSource.includes('return /IDBDatabase.*closing|database connection is closing/i.test(message);'),
+  readFileSync(new URL('./layout-authority.js', import.meta.url), 'utf8')
+    .includes('return /IDBDatabase.*closing|database connection is closing/i.test(message);')
+    && /import \{[^}]*isDatabaseClosingError[^}]*\} from '\.\/layout-authority\.js\?v=20260929-desktop-icon-cancel-v1'/.test(desktopSource),
   'Desktop transient IndexedDB shutdown detection must not depend on DOMException prototype shape'
 );
 assert.ok(
@@ -165,6 +190,11 @@ assert.ok(
   'Desktop syncing shell must only gate the replicated-collection path, not transient launcher fallbacks'
 );
 
+// `normalizeDesktopAppItem` was the desktop-shaped normalizer; since the App
+// Store reads only the server projection (93228b38a) the item normalizers are
+// `normalizeItem`/`normalizeMarketplaceItem`. The contract is unchanged: the
+// adapter normalizes catalog items, dedupes them, decides launchability and
+// opens the app.
 for (const requiredSnippet of [
   'isLaunchableModule',
   '.map((item) => normalizeItem(item, moduleKind(item)))',

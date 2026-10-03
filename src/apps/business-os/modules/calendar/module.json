@@ -22,12 +22,7 @@
     "left": "Calendars and booking pages (grammar column)",
     "center": "EventCalendar surface with the Monat/Woche/Tag view band",
     "right": "Bookings and holds context for the selected booking page",
-    "third_pane_justification": "The bookings and holds auditing context belongs to a selected booking page and must stay beside the calendar grid in wide mode; it is hidden by default, auto-reveals on selection, and stacks below the grid in compact mode.",
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/calendar.jpg",
-    "icon_asset_sha256": "c3de8ab4a29322bb08256ac953058904ac73d8d945df22f20df72ff988067f67",
-    "icon_selection_sha256": "c3de8ab4a29322bb08256ac953058904ac73d8d945df22f20df72ff988067f67",
-    "icon_selection_candidate": "candidate-05",
-    "icon_asset_kind": "raster-reference"
+    "third_pane_justification": "The bookings and holds auditing context belongs to a selected booking page and must stay beside the calendar grid in wide mode; it is hidden by default, auto-reveals on selection, and stacks below the grid in compact mode."
   },
   "category": "Productivity",
   "version": "1.0.2",

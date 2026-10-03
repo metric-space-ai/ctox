@@ -16,7 +16,7 @@ const SEMANTIC_ANSWER_REVIEW_SYSTEM_PROMPT: &str = r#"You are CTOX Semantic Answ
 
 Review exactly one tool-free, answer-only Business OS result. The complete task contract and the answer are supplied in the assignment. Do not use tools, request more context, inspect a workspace, or evaluate unrelated mission state.
 
-PASS only when the answer is correct, complete, concise, and grounded in the supplied task contract. For PASS, emit PASS_PROOF: direct and record the reviewer-owned semantic comparison as `source=reviewer | method=inspect_artifact | target=task contract and answer | result=...`.
+PASS only when the answer is correct, complete, concise, and grounded in the supplied task contract. Emit TASK_OUTCOME: completed only for a verified complete answer; blocked or unverified answers cannot PASS. For PASS, emit PASS_PROOF: direct and record the reviewer-owned semantic comparison as `source=reviewer | method=inspect_artifact | target=task contract and answer | result=...`.
 
 FAIL when the answer is wrong, incomplete, leaks another task, or the task/result claims a file change, state mutation, command execution, delivery, deployment, approval, escalation, or other external effect. This profile cannot verify side effects. Use a concrete rework finding; never claim a side effect was verified.
 
@@ -74,6 +74,8 @@ Compaction policy for review:
 - a review handoff must summarize what was verified, the decisive facts, the remaining checks, and the next best verification targets
 
 Decision policy:
+- TASK_OUTCOME describes completion of the original requested work, independently of report quality. Use completed only after verifying that work. Use blocked when the requested work could not be performed, even if the task allows stopping with a blocker report. Use unverified when evidence is missing. Never convert a well-written blocker report into completed work. A verified query that executed successfully and found zero matches may be completed; missing execution is not an empty result. Never ask the worker to mark unexecuted plan steps completed.
+- PASS requires TASK_OUTCOME: completed as well as acceptable proof.
 - PASS only when the gates are satisfied and the mission state is acceptable
 - PASS requires PASS_PROOF=direct or PASS_PROOF=trusted_external; worker-owned scripts/tests, workspace-local notes, and prose claims are useful evidence but never sufficient positive proof by themselves
 - for a task whose complete contract is only to read, explain, classify, summarize, calculate, draft without sending, or answer, and whose result claims no mutation or delivery, the answer itself is the reviewed artifact; independently compare it with the task and supplied source material and record `source=reviewer | method=inspect_artifact | target=task contract and answer | result=...`; this reviewer-owned comparison is direct evidence, not worker `prose_only`
@@ -97,6 +99,7 @@ Review writing standard:
 Respond in exactly this format:
 
 VERDICT: PASS|FAIL|PARTIAL
+TASK_OUTCOME: completed|blocked|unverified
 MISSION_STATE: HEALTHY|UNHEALTHY|UNCLEAR
 SUMMARY: <one sentence>
 DISPOSITION: SEND|NO_SEND
@@ -442,6 +445,30 @@ impl ReviewVerdict {
     }
 }
 
+/// Completion of the requested work is distinct from the quality of its report.
+/// An honest blocker report can be well written without completing the task.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewTaskOutcome {
+    Completed,
+    Blocked,
+    Unverified,
+}
+
+pub fn parse_task_outcome(report: &str) -> ReviewTaskOutcome {
+    let mut values = report
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("TASK_OUTCOME:").map(str::trim));
+    let first = values.next();
+    if values.next().is_some() {
+        return ReviewTaskOutcome::Unverified;
+    }
+    match first {
+        Some("completed") => ReviewTaskOutcome::Completed,
+        Some("blocked") => ReviewTaskOutcome::Blocked,
+        _ => ReviewTaskOutcome::Unverified,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewOutcome {
     pub required: bool,
@@ -523,6 +550,9 @@ impl ReviewOutcome {
 
     pub fn has_acceptable_pass_proof(&self) -> bool {
         let report = self.canonical_report();
+        if parse_task_outcome(&report) != ReviewTaskOutcome::Completed {
+            return false;
+        }
         let proof = parse_pass_proof(&report);
         let evidence = if self.evidence.is_empty() {
             parse_section_items(&report, "EVIDENCE:")
@@ -1121,6 +1151,7 @@ If active vision or active mission is missing for strategic or owner-visible wor
 \n\
 Respond in exactly this shape:\n\
 VERDICT: PASS|FAIL|PARTIAL\n\
+TASK_OUTCOME: completed|blocked|unverified\n\
 MISSION_STATE: HEALTHY|UNHEALTHY|UNCLEAR\n\
 SUMMARY: <one sentence>\n\
 PASS_PROOF: direct|trusted_external|workspace_local|prose_only|none\n\
@@ -1205,6 +1236,7 @@ Compare the answer directly with this task. If either the task or answer require
 \n\
 Return exactly:\n\
 VERDICT: PASS|FAIL\n\
+TASK_OUTCOME: completed|blocked|unverified\n\
 MISSION_STATE: HEALTHY|UNHEALTHY\n\
 SUMMARY: <one sentence>\n\
 PASS_PROOF: direct|none\n\
@@ -1311,6 +1343,7 @@ Previous malformed review response:\n\
 \n\
 Do not do worker actions. Inspect only as needed to produce a real verdict. Return exactly:\n\
 VERDICT: PASS|FAIL|PARTIAL\n\
+TASK_OUTCOME: completed|blocked|unverified\n\
 MISSION_STATE: HEALTHY|UNHEALTHY|UNCLEAR\n\
 SUMMARY: <one sentence>\n\
 PASS_PROOF: direct|trusted_external|workspace_local|prose_only|none\n\
@@ -1410,6 +1443,19 @@ fn parse_review_report(score: u8, reasons: Vec<String>, report: &str) -> ReviewO
                 "Re-run review with direct artifact/state/communication/live-surface inspection or trusted external acceptance evidence; worker-owned tests, logs, and prose are not sufficient.",
             );
         }
+    }
+    if verdict == ReviewVerdict::Pass && parse_task_outcome(report) != ReviewTaskOutcome::Completed
+    {
+        verdict = ReviewVerdict::Partial;
+        summary = format!(
+            "Review PASS was rejected because requested work was blocked or unverified. {summary}"
+        );
+        push_unique_item(
+            &mut failed_gates,
+            "Requested work has no verified completed outcome.",
+        );
+        push_unique_item(&mut open_items,
+            "Verify the requested work itself before accepting completion; a truthful blocker report does not prove execution.");
     }
     ReviewOutcome {
         required: true,
@@ -1810,6 +1856,7 @@ fn parse_handoff_block(report: &str) -> Option<String> {
         }
         if collecting {
             if trimmed.starts_with("VERDICT:")
+                || trimmed.starts_with("TASK_OUTCOME:")
                 || trimmed.starts_with("MISSION_STATE:")
                 || trimmed.starts_with("SUMMARY:")
                 || trimmed.starts_with("PASS_PROOF:")
@@ -1853,6 +1900,7 @@ fn parse_section_items(report: &str, header: &str) -> Vec<String> {
         if collecting {
             if [
                 "VERDICT:",
+                "TASK_OUTCOME:",
                 "MISSION_STATE:",
                 "SUMMARY:",
                 "FAILED_GATES:",
@@ -1908,6 +1956,7 @@ fn parse_categorized_findings(report: &str) -> Vec<CategorizedFinding> {
             if matches!(
                 trimmed,
                 "VERDICT:"
+                    | "TASK_OUTCOME:"
                     | "MISSION_STATE:"
                     | "SUMMARY:"
                     | "FAILED_GATES:"
@@ -2006,6 +2055,38 @@ fn clip_text(value: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn review_rejects_blocked_unverified_missing_and_conflicting_task_outcomes() {
+        // Direct inspection of a blocker report proves the report exists, not
+        // that the requested migration or validation was performed.
+        for outcome in [
+            "TASK_OUTCOME: blocked\n",
+            "TASK_OUTCOME: unverified\n",
+            "",
+            "TASK_OUTCOME: completed\nTASK_OUTCOME: blocked\n",
+            "TASK_OUTCOME: unknown\n",
+        ] {
+            let report = format!("VERDICT: PASS\n{outcome}MISSION_STATE: HEALTHY\nSUMMARY: inspected the truthful blocker report.\nPASS_PROOF: direct\nEVIDENCE:\n- source=reviewer | method=read_file | target=blocker.md | result=report exists; requested action was not performed\n");
+            let reviewed = parse_review_report(4, vec![], &report);
+            assert_eq!(reviewed.verdict, ReviewVerdict::Partial, "{outcome}");
+            assert!(reviewed.requires_follow_up());
+            assert!(!reviewed.has_acceptable_pass_proof());
+        }
+    }
+
+    #[test]
+    fn review_accepts_verified_execution_and_verified_zero_matches() {
+        for result in [
+            "requested change and validation verified",
+            "query executed successfully; zero matching records",
+        ] {
+            let report = format!("VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: {result}.\nPASS_PROOF: direct\nEVIDENCE:\n- source=reviewer | method=db_query | target=current run receipt | result={result}\n");
+            let reviewed = parse_review_report(4, vec![], &report);
+            assert_eq!(reviewed.verdict, ReviewVerdict::Pass);
+            assert!(reviewed.has_acceptable_pass_proof());
+        }
+    }
 
     #[test]
     fn requires_review_for_owner_visible_runtime_completion_claim() {
@@ -2493,7 +2574,7 @@ mod tests {
         let outcome = parse_review_report(
             4,
             vec!["external_chat_quick_response".to_string()],
-            "VERDICT: PASS\nSUMMARY: ack is backed.\nPIPELINE_RESOLUTION: action=merge_duplicate | target=queue:system::intersolar | rationale=\"Merged Jill's duplicate into the open scraper task.\"\nEVIDENCE:\n- queue row exists\n",
+            "VERDICT: PASS\nTASK_OUTCOME: completed\nSUMMARY: ack is backed.\nPIPELINE_RESOLUTION: action=merge_duplicate | target=queue:system::intersolar | rationale=\"Merged Jill's duplicate into the open scraper task.\"\nEVIDENCE:\n- queue row exists\n",
         );
         let resolution = outcome
             .pipeline_resolution
@@ -2589,7 +2670,7 @@ mod tests {
 
     #[test]
     fn parses_send_disposition_block_explicitly() {
-        let report = "VERDICT: PASS\nSUMMARY: looks good.\nPASS_PROOF: direct\nEVIDENCE:\n- inspected artifact => matches request\nDISPOSITION: SEND\n";
+        let report = "VERDICT: PASS\nTASK_OUTCOME: completed\nSUMMARY: looks good.\nPASS_PROOF: direct\nEVIDENCE:\n- inspected artifact => matches request\nDISPOSITION: SEND\n";
         let outcome = parse_review_report(0, vec![], report);
         assert_eq!(outcome.disposition, ReviewDisposition::Send);
     }
@@ -2597,7 +2678,7 @@ mod tests {
     #[test]
     fn required_pass_without_evidence_is_downgraded_to_partial() {
         let report =
-            "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: claims look fine.\nEVIDENCE:\n- none\n";
+            "VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: claims look fine.\nEVIDENCE:\n- none\n";
         let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
 
         assert_eq!(outcome.verdict, ReviewVerdict::Partial);
@@ -2611,7 +2692,7 @@ mod tests {
 
     #[test]
     fn required_pass_with_sandbox_blocker_is_downgraded_to_partial() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: sandbox restrictions prevented filesystem inspection, but it seems okay.\nEVIDENCE:\n- worker said tests passed\n";
+        let report = "VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: sandbox restrictions prevented filesystem inspection, but it seems okay.\nEVIDENCE:\n- worker said tests passed\n";
         let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
 
         assert_eq!(outcome.verdict, ReviewVerdict::Partial);
@@ -2623,7 +2704,7 @@ mod tests {
 
     #[test]
     fn required_pass_with_direct_evidence_stays_pass() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: verified directly.\nPASS_PROOF: direct\nEVIDENCE:\n- inspected required artifact content => matches task contract\nDISPOSITION: SEND\n";
+        let report = "VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: verified directly.\nPASS_PROOF: direct\nEVIDENCE:\n- inspected required artifact content => matches task contract\nDISPOSITION: SEND\n";
         let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
 
         assert_eq!(outcome.verdict, ReviewVerdict::Pass);
@@ -2633,7 +2714,7 @@ mod tests {
 
     #[test]
     fn required_pass_with_structured_reviewer_command_evidence_stays_pass() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: reviewer verified the workspace.\nPASS_PROOF: direct\nEVIDENCE:\n- source=reviewer | method=run_command | target=bash run-tests.sh | result=exit 0 and required artifacts match the assignment\nDISPOSITION: SEND\n";
+        let report = "VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: reviewer verified the workspace.\nPASS_PROOF: direct\nEVIDENCE:\n- source=reviewer | method=run_command | target=bash run-tests.sh | result=exit 0 and required artifacts match the assignment\nDISPOSITION: SEND\n";
         let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
 
         assert_eq!(outcome.verdict, ReviewVerdict::Pass);
@@ -2642,7 +2723,7 @@ mod tests {
 
     #[test]
     fn required_answer_only_pass_with_reviewer_inspection_stays_pass() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: answer matches.\nPASS_PROOF: direct\nEVIDENCE:\n- source=reviewer | method=inspect_artifact | target=task contract and answer | result=Berlin matches the supplied fact and no effect is claimed\nDISPOSITION: SEND\n";
+        let report = "VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: answer matches.\nPASS_PROOF: direct\nEVIDENCE:\n- source=reviewer | method=inspect_artifact | target=task contract and answer | result=Berlin matches the supplied fact and no effect is claimed\nDISPOSITION: SEND\n";
         let outcome = parse_review_report(3, vec!["durable_queue_or_ticket_work".into()], report);
         assert_eq!(outcome.verdict, ReviewVerdict::Pass);
         assert!(outcome.has_acceptable_pass_proof());
@@ -2650,14 +2731,14 @@ mod tests {
 
     #[test]
     fn answer_only_worker_prose_without_reviewer_inspection_is_rejected() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: looks right.\nPASS_PROOF: prose_only\nEVIDENCE:\n- worker claims Berlin\nDISPOSITION: SEND\n";
+        let report = "VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: looks right.\nPASS_PROOF: prose_only\nEVIDENCE:\n- worker claims Berlin\nDISPOSITION: SEND\n";
         let outcome = parse_review_report(3, vec!["durable_queue_or_ticket_work".into()], report);
         assert_eq!(outcome.verdict, ReviewVerdict::Partial);
     }
 
     #[test]
     fn required_pass_with_reviewer_direct_command_phrase_stays_pass() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: reviewer verified the workspace.\nPASS_PROOF: direct\nEVIDENCE:\n- I ran bash run-tests.sh in the current workspace and inspected the required output file; all acceptance checks passed\nDISPOSITION: SEND\n";
+        let report = "VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: reviewer verified the workspace.\nPASS_PROOF: direct\nEVIDENCE:\n- I ran bash run-tests.sh in the current workspace and inspected the required output file; all acceptance checks passed\nDISPOSITION: SEND\n";
         let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
 
         assert_eq!(outcome.verdict, ReviewVerdict::Pass);
@@ -2666,7 +2747,7 @@ mod tests {
 
     #[test]
     fn required_pass_with_workspace_local_proof_is_downgraded_to_partial() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: tests pass.\nPASS_PROOF: workspace_local\nEVIDENCE:\n- bash run-tests.sh => exit 0\n";
+        let report = "VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: tests pass.\nPASS_PROOF: workspace_local\nEVIDENCE:\n- bash run-tests.sh => exit 0\n";
         let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
 
         assert_eq!(outcome.verdict, ReviewVerdict::Partial);
@@ -2679,7 +2760,7 @@ mod tests {
 
     #[test]
     fn required_pass_without_pass_proof_is_downgraded_to_partial() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: checked.\nEVIDENCE:\n- inspected artifact => looked correct\n";
+        let report = "VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: checked.\nEVIDENCE:\n- inspected artifact => looked correct\n";
         let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
 
         assert_eq!(outcome.verdict, ReviewVerdict::Partial);
@@ -2689,7 +2770,7 @@ mod tests {
 
     #[test]
     fn required_pass_with_direct_label_but_only_workspace_local_evidence_is_downgraded() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: tests pass.\nPASS_PROOF: direct\nEVIDENCE:\n- bash run-tests.sh => all tests pass\n";
+        let report = "VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: tests pass.\nPASS_PROOF: direct\nEVIDENCE:\n- bash run-tests.sh => all tests pass\n";
         let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
 
         assert_eq!(outcome.verdict, ReviewVerdict::Partial);
@@ -2699,7 +2780,7 @@ mod tests {
 
     #[test]
     fn trusted_external_requires_external_system_of_record_evidence() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: tests pass.\nPASS_PROOF: trusted_external\nEVIDENCE:\n- pytest => all tests pass\n";
+        let report = "VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: tests pass.\nPASS_PROOF: trusted_external\nEVIDENCE:\n- pytest => all tests pass\n";
         let outcome = parse_review_report(4, vec!["runtime_or_infra_change".to_string()], report);
 
         assert_eq!(outcome.verdict, ReviewVerdict::Partial);
@@ -2710,7 +2791,7 @@ mod tests {
 
     #[test]
     fn trusted_external_with_accepted_send_proof_stays_pass() {
-        let report = "VERDICT: PASS\nMISSION_STATE: HEALTHY\nSUMMARY: provider accepted the message.\nPASS_PROOF: trusted_external\nEVIDENCE:\n- accepted send proof from provider system of record => message id msg_123\n";
+        let report = "VERDICT: PASS\nTASK_OUTCOME: completed\nMISSION_STATE: HEALTHY\nSUMMARY: provider accepted the message.\nPASS_PROOF: trusted_external\nEVIDENCE:\n- accepted send proof from provider system of record => message id msg_123\n";
         let outcome = parse_review_report(4, vec!["communication".to_string()], report);
 
         assert_eq!(outcome.verdict, ReviewVerdict::Pass);

@@ -1,0 +1,8 @@
+{
+  "schema": "ctox.main-source-tree-verification.v1",
+  "commit": "aece8a4f28999885b4fe788f2c3bf4559a4bcf38",
+  "root": "/home/ctox/.cache/ctox/file-preservation-fbeca32b7/main-shell-aece8a4f",
+  "filesChecked": 9820,
+  "errors": [],
+  "passed": true
+}

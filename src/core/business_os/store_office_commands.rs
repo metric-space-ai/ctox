@@ -591,7 +591,11 @@ fn load_rxdb_office_document(
         .transpose()
 }
 
-fn load_rxdb_office_blob(root: &Path, collection: &str, blob_id: &str) -> anyhow::Result<Vec<u8>> {
+pub(super) fn load_rxdb_office_blob(
+    root: &Path,
+    collection: &str,
+    blob_id: &str,
+) -> anyhow::Result<Vec<u8>> {
     let table = match collection {
         "document_blob_chunks" => "ctox_business_os__document_blob_chunks__v0",
         "spreadsheet_blob_chunks" => "ctox_business_os__spreadsheet_blob_chunks__v0",

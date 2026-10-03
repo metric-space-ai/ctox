@@ -1,3 +1,60 @@
+#[test]
+fn incomplete_plan_can_be_reviewed_without_fabricating_completed_steps() -> Result<()> {
+    let db_path = temp_db();
+    let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
+    let work_key = "queue:blocked-synthetic";
+    let steps = [
+        TaskExecutionPlanStepInput {
+            label: "Inspect prerequisites".into(),
+            status: "completed".into(),
+        },
+        TaskExecutionPlanStepInput {
+            label: "Apply requested change".into(),
+            status: "in_progress".into(),
+        },
+        TaskExecutionPlanStepInput {
+            label: "Verify result".into(),
+            status: "pending".into(),
+        },
+    ];
+    engine.record_task_execution_plan(TaskExecutionPlanUpdate {
+        work_key,
+        task_id: "blocked-task",
+        command_id: "blocked-command",
+        attempt_id: "blocked-attempt",
+        explanation: Some("Required prerequisite unavailable"),
+        steps: &steps,
+    })?;
+    let reviewing = engine.prepare_task_execution_review(work_key)?;
+    assert_eq!(reviewing["percent"], 30);
+    assert_eq!(reviewing["completed_steps"], 1);
+    let rejection = engine
+        .set_task_execution_review_status(work_key, "completed")
+        .expect_err("incomplete plan must never complete");
+    let incomplete = rejection
+        .downcast_ref::<IncompleteTaskExecutionPlan>()
+        .expect("deterministic plan rejection must remain distinguishable from store failure");
+    assert_eq!(incomplete.work_key, work_key);
+    assert_eq!(incomplete.revision, reviewing["revision"].as_i64().unwrap());
+    assert_eq!((incomplete.completed, incomplete.total), (1, 3));
+    assert_eq!(
+        engine.task_execution_progress(work_key)?.unwrap(),
+        reviewing
+    );
+    let failed = engine.set_task_execution_review_status(work_key, "failed")?;
+    assert_eq!(failed["percent"], 30);
+    assert_eq!(failed["steps"][1]["status"], "in_progress");
+    assert_eq!(failed["steps"][2]["status"], "pending");
+    assert_eq!(failed["review"]["status"], "failed");
+    drop(engine);
+    let recovered = LcmEngine::open(&db_path, LcmConfig::default())?
+        .task_execution_progress(work_key)?
+        .unwrap();
+    assert_eq!(recovered, failed);
+    let _ = std::fs::remove_file(db_path);
+    Ok(())
+}
+
 // In-tree behavioral tests for the lifecycle context manager (extracted
 // from mod.rs; `use super::*` keeps access to crate-private internals).
 use super::*;

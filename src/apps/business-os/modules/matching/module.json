@@ -21,12 +21,7 @@
       "right": "Object pool configuration and selected record detail",
       "bottom": "Matching prompt, schema, task status, and evidence"
     },
-    "third_pane_justification": "Matching is an evidence app (IA-Karte): left = requirements, main = ranked match workbench; the third pane is the parsed CV/object evidence for the selected match — hidden by default, auto-reveals on selection.",
-    "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/matching.jpg",
-    "icon_asset_sha256": "3ececa42f99f1d63104468b920b6fea37fcc398186cae1f3b409de1647e2c3b7",
-    "icon_selection_sha256": "3ececa42f99f1d63104468b920b6fea37fcc398186cae1f3b409de1647e2c3b7",
-    "icon_selection_candidate": "candidate-02",
-    "icon_asset_kind": "raster-reference"
+    "third_pane_justification": "Matching is an evidence app (IA-Karte): left = requirements, main = ranked match workbench; the third pane is the parsed CV/object evidence for the selected match — hidden by default, auto-reveals on selection."
   },
   "category": "Operations",
   "version": "1.0.2",

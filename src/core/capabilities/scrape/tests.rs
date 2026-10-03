@@ -1,3 +1,191 @@
+mod completed_empty_query_contract {
+    use super::*;
+
+    const SCRIPT: &str = r#"
+python3 - <<'CTOX_QUERY_FIXTURE'
+import hashlib,json,os,pathlib,sys
+raw=os.environ['CTOX_SCRAPE_INPUT_JSON']; inp=json.loads(raw)
+mode=inp.get('mode','valid'); run=pathlib.Path(os.environ['CTOX_SCRAPE_RUN_DIR'])
+if mode == 'records':
+ print(json.dumps({'records':[{'id':'prior','company_name':'Previous Company'}]})); sys.exit(0)
+r={'schema':'ctox.scrape.query_completion.v1','run_id':run.name,
+ 'target_key':os.environ['CTOX_SCRAPE_TARGET_KEY'],'input_sha256':hashlib.sha256(raw.encode()).hexdigest(),
+ 'query':inp['company'],'provider_url':'https://example.com/search','http_status':200,
+ 'completed':True,'results_page':True,'blocked':False,'matched_records':0,'observed_records':8,
+ 'observation':{'publishers':['Other Company'],'exact_matches':[]}}
+if mode == 'wrong_run': r['run_id']='old-run'
+if mode == 'wrong_target': r['target_key']='other-target'
+if mode == 'wrong_input': r['input_sha256']='0'*64
+if mode == 'wrong_query': r['query']='Different Company'
+if mode == 'wrong_provider': r['provider_url']='https://other.example/search'
+if mode == 'blocked': r['blocked']=True
+if mode == 'http_error': r['http_status']=503
+if mode == 'not_completed': r['completed']=False
+if mode == 'wrong_count': r['matched_records']=1
+if mode == 'no_observation': r['observation']={}
+b=json.dumps(r).encode(); path=run/'outputs/query-evidence.json'; path.write_bytes(b)
+p={'records':[],'query_completion':{'evidence_path':'outputs/query-evidence.json','evidence_sha256':hashlib.sha256(b).hexdigest()}}
+if mode == 'wrong_hash': p['query_completion']['evidence_sha256']='0'*64
+if mode == 'missing_evidence': path.unlink()
+if mode == 'absent_receipt': del p['query_completion']
+if mode == 'blocked': p['failure_mode']='blocked'
+print(json.dumps(p)); sys.exit(2 if mode == 'exit_error' else 0)
+CTOX_QUERY_FIXTURE
+"#;
+
+    fn fixture(root: &Path) -> ScrapeTargetView {
+        let target = upsert_target(root, DEFAULT_RUNTIME_ROOT, json!({
+            "target_key":"query-provider", "display_name":"Query Provider",
+            "start_url":"https://example.com/search", "target_kind":"company",
+            "config":{"skip_probe":true,"expected_min_records":1,"llm_enrichment":{"enabled":false}},
+            "output_schema":{"schema_key":"company.v1"}
+        })).unwrap();
+        let path = root.join("query.sh");
+        fs::write(&path, SCRIPT).unwrap();
+        register_script(
+            root,
+            DEFAULT_RUNTIME_ROOT,
+            &target.target_key,
+            path.to_str().unwrap(),
+            "shell",
+            None,
+            None,
+        )
+        .unwrap();
+        target
+    }
+
+    fn execute(root: &Path, mode: &str) -> ScrapeExecutionOutcome {
+        execute_scrape_with_outcome(
+            root,
+            &[
+                "--target-key".into(),
+                "query-provider".into(),
+                "--input-json".into(),
+                json!({"company":"Current Company","mode":mode}).to_string(),
+                "--timeout-seconds".into(),
+                "10".into(),
+            ],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn completed_empty_query_persists_current_receipt_without_fabricated_or_old_records() {
+        let root = temp_root("completed-empty-query");
+        let target = fixture(&root);
+        let previous = execute(&root, "records");
+        assert_eq!(previous.status, ScrapeRunStatus::Succeeded, "{previous:?}");
+        let before: i64 = open_db(&root)
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM scrape_record_latest WHERE target_id=?1",
+                params![target.target_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let outcome = execute(&root, "valid");
+        assert_eq!(outcome.status, ScrapeRunStatus::CompletedEmpty);
+        assert!(outcome.ok);
+        assert!(!outcome.should_queue_repair);
+        assert!(outcome.repair_request_path.is_none());
+        assert!(outcome.repair_queue_task.is_none());
+        assert!(outcome.error.is_none());
+        assert_eq!(outcome.records_found, 0);
+        assert!(outcome.fields_extracted.is_empty());
+        assert!(outcome.materialization.is_none());
+        assert_ne!(outcome.run_id, previous.run_id);
+        let receipt = outcome.query_completion.as_ref().unwrap();
+        assert_eq!(receipt["run_id"], outcome.run_id);
+        assert_eq!(receipt["query"], "Current Company");
+        let conn = open_db(&root).unwrap();
+        let (status, result): (String, String) = conn
+            .query_row(
+                "SELECT status,result_json FROM scrape_run WHERE run_id=?1",
+                params![outcome.run_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "completed_empty");
+        assert_eq!(
+            serde_json::from_str::<Value>(&result).unwrap()["query_completion"],
+            *receipt
+        );
+        assert_eq!(
+            load_last_successful_run(&conn, &target.target_id)
+                .unwrap()
+                .unwrap()["run_id"],
+            previous.run_id
+        );
+        let after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM scrape_record_latest WHERE target_id=?1",
+                params![target.target_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            after, before,
+            "empty query must not materialize or erase records"
+        );
+        let manifest: Value =
+            serde_json::from_str(&fs::read_to_string(&outcome.run_manifest_path).unwrap()).unwrap();
+        assert_eq!(manifest["result"]["query_completion"], *receipt);
+        let evidence = manifest["artifacts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["artifact_kind"] == "query_completion_evidence")
+            .unwrap();
+        let bytes = fs::read(evidence["path"].as_str().unwrap()).unwrap();
+        assert_eq!(evidence["content_sha256"], compute_sha256_bytes(&bytes));
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), *receipt);
+        drop(conn);
+        cleanup_test_root(&root);
+    }
+
+    #[test]
+    fn invalid_empty_query_receipts_persist_failure_and_never_become_success() {
+        let root = temp_root("invalid-empty-query");
+        fixture(&root);
+        for mode in [
+            "wrong_run",
+            "wrong_target",
+            "wrong_input",
+            "wrong_query",
+            "wrong_provider",
+            "blocked",
+            "http_error",
+            "not_completed",
+            "wrong_count",
+            "no_observation",
+            "wrong_hash",
+            "missing_evidence",
+            "absent_receipt",
+            "exit_error",
+        ] {
+            let outcome = execute(&root, mode);
+            assert!(!outcome.ok, "{mode}");
+            assert_ne!(outcome.status, ScrapeRunStatus::CompletedEmpty, "{mode}");
+            assert!(outcome.query_completion.is_none(), "{mode}");
+            assert!(outcome.materialization.is_none(), "{mode}");
+            if mode == "blocked" {
+                assert_eq!(outcome.status, ScrapeRunStatus::Blocked, "{outcome:?}");
+            }
+            let persisted: String = open_db(&root)
+                .unwrap()
+                .query_row(
+                    "SELECT status FROM scrape_run WHERE run_id=?1",
+                    params![outcome.run_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(persisted, outcome.status.as_str(), "{mode}");
+        }
+        cleanup_test_root(&root);
+    }
+}
+
 // In-tree behavioral tests for the scrape capability (extracted from
 // mod.rs; `use super::*` keeps access to crate-private internals).
 use super::*;
@@ -319,6 +507,556 @@ fn upsert_target_creates_workspace_and_manifest() {
     assert!(resolve_workspace_dir(&root, &target.workspace_dir)
         .join("sources/primary/extractor.js")
         .is_file());
+    cleanup_test_root(&root);
+}
+fn scrape_file_snapshot(root: &Path) -> std::collections::BTreeMap<String, String> {
+    fn visit(dir: &Path, root: &Path, snapshot: &mut std::collections::BTreeMap<String, String>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(&path, root, snapshot);
+            } else {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                snapshot.insert(relative, fs::read_to_string(path).unwrap());
+            }
+        }
+    }
+
+    let mut snapshot = std::collections::BTreeMap::new();
+    visit(root, root, &mut snapshot);
+    snapshot
+}
+
+fn scrape_script_registration_state(
+    root: &Path,
+    target: &ScrapeTargetView,
+) -> (Value, std::collections::BTreeMap<String, String>) {
+    let conn = open_db(root).unwrap();
+    let target_row = conn
+        .query_row(
+            r#"
+            SELECT target_key, workspace_dir, latest_script_revision_no,
+                   latest_script_sha256, updated_at
+            FROM scrape_target WHERE target_id = ?1
+            "#,
+            params![target.target_id],
+            |row| {
+                Ok(json!({
+                    "target_key": row.get::<_, String>(0)?,
+                    "workspace_dir": row.get::<_, String>(1)?,
+                    "latest_script_revision_no": row.get::<_, Option<i64>>(2)?,
+                    "latest_script_sha256": row.get::<_, Option<String>>(3)?,
+                    "updated_at": row.get::<_, String>(4)?,
+                }))
+            },
+        )
+        .unwrap();
+    let mut statement = conn
+        .prepare(
+            r#"
+        SELECT revision_no, script_path, script_sha256, script_body
+        FROM scrape_script_revision WHERE target_id = ?1 ORDER BY revision_no
+        "#,
+        )
+        .unwrap();
+    let revisions = statement
+        .query_map(params![target.target_id], |row| {
+            Ok(json!({
+                "revision_no": row.get::<_, i64>(0)?,
+                "script_path": row.get::<_, String>(1)?,
+                "script_sha256": row.get::<_, String>(2)?,
+                "script_body": row.get::<_, String>(3)?,
+            }))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    (
+        json!({"target": target_row, "revisions": revisions}),
+        scrape_file_snapshot(&resolve_workspace_dir(root, &target.workspace_dir)),
+    )
+}
+
+fn scrape_source_registration_state(
+    root: &Path,
+    target: &ScrapeTargetView,
+) -> (Value, std::collections::BTreeMap<String, String>) {
+    let conn = open_db(root).unwrap();
+    let target_row = conn
+        .query_row(
+            r#"
+            SELECT target_key, workspace_dir, updated_at
+            FROM scrape_target WHERE target_id = ?1
+            "#,
+            params![target.target_id],
+            |row| {
+                Ok(json!({
+                    "target_key": row.get::<_, String>(0)?,
+                    "workspace_dir": row.get::<_, String>(1)?,
+                    "updated_at": row.get::<_, String>(2)?,
+                }))
+            },
+        )
+        .unwrap();
+    let mut statement = conn
+        .prepare(
+            r#"
+        SELECT source_key, revision_no, module_path, module_sha256, module_body
+        FROM scrape_source_revision WHERE target_id = ?1
+        ORDER BY source_key, revision_no
+        "#,
+        )
+        .unwrap();
+    let revisions = statement
+        .query_map(params![target.target_id], |row| {
+            Ok(json!({
+                "source_key": row.get::<_, String>(0)?,
+                "revision_no": row.get::<_, i64>(1)?,
+                "module_path": row.get::<_, String>(2)?,
+                "module_sha256": row.get::<_, String>(3)?,
+                "module_body": row.get::<_, String>(4)?,
+            }))
+        })
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    (
+        json!({"target": target_row, "revisions": revisions}),
+        scrape_file_snapshot(&resolve_workspace_dir(root, &target.workspace_dir)),
+    )
+}
+
+#[test]
+fn reject_whitespace_script_registration_before_dedup_and_mutation() {
+    let root = temp_root("reject-empty-script");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "reject-empty-script",
+            "display_name": "Reject Empty Script",
+            "start_url": "https://example.com",
+            "target_kind": "company",
+            "config": {"skip_probe": true},
+            "output_schema": {"schema_key": "company.v1"}
+        }),
+    )
+    .unwrap();
+    let script = root.join("adapter.js");
+    let body = "process.stdout.write('A');\n";
+    fs::write(&script, body).unwrap();
+    let registered = register_script(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        script.to_str().unwrap(),
+        "javascript",
+        Some("initial"),
+        None,
+    )
+    .unwrap();
+    open_db(&root)
+        .unwrap()
+        .execute(
+            r#"
+            UPDATE scrape_script_revision
+            SET script_sha256 = ?2, script_body = ''
+            WHERE target_id = ?1 AND revision_no = ?3
+            "#,
+            params![
+                target.target_id,
+                compute_sha256(""),
+                registered["revision_no"].as_i64().unwrap()
+            ],
+        )
+        .unwrap();
+
+    let blank = root.join("blank.js");
+    fs::write(&blank, " \n\t").unwrap();
+    let before = scrape_script_registration_state(&root, &target);
+    let error = register_script(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        blank.to_str().unwrap(),
+        "javascript",
+        Some("rejected"),
+        None,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("non-whitespace content"),
+        "unexpected: {error}"
+    );
+    assert_eq!(before, scrape_script_registration_state(&root, &target));
+    cleanup_test_root(&root);
+}
+
+#[test]
+fn reject_whitespace_source_registration_before_dedup_and_mutation() {
+    let root = temp_root("reject-empty-source");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "reject-empty-source",
+            "display_name": "Reject Empty Source",
+            "start_url": "https://example.com",
+            "target_kind": "company",
+            "config": {
+                "skip_probe": true,
+                "sources": [{
+                    "source_key": "primary",
+                    "display_name": "Primary",
+                    "start_url": "https://example.com",
+                    "source_kind": "html",
+                    "extraction_module": "sources/primary/extractor.js"
+                }]
+            },
+            "output_schema": {"schema_key": "company.v1"}
+        }),
+    )
+    .unwrap();
+    let module = root.join("extractor.js");
+    let body = "module.exports = 'A';\n";
+    fs::write(&module, body).unwrap();
+    let registered = register_source_module(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        "primary",
+        module.to_str().unwrap(),
+        "javascript",
+        Some("initial"),
+        None,
+    )
+    .unwrap();
+    open_db(&root)
+        .unwrap()
+        .execute(
+            r#"
+            UPDATE scrape_source_revision
+            SET module_sha256 = ?4, module_body = ''
+            WHERE target_id = ?1 AND source_key = ?2 AND revision_no = ?3
+            "#,
+            params![
+                target.target_id,
+                "primary",
+                registered["revision_no"].as_i64().unwrap(),
+                compute_sha256("")
+            ],
+        )
+        .unwrap();
+
+    let blank = root.join("blank.js");
+    fs::write(&blank, "\n \t").unwrap();
+    let before = scrape_source_registration_state(&root, &target);
+    let error = register_source_module(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        "primary",
+        blank.to_str().unwrap(),
+        "javascript",
+        Some("rejected"),
+        None,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        error.contains("non-whitespace content"),
+        "unexpected: {error}"
+    );
+    assert_eq!(before, scrape_source_registration_state(&root, &target));
+    cleanup_test_root(&root);
+}
+
+#[test]
+fn register_script_self_path_preserves_validated_bytes() {
+    let root = temp_root("script-self-path");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "script-self-path",
+            "display_name": "Script Self Path",
+            "start_url": "https://example.com",
+            "target_kind": "company",
+            "config": {"skip_probe": true},
+            "output_schema": {"schema_key": "company.v1"}
+        }),
+    )
+    .unwrap();
+    let body = "\nprocess.stdout.write('A');\n";
+    let script = root.join("adapter.js");
+    fs::write(&script, body).unwrap();
+    let first = register_script(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        script.to_str().unwrap(),
+        "javascript",
+        Some("initial"),
+        None,
+    )
+    .unwrap();
+    let current = PathBuf::from(first["current_path"].as_str().unwrap());
+    let reactivated = register_script(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        current.to_str().unwrap(),
+        "javascript",
+        Some("self-path"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(reactivated["deduplicated"], json!(true));
+    let revision = PathBuf::from(reactivated["script_path"].as_str().unwrap());
+    assert_eq!(fs::read_to_string(revision).unwrap(), body);
+    assert_eq!(fs::read_to_string(&current).unwrap(), body);
+    let stored_body: String = open_db(&root)
+        .unwrap()
+        .query_row(
+            "SELECT script_body FROM scrape_script_revision WHERE target_id = ?1",
+            params![target.target_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored_body, body);
+    cleanup_test_root(&root);
+}
+#[test]
+fn register_script_current_path_new_revision_preserves_validated_bytes() {
+    let root = temp_root("script-current-new-revision");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "script-current-new-revision",
+            "display_name": "Script Current New Revision",
+            "start_url": "https://example.com",
+            "target_kind": "company",
+            "config": {"skip_probe": true},
+            "output_schema": {"schema_key": "company.v1"}
+        }),
+    )
+    .unwrap();
+    let first_body = "\nprocess.stdout.write('A');\n";
+    let script = root.join("adapter.js");
+    fs::write(&script, first_body).unwrap();
+    let first = register_script(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        script.to_str().unwrap(),
+        "javascript",
+        Some("first"),
+        None,
+    )
+    .unwrap();
+    let current = PathBuf::from(first["current_path"].as_str().unwrap());
+    let second_body = "\n  process.stdout.write('B');\n  \n";
+    fs::write(&current, second_body).unwrap();
+    let second = register_script(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        current.to_str().unwrap(),
+        "javascript",
+        Some("current-overwrite"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(second["deduplicated"], json!(false));
+    assert!(second["revision_no"].as_i64().unwrap() > first["revision_no"].as_i64().unwrap());
+    let revision = PathBuf::from(second["script_path"].as_str().unwrap());
+    assert_eq!(fs::read_to_string(&current).unwrap(), second_body);
+    assert_eq!(fs::read_to_string(revision).unwrap(), second_body);
+    let (stored_body, stored_hash): (String, String) = open_db(&root)
+        .unwrap()
+        .query_row(
+            r#"
+            SELECT script_body, script_sha256
+            FROM scrape_script_revision
+            WHERE target_id = ?1 AND revision_no = ?2
+            "#,
+            params![target.target_id, second["revision_no"].as_i64().unwrap()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored_body, second_body);
+    assert_eq!(stored_hash, compute_sha256(second_body.trim()));
+    cleanup_test_root(&root);
+}
+
+#[test]
+fn register_source_current_path_new_revision_preserves_validated_bytes() {
+    let root = temp_root("source-current-new-revision");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "source-current-new-revision",
+            "display_name": "Source Current New Revision",
+            "start_url": "https://example.com",
+            "target_kind": "company",
+            "config": {
+                "skip_probe": true,
+                "sources": [{
+                    "source_key": "primary",
+                    "display_name": "Primary",
+                    "start_url": "https://example.com",
+                    "source_kind": "html",
+                    "extraction_module": "sources/primary/extractor.js"
+                }]
+            },
+            "output_schema": {"schema_key": "company.v1"}
+        }),
+    )
+    .unwrap();
+    let first_body = "\nmodule.exports = 'A';\n";
+    let module = root.join("extractor.js");
+    fs::write(&module, first_body).unwrap();
+    let first = register_source_module(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        "primary",
+        module.to_str().unwrap(),
+        "javascript",
+        Some("first"),
+        None,
+    )
+    .unwrap();
+    let current = PathBuf::from(first["current_path"].as_str().unwrap());
+    let second_body = "\n  module.exports = 'B';\n  \n";
+    fs::write(&current, second_body).unwrap();
+    let second = register_source_module(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        "primary",
+        current.to_str().unwrap(),
+        "javascript",
+        Some("current-overwrite"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(second["deduplicated"], json!(false));
+    assert!(second["revision_no"].as_i64().unwrap() > first["revision_no"].as_i64().unwrap());
+    let revision = PathBuf::from(second["module_path"].as_str().unwrap());
+    let current = PathBuf::from(second["current_path"].as_str().unwrap());
+    let configured = PathBuf::from(second["configured_path"].as_str().unwrap());
+    for path in [revision, current, configured] {
+        assert_eq!(fs::read_to_string(path).unwrap(), second_body);
+    }
+    let (stored_body, stored_hash): (String, String) = open_db(&root)
+        .unwrap()
+        .query_row(
+            r#"
+            SELECT module_body, module_sha256
+            FROM scrape_source_revision
+            WHERE target_id = ?1 AND source_key = ?2 AND revision_no = ?3
+            "#,
+            params![
+                target.target_id,
+                "primary",
+                second["revision_no"].as_i64().unwrap()
+            ],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(stored_body, second_body);
+    assert_eq!(stored_hash, compute_sha256(second_body.trim()));
+    cleanup_test_root(&root);
+}
+
+#[test]
+fn register_source_self_path_preserves_validated_bytes() {
+    let root = temp_root("source-self-path");
+    let target = upsert_target(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        json!({
+            "target_key": "source-self-path",
+            "display_name": "Source Self Path",
+            "start_url": "https://example.com",
+            "target_kind": "company",
+            "config": {
+                "skip_probe": true,
+                "sources": [{
+                    "source_key": "primary",
+                    "display_name": "Primary",
+                    "start_url": "https://example.com",
+                    "source_kind": "html",
+                    "extraction_module": "sources/primary/extractor.js"
+                }]
+            },
+            "output_schema": {"schema_key": "company.v1"}
+        }),
+    )
+    .unwrap();
+    let body = "\nmodule.exports = 'A';\n";
+    let module = root.join("extractor.js");
+    fs::write(&module, body).unwrap();
+    let first = register_source_module(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        "primary",
+        module.to_str().unwrap(),
+        "javascript",
+        Some("initial"),
+        None,
+    )
+    .unwrap();
+    let current = PathBuf::from(first["current_path"].as_str().unwrap());
+    let revision = PathBuf::from(first["module_path"].as_str().unwrap());
+    let configured = PathBuf::from(first["configured_path"].as_str().unwrap());
+    fs::remove_file(&revision).unwrap();
+    fs::write(&configured, "changed").unwrap();
+    let reactivated = register_source_module(
+        &root,
+        DEFAULT_RUNTIME_ROOT,
+        &target.target_key,
+        "primary",
+        current.to_str().unwrap(),
+        "javascript",
+        Some("self-path"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(reactivated["deduplicated"], json!(true));
+    assert_eq!(
+        PathBuf::from(reactivated["module_path"].as_str().unwrap()),
+        revision
+    );
+    assert_eq!(
+        PathBuf::from(reactivated["configured_path"].as_str().unwrap()),
+        configured
+    );
+    for path in [revision, current, configured] {
+        assert_eq!(fs::read_to_string(path).unwrap(), body);
+    }
+    let stored_body: String = open_db(&root)
+        .unwrap()
+        .query_row(
+            "SELECT module_body FROM scrape_source_revision WHERE target_id = ?1",
+            params![target.target_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(stored_body, body);
     cleanup_test_root(&root);
 }
 
@@ -1582,8 +2320,17 @@ capture_supported: false,
         should_queue_repair: true,
         reason: "explicit_failure_mode_portal_drift".to_string(),
     };
-    let action = session_expiry_reauthorization(&registered, &probe, &payload, &drift)
-        .expect("login landing on a protected source must yield a reauthorization action");
+    assert!(session_expiry_reauthorization(&registered, &probe, &payload, &drift).is_none());
+    assert_eq!(drift.status, ScrapeRunStatus::PortalDrift);
+    let empty_payload = json!({"records":[]});
+    let derived_drift = Classification {
+        status: ScrapeRunStatus::PortalDrift,
+        should_queue_repair: true,
+        reason: "empty_record_set_on_reachable_portal".to_string(),
+    };
+    let action =
+        session_expiry_reauthorization(&registered, &probe, &empty_payload, &derived_drift)
+            .expect("derived empty output on the protected login page needs reauthorization");
     assert_eq!(action["kind"], "auth-assist-request");
     assert_eq!(action["source_id"], "rocketreach.com");
     assert_eq!(action["login_url"], "https://rocketreach.co/login");
@@ -1597,14 +2344,76 @@ capture_supported: false,
     assert!(!serialized.contains("password"));
     assert!(!serialized.contains("hunter"));
 
+    let explicit_auth = json!({"records":[], "failure_mode":"authorization_required"});
+    let auth_classification = Classification {
+        status: ScrapeRunStatus::AuthorizationRequired,
+        should_queue_repair: true,
+        reason: "explicit_failure_mode_authorization_required".to_string(),
+    };
+    assert!(session_expiry_reauthorization(
+        &registered,
+        &probe,
+        &explicit_auth,
+        &auth_classification
+    )
+    .is_some());
+    let inactive_payload = json!({
+        "records": [],
+        "failure_mode": "authorization_required",
+        "detail": "Subscription is expired"
+    });
+    let inactive_execution = CommandExecution {
+        exit_code: Some(1),
+        timed_out: false,
+        stdout_text: String::new(),
+        stderr_text: String::new(),
+    };
+    let inactive_classification =
+        classify_outcome(&inactive_payload, &probe, &inactive_execution, 0, 1);
+    assert_eq!(
+        inactive_classification.status,
+        ScrapeRunStatus::ProviderAccountInactive
+    );
+    assert!(!inactive_classification.should_queue_repair);
+    assert!(session_expiry_reauthorization(
+        &registered,
+        &probe,
+        &inactive_payload,
+        &inactive_classification
+    )
+    .is_none());
+    // An unrecognized explicit adapter diagnostic is not evidence of expiry,
+    // even when the generic classifier reports an empty record set.
+    let invalid_input =
+        json!({"records":[], "failure_mode":"invalid_input", "detail":"missing source_id"});
+    assert!(
+        session_expiry_reauthorization(&registered, &probe, &invalid_input, &derived_drift)
+            .is_none()
+    );
+    for reason in ["http_404", "command_failed_exit_Some(1)"] {
+        let failed_run = Classification {
+            status: ScrapeRunStatus::PortalDrift,
+            should_queue_repair: true,
+            reason: reason.to_string(),
+        };
+        assert!(
+            session_expiry_reauthorization(&registered, &probe, &empty_payload, &failed_run)
+                .is_none()
+        );
+    }
+
     // Genuine drift away from the login page stays portal_drift.
     let drifted_probe = ProbeResult {
         final_url: "https://rocketreach.co/search".to_string(),
         ..probe
     };
-    assert!(
-        session_expiry_reauthorization(&registered, &drifted_probe, &payload, &drift).is_none()
-    );
+    assert!(session_expiry_reauthorization(
+        &registered,
+        &drifted_probe,
+        &empty_payload,
+        &derived_drift
+    )
+    .is_none());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -1659,6 +2468,54 @@ fn session_expiry_reauthorization_ignores_public_targets() {
         session_expiry_reauthorization(&registered, &probe, &payload, &classification).is_none()
     );
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn provider_account_errors_do_not_schedule_script_repair_or_reauthentication() {
+    let probe = ProbeResult {
+        reachable: true,
+        status_code: Some(200),
+        final_url: "https://api.example.com".to_string(),
+        human_verification: false,
+        error: None,
+    };
+    let execution = CommandExecution {
+        exit_code: Some(1),
+        timed_out: false,
+        stdout_text: String::new(),
+        stderr_text: String::new(),
+    };
+    for mode in [
+        "temporary_unreachable",
+        "blocked",
+        "auth_required",
+        "authorization_required",
+    ] {
+        let classification = classify_outcome(
+            &json!({"failure_mode":mode,
+            "detail":"Subscription is expired","records":[]}),
+            &probe,
+            &execution,
+            0,
+            1,
+        );
+        assert_eq!(
+            classification.status,
+            ScrapeRunStatus::ProviderAccountInactive,
+            "{mode}"
+        );
+        assert!(!classification.should_queue_repair, "{mode}");
+    }
+    let ordinary_login = classify_outcome(
+        &json!({"failure_mode":"auth_required",
+        "detail":"Please sign in to continue","records":[]}),
+        &probe,
+        &execution,
+        0,
+        1,
+    );
+    assert_eq!(ordinary_login.status, ScrapeRunStatus::Blocked);
+    assert!(ordinary_login.should_queue_repair);
 }
 
 #[test]
@@ -2109,4 +2966,481 @@ fn execute_with_blocked_failure_queues_web_unlock_task() {
     assert_eq!(tasks[0].suggested_skill.as_deref(), Some("web-unlock"));
     assert!(tasks[0].thread_key.contains("blocked-fixture"));
     let _ = fs::remove_dir_all(root);
+}
+
+// A production incident: 77 of 80 LinkedIn runs asked Bright Data again although it
+// kept answering "Customer is not active". Through the real execute path:
+// repeated calls stay off the provider, a credential edit probes once,
+// input errors stay separate, a success clears the state.
+mod provider_account_state {
+    use super::*;
+
+    const SCRIPT: &str = r#"
+python3 - <<'CTOX_ACCOUNT_FIXTURE'
+import json,os,pathlib
+inp=json.loads(os.environ['CTOX_SCRAPE_INPUT_JSON'])
+calls=pathlib.Path(inp['calls']); calls.write_text(calls.read_text()+'x' if calls.exists() else 'x')
+mode=pathlib.Path(inp['mode_file']).read_text().strip()
+if mode == 'inactive':
+    print(json.dumps({'records':[],'failure_mode':'temporary_unreachable','detail':'Bright Data antwortete mit HTTP 400: Customer is not active'}))
+elif mode == 'input':
+    print(json.dumps({'records':[],'failure_mode':'portal_drift','detail':'weder LinkedIn-Profil-URL noch Vor- und Nachname im Auftrag'}))
+else:
+    print(json.dumps({'records':[{'id':'p1','name':'Person'}]}))
+CTOX_ACCOUNT_FIXTURE
+"#;
+
+    struct Fixture {
+        root: PathBuf,
+        target: ScrapeTargetView,
+    }
+
+    impl Fixture {
+        fn new(prefix: &str) -> Self {
+            let root = temp_root(prefix);
+            let target = upsert_target(&root, DEFAULT_RUNTIME_ROOT, json!({
+                "target_key":"account-provider", "display_name":"Account Provider",
+                "start_url":"https://provider.test/api", "target_kind":"person",
+                "config":{"skip_probe":true,"expected_min_records":1,"record_key_fields":["id"],
+                          "credential_secret_name":"ACCOUNTPROV_API_KEY","llm_enrichment":{"enabled":false}},
+                "output_schema":{"schema_key":"person.v1","record_key_fields":["id"]}
+            })).unwrap();
+            let path = root.join("account.sh");
+            fs::write(&path, SCRIPT).unwrap();
+            register_script(
+                &root,
+                DEFAULT_RUNTIME_ROOT,
+                &target.target_key,
+                path.to_str().unwrap(),
+                "shell",
+                None,
+                None,
+            )
+            .unwrap();
+            let fixture = Self { root, target };
+            fixture.set_credential("v1");
+            fixture
+        }
+
+        fn set_credential(&self, value: &str) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            crate::secrets::write_secret_record(
+                &self.root,
+                crate::secrets::credential_scope(),
+                "ACCOUNTPROV_API_KEY",
+                value,
+                None,
+                json!({"source":"test"}),
+            )
+            .unwrap();
+        }
+
+        fn mode(&self, mode: &str) {
+            fs::write(self.root.join("mode.txt"), mode).unwrap();
+        }
+
+        fn calls(&self) -> usize {
+            fs::read_to_string(self.root.join("calls.txt"))
+                .map(|text| text.len())
+                .unwrap_or(0)
+        }
+
+        fn execute(&self, extra: &[&str]) -> ScrapeExecutionOutcome {
+            let mut args = vec![
+                "--target-key".to_string(),
+                "account-provider".to_string(),
+                "--input-json".to_string(),
+                json!({"calls": self.root.join("calls.txt"), "mode_file": self.root.join("mode.txt")}).to_string(),
+                "--timeout-seconds".to_string(),
+                "10".to_string(),
+            ];
+            args.extend(extra.iter().map(|value| value.to_string()));
+            execute_scrape_with_outcome(&self.root, &args).unwrap()
+        }
+
+        fn execute_granted(&self, grant: &AccountProbeGrant) -> ScrapeExecutionOutcome {
+            let args = vec![
+                "--target-key".to_string(),
+                "account-provider".to_string(),
+                "--input-json".to_string(),
+                json!({"calls": self.root.join("calls.txt"), "mode_file": self.root.join("mode.txt")}).to_string(),
+                "--timeout-seconds".to_string(),
+                "10".to_string(),
+            ];
+            execute_scrape_with_probe_grant(&self.root, &args, Some(grant)).unwrap()
+        }
+
+        fn runs(&self) -> i64 {
+            open_db(&self.root)
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM scrape_run WHERE target_id=?1",
+                    params![self.target.target_id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        }
+    }
+
+    #[test]
+    fn repeated_calls_do_not_reach_the_provider_and_name_the_causal_run() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-repeated");
+        fx.mode("inactive");
+        let first = fx.execute(&[]);
+        assert_eq!(
+            first.status,
+            ScrapeRunStatus::ProviderAccountInactive,
+            "{first:?}"
+        );
+        assert!(!first.should_queue_repair);
+        assert!(first.repair_queue_task.is_none());
+        for _ in 0..3 {
+            let again = fx.execute(&[]);
+            assert_eq!(again.status, ScrapeRunStatus::ProviderAccountInactive);
+            assert_eq!(
+                again.run_id, first.run_id,
+                "suppressed call names the causal run"
+            );
+            assert!(again
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("kein Anbieteraufruf"));
+        }
+        assert_eq!(fx.calls(), 1, "only the first call reached the provider");
+        assert_eq!(fx.runs(), 1, "no invented runs");
+        let result: String = open_db(&fx.root)
+            .unwrap()
+            .query_row(
+                "SELECT result_json FROM scrape_run WHERE run_id=?1",
+                params![first.run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&result).unwrap()["failure_mode"],
+            "provider_account_inactive"
+        );
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn a_credential_edit_probes_exactly_once_and_success_clears_the_state() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-credential");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        fx.set_credential("v2");
+        let probe = fx.execute(&[]);
+        assert_eq!(probe.status, ScrapeRunStatus::ProviderAccountInactive);
+        assert_eq!(fx.calls(), 2, "the edited credential was probed once");
+        fx.execute(&[]);
+        assert_eq!(
+            fx.calls(),
+            2,
+            "a failed probe consumed that credential version"
+        );
+        fx.set_credential("v3");
+        fx.mode("ok");
+        let ok = fx.execute(&[]);
+        assert_eq!(ok.status, ScrapeRunStatus::Succeeded, "{ok:?}");
+        assert!(super::super::account_state::load(
+            &open_db(&fx.root).unwrap(),
+            &fx.target.target_id
+        )
+        .unwrap()
+        .is_none());
+        fx.execute(&[]);
+        assert_eq!(fx.calls(), 4, "after success calls go through again");
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    fn operator_authorization(allowed: bool, trusted: bool) -> Value {
+        json!({
+            "contract": "ctox-business-command-authorization-v1",
+            "actor": {"id": "user-owner", "role": "admin", "trusted": trusted},
+            "allowed": allowed,
+            "permission": "data.write",
+        })
+    }
+
+    #[test]
+    fn a_policy_granted_operator_probe_reaches_the_provider_once() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-operator");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        let grant = AccountProbeGrant::from_command_authorization(
+            "cmd-source-test",
+            &operator_authorization(true, true),
+        )
+        .expect("allowed trusted operator gets a grant");
+        let probe = fx.execute_granted(&grant);
+        assert_eq!(probe.status, ScrapeRunStatus::ProviderAccountInactive);
+        assert_eq!(fx.calls(), 2, "the granted probe reached the provider once");
+        fx.execute(&[]);
+        assert_eq!(fx.calls(), 2, "without a new grant calls stay suppressed");
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn the_probe_flag_from_cli_or_worker_is_refused_without_a_provider_call() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-refused");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        let args = vec![
+            "--target-key".to_string(),
+            "account-provider".to_string(),
+            "--input-json".to_string(),
+            json!({"calls": fx.root.join("calls.txt"), "mode_file": fx.root.join("mode.txt")})
+                .to_string(),
+            "--timeout-seconds".to_string(),
+            "10".to_string(),
+            "--probe-account".to_string(),
+        ];
+        let error = execute_scrape_with_outcome(&fx.root, &args)
+            .expect_err("an unauthorized --probe-account must be refused");
+        assert!(
+            format!("{error:#}").contains("--probe-account is refused"),
+            "{error:#}"
+        );
+        assert_eq!(
+            fx.calls(),
+            1,
+            "the refused probe never reached the provider"
+        );
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    /// A real worker command session: an accepted Outbound research chat task
+    /// authorized by a signed managed-user capability, and the session token
+    /// the harness issues for it. Verification runs the production path.
+    fn worker_command_session(fx: &Fixture) -> String {
+        let contract = json!({
+            "mechanism": "business_command",
+            "command_type": "outbound.lead.research_writeback",
+            "collection": "outbound_lead_generation_leads",
+            "record_ids": ["lead-worker"],
+        });
+        let (capability, _) =
+            crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                &fx.root,
+                "operator",
+                "Operator",
+                "admin",
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .unwrap();
+        crate::business_os::store::accept_rxdb_business_command_with_origin(
+            &fx.root,
+            json!({
+                "id": "worker-research-account", "module": "outbound-lead-generation",
+                "command_type": "business_os.chat.task", "record_id": "lead-worker",
+                "payload": {
+                    "instruction": "Research the lead", "mode": "data",
+                    "lead_id": "lead-worker", "company": "UITEST Account GmbH", "country": "DE",
+                    "source_policy": {"sources": [{"id": "provider.test", "target_key": "account-provider"}]},
+                    "writeback_contract": contract,
+                },
+                "client_context": {"capability_token": capability},
+            }),
+            crate::business_os::store::CommandOrigin::ReplicatedPeer,
+        )
+        .unwrap();
+        let parent = crate::mission::channels::business_command_projection(
+            &fx.root,
+            "worker-research-account",
+        )
+        .unwrap();
+        let token = crate::business_os::mcp_channel::issue_internal_command_session_token(
+            &fx.root,
+            "worker-research-account",
+            parent["payload_hash"].as_str().unwrap(),
+            "operator",
+            "admin",
+            "research-workspace",
+            &contract,
+        )
+        .unwrap();
+        // The session is genuinely valid, so a refusal below is the probe
+        // rule and not a broken session.
+        crate::business_os::mcp_channel::verify_internal_command_session_token(&fx.root, &token)
+            .expect("worker command session verifies");
+        token
+    }
+
+    #[test]
+    fn a_valid_worker_command_session_never_reaches_the_provider_with_flag_or_grant() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-worker-session");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        assert_eq!(fx.calls(), 1);
+        let token = worker_command_session(&fx);
+        let args = |extra: &[&str]| {
+            let mut args = vec![
+                "--target-key".to_string(),
+                "account-provider".to_string(),
+                "--input-json".to_string(),
+                json!({"calls": fx.root.join("calls.txt"), "mode_file": fx.root.join("mode.txt")})
+                    .to_string(),
+                "--timeout-seconds".to_string(),
+                "10".to_string(),
+                "--command-session".to_string(),
+                token.clone(),
+            ];
+            args.extend(extra.iter().map(|value| value.to_string()));
+            args
+        };
+        let refused = execute_scrape_with_outcome(&fx.root, &args(&["--probe-account"]))
+            .expect_err("a worker session cannot authorize a probe");
+        assert!(
+            format!("{refused:#}").contains("--probe-account is refused"),
+            "{refused:#}"
+        );
+        assert_eq!(
+            fx.calls(),
+            1,
+            "the refused worker probe never reached the provider"
+        );
+        let grant = AccountProbeGrant::from_command_authorization(
+            "cmd-source-test",
+            &operator_authorization(true, true),
+        )
+        .unwrap();
+        let suppressed =
+            execute_scrape_with_probe_grant(&fx.root, &args(&[]), Some(&grant)).unwrap();
+        assert_eq!(suppressed.status, ScrapeRunStatus::ProviderAccountInactive);
+        assert!(suppressed
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("kein Anbieteraufruf"));
+        assert_eq!(
+            fx.calls(),
+            1,
+            "a grant inside a worker session does not probe"
+        );
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn a_worker_session_never_authorizes_an_early_probe_even_with_a_grant() {
+        let grant = AccountProbeGrant::from_command_authorization(
+            "cmd-source-test",
+            &operator_authorization(true, true),
+        )
+        .unwrap();
+        assert!(super::super::execute::account_probe_authorized(
+            Some(&grant),
+            None
+        ));
+        assert!(!super::super::execute::account_probe_authorized(
+            Some(&grant),
+            Some("worker-session-owner")
+        ));
+        assert!(!super::super::execute::account_probe_authorized(None, None));
+    }
+
+    #[test]
+    fn only_an_allowed_trusted_authorization_yields_a_grant() {
+        assert!(AccountProbeGrant::from_command_authorization(
+            "cmd",
+            &operator_authorization(false, true)
+        )
+        .is_none());
+        assert!(AccountProbeGrant::from_command_authorization(
+            "cmd",
+            &operator_authorization(true, false)
+        )
+        .is_none());
+        assert!(AccountProbeGrant::from_command_authorization(
+            "",
+            &operator_authorization(true, true)
+        )
+        .is_none());
+        let mut foreign = operator_authorization(true, true);
+        foreign["contract"] = json!("something-else");
+        assert!(AccountProbeGrant::from_command_authorization("cmd", &foreign).is_none());
+        let mut read_only = operator_authorization(true, true);
+        read_only["permission"] = json!("data.read");
+        assert!(AccountProbeGrant::from_command_authorization("cmd", &read_only).is_none());
+        read_only.as_object_mut().unwrap().remove("permission");
+        assert!(AccountProbeGrant::from_command_authorization("cmd", &read_only).is_none());
+    }
+
+    #[test]
+    fn the_installed_credential_ref_form_names_the_credential() {
+        let scope = crate::secrets::credential_scope();
+        let config = json!({
+            "expected_provider": "linkedin.com",
+            "credential_ref": format!("ctox-secret://{scope}/BRIGHTDATA_API_KEY"),
+        });
+        assert_eq!(
+            super::super::execute::target_credential_name(&config).as_deref(),
+            Some("BRIGHTDATA_API_KEY")
+        );
+        // An explicit secret name still wins; a malformed reference falls back.
+        let explicit = json!({"credential_secret_name": "OTHER_KEY", "credential_ref": format!("ctox-secret://{scope}/BRIGHTDATA_API_KEY")});
+        assert_eq!(
+            super::super::execute::target_credential_name(&explicit).as_deref(),
+            Some("OTHER_KEY")
+        );
+        let malformed =
+            json!({"expected_provider": "linkedin.com", "credential_ref": "https://evil.test/KEY"});
+        assert_ne!(
+            super::super::execute::target_credential_name(&malformed).as_deref(),
+            Some("KEY")
+        );
+    }
+
+    #[test]
+    fn an_unreadable_secret_store_is_not_absent() {
+        let record = crate::secrets::SecretRecordView {
+            secret_id: "s1".to_string(),
+            scope: crate::secrets::credential_scope().to_string(),
+            secret_name: "BRIGHTDATA_API_KEY".to_string(),
+            description: None,
+            metadata: json!({}),
+            created_at: "2026-09-27T10:00:00Z".to_string(),
+            updated_at: "2026-09-27T11:00:00Z".to_string(),
+        };
+        assert_eq!(
+            super::super::execute::credential_version(Ok(vec![record]), "BRIGHTDATA_API_KEY")
+                .as_deref(),
+            Some("2026-09-27T11:00:00Z")
+        );
+        assert_eq!(
+            super::super::execute::credential_version(Ok(Vec::new()), "BRIGHTDATA_API_KEY")
+                .as_deref(),
+            Some("absent")
+        );
+        assert_eq!(
+            super::super::execute::credential_version(
+                Err(anyhow::anyhow!("secret store locked")),
+                "BRIGHTDATA_API_KEY"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn input_errors_stay_separate_from_the_account_state() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-input");
+        fx.mode("input");
+        let outcome = fx.execute(&[]);
+        assert_eq!(outcome.status, ScrapeRunStatus::PortalDrift);
+        fx.execute(&[]);
+        assert_eq!(fx.calls(), 2, "input errors are not suppressed");
+        assert!(super::super::account_state::load(
+            &open_db(&fx.root).unwrap(),
+            &fx.target.target_id
+        )
+        .unwrap()
+        .is_none());
+        let _ = fs::remove_dir_all(&fx.root);
+    }
 }

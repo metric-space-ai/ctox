@@ -39,10 +39,10 @@ for example `runtime/ticket_local.db` and `runtime/ctox_scraping.db`.
 Every service-owned queue attempt starts with `update_plan` as its required
 initial harness tool. Until that call succeeds, the fork exposes no other tool
 to the model. A plan contains at least one ordered step and is valid only as a
-completed prefix, at most one active step, and a pending suffix. Successful
-assistant persistence fails closed unless the latest durable plan exists and
-all model-owned steps are completed; only then may the native CTOX review
-begin.
+completed prefix, at most one active step, and a pending suffix. Assistant
+persistence requires a durable plan, but incomplete plans may enter review so
+blocked work can retain honest pending steps. Only validated completion with
+all model-owned steps completed may reach terminal success and 100 percent.
 
 `task_execution_plan_revisions` is the authoritative plan history. Status-only
 updates rewrite the current revision, while changed labels, count, or order
@@ -52,6 +52,22 @@ stable event id. Each model tool start, including `update_plan`, and each new
 reasoning section contributes one activity turn. Streaming deltas, tool ends,
 and transport replays do not. Reasoning contents are never copied into this
 store.
+
+The direct-session adapter accepts both typed `TurnPlanUpdated` notifications
+and legacy `PlanUpdate` events. Typed plans require the current thread and turn
+ids; their explicit identity does not depend on receiving a legacy turn-start
+event first. Both forms normalize to the same plan payload and deduplicate
+within the turn before progress counters and durable persistence. A real plan
+is still required before review: the adapter never invents completed steps
+from a reply or a writeback receipt.
+
+The completion reviewer receives the latest durable plan revision for the
+stable work key, including its task and command identities, phase, review
+status and step statuses. This is a latest-work-key query, not an attempt-local
+filter: retries can create a newer revision while prior revisions remain
+evidence. Completed plan steps do not establish review approval or prove a
+requested side effect. Missing, incomplete and failed-review evidence remains
+subject to the deterministic completion and recovery gates.
 
 Plan steps own the first 90 percent of progress, divided equally and rounded:
 `round(90 * completed_steps / total_steps)`. Completed model work remains at
@@ -248,17 +264,27 @@ execution:
 
 Plan-step messages force continuity refresh because they are task boundaries.
 Normal worker slices reuse one named, non-ephemeral harness thread. Its rollout
-is resumed after a service restart. Jobs with a replacement base prompt or a
-narrow no-MCP profile remain deliberately isolated sessions because they have a
-different capability/instruction contract. A queue job's workspace is applied
-as the typed per-turn cwd rather than encoded only in prompt prose.
+is resumed after a service restart. If lookup of that named thread fails, or
+resume of an identified thread fails, or `turn/start` is rejected on the bound
+thread, the native adapter returns an actionable error. It does not start a
+replacement thread and does not resubmit the turn. Ambiguous `turn/start`
+outcomes (timeout, transport, or decode) still poison the process-local session
+so a duplicate turn cannot be issued. First-time creation remains allowed when
+lookup completes and finds no named durable thread. Jobs with a replacement
+base prompt or a narrow no-MCP profile remain deliberately isolated sessions
+because they have a different capability/instruction contract; isolated
+sessions still start fresh/ephemeral threads and may rotate once after a
+definitive `turn/start` rejection. A queue job's workspace is applied as the
+typed per-turn cwd rather than encoded only in prompt prose.
 Systematic-research jobs are also isolated: each attempt starts a fresh
 non-persistent session with the typed CTOX Web tools. This prevents prior
 research history from influencing a new evidence run while preserving the
 server-authoritative research toolchain.
 Before reuse, the worker compares the current composed base instructions and
 model with the live session contract. A mismatch rebuilds the process-local
-client and resumes the durable thread with the new contract.
+client and resumes the durable thread with the new contract. This native
+in-process continuity is not Codex/Claude export/import, cross-device restore,
+or checkpoint-certified provider failover.
 
 Turn timeout defaults follow the resolved provider boundary. Native local
 inference keeps the long local budget; a local proxy/process that resolves to
@@ -289,6 +315,12 @@ one-hour local-inference timeout.
 Direct-session model events write token and timing forensics to
 `runtime/context-log.jsonl`. Worker failures are persisted as structured
 `messages.agent_outcome` values rather than by scraping assistant text.
+
+The direct-session adapter retains an explicitly final answer when a separate
+terminal `ctox-crew` metadata block follows in the same turn. Known commentary
+is never promoted to the reply. Unphased providers keep last-message behavior;
+an unphased earlier message is not evidence for recovering an answer from a
+metadata-only completion. Existing thread and turn attribution gates still apply.
 
 On Linux, CTOX-managed in-process sessions select the stable Landlock backend
 for root workers and reviewers. Normal workers can read and write their current
@@ -382,7 +414,27 @@ only and do not decide refresh behavior.
 A successful model turn does not automatically close work. The service starts a
 completion review unless the source is internal queue-guard maintenance. The
 reviewer runs as a separate skeptical pass over the worker result and returns a
-typed disposition:
+typed disposition. Review reports separately declare
+`TASK_OUTCOME: completed|blocked|unverified`. Only `completed` with acceptable
+independent proof can pass. Missing, unknown, or conflicting declarations fail
+closed. A truthful blocker report does not complete requested execution; a
+verified query with zero matches can complete it. Review admission preserves
+incomplete plan steps and their actual progress.
+
+When an otherwise accepted Business OS chat queue result still has incomplete
+durable plan steps, finalization records a terminal failure with the same
+attempt/work key and plan revision/counts. It does not complete those steps,
+replay research/writebacks, or enqueue an automatic recovery prompt. Partial
+writeback receipts are retained evidence, not completion proof. Reconciliation
+of the saved result and plan must precede an explicit retry. Storage failures
+remain recoverable from the stored attempt.
+
+The failure transition checks current plan and lease ownership under an
+Immediate transaction. A prior nonterminal hold's effect marker is preserved;
+it cannot swallow this terminal transition. Cancellation and other terminal
+owners are retained. A changed lease or plan is not overwritten.
+
+The supported dispositions are:
 
 - `Approved`
 - `Hold`
@@ -422,6 +474,22 @@ app authoring and jobs that share context retain serial dispatch. Slots are
 reserved before thread startup and released through worker cleanup or lease
 expiry. The orphan sweep protects live worker registrations, never the entire
 inflight cache merely because an unrelated worker is busy.
+A serial worker consumes one capacity slot instead of blocking every isolated
+chat. A buffered serial backlog reserves one serial slot rather than consuming
+one slot per waiting job; unstarted chat reservations each consume a slot.
+Active thread identities remain exclusive across both admission paths. Direct and
+buffered serial prompts wait for worker registrations and startup reservations
+to drain, even when another worker's finalization has cleared the UI busy flag.
+The normal idle dispatcher then starts the next buffered prompt. App recovery,
+lease acquisition, pause, working hours, and runtime-blocker gates still apply.
+
+Adapter reconciliation admission coalesces an identical configuration while an
+open reconciliation exists in the same module, record and authorization/context.
+The redundant command keeps its own immutable task identity and is cancelled
+atomically before leasing, with `adapter_reconciliation_superseded` and result
+references `superseded_by_command_id` / `superseded_by_task_id`. It is not marked
+successful and shares no review evidence. Changed configurations and a new
+request after the preceding reconciliation finishes still create work.
 
 A research writeback contract with mechanism=business_command, command_type,
 collection and record_ids enables a signed, scoped Business OS MCP session even
@@ -512,6 +580,15 @@ persisted reviewer provenance.
 Rejected or incomplete work is fed back into the same durable queue item or
 internal work item where possible. The review path has finite retry budgets and eventually
 fails terminally instead of creating unbounded review/rework cascades.
+
+Founder communication rework spends its existing two-attempt review-rejection
+budget from the durable routing `attempt` count, scoped to the same self-work
+item. Re-leasing one queue row therefore cannot bypass the budget by keeping
+the message count at one. Legacy or not-yet-leased rows still reserve at least
+one attempt each. Exhaustion fails the matching rework rows and item once;
+unrelated work and the original email are not sent or mutated by this counter.
+The separate reviewed-send evidence gate still prevents an unsent rework from
+closing successfully.
 
 Transient model/API failures also keep the original durable identity. A typed
 Business OS command moves from `running` to `retry_wait` before its linked queue
@@ -749,18 +826,47 @@ missing liveness, review, outcome, or spawn evidence with prompt text.
 
 ## Crew-Identität
 
-Die Core-Migration der Kommunikations-Queue legt vier feste Mitglieder (Milo,
-Nori, Lumi, Pico) idempotent an. Ihre IDs, Formen, Farben und `soul_json` bleiben
-bei Neustarts und Migrationen erhalten. `crew_members` und
-`crew_member_learnings` sind die Autorität; `crew_attempts` bindet ein Mitglied
-an genau eine Attempt-ID und verbucht dessen Ergebnis höchstens einmal.
+Die Crew ist ein Kollektiv in einem seriellen Harness: keine Wesen-Sessions,
+keine Wesen-Threads, kein zweiter Speicher. Die Mitglieder sind Experten im
+Sinn einer Mixture of Experts: Sie existieren, damit Wissen über bestimmte
+Tätigkeiten getrennt verwaltet und gezielt geladen wird. Die Core-Migration der
+Kommunikations-Queue legt vier feste Mitglieder (Milo, Nori, Lumi, Pico)
+idempotent an. Ihre IDs, Formen, Farben und `soul_json` (Persona) bleiben bei
+Neustarts und Migrationen erhalten. `crew_members` ist die Autorität für die
+Persona; das **Gedächtnis eines Mitglieds liegt im LCM**: Continuity-Dokumente
+(Narrative = Erfahrung, Anchors = gesichertes Wissen) der Mitglieds-Konversation
+`crew:<member_id>` (`crew::memory::member_conversation_id`), mit denselben
+Commits, demselben Refresh-Prompt und derselben Kompaktierung wie jede andere
+Konversation. `crew_attempts` bindet ein Mitglied an genau eine Attempt-ID,
+speichert die Aufgaben-Zusammenfassung (`task_summary`) und verbucht das
+Ergebnis höchstens einmal. Die frühere Tabelle `crew_member_learnings` wird beim
+ersten Einsatz eines Mitglieds einmalig in dessen Anchors überführt
+(`migrated_to_lcm`).
 
-Erst nach den fünf Zulassungs-/Hold-/Redirect-Guards wählt `crew::select` als reine Funktion: manuelle
-Zuordnung vor Thread-Kontinuität, danach Spezialitäten, passende Erfolge und
-Fehlschläge der letzten 24 Stunden. Bei Gleichstand entscheiden letzte Aktivität
-und ID. Archivierte Mitglieder werden nicht neu ausgewählt. Ein wiederaufgenommener
-Versuch behält seine ursprüngliche Identität. Die wörtliche Begründung steht im
-Harness-Flow-Ereignis `crew_selected` und in dessen Cockpit-Projektion.
+Erst nach den fünf Zulassungs-/Hold-/Redirect-Guards und vor der
+Schreib-Transaktion entscheidet der **Router** (`crew::router`): manuelle
+Zuordnung vor Thread-Kontinuität; sonst ein gebundener, werkzeugfreier
+Modellaufruf (60 s) mit der Aufgabe und je aktivem Mitglied Persona, Lebenslauf,
+letzten Einsätzen mit Ausgang, Anchors und Narrative-Kopf. Regel: ähnlichste
+gut ausgegangene Erfahrung gewinnt; ohne verwandte Erfahrung das Mitglied mit
+den wenigsten Einsätzen, damit sich Wissen im Pool verteilt; wiederholte
+Fehlschläge in der Tätigkeit nur ohne Alternative. Die Antwort ist JSON
+(`member_id`, `reason`); ein unbrauchbares oder unerreichbares Urteil fällt auf
+die deterministische Punktzahl (`crew::select`) zurück, und die Begründung sagt
+das. Archivierte Mitglieder werden nicht neu ausgewählt. Ein wiederaufgenommener
+Versuch behält seine ursprüngliche Identität. Die Zulassung prüft die bestehende
+Attempt-Zeile innerhalb derselben Schreibtransaktion wie die Crew-Bindung:
+Aufgabe und Mitglied müssen übereinstimmen, und der Attempt darf noch nicht
+finalisiert sein. Ein Konflikt verbraucht keine manuelle Zuweisung und schreibt
+keine neue Auswahl. Ein neuer Versuch benötigt eine neue Attempt-ID. Diese
+Prüfung ist eine Voraussetzung für die externe Crew-Anbindung, noch keine
+externe Laufzulassungs-API. Der separate [MCP-Kontextabruf](docs/workjet-crew-context.md)
+liefert nur den gebundenen Kontext eines bereits zugelassenen Versuchs unter
+bestehenden privaten Crew-Leserechten. Die wörtliche Begründung steht im
+Harness-Flow-Ereignis `crew_selected` (`selection_kind` routed/selected/
+assigned/continuity) und in dessen Cockpit-Projektion; das Lesen des
+Gedächtnisses erzeugt `crew.memory_read`. In Tests ist kein Router-Urteil
+aktiv (`cfg!(test)`), damit Zulassung nie von einem Provider abhängt.
 `crew_assigned_member_id` ist eine einmalige Owner-Zuweisung und wird bei der
 erfolgreichen Übernahme geleert; ein Crew-Fehler erhält die manuelle Zuweisung.
 `crew_member_id` beschreibt ausschließlich die tatsächliche
@@ -793,15 +899,20 @@ finalisierte Crew-Attempts plus alle Attempts nichtterminaler Tasks. Löschungen
 alter Schein-Start-Ereignisse werden über eine kleine dauerhafte Tombstone-Outbox
 wiederholbar in die Projektion übertragen.
 
-Der Soul-Block wird deterministisch aus fünf Achsen, Charakter, Stimme und
-Statistik gerendert. Höchstens acht bestätigte und zwei ausdrücklich unbestätigte,
-zum Scope passende Learnings werden angefügt. Unbestätigte Learnings ohne Scope
-werden nie injiziert; gesetzte Modul-/Command-/Thread-Scopes müssen jeweils passen.
-E-Mail-Adressen bleiben in Learnings und Rückblicken verboten, ebenso wie
-Geheimnisse und Dateipfade; reine Erwähnungen wie `@Milo` bleiben zulässig.
-Zeilenumbrüche und Mehrfach-Whitespace werden zu einzelnen Leerzeichen normalisiert. Der Block ist auf 4.000 UTF-8-Bytes
-begrenzt, steht auf dem tatsächlichen Prompt-Pfad nach dem CTO-Systemkontext und
-den Ausführungsregeln und verleiht keine zusätzlichen Befugnisse.
+Die Persona und das Gedächtnis reisen in den Spuren des Kontextvertrags
+(`docs/context-build.md`), nie in der Nutzernachricht. Die **Persona**
+(`crew::memory::render_persona`: Charakter, Stimme, Arbeitsweise in fünf
+Intensitätsstufen je Regler, Erfahrung; höchstens 2.400 Bytes) wird als Suffix
+der Basis-Instruktionen gerendert (`compose_base_instructions`) und ist Teil des
+Sitzungsvertrags: Ein Mitgliedswechsel baut den prozesslokalen Client neu auf,
+der dauerhafte Thread wird mit dem neuen Vertrag fortgesetzt. Das **Gedächtnis**
+(`render_memory_block`: Anchors, jüngste Narrative-Einträge, letzte Einsätze;
+höchstens 6.000 Bytes) ist ein Block im markierten Runtime-Kontext
+(`attach_crew_memory`, Developer-Spur, nach gebundenem Skill) und entfällt,
+wenn es nichts zu wissen gibt. Beide stehen nach dem CTO-Systemkontext und den
+Ausführungsregeln und verleihen keine zusätzlichen Befugnisse. E-Mail-Adressen,
+Geheimnisse und Dateipfade bleiben in Rückblicken und Learnings verboten;
+Whitespace wird normalisiert.
 
 Der bestehende finale Worker-Text darf ein JSON-Objekt `crew_retrospective`
 enthalten (bevorzugt in einem reservierten `ctox-crew`-Codeblock): `retrospective` mit höchstens 300 Zeichen
@@ -813,10 +924,18 @@ Fehlschlag stammen; `preference` benötigt ein wörtliches, belegtes Owner-Zitat
 Der sichtbare Antworttext enthält diesen Metadatenblock nicht; die vollständige
 Nachricht bleibt als Attempt-Evidenz erhalten. Owner-Zitate werden gegen den
 nativ autorisierten Admin/Chef-Command geprüft, nicht gegen die Behauptung des
-Workers. Ungültige Abschlüsse erzeugen keine Learnings. Alles wird zunächst unbestätigt
-gespeichert, ohne zusätzlichen Modellaufruf. Der Projektions-Pump verbucht Stats
-und Rückblick transaktional; Retention lässt höchstens 200 Learnings je Mitglied
-stehen und entfernt zuerst die ältesten unbestätigten.
+Workers. Ungültige Abschlüsse erzeugen keine Learnings. Der Projektions-Pump verbucht
+Stats, Rückblick und die typisierten Learnings (`learning_json`) transaktional
+am Attempt und markiert ihn `learning_due`. Das **Lernen** läuft danach seriell
+im 60-Sekunden-Wartungslauf (`crew::memory::run_learning_tick`, ein Attempt je
+Tick): Die Learnings werden als Hypothese-Anchors in das Gedächtnis des
+Mitglieds geschrieben, der Einsatz wird als Nachricht der Mitglieds-Konversation
+abgelegt, und der bestehende werkzeugbasierte Continuity-Refresh
+(`refresh_member_memory`, Narrative + Anchors) destilliert daraus Erfahrung und
+Wissen. Ergebnis und Fehler stehen im Ereignis `crew.learning`. Der Owner
+kuratiert über `ctox.crew.memory.update` (diff/replace/full auf dieselben
+Dokumente); die Projektion `ctox_crew_members` trägt `memory` (nur für
+Chef/Admin/Founder) und das abgeleitete Fachgebiet `domain`.
 
 `ctox crew list` und `ctox crew show <id>` lesen diese Core-Identität ohne Browser.
 Queue-Zulassung, Review-Gates, Kapazität und Wiederholungssemantik bleiben unverändert.

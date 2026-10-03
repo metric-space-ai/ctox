@@ -264,6 +264,16 @@ pub trait RxStorage: Send + Sync {
     ) -> Result<std::sync::Arc<dyn RxStorageInstance>, RxError>;
 }
 
+/// Internal storage snapshot events, not a wire cursor or authorization proof.
+/// The counter belongs to one live source/table incarnation. A service must
+/// bind it to its authenticated source epoch before using it for continuity.
+#[derive(Debug, Clone)]
+pub enum RxStorageSnapshotEvent {
+    Start { change_counter: u64 },
+    Documents(Vec<Value>),
+    End,
+}
+
 // ref: rxdb/src/types/rx-storage-instance.d.ts RxStorageInstance<RxDocType, Internals, InstanceCreationOptions, CheckpointType>
 //
 // T1: trait-object form. Operations are `async fn` via `#[async_trait]`.
@@ -322,6 +332,19 @@ pub trait RxStorageInstance: Send + Sync {
         _prepared_query: &Value,
         _chunk_size: usize,
         _on_batch: &mut (dyn FnMut(Vec<Value>) -> Result<bool, RxError> + Send),
+    ) -> Option<Result<(), RxError>> {
+        None
+    }
+
+    /// Read a query and its source change counter from the SAME storage snapshot.
+    /// Run on a blocking worker, with bounded/cancellable delivery in the visitor.
+    /// Returning false cancels without End. Unsupported backends return None;
+    /// callers must not manufacture a boundary from query() plus a status read.
+    fn query_snapshot_stream_into_blocking(
+        &self,
+        _prepared_query: &Value,
+        _chunk_size: usize,
+        _on_event: &mut (dyn FnMut(RxStorageSnapshotEvent) -> Result<bool, RxError> + Send),
     ) -> Option<Result<(), RxError>> {
         None
     }

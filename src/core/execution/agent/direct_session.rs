@@ -19,15 +19,13 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use ctox_app_server_client::{
-    InProcessAppServerClient, InProcessClientStartArgs, InProcessServerEvent, TypedRequestError,
+    InProcessAppServerClient, InProcessClientStartArgs, InProcessServerEvent,
     DEFAULT_IN_PROCESS_CHANNEL_CAPACITY,
 };
 use ctox_app_server_protocol::{
-    ClientRequest, JSONRPCNotification, RequestId, ServerNotification, ThreadCompactStartParams,
-    ThreadCompactStartResponse, ThreadListParams, ThreadListResponse, ThreadResumeParams,
-    ThreadResumeResponse, ThreadSetNameParams, ThreadSetNameResponse, ThreadSortKey,
-    ThreadSourceKind, ThreadStartParams, ThreadStartResponse, TurnInterruptParams,
-    TurnInterruptResponse, TurnStartParams, TurnStartResponse,
+    ClientRequest, JSONRPCNotification, ServerNotification, ThreadCompactStartParams,
+    ThreadCompactStartResponse, TurnInterruptParams, TurnInterruptResponse, TurnStartParams,
+    TurnStartResponse,
 };
 use ctox_arg0::Arg0DispatchPaths;
 use ctox_cloud_requirements::cloud_requirements_loader;
@@ -40,6 +38,7 @@ use ctox_core::ThreadManager;
 use ctox_feedback::CodexFeedback;
 use ctox_protocol::config_types::SandboxMode;
 use ctox_protocol::openai_models::ReasoningEffort;
+use ctox_protocol::plan_tool::{PlanItemArg, StepStatus, UpdatePlanArgs};
 use ctox_protocol::protocol::{
     AskForApproval, CodexErrorInfo, EventMsg, SandboxPolicy, SessionSource,
 };
@@ -53,6 +52,14 @@ use crate::inference::engine;
 use crate::inference::runtime_kernel;
 use crate::inference::runtime_state;
 use crate::secrets;
+
+pub(crate) use super::session_continuity::SessionPoisoned;
+use super::session_continuity::{
+    bind_session_thread, start_bound_turn, RequestIdSeq, SessionControlTimeouts, SessionThreadSpec,
+};
+#[path = "direct_session_reply.rs"]
+mod reply_capture;
+use reply_capture::DirectSessionReplyCapture;
 
 const OPENAI_AUTH_MODE_KEY: &str = "CTOX_OPENAI_AUTH_MODE";
 const OPENAI_AUTH_MODE_CHATGPT_SUBSCRIPTION: &str = "chatgpt_subscription";
@@ -72,6 +79,16 @@ const DIRECT_SESSION_INTERRUPT_TIMEOUT_SECS: u64 = 10;
 // bounded: an unbounded await here hangs the whole prompt worker when the
 // session runtime is wedged (ctox#21).
 const DIRECT_SESSION_TURN_START_TIMEOUT_SECS: u64 = 30;
+
+fn production_session_control_timeouts() -> SessionControlTimeouts {
+    SessionControlTimeouts {
+        list: Duration::from_secs(DIRECT_SESSION_CONTROL_REQUEST_TIMEOUT_SECS),
+        resume: Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
+        start: Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
+        turn_start: Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
+    }
+}
+
 const EXACT_PROMPT_SAFE_INPUT_BUDGET_NUMERATOR: i64 = 3;
 const EXACT_PROMPT_SAFE_INPUT_BUDGET_DENOMINATOR: i64 = 4;
 const CTOX_PERSISTENT_WORKER_THREAD_NAME: &str = "ctox-service-worker";
@@ -88,6 +105,11 @@ const BUSINESS_OS_MCP_SESSION_TOOLS: &[&str] = &[
     "business_os.list_module_actions",
     "business_os.propose_action",
     "business_os.execute_action",
+    // Befund 07.09.2026: the research writeback contract (mechanism
+    // business_command, command_type outbound.lead.research_writeback) can only
+    // be fulfilled through this tool. Without it in the session allowlist every
+    // research task ends in "no successful writeback receipt".
+    "business_os.execute_writeback",
     "business_os.get_command_status",
     "business_os.list_runs",
     "business_os.get_run",
@@ -145,7 +167,10 @@ fn business_os_mcp_thread_config(
                 },
                 "enabled": true,
                 "required": true,
-                "startup_timeout_sec": 10,
+                // 10 s was too short under business-os.sqlite3 write contention:
+                // seven research runs failed on 25.09.2026 with "timed out
+                // handshaking with MCP server after 10s" while a browser synced.
+                "startup_timeout_sec": 45,
                 "tool_timeout_sec": 120,
                 "enabled_tools": BUSINESS_OS_MCP_SESSION_TOOLS
             }
@@ -563,23 +588,35 @@ fn escape_json_fragment(value: &str) -> String {
 /// Sessions that pass an override (completion review, queue repair) own their
 /// entire system prompt. They intentionally do not inherit the worker prompt:
 /// a reviewer must not be instructed to perform worker actions.
+///
+/// A crew persona is identity: it is appended after the complete system prompt
+/// and execution contract (never above them) and becomes part of the session
+/// contract, so a member change rebuilds the process-local client.
 fn compose_base_instructions(
     root: &Path,
     settings: &BTreeMap<String, String>,
     override_prompt: Option<&str>,
+    persona: Option<&str>,
 ) -> Result<String> {
-    if let Some(prompt) = override_prompt
+    let base = if let Some(prompt) = override_prompt
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return Ok(prompt.to_string());
-    }
-    let system_prompt = live_context::render_system_prompt(root, settings)
-        .context("failed to render CTOX worker system prompt")?;
-    Ok(format!(
-        "{}\n\n{CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS}",
-        system_prompt.trim_end()
-    ))
+        prompt.to_string()
+    } else {
+        let system_prompt = live_context::render_system_prompt(root, settings)
+            .context("failed to render CTOX worker system prompt")?;
+        format!(
+            "{}\n\n{CTOX_DIRECT_SESSION_BASE_INSTRUCTIONS}",
+            system_prompt.trim_end()
+        )
+    };
+    Ok(
+        match persona.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(persona) => format!("{}\n\n{persona}", base.trim_end()),
+            None => base,
+        },
+    )
 }
 
 fn openai_chatgpt_subscription_auth_enabled(settings: &BTreeMap<String, String>) -> bool {
@@ -727,20 +764,6 @@ fn direct_session_deadline_capped_timeout(
 // PersistentSession — lives across normal worker turns and bounded helper turns
 // ---------------------------------------------------------------------------
 
-/// Marker error for ambiguous turn outcomes that must poison the session.
-/// Carried through anyhow so `run_turn_inner_with_context` can flip the
-/// session's `poisoned` flag on the way out.
-#[derive(Debug)]
-pub(crate) struct SessionPoisoned(pub(crate) String);
-
-impl std::fmt::Display for SessionPoisoned {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-impl std::error::Error for SessionPoisoned {}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TurnRuntimeErrorClass {
     StreamDisconnected,
@@ -824,9 +847,13 @@ pub(crate) struct PersistentSession {
 
 impl PersistentSession {
     /// Start or resume the normal persistent worker session.
-    pub fn start(root: &Path, settings: &BTreeMap<String, String>) -> Result<Self> {
+    pub fn start(
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+        persona: Option<&str>,
+    ) -> Result<Self> {
         Self::start_with_instructions_and_tool_mode(
-            root, settings, None, false, false, false, None, false, true,
+            root, settings, None, persona, false, false, false, None, false, true,
         )
     }
 
@@ -836,6 +863,7 @@ impl PersistentSession {
         root: &Path,
         settings: &BTreeMap<String, String>,
         command_session_token: &str,
+        persona: Option<&str>,
     ) -> Result<Self> {
         let addr = settings
             .get(BUSINESS_OS_MCP_ADDR_KEY)
@@ -847,6 +875,7 @@ impl PersistentSession {
             root,
             settings,
             None,
+            persona,
             false,
             false,
             false,
@@ -858,9 +887,13 @@ impl PersistentSession {
 
     /// Start a fresh worker session that cannot resume the process-wide
     /// persistent harness thread.
-    pub(crate) fn start_isolated(root: &Path, settings: &BTreeMap<String, String>) -> Result<Self> {
+    pub(crate) fn start_isolated(
+        root: &Path,
+        settings: &BTreeMap<String, String>,
+        persona: Option<&str>,
+    ) -> Result<Self> {
         Self::start_with_instructions_and_tool_mode(
-            root, settings, None, false, false, false, None, false, false,
+            root, settings, None, persona, false, false, false, None, false, false,
         )
     }
 
@@ -872,11 +905,13 @@ impl PersistentSession {
         root: &Path,
         settings: &BTreeMap<String, String>,
         base_instructions: Option<&str>,
+        persona: Option<&str>,
     ) -> Result<Self> {
         Self::start_with_instructions_and_tool_mode(
             root,
             settings,
             base_instructions,
+            persona,
             false,
             false,
             true,
@@ -900,8 +935,9 @@ impl PersistentSession {
         &self,
         root: &Path,
         settings: &BTreeMap<String, String>,
+        persona: Option<&str>,
     ) -> Result<bool> {
-        let base_instructions = compose_base_instructions(root, settings, None)?;
+        let base_instructions = compose_base_instructions(root, settings, None, persona)?;
         let runtime_model = runtime_kernel::InferenceRuntimeKernel::resolve(root)
             .ok()
             .and_then(|runtime| {
@@ -953,6 +989,7 @@ impl PersistentSession {
             root,
             settings,
             base_instructions,
+            None,
             disable_compaction,
             disable_compaction,
             false,
@@ -977,6 +1014,7 @@ impl PersistentSession {
             root,
             settings,
             base_instructions,
+            None,  // persona: reviewers never carry a crew identity
             true,  // disable_compaction
             false, // disable_active_tools
             true,  // disable_mcp_servers
@@ -1002,6 +1040,7 @@ impl PersistentSession {
             root,
             settings,
             base_instructions,
+            None,  // persona: reviewers never carry a crew identity
             true,  // disable_compaction
             true,  // disable_active_tools
             true,  // disable_mcp_servers
@@ -1011,10 +1050,12 @@ impl PersistentSession {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn start_with_instructions_and_tool_mode(
         root: &Path,
         settings: &BTreeMap<String, String>,
         base_instructions: Option<&str>,
+        persona: Option<&str>,
         disable_compaction: bool,
         disable_active_tools: bool,
         disable_mcp_servers: bool,
@@ -1029,7 +1070,7 @@ impl PersistentSession {
             .context("failed to start tokio runtime")?;
 
         let composed_base_instructions =
-            compose_base_instructions(root, settings, base_instructions)?;
+            compose_base_instructions(root, settings, base_instructions, persona)?;
         let start_result = rt.block_on(async {
             Self::start_client_and_thread(
                 root,
@@ -1529,7 +1570,7 @@ impl PersistentSession {
         };
 
         eprintln!("[ctox direct-session] starting InProcessAppServerClient...");
-        let mut client = InProcessAppServerClient::start(start_args)
+        let client = InProcessAppServerClient::start(start_args)
             .await
             .map_err(|err| anyhow::anyhow!("client start: {err}"))?;
         eprintln!("[ctox direct-session] client started");
@@ -1537,108 +1578,19 @@ impl PersistentSession {
         let mut seq = RequestIdSeq::new();
         let canonical_cwd = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
         let persistent_thread_name = persistent_worker.then(|| persistent_worker_thread_name(root));
-        let resumable_thread_id = if let Some(persistent_thread_name) =
-            persistent_thread_name.as_deref()
-        {
-            match client
-                .request_typed::<ThreadListResponse>(ClientRequest::ThreadList {
-                    request_id: seq.next(),
-                    params: ThreadListParams {
-                        cursor: None,
-                        limit: Some(20),
-                        sort_key: Some(ThreadSortKey::UpdatedAt),
-                        model_providers: None,
-                        source_kinds: Some(vec![ThreadSourceKind::Exec]),
-                        archived: Some(false),
-                        cwd: None,
-                        search_term: Some(persistent_thread_name.to_string()),
-                    },
-                })
-                .await
-            {
-                Ok(response) => response
-                    .data
-                    .into_iter()
-                    .find(|thread| {
-                        !thread.ephemeral && thread.name.as_deref() == Some(persistent_thread_name)
-                    })
-                    .map(|thread| thread.id),
-                Err(err) => {
-                    eprintln!(
-                        "[ctox direct-session] persistent thread lookup failed; starting fresh: {err}"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
+        let spec = SessionThreadSpec {
+            model: &model,
+            model_provider: selected_provider_id.as_deref(),
+            cwd: &canonical_cwd,
+            base_instructions,
+            disable_active_tools,
+            disable_mcp_servers,
+            thread_config,
+            persistent_worker,
+            persistent_thread_name: persistent_thread_name.as_deref(),
         };
-
-        let thread_id = if let Some(thread_id) = resumable_thread_id {
-            match client
-                .request_typed::<ThreadResumeResponse>(ClientRequest::ThreadResume {
-                    request_id: seq.next(),
-                    params: ThreadResumeParams {
-                        thread_id: thread_id.clone(),
-                        history: None,
-                        path: None,
-                        model: Some(model.clone()),
-                        model_provider: selected_provider_id.clone(),
-                        service_tier: None,
-                        cwd: Some(canonical_cwd.to_string_lossy().to_string()),
-                        approval_policy: Some(AskForApproval::Never.into()),
-                        approvals_reviewer: None,
-                        sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
-                        config: None,
-                        base_instructions: Some(base_instructions.to_string()),
-                        developer_instructions: None,
-                        personality: None,
-                        persist_extended_history: true,
-                    },
-                })
-                .await
-            {
-                Ok(response) => {
-                    let resumed_id = response.thread.id;
-                    eprintln!("[ctox direct-session] thread resumed: {resumed_id}");
-                    resumed_id
-                }
-                Err(err) => {
-                    eprintln!(
-                        "[ctox direct-session] thread/resume failed for {thread_id}; starting fresh: {err}"
-                    );
-                    start_session_thread(
-                        &mut client,
-                        &mut seq,
-                        &model,
-                        selected_provider_id.as_deref(),
-                        &canonical_cwd,
-                        base_instructions,
-                        disable_active_tools,
-                        disable_mcp_servers,
-                        thread_config,
-                        persistent_worker,
-                        persistent_thread_name.as_deref(),
-                    )
-                    .await?
-                }
-            }
-        } else {
-            start_session_thread(
-                &mut client,
-                &mut seq,
-                &model,
-                selected_provider_id.as_deref(),
-                &canonical_cwd,
-                base_instructions,
-                disable_active_tools,
-                disable_mcp_servers,
-                thread_config,
-                persistent_worker,
-                persistent_thread_name.as_deref(),
-            )
-            .await?
-        };
+        let timeouts = production_session_control_timeouts();
+        let thread_id = bind_session_thread(&client, &mut seq, &spec, &timeouts).await?;
 
         Ok((
             client,
@@ -1686,8 +1638,9 @@ impl PersistentSession {
         // and ephemeral threads stay registered in the in-memory manager.
         // Reuse makes a slice (main turn + continuity refreshes) one thread,
         // sends the base instructions once instead of four times, and is the
-        // first building block of the long-lived worker session. A defensive
-        // fallback below still rotates the thread if TurnStart reports it
+        // first building block of the long-lived worker session. Persistent
+        // workers fail closed on a rejected turn/start instead of rotating.
+        // Isolated sessions still rotate once if TurnStart reports the thread
         // missing.
         let thread_id = session_thread_id.clone();
 
@@ -1767,8 +1720,9 @@ impl PersistentSession {
             }
         }
 
-        // TurnStart on the session thread, with a one-shot rotation fallback
-        // if the thread genuinely went away (defensive; see comment above).
+        // TurnStart on the bound session thread. Persistent workers refuse
+        // replacement threads; isolated sessions still rotate once on a
+        // definitive server rejection.
         let turn_start_params = |thread_id: &str| TurnStartParams {
             thread_id: thread_id.to_string(),
             input: vec![UserInput::Text {
@@ -1797,99 +1751,37 @@ impl PersistentSession {
             output_schema: None,
             collaboration_mode: None,
         };
-        // A turn/start TIMEOUT is ambiguous: the facade detaches the request
-        // onto its own task, so timing out the caller-side future does NOT
-        // cancel the server-side turn — it may still be starting. Rotating
-        // the thread and re-submitting the same prompt on a timeout would
-        // duplicate model/tool side effects (ctox#21 P1 review). So we only
-        // rotate on a DEFINITIVE error response (the turn provably did not
-        // start); a timeout poisons the session and bails without retry.
-        let turn_resp: TurnStartResponse = match tokio::time::timeout(
-            Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
-            client.request_typed(ClientRequest::TurnStart {
-                request_id: seq.next(),
-                params: turn_start_params(&thread_id),
-            }),
-        )
-        .await
-        {
-            Ok(Ok(resp)) => resp,
-            Err(_) => {
-                return Err(anyhow::Error::new(SessionPoisoned(format!(
-                    "turn/start timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s; the turn may have started server-side, so the session is poisoned instead of retried to avoid a duplicate turn"
-                ))));
-            }
-            // Transport and decode failures are as ambiguous as a timeout:
-            // the request may have reached the processor (transport) or the
-            // response arrived but could not be decoded (deserialize) — in
-            // both cases the turn may be running. Only a definitive server
-            // rejection proves the turn did not start.
-            Ok(Err(
-                err @ (TypedRequestError::Transport { .. } | TypedRequestError::Deserialize { .. }),
-            )) => {
-                return Err(anyhow::Error::new(SessionPoisoned(format!(
-                    "turn/start ended ambiguously ({err}); session poisoned instead of retried to avoid a duplicate turn"
-                ))));
-            }
-            Ok(Err(err @ TypedRequestError::Server { .. })) => {
-                eprintln!(
-                    "[ctox direct-session] turn/start on session thread {thread_id} was rejected by the server ({err}); rotating thread"
-                );
-                let rotated_thread_id = start_session_thread(
-                    client,
-                    seq,
-                    model,
-                    model_provider,
-                    cwd,
-                    base_instructions,
-                    disable_active_tools,
-                    disable_mcp_servers,
-                    thread_config,
-                    persistent_worker,
-                    persistent_worker
-                        .then(|| persistent_worker_thread_name(root))
-                        .as_deref(),
-                )
-                .await
-                .map_err(|err| anyhow::anyhow!("thread/start (rotation): {err}"))?;
-                eprintln!("[ctox direct-session] rotated session thread: {rotated_thread_id}");
-                *session_thread_id = rotated_thread_id.clone();
-                // The rotation retry is likewise timeout-poisoned: a fresh
-                // thread's turn/start that times out must not fan out again.
-                match tokio::time::timeout(
-                    Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
-                    client.request_typed(ClientRequest::TurnStart {
-                        request_id: seq.next(),
-                        params: turn_start_params(&rotated_thread_id),
-                    }),
-                )
-                .await
-                {
-                    Ok(Ok(resp)) => resp,
-                    Ok(Err(err @ TypedRequestError::Server { .. })) => {
-                        return Err(anyhow::anyhow!("turn/start: {err}"));
-                    }
-                    Ok(Err(err)) => {
-                        return Err(anyhow::Error::new(SessionPoisoned(format!(
-                            "turn/start on rotated thread ended ambiguously ({err}); session poisoned"
-                        ))));
-                    }
-                    Err(_) => {
-                        return Err(anyhow::Error::new(SessionPoisoned(format!(
-                            "turn/start on rotated thread timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s; session poisoned instead of retried"
-                        ))));
-                    }
-                }
-            }
+        let persistent_thread_name = persistent_worker.then(|| persistent_worker_thread_name(root));
+        let spec = SessionThreadSpec {
+            model,
+            model_provider,
+            cwd,
+            base_instructions,
+            disable_active_tools,
+            disable_mcp_servers,
+            thread_config,
+            persistent_worker,
+            persistent_thread_name: persistent_thread_name.as_deref(),
         };
+        let timeouts = production_session_control_timeouts();
+        let turn_resp: TurnStartResponse = start_bound_turn(
+            client,
+            seq,
+            session_thread_id,
+            turn_start_params,
+            &spec,
+            &timeouts,
+        )
+        .await?;
         let thread_id = session_thread_id.clone();
         let turn_id = turn_resp.turn.id;
 
         // Event loop
-        let mut final_message: Option<String> = None;
+        let mut reply_capture = DirectSessionReplyCapture::default();
+        let mut completion_message: Option<String> = None;
         // `AgentMessage` events carry no turn id, so an orphaned message from
         // a prior/interrupted turn still queued on this reused thread could
-        // set `final_message` and become this turn's reply (ctox#21 P1
+        // become this turn's reply (ctox#21 P1
         // review). Only trust `AgentMessage` once we have observed the
         // `TurnStarted` for OUR turn_id; everything before that belongs to an
         // earlier turn and is ignored for reply attribution.
@@ -1901,6 +1793,7 @@ impl PersistentSession {
         let mut tool_call_count = 0_u64;
         let mut activity_turn_count = 0_u64;
         let mut saw_reasoning_section_break = false;
+        let mut seen_plan_updates = None;
         let deadline = timeout.map(|d| tokio::time::Instant::now() + d);
 
         loop {
@@ -1971,6 +1864,22 @@ impl PersistentSession {
             match event {
                 InProcessServerEvent::ServerRequest(_) => {}
                 InProcessServerEvent::ServerNotification(notification) => {
+                    // V2 notifications carry their own thread/turn identity and
+                    // must not depend on seeing a legacy TurnStarted first.
+                    if let Some(plan) = current_turn_plan_event(&notification, &thread_id, &turn_id)
+                    {
+                        if let Some(event) = direct_session_progress_event(
+                            &plan,
+                            &turn_id,
+                            turn_started_at.elapsed(),
+                            &mut tool_call_count,
+                            &mut activity_turn_count,
+                            &mut saw_reasoning_section_break,
+                            &mut seen_plan_updates,
+                        ) {
+                            progress(&event);
+                        }
+                    }
                     if let ServerNotification::ContextCompacted(compacted) = notification {
                         if compacted.turn_id == turn_id {
                             eprintln!(
@@ -2023,6 +1932,7 @@ impl PersistentSession {
                                 &mut tool_call_count,
                                 &mut activity_turn_count,
                                 &mut saw_reasoning_section_break,
+                                &mut seen_plan_updates,
                             ) {
                                 progress(&event);
                             }
@@ -2192,26 +2102,14 @@ impl PersistentSession {
                                 // has started — they belong to an earlier turn
                                 // draining off the reused thread.
                                 if saw_our_turn_started {
-                                    final_message = Some(am.message.clone());
+                                    reply_capture.observe(&am);
                                 }
                             }
                             EventMsg::TurnComplete(tc) if tc.turn_id == turn_id => {
-                                // The completion event's own last message is
-                                // authoritative when present. When it is
-                                // absent, fall back to a same-turn
-                                // `AgentMessage` (guarded by
-                                // `saw_our_turn_started`); if neither exists,
-                                // clear any stale value so we never return a
-                                // foreign turn's reply.
-                                match tc
-                                    .last_agent_message
-                                    .as_ref()
-                                    .filter(|last| !last.trim().is_empty())
-                                {
-                                    Some(last) => final_message = Some(last.clone()),
-                                    None if !saw_our_turn_started => final_message = None,
-                                    None => {}
-                                }
+                                // Preserve a witnessed explicit final answer
+                                // when the terminal item is only Crew metadata.
+                                // The reducer also rejects known commentary.
+                                completion_message = tc.last_agent_message;
                                 break;
                             }
                             EventMsg::TurnComplete(tc) => {
@@ -2303,6 +2201,9 @@ impl PersistentSession {
             }
         }
 
+        let final_message =
+            reply_capture.complete(completion_message.as_deref(), saw_our_turn_started);
+
         ctx_log.log(
             "turn_end",
             &format!(
@@ -2318,6 +2219,176 @@ impl PersistentSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plan_v2_notification(
+        thread_id: &str,
+        turn_id: &str,
+        status: ctox_app_server_protocol::TurnPlanStepStatus,
+    ) -> ServerNotification {
+        ServerNotification::TurnPlanUpdated(ctox_app_server_protocol::TurnPlanUpdatedNotification {
+            thread_id: thread_id.into(),
+            turn_id: turn_id.into(),
+            explanation: Some("Verify the recorded result".into()),
+            plan: vec![ctox_app_server_protocol::TurnPlanStep {
+                step: "Prüfen".into(),
+                status,
+            }],
+        })
+    }
+
+    #[test]
+    fn direct_plan_v2_persists_real_steps_before_review_without_legacy_start() -> Result<()> {
+        use crate::context::lcm;
+        let notification = plan_v2_notification(
+            "thread-current",
+            "turn-current",
+            ctox_app_server_protocol::TurnPlanStepStatus::InProgress,
+        );
+        let msg = current_turn_plan_event(&notification, "thread-current", "turn-current")
+            .expect("a scoped typed plan must not require a legacy start event");
+        let mut tool_count = 0;
+        let mut activity_count = 0;
+        let mut seen = None;
+        let event = direct_session_progress_event(
+            &msg,
+            "turn-current",
+            Duration::ZERO,
+            &mut tool_count,
+            &mut activity_count,
+            &mut false,
+            &mut seen,
+        )
+        .expect("typed plan reaches the native progress contract");
+        assert_eq!(event["event_kind"], "worker.plan_updated");
+        let plan = &event["metadata"]["plan"];
+        assert_eq!(plan["plan"][0]["status"], "in_progress");
+        let steps = plan["plan"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|step| lcm::TaskExecutionPlanStepInput {
+                label: step["step"].as_str().unwrap().to_owned(),
+                status: step["status"].as_str().unwrap().to_owned(),
+            })
+            .collect::<Vec<_>>();
+        let temp = tempfile::tempdir()?;
+        let db = temp.path().join("ctox.sqlite3");
+        lcm::run_record_task_execution_plan(
+            &db,
+            lcm::TaskExecutionPlanUpdate {
+                work_key: "worker-attempt:typed-plan",
+                task_id: "task-typed-plan",
+                command_id: "command-typed-plan",
+                attempt_id: "attempt-typed-plan",
+                explanation: plan["explanation"].as_str(),
+                steps: &steps,
+            },
+        )?;
+        let review = lcm::run_prepare_task_execution_review(&db, "worker-attempt:typed-plan")?;
+        assert_eq!(review["total_steps"], 1);
+        assert_eq!(review["completed_steps"], 0);
+        assert_eq!(review["steps"][0]["label"], "Prüfen");
+        assert!(
+            lcm::run_set_task_execution_review_status(
+                &db,
+                "worker-attempt:typed-plan",
+                "completed"
+            )
+            .is_err(),
+            "a received plan is not completed-work evidence"
+        );
+        assert_eq!((tool_count, activity_count), (1, 1));
+        Ok(())
+    }
+
+    #[test]
+    fn direct_plan_v2_rejects_foreign_thread_and_stale_turn() {
+        for (thread, turn) in [("foreign", "current"), ("current", "stale")] {
+            let notification = plan_v2_notification(
+                thread,
+                turn,
+                ctox_app_server_protocol::TurnPlanStepStatus::Completed,
+            );
+            assert!(current_turn_plan_event(&notification, "current", "current").is_none());
+        }
+    }
+
+    #[test]
+    fn direct_plan_v2_and_legacy_deduplicate_in_either_order_but_keep_changes() {
+        for typed_first in [true, false] {
+            let notification = plan_v2_notification(
+                "thread",
+                "turn",
+                ctox_app_server_protocol::TurnPlanStepStatus::Pending,
+            );
+            let typed = current_turn_plan_event(&notification, "thread", "turn").unwrap();
+            let legacy = EventMsg::PlanUpdate(UpdatePlanArgs {
+                explanation: Some("Verify the recorded result".into()),
+                plan: vec![PlanItemArg {
+                    step: "Prüfen".into(),
+                    status: StepStatus::Pending,
+                }],
+            });
+            let ordered = if typed_first {
+                [&typed, &legacy]
+            } else {
+                [&legacy, &typed]
+            };
+            let mut seen = None;
+            let mut tools = 0;
+            let mut activities = 0;
+            for (index, msg) in ordered.into_iter().enumerate() {
+                assert_eq!(
+                    direct_session_progress_event(
+                        msg,
+                        "turn",
+                        Duration::ZERO,
+                        &mut tools,
+                        &mut activities,
+                        &mut false,
+                        &mut seen,
+                    )
+                    .is_some(),
+                    index == 0
+                );
+            }
+            let changed = current_turn_plan_event(
+                &plan_v2_notification(
+                    "thread",
+                    "turn",
+                    ctox_app_server_protocol::TurnPlanStepStatus::Completed,
+                ),
+                "thread",
+                "turn",
+            )
+            .unwrap();
+            let event = direct_session_progress_event(
+                &changed,
+                "turn",
+                Duration::ZERO,
+                &mut tools,
+                &mut activities,
+                &mut false,
+                &mut seen,
+            )
+            .expect("a real status change must still be persisted");
+            assert_eq!(event["metadata"]["plan"]["plan"][0]["status"], "completed");
+            assert_eq!((tools, activities), (2, 2));
+            // A genuine return to an earlier plan after a different update
+            // must not be confused with the duplicate transport notification.
+            assert!(direct_session_progress_event(
+                &legacy,
+                "turn",
+                Duration::ZERO,
+                &mut tools,
+                &mut activities,
+                &mut false,
+                &mut seen,
+            )
+            .is_some());
+            assert_eq!((tools, activities), (3, 3));
+        }
+    }
 
     #[test]
     fn direct_sessions_receive_the_managed_linux_sandbox_executable() {
@@ -2373,6 +2444,12 @@ mod tests {
             .expect("enabled tools")
             .iter()
             .any(|tool| tool.as_str() == Some("business_os.upsert_record")));
+        assert!(server
+            .get("enabled_tools")
+            .and_then(JsonValue::as_array)
+            .expect("enabled tools")
+            .iter()
+            .any(|tool| tool.as_str() == Some("business_os.execute_writeback")));
         assert_eq!(
             config.get("features.apps").and_then(JsonValue::as_bool),
             Some(false)
@@ -2643,8 +2720,8 @@ mod tests {
     #[test]
     fn worker_base_instructions_include_system_prompt_and_durable_outcome_contract() {
         let root = compose_test_root("worker-base");
-        let instructions =
-            compose_base_instructions(&root, &BTreeMap::new(), None).expect("worker instructions");
+        let instructions = compose_base_instructions(&root, &BTreeMap::new(), None, None)
+            .expect("worker instructions");
         // The long CTOX system prompt is the stability layer and must be present.
         assert!(instructions.contains("You are CTOX, the personal CTO agent"));
         assert!(instructions.contains("Secret handling policy:"));
@@ -2663,6 +2740,7 @@ mod tests {
             &root,
             &BTreeMap::new(),
             Some("Act as the external reviewer."),
+            None,
         )
         .expect("override instructions");
         assert!(instructions.contains("Act as the external reviewer."));
@@ -2952,93 +3030,6 @@ impl PersistentSession {
 // Internals
 // ---------------------------------------------------------------------------
 
-struct RequestIdSeq {
-    next: i64,
-}
-impl RequestIdSeq {
-    fn new() -> Self {
-        Self { next: 1 }
-    }
-    fn next(&mut self) -> RequestId {
-        let id = self.next;
-        self.next += 1;
-        RequestId::Integer(id)
-    }
-}
-
-async fn start_session_thread(
-    client: &mut InProcessAppServerClient,
-    seq: &mut RequestIdSeq,
-    model: &str,
-    model_provider: Option<&str>,
-    cwd: &Path,
-    base_instructions: &str,
-    disable_active_tools: bool,
-    disable_mcp_servers: bool,
-    thread_config: Option<&HashMap<String, JsonValue>>,
-    persistent_worker: bool,
-    persistent_thread_name: Option<&str>,
-) -> Result<String> {
-    // Bound these control requests: a wedged response path must not hang the
-    // worker indefinitely (ctox#21 P1 review). They register/name a thread
-    // with no model side effects, so a timeout simply surfaces as an error
-    // and the session is rebuilt.
-    let thread_start_fut = client.request_typed(ClientRequest::ThreadStart {
-        request_id: seq.next(),
-        params: ThreadStartParams {
-            model: Some(model.to_string()),
-            model_provider: model_provider.map(str::to_string),
-            cwd: Some(cwd.to_string_lossy().to_string()),
-            approval_policy: Some(AskForApproval::Never.into()),
-            sandbox: Some(ctox_app_server_protocol::SandboxMode::WorkspaceWrite),
-            config: thread_config.cloned(),
-            base_instructions: Some(base_instructions.to_string()),
-            dynamic_tools: disable_active_tools.then(Vec::new),
-            disable_mcp_servers: Some(disable_mcp_servers),
-            ephemeral: Some(!persistent_worker),
-            persist_extended_history: persistent_worker,
-            ..ThreadStartParams::default()
-        },
-    });
-    let response: ThreadStartResponse = match tokio::time::timeout(
-        Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
-        thread_start_fut,
-    )
-    .await
-    {
-        Ok(result) => result.map_err(|err| anyhow::anyhow!("thread/start: {err}"))?,
-        Err(_) => {
-            anyhow::bail!("thread/start timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s")
-        }
-    };
-    let thread_id = response.thread.id;
-    if let Some(persistent_thread_name) = persistent_thread_name {
-        let set_name_fut =
-            client.request_typed::<ThreadSetNameResponse>(ClientRequest::ThreadSetName {
-                request_id: seq.next(),
-                params: ThreadSetNameParams {
-                    thread_id: thread_id.clone(),
-                    name: persistent_thread_name.to_string(),
-                },
-            });
-        match tokio::time::timeout(
-            Duration::from_secs(DIRECT_SESSION_TURN_START_TIMEOUT_SECS),
-            set_name_fut,
-        )
-        .await
-        {
-            Ok(result) => {
-                result.map_err(|err| anyhow::anyhow!("thread/name/set: {err}"))?;
-            }
-            Err(_) => anyhow::bail!(
-                "thread/name/set timed out after {DIRECT_SESSION_TURN_START_TIMEOUT_SECS}s"
-            ),
-        }
-    }
-    eprintln!("[ctox direct-session] thread started: {thread_id}");
-    Ok(thread_id)
-}
-
 /// Conversation/thread id a legacy notification is scoped to, when present.
 /// Legacy `codex/event/*` notifications place it at the params top level as
 /// `conversationId` (some producers use `threadId`).
@@ -3111,6 +3102,38 @@ fn tokens_per_second(tokens: i64, elapsed_ms: i64) -> Option<f64> {
     Some(tokens as f64 / (elapsed_ms as f64 / 1000.0))
 }
 
+fn current_turn_plan_event(
+    notification: &ServerNotification,
+    thread_id: &str,
+    turn_id: &str,
+) -> Option<EventMsg> {
+    let ServerNotification::TurnPlanUpdated(plan) = notification else {
+        return None;
+    };
+    if plan.thread_id != thread_id || plan.turn_id != turn_id {
+        return None;
+    }
+    Some(EventMsg::PlanUpdate(UpdatePlanArgs {
+        explanation: plan.explanation.clone(),
+        plan: plan
+            .plan
+            .iter()
+            .map(|step| PlanItemArg {
+                step: step.step.clone(),
+                status: match step.status {
+                    ctox_app_server_protocol::TurnPlanStepStatus::Pending => StepStatus::Pending,
+                    ctox_app_server_protocol::TurnPlanStepStatus::InProgress => {
+                        StepStatus::InProgress
+                    }
+                    ctox_app_server_protocol::TurnPlanStepStatus::Completed => {
+                        StepStatus::Completed
+                    }
+                },
+            })
+            .collect(),
+    }))
+}
+
 fn direct_session_progress_event(
     msg: &EventMsg,
     turn_id: &str,
@@ -3118,6 +3141,7 @@ fn direct_session_progress_event(
     tool_call_count: &mut u64,
     activity_turn_count: &mut u64,
     saw_reasoning_section_break: &mut bool,
+    seen_plan_updates: &mut Option<String>,
 ) -> Option<JsonValue> {
     let elapsed_seconds = elapsed.as_secs();
     let cumulative_metadata = |extra: JsonValue| {
@@ -3172,8 +3196,6 @@ fn direct_session_progress_event(
 
     match msg {
         EventMsg::PlanUpdate(plan) => {
-            *tool_call_count = tool_call_count.saturating_add(1);
-            *activity_turn_count = activity_turn_count.saturating_add(1);
             // PlanUpdate does not expose the originating tool call id. Bind
             // the activity to the stable turn plus canonical plan payload so
             // a replayed notification is deduplicated by durable storage.
@@ -3182,6 +3204,14 @@ fn direct_session_progress_event(
                 .iter()
                 .map(|byte| format!("{byte:02x}"))
                 .collect::<String>();
+            // The server can emit both typed and legacy forms of one update.
+            // Use the same canonical payload as the durable activity identity.
+            if seen_plan_updates.as_deref() == Some(plan_event_id.as_str()) {
+                return None;
+            }
+            *seen_plan_updates = Some(plan_event_id.clone());
+            *tool_call_count = tool_call_count.saturating_add(1);
+            *activity_turn_count = activity_turn_count.saturating_add(1);
             Some(serde_json::json!({
                 "event_kind": "worker.plan_updated",
                 "title": "Execution plan updated",

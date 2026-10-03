@@ -40,11 +40,7 @@
     "default_width": 1200,
     "default_height": 720,
     "min_width": 360,
-    "min_height": 480,
-    "icon_asset_sha256": "257526ec6c932c287be864be47e7e7708f32d136d587ab2d17da6cc62629c220",
-    "icon_selection_sha256": "6aaaac3c849a444f1bc8af3e4f019eb4eded5ad64ac70ec85eee5c54cdb06e3b",
-    "icon_selection_candidate": "candidate-01",
-    "icon_asset_kind": "raster-reference"
+    "min_height": 480
   },
   "category": "Knowledge",
   "version": "1.1.7",

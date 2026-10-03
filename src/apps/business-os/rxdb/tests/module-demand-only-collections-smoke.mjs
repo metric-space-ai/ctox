@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createSyncRuntime, __ctoxSyncTestHooks } from '../../shared/sync.js';
+import { roleMayReadCollection } from '../../shared/permissions.js';
 import { createMultiTabSyncCoordinator } from '../src/multi-tab-sync-coordinator.mjs';
 
 const {
@@ -202,7 +203,7 @@ function createMockReplicationState(collection = 'desktop_file_chunks') {
   };
 }
 
-function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null } = {}) {
+function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null, mayReadCollection } = {}) {
   const browserToken = 'browser-role-token';
   const starts = [];
   const cancels = [];
@@ -210,6 +211,8 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
     mode: 'rxdb',
     raw: {
       desktop_file_chunks: { name: 'desktop_file_chunks' },
+      business_users: { name: 'business_users' },
+      ctox_crew_members: { name: 'ctox_crew_members' },
     },
     rxdb: {
       ...(coordinator ? { getMultiTabSyncCoordinator: () => coordinator } : {}),
@@ -242,6 +245,7 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
   };
   const runtime = createSyncRuntime({
     db,
+    mayReadCollection,
     config: {
       transport: 'webrtc',
       sync_room: 'ctox-business-os:test',
@@ -253,6 +257,66 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
     },
   });
   return { runtime, starts, cancels };
+}
+
+{
+  for (const collection of [
+    'business_users', 'ctox_runtime_settings', 'business_module_acl',
+    'business_module_source_files', 'business_module_commits',
+    'business_module_source_blob_chunks', 'ctox_runs',
+    'ctox_crew_learnings', 'ctox_harness_events',
+  ]) {
+    assert.equal(roleMayReadCollection('user', collection), false, `${collection} is private to the requester`);
+  }
+  assert.equal(roleMayReadCollection('user', 'ctox_crew_members'), true);
+  assert.equal(roleMayReadCollection('user', 'ctox_harness_status'), true);
+  assert.equal(roleMayReadCollection('founder', 'ctox_runs'), true);
+  assert.equal(roleMayReadCollection('founder', 'business_users'), false);
+  assert.equal(roleMayReadCollection('admin', 'business_users'), true);
+
+  const { runtime, starts } = createMockSyncRuntime({
+    mayReadCollection: (collection) => roleMayReadCollection('user', collection),
+  });
+  await assert.rejects(
+    () => runtime.startCollection('business_users'),
+    (error) => error?.code === 'COLLECTION_READ_FORBIDDEN',
+  );
+  assert.equal(runtime.diagnostics.collections.business_users?.lastError, null);
+  assert.equal(starts.length, 0, 'denied collection never reaches WebRTC');
+  const module = await runtime.startModule({ id: 'ctox', collections: ['business_users', 'ctox_crew_members'] });
+  assert.equal(module[0].value.reason, 'role-denied');
+  assert.equal(module[1].status, 'fulfilled');
+  assert.deepEqual(starts.map((entry) => entry.collection), ['ctox_crew_members']);
+  const moduleLease = await runtime.leaseModule({ id: 'ctox', collections: ['business_users'] });
+  assert.deepEqual(moduleLease.collections, []);
+  await moduleLease.release();
+  await assert.rejects(
+    () => runtime.restartCollection('business_users'),
+    (error) => error?.code === 'COLLECTION_READ_FORBIDDEN',
+  );
+  await runtime.restartCollections(['business_users']);
+  assert.deepEqual(starts.map((entry) => entry.collection), ['ctox_crew_members']);
+  await runtime.stop();
+}
+
+{
+  let role = 'admin';
+  let restrictedChecks = 0;
+  const { runtime, starts } = createMockSyncRuntime({
+    mayReadCollection(collection) {
+      if (collection === 'business_users' && ++restrictedChecks === 2) role = 'founder';
+      return roleMayReadCollection(role, collection);
+    },
+  });
+  const lease = await runtime.leaseModule({
+    id: 'ctox',
+    collections: ['ctox_crew_members', 'business_users'],
+  });
+  assert.deepEqual(lease.collections, ['ctox_crew_members'],
+    'role resolution during an asynchronous module lease skips newly forbidden collections');
+  assert.deepEqual(starts.map((entry) => entry.collection), ['ctox_crew_members']);
+  await lease.release();
+  await runtime.stop();
 }
 
 {
@@ -309,17 +373,24 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
 {
   const { runtime, starts, cancels } = createMockSyncRuntime();
   const lease = await runtime.leaseCollection('desktop_file_chunks', 'module-demand-only-restart-smoke');
-  await runtime.restartCollection('desktop_file_chunks');
+  const originalBridge = lease.bridge;
+  const replacementBridge = await runtime.restartCollection('desktop_file_chunks');
+  assert.notEqual(replacementBridge, originalBridge, 'runtime creates a replacement bridge');
+  assert.equal(lease.bridge === replacementBridge, true, 'retained lease must expose the current authoritative bridge after restart');
   assert.equal(starts.length, 2, 'restartCollection preserves the demand-only lease and restarts replication');
   assert.deepEqual(cancels, ['desktop_file_chunks']);
   await runtime.restartCollections(['desktop_file_chunks']);
+  assert.notEqual(lease.bridge, replacementBridge, 'the retained lease follows a batch restart too');
   assert.equal(starts.length, 3, 'restartCollections preserves the demand-only lease and restarts replication');
   assert.deepEqual(cancels, ['desktop_file_chunks', 'desktop_file_chunks']);
   await runtime.suspendCollections(['desktop_file_chunks'], 'module-demand-only-suspend-smoke');
+  assert.equal(lease.bridge.state, null, 'suspend cannot expose the retired replication state');
   assert.deepEqual(cancels, ['desktop_file_chunks', 'desktop_file_chunks', 'desktop_file_chunks']);
   await runtime.resumeCollections(['desktop_file_chunks']);
   assert.equal(starts.length, 4, 'resumeCollections preserves the demand-only lease after suspension');
+  assert.ok(lease.bridge.state, 'resume publishes the new state through the same lease');
   assert.equal(await lease.release(), true, 'lease release succeeds after restart/suspend/resume');
+  assert.equal(lease.bridge.mode, 'released', 'a released lease never returns a usable state');
   assert.deepEqual(
     cancels,
     ['desktop_file_chunks', 'desktop_file_chunks', 'desktop_file_chunks', 'desktop_file_chunks'],
@@ -341,6 +412,7 @@ function createMockSyncRuntime({ emitProtocolCallback = true, coordinator = null
     assert.equal(follower.isLeader(), false);
     lease = await runtime.leaseCollection('desktop_file_chunks', 'active-file-transfer');
     const direct = await runtime.startCollection('desktop_file_chunks', { forceDirect: true });
+    assert.equal(lease.bridge, direct, 'follower promotion updates the existing lease without app-side assignment');
     const acquired = await runtime.startCollection('desktop_file_chunks', { pin: false });
     assert.equal(acquired === direct, true, 'ordinary acquisition must retain the direct bridge serving an active transfer');
     assert.equal(await runtime.startCollection('desktop_file_chunks', { forceDirect: true }), direct);
