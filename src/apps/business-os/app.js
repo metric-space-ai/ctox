@@ -1,17 +1,17 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261003-shell-v2-startup-recovery-v444';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261003-shell-v2-startup-recovery-v444';
-import { CtoxResizer } from './shared/resizer.js?v=20261003-shell-v2-startup-recovery-v444';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20261003-shell-v2-startup-recovery-v444';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261003-shell-v2-startup-recovery-v444';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261003-shell-v2-startup-recovery-v444';
-import { createAppActions } from './shared/app-actions.js?v=20261003-shell-v2-startup-recovery-v444';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261003-shell-v2-startup-recovery-v445';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261003-shell-v2-startup-recovery-v445';
+import { CtoxResizer } from './shared/resizer.js?v=20261003-shell-v2-startup-recovery-v445';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20261003-shell-v2-startup-recovery-v445';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261003-shell-v2-startup-recovery-v445';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261003-shell-v2-startup-recovery-v445';
+import { createAppActions } from './shared/app-actions.js?v=20261003-shell-v2-startup-recovery-v445';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261003-shell-v2-startup-recovery-v444';
+} from './shared/app-lifecycle.js?v=20261003-shell-v2-startup-recovery-v445';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -20,20 +20,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261003-shell-v2-startup-recovery-v444';
+} from './shared/permissions.js?v=20261003-shell-v2-startup-recovery-v445';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261003-shell-v2-startup-recovery-v444';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261003-shell-v2-startup-recovery-v444';
+} from './shared/branding.js?v=20261003-shell-v2-startup-recovery-v445';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261003-shell-v2-startup-recovery-v445';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261003-shell-v2-startup-recovery-v444';
+} from './shared/presentation.js?v=20261003-shell-v2-startup-recovery-v445';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -44,9 +44,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261003-shell-v2-startup-recovery-v444';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261003-shell-v2-startup-recovery-v444';
-import { createDocumentsFacade } from './shared/documents.js?v=20261003-shell-v2-startup-recovery-v444';
+} from './shared/shell-permissions-ui.js?v=20261003-shell-v2-startup-recovery-v445';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261003-shell-v2-startup-recovery-v445';
+import { createDocumentsFacade } from './shared/documents.js?v=20261003-shell-v2-startup-recovery-v445';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -54,16 +54,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261003-shell-v2-startup-recovery-v444';
+} from './shared/maintenance-state.js?v=20261003-shell-v2-startup-recovery-v445';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261003-shell-v2-startup-recovery-v444';
+} from './shared/workspace-session.js?v=20261003-shell-v2-startup-recovery-v445';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261003-shell-v2-startup-recovery-v444';
+} from './shared/taskbar-pins.js?v=20261003-shell-v2-startup-recovery-v445';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -71,10 +71,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261003-shell-v2-startup-recovery-v444';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261003-shell-v2-startup-recovery-v445';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261003-shell-v2-startup-recovery-v444';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261003-shell-v2-startup-recovery-v444';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261003-shell-v2-startup-recovery-v445';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261003-shell-v2-startup-recovery-v445';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -82,8 +82,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261003-shell-v2-startup-recovery-v444';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261003-shell-v2-startup-recovery-v444';
+} from './shared/startup-deadlines.js?v=20261003-shell-v2-startup-recovery-v445';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261003-shell-v2-startup-recovery-v445';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -101,7 +101,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261003-shell-v2-startup-recovery-v444';
+const APP_BUILD = '20261003-shell-v2-startup-recovery-v445';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -13391,7 +13391,7 @@ async function waitForProjectedWorkjetComputer(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const doc = await collection.findOne(computerId).exec();
       const rawComputer = doc?.toJSON?.() || doc;
       if (rawComputer?.owner_user_id === ownerUserId && rawComputer?.status === status) {
@@ -13787,7 +13787,7 @@ async function waitForProjectedWorkjetProject(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const doc = await collection.findOne(projectId).exec();
       const rawProject = doc?.toJSON?.() || doc;
       if (rawProject?.owner_user_id === ownerUserId
@@ -13834,7 +13834,7 @@ async function waitForProjectedWorkjetWorkingCopy(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const docs = await collection.find({
         selector: {
           project_id: { $eq: projectId },
@@ -14179,7 +14179,7 @@ async function waitForProjectedWorkjetSession(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       let rawSession = null;
       if (sessionId) {
         const doc = await collection.findOne(sessionId).exec();

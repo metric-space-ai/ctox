@@ -100,6 +100,13 @@ deadline inside Workjet's existing 30-second desktop call. Timeout does not
 extend that call or introduce an HTTP data bridge. Query streams are aborted
 when the list settles; shared replication bridges are not stopped.
 
+Workjet computer, project, working-copy and session projection waits use the
+replication state on `bridge.state`, through the existing bounded readiness
+helper. Each retry passes only the time left on its original deadline. The
+bridge wrapper itself has no `awaitInSync` method; treating that optional call
+as readiness skipped the replication wait. This repair does not replace the
+native command receipt or the existing owner/status projection checks.
+
 ### Native query cache shutdown
 
 Closing a native collection drains its query cache and marks those queries
