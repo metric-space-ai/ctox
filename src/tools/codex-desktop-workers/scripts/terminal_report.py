@@ -144,12 +144,18 @@ def record(base, entry):
         raise ValueError("Actor, obligations and independent reviewer required")
     if entry["reviewer"] == entry["actor_id"]:
         raise ValueError("Actor cannot assess itself")
-    for stage in ("first", "corrected"):
+    for stage in ("first", "corrected", "parent_completion"):
         result = entry.get(stage)
         if result:
+            if stage == "parent_completion" and entry["role"] != "parent":
+                raise ValueError("PR-completion assessment belongs to a parent")
             result["weighted_total"] = weighted(result)
             if result["weighted_total"] is not None and not re.fullmatch("[a-f0-9]{40}", result.get("head") or ""):
                 raise ValueError("Assessed result requires immutable source head")
+            if result.get("model"):
+                prov = result.get("provenance") or entry.get("provenance") or {}
+                if prov.get("model") != result["model"] or not (prov.get("turn_id") and prov.get("evidence")):
+                    raise ValueError("Stage model requires matching actual turn evidence")
     provenance = entry.get("provenance") or {}
     if entry.get("model") and not (provenance.get("turn_id") and provenance.get("evidence")):
         raise ValueError("Exact model requires exact authoring turn evidence")
@@ -250,6 +256,24 @@ def stage_model(row, stage):
     return row.get(stage + "_model", row.get("model"))
 
 
+def rework_iterations(row, model=None):
+    """Count proved corrective deliveries; never infer them from commits or reratings."""
+    count = row.get("rework_iterations")
+    if type(count) is not int or count < 0:
+        return None
+    if model is None or count == 0:
+        return count
+    models = {stage_model(row, s) for s in ("first", "corrected", "parent_completion")} - {None}
+    if models == {model}:
+        return count
+    evidence = row.get("iteration_evidence")
+    if isinstance(evidence, list):
+        corrections = [e for e in evidence if isinstance(e, dict) and e.get("kind") == "correction"]
+        if len(corrections) == count and all(e.get("model") for e in corrections):
+            return sum(e["model"] == model for e in corrections)
+    return None
+
+
 def leaderboard_data(records):
     groups = {}
     seen = set()
@@ -259,7 +283,10 @@ def leaderboard_data(records):
             continue
         seen.add(key)
         rubric = row.get("rubric", row.get("schema"))
-        for model in {stage_model(row, stage) for stage in ("first", "corrected")}:
+        if row["role"] == "parent" and rubric == RUBRIC and (row.get("parent_completion") or {}).get("weighted_total") is None:
+            continue
+        stages = ("parent_completion",) if row["role"] == "parent" and rubric == RUBRIC else ("first", "corrected")
+        for model in {stage_model(row, stage) for stage in stages}:
             groups.setdefault((row["role"], row.get("harness"), model, rubric), []).append(row)
     result = []
     for (role, harness, model, rubric), rows in sorted(groups.items(), key=lambda x: str(x[0])):
@@ -268,15 +295,50 @@ def leaderboard_data(records):
                 return None
             value = row.get(stage)
             return value.get("weighted_total") if isinstance(value, dict) else value
-        first = [score(r, "first") for r in rows]
-        corrected = [score(r, "corrected") for r in rows]
-        rework = [r["rework"] for r in rows if r.get("rework") not in (None, "unknown")]
+        historical_parent = role == "parent" and rubric == RUBRIC
+        first = [None if historical_parent else score(r, "first") for r in rows]
+        corrected = [None if historical_parent else score(r, "corrected") for r in rows]
+        completion = [score(r, "parent_completion") for r in rows]
+        rework = [rework_iterations(r, model) for r in rows]
+        known_rework = [v for v in rework if v is not None]
         result.append(dict(role=role, harness=harness, model=model, rubric=rubric, deliveries=len(rows),
-                           prs=len({r["pr_url"] for r in rows if score(r,"first") is not None or score(r,"corrected") is not None}),
+                           prs=len({r["pr_url"] for r in rows if any(score(r,s) is not None for s in (("parent_completion",) if role == "parent" and rubric == RUBRIC else ("first", "corrected")))}),
+                           score=stats(completion),
                            first=stats(first), corrected=stats(corrected),
-                           rework=dict(changed=sum(v != "none" for v in rework), denominator=len(rework))))
+                           rework=dict(iterations=sum(known_rework) if len(known_rework) == len(rows) else None,
+                                       observed_iterations=sum(known_rework) if known_rework else None,
+                                       known=len(known_rework), unknown=len(rows)-len(known_rework))))
     return result
 
+
+
+def parent_worker_pairs(records, prs):
+    """Join source-proved parent/worker edges on the same PR, never by model coincidence."""
+    parents = {}
+    for row in records:
+        if row["role"] == "parent" and (row.get("parent_completion") or {}).get("weighted_total") is not None:
+            parents.setdefault((row["pr_url"], row["actor_id"]), []).append(row)
+    pairs = []
+    for worker in records:
+        if worker["role"] != "worker" or not worker.get("parent_id"):
+            continue
+        for parent in parents.get((worker["pr_url"], worker["parent_id"]), []):
+            pm = stage_model(parent, "parent_completion")
+            fm, em = stage_model(worker, "first"), stage_model(worker, "corrected")
+            first = (worker.get("first") or {}).get("weighted_total")
+            end = (worker.get("corrected") or {}).get("weighted_total")
+            if not pm or (first is None and end is None):
+                continue
+            pr = prs[worker["pr_url"]]
+            ph, wh = parent.get("harness") or "—", worker.get("harness") or "—"
+            pairs.append(dict(pr_url=pr["url"], repository=pr["repository"], number=pr["number"],
+                parent_id=parent["actor_id"], worker_id=worker["actor_id"],
+                parent_record_id=parent["record_id"], worker_record_id=worker["record_id"],
+                parent_model=pm, worker_first_model=fm, worker_end_model=em,
+                parent_harness=ph, worker_harness=wh,
+                parent_score=parent["parent_completion"]["weighted_total"], worker_first=first, worker_end=end,
+                combination=json.dumps([ph, pm, wh, fm, em], ensure_ascii=False)))
+    return pairs
 
 def build(base):
     snapshot = load(base / "terminal-evidence/current.json")
@@ -318,13 +380,14 @@ def build(base):
             owner = connection.execute("select originator,source from threads where id=?", (row["actor_id"],)).fetchone()
             row["harness"] = owner[0] if owner and owner[0] else "Codex Desktop" if owner and owner[1] == "vscode" else row.get("harness")
         connection.close()
-    urls = {r["pr_url"] for r in records if any((r.get(s) or {}).get("weighted_total") is not None for s in ("first", "corrected"))}
+    urls = {r["pr_url"] for r in records if any((r.get(s) or {}).get("weighted_total") is not None for s in ("first", "corrected", "parent_completion"))}
     summary = dict(terminal_prs=len(prs), core_terminal=sum(p["repository"] in REPOS for p in prs),
                    merged=sum(p["state"] == "MERGED" for p in prs), closed=sum(p["state"] == "CLOSED" for p in prs),
                    unified_assessed_prs=len(urls), legacy_records=len(legacy), registry_jobs=len(registry),
                    registry_gpt61=sum(j.get("model") == "gpt-6.1-sol" for j in registry),
                    unified_first=stats([(r.get("first") or {}).get("weighted_total") for r in records]),
-                   unified_corrected=stats([(r.get("corrected") or {}).get("weighted_total") for r in records]))
+                   unified_corrected=stats([(r.get("corrected") or {}).get("weighted_total") for r in records]),
+                   parent_completion=stats([(r.get("parent_completion") or {}).get("weighted_total") for r in records if r["role"] == "parent"]))
     for p in prs:
         p["cycle_hours"] = cycle(p)
         p["stop"] = stop(p)
@@ -334,7 +397,7 @@ def build(base):
             "PR evidence collected; assignment/actor review not yet completed")
     data = dict(schema=RUBRIC, generated_at=now(), snapshot_at=snapshot["collected_at"],
                 summary=summary, weights=WEIGHTS, prs=prs, assessments=records, legacy=legacy,
-                leaderboards=leaderboard_data(records + legacy), scope_repositories=list(REPOS))
+                leaderboards=leaderboard_data(records + legacy), parent_worker_pairs=parent_worker_pairs(records, mapping), scope_repositories=list(REPOS))
     save(base / "MODEL-EXPERIENCE.json", data)
     template = read(Path(__file__).with_name("terminal_report.html"))
     serialized = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")

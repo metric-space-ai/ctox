@@ -28,14 +28,14 @@ class ReportTests(unittest.TestCase):
         with self.assertRaises(ValueError):r.weighted(dict(criteria={"total":8}))
         with self.assertRaises(ValueError):r.weighted(dict(criteria=None))
     def test_model_means_exclude_unknown_and_deduplicate(self):
-        row=dict(pr_url="pr",role="parent",actor_id="actor",schema=r.RUBRIC,model="gpt-6.1-sol",first={"weighted_total":4},corrected={"weighted_total":8},rework="substantial")
+        row=dict(pr_url="pr",role="worker",actor_id="actor",schema=r.RUBRIC,model="gpt-6.1-sol",first={"weighted_total":4},corrected={"weighted_total":8},rework="substantial")
         output=r.leaderboard_data([row,copy.deepcopy(row)])
         self.assertEqual(output[0]["deliveries"],1)
         self.assertEqual(output[0]["corrected"]["mean"],8)
         row["model"]=None
         self.assertIsNone(r.leaderboard_data([row])[0]["corrected"]["mean"])
     def test_first_and_corrected_models_remain_separate(self):
-        row=dict(pr_url="pr",role="parent",actor_id="actor",schema=r.RUBRIC,model="gpt-6-astra",
+        row=dict(pr_url="pr",role="worker",actor_id="actor",schema=r.RUBRIC,model="gpt-6-astra",
                  first={"model":"gpt-6-astra","weighted_total":4},
                  corrected={"model":"gpt-6.1-sol","weighted_total":8},rework="bounded")
         groups={g["model"]:g for g in r.leaderboard_data([row,copy.deepcopy(row)])}
@@ -44,6 +44,39 @@ class ReportTests(unittest.TestCase):
         self.assertIsNone(groups["gpt-6.1-sol"]["first"]["mean"])
         self.assertEqual(groups["gpt-6.1-sol"]["corrected"]["mean"],8)
         self.assertEqual(groups["gpt-6.1-sol"]["deliveries"],1)
+    def test_parent_completion_replaces_historical_parent_stages(self):
+        row=dict(pr_url="pr",role="parent",actor_id="p",schema=r.RUBRIC,model="old",
+                 first={"weighted_total":4},corrected={"weighted_total":4},
+                 parent_completion={"weighted_total":7.8,"model":"actual-closing-model"},
+                 rework_iterations=3,iteration_evidence=[{"kind":"correction","model":"actual-closing-model"}]*3)
+        groups=r.leaderboard_data([row])
+        self.assertEqual(len(groups),1)
+        self.assertEqual(groups[0]["model"],"actual-closing-model")
+        self.assertEqual(groups[0]["score"]["mean"],7.8)
+        self.assertEqual(groups[0]["prs"],1)
+        self.assertEqual(groups[0]["rework"]["iterations"],3)
+        self.assertEqual(row["corrected"]["weighted_total"],4)
+    def test_pairs_require_parent_edge_same_pr_and_real_scores(self):
+        parent=dict(pr_url="pr",role="parent",actor_id="p",record_id="parent-record",
+                    model="parent-model",harness="Codex",parent_completion={"weighted_total":8})
+        worker=dict(pr_url="pr",role="worker",actor_id="w",parent_id="p",record_id="worker-record",
+                    model="worker-model",harness="Codex",first={"weighted_total":4},corrected={"weighted_total":7})
+        prs={"pr":{"url":"pr","repository":"repo","number":1}}
+        pairs=r.parent_worker_pairs([parent,worker],prs)
+        self.assertEqual(len(pairs),1)
+        self.assertEqual((pairs[0]["parent_score"],pairs[0]["worker_first"],pairs[0]["worker_end"]),(8,4,7))
+        wrong=copy.deepcopy(worker);wrong["parent_id"]="someone-else"
+        self.assertEqual(r.parent_worker_pairs([parent,wrong],prs),[])
+        missing=copy.deepcopy(worker);missing["corrected"]=None
+        self.assertIsNone(r.parent_worker_pairs([parent,missing],prs)[0]["worker_end"])
+    def test_iterations_are_evidenced_absolute_counts(self):
+        self.assertIsNone(r.rework_iterations({"rework":"substantial"}))
+        self.assertEqual(r.rework_iterations({"rework_iterations":0}),0)
+        row={"rework_iterations":3,"model":"a","first":{"model":"a"},"corrected":{"model":"b"},
+             "iteration_evidence":[{"kind":"correction","model":"a"},{"kind":"correction","model":"b"},{"kind":"correction","model":"b"}]}
+        self.assertEqual(r.rework_iterations(row,"b"),2)
+        row["iteration_evidence"].pop()
+        self.assertIsNone(r.rework_iterations(row,"b"))
     def test_immutable_revisions_and_reject_self_score_live_stop(self):
         with tempfile.TemporaryDirectory() as temp:
             base=Path(temp)
