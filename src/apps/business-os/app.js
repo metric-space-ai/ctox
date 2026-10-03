@@ -1,17 +1,17 @@
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261002-shell-v2-live-query-window-v438';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261002-shell-v2-live-query-window-v438';
-import { CtoxResizer } from './shared/resizer.js?v=20261002-shell-v2-live-query-window-v438';
-import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20261002-shell-v2-live-query-window-v438';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261002-shell-v2-live-query-window-v438';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261002-shell-v2-live-query-window-v438';
-import { createAppActions } from './shared/app-actions.js?v=20261002-shell-v2-live-query-window-v438';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261003-shell-v2-backend-version-v440';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261003-shell-v2-backend-version-v440';
+import { CtoxResizer } from './shared/resizer.js?v=20261003-shell-v2-backend-version-v440';
+import { collectionReadinessFromDiagnostics } from './shared/sync-contract.js?v=20261003-shell-v2-backend-version-v440';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261003-shell-v2-backend-version-v440';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261003-shell-v2-backend-version-v440';
+import { createAppActions } from './shared/app-actions.js?v=20261003-shell-v2-backend-version-v440';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/app-lifecycle.js?v=20261003-shell-v2-backend-version-v440';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -20,20 +20,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/permissions.js?v=20261003-shell-v2-backend-version-v440';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261002-shell-v2-live-query-window-v438';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/branding.js?v=20261003-shell-v2-backend-version-v440';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261003-shell-v2-backend-version-v440';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/presentation.js?v=20261003-shell-v2-backend-version-v440';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -44,9 +44,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261002-shell-v2-live-query-window-v438';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261002-shell-v2-live-query-window-v438';
-import { createDocumentsFacade } from './shared/documents.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/shell-permissions-ui.js?v=20261003-shell-v2-backend-version-v440';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261003-shell-v2-backend-version-v440';
+import { createDocumentsFacade } from './shared/documents.js?v=20261003-shell-v2-backend-version-v440';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -54,16 +54,16 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/maintenance-state.js?v=20261003-shell-v2-backend-version-v440';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/workspace-session.js?v=20261003-shell-v2-backend-version-v440';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/taskbar-pins.js?v=20261003-shell-v2-backend-version-v440';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
@@ -71,10 +71,10 @@ import {
   workjetCategoryForModule,
   workjetCategoryForTarget,
 } from './shared/workjet-theme.js?v=20260903-entertainment-import-v336';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261002-shell-v2-live-query-window-v438';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261003-shell-v2-backend-version-v440';
 import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20260923-grok-shell-v1';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261002-shell-v2-live-query-window-v438';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261002-shell-v2-live-query-window-v438';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261003-shell-v2-backend-version-v440';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261003-shell-v2-backend-version-v440';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -82,8 +82,8 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261002-shell-v2-live-query-window-v438';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261002-shell-v2-live-query-window-v438';
+} from './shared/startup-deadlines.js?v=20261003-shell-v2-backend-version-v440';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261003-shell-v2-backend-version-v440';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -101,7 +101,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261002-shell-v2-live-query-window-v438';
+const APP_BUILD = '20261003-shell-v2-backend-version-v440';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -10638,17 +10638,19 @@ function renderShellCtoxVersion(status = state.ctoxHealth) {
   }
   const platform = status?.runtime_settings?.platform || null;
   const version = platformDisplayVersion(platform?.version || platform?.release_tag || '');
+  const labelEl = container.querySelector('[data-ctox-version-label]');
+  const button = container.querySelector('[data-ctox-update-button]');
   if (!version) {
-    container.hidden = true;
-    container.removeAttribute('title');
+    if (labelEl) labelEl.textContent = 'CTOX —';
+    container.title = 'Backend-Version derzeit nicht verfügbar; Runtime-Status über Sync prüfen';
+    container.hidden = false;
+    if (button) button.hidden = true;
     return;
   }
   maybeRefreshCtoxUpdateCheck(platform);
   const check = currentCtoxUpdateCheck();
   const updateAvailable = check?.update_available === true;
   const latest = platformDisplayVersion(check?.latest_release || '');
-  const labelEl = container.querySelector('[data-ctox-version-label]');
-  const button = container.querySelector('[data-ctox-update-button]');
   const parts = [`CTOX ${version}`];
   // Die Versionsnummer stammt aus Cargo.toml und wird auf main nie
   // hochgezaehlt: sie zeigt seit Monaten 0.3.22, egal wie oft aktualisiert
