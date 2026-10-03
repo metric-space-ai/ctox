@@ -52,6 +52,36 @@ Legacy/superseded replica inventory runs after initial module/restore handling,
 outside the critical startup wait. It still preserves all old primaries and
 recovery journals; slow metadata enumeration is not a deletion authorization.
 
+Window placement hydrates from the scoped localStorage cache synchronously after
+core schema registration. Its optional IndexedDB refresh runs in the background,
+so a blocked read does not add the previous 1500ms wait before the first app.
+Late results retain moves made since the read began, even with equal timestamps
+or a remote clock ahead, and are discarded if the database, workspace or actor
+changed. This removes one startup delay; retained-profile
+browser measurements still determine whether the complete shell meets its
+latency and memory targets.
+
+If a requested route is absent from a cached or injected native catalog, warm
+startup renders that actor's existing catalog immediately while catalog sync
+continues. A valid projected empty catalog also renders without the route wait.
+The existing catalog subscription opens the requested app only after it appears
+in the filtered projection. Cold shell-seed startup retains its existing bounded
+wait; a URL cannot add an app or grant access.
+
+App-icon task counts require the native harness's active task identities as
+well as active queue status. They use the native source_module as the app
+origin, deduplicate task identities, and expose only bounded title/status and
+the existing task navigation keys. Opening an app does not count as execution.
+The shared presence query selects active statuses before its 200-row window;
+the count reflects the confirmed projected tasks in that bounded snapshot.
+An unavailable harness snapshot supplies no confirmed count. Presence reloads
+keep one read active and coalesce subsequent notifications. A cancelled queue
+read retains its rows, while fresh harness truth still retires stopped tasks.
+The task chooser rechecks its selected identity against the latest snapshot
+before navigation and is removed when the chat/presence owner is disposed.
+This browser consumption does not replace Crew's native projection authority
+or prove installed persistence, permissions, startup latency or memory.
+
 ### Fresh native schema initialization
 
 Before dispatching native Business OS commands into a fresh root, run
@@ -83,6 +113,13 @@ Collection acquisition, command completion and both queries share a 29-second
 deadline inside Workjet's existing 30-second desktop call. Timeout does not
 extend that call or introduce an HTTP data bridge. Query streams are aborted
 when the list settles; shared replication bridges are not stopped.
+
+Workjet computer, project, working-copy and session projection waits use the
+replication state on `bridge.state`, through the existing bounded readiness
+helper. Each retry passes only the time left on its original deadline. The
+bridge wrapper itself has no `awaitInSync` method; treating that optional call
+as readiness skipped the replication wait. This repair does not replace the
+native command receipt or the existing owner/status projection checks.
 
 ### Native query cache shutdown
 
@@ -1932,7 +1969,16 @@ adds the device id and proof-key thumbprint to the invite row. Later reconnects
 require that exact active Device-to-Instance edge; revoke disables both the row
 and actor epoch. This keeps the QR compact without an online reference service.
 
+Background transfer ACKs wake the existing high-priority control drain directly,
+before its awaited drain can lose an enqueue. This lets simultaneous bulk pull
+and command push progress without a page polling timer. Frame/queue budgets,
+ACK windows, retries and the WebRTC-only data boundary remain unchanged.
+`hidden-transfer-smoke.mjs` verifies both directions with all page progress
+timers held. Transport diagnostics report page visibility and a bounded,
+expiring observed timer-delay sample; visibility alone does not prove throttling.
+
 ## 10. Build & release
+
 
 `dist/ctox-rxdb-js.mjs` is **built** from `src/index.mjs` with a pinned
 esbuild. The exact command (pinned in

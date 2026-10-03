@@ -61,9 +61,9 @@ test('the generation probe wiring propagates typed timeouts and cancels complete
 
 test('shell companions start before module launch and workspace restore', async () => {
   const appSource = await readFile(new URL('../app.js', import.meta.url), 'utf8');
-  const moduleStart = appSource.indexOf('await openModule(explicitModule || workspaceSession?.activeModuleId');
+  const moduleStart = appSource.indexOf("await traceShellPhase('first-module-mount', () => openModule(explicitModule || workspaceSession?.activeModuleId");
   const companionStart = appSource.lastIndexOf('scheduleBusinessCompanions();', moduleStart);
-  const restoreStart = appSource.indexOf('await restoreWorkspaceSession(workspaceSession', companionStart);
+  const restoreStart = appSource.indexOf("await traceShellPhase('restored-windows', () => restoreWorkspaceSession(workspaceSession", companionStart);
 
   assert.ok(moduleStart >= 0, 'module launch must exist');
   assert.ok(companionStart >= 0 && companionStart < moduleStart, 'companions must start before module launch');
