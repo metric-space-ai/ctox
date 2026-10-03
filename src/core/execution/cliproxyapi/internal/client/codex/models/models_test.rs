@@ -186,7 +186,21 @@ fn response_has_expected_envelope() {
 fn candidate_apply_patch_template_fallback_and_exact_capability_override() {
     let available = vec![model(json!({"id":"custom"}))];
     let inherited = catalog(1).build_models(&available, &empty_metadata, None, false);
+    for key in ["apply_patch_tool_type", "upgrade", "availability_nux"] {
+        assert_eq!(inherited[0][key], Value::Null);
+    }
+    let official = vec![model(json!({"id":"gpt-5.5"}))];
+    let inherited = catalog(1).build_models(&official, &empty_metadata, None, false);
     assert_eq!(inherited[0]["apply_patch_tool_type"], "freeform");
+    for codex_only in [false, true] {
+        let providers = |_: &str| if codex_only { vec!["codex".into()] } else { vec!["codex".into(), "openai".into()] };
+        let entries = catalog(1).build_models(&official, &empty_metadata, Some(&providers), false);
+        assert_eq!(entries[0]["apply_patch_tool_type"], if codex_only { json!("freeform") } else { Value::Null });
+        if !codex_only {
+            assert_eq!(entries[0]["upgrade"], Value::Null);
+            assert_eq!(entries[0]["availability_nux"], Value::Null);
+        }
+    }
     for supported in [false, true] {
         let resolver = |id: &str| {
             assert_eq!(id, "custom");

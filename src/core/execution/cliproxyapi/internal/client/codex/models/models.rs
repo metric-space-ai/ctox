@@ -193,7 +193,7 @@ impl CodexModelCatalog {
                     optimize_multi_agent_v2,
                 );
             }
-            apply_search_tool_support(&mut entry, &id, template_model, providers);
+            apply_provider_capabilities(&mut entry, &id, template_model, providers);
             sanitize_reasoning_metadata(&mut entry);
             apply_visibility_override(&mut entry, &id);
             apply_patch_tool_capability(&mut entry, &id, apply_patch_capability);
@@ -217,6 +217,28 @@ fn apply_max_context_length_override(entry: &mut ModelMap, model: &ModelMap) {
         entry.insert("context_window".to_owned(), maximum.into());
         entry.insert("max_context_window".to_owned(), maximum.into());
     }
+}
+
+// ref: internal/client/codex/models/models.go:545-566 @ e2bff010
+fn apply_provider_capabilities(
+    entry: &mut ModelMap,
+    id: &str,
+    template_model: bool,
+    providers: Option<&dyn ProvidersForModel>,
+) {
+    if template_model && providers.is_some_and(|source| {
+        let routes = source.providers(id);
+        routes.is_empty() || routes.iter().any(|provider| !provider.trim().eq_ignore_ascii_case("codex"))
+    }) {
+        entry.insert("supports_search_tool".to_owned(), Value::Bool(false));
+        entry.insert("prefer_websockets".to_owned(), Value::Bool(false));
+        entry.insert("service_tiers".to_owned(), Value::Array(Vec::new()));
+        for key in ["apply_patch_tool_type", "upgrade", "availability_nux"] {
+            entry.insert(key.to_owned(), Value::Null);
+        }
+        return;
+    }
+    apply_search_tool_support(entry, id, template_model, providers);
 }
 
 fn apply_search_tool_support(
@@ -292,8 +314,8 @@ fn apply_model_metadata(
         );
     }
     entry.insert("service_tiers".to_owned(), Value::Array(Vec::new()));
-    for key in ["upgrade", "availability_nux"] {
-        entry.remove(key);
+    for key in ["apply_patch_tool_type", "upgrade", "availability_nux"] {
+        entry.insert(key.to_owned(), Value::Null);
     }
     if context_window > 0 {
         entry.insert("context_window".to_owned(), context_window.into());
