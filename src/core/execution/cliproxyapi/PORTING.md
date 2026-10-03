@@ -36,9 +36,16 @@
   forms, changes only selected raw type values, preserves unrelated/duplicate
   data and keeps unknown tools unchanged. The exact412-line upstream
   history/notes fixture is vendored unchanged; six new scoped regressions are
-  prepared, for69 candidate tests in total. Narrow formatting passed.
+  prepared. The Claude handler now maps both408 and504 to timeout_error,
+  retains explicit upstream error classifications and supplies the request-timeout
+  fallback message. The two Antigravity Claude5.5 high catalog entries now
+  match the complete upstream records, including context/output and modalities;
+  unrelated catalog data stays unchanged and the exact full-catalog hash guard
+  remains enforced. Three further catalog/error regressions are prepared, for72
+  candidate test functions in total. Prepared cases cover buffered JSON errors;
+  the committed-SSE timeout lifecycle remains unverified.
   The Go oracle is materialized at this exact commit and the bounded controller
-  requires five executed upstream parent tests; Rust/Go execution, remaining
+  requires five integer and two Claude-error upstream parent tests; execution, remaining
   semantic deltas and promotion remain open. Preserve both earlier reviews;
   the accepted pin is unchanged.
 
@@ -78,7 +85,7 @@
   executor consumes it before registry translation, normalizes integer schemas
   before conversion and uses the compatibility dispatcher/plugin normalizer.
   Seven further configuration, selection, wire and executor regressions are
-  prepared; with the six v8.0.13 integer cases above there are69 candidate
+  prepared; with the nine v8.0.13 cases above there are72 candidate
   tests. Narrow formatting and whitespace checks passed; Cargo/Go execution
   is still pending. Home capability binding, other
   executor consumers and live thinking update-intent propagation remain open;

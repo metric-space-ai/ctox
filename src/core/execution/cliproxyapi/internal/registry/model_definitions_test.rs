@@ -101,6 +101,41 @@ fn antigravity_web_search_requires_requested_provider_capability() {
     );
 }
 
+// ref: internal/registry/models/models.json:3980-4030 @ d7914afd
+#[test]
+fn candidate_v13_antigravity_claude_catalog_keeps_provider_and_thinking_limits() {
+    let catalog = embedded_models_catalog().unwrap();
+    let models = models_for_channel(&catalog, "antigravity").unwrap();
+    for (id, display) in [
+        ("claude-opus-5-5-high", "Claude Opus 5.5 (High)"),
+        ("claude-sonnet-5-5-high", "Claude Sonnet 5.5 (High)"),
+    ] {
+        let model = models.iter().find(|model| model.id == id).unwrap();
+        assert_eq!(model.provider_type, "antigravity");
+        assert_eq!(model.owned_by, "antigravity");
+        assert_eq!(model.display_name, display);
+        assert_eq!(model.name, id);
+        assert_eq!(model.description, display);
+        assert_eq!(model.context_length, 1_000_000);
+        assert_eq!(model.max_completion_tokens, 128_000);
+        assert_eq!(
+            model.supported_input_modalities,
+            vec!["text".to_owned(), "image".to_owned()]
+        );
+        assert_eq!(model.supported_output_modalities, vec!["text".to_owned()]);
+        let thinking = model.thinking.as_ref().unwrap();
+        assert_eq!((thinking.min, thinking.max), (1024, 64_000));
+        assert!(thinking.zero_allowed && thinking.dynamic_allowed);
+    }
+    assert!(!models.iter().any(
+        |model| ["claude-opus-4-6-thinking", "claude-sonnet-4-6"].contains(&model.id.as_str())
+    ));
+    assert!(models_for_channel(&catalog, "claude")
+        .unwrap()
+        .iter()
+        .any(|model| model.id == "claude-sonnet-4-6"));
+}
+
 #[test]
 fn complete_embedded_catalog_hash_channels_and_lookup_are_stable() {
     assert_eq!(
@@ -108,7 +143,7 @@ fn complete_embedded_catalog_hash_channels_and_lookup_are_stable() {
             "{:x}",
             Sha256::digest(include_str!("models/models.json").trim_end().as_bytes())
         ),
-        "483f7fb1b0f159bcda08c01ea91e21162b8f50ad34e83b7d7884e6a5384525c7"
+        "a872f4f35fe141383110a8477e2a9cc6ffc47f0b37fda8100133820a3787e32e"
     );
     let expected = [
         ("claude", 15),

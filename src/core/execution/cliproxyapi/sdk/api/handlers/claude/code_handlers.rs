@@ -148,6 +148,7 @@ fn non_empty_json_string(value: Option<&Value>) -> Option<&str> {
 }
 
 fn claude_error_type_from_status(status: u16) -> &'static str {
+    // ref: sdk/api/handlers/claude/code_handlers.go:448-473 @ d7914afd
     match status {
         401 => "authentication_error",
         402 => "billing_error",
@@ -155,7 +156,7 @@ fn claude_error_type_from_status(status: u16) -> &'static str {
         404 => "not_found_error",
         413 => "request_too_large",
         429 => "rate_limit_error",
-        504 => "timeout_error",
+        408 | 504 => "timeout_error",
         529 => "overloaded_error",
         500.. => "api_error",
         _ => "invalid_request_error",
@@ -169,6 +170,7 @@ fn status_text(status: u16) -> &'static str {
         402 => "Payment Required",
         403 => "Forbidden",
         404 => "Not Found",
+        408 => "Request Timeout",
         413 => "Payload Too Large",
         429 => "Too Many Requests",
         500 => "Internal Server Error",
