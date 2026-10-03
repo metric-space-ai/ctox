@@ -260,9 +260,9 @@ def leaderboard_data(records):
         seen.add(key)
         rubric = row.get("rubric", row.get("schema"))
         for model in {stage_model(row, stage) for stage in ("first", "corrected")}:
-            groups.setdefault((row["role"], model, rubric), []).append(row)
+            groups.setdefault((row["role"], row.get("harness"), model, rubric), []).append(row)
     result = []
-    for (role, model, rubric), rows in sorted(groups.items(), key=lambda x: str(x[0])):
+    for (role, harness, model, rubric), rows in sorted(groups.items(), key=lambda x: str(x[0])):
         def score(row, stage):
             if model is None or stage_model(row, stage) != model:
                 return None
@@ -271,7 +271,8 @@ def leaderboard_data(records):
         first = [score(r, "first") for r in rows]
         corrected = [score(r, "corrected") for r in rows]
         rework = [r["rework"] for r in rows if r.get("rework") not in (None, "unknown")]
-        result.append(dict(role=role, model=model, rubric=rubric, deliveries=len(rows),
+        result.append(dict(role=role, harness=harness, model=model, rubric=rubric, deliveries=len(rows),
+                           prs=len({r["pr_url"] for r in rows if score(r,"first") is not None or score(r,"corrected") is not None}),
                            first=stats(first), corrected=stats(corrected),
                            rework=dict(changed=sum(v != "none" for v in rework), denominator=len(rework))))
     return result
@@ -315,7 +316,7 @@ def build(base):
         connection = sqlite3.connect("file:" + str(database) + "?mode=ro", uri=True)
         for row in records + legacy:
             owner = connection.execute("select originator,source from threads where id=?", (row["actor_id"],)).fetchone()
-            row["harness"] = owner[0] if owner and owner[0] else "Codex Desktop" if owner and owner[1] == "vscode" else None
+            row["harness"] = owner[0] if owner and owner[0] else "Codex Desktop" if owner and owner[1] == "vscode" else row.get("harness")
         connection.close()
     urls = {r["pr_url"] for r in records if any((r.get(s) or {}).get("weighted_total") is not None for s in ("first", "corrected"))}
     summary = dict(terminal_prs=len(prs), core_terminal=sum(p["repository"] in REPOS for p in prs),

@@ -3,34 +3,32 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PR-Auswertung · Parents & Worker</title>
 <style>
 :root{font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#242a31;background:#f6f6f3;--border:#dfe2dc;--muted:#737b77;--accent:#27614b}
-*{box-sizing:border-box}body{margin:0}main{max-width:1480px;margin:auto;padding:32px 36px}h1{font-size:28px;letter-spacing:-.7px;margin:0}h2{font-size:17px;margin:0;font-weight:650}p{margin:5px 0}header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:22px}small,.muted{font-size:12px;color:var(--muted)}button,select,input{font:inherit;color:inherit;background:white;border:1px solid #cbd0c8;border-radius:5px;padding:7px 10px}button{cursor:pointer}button:hover{background:#ecf2eb}a{color:#27614b;text-decoration:none}a:hover{text-decoration:underline}label{font-size:12px;color:var(--muted);display:grid;gap:4px}.filters{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:22px}.filters label{flex:1;min-width:140px}.filters label.search{flex:2}.summary{display:flex;gap:28px;flex-wrap:wrap;margin:18px 0 22px}.summary b{font-size:22px;display:block;letter-spacing:-.4px}.summary span{color:var(--muted);font-size:12px}.leaderboards{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:26px}.box{background:white;border:1px solid var(--border);border-radius:7px;overflow:hidden}.boxhead{padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;font-size:12px}th{font-weight:550;text-align:left;color:var(--muted);border-bottom:1px solid var(--border);padding:10px 14px;white-space:nowrap}td{padding:13px 14px;border-bottom:1px solid #eceee9;vertical-align:top}tbody tr:last-child td{border-bottom:0}.number{font-variant-numeric:tabular-nums;white-space:nowrap}.score{font-size:16px;font-weight:650}.model{font-weight:600}.empty{color:var(--muted);padding:22px}.bar{height:4px;width:80px;background:#ecefe9;border-radius:2px;margin-top:6px}.bar i{display:block;background:var(--accent);height:4px;border-radius:2px}.listheader{display:flex;justify-content:space-between;align-items:center;margin:8px 0 12px}.pager{display:flex;gap:10px;align-items:center;font-size:12px;margin:16px 0 22px}.pager button:disabled{opacity:.35;cursor:default}.prtitle{max-width:300px;min-width:210px}.actor{min-width:155px;max-width:240px}.actor+.actor{margin-top:8px}.tag{display:inline-block;font-size:10px;font-weight:600;padding:2px 5px;border-radius:3px;background:#f0f1ec;color:#677169}.merged{background:#e9f1eb;color:#37644a}.closed{background:#f5ece7;color:#905b42}.hint{font-size:11px;color:var(--muted)}code{font:11px ui-monospace,SFMono-Regular,monospace}.detail{background:#fafbf8;padding:20px 24px}.detailgrid{display:grid;grid-template-columns:1fr 1fr;gap:24px}.detailscore{width:100%;margin:10px 0}.detailscore td,.detailscore th{padding:7px 8px}.detail h3{font-size:14px;margin:12px 0 5px}.refs{word-break:break-all;font-size:11px}.detail p{font-size:12px}details{margin:10px 0}summary{cursor:pointer;font-size:12px;color:#37644a}.detail pre{white-space:pre-wrap;font-size:11px;line-height:1.5}.lifecycle{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;padding:10px 0}.advanced{display:none;gap:12px;flex-wrap:wrap;margin:-10px 0 20px}.advanced.open{display:flex}.advanced label{flex:1;min-width:130px}footer{color:var(--muted);font-size:12px;border-top:1px solid var(--border);padding-top:14px}.method{max-width:950px;font-size:12px}.method p{margin:8px 0}.compact td{padding:9px 14px}
-@media(max-width:900px){main{padding:22px 16px}.leaderboards,.detailgrid{grid-template-columns:1fr}header{align-items:start}.filters label{min-width:120px}.summary{gap:16px}.prtitle{min-width:180px}}@media print{button,.filters,.advanced,.pager{display:none}.scroll{overflow:visible}main{padding:0}}
+*{box-sizing:border-box}body{margin:0}main{max-width:1480px;margin:auto;padding:32px 36px}h1{font-size:28px;letter-spacing:-.7px;margin:0}h2{font-size:17px;margin:0;font-weight:650}p{margin:5px 0}header{display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:22px}small,.muted{font-size:12px;color:var(--muted)}button,select,input{font:inherit;color:inherit;background:white;border:1px solid #cbd0c8;border-radius:5px;padding:7px 10px}button{cursor:pointer}button:hover{background:#ecf2eb}a{color:#27614b;text-decoration:none}a:hover{text-decoration:underline}label{font-size:12px;color:var(--muted);display:grid;gap:4px}.filters{display:flex;gap:12px;align-items:end;flex-wrap:wrap;margin-bottom:22px}.filters label{flex:1;min-width:140px}.filters label.search{flex:2}.summary{display:flex;gap:28px;flex-wrap:wrap;margin:18px 0 22px}.summary b{font-size:22px;display:block;letter-spacing:-.4px}.summary span{color:var(--muted);font-size:12px}.leaderboards{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:26px}.box{background:white;border:1px solid var(--border);border-radius:7px;overflow:hidden}.boxhead{padding:16px 18px 8px;display:flex;justify-content:space-between;align-items:center}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;font-size:12px}th{font-weight:550;text-align:left;color:var(--muted);border-bottom:1px solid var(--border);padding:10px 14px;white-space:nowrap}td{padding:13px 14px;border-bottom:1px solid #eceee9;vertical-align:top}tbody tr:last-child td{border-bottom:0}.number{font-variant-numeric:tabular-nums;white-space:nowrap}.score{font-size:16px;font-weight:650}.model{font-weight:600}.empty{color:var(--muted);padding:22px}.listheader{display:flex;justify-content:space-between;align-items:center;margin:8px 0 12px}.pager{display:flex;gap:10px;align-items:center;font-size:12px;margin:16px 0 22px}.pager button:disabled{opacity:.35;cursor:default}.prtitle{max-width:300px;min-width:210px}.actor{min-width:155px;max-width:240px}.actor+.actor{margin-top:8px}.tag{display:inline-block;font-size:10px;font-weight:600;padding:2px 5px;border-radius:3px;background:#f0f1ec;color:#677169}.merged{background:#e9f1eb;color:#37644a}.closed{background:#f5ece7;color:#905b42}.hint{font-size:11px;color:var(--muted)}code{font:11px ui-monospace,SFMono-Regular,monospace}.advanced{display:none;gap:12px;flex-wrap:wrap;margin:-10px 0 20px}.advanced.open{display:flex}.advanced label{flex:1;min-width:130px}footer{color:var(--muted);font-size:12px;border-top:1px solid var(--border);padding-top:14px}.method{max-width:950px;font-size:12px}.method p{margin:8px 0}.compact td{padding:9px 14px}
+@media(max-width:900px){main{padding:22px 16px}.leaderboards{grid-template-columns:1fr}header{align-items:start}.filters label{min-width:120px}.summary{gap:16px}.prtitle{min-width:180px}}@media print{button,.filters,.advanced,.pager{display:none}.scroll{overflow:visible}main{padding:0}}
 </style></head>
 <body><main>
-<header><div><h1>PR-Auswertung</h1><p class="muted" id="stamp"></p></div><button id="export">JSON herunterladen</button></header>
+<header><div><h1>PR-Auswertung</h1></div><button id="export">JSON herunterladen</button></header>
 <div class="filters">
-<label>Projekt<select id="project"></select></label><label>Repository<select id="repo"></select></label><label>Rolle<select id="role"><option value="">Parents & Worker</option><option value="parent">Parent</option><option value="worker">Worker</option></select></label><label>Modell<select id="model"></select></label><label class="search">PR suchen<input id="query" type="search" placeholder="Nummer, Titel oder Modell"></label><button id="advanced">Weitere Filter</button>
+<label>Projekt<select id="project"></select></label><label>Repository<select id="repo"></select></label><label>Rolle<select id="role"><option value="">Parents & Worker</option><option value="parent">Parent</option><option value="worker">Worker</option></select></label><label>Modell<select id="model"></select></label><label class="search">PR suchen<input id="query" type="search"></label><button id="advanced">Weitere Filter</button>
 </div>
-<div class="advanced" id="extras"><label>Geschlossen ab<input type="date" id="from"></label><label>Bis<input type="date" id="through"></label><label>Status<select id="status"><option value="">Gemergt & geschlossen</option><option value="MERGED">Gemergt</option><option value="CLOSED">Geschlossen</option></select></label><label>Bewertungen<select id="coverage"><option value="">Alle PRs</option><option value="scored">Mit neuer Bewertung</option><option value="missing">Neue Bewertung fehlt</option></select></label><label>Leaderboard-Schema<select id="rubric"><option value="unified-actor-v1">Einheitliche Kriterien</option><option value="legacy-delivery-v1">Historische Liefernoten</option><option value="legacy-retrospective-v1">Historische Rückblicke</option></select></label></div>
-<div class="summary" id="summary"></div>
-<div class="leaderboards"><section class="box"><div class="boxhead"><h2>Parents</h2><small id="parentnote"></small></div><div class="scroll"><table><thead><tr><th>Modell</th><th>n Erst / End</th><th>Ø Erst</th><th>Ø End</th><th>Median End</th><th>Nacharbeit</th></tr></thead><tbody id="parentboard"></tbody></table></div></section>
-<section class="box"><div class="boxhead"><h2>Worker</h2><small id="workernote"></small></div><div class="scroll"><table><thead><tr><th>Modell</th><th>n Erst / End</th><th>Ø Erst</th><th>Ø End</th><th>Median End</th><th>Nacharbeit</th></tr></thead><tbody id="workerboard"></tbody></table></div></section></div>
-<div class="listheader"><h2>Pull Requests</h2><small id="total"></small></div>
-<div class="box scroll"><table><thead><tr><th>PR / Änderung</th><th>Status / Datum</th><th>Parent · Harness / Modell</th><th>Erst → End</th><th>Worker · Harness / Modell</th><th>Erst → End</th><th>Produktabnahme</th></tr></thead><tbody id="prlist"></tbody></table></div>
+<div class="advanced" id="extras"><label>Geschlossen ab<input type="date" id="from"></label><label>Bis<input type="date" id="through"></label><label>Status<select id="status"><option value="">Gemergt & geschlossen</option><option value="MERGED">Gemergt</option><option value="CLOSED">Geschlossen</option></select></label></div>
+
+<div class="leaderboards"><section class="box"><div class="boxhead"><h2>Parents</h2></div><div class="scroll"><table><thead><tr><th>Harness / Modell</th><th>PRs</th><th>Erstscore</th><th>Endscore</th><th>Nacharbeiten</th></tr></thead><tbody id="parentboard"></tbody></table></div></section>
+<section class="box"><div class="boxhead"><h2>Worker</h2></div><div class="scroll"><table><thead><tr><th>Harness / Modell</th><th>PRs</th><th>Erstscore</th><th>Endscore</th><th>Nacharbeiten</th></tr></thead><tbody id="workerboard"></tbody></table></div></section></div>
+
+<div class="box scroll"><table><thead><tr><th>PR</th><th>Status</th><th>Parent · Harness / Modell</th><th>Worker · Harness / Modell</th><th>Parent Erst</th><th>Parent End</th><th>Worker Erst</th><th>Worker End</th><th>Nacharbeiten</th></tr></thead><tbody id="prlist"></tbody></table></div>
 <div class="pager"><button id="prev">← Zurück</button><span id="page"></span><button id="next">Weiter →</button><label><select id="size"><option value="25">25 PRs pro Seite</option><option value="50">50 PRs pro Seite</option><option value="100">100 PRs pro Seite</option></select></label></div>
-<footer id="coveragefoot"></footer>
+
 </main>
 <script id="report-data" type="application/json">__REPORT_DATA__</script>
 <script>
 'use strict';
 const D=JSON.parse(document.getElementById('report-data').textContent),$=id=>document.getElementById(id);
 const E=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const F=v=>v==null?'nicht bewertet':Number(v).toFixed(1);
+const F=v=>v==null?'—':Number(v).toFixed(1);
 const day=v=>v?v.slice(0,10):'—',avg=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:null;
 const median=a=>{if(!a.length)return null;const s=[...a].sort((x,y)=>x-y),n=Math.floor(s.length/2);return s.length%2?s[n]:(s[n-1]+s[n])/2};
 const known=a=>a.filter(v=>v!=null);
-const refs=a=>(a||[]).map(v=>'<p class="refs">'+(/^https:\/\/github\.com\//.test(v)?'<a target="_blank" rel="noopener" href="'+E(v)+'">'+E(v)+'</a>':E(v))+'</p>').join('');
-const criterion={correctness:'Korrektheit',assignment_fulfillment:'Auftragserfüllung',evidence_quality:'Nachweisqualität',closure_quality:'Abschlussqualität',efficiency:'Effizienz'};
 const all=[...D.assessments.map(a=>({...a,rubric:a.schema})),...D.legacy];
 const stageModel=(a,s)=>a[s]&&typeof a[s]==='object'?(Object.hasOwn(a[s],'model')?a[s].model:a[s].provenance?.model??a.model):Object.hasOwn(a,s+'_model')?a[s+'_model']:a.model;
 const actorModels=a=>[...new Set(['first','corrected'].map(s=>stageModel(a,s)).filter(Boolean))];
@@ -38,13 +36,12 @@ const matchesModel=(a,m)=>!m||actorModels(a).includes(m)||(m==='unknown'&&actorM
 const value=(a,stage)=>a.rubric==='unified-actor-v1'?a[stage]?.weighted_total??null:a[stage]??null;
 const fill=(id,v,label)=>{$(id).innerHTML='<option value="">'+label+'</option>'+[...new Set(v)].sort().map(x=>'<option value="'+E(x)+'">'+E(x)+'</option>').join('')};
 fill('project',D.prs.map(p=>p.project),'Alle Projekte');fill('repo',D.prs.map(p=>p.repository),'Alle Repositories');fill('model',all.flatMap(a=>actorModels(a).length?actorModels(a):['unknown']),'Alle Modelle');
-$('stamp').textContent='Abgeschlossene PRs · Stand '+day(D.snapshot_at)+' · offline lesbar';
 let page=0,visible=[],actors=[];
 function current(p,role){
  let a=all.filter(a=>a.pr_url===p.url&&a.role===role);
  const newActors=new Set(a.filter(a=>a.rubric==='unified-actor-v1').map(a=>a.actor_id));
  a=a.filter(a=>a.rubric==='unified-actor-v1'||!newActors.has(a.actor_id));
- // Prefer historical retrospective over the earlier same actor total. Keep all history in details.
+ // Prefer historical retrospective over the earlier same actor total. History stays in JSON.
  const retro=new Set(a.filter(a=>a.rubric==='legacy-retrospective-v1').map(a=>a.actor_id));
  return a.filter(a=>a.rubric!=='legacy-delivery-v1'||!retro.has(a.actor_id));
 }
@@ -56,44 +53,41 @@ function refresh(reset=true){
  return (!$('project').value||p.project===$('project').value)&&(!$('repo').value||p.repository===$('repo').value)&&
  (!$('role').value||aa.some(a=>a.role===$('role').value))&&(!$('model').value||aa.some(a=>matchesModel(a,$('model').value)))&&
  (!$('status').value||p.state===$('status').value)&&(!$('from').value||date>=$('from').value)&&(!$('through').value||date<=$('through').value)&&
- (!$('coverage').value||isScored(p)===($('coverage').value==='scored'))&&
  (!q||(p.repository+' #'+p.number+' '+p.title+' '+aa.map(a=>a.model+' '+a.actor_id).join(' ')).toLowerCase().includes(q));
  }).sort((a,b)=>(b.closedAt||'').localeCompare(a.closedAt||''));
  actors=all.filter(a=>visible.some(p=>p.url===a.pr_url)&&(!$('role').value||a.role===$('role').value)&&(!$('model').value||matchesModel(a,$('model').value)));
- const n=visible.length,assessed=visible.filter(isScored).length,cy=known(visible.map(p=>p.cycle_hours)),accepted=visible.filter(p=>D.assessments.some(a=>a.pr_url===p.url&&a.lifecycle?.acceptance?.state==='passed')).length;
- $('summary').innerHTML=[[n,'abgeschlossene PRs'],[assessed+'/'+n,'mit neuer Gesamtbewertung'],[visible.filter(p=>p.state==='MERGED').length,'gemergt'],[accepted,'Abnahme belegt'],[cy.length?median(cy).toFixed(1)+' h':'—','mediane Durchlaufzeit · n='+cy.length]].map(([v,l])=>'<div><b>'+v+'</b><span>'+l+'</span></div>').join('');
  for(const role of ['parent','worker']){
- const seen=new Set(),rr=actors.filter(a=>a.role===role&&a.rubric===$('rubric').value).filter(a=>{
+ const seen=new Set(),rr=actors.filter(a=>a.role===role&&a.rubric==='unified-actor-v1').filter(a=>{
  const key=JSON.stringify([a.pr_url,a.role,a.actor_id,a.rubric,a.package||'delivery']);if(seen.has(key))return false;seen.add(key);return true;
  }),group=new Map();
- for(const a of rr){for(const model of new Set(['first','corrected'].map(s=>stageModel(a,s)||'unknown'))){if($('model').value&&model!==$('model').value)continue;if(!group.has(model))group.set(model,[]);group.get(model).push(a)}}
- const rows=[...group].map(([model,aa])=>{const first=model==='unknown'?[]:known(aa.map(a=>stageModel(a,'first')===model?value(a,'first'):null)),final=model==='unknown'?[]:known(aa.map(a=>stageModel(a,'corrected')===model?value(a,'corrected'):null)),re=aa.filter(a=>a.rework&&a.rework!=='unknown');return {model,aa,first,final,re,mean:avg(final)}});
- rows.sort((a,b)=>(b.mean??-1)-(a.mean??-1));
- $(role+'board').innerHTML=rows.map(g=>'<tr><td class="model">'+E(g.model==='unknown'?'Modell unbekannt':g.model)+'<p class="hint">'+g.aa.length+' Lieferung'+(g.aa.length===1?'':'en')+'</p></td><td class="number">'+g.first.length+' / '+g.final.length+'</td><td class="number">'+F(avg(g.first))+'</td><td><span class="score">'+F(g.mean)+'</span>'+(g.mean!=null?'<div class="bar"><i style="width:'+g.mean*10+'%"></i></div>':'')+'</td><td class="number">'+F(median(g.final))+'</td><td class="number">'+g.re.filter(a=>a.rework!=='none').length+'/'+g.re.length+'</td></tr>').join('')||'<tr><td colspan="6" class="empty">Noch keine Bewertungen nach diesem Schema.</td></tr>';
- $(role+'note').textContent=$('rubric').value==='unified-actor-v1'?'einheitliches Schema':'historisches Schema';
+ for(const a of rr){for(const model of new Set(['first','corrected'].map(s=>stageModel(a,s)||'unknown'))){if($('model').value&&model!==$('model').value)continue;const key=JSON.stringify([a.harness||'—',model]);if(!group.has(key))group.set(key,[]);group.get(key).push(a)}}
+ const rows=[...group].map(([key,aa])=>{const [harness,model]=JSON.parse(key);const first=model==='unknown'?[]:known(aa.map(a=>stageModel(a,'first')===model?value(a,'first'):null)),final=model==='unknown'?[]:known(aa.map(a=>stageModel(a,'corrected')===model?value(a,'corrected'):null)),re=aa.filter(a=>a.rework&&a.rework!=='unknown');return {harness,model,aa,first,final,re,mean:avg(final)}});
+ const scoredRows=rows.filter(g=>g.first.length||g.final.length);
+ scoredRows.sort((a,b)=>(b.mean??-1)-(a.mean??-1));
+ $(role+'board').innerHTML=scoredRows.map(g=>'<tr><td>'+E(g.harness)+' / '+E(g.model)+'</td><td class="number">'+new Set(g.aa.filter(a=>['first','corrected'].some(s=>stageModel(a,s)===g.model&&value(a,s)!=null)).map(a=>a.pr_url)).size+'</td><td class="number" title="'+g.first.length+' Erstnoten">'+F(avg(g.first))+'</td><td class="number" title="'+g.final.length+' Endnoten">'+F(g.mean)+'</td><td class="number">'+(g.re.length?Math.round(100*g.re.filter(a=>a.rework!=='none').length/g.re.length)+' %':'—')+'</td></tr>').join('')||'<tr><td colspan="5" class="empty">—</td></tr>';
  }
- $('coveragefoot').textContent='Neue Bewertungen: '+assessed+' / '+n+' PRs · Historische Noten: Alt · Belege im JSON-Export';
  draw();
 }
 function actorCell(a){
- if(!a.length)return '<span class="hint">nicht zugeordnet</span>';
- return a.map(x=>'<div class="actor"><span class="model">'+E(actorModels(x).join(' → ')||'Modell nicht belegt')+'</span><p class="hint">'+E(x.harness||'Harness nicht belegt')+'</p>'+(x.registered_model&&!x.model?'<p class="hint">Modell im Auftrag: '+E(x.registered_model)+'</p>':'')+'</div>').join('');
+ if(!a.length)return '—';
+ return a.map(x=>'<div>'+E(x.harness||'—')+' / '+E(actorModels(x).join(' → ')||'—')+'</div>').join('');
 }
-function scoreCell(a){
- if(!a.length)return '<span class="hint">nicht bewertet</span>';
- return a.map(x=>{
- if(x.rubric==='legacy-parent-phase-v1')return Object.entries(x.phases||{}).map(([k,v])=>'<div><span class="number">'+F(v.score)+'</span><p class="hint">Alt · '+E({handover:'Übergabe',review:'Review',lifecycle:'Abschluss'}[k]||k)+'</p></div>').join('');
- return '<div><span class="number">'+F(value(x,'first'))+' → '+F(value(x,'corrected'))+'</span><p class="hint">'+(x.rubric==='unified-actor-v1'?'':'Alt · ')+E(x.rubric==='unified-actor-v1'?'einheitlich':x.rubric==='legacy-retrospective-v1'?'Rückblick':'Liefernote')+'</p></div>';
- }).join('');
+function scoreCell(a,stage){
+ const rows=a.filter(x=>x.rubric!=='legacy-parent-phase-v1');
+ if(!rows.length)return '—';
+ return rows.map(x=>'<div class="number">'+F(value(x,stage))+(x.rubric==='unified-actor-v1'?'':' <small>Alt</small>')+'</div>').join('');
+}
+function reworkCell(parent,worker){
+ const names={none:'keine',minor:'gering',bounded:'begrenzt',moderate:'mittel',substantial:'umfangreich',major:'umfangreich'};
+ return [[parent,'P'],[worker,'W']].filter(([a])=>a.length).map(([a,role])=>role+': '+[...new Set(a.map(x=>names[x.rework]||(!x.rework||x.rework==='unknown'?'—':x.rework)))].map(E).join(', ')).join('<br>')||'—';
 }
 function draw(){
  const size=Number($('size').value),pages=Math.max(1,Math.ceil(visible.length/size));page=Math.min(page,pages-1);
  const prs=visible.slice(page*size,(page+1)*size);
- $('total').textContent=visible.length+' PRs';
  $('prlist').innerHTML=prs.map((p,i)=>{
- const parent=current(p,'parent'),worker=current(p,'worker'),accept=D.assessments.find(a=>a.pr_url===p.url&&a.lifecycle?.acceptance)?.lifecycle?.acceptance?.state||'unknown';
- return '<tr><td class="prtitle"><a target="_blank" rel="noopener" href="'+E(p.url)+'"><strong>#'+p.number+'</strong> '+E(p.title)+'</a><p class="hint">'+E(p.repository)+' · '+p.changedFiles+' Dateien</p></td><td><span class="tag '+p.state.toLowerCase()+'">'+(p.state==='MERGED'?'gemergt':'geschlossen')+'</span>'+(p.stop?' <span class="tag">STOP</span>':'')+'<p class="hint">'+day(p.closedAt)+'</p><code>'+E(p.headRefOid.slice(0,10))+'</code></td><td>'+actorCell(parent)+'</td><td>'+scoreCell(parent)+'</td><td>'+actorCell(worker)+'</td><td>'+scoreCell(worker)+'</td><td class="hint">'+E(accept==='passed'?'belegt':accept==='unknown'?'nicht belegt':accept==='pending'?'offen':accept==='unmeasured'?'nicht gemessen':accept)+'</td></tr>';
- }).join('')||'<tr><td colspan="7" class="empty">Keine passenden PRs.</td></tr>';
+ const parent=current(p,'parent'),worker=current(p,'worker');
+ return '<tr><td class="prtitle"><a target="_blank" rel="noopener" href="'+E(p.url)+'"><strong>'+E(p.repository.split('/').pop())+' #'+p.number+'</strong> '+E(p.title)+'</a></td><td><span class="tag '+p.state.toLowerCase()+'">'+(p.state==='MERGED'?'gemergt':'geschlossen')+'</span>'+(p.stop?' <span class="tag">STOP</span>':'')+'</td><td>'+actorCell(parent)+'</td><td>'+actorCell(worker)+'</td><td>'+scoreCell(parent,'first')+'</td><td>'+scoreCell(parent,'corrected')+'</td><td>'+scoreCell(worker,'first')+'</td><td>'+scoreCell(worker,'corrected')+'</td><td>'+reworkCell(parent,worker)+'</td></tr>';
+ }).join('')||'<tr><td colspan="9" class="empty">Keine passenden PRs.</td></tr>';
  $('page').textContent='Seite '+(page+1)+' von '+pages+' · '+(visible.length?page*size+1:0)+'–'+Math.min((page+1)*size,visible.length)+' von '+visible.length;
  $('prev').disabled=page===0;$('next').disabled=page+1>=pages;
 }
