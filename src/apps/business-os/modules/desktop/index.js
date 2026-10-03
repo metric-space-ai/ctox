@@ -231,7 +231,7 @@ export async function mount(ctx) {
       cleanups.push(() => clearInterval(clockInterval));
     };
   }
-  wireSyncStatusWidget();
+
   const layoutCollection = ctx.db?.collection?.('desktop_layout');
   const iconsCollection = ctx.db?.collection?.('desktop_icons');
   const commandsCollection = ctx.db?.collection?.('business_commands');
@@ -246,6 +246,7 @@ export async function mount(ctx) {
   let iconsReadiness = readIconsReadiness();
   await renderIcons();
   startClockTimer?.();
+  wireSyncStatusWidget();
 
   cleanups.push(subscribeIcons());
   cleanups.push(subscribeIconsReadiness());

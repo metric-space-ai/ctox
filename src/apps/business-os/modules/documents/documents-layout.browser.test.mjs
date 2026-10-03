@@ -119,27 +119,25 @@ test('Documents has only a resizable file library and editor, with a left librar
     assert.equal(await root.evaluate((element) => element.style.getPropertyValue('--shell-col-left')), '300px');
     await leftResizer.press('ArrowRight');
     assert.equal(await root.evaluate((element) => element.style.getPropertyValue('--shell-col-left')), '324px');
+    await leftResizer.press('Home');
+    assert.equal(await root.evaluate((element) => element.style.getPropertyValue('--shell-col-left')), '300px');
     await leftResizer.press('End');
     assert.equal(await root.evaluate((element) => element.style.getPropertyValue('--shell-col-left')), '560px');
     assert.equal(Math.round((await library.boundingBox()).width), 560);
-    assert.ok(
-      Math.round((await editor.boundingBox()).width) >= 480,
-      'the editor must retain usable width with the library maximized',
-    );
+    assert.ok(Math.round((await editor.boundingBox()).width) >= 480,
+      'the editor must retain usable width with the library maximized');
 
     await page.setViewportSize({ width: 1180, height: 800 });
     await assertNoRightColumn();
-    assert.ok(
-      Math.round((await editor.boundingBox()).width) >= 480,
-      'the editor must retain usable width at the narrower desktop size',
-    );
+    assert.ok(Math.round((await editor.boundingBox()).width) >= 480,
+      'the editor must retain usable width at the narrower desktop size');
 
     await page.setViewportSize({ width: 720, height: 800 });
     await page.evaluate(() => window.setCompact(true));
     await assertNoRightColumn();
     assert.equal(await root.evaluate((element) => getComputedStyle(element).gridTemplateColumns.split(' ').length), 1);
     assert.equal(await library.evaluate((element) => getComputedStyle(element).display), 'none');
-    assert.equal(await leftResizer.evaluate((element) => getComputedStyle(element).display), 'none');
+    assert.equal(await leftResizer.isVisible(), false);
     assert.equal(Math.round((await editor.boundingBox()).width), 720);
     await page.evaluate(() => window.setLibraryOpen(true));
     assert.equal(await library.evaluate((element) => getComputedStyle(element).position), 'absolute');
@@ -150,6 +148,11 @@ test('Documents has only a resizable file library and editor, with a left librar
     await assertNoRightColumn();
     await page.evaluate(() => window.setLibraryOpen(false));
     assert.equal(await library.evaluate((element) => getComputedStyle(element).display), 'none');
+    await page.setViewportSize({ width: 600, height: 800 });
+    assert.equal(await leftResizer.isVisible(), false);
+    assert.equal(Math.round((await editor.boundingBox()).width), 600);
+    assert.ok(await root.evaluate((element) => element.scrollWidth <= element.clientWidth),
+      'compact Documents has no horizontal overflow');
   } finally {
     await browser?.close();
     await fixture.close();

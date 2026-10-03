@@ -146,6 +146,7 @@ export async function mount(ctx) {
   window.addEventListener('message', handleShellMessage);
   return () => {
     disposed = true;
+    ctx.closeDrawers?.();
     knowledgeTableRenderToken += 1;
     knowledgeTableAbort?.abort();
     knowledgeTableAbort = null;

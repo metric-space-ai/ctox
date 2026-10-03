@@ -169,6 +169,13 @@ jobs:
       - uses: android-actions/setup-android@v3
         with:
           packages: platform-tools
+      - name: Enable emulator hardware acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sudo udevadm settle --timeout=30
+          test -r /dev/kvm && test -w /dev/kvm
       - name: Install pinned Android SDK
         run: |
           yes | sdkmanager --licenses >/dev/null || true
@@ -201,7 +208,8 @@ jobs:
           disable-linux-hw-accel: false
           script: |
             adb install -r src/apps/business-os-mobile/android/app/build/outputs/apk/debug/app-debug.apk
-            adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity
+            adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity > "$RUNNER_TEMP/android-phone-launch.txt"
+            cat "$RUNNER_TEMP/android-phone-launch.txt" && grep -q '^Status: ok' "$RUNNER_TEMP/android-phone-launch.txt"
             adb exec-out screencap -p > "$RUNNER_TEMP/android-phone.png"
       - name: Grant and verify tablet KVM access after phone shutdown
         run: |
@@ -228,6 +236,7 @@ jobs:
           target: google_apis
           arch: x86_64
           profile: "Nexus 9"
+          avd-name: ctox-tablet-landscape
           disable-animations: true
           disable-linux-hw-accel: false
           script: |
@@ -235,7 +244,9 @@ jobs:
             adb shell settings put system accelerometer_rotation 0
             # Nexus 9 boots at 2048x1536; rotation 1 turns it into portrait.
             adb shell settings put system user_rotation 0
-            adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity
+            adb shell am start -W -n dev.ctox.businessosmobile/.MainActivity > "$RUNNER_TEMP/android-tablet-launch.txt"
+            cat "$RUNNER_TEMP/android-tablet-launch.txt" && grep -q '^Status: ok' "$RUNNER_TEMP/android-tablet-launch.txt"
+            adb shell dumpsys window displays > "$RUNNER_TEMP/android-tablet-display.txt"
             sleep 2
             adb exec-out screencap -p > "$RUNNER_TEMP/android-tablet-4x3.png"
             python3 src/scripts/assert_android_tablet_screenshot.py "$RUNNER_TEMP/android-tablet-4x3.png"
@@ -254,6 +265,16 @@ jobs:
           path: ${{ runner.temp }}/android-tablet-framework-diagnostics.json
           if-no-files-found: error
           retention-days: 7
+      - name: Preserve Android smoke failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: business-os-mobile-android-failure
+          path: |
+            ${{ runner.temp }}/android-*.png
+            ${{ runner.temp }}/android-*-launch.txt
+            ${{ runner.temp }}/android-tablet-display.txt
+          if-no-files-found: warn
       - name: Package checksums and manifests
         run: |
           cp "$MOBILE_ROOT/android/app/build/outputs/apk/debug/app-debug.apk" "$RUNNER_TEMP/CTOXBusinessOSMobile-android-debug.apk"

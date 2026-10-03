@@ -6905,10 +6905,20 @@ function createModuleContext(mod, overrides = {}) {
 
 function createModuleDrawerController(hostEl) {
   const scope = hostEl?.closest?.('.shell-window-module-root') || hostEl;
-  const close = () => scope?.querySelector?.('[data-module-drawer-overlay]')?.remove();
+  let previousFocus = null;
+  let focusFrame = null;
+  const close = () => {
+    if (focusFrame !== null) cancelAnimationFrame(focusFrame);
+    focusFrame = null;
+    scope?.querySelector?.('[data-module-drawer-overlay]')?.remove();
+    const restoreFocus = previousFocus;
+    previousFocus = null;
+    if (restoreFocus?.isConnected) restoreFocus.focus?.({ preventScroll: true });
+  };
   const open = (side, content) => {
     if (!scope) return null;
     close();
+    previousFocus = document.activeElement;
     const placement = ['left', 'right', 'bottom'].includes(side) ? side : 'right';
     const overlay = document.createElement('div');
     overlay.className = `shell-module-drawer-overlay shell-module-drawer-overlay--${placement}`;
@@ -6933,11 +6943,17 @@ function createModuleDrawerController(hostEl) {
     overlay.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
         event.preventDefault();
+        event.stopPropagation();
         close();
       }
     });
     scope.append(overlay);
-    requestAnimationFrame(() => panel.focus({ preventScroll: true }));
+    focusFrame = requestAnimationFrame(() => {
+      focusFrame = null;
+      if (!panel.isConnected) return;
+      const firstControl = panel.querySelector('input, textarea, button, [tabindex="0"]');
+      (firstControl || panel).focus({ preventScroll: true });
+    });
     return panel;
   };
   return Object.freeze({ open, close });
@@ -13355,7 +13371,7 @@ async function waitForProjectedWorkjetComputer(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const doc = await collection.findOne(computerId).exec();
       const rawComputer = doc?.toJSON?.() || doc;
       if (rawComputer?.owner_user_id === ownerUserId && rawComputer?.status === status) {
@@ -13751,7 +13767,7 @@ async function waitForProjectedWorkjetProject(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const doc = await collection.findOne(projectId).exec();
       const rawProject = doc?.toJSON?.() || doc;
       if (rawProject?.owner_user_id === ownerUserId
@@ -13798,7 +13814,7 @@ async function waitForProjectedWorkjetWorkingCopy(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       const docs = await collection.find({
         selector: {
           project_id: { $eq: projectId },
@@ -14143,7 +14159,7 @@ async function waitForProjectedWorkjetSession(
   let lastError = null;
   while (Date.now() < deadline) {
     try {
-      await bridge?.awaitInSync?.();
+      await waitForSyncBridgeReady(bridge, Math.max(1, deadline - Date.now()));
       let rawSession = null;
       if (sessionId) {
         const doc = await collection.findOne(sessionId).exec();

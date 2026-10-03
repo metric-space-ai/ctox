@@ -447,6 +447,12 @@ jobs:
       - name: Check
         run: cargo check --locked --target ${{ matrix.target }}
 
+      - name: Native pairing and RxDB contracts
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        run: |
+          cargo test --locked --bin ctox business_os::mobile_invites::tests::
+          cargo test --locked --manifest-path src/core/rxdb/Cargo.toml
+
       - name: Windows encrypted Secret Store runtime smoke
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
