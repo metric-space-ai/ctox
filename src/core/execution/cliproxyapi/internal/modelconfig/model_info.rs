@@ -35,7 +35,38 @@ pub struct ModelInfo {
     /// Private per-selected-model capability, matching registry.ModelInfo.IsCompat.
     /// Static catalog entries default to false.
     pub is_compat: bool,
+    pub input_token_limit: usize,
+    pub output_token_limit: usize,
+    pub context_length: usize,
     pub max_completion_tokens: usize,
+    pub thinking: Option<ThinkingSupport>,
+    pub native_capabilities: Option<NativeCapabilities>,
+    pub support_configuration_update: bool,
+}
+
+/// Tri-state native capability supplied by the selected Home dispatch.
+/// ref: internal/registry/model_registry.go:29-33 @ d7914afd
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct NativeCapabilities {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_search: Option<bool>,
+}
+
+/// Execution-only selected credential model options and upstream defaults.
+/// ref: internal/config/config_types.go:892-928 @ d7914afd
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "kebab-case")]
+pub struct HomeModelOptions {
+    pub name: String,
+    pub alias: String,
+    pub display_name: String,
+    pub max_context_length: usize,
+    pub force_mapping: bool,
+    pub image: bool,
+    pub input_modalities: Vec<String>,
+    pub output_modalities: Vec<String>,
+    pub is_compat: bool,
+    pub use_max_completion_tokens: bool,
     pub thinking: Option<ThinkingSupport>,
 }
 
@@ -92,6 +123,7 @@ impl From<registry::ModelInfo> for ModelInfo {
             is_compat: false,
             max_completion_tokens: info.max_completion_tokens,
             thinking: info.thinking.map(ThinkingSupport::from),
+            ..Self::default()
         }
     }
 }

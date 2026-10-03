@@ -25,6 +25,7 @@ pub mod error_events;
 pub mod errors;
 pub mod home_concurrency;
 pub mod home_in_flight_publisher;
+mod home_model_capabilities;
 pub mod home_result;
 pub mod home_selection;
 pub mod home_session_alias;

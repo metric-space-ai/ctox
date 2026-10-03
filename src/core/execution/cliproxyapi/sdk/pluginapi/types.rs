@@ -612,6 +612,10 @@ pub struct ExecutorRequest {
     /// from the public plugin/client JSON wire and cannot be supplied in metadata.
     #[serde(skip)]
     pub resolved_model_info: Option<Arc<crate::internal::modelconfig::ModelInfo>>,
+    /// Central Home credential options, including false/default compatibility.
+    /// Caller JSON and ordinary auth-manager paths cannot supply this authority.
+    #[serde(skip)]
+    pub resolved_home_model_options: Option<crate::internal::modelconfig::HomeModelOptions>,
     #[serde(skip)]
     pub http_client: Option<Arc<dyn HostHttpClient>>,
 }

@@ -212,9 +212,15 @@ impl OpenAiCompatExecutor {
                 &request.payload,
                 stream,
                 request
-                    .resolved_model_info
+                    .resolved_home_model_options
                     .as_ref()
-                    .is_some_and(|info| info.is_compat),
+                    .map(|options| options.is_compat)
+                    .unwrap_or_else(|| {
+                        request
+                            .resolved_model_info
+                            .as_ref()
+                            .is_some_and(|info| info.is_compat)
+                    }),
             );
         translated = apply_model_suffix_effort(&translated, &request.model);
         translated =
