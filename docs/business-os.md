@@ -36,6 +36,17 @@ attempt and positive review timestamp, alongside the current writeback/parent/pe
 identity. Contact projections with a newer parent or native verified verdict retain
 their current result. An exactly bound refutation reopens native gap closure; honest
 `no_match` remains answered, and a replacement writeback expires the review.
+Remote replication cannot create, remove, modify, or transplant a stamped
+field status (including its claim/value/person binding). The host guard compares
+lead, canonical person, and keyed-contact statuses against the actual master
+snapshot used by the storage CAS. A concurrent native write produces a conflict;
+it cannot be overwritten using a separately read stale authority snapshot.
+Unmarked legacy fields, ordinary lead edits and tombstones retaining protected
+statuses remain allowed. Generic MCP app-record patches use the same guard on
+the effective merged document inside an IMMEDIATE transaction, reject deleted
+lead resurrection, and cannot issue native receipts even for a DataWrite actor.
+Trusted native writebacks and audit publication retain their existing paths.
+
 Browser rendering/selection and the installed end-to-end review workflow still
 require their app integration and acceptance; source code and provenance alone
 do not establish product acceptance.

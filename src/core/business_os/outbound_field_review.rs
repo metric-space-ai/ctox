@@ -14,6 +14,85 @@ use crate::mission::channels;
 const COLLECTION: &str = "outbound_lead_generation_leads";
 const SCHEMA: &str = "ctox.outbound.field_review.v1";
 
+/// Replication permission is not authority to issue native writeback receipts
+/// or reviews. Compare full stamped status records with the actual master, so
+/// retaining IDs while changing the claim or moving it to another person also
+/// fails. Legacy unmarked fields and unrelated authorized lead edits remain
+/// writable. This runs inside masterWrite against its CAS previous-state,
+/// never against a second, independently read store snapshot.
+pub(super) fn peer_preserves_native_field_status(
+    collection: &str,
+    incoming: &Value,
+    master: Option<&Value>,
+) -> bool {
+    if collection != COLLECTION {
+        return true;
+    }
+    fn stamped(status: &Value) -> bool {
+        ["revision", "review"]
+            .iter()
+            .any(|key| status.get(*key).is_some_and(|value| !value.is_null()))
+    }
+    fn snapshot(lead: &Value) -> Option<BTreeMap<(String, String, String), Value>> {
+        let mut protected = BTreeMap::new();
+        let mut fields = |scope: &str, person: &str, statuses: &Value| {
+            for (field, status) in statuses.as_object().into_iter().flatten() {
+                if stamped(status) {
+                    protected.insert(
+                        (scope.to_owned(), person.to_owned(), field.clone()),
+                        status.clone(),
+                    );
+                }
+            }
+        };
+        fields("lead", "", &lead["field_status"]);
+        for (person, statuses) in lead["person_field_status"]
+            .as_object()
+            .into_iter()
+            .flatten()
+        {
+            if statuses
+                .as_object()
+                .is_some_and(|values| values.values().any(stamped))
+                && !valid_id(person)
+            {
+                return None;
+            }
+            fields("person", person, statuses);
+        }
+        let contacts = lead["contacts"].as_array();
+        let mut people = BTreeMap::<&str, usize>::new();
+        for contact in contacts.into_iter().flatten() {
+            if let Some(key) = contact["person_key"].as_str() {
+                *people.entry(key).or_default() += 1;
+            }
+        }
+        for contact in contacts.into_iter().flatten() {
+            let statuses = &contact["field_status"];
+            if !statuses
+                .as_object()
+                .is_some_and(|values| values.values().any(stamped))
+            {
+                continue;
+            }
+            let person = contact["person_key"].as_str().filter(|key| valid_id(key))?;
+            // An unmarked duplicate must not borrow the stamped one's identity.
+            if people.get(person) != Some(&1) {
+                return None;
+            }
+            fields("contact", person, statuses);
+        }
+        Some(protected)
+    }
+    let Some(incoming) = snapshot(incoming) else {
+        return false;
+    };
+    match master {
+        Some(master) => snapshot(master).is_some_and(|stored| incoming == stored),
+        None => incoming.is_empty(),
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RevisionRef {
@@ -467,6 +546,162 @@ mod tests {
             "writeback_id": "wb-a", "command_id": "research-a", "attempt": 8,
             "written_at_ms": 1
         }})
+    }
+
+    #[test]
+    fn peers_cannot_issue_erase_replay_or_launder_native_field_status() {
+        let mut reviewed = json!({"field_status": {"firma_prokura": negative()}});
+        assert!(apply_refutation(
+            &mut reviewed,
+            &claim(None),
+            &binding(),
+            "review-a",
+            2
+        ));
+        let status = reviewed["field_status"]["firma_prokura"].clone();
+        let locations = [
+            ("/field_status/firma_prokura", reviewed),
+            (
+                "/person_field_status/person-a/person_email",
+                json!({
+                    "person_field_status": {"person-a": {"person_email": status.clone()}}
+                }),
+            ),
+            (
+                "/contacts/0/field_status/person_email",
+                json!({"contacts": [{
+                    "person_key": "person-a", "field_status": {"person_email": status.clone()}
+                }]}),
+            ),
+        ];
+        for (path, mut master) in locations {
+            master["id"] = json!("lead-a");
+            let mut ordinary = master.clone();
+            ordinary["campaign_id"] = json!("another-campaign");
+            ordinary["updated_at_ms"] = json!(100);
+            assert!(peer_preserves_native_field_status(
+                COLLECTION,
+                &ordinary,
+                Some(&master)
+            ));
+            ordinary["_deleted"] = json!(true);
+            assert!(peer_preserves_native_field_status(
+                COLLECTION,
+                &ordinary,
+                Some(&master)
+            ));
+            assert!(!peer_preserves_native_field_status(
+                COLLECTION, &master, None
+            ));
+            assert!(!peer_preserves_native_field_status(
+                COLLECTION,
+                &master,
+                Some(&json!({"id": "lead-a"}))
+            ));
+            for (key, value) in [
+                ("revision", Value::Null),
+                ("review", Value::Null),
+                ("revision", json!({"writeback_id": "borrowed"})),
+                ("review", json!({"schema": SCHEMA, "verdict": "refuted"})),
+                ("status", json!("verified")),
+                ("value", json!("invented claim")),
+                ("person_key", json!("person-other")),
+            ] {
+                let mut forged = master.clone();
+                forged.pointer_mut(path).unwrap()[key] = value;
+                assert!(
+                    !peer_preserves_native_field_status(COLLECTION, &forged, Some(&master)),
+                    "{path}: {key}"
+                );
+            }
+            for key in ["revision", "review"] {
+                let mut forged = master.clone();
+                forged
+                    .pointer_mut(path)
+                    .unwrap()
+                    .as_object_mut()
+                    .unwrap()
+                    .remove(key);
+                assert!(!peer_preserves_native_field_status(
+                    COLLECTION,
+                    &forged,
+                    Some(&master)
+                ));
+            }
+            let mut erased = master.clone();
+            *erased.pointer_mut(path).unwrap() = Value::Null;
+            assert!(!peer_preserves_native_field_status(
+                COLLECTION,
+                &erased,
+                Some(&master)
+            ));
+            let mut newer = master.clone();
+            newer.pointer_mut(path).unwrap()["revision"]["writeback_id"] = json!("wb-new");
+            assert!(!peer_preserves_native_field_status(
+                COLLECTION,
+                &master,
+                Some(&newer)
+            ));
+        }
+    }
+
+    #[test]
+    fn peer_field_status_guard_preserves_legacy_edits_and_exact_person_identity() {
+        let legacy = json!({"id": "lead-a", "field_status": {
+            "firma_prokura": {"status": "no_match", "value": null, "review": null}
+        }});
+        assert!(peer_preserves_native_field_status(
+            COLLECTION, &legacy, None
+        ));
+        let mut edited = legacy.clone();
+        edited["field_status"]["firma_prokura"]["status"] = json!("pending");
+        assert!(peer_preserves_native_field_status(
+            COLLECTION,
+            &edited,
+            Some(&legacy)
+        ));
+        assert!(peer_preserves_native_field_status(
+            "unrelated",
+            &negative(),
+            None
+        ));
+        let master = json!({"contacts": [
+            {"person_key": "person-a", "field_status": {"person_email": negative()}},
+            {"person_key": "person-b", "name": "Other"}
+        ]});
+        let mut reordered = master.clone();
+        reordered["contacts"].as_array_mut().unwrap().reverse();
+        assert!(peer_preserves_native_field_status(
+            COLLECTION,
+            &reordered,
+            Some(&master)
+        ));
+        for key in ["person-b", "", " person-a "] {
+            let mut moved = master.clone();
+            moved["contacts"][0]["person_key"] = json!(key);
+            assert!(!peer_preserves_native_field_status(
+                COLLECTION,
+                &moved,
+                Some(&master)
+            ));
+        }
+        let mut duplicated = master.clone();
+        duplicated["contacts"][1]["person_key"] = json!("person-a");
+        assert!(!peer_preserves_native_field_status(
+            COLLECTION,
+            &duplicated,
+            Some(&master)
+        ));
+        let mut missing_key = master.clone();
+        missing_key["contacts"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("person_key");
+        assert!(!peer_preserves_native_field_status(
+            COLLECTION,
+            &missing_key,
+            Some(&master)
+        ));
     }
 
     #[test]
