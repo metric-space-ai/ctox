@@ -5564,6 +5564,72 @@ mod tests {
     }
 
     #[test]
+    fn native_writeback_ignores_unissued_old_refutations_when_computing_open_fields(
+    ) -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let record_id = "lead-unissued-review";
+        let research_command_id = "research-unissued-review";
+        create_chat_fixture_with_sellify(
+            temp.path(),
+            research_command_id,
+            record_id,
+            &["firma_telefon", "firma_prokura"],
+        )?;
+        let unissued = serde_json::json!({
+            "status":"no_match", "value":null, "reason":"Documented prior negative",
+            "revision":{"writeback_id":"shaped-old-writeback", "command_id":research_command_id,
+                "attempt":7, "written_at_ms":1},
+            "review":{"schema":"ctox.outbound.field_review.v1", "verdict":"refuted",
+                "claim_status":"no_match", "command_id":research_command_id,
+                "review_attempt_id":"shaped-old-review", "attempt":8, "reviewed_at_ms":2,
+                "revision_ref":{"writeback_id":"shaped-old-writeback"},
+                "reason_code":"contradicted_by_saved_source"}
+        });
+        assert!(
+            super::super::outbound_field_review::is_refuted_no_match(&unissued),
+            "the old pure predicate would reopen this shape-valid metadata"
+        );
+        let mut prior =
+            store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+                .context("fixture lead")?;
+        prior["field_status"] = serde_json::json!({"firma_prokura":unissued});
+        store::upsert_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id, 1, prior)?;
+        let command = writeback_command(
+            record_id,
+            serde_json::json!({
+                "record_id":record_id, "module":"outbound-lead-generation",
+                "research_command_id":research_command_id, "gap_task_id":"",
+                "field_status":{"firma_telefon":{"status":"verified", "value":"+4940636841000",
+                    "sources":[{"source_id":"sasol.com", "url":"https://www.sasol.com/contact",
+                        "quote":"+4940636841000"}]}},
+                "result":{"fields":{"firma_telefon":{"value":"+4940636841000"}},
+                    "person_records":[], "evidence":[]}
+            }),
+        );
+        let result = handle_research_writeback(temp.path(), &command)?;
+        assert_eq!(result["open_fields"], serde_json::json!([]), "{result}");
+        assert!(result["accepted_fields"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("firma_prokura")));
+        let saved = store::load_rxdb_collection_record(temp.path(), LEAD_COLLECTION, record_id)?
+            .context("persisted native writeback")?;
+        assert_eq!(
+            saved["field_status"]["firma_prokura"], unissued,
+            "no historical record correction or invented receipt"
+        );
+        let conn = rusqlite::Connection::open(store::rxdb_store_path(temp.path()))?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM outbound_native_field_status_witnesses WHERE record_id=?1 AND field='firma_prokura'",
+            [record_id], |row| row.get(0))?;
+        assert_eq!(
+            count, 0,
+            "untouched shaped metadata never acquires native issuance"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn native_writeback_without_an_id_has_distinct_receipts_and_no_invented_attempt(
     ) -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
