@@ -156,13 +156,22 @@ export class CtoxRecoveryJournal {
   }
 
   async replayRegisteredCollections(collection = null) {
-    const batches = await this.listBatches('pending', collection);
+    // Retain only IDs/order during the scan, rather than every WAL payload.
+    // Committed writes await native ACK; their large documents need no replay.
+    const candidates = [];
+    await scanRecords(this.db, BATCH_STORE, (batch) => {
+      if (batch.state !== 'pending' || Number(batch.primaryCommittedAtMs || 0) > 0) return;
+      if (collection && batch.collection !== collection) return;
+      candidates.push({ batchId: batch.batchId, sequence: Number(batch.sequence || 0) });
+    }, collection ? BATCH_STATE_COLLECTION_INDEX : BATCH_STATE_INDEX,
+    collection ? ['pending', collection] : 'pending');
+    candidates.sort((left, right) => left.sequence - right.sequence);
     const outcomes = [];
-    for (const batch of batches) {
-      // A primary-committed batch is durable already and only waits for the
-      // native peer acknowledgement. Replaying it on every collection
-      // registration multiplied startup work by collections × journal size.
-      if (Number(batch.primaryCommittedAtMs || 0) > 0) continue;
+    for (const candidate of candidates) {
+      const batch = await getRecord(this.db, BATCH_STORE, candidate.batchId);
+      // A primary commit or native ACK may have arrived after the scan.
+      if (!batch || batch.state !== 'pending' || Number(batch.primaryCommittedAtMs || 0) > 0) continue;
+      if (collection && batch.collection !== collection) continue;
       const replayer = this.replayers.get(batch.collection);
       if (!replayer) continue;
       if (batch.schemaHash && replayer.schemaHash && batch.schemaHash !== replayer.schemaHash) {
@@ -283,20 +292,34 @@ export class CtoxRecoveryJournal {
   }
 
   async getStatus() {
-    const batches = await this.listBatches('pending');
-    const conflicts = await this.listConflicts();
-    const bytes = estimateBytes(batches) + estimateBytes(conflicts);
+    let pendingBatches = 0;
+    let pendingWrites = 0;
+    let unresolvedConflicts = 0;
+    let oldestPendingAtMs = Number.MAX_SAFE_INTEGER;
+    // Preserve the UTF-8 size of both JSON arrays, including brackets/commas,
+    // while serializing only the current record rather than the whole WAL.
+    let pendingBytes = 4;
+    await scanRecords(this.db, BATCH_STORE, (batch) => {
+      if (batch.state !== 'pending') return;
+      if (pendingBatches++) pendingBytes += 1;
+      pendingBytes += estimateBytes(batch);
+      pendingWrites += countOutstandingWrites([batch]);
+      oldestPendingAtMs = Math.min(oldestPendingAtMs, batch.createdAtMs || oldestPendingAtMs);
+    }, BATCH_STATE_INDEX, 'pending');
+    await scanRecords(this.db, CONFLICT_STORE, (conflict) => {
+      if (conflict.state !== 'pending') return;
+      if (unresolvedConflicts++) pendingBytes += 1;
+      pendingBytes += estimateBytes(conflict);
+    });
     return {
       schema: 'ctox.browser-recovery.status.v2',
       databaseName: this.databaseName,
       instanceId: this.instanceId,
-      pendingBatches: batches.length,
-      pendingWrites: countOutstandingWrites(batches),
-      pendingBytes: bytes,
-      oldestPendingAtMs: batches.reduce((oldest, batch) => Math.min(oldest, batch.createdAtMs || oldest), Number.MAX_SAFE_INTEGER) === Number.MAX_SAFE_INTEGER
-        ? 0
-        : batches.reduce((oldest, batch) => Math.min(oldest, batch.createdAtMs || oldest), Number.MAX_SAFE_INTEGER),
-      unresolvedConflicts: conflicts.length,
+      pendingBatches,
+      pendingWrites,
+      pendingBytes,
+      oldestPendingAtMs: oldestPendingAtMs === Number.MAX_SAFE_INTEGER ? 0 : oldestPendingAtMs,
+      unresolvedConflicts,
       lastExportAtMs: Number((await getRecord(this.db, META_STORE, 'lastExport'))?.value || 0),
       updatedAtMs: Date.now(),
     };
@@ -377,6 +400,16 @@ export class CtoxRecoveryJournal {
     const replay = await this.replayRegisteredCollections();
     await this.publishStatus();
     return { imported: true, replay };
+  }
+
+  async pendingDocumentIds(collection) {
+    const ids = new Set();
+    await scanRecords(this.db, BATCH_STORE, (batch) => {
+      if (batch.state !== 'pending' || batch.collection !== collection) return;
+      const acked = new Set(batch.ackedIds || []);
+      for (const id of batch.documentIds || []) if (!acked.has(id)) ids.add(id);
+    }, BATCH_STATE_COLLECTION_INDEX, ['pending', collection]);
+    return [...ids];
   }
 
   async listBatches(state = null, collection = null) {
@@ -571,6 +604,24 @@ function putSequencedBatch(db, batch) {
 
 function getRecord(db, storeName, key) {
   return transact(db, storeName, 'readonly', (store) => requestResult(store.get(key)));
+}
+
+// Visitors are synchronous: advance within the same IndexedDB transaction.
+// The cursor owns at most the current full record; callers retain summaries.
+function scanRecords(db, storeName, visit, indexName = null, key = undefined) {
+  return transact(db, storeName, 'readonly', (store) => new Promise((resolve, reject) => {
+    const source = indexName ? store.index(indexName) : store;
+    const request = source.openCursor(key);
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) { resolve(); return; }
+      try {
+        visit(cursor.value);
+        cursor.continue();
+      } catch (error) { reject(error); }
+    };
+    request.onerror = () => reject(request.error || new Error('IndexedDB recovery scan failed'));
+  }));
 }
 
 function getAllRecords(db, storeName) {

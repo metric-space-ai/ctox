@@ -1,5 +1,19 @@
 # CTOX Sync Engine (ctox-rxdb) — The Business OS Data Plane
 
+### Recovery journal startup payload bounds
+
+Recovery status scans one IndexedDB record at a time and preserves the exact
+UTF-8 byte count of pending batches and conflicts, including JSON delimiters.
+Startup replay retains only batch IDs and sequence numbers, then re-reads each
+candidate before applying it; primary-committed or newly acknowledged batches
+are skipped. Schema and application failures retain their recoverable conflicts.
+Startup reconciliation collects outstanding document IDs through the compound
+state/collection index and reads primary documents in groups of at most200.
+These paths no longer hold the complete pending WAL payload in memory. Batch
+atomicity and the v4 schema are unchanged; individual batch payloads and the
+ID/order summaries still consume memory. This source repair does not establish
+the THESEN renderer-crash cause or actual Windows8GiB startup acceptance.
+
 ### Browser live-query single-flight
 
 Each `RxQuery.$` subscription keeps at most one executing snapshot and one

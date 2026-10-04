@@ -128,26 +128,56 @@ try {
     // the affected tenant's unknown batch mix or browser profile.
     const backlogName = `${databaseName}-backlog`;
     const backlogJournal = await openRecoveryJournal({ databaseName: backlogName });
-    const backlogTx = backlogJournal.db.transaction('batches', 'readwrite');
+    const backlogTx = backlogJournal.db.transaction(['batches', 'conflicts'], 'readwrite');
     const backlogStore = backlogTx.objectStore('batches');
     const backlogPayload = 'x'.repeat(90_000);
+    let backlogExpectedBytes = 4;
     for (let index = 0; index < 240; index += 1) {
       const id = `lead-${index % 60}`;
       const doc = { id, payload: backlogPayload, _meta: { ctoxHlc: `${(index + 1).toString(36)}:0:tab-a` } };
-      backlogStore.put({
+      const batch = {
         batchId: `backlog-${index}`, sequence: index + 1,
         collection: 'outbound_leads', state: 'pending',
         documentIds: [id], ackedIds: [], committedDocs: { [id]: doc },
         primaryCommittedAtMs: Date.now(), createdAtMs: Date.now(),
-      });
+      };
+      backlogStore.put(batch);
+      backlogExpectedBytes += new TextEncoder().encode(JSON.stringify(batch)).byteLength + (index ? 1 : 0);
     }
+    const pendingBacklogConflict = { conflictId: 'unicode', state: 'pending', local: { title: '恢复 résumé 🐈' } };
+    backlogTx.objectStore('conflicts').put(pendingBacklogConflict);
+    backlogTx.objectStore('conflicts').put({ conflictId: 'resolved', state: 'resolved', local: { title: 'old' } });
+    backlogExpectedBytes += new TextEncoder().encode(JSON.stringify(pendingBacklogConflict)).byteLength;
     await new Promise((resolveDone, rejectDone) => {
       backlogTx.oncomplete = resolveDone;
       backlogTx.onerror = () => rejectDone(backlogTx.error);
       backlogTx.onabort = () => rejectDone(backlogTx.error);
     });
+    // Trap full materialization only for this owned fixture journal. The real
+    // status/collection-startup paths must complete while these APIs reject.
+    const withBoundedJournalRead = async (operation) => {
+      const originalStoreGetAll = IDBObjectStore.prototype.getAll;
+      const originalIndexGetAll = IDBIndex.prototype.getAll;
+      IDBObjectStore.prototype.getAll = function (...args) {
+        if (this.transaction.db.name === `${backlogName}__recovery_v2`) {
+          throw new Error('startup materialized all journal payloads');
+        }
+        return originalStoreGetAll.apply(this, args);
+      };
+      IDBIndex.prototype.getAll = function (...args) {
+        if (this.objectStore.transaction.db.name === `${backlogName}__recovery_v2`) {
+          throw new Error('startup materialized all indexed journal payloads');
+        }
+        return originalIndexGetAll.apply(this, args);
+      };
+      try { return await operation(); }
+      finally {
+        IDBObjectStore.prototype.getAll = originalStoreGetAll;
+        IDBIndex.prototype.getAll = originalIndexGetAll;
+      }
+    };
     const statusStarted = performance.now();
-    const backlogBefore = await backlogJournal.getStatus();
+    const backlogBefore = await withBoundedJournalRead(() => backlogJournal.getStatus());
     const backlogStatusMs = performance.now() - statusStarted;
     const backlogPendingBefore = backlogBefore.pendingWrites;
     const backlogBytesBefore = backlogBefore.pendingBytes;
@@ -161,7 +191,7 @@ try {
       },
     });
     const recoveryStarted = performance.now();
-    await backlogCollection.initializeRecovery();
+    await withBoundedJournalRead(() => backlogCollection.initializeRecovery());
     const backlogRecoveryMs = performance.now() - recoveryStarted;
     const writeStarted = performance.now();
     await backlogCollection.bulkUpsert([{ id: 'lead-new', payload: 'new' }]);
@@ -409,6 +439,7 @@ try {
       migratedVersion,
       backlogPendingBefore,
       backlogBytesBefore,
+      backlogExpectedBytes,
       backlogStatusMs,
       backlogPendingAfterFirstWrite,
       backlogPendingAfter,
@@ -462,6 +493,8 @@ try {
   'the new local write adds one pending version; the exact master HLC then drains one historical version');
   assert(result.backlogBytesBefore >= 20_000_000,
     'the sanitized backlog must exercise status and ACK costs at roughly the observed byte scale');
+  assert(result.backlogBytesBefore === result.backlogExpectedBytes,
+    'bounded cursor status must preserve exact UTF-8 JSON-array bytes and exclude resolved conflicts');
   assert([result.backlogStatusMs, result.backlogRecoveryMs, result.backlogFirstWriteMs, result.backlogAckMs]
     .every((value) => Number.isFinite(value) && value >= 0),
   'sanitized backlog timings must be recorded for recovery, first write and ACK');
