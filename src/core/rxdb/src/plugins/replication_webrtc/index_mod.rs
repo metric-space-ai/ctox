@@ -1545,8 +1545,7 @@ where
                                 peer_session_id.as_deref(),
                                 flag,
                                 rows_fetch_registered,
-                                room_payload.collection_schemas,
-                                room_payload.collection_checkpoints,
+                                room_payload,
                                 Some(&storage_token),
                                 handler_task.as_ref(),
                             )
@@ -1796,8 +1795,7 @@ where
                         peer_session_id.as_deref(),
                         local_flag,
                         rows_fetch_registered,
-                        local_room_payload.collection_schemas,
-                        local_room_payload.collection_checkpoints,
+                        local_room_payload,
                         Some(&storage_token),
                         handler.as_ref(),
                     )
@@ -2261,8 +2259,7 @@ async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
     rows_fetch_registered: bool,
-    collection_schemas: Option<Value>,
-    collection_checkpoints: Option<Value>,
+    room_payload: ProtocolRoomPayload,
     storage_generation: Option<&str>,
     handler: &H,
 ) -> Value {
@@ -2289,8 +2286,7 @@ async fn ctox_protocol_response_with_flag<H: WebRTCConnectionHandler>(
         peer_session_id,
         query_demand_loading_enabled,
         rows_fetch_registered,
-        collection_schemas,
-        collection_checkpoints,
+        room_payload,
         storage_generation,
         handler.local_peer_role(),
     );
@@ -2309,8 +2305,7 @@ fn ctox_protocol_response_payload(collection: Value, peer_session_id: Option<&st
         peer_session_id,
         true,
         false,
-        None,
-        None,
+        ProtocolRoomPayload::default(),
         None,
         NativePeerRole::CtoxInstance,
     )
@@ -2321,8 +2316,7 @@ fn ctox_protocol_response_payload_with_flag(
     peer_session_id: Option<&str>,
     query_demand_loading_enabled: bool,
     rows_fetch_registered: bool,
-    collection_schemas: Option<Value>,
-    collection_checkpoints: Option<Value>,
+    room_payload: ProtocolRoomPayload,
     storage_generation: Option<&str>,
     peer_role: NativePeerRole,
 ) -> Value {
@@ -2369,14 +2363,14 @@ fn ctox_protocol_response_payload_with_flag(
     // Phase 3 schema-validation hardening: attach the per-collection schema-hash
     // map under multiplex so the browser validates each collection's schema
     // individually. Omitted entirely (key absent) for single-collection rooms.
-    if let Some(schemas) = collection_schemas {
+    if let Some(schemas) = room_payload.collection_schemas {
         payload["collectionSchemas"] = schemas;
     }
     // Phase 3 multiplex: per-collection checkpoint epochs, so a collection
     // deriving its protocol from the room handshake advertises ITS OWN
     // checkpoint evidence (the browser prefers `collectionCheckpoints` in
     // `remoteProtocolForCollection`).
-    if let Some(checkpoints) = collection_checkpoints {
+    if let Some(checkpoints) = room_payload.collection_checkpoints {
         payload["collectionCheckpoints"] = checkpoints;
     }
     payload
@@ -3558,8 +3552,10 @@ mod tests {
             Some("rxdb-rs-run-a"),
             true,
             false,
-            None,
-            Some(checkpoints_map.clone()),
+            ProtocolRoomPayload {
+                collection_schemas: None,
+                collection_checkpoints: Some(checkpoints_map.clone()),
+            },
             Some(storage_generation),
             NativePeerRole::CtoxInstance,
         );
@@ -3831,8 +3827,7 @@ mod tests {
                 Some("session"),
                 true,
                 false,
-                None,
-                None,
+                ProtocolRoomPayload::default(),
                 None,
                 role,
             );
@@ -3860,8 +3855,7 @@ mod tests {
             Some("rxdb-rs-session"),
             true,
             false,
-            None,
-            None,
+            ProtocolRoomPayload::default(),
             Some("storage-generation-1"),
             NativePeerRole::CtoxInstance,
         );
@@ -3874,11 +3868,13 @@ mod tests {
             Some("rxdb-rs-session"),
             true,
             false,
-            Some(local_schemas_two()),
-            Some(serde_json::json!({
-                "documents": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "documents" },
-                "desktop_files": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "desktop_files" },
-            })),
+            ProtocolRoomPayload {
+                collection_schemas: Some(local_schemas_two()),
+                collection_checkpoints: Some(serde_json::json!({
+                    "documents": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "documents" },
+                    "desktop_files": { "source": "rxdb-rs-sqlite", "state": "advertised", "collection": "desktop_files" },
+                })),
+            },
             Some("storage-generation-1"),
             NativePeerRole::CtoxInstance,
         );
@@ -4371,8 +4367,7 @@ mod tests {
             Some("worker-session"),
             false,
             false,
-            payload.collection_schemas,
-            payload.collection_checkpoints,
+            payload,
             Some("worker-storage"),
             MockHandler::with_role(NativePeerRole::WorkjetExecutor).as_ref(),
         )
@@ -4433,8 +4428,10 @@ mod tests {
                 Some("control-session"),
                 false,
                 false,
-                Some(serde_json::json!({})),
-                Some(serde_json::json!({})),
+                ProtocolRoomPayload {
+                    collection_schemas: Some(serde_json::json!({})),
+                    collection_checkpoints: Some(serde_json::json!({})),
+                },
                 Some(remote_token),
                 MockHandler::with_role(NativePeerRole::WorkjetExecutor).as_ref(),
             )
