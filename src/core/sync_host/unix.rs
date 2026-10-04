@@ -162,14 +162,24 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
         ["run"] => runtime::run(&root, async {
             let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
             tokio::select! { result = tokio::signal::ctrl_c() => result, _ = terminate.recv() => Ok(()) }
-        }, |started| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
+        }, |started, _authority| print(serde_json::json!({"listener":"active", "nodeId":started.node_id, "scopeId":started.scope_id, "ipcEndpoint":started.ipc_endpoint}))),
         _ => anyhow::bail!("usage: ctox sync init | identity | import-key <public-identity> (key on stdin) | configure (public JSON on stdin) | transport (secret JSON on stdin) | status | run"),
     }
 }
 
 pub struct ServiceHost {
+    authority: Arc<dyn ctox_sync::authority::client::ExecutionAuthority>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     task: Option<thread::JoinHandle<()>>,
+}
+impl ServiceHost {
+    /// The host remains the lifecycle owner; cloning this handle cannot keep
+    /// a stopped listener/discovery or revoked quorum owner authorized.
+    pub(crate) fn execution_authority(
+        &self,
+    ) -> Arc<dyn ctox_sync::authority::client::ExecutionAuthority> {
+        self.authority.clone()
+    }
 }
 impl Drop for ServiceHost {
     fn drop(&mut self) {
@@ -198,9 +208,9 @@ pub fn start_if_configured(root: &Path) -> Result<Option<ServiceHost>> {
                     let _ = stopped.await;
                     Ok(())
                 },
-                move |_| {
+                move |_, authority| {
                     ready
-                        .send(Ok(()))
+                        .send(Ok(authority))
                         .map_err(|_| anyhow::anyhow!("native Sync service startup receiver closed"))
                 },
             );
@@ -210,18 +220,20 @@ pub fn start_if_configured(root: &Path) -> Result<Option<ServiceHost>> {
                 eprintln!("ctox service: native Sync host stopped; local listener is unavailable");
             }
         })?;
-    let host = ServiceHost {
-        stop: Some(stop),
-        task: Some(task),
-    };
-    match started
-        .recv()
-        .context("native Sync host startup thread ended")?
-    {
-        Ok(()) => Ok(Some(host)),
-        Err(error) => {
-            drop(host);
-            anyhow::bail!(error)
+    match started.recv() {
+        Ok(Ok(authority)) => Ok(Some(ServiceHost {
+            authority,
+            stop: Some(stop),
+            task: Some(task),
+        })),
+        failed => {
+            let _ = stop.send(());
+            let _ = task.join();
+            match failed {
+                Ok(Err(error)) => anyhow::bail!(error),
+                Err(error) => Err(error).context("native Sync host startup thread ended"),
+                Ok(Ok(_)) => unreachable!(),
+            }
         }
     }
 }

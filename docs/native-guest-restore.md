@@ -92,10 +92,18 @@ legacy provider witness cannot acquire guest admission.
 
 The constructor and its account checks do not replace canonical instance,
 project, principal, worker-profile or controller resolution. The concrete
-PendingCreate / quorum Create / fresh native policy revalidation / Admitted
-consumer and production registration remain unfinished. No capability is enabled
-by these producer changes. New account, durable-thread and provider regressions
-are source coverage until executed on the composed revision.
+\x60NativeGuestAdmission\x60 consumer writes PendingCreate under the exact held worker
+transaction and native owner callback, submits Create on the existing running
+host's authority, validates the returned job with a fresh quorum read, and writes
+Admitted only after current native destination/policy/controller revalidation.
+One native attempt cannot create a second job. Transport uncertainty, replay,
+revocation or any failed post-await check leaves PendingCreate for reconciliation;
+none automatically retries or starts a model turn. The authority handle is lent
+by the existing host lifecycle, with no second node/store or new IPC contract.
+The VM owner must implement the actual registry/policy/controller callback and
+connect it at the production factory; registration remains unfinished. No
+capability is enabled by these changes. Account, durable-thread, provider and
+admission regressions are source coverage until executed on the composed revision.
 
 There is deliberately no default/permissive production lifecycle owner or
 readiness probe in this module. Production registration remains unavailable

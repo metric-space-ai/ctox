@@ -427,7 +427,7 @@ impl Drop for NativeProviderTurnOwner {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     // ctox-allow-direct-state-write: isolated native witness/lease fixtures
     use super::*;
     use crate::channels::{
@@ -436,7 +436,7 @@ mod tests {
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    fn admitted() -> Result<(
+    pub(in crate::channels) fn admitted() -> Result<(
         tempfile::TempDir,
         QueueExecutionFence,
         Arc<QueueWorkerLifetime>,

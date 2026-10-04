@@ -40,15 +40,21 @@ impl NativeProviderCheckpointBinding {
 
 mod account_helpers;
 #[cfg(unix)]
+mod native_guest_admission;
+#[cfg(unix)]
 mod queue_execution_fence;
 #[cfg(unix)]
 mod queue_provider_binding;
+#[cfg(unix)]
+pub(crate) use native_guest_admission::{
+    NativeGuestAdmission, NativeGuestAdmissionDestination, NativeGuestAdmissionOwner,
+};
 #[cfg(unix)]
 pub(crate) use queue_execution_fence::{QueueExecutionFence, QueueWorkerLifetime};
 #[cfg(unix)]
 pub(crate) use queue_provider_binding::{
     lookup_native_provider_binding, NativeProviderAdmission, NativeProviderBinding,
-    NativeProviderTurnOwner,
+    NativeProviderFacts, NativeProviderTurnOwner,
 };
 mod outbound_review;
 use crate::communication_store::parse_string_json_array;
