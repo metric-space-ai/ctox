@@ -63,6 +63,9 @@ def refresh_experience():
     stage.write_text(experience.render(jobs, prior))
     stage.chmod(0o600)
     os.replace(stage, EXPERIENCE)
+    if (EXPERIENCE.parent / "terminal-evidence/current.json").exists():
+        import terminal_report
+        terminal_report.build(EXPERIENCE.parent)
 
 
 def require_archive_ready(job, pr):
