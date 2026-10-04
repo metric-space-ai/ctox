@@ -423,13 +423,16 @@ export class CtoxRecoveryJournal {
   }
 
   async gc(now = Date.now()) {
-    const rows = await this.listBatches('master_acked');
-    let pruned = 0;
-    for (const row of rows) {
-      if (now - Number(row.masterAckedAtMs || 0) >= ACKED_RETENTION_MS) {
-        await deleteRecord(this.db, BATCH_STORE, row.batchId);
-        pruned += 1;
+    const expiredIds = [];
+    await scanRecords(this.db, BATCH_STORE, (row) => {
+      if (row.state === 'master_acked' && now - Number(row.masterAckedAtMs || 0) >= ACKED_RETENTION_MS) {
+        expiredIds.push(row.batchId);
       }
+    }, BATCH_STATE_INDEX, 'master_acked');
+    let pruned = 0;
+    for (const batchId of expiredIds) {
+      await deleteRecord(this.db, BATCH_STORE, batchId);
+      pruned += 1;
     }
     pruned += await this.gcConflicts(now);
     this.lastGcAtMs = Date.now();
@@ -446,23 +449,28 @@ export class CtoxRecoveryJournal {
   // here; neither are unsynced WRITE batches (handled by the master_acked
   // path above and protected by §9). Returns the number of records pruned.
   async gcConflicts(now = Date.now()) {
-    const rows = await getAllRecords(this.db, CONFLICT_STORE);
-    let pruned = 0;
-    for (const row of rows) {
-      if (row.state !== 'resolved') continue;
+    const candidates = [];
+    await scanRecords(this.db, CONFLICT_STORE, (row) => {
+      if (row.state !== 'resolved') return;
       const resolvedAt = Number(row.resolvedAtMs || 0);
+      if (!resolvedAt || now - resolvedAt >= ACKED_RETENTION_MS) {
+        candidates.push({ conflictId: row.conflictId, resolvedAt });
+      }
+    });
+    let pruned = 0;
+    for (const { conflictId, resolvedAt } of candidates) {
       if (!resolvedAt) {
         // A resolved record with no timestamp (legacy/imported) cannot be
         // aged safely — stamp it now so a later pass reclaims it after the
         // retention window instead of deleting a possibly-fresh resolution.
-        await updateRecord(this.db, CONFLICT_STORE, row.conflictId, (current) => ({
+        await updateRecord(this.db, CONFLICT_STORE, conflictId, (current) => ({
           ...current,
           resolvedAtMs: now,
         }));
         continue;
       }
       if (now - resolvedAt >= ACKED_RETENTION_MS) {
-        await deleteRecord(this.db, CONFLICT_STORE, row.conflictId);
+        await deleteRecord(this.db, CONFLICT_STORE, conflictId);
         pruned += 1;
       }
     }

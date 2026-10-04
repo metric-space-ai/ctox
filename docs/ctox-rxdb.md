@@ -9,6 +9,8 @@ candidate before applying it; primary-committed or newly acknowledged batches
 are skipped. Schema and application failures retain their recoverable conflicts.
 Startup reconciliation collects outstanding document IDs through the compound
 state/collection index and reads primary documents in groups of at most200.
+Acknowledgement-triggered retention scans also retain only eligible IDs and
+timestamps; pending writes/conflicts and the24-hour retention window survive.
 These paths no longer hold the complete pending WAL payload in memory. Batch
 atomicity and the v4 schema are unchanged; individual batch payloads and the
 ID/order summaries still consume memory. This source repair does not establish

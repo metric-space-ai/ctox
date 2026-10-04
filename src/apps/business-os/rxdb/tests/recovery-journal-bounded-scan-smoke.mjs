@@ -62,6 +62,7 @@ function fixture(records, onGet = () => {}) {
               const key = row.batchId || row.conflictId || row.key;
               values.set(key, structuredClone(row)); return key;
             }),
+            delete: (key) => requestFor(() => values.delete(key)),
           };
         },
         abort() { tx.onabort?.(); },
@@ -162,4 +163,27 @@ test('outstanding ID scan excludes ACKs, other collections and duplicate version
   ] });
   assert.deepEqual((await journal.pendingDocumentIds('tickets')).sort(), ['b', 'c']);
   assert.deepEqual(await journal.pendingDocumentIds('missing'), []);
+});
+
+test('cursor GC preserves pending/fresh records and stamps undated legacy resolutions', async () => {
+  const day = 24 * 60 * 60 * 1000;
+  const now = 3 * day;
+  const { journal, stores } = fixture({
+    batches: [
+      batch('pending', 1),
+      batch('expired', 2, { state: 'master_acked', masterAckedAtMs: now - day - 1 }),
+      batch('fresh', 3, { state: 'master_acked', masterAckedAtMs: now - 100 }),
+    ],
+    conflicts: [
+      { conflictId: 'pending', state: 'pending', resolvedAtMs: 1 },
+      { conflictId: 'expired', state: 'resolved', resolvedAtMs: now - day - 1 },
+      { conflictId: 'fresh', state: 'resolved', resolvedAtMs: now - 100 },
+      { conflictId: 'legacy', state: 'resolved' },
+    ],
+  });
+  assert.equal(await journal.gc(now), 2);
+  assert.deepEqual([...stores.batches.keys()], ['pending', 'fresh']);
+  assert.deepEqual([...stores.conflicts.keys()], ['pending', 'fresh', 'legacy']);
+  assert.equal(stores.conflicts.get('legacy').resolvedAtMs, now);
+  assert.equal(stores.conflicts.get('pending').resolvedAtMs, 1);
 });

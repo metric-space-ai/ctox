@@ -194,13 +194,13 @@ try {
     await withBoundedJournalRead(() => backlogCollection.initializeRecovery());
     const backlogRecoveryMs = performance.now() - recoveryStarted;
     const writeStarted = performance.now();
-    await backlogCollection.bulkUpsert([{ id: 'lead-new', payload: 'new' }]);
+    await withBoundedJournalRead(() => backlogCollection.bulkUpsert([{ id: 'lead-new', payload: 'new' }]));
     const backlogFirstWriteMs = performance.now() - writeStarted;
     const backlogPendingAfterFirstWrite = (await backlogStorage.recoveryJournal.getStatus()).pendingWrites;
     const ackStarted = performance.now();
-    await backlogStorage.recoveryJournal.markMasterAcknowledged('outbound_leads', {
+    await withBoundedJournalRead(() => backlogStorage.recoveryJournal.markMasterAcknowledged('outbound_leads', {
       'lead-0': { id: 'lead-0', payload: backlogPayload, _meta: { ctoxHlc: '51:0:tab-a' } },
-    });
+    }));
     const backlogAckMs = performance.now() - ackStarted;
     const backlogPendingAfter = (await backlogStorage.recoveryJournal.getStatus()).pendingWrites;
     backlogCollection.close();
