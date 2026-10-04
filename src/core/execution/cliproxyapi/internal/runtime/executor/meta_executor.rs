@@ -267,11 +267,9 @@ impl ProviderExecutor for MetaExecutor {
                 .http_client
                 .as_ref()
                 .ok_or_else(|| meta_error(500, "meta executor: HTTP client is missing"))?;
-            let auth = Auth {
-                attributes: request.attributes.clone(),
-                metadata: request.metadata.clone(),
-                ..Auth::default()
-            };
+            let mut auth = Auth::default();
+            auth.attributes = request.attributes.clone();
+            auth.metadata = request.metadata.clone();
             let credential = meta_credentials(&auth);
             if credential.api_key().is_empty() {
                 return Err(meta_error(401, "meta executor: missing inference API key"));

@@ -7,11 +7,10 @@ use crate::internal::runtime::executor::meta_executor_response::{
 use std::time::{Duration, SystemTime};
 const NOW: SystemTime = SystemTime::UNIX_EPOCH;
 fn account(provider: &str) -> Auth {
-    Auth {
-        id: "owned-test-account".into(),
-        provider: provider.into(),
-        ..Auth::default()
-    }
+    let mut auth = Auth::default();
+    auth.id = "owned-test-account".into();
+    auth.provider = provider.into();
+    auth
 }
 fn error(status: u16, body: &[u8]) -> PluginExecutionError {
     Arc::new(meta_upstream_error(status, body, NOW))

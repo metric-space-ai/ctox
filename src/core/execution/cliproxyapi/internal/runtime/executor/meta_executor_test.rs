@@ -176,11 +176,9 @@ async fn candidate_meta_factory_keeps_all_owned_capabilities_and_dispatches_real
         asynchronous.clone(),
         preparer.clone(),
     );
-    let mut account = Auth {
-        id: "test-only-meta-account".into(),
-        provider: "meta".into(),
-        ..Auth::default()
-    };
+    let mut account = Auth::default();
+    account.id = "test-only-meta-account".into();
+    account.provider = "meta".into();
     let registration = factory.registration_for(" META ", &account).unwrap();
     assert!(Arc::ptr_eq(&registration.refresher(), &scheduled));
     assert!(Arc::ptr_eq(
@@ -232,17 +230,13 @@ fn candidate_meta_factory_rejects_disabled_mismatched_accounts_and_delegates_oth
         Arc::new(Refresh),
         Arc::new(Preparer),
     );
-    let other = Auth {
-        provider: "codex".into(),
-        ..Auth::default()
-    };
+    let mut other = Auth::default();
+    other.provider = "codex".into();
     assert!(factory.registration_for("meta", &other).is_err());
     assert_eq!(fallback.0.load(Ordering::SeqCst), 0);
-    let disabled = Auth {
-        provider: "meta".into(),
-        disabled: true,
-        ..Auth::default()
-    };
+    let mut disabled = Auth::default();
+    disabled.provider = "meta".into();
+    disabled.disabled = true;
     assert!(factory.registration_for("meta", &disabled).is_err());
     assert!(factory.registration_for("codex", &other).is_err());
     assert_eq!(fallback.0.load(Ordering::SeqCst), 1);
