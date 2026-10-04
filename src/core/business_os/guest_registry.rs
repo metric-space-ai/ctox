@@ -201,6 +201,7 @@ struct Registration {
     import_identity: FileIdentity,
     revoked: bool,
     execution: Option<ExecutionBinding>,
+    provider: Option<NativeProviderBinding>,
     imported: Option<GuestImportReceipt>,
     imported_identity: Option<FileIdentity>,
     publication: PublicationState,
@@ -402,6 +403,7 @@ impl NativeGuestRegistry {
                     import_identity,
                     revoked: false,
                     execution: None,
+                    provider: None,
                     imported: None,
                     imported_identity: None,
                     publication: PublicationState::Virgin,
@@ -463,6 +465,50 @@ impl NativeGuestRegistry {
                 apply(worker_tx, &entry.assignment)
             })
         })
+    }
+
+    /// Native lifecycle owner obtains the actual producer binding, never one
+    /// reconstructed from a serialized job or a guest ID alone.
+    pub(crate) fn bound_execution(
+        self: &Arc<Self>,
+        session: &BusinessOsSession,
+        guest_id: &str,
+    ) -> Result<NativeGuestExecution> {
+        ensure!(
+            session.ok && session.authenticated,
+            "guest requires authenticated human"
+        );
+        let entry = self.registration(guest_id)?;
+        let (provider, binding) = {
+            let entry = entry
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native controller poisoned"))?;
+            ensure!(
+                session_user_id(session)
+                    == Some(entry.assignment.destination.human_owner_id.as_str()),
+                "foreign guest execution"
+            );
+            (
+                entry
+                    .provider
+                    .clone()
+                    .context("guest has no actual producer binding")?,
+                entry
+                    .execution
+                    .clone()
+                    .context("guest has no bound execution")?,
+            )
+        };
+        let execution = NativeGuestExecution {
+            registry: Arc::clone(self),
+            provider,
+            guest_id: guest_id.into(),
+            binding,
+        };
+        // Reacquire in the real worker -> policy -> controller order and check
+        // expiry, current native policy and provider identity before returning.
+        execution.with_current(|_, verify| verify())?;
+        Ok(execution)
     }
 
     /// Producer consumes its own admitted row as an observation, then the
@@ -723,6 +769,7 @@ impl NativeGuestExecution {
                     "native import parent replaced"
                 );
                 entry.execution = Some(self.binding.clone());
+                entry.provider = Some(self.provider.clone());
                 Ok(())
             })
         })
