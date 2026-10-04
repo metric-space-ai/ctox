@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import { ensureDesktopLayoutWithAuthority } from './layout-authority.js';
+import { ensureDesktopLayoutWithAuthority, readLocalDesktopIcons, readLocalDesktopLayout, withDesktopIconReconciliationRead } from './layout-authority.js?v=20260929-desktop-icon-cancel-v1';
 
 const defaultLayout = () => ({
   wallpaper_url: '',
@@ -11,6 +11,52 @@ const defaultLayout = () => ({
   grid_cell_h: 104,
   grid_offset: 24,
 });
+
+{
+  const launcherIcons = [{ id: 'ctox' }];
+  let reads = 0;
+  const cancelledCollection = {
+    find() {
+      reads += 1;
+      return { exec: async () => { throw new Error('QUERY_CANCELLED: replication-cancel'); } };
+    },
+  };
+  assert.deepEqual(
+    await readLocalDesktopIcons({
+      collection: cancelledCollection,
+      fallbackIcons: () => launcherIcons,
+    }),
+    { docs: launcherIcons, usingFallbackDocs: true },
+    'a cancelled icon read paints local launcher defaults without a data write',
+  );
+  assert.equal(reads, 1);
+  await assert.rejects(
+    readLocalDesktopIcons({
+      collection: { find: () => ({ exec: async () => { throw new Error('UNAUTHORIZED'); } }) },
+      fallbackIcons: () => launcherIcons,
+    }),
+    /UNAUTHORIZED/,
+    'an authorization failure must not be disguised as a transient icon read',
+  );
+
+  let reconciliations = 0;
+  assert.equal(
+    await withDesktopIconReconciliationRead(cancelledCollection, async () => {
+      reconciliations += 1;
+    }),
+    false,
+    'background reconciliation must skip seeding after its initial read is cancelled',
+  );
+  assert.equal(reconciliations, 0);
+  await assert.rejects(
+    withDesktopIconReconciliationRead(
+      { find: () => ({ exec: async () => launcherIcons }) },
+      async () => { throw new Error('QUERY_CANCELLED: replication-cancel'); },
+    ),
+    /QUERY_CANCELLED: replication-cancel/,
+    'a cancellation-shaped error after the read must still surface as a write failure',
+  );
+}
 
 function collection(initial) {
   let document = initial;
@@ -30,6 +76,30 @@ function collection(initial) {
       };
     },
   };
+}
+
+{
+  const saved = { id: 'layout', grid_cell_w: 180, taskbar_pins: ['documents'] };
+  const db = collection(saved);
+  const result = await readLocalDesktopLayout({
+    collection: db,
+    documentId: 'layout',
+    defaultLayout,
+  });
+  assert.deepEqual(result, saved);
+  assert.equal(db.calls.findOne, 1);
+  assert.deepEqual(db.calls.insert, []);
+}
+
+{
+  const db = collection();
+  const result = await readLocalDesktopLayout({
+    collection: db,
+    documentId: 'layout',
+    defaultLayout,
+  });
+  assert.deepEqual(result, defaultLayout());
+  assert.deepEqual(db.calls.insert, []);
 }
 
 await ensureDesktopLayoutWithAuthority({
@@ -58,19 +128,37 @@ await ensureDesktopLayoutWithAuthority({
 
 {
   const db = collection();
+  const saved = { id: 'layout', grid_cell_w: 180 };
   const result = await ensureDesktopLayoutWithAuthority({
     collection: db,
     documentId: 'layout',
     defaultLayout,
+    unknownLayout: () => saved,
     readNativeDocument: async () => {
       throw new Error('authority unavailable');
     },
     insertMissingSeed: async () => assert.fail('failed authority must not seed'),
     now: () => 42,
   });
-  assert.deepEqual(result, defaultLayout());
+  assert.deepEqual(result, saved);
   assert.equal(db.calls.insert.length, 0);
   assert.equal(db.calls.findOne, 0);
+}
+
+{
+  const db = collection();
+  const saved = { id: 'layout', grid_cell_w: 180 };
+  const result = await ensureDesktopLayoutWithAuthority({
+    collection: db,
+    documentId: 'layout',
+    defaultLayout,
+    unknownLayout: () => saved,
+    readNativeDocument: async () => null,
+    isCurrent: () => false,
+    insertMissingSeed: async () => assert.fail('unmounted desktop must not seed'),
+  });
+  assert.deepEqual(result, saved);
+  assert.deepEqual(db.calls.insert, []);
 }
 
 {
@@ -94,6 +182,7 @@ await ensureDesktopLayoutWithAuthority({
     collection: db,
     documentId: 'layout',
     defaultLayout,
+    unknownLayout: () => ({ grid_cell_w: 180 }),
     readNativeDocument: async () => null,
     insertMissingSeed: async (scopedDb, id, seed) => {
       assert.equal(scopedDb, db);
@@ -156,4 +245,16 @@ assert.match(
   desktopSource,
   /readNativeDocument: ctx\.readNativeCollectionDocument[\s\S]*readNativeCollectionDocument\('desktop_layout', LAYOUT_DOC_ID, \{ timeoutMs: 5000 \}\)/,
   'layout creation must be gated by the bounded native authority read',
+);
+const mountSource = desktopSource.slice(
+  desktopSource.indexOf('export async function mount(ctx)'),
+  desktopSource.indexOf('function wireSyncStatusWidget()'),
+);
+assert.ok(
+  mountSource.indexOf('await readLocalDesktopLayout(') < mountSource.indexOf('await renderIcons()'),
+  'first paint must use the locally saved layout',
+);
+assert.ok(
+  mountSource.indexOf('await renderIcons()') < mountSource.indexOf('const reconciliationTimer = setTimeout('),
+  'native layout reconciliation must not block the local first paint',
 );

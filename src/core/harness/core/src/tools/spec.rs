@@ -1486,7 +1486,7 @@ fn create_ctox_web_scrape_tool() -> ToolSpec {
             "mode".to_string(),
             JsonSchema::String {
                 description: Some(
-                    "Explicit scrape read mode: `latest` to read newest stored records, or `semantic` to run a semantic query over the durable scrape corpus."
+                    "`execute` runs the registered adapter live with `input` (use this for research sources: Northdata, Handelsregister, D&B Hoovers, Leadfeeder, XING, LinkedIn via Bright Data, FirmenABC, Zefix, Moneyhouse ...); `latest` reads the newest stored records; `semantic` queries the durable scrape corpus."
                         .to_string(),
                 ),
             },
@@ -1508,11 +1508,30 @@ fn create_ctox_web_scrape_tool() -> ToolSpec {
                 maximum: None,
             },
         ),
+        (
+            "input".to_string(),
+            JsonSchema::Object {
+                properties: BTreeMap::new(),
+                required: None,
+                additional_properties: Some(true.into()),
+            },
+        ),
+        (
+            "timeout_seconds".to_string(),
+            JsonSchema::Number {
+                description: Some(
+                    "Only for `execute`: run budget in seconds (default 180, max 420; LinkedIn name search needs ~400)."
+                        .to_string(),
+                ),
+                minimum: Some(30.0),
+                maximum: Some(420.0),
+            },
+        ),
     ]);
 
     ToolSpec::Function(ResponsesApiTool {
         name: "ctox_web_scrape".to_string(),
-        description: "Reads from CTOX's durable scrape corpus. Use this when a reviewed scrape target already exists and you want stored records rather than live browsing."
+        description: "Runs or reads CTOX's registered scrape adapters. `mode: execute` runs a target live with the lead as `input` ({source_id, company, country, city, domain, task_id = research command id; person or email where the source needs it}); authenticated targets use the stored credentials. `latest`/`semantic` read stored records."
             .to_string(),
         strict: false,
         defer_loading: None,

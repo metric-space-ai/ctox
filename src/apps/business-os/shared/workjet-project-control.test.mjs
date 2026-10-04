@@ -18,8 +18,8 @@ test('Workjet project control is installed and uses the RxDB command plane', () 
   assert.match(controlSource, /command_type: 'ctox\.workjet\.project\.upsert'/);
   assert.match(controlSource, /command_type: 'ctox\.workjet\.working_copy\.upsert'/);
   assert.match(controlSource, /startCollection\?\.\('business_commands'\)/);
-  assert.match(controlSource, /startCollection\?\.\('workjet_projects'\)/);
-  assert.match(controlSource, /startCollection\?\.\('workjet_working_copies'\)/);
+  assert.match(controlSource, /startCollection\?\.\('workjet_projects', \{ pin: false, forceDirect: true \}\)/);
+  assert.match(controlSource, /startCollection\?\.\('workjet_working_copies', \{ pin: false, forceDirect: true \}\)/);
   assert.equal((controlSource.match(/until: 'terminal'/g) || []).length, 4);
   assert.match(controlSource, /waitForProjectedWorkjetProject\(/);
   assert.match(controlSource, /rawProject\?\.name === expectedTitle/);
@@ -63,6 +63,7 @@ test('Workjet project create/list is idempotent across optional copies and compu
   const dispatched = [];
   const completedCommandIds = new Set();
   const collection = (name) => ({
+    demandLoader: {},
     find({ selector = {}, limit = Number.MAX_SAFE_INTEGER } = {}) {
       return {
         async exec() {
@@ -82,13 +83,22 @@ test('Workjet project create/list is idempotent across optional copies and compu
     session: { id: 'owner-1' },
     db: { collection },
     sync: {
-      async startCollection() {
-        return { async awaitInSync() {} };
+      async startCollection(name) {
+        return { state: {
+          collection: collection(name),
+          async awaitQueryReady() {},
+          collectionQueryGenerationToken: () => 'generation-1',
+          async awaitInSync() { throw new Error('Historical pull must not gate project control'); },
+        } };
       },
     },
     commandBus: {
       async dispatch(command) {
         dispatched.push(command);
+        if (command.command_type === 'ctox.workjet.project.list') {
+          return { command_id: command.id, status: 'completed', ok: true,
+            result: { ok: true, collection: 'workjet_projects' } };
+        }
         if (completedCommandIds.has(command.id)) return { status: 'completed' };
         completedCommandIds.add(command.id);
         if (command.command_type === 'ctox.workjet.project.upsert') {
@@ -127,9 +137,11 @@ test('Workjet project create/list is idempotent across optional copies and compu
     newId: () => 'list-id',
     waitForSyncBridgeReady: async () => {},
     crypto: webcrypto,
+    AbortController,
     TextEncoder,
     window: { setTimeout },
     setTimeout,
+    clearTimeout,
   };
   vm.runInNewContext(`${controlSource}\nglobalThis.__workjetProjectControl = workjetProjectControl;`, context);
   const invoke = async (request) => JSON.parse(JSON.stringify(
@@ -202,6 +214,171 @@ test('Workjet project create/list is idempotent across optional copies and compu
     3,
     'retry reuses the same child command id instead of creating another logical copy',
   );
+});
+
+function nativeProjectListFixture({ start, dispatch, exec } = {}) {
+  const starts = [];
+  const commands = [];
+  const reads = [];
+  const rows = {
+    workjet_projects: [{ id: 'native-project', name: 'Native project', status: 'active',
+      owner_user_id: 'owner-1', created_at_ms: 1_700_000_000_000 }],
+    workjet_working_copies: [{ id: 'native-copy', project_id: 'native-project',
+      computer_id: 'computer-a', path: 'guest://native', status: 'active', owner_user_id: 'owner-1' }],
+  };
+  const peers = Object.fromEntries(Object.keys(rows).map((name) => {
+    const peer = {
+      generation: 'generation-1',
+      async awaitQueryReady(budget) { assert.ok(budget > 0 && budget <= 29_000); },
+      async awaitInSync() { assert.fail('Historical replication must not gate a project list'); },
+      collectionQueryGenerationToken() { return this.generation; },
+      collection: {
+        demandLoader: {},
+        find(query) {
+          assert.equal(query.selector.owner_user_id.$eq, 'owner-1');
+          assert.match(query.requireRevision, /^cmd_workjet_project_list_/);
+          assert.ok(query.signal instanceof AbortSignal);
+          reads.push({ name, query });
+          return { async exec() { return exec ? exec(name, query, peer)
+            : rows[name].slice(query.skip || 0, (query.skip || 0) + query.limit); } };
+        },
+      },
+    };
+    return [name, peer];
+  }));
+  const state = {
+    session: { id: 'owner-1' },
+    db: { collection: () => ({ find() { assert.fail('Cached rows cannot confirm the native project list'); } }) },
+    sync: { async startCollection(name, options) {
+      starts.push(name);
+      if (name !== 'business_commands') assert.deepEqual(JSON.parse(JSON.stringify(options)), { pin: false, forceDirect: true });
+      const bridge = { state: peers[name] || { async awaitInSync() { assert.fail('Command history'); } } };
+      return start ? start(name, bridge) : bridge;
+    } },
+    commandBus: { async dispatch(command, options) {
+      commands.push({ command, options });
+      assert.equal(options.until, 'terminal');
+      assert.equal(options.sync_queue_tasks, false);
+      assert.ok(options.timeoutMs > 0 && options.timeoutMs <= 29_000);
+      const receipt = { command_id: command.id, status: 'completed', ok: true,
+        result: { ok: true, collection: 'workjet_projects' } };
+      return dispatch ? dispatch(receipt, state) : receipt;
+    } },
+  };
+  let sequence = 0;
+  const context = { state, actorContext: (session) => ({ id: session.id }),
+    newId: () => `list-${++sequence}`, AbortController, setTimeout, clearTimeout };
+  vm.runInNewContext(`${controlSource}\nglobalThis.invoke = workjetProjectControl;`, context);
+  return { state, context, starts, commands, reads, rows, peers,
+    invoke: async () => JSON.parse(JSON.stringify(await context.invoke({ action: 'project.list' }))) };
+}
+
+test('project list starts all bridges concurrently and skips historical command replication', async () => {
+  const waiting = [];
+  const fixture = nativeProjectListFixture({
+    start: (name, bridge) => new Promise((resolve) => waiting.push(() => resolve(bridge))),
+  });
+  const pending = fixture.invoke();
+  assert.deepEqual(fixture.starts, ['business_commands', 'workjet_projects', 'workjet_working_copies']);
+  waiting.forEach((resolve) => resolve());
+  const result = await pending;
+  assert.equal(result.projects[0].id, 'native-project');
+  assert.equal(result.projects[0].workingCopies[0].id, 'native-copy');
+  assert.equal(fixture.reads.length, 2);
+  assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
+});
+
+test('each project list requires new native authority and accepts a confirmed empty result', async () => {
+  const fixture = nativeProjectListFixture();
+  await fixture.invoke();
+  fixture.rows.workjet_projects.length = 0;
+  fixture.rows.workjet_working_copies.length = 0;
+  assert.deepEqual((await fixture.invoke()).projects, []);
+  assert.notEqual(fixture.reads[0].query.requireRevision, fixture.reads[2].query.requireRevision);
+});
+
+test('native working-copy reads page through 200-row windows up to the declared 500-row cap', async () => {
+  const fixture = nativeProjectListFixture();
+  fixture.rows.workjet_working_copies = Array.from({ length: 520 }, (_, index) => ({
+    id: `copy-${String(index).padStart(3, '0')}`, project_id: 'native-project',
+    computer_id: `computer-${index}`, path: `guest://native/${index}`,
+    status: 'active', owner_user_id: 'owner-1',
+  }));
+  assert.equal((await fixture.invoke()).projects[0].workingCopies.length, 500);
+  const pages = fixture.reads.filter(({ name }) => name === 'workjet_working_copies');
+  assert.deepEqual(pages.map(({ query }) => query.limit), [200, 200, 100]);
+  assert.deepEqual(pages.map(({ query }) => query.skip), [0, 200, 400]);
+});
+
+test('a replaced generation or duplicated page boundary cannot deliver a partial native copy list', async () => {
+  for (const mode of ['generation', 'duplicate']) {
+    const fixture = nativeProjectListFixture({ exec: (name, query, peer) => {
+      if (name === 'workjet_projects') return fixture.rows.workjet_projects;
+      if (query.skip && mode === 'generation') peer.generation = 'generation-2';
+      const offset = query.skip && mode === 'duplicate' ? 0 : query.skip;
+      return fixture.rows.workjet_working_copies.slice(offset, offset + query.limit);
+    } });
+    fixture.rows.workjet_working_copies = Array.from({ length: 220 }, (_, index) => ({
+      id: `copy-${String(index).padStart(3, '0')}`, project_id: 'native-project',
+      computer_id: `computer-${index}`, path: `guest://native/${index}`,
+      status: 'active', owner_user_id: 'owner-1',
+    }));
+    await assert.rejects(fixture.invoke(), /generation changed|repeated identity/);
+    assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
+  }
+});
+
+test('missing, rejected or replaced native project authority cannot return cached data', async () => {
+  for (const mode of ['missing', 'rejected', 'replaced']) {
+    const fixture = nativeProjectListFixture({ exec: async (name, query, peer) => {
+      if (mode === 'replaced') peer.generation = 'generation-2';
+      return [{ id: 'stale', name: 'Cached', status: 'active' }];
+    } });
+    if (mode === 'missing') fixture.peers.workjet_projects.collection.demandLoader = null;
+    if (mode === 'rejected') fixture.peers.workjet_projects.awaitQueryReady = async () => { throw new Error('Peer denied'); };
+    await assert.rejects(fixture.invoke(), /authority is unavailable|Peer denied|generation changed/);
+    assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
+  }
+});
+
+test('project list rejects wrong command receipt or a changed actor before querying', async () => {
+  for (const mode of ['receipt', 'actor']) {
+    const fixture = nativeProjectListFixture({ dispatch: (receipt, state) => {
+      if (mode === 'actor') state.session = { id: 'owner-2' };
+      else receipt.command_id = 'other-command';
+      return receipt;
+    } });
+    await assert.rejects(fixture.invoke(), /uncorrelated|session changed/);
+    assert.equal(fixture.reads.length, 0);
+  }
+});
+
+test('collection and command phases consume one list deadline rather than restarting it', async () => {
+  for (const phase of ['collections', 'command']) {
+    let now = 10_000;
+    const fixture = nativeProjectListFixture({
+      start: (name, bridge) => { if (phase === 'collections') now = 39_000; return bridge; },
+      dispatch: (receipt) => { if (phase === 'command') now = 39_000; return receipt; },
+    });
+    fixture.context.Date = class extends Date { static now() { return now; } };
+    await assert.rejects(fixture.invoke(), (error) => error.code === 'WORKJET_PROJECT_TIMEOUT');
+    assert.equal(fixture.reads.length, 0);
+    if (phase === 'collections') assert.equal(fixture.commands.length, 0);
+  }
+});
+
+test('a query deadline aborts both native projection streams', async () => {
+  let now = 10_000;
+  const fixture = nativeProjectListFixture({
+    dispatch: (receipt) => { now = 38_995; return receipt; },
+    exec: (name, query) => new Promise((resolve, reject) => {
+      query.signal.addEventListener('abort', () => reject(new Error('Query aborted')), { once: true });
+    }),
+  });
+  fixture.context.Date = class extends Date { static now() { return now; } };
+  await assert.rejects(fixture.invoke(), (error) => error.code === 'WORKJET_PROJECT_TIMEOUT');
+  assert.equal(fixture.reads.length, 2);
+  assert.ok(fixture.reads.every(({ query }) => query.signal.aborted));
 });
 
 function projectChatFixture(dispatch, onBridge = async () => {}) {

@@ -80,7 +80,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await state.cancel();
 }
 
-// --- 0a. critical command collections have checkpoint catch-up timers -----
+// --- 0a. leased pull collections recover missed hints with bounded timers --
 {
   const commands = await makeState('business_commands');
   let masterChanges = 0;
@@ -95,8 +95,12 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   assert(!commands.periodicPullTimer, 'cancel must clear the command catch-up timer');
 
   const ordinary = await makeState('ordinary_collection');
-  assert(!ordinary.periodicPullTimer, 'ordinary collections stay event-driven');
+  assert(commands.periodicPullIntervalMs() === 1000, 'command catch-up retains its one-second cadence');
+  assert(ordinary.periodicPullTimer, 'ordinary collections also recover a missed master-change hint');
+  assert(ordinary.periodicPullIntervalMs() === 60_000, 'ordinary collection catch-up is bounded to once per minute');
   await ordinary.cancel();
+  assert(!ordinary.periodicPullTimer, 'cancel clears the ordinary collection timer too');
+  assert(ordinary.periodicPullIntervalMs.call({ pull: null }) === 0, 'query-only collections have no periodic pull');
 }
 
 // --- 0. remote-origin-only changes must not trigger local push scans -------
@@ -312,7 +316,72 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
   await state.cancel();
 }
 
-// --- 2b. stale pending business commands absorb authoritative master ------
+// --- 2b. a malformed masterWrite reply cannot acknowledge a local write ----
+for (const [label, reply] of [['missing', undefined], ['null', null], ['object', {}]]) {
+  const state = await makeState(`masterwrite-${label}`);
+  const pending = { id: `lead-${label}`, _meta: { lwt: 101 } };
+  state.collection.storageCollection.getChangedDocumentsSince = async () => ({
+    documents: [pending],
+    checkpoint: { lwt: 101, id: pending.id },
+    scanned: 1,
+    scanLimitReached: false,
+  });
+  state.shared.peer = { request: async () => reply };
+  for (const push of [() => state.pushToPeer('p1'), () => state.writeDocumentsToPeer('p1', [pending])]) {
+    let rejected = null;
+    try { await push(); } catch (error) { rejected = error; }
+    assert(rejected?.code === 'ctox_replication_invalid_master_write_result',
+      `${label}: malformed masterWrite must fail both push paths`);
+    assert(!state.pushCheckpointsByPeer.has('p1'),
+      `${label}: a local write must remain behind the push checkpoint`);
+  }
+  await state.cancel();
+}
+
+// --- 2c. a malformed pull reply cannot mark the collection synchronized ---
+for (const [label, reply] of [['missing', undefined], ['null', null], ['array', []], ['object', {}]]) {
+  const state = await makeState(`masterchanges-${label}`);
+  state.shared.peer = { request: async () => reply };
+  let rejected = null;
+  try { await state.pullFromPeer('p1'); } catch (error) { rejected = error; }
+  assert(rejected?.code === 'ctox_replication_invalid_master_changes_result',
+    `${label}: malformed masterChangesSince must fail the pull`);
+  assert(!state.pullCheckpointsByPeer.has('p1'),
+    `${label}: a malformed pull must not advance the checkpoint`);
+  assert(!state.firstPullCompletedAtMs,
+    `${label}: a malformed pull must not mark an empty collection live`);
+  await state.cancel();
+}
+
+// --- 2c.1 a temporarily missing collection handler cannot fake an ACK ----
+{
+  const SharedRoomPeer = replicationWebRtcTestInternals.getSharedRoomPeerClass();
+  const shared = new SharedRoomPeer({
+    key: 'missing-handler-test',
+    signalingUrl: 'wss://signaling.invalid',
+    room: 'missing-handler-test',
+  });
+  const missingWrite = await shared.routeMasterWrite('outbound_leads', [[{ id: 'lead-1' }]], 'p1');
+  const missingPull = await shared.routeMasterChangesSince('outbound_leads', [null, 5], 'p1');
+  for (const [direction, reply] of [['push', missingWrite], ['pull', missingPull]]) {
+    assert(reply?.type === 'ctoxError' && reply.scope === 'replication',
+      `missing handler must reject ${direction} rather than returning empty success`);
+    assert(reply.direction === direction && reply.collection === 'outbound_leads',
+      `missing handler must identify the ${direction} collection`);
+  }
+  shared.collections.set('outbound_leads', {
+    state: {
+      masterWrite: async () => [],
+      masterChangesSince: async () => ({ documents: [], checkpoint: null }),
+    },
+  });
+  assert(Array.isArray(await shared.routeMasterWrite('outbound_leads', [], 'p1')),
+    'a registered handler must still provide the normal write response');
+  assert(Array.isArray((await shared.routeMasterChangesSince('outbound_leads', [], 'p1')).documents),
+    'a registered handler must still provide the normal pull response');
+}
+
+// --- 2d. stale pending business commands absorb authoritative master ------
 {
   const state = await makeState('business_commands');
   const localPending = {

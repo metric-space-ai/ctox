@@ -1,0 +1,74 @@
+name: Workjet computer migration
+
+on:
+  push:
+    branches: [codex/workjet-computer-schema-migration]
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/workjet-computer-migration.yml'
+      - 'src/core/business_os/rxdb_peer.rs'
+      - 'src/core/business_os/business_os_schema*'
+      - 'src/apps/business-os/modules/ctox/schema.js'
+      - 'src/apps/business-os/modules/**/collections.schema.json'
+      - 'src/apps/business-os/rxdb/tests/workjet-computer-migration-smoke.mjs'
+      - 'tests/fixtures/workjet-computers-v0-67e44b11d.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workjet-computer-migration-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  native:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      CARGO_BUILD_JOBS: '2'
+      RUST_TEST_THREADS: '2'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24.13.1'
+      - name: Check migration and generated schemas
+        run: |
+          node src/core/rxdb/tools/build_business_os_module_schema_files.mjs
+          node src/core/rxdb/tools/build_business_os_schema_contract.mjs
+          node src/core/rxdb/tools/build_business_os_schema_hashes.mjs
+          node src/apps/business-os/scripts/assert-declarative-migrations.mjs
+          node src/apps/business-os/rxdb/tests/workjet-computer-migration-smoke.mjs
+          node src/apps/business-os/rxdb/tests/module-migrations-smoke.mjs
+      - name: Configure disposable build storage
+        run: |
+          printf 'CARGO_TARGET_DIR=%s/workjet-computer-migration-target\nTMPDIR=%s\n' "$RUNNER_TEMP" "$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/build-pi-sidecar
+      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: '1.93.0'
+          components: rustfmt
+      - name: Native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap libssl-dev libfontconfig1-dev pkg-config libdbus-1-dev sqlite3
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae
+        with:
+          key: workjet-computer-migration-no-debug
+          cache-on-failure: true
+          workspaces: . -> ${{ runner.temp }}/workjet-computer-migration-target
+      - name: Format native migration
+        run: rustfmt --check --edition 2021 --config skip_children=true src/core/business_os/rxdb_peer.rs
+      - name: Persisted migration and native schema parity
+        run: |
+          cargo test --locked --bin ctox -- \
+            workjet_computer_schema_migration \
+            native_all_schema_hashes_match_browser_contract_fixture \
+            runtime_migration_without_strategy_retains_old_table_and_fails_closed \
+            --test-threads=2 --show-output

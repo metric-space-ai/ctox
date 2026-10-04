@@ -427,6 +427,36 @@ fn embed_texts_via_local_socket_uses_internal_embedding_contract() {
 
 #[cfg(unix)]
 #[test]
+fn embed_texts_via_local_socket_rejects_non_numeric_vector_cells() {
+    for data in [r#"[[{"value":1.0}]]"#, r#"[["1.0"]]"#, r#"[[null]]"#] {
+        let root = tempfile::tempdir().unwrap();
+        let socket_path = root.path().join("e.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = std::thread::spawn(move || -> Result<()> {
+            let (stream, _) = listener.accept()?;
+            let mut reader = BufReader::new(stream);
+            let mut request = String::new();
+            std::io::BufRead::read_line(&mut reader, &mut request)?;
+            assert!(request.contains("\"kind\":\"embeddings_create\""));
+            let reply = format!(
+                "{{\"kind\":\"embeddings\",\"model\":\"Qwen/Qwen3-Embedding-0.6B\",\"data\":{data},\"prompt_tokens\":4,\"total_tokens\":4}}\n"
+            );
+            std::io::Write::write_all(reader.get_mut(), reply.as_bytes())?;
+            std::io::Write::flush(reader.get_mut())?;
+            Ok(())
+        });
+        let result = embed_texts_via_local_socket(
+            &LocalTransport::UnixSocket { path: socket_path },
+            &["alpha".to_string()],
+            "Qwen/Qwen3-Embedding-0.6B",
+        );
+        server.join().unwrap().unwrap();
+        assert!(result.is_err(), "non-numeric matrix was accepted: {data}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn invoke_responses_text_via_local_socket_streams_internal_response_contract() {
     let root = std::env::temp_dir().join(format!("cr-{}", &stable_digest(&now_iso_string())[..8]));
     let _ = fs::remove_dir_all(&root);
@@ -2095,6 +2125,41 @@ fn classify_reachable_empty_output_as_portal_drift() {
 }
 
 #[test]
+fn classify_invalid_input_without_script_repair() {
+    let execution = CommandExecution {
+        exit_code: Some(1),
+        timed_out: false,
+        stdout_text: String::new(),
+        stderr_text: String::new(),
+    };
+    for detail in [
+        "missing source_id",
+        "neither profile URL nor person name supplied",
+    ] {
+        for status_code in [Some(200), Some(403), None] {
+            let probe = ProbeResult {
+                reachable: status_code.is_some(),
+                status_code,
+                final_url: "https://example.com/".to_string(),
+                human_verification: status_code == Some(403),
+                error: None,
+            };
+            let classification = classify_outcome(
+                &json!({"failure_mode": " invalid_input ", "detail": detail}),
+                &probe,
+                &execution,
+                0,
+                1,
+            );
+            assert_eq!(classification.status, ScrapeRunStatus::InvalidInput);
+            assert_eq!(classification.status.as_str(), "invalid_input");
+            assert!(!classification.should_queue_repair);
+            assert_eq!(classification.reason, "explicit_failure_mode_invalid_input");
+        }
+    }
+}
+
+#[test]
 fn classify_browser_challenge_for_web_unlock_repair() {
     let payload = json!({"failure_mode": "blocked"});
     let probe = ProbeResult {
@@ -2320,8 +2385,17 @@ capture_supported: false,
         should_queue_repair: true,
         reason: "explicit_failure_mode_portal_drift".to_string(),
     };
-    let action = session_expiry_reauthorization(&registered, &probe, &payload, &drift)
-        .expect("login landing on a protected source must yield a reauthorization action");
+    assert!(session_expiry_reauthorization(&registered, &probe, &payload, &drift).is_none());
+    assert_eq!(drift.status, ScrapeRunStatus::PortalDrift);
+    let empty_payload = json!({"records":[]});
+    let derived_drift = Classification {
+        status: ScrapeRunStatus::PortalDrift,
+        should_queue_repair: true,
+        reason: "empty_record_set_on_reachable_portal".to_string(),
+    };
+    let action =
+        session_expiry_reauthorization(&registered, &probe, &empty_payload, &derived_drift)
+            .expect("derived empty output on the protected login page needs reauthorization");
     assert_eq!(action["kind"], "auth-assist-request");
     assert_eq!(action["source_id"], "rocketreach.com");
     assert_eq!(action["login_url"], "https://rocketreach.co/login");
@@ -2335,14 +2409,76 @@ capture_supported: false,
     assert!(!serialized.contains("password"));
     assert!(!serialized.contains("hunter"));
 
+    let explicit_auth = json!({"records":[], "failure_mode":"authorization_required"});
+    let auth_classification = Classification {
+        status: ScrapeRunStatus::AuthorizationRequired,
+        should_queue_repair: true,
+        reason: "explicit_failure_mode_authorization_required".to_string(),
+    };
+    assert!(session_expiry_reauthorization(
+        &registered,
+        &probe,
+        &explicit_auth,
+        &auth_classification
+    )
+    .is_some());
+    let inactive_payload = json!({
+        "records": [],
+        "failure_mode": "authorization_required",
+        "detail": "Subscription is expired"
+    });
+    let inactive_execution = CommandExecution {
+        exit_code: Some(1),
+        timed_out: false,
+        stdout_text: String::new(),
+        stderr_text: String::new(),
+    };
+    let inactive_classification =
+        classify_outcome(&inactive_payload, &probe, &inactive_execution, 0, 1);
+    assert_eq!(
+        inactive_classification.status,
+        ScrapeRunStatus::ProviderAccountInactive
+    );
+    assert!(!inactive_classification.should_queue_repair);
+    assert!(session_expiry_reauthorization(
+        &registered,
+        &probe,
+        &inactive_payload,
+        &inactive_classification
+    )
+    .is_none());
+    // An unrecognized explicit adapter diagnostic is not evidence of expiry,
+    // even when the generic classifier reports an empty record set.
+    let invalid_input =
+        json!({"records":[], "failure_mode":"invalid_input", "detail":"missing source_id"});
+    assert!(
+        session_expiry_reauthorization(&registered, &probe, &invalid_input, &derived_drift)
+            .is_none()
+    );
+    for reason in ["http_404", "command_failed_exit_Some(1)"] {
+        let failed_run = Classification {
+            status: ScrapeRunStatus::PortalDrift,
+            should_queue_repair: true,
+            reason: reason.to_string(),
+        };
+        assert!(
+            session_expiry_reauthorization(&registered, &probe, &empty_payload, &failed_run)
+                .is_none()
+        );
+    }
+
     // Genuine drift away from the login page stays portal_drift.
     let drifted_probe = ProbeResult {
         final_url: "https://rocketreach.co/search".to_string(),
         ..probe
     };
-    assert!(
-        session_expiry_reauthorization(&registered, &drifted_probe, &payload, &drift).is_none()
-    );
+    assert!(session_expiry_reauthorization(
+        &registered,
+        &drifted_probe,
+        &empty_payload,
+        &derived_drift
+    )
+    .is_none());
     let _ = fs::remove_dir_all(root);
 }
 
@@ -2397,6 +2533,54 @@ fn session_expiry_reauthorization_ignores_public_targets() {
         session_expiry_reauthorization(&registered, &probe, &payload, &classification).is_none()
     );
     let _ = fs::remove_dir_all(root);
+}
+
+#[test]
+fn provider_account_errors_do_not_schedule_script_repair_or_reauthentication() {
+    let probe = ProbeResult {
+        reachable: true,
+        status_code: Some(200),
+        final_url: "https://api.example.com".to_string(),
+        human_verification: false,
+        error: None,
+    };
+    let execution = CommandExecution {
+        exit_code: Some(1),
+        timed_out: false,
+        stdout_text: String::new(),
+        stderr_text: String::new(),
+    };
+    for mode in [
+        "temporary_unreachable",
+        "blocked",
+        "auth_required",
+        "authorization_required",
+    ] {
+        let classification = classify_outcome(
+            &json!({"failure_mode":mode,
+            "detail":"Subscription is expired","records":[]}),
+            &probe,
+            &execution,
+            0,
+            1,
+        );
+        assert_eq!(
+            classification.status,
+            ScrapeRunStatus::ProviderAccountInactive,
+            "{mode}"
+        );
+        assert!(!classification.should_queue_repair, "{mode}");
+    }
+    let ordinary_login = classify_outcome(
+        &json!({"failure_mode":"auth_required",
+        "detail":"Please sign in to continue","records":[]}),
+        &probe,
+        &execution,
+        0,
+        1,
+    );
+    assert_eq!(ordinary_login.status, ScrapeRunStatus::Blocked);
+    assert!(ordinary_login.should_queue_repair);
 }
 
 #[test]
@@ -2847,4 +3031,532 @@ fn execute_with_blocked_failure_queues_web_unlock_task() {
     assert_eq!(tasks[0].suggested_skill.as_deref(), Some("web-unlock"));
     assert!(tasks[0].thread_key.contains("blocked-fixture"));
     let _ = fs::remove_dir_all(root);
+}
+
+// A production incident: 77 of 80 LinkedIn runs asked Bright Data again although it
+// kept answering "Customer is not active". Through the real execute path:
+// repeated calls stay off the provider, a credential edit probes once,
+// input errors stay separate, a success clears the state.
+mod provider_account_state {
+    use super::*;
+
+    const SCRIPT: &str = r#"
+python3 - <<'CTOX_ACCOUNT_FIXTURE'
+import json,os,pathlib
+inp=json.loads(os.environ['CTOX_SCRAPE_INPUT_JSON'])
+calls=pathlib.Path(inp['calls']); calls.write_text(calls.read_text()+'x' if calls.exists() else 'x')
+mode=pathlib.Path(inp['mode_file']).read_text().strip()
+if mode == 'inactive':
+    print(json.dumps({'records':[],'failure_mode':'temporary_unreachable','detail':'Bright Data antwortete mit HTTP 400: Customer is not active'}))
+elif mode == 'invalid_input':
+    print(json.dumps({'records':[],'failure_mode':'invalid_input','detail':'neither profile URL nor person name supplied'}))
+elif mode == 'input':
+    print(json.dumps({'records':[],'failure_mode':'portal_drift','detail':'weder LinkedIn-Profil-URL noch Vor- und Nachname im Auftrag'}))
+else:
+    print(json.dumps({'records':[{'id':'p1','name':'Person'}]}))
+CTOX_ACCOUNT_FIXTURE
+"#;
+
+    struct Fixture {
+        root: PathBuf,
+        target: ScrapeTargetView,
+    }
+
+    impl Fixture {
+        fn new(prefix: &str) -> Self {
+            let root = temp_root(prefix);
+            let target = upsert_target(&root, DEFAULT_RUNTIME_ROOT, json!({
+                "target_key":"account-provider", "display_name":"Account Provider",
+                "start_url":"https://provider.test/api", "target_kind":"person",
+                "config":{"skip_probe":true,"expected_min_records":1,"record_key_fields":["id"],
+                          "credential_secret_name":"ACCOUNTPROV_API_KEY","llm_enrichment":{"enabled":false}},
+                "output_schema":{"schema_key":"person.v1","record_key_fields":["id"]}
+            })).unwrap();
+            let path = root.join("account.sh");
+            fs::write(&path, SCRIPT).unwrap();
+            register_script(
+                &root,
+                DEFAULT_RUNTIME_ROOT,
+                &target.target_key,
+                path.to_str().unwrap(),
+                "shell",
+                None,
+                None,
+            )
+            .unwrap();
+            let fixture = Self { root, target };
+            fixture.set_credential("v1");
+            fixture
+        }
+
+        fn set_credential(&self, value: &str) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            crate::secrets::write_secret_record(
+                &self.root,
+                crate::secrets::credential_scope(),
+                "ACCOUNTPROV_API_KEY",
+                value,
+                None,
+                json!({"source":"test"}),
+            )
+            .unwrap();
+        }
+
+        fn mode(&self, mode: &str) {
+            fs::write(self.root.join("mode.txt"), mode).unwrap();
+        }
+
+        fn calls(&self) -> usize {
+            fs::read_to_string(self.root.join("calls.txt"))
+                .map(|text| text.len())
+                .unwrap_or(0)
+        }
+
+        fn execute(&self, extra: &[&str]) -> ScrapeExecutionOutcome {
+            let mut args = vec![
+                "--target-key".to_string(),
+                "account-provider".to_string(),
+                "--input-json".to_string(),
+                json!({"calls": self.root.join("calls.txt"), "mode_file": self.root.join("mode.txt")}).to_string(),
+                "--timeout-seconds".to_string(),
+                "10".to_string(),
+            ];
+            args.extend(extra.iter().map(|value| value.to_string()));
+            execute_scrape_with_outcome(&self.root, &args).unwrap()
+        }
+
+        fn execute_granted(&self, grant: &AccountProbeGrant) -> ScrapeExecutionOutcome {
+            let args = vec![
+                "--target-key".to_string(),
+                "account-provider".to_string(),
+                "--input-json".to_string(),
+                json!({"calls": self.root.join("calls.txt"), "mode_file": self.root.join("mode.txt")}).to_string(),
+                "--timeout-seconds".to_string(),
+                "10".to_string(),
+            ];
+            execute_scrape_with_probe_grant(&self.root, &args, Some(grant)).unwrap()
+        }
+
+        fn runs(&self) -> i64 {
+            open_db(&self.root)
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM scrape_run WHERE target_id=?1",
+                    params![self.target.target_id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        }
+    }
+
+    #[test]
+    fn repeated_calls_do_not_reach_the_provider_and_name_the_causal_run() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-repeated");
+        fx.mode("inactive");
+        let first = fx.execute(&[]);
+        assert_eq!(
+            first.status,
+            ScrapeRunStatus::ProviderAccountInactive,
+            "{first:?}"
+        );
+        assert!(!first.should_queue_repair);
+        assert!(first.repair_queue_task.is_none());
+        for _ in 0..3 {
+            let again = fx.execute(&[]);
+            assert_eq!(again.status, ScrapeRunStatus::ProviderAccountInactive);
+            assert_eq!(
+                again.run_id, first.run_id,
+                "suppressed call names the causal run"
+            );
+            assert!(again
+                .error
+                .as_deref()
+                .unwrap_or("")
+                .contains("kein Anbieteraufruf"));
+        }
+        assert_eq!(fx.calls(), 1, "only the first call reached the provider");
+        assert_eq!(fx.runs(), 1, "no invented runs");
+        let result: String = open_db(&fx.root)
+            .unwrap()
+            .query_row(
+                "SELECT result_json FROM scrape_run WHERE run_id=?1",
+                params![first.run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&result).unwrap()["failure_mode"],
+            "provider_account_inactive"
+        );
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn a_credential_edit_probes_exactly_once_and_success_clears_the_state() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-credential");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        fx.set_credential("v2");
+        let probe = fx.execute(&[]);
+        assert_eq!(probe.status, ScrapeRunStatus::ProviderAccountInactive);
+        assert_eq!(fx.calls(), 2, "the edited credential was probed once");
+        fx.execute(&[]);
+        assert_eq!(
+            fx.calls(),
+            2,
+            "a failed probe consumed that credential version"
+        );
+        fx.set_credential("v3");
+        fx.mode("ok");
+        let ok = fx.execute(&[]);
+        assert_eq!(ok.status, ScrapeRunStatus::Succeeded, "{ok:?}");
+        assert!(super::super::account_state::load(
+            &open_db(&fx.root).unwrap(),
+            &fx.target.target_id
+        )
+        .unwrap()
+        .is_none());
+        fx.execute(&[]);
+        assert_eq!(fx.calls(), 4, "after success calls go through again");
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    fn operator_authorization(allowed: bool, trusted: bool) -> Value {
+        json!({
+            "contract": "ctox-business-command-authorization-v1",
+            "actor": {"id": "user-owner", "role": "admin", "trusted": trusted},
+            "allowed": allowed,
+            "permission": "data.write",
+        })
+    }
+
+    #[test]
+    fn a_policy_granted_operator_probe_reaches_the_provider_once() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-operator");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        let grant = AccountProbeGrant::from_command_authorization(
+            "cmd-source-test",
+            &operator_authorization(true, true),
+        )
+        .expect("allowed trusted operator gets a grant");
+        let probe = fx.execute_granted(&grant);
+        assert_eq!(probe.status, ScrapeRunStatus::ProviderAccountInactive);
+        assert_eq!(fx.calls(), 2, "the granted probe reached the provider once");
+        fx.execute(&[]);
+        assert_eq!(fx.calls(), 2, "without a new grant calls stay suppressed");
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn the_probe_flag_from_cli_or_worker_is_refused_without_a_provider_call() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-refused");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        let args = vec![
+            "--target-key".to_string(),
+            "account-provider".to_string(),
+            "--input-json".to_string(),
+            json!({"calls": fx.root.join("calls.txt"), "mode_file": fx.root.join("mode.txt")})
+                .to_string(),
+            "--timeout-seconds".to_string(),
+            "10".to_string(),
+            "--probe-account".to_string(),
+        ];
+        let error = execute_scrape_with_outcome(&fx.root, &args)
+            .expect_err("an unauthorized --probe-account must be refused");
+        assert!(
+            format!("{error:#}").contains("--probe-account is refused"),
+            "{error:#}"
+        );
+        assert_eq!(
+            fx.calls(),
+            1,
+            "the refused probe never reached the provider"
+        );
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    /// A real worker command session: an accepted Outbound research chat task
+    /// authorized by a signed managed-user capability, and the session token
+    /// the harness issues for it. Verification runs the production path.
+    fn worker_command_session(fx: &Fixture) -> String {
+        let contract = json!({
+            "mechanism": "business_command",
+            "command_type": "outbound.lead.research_writeback",
+            "collection": "outbound_lead_generation_leads",
+            "record_ids": ["lead-worker"],
+        });
+        let (capability, _) =
+            crate::business_os::store::issue_business_os_capability_token_for_managed_user(
+                &fx.root,
+                "operator",
+                "Operator",
+                "admin",
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .unwrap();
+        crate::business_os::store::accept_rxdb_business_command_with_origin(
+            &fx.root,
+            json!({
+                "id": "worker-research-account", "module": "outbound-lead-generation",
+                "command_type": "business_os.chat.task", "record_id": "lead-worker",
+                "payload": {
+                    "instruction": "Research the lead", "mode": "data",
+                    "lead_id": "lead-worker", "company": "UITEST Account GmbH", "country": "DE",
+                    "source_policy": {"sources": [{"id": "provider.test", "target_key": "account-provider"}]},
+                    "writeback_contract": contract,
+                },
+                "client_context": {"capability_token": capability},
+            }),
+            crate::business_os::store::CommandOrigin::ReplicatedPeer,
+        )
+        .unwrap();
+        let parent = crate::mission::channels::business_command_projection(
+            &fx.root,
+            "worker-research-account",
+        )
+        .unwrap();
+        let token = crate::business_os::mcp_channel::issue_internal_command_session_token(
+            &fx.root,
+            "worker-research-account",
+            parent["payload_hash"].as_str().unwrap(),
+            "operator",
+            "admin",
+            "research-workspace",
+            &contract,
+        )
+        .unwrap();
+        // The session is genuinely valid, so a refusal below is the probe
+        // rule and not a broken session.
+        crate::business_os::mcp_channel::verify_internal_command_session_token(&fx.root, &token)
+            .expect("worker command session verifies");
+        token
+    }
+
+    #[test]
+    fn a_valid_worker_command_session_never_reaches_the_provider_with_flag_or_grant() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-worker-session");
+        fx.mode("inactive");
+        fx.execute(&[]);
+        assert_eq!(fx.calls(), 1);
+        let token = worker_command_session(&fx);
+        let args = |extra: &[&str]| {
+            let mut args = vec![
+                "--target-key".to_string(),
+                "account-provider".to_string(),
+                "--input-json".to_string(),
+                json!({"calls": fx.root.join("calls.txt"), "mode_file": fx.root.join("mode.txt")})
+                    .to_string(),
+                "--timeout-seconds".to_string(),
+                "10".to_string(),
+                "--command-session".to_string(),
+                token.clone(),
+            ];
+            args.extend(extra.iter().map(|value| value.to_string()));
+            args
+        };
+        let refused = execute_scrape_with_outcome(&fx.root, &args(&["--probe-account"]))
+            .expect_err("a worker session cannot authorize a probe");
+        assert!(
+            format!("{refused:#}").contains("--probe-account is refused"),
+            "{refused:#}"
+        );
+        assert_eq!(
+            fx.calls(),
+            1,
+            "the refused worker probe never reached the provider"
+        );
+        let grant = AccountProbeGrant::from_command_authorization(
+            "cmd-source-test",
+            &operator_authorization(true, true),
+        )
+        .unwrap();
+        let suppressed =
+            execute_scrape_with_probe_grant(&fx.root, &args(&[]), Some(&grant)).unwrap();
+        assert_eq!(suppressed.status, ScrapeRunStatus::ProviderAccountInactive);
+        assert!(suppressed
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("kein Anbieteraufruf"));
+        assert_eq!(
+            fx.calls(),
+            1,
+            "a grant inside a worker session does not probe"
+        );
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn a_worker_session_never_authorizes_an_early_probe_even_with_a_grant() {
+        let grant = AccountProbeGrant::from_command_authorization(
+            "cmd-source-test",
+            &operator_authorization(true, true),
+        )
+        .unwrap();
+        assert!(super::super::execute::account_probe_authorized(
+            Some(&grant),
+            None
+        ));
+        assert!(!super::super::execute::account_probe_authorized(
+            Some(&grant),
+            Some("worker-session-owner")
+        ));
+        assert!(!super::super::execute::account_probe_authorized(None, None));
+    }
+
+    #[test]
+    fn only_an_allowed_trusted_authorization_yields_a_grant() {
+        assert!(AccountProbeGrant::from_command_authorization(
+            "cmd",
+            &operator_authorization(false, true)
+        )
+        .is_none());
+        assert!(AccountProbeGrant::from_command_authorization(
+            "cmd",
+            &operator_authorization(true, false)
+        )
+        .is_none());
+        assert!(AccountProbeGrant::from_command_authorization(
+            "",
+            &operator_authorization(true, true)
+        )
+        .is_none());
+        let mut foreign = operator_authorization(true, true);
+        foreign["contract"] = json!("something-else");
+        assert!(AccountProbeGrant::from_command_authorization("cmd", &foreign).is_none());
+        let mut read_only = operator_authorization(true, true);
+        read_only["permission"] = json!("data.read");
+        assert!(AccountProbeGrant::from_command_authorization("cmd", &read_only).is_none());
+        read_only.as_object_mut().unwrap().remove("permission");
+        assert!(AccountProbeGrant::from_command_authorization("cmd", &read_only).is_none());
+    }
+
+    #[test]
+    fn the_installed_credential_ref_form_names_the_credential() {
+        let scope = crate::secrets::credential_scope();
+        let config = json!({
+            "expected_provider": "linkedin.com",
+            "credential_ref": format!("ctox-secret://{scope}/BRIGHTDATA_API_KEY"),
+        });
+        assert_eq!(
+            super::super::execute::target_credential_name(&config).as_deref(),
+            Some("BRIGHTDATA_API_KEY")
+        );
+        // An explicit secret name still wins; a malformed reference falls back.
+        let explicit = json!({"credential_secret_name": "OTHER_KEY", "credential_ref": format!("ctox-secret://{scope}/BRIGHTDATA_API_KEY")});
+        assert_eq!(
+            super::super::execute::target_credential_name(&explicit).as_deref(),
+            Some("OTHER_KEY")
+        );
+        let malformed =
+            json!({"expected_provider": "linkedin.com", "credential_ref": "https://evil.test/KEY"});
+        assert_ne!(
+            super::super::execute::target_credential_name(&malformed).as_deref(),
+            Some("KEY")
+        );
+    }
+
+    #[test]
+    fn an_unreadable_secret_store_is_not_absent() {
+        let record = crate::secrets::SecretRecordView {
+            secret_id: "s1".to_string(),
+            scope: crate::secrets::credential_scope().to_string(),
+            secret_name: "BRIGHTDATA_API_KEY".to_string(),
+            description: None,
+            metadata: json!({}),
+            created_at: "2026-09-27T10:00:00Z".to_string(),
+            updated_at: "2026-09-27T11:00:00Z".to_string(),
+        };
+        assert_eq!(
+            super::super::execute::credential_version(Ok(vec![record]), "BRIGHTDATA_API_KEY")
+                .as_deref(),
+            Some("2026-09-27T11:00:00Z")
+        );
+        assert_eq!(
+            super::super::execute::credential_version(Ok(Vec::new()), "BRIGHTDATA_API_KEY")
+                .as_deref(),
+            Some("absent")
+        );
+        assert_eq!(
+            super::super::execute::credential_version(
+                Err(anyhow::anyhow!("secret store locked")),
+                "BRIGHTDATA_API_KEY"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn invalid_input_is_persisted_without_repair_or_account_suppression() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-invalid-input");
+        fx.mode("invalid_input");
+        let outcome = fx.execute(&[]);
+        assert_eq!(outcome.status, ScrapeRunStatus::InvalidInput, "{outcome:?}");
+        assert!(!outcome.ok);
+        assert!(!outcome.should_queue_repair);
+        assert!(outcome.repair_queue_task.is_none());
+        assert!(outcome
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("neither profile URL nor person name supplied"));
+        let stored_status: String = open_db(&fx.root)
+            .unwrap()
+            .query_row(
+                "SELECT status FROM scrape_run WHERE run_id=?1",
+                params![outcome.run_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_status, "invalid_input");
+        assert!(
+            crate::channels::list_queue_tasks(&fx.root, &["pending".to_string()], 10)
+                .unwrap()
+                .is_empty()
+        );
+        fx.execute(&[]);
+        assert_eq!(
+            fx.calls(),
+            2,
+            "input errors must not suppress later queries"
+        );
+        assert_eq!(
+            fx.runs(),
+            2,
+            "each rejected query keeps its own run evidence"
+        );
+        assert!(super::super::account_state::load(
+            &open_db(&fx.root).unwrap(),
+            &fx.target.target_id
+        )
+        .unwrap()
+        .is_none());
+        let _ = fs::remove_dir_all(&fx.root);
+    }
+
+    #[test]
+    fn input_errors_stay_separate_from_the_account_state() {
+        let _guard = SCRAPE_EXEC_TEST_LOCK.lock().unwrap();
+        let fx = Fixture::new("account-input");
+        fx.mode("input");
+        let outcome = fx.execute(&[]);
+        assert_eq!(outcome.status, ScrapeRunStatus::PortalDrift);
+        fx.execute(&[]);
+        assert_eq!(fx.calls(), 2, "input errors are not suppressed");
+        assert!(super::super::account_state::load(
+            &open_db(&fx.root).unwrap(),
+            &fx.target.target_id
+        )
+        .unwrap()
+        .is_none());
+        let _ = fs::remove_dir_all(&fx.root);
+    }
 }

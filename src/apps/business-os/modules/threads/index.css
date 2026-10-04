@@ -44,12 +44,56 @@
 .threads-right { grid-column: 5; grid-row: 1; }
 
 .threads-center {
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   position: relative;
 }
 
+.threads-command-receipt {
+  padding: 6px 14px;
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+  overflow-wrap: anywhere;
+}
+.threads-command-receipt[data-state="error"] { color: var(--danger, #b42318); }
+
 .threads-right {
   grid-template-rows: minmax(0, 1fr);
+}
+
+.threads-source-link {
+  display: inline-block;
+  width: fit-content;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+.threads-source-link.is-linked {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.threads-source-link:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: 3px;
+}
+.threads-center > .ctox-pane-header {
+  position: relative;
+}
+.threads-status {
+  position: absolute;
+  bottom: 5px;
+  left: 14px;
+  max-width: calc(100% - 90px);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--fs-meta);
+}
+.threads-sync-state {
+  display: block;
+  font-size: var(--fs-meta);
 }
 
 /* ----------------------------------------------------------------------------
@@ -586,12 +630,21 @@
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 .threads-right .ctox-card.threads-panel:last-child { border-bottom: 0; }
-.threads-right .ctox-card.threads-panel > header h3 {
+.threads-right .ctox-card.threads-panel > header h3,
+.threads-right .ctox-card.threads-panel > summary h3 {
   font-size: var(--fs-micro);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
+}
+.threads-right .ctox-card.threads-panel > summary {
+  cursor: pointer;
+  padding: 10px 12px;
+}
+.threads-right .ctox-card.threads-panel > summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
 }
 
 /* Main-view toggle: the timeline renders as message cards or as compact rows —

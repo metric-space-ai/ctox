@@ -37,10 +37,12 @@ import {
   CTOX_PRESENCE_CAPABILITY,
   CTOX_PRESENCE_RPC,
   CTOX_QUERY_FETCH_CAPABILITY,
+  CTOX_ROWS_FETCH_CAPABILITY,
 } from './protocol-contract.generated.mjs';
 import { createDemandLoadingTransport } from './demand-loading-transport.mjs';
 import { createQueryDemandLoader } from './query-demand-loader.mjs';
 import { createFileDemandLoader } from './file-demand-loader.mjs';
+import { createRowsDemandLoader } from './rows-demand-loader.mjs';
 import { QueryMetaStorage } from './query-meta-storage.mjs';
 import { createIndexedDbMetaBackend } from './query-meta-backend-indexeddb.mjs';
 import { createMemoryMetaBackend } from './query-meta-backend-memory.mjs';
@@ -62,8 +64,9 @@ import { threeWayMergeDocuments } from './conflict-merge.mjs';
 import {
   compareHybridLogicalClocks,
   hybridLogicalClockStatus,
+  clearHybridLogicalClockTimeAnchor,
   isFutureHybridLogicalClock,
-  setHybridLogicalClockTimeAnchor,
+  setHybridLogicalClockTimeAnchorFromRoundTrip,
 } from './hybrid-logical-clock.mjs';
 import { createV1_5StatusState, snapshotV1_5Status } from './v1_5_status.mjs';
 import { createBroadcastChannelBroker } from './multi-tab-broker.mjs';
@@ -129,6 +132,12 @@ export function remoteSupportsQueryFetch(remoteProtocol) {
   const flag = remoteProtocol.v1_5?.queryDemandLoadingEnabled;
   if (flag === false) return false;
   return true;
+}
+
+export function remoteSupportsRowsFetch(remoteProtocol) {
+  if (!remoteProtocol || typeof remoteProtocol !== 'object') return false;
+  const capabilities = Array.isArray(remoteProtocol.capabilities) ? remoteProtocol.capabilities : [];
+  return capabilities.includes(CTOX_ROWS_FETCH_CAPABILITY);
 }
 
 export function getConnectionHandlerSimplePeer({ signalingServerUrl, config } = {}) {
@@ -215,6 +224,12 @@ export const replicationWebRtcTestInternals = Object.freeze({
   decodeCapabilityTokenClaims,
   readPermissionDigestFromCapabilityToken,
   readPermissionDigestMatches,
+  // Local checkpoint reuse across ordinary pulls/writes, never across eviction.
+  localCheckpointValidityKey,
+  localCheckpointStillCovers,
+  remoteCheckpointStillCovers,
+  // Eager replicas are never evicted by the demand sidecar.
+  demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
   // real state machines without opening a network connection.
   getSharedRoomPeerClass: () => SharedRoomPeer,
@@ -264,11 +279,18 @@ class SharedRoomPeer {
       getPeerId: () => this.activeRemotePeerId,
     });
     this.activeRemotePeerId = null;
+    this.clockAnchorSource = null;
+    this.clockAnchorPeerId = null;
     this.started = false;
     this.peerOpenQueue = Promise.resolve();
     // Negotiated remote protocol from the room-level handshake, retained so a
     // collection that registers AFTER the handshake can immediately catch up.
     this.negotiated = null; // { peerId, remoteProtocol, queryFetchCapable }
+    // Change-detection metadata only, scoped to the actual connection object.
+    // Never expose or persist a bearer token; native verification owns admission.
+    this.peerAuthorities = new WeakMap();
+    this.authorityRefreshPromise = null;
+    this.authorityRefreshScopeKey = null;
     // Phase 3 schema-validation hardening: collections whose per-collection
     // schema hash mismatched the remote at handshake time. They stay quiesced
     // (no pull/push) until reconciled instead of disabling validation for the
@@ -572,7 +594,7 @@ class SharedRoomPeer {
       iceServersRefreshUrl: this.iceServersRefreshUrl,
       refreshIceServers: this.refreshIceServers,
       expectedNativePeerId: this.expectedNativePeerId || '',
-      protocolPayload: async ({ collection, params } = {}) => this.buildProtocolPayload(collection, params),
+      protocolPayload: async ({ peerId, collection, params } = {}) => this.buildProtocolPayload(collection, params, peerId),
       requestHandlers: {
         masterChangesSince: async ({ params, peerId, collection }) =>
           this.routeMasterChangesSince(collection, params, peerId),
@@ -626,6 +648,11 @@ class SharedRoomPeer {
       // A closed peer invalidates the negotiated handshake; a fresh peer-open
       // will renegotiate and re-drive every collection's catch-up.
       try { this.demandTransport.abortPeerRequests(event.detail?.peerId, event.detail?.reason || 'peer-close'); } catch {}
+      if (this.clockAnchorSource && this.clockAnchorPeerId === event.detail?.peerId) {
+        clearHybridLogicalClockTimeAnchor(this.clockAnchorSource);
+        this.clockAnchorSource = null;
+        this.clockAnchorPeerId = null;
+      }
       if (this.negotiated && this.negotiated.peerId === event.detail?.peerId) {
         this.negotiated = null;
       }
@@ -753,8 +780,68 @@ class SharedRoomPeer {
     }
   }
 
-  async buildProtocolPayload(collection, params = []) {
-    return this.buildProtocolPayloadUncached(collection, params);
+  async buildProtocolPayload(collection, params = [], peerId = '') {
+    const connection = this.peer?.connections?.get?.(peerId);
+    const payload = await this.buildProtocolPayloadUncached(collection, params);
+    const authority = await peerAuthorityDescriptor(payload?.peerSession?.capabilityToken);
+    if (this.authorityRefreshScopeKey && authority?.scopeKey !== this.authorityRefreshScopeKey) {
+      throw peerAuthorityError('auth_required', 'Peer authority changed account or device scope.');
+    }
+    if (connection && this.peer?.connections?.get?.(peerId) === connection && authority
+        && !this.peerAuthorities.has(connection)) {
+      this.peerAuthorities.set(connection, authority);
+    }
+    return payload;
+  }
+
+  async ensurePeerAuthority(capabilityToken) {
+    const desired = await peerAuthorityDescriptor(capabilityToken);
+    if (!desired || desired.expiresAtMs <= Date.now()) {
+      throw peerAuthorityError('auth_required', 'A current capability is required for peer renewal.');
+    }
+    if (this.authorityRefreshPromise) {
+      if (desired.scopeKey !== this.authorityRefreshScopeKey) {
+        throw peerAuthorityError('auth_required', 'Concurrent peer renewal changed account or device scope.');
+      }
+      await this.authorityRefreshPromise;
+      return true; // The caller reacquires authority after the shared handshake.
+    }
+    const peerId = this.negotiated?.peerId;
+    const connection = this.peer?.connections?.get?.(peerId);
+    if (!connection || !this.isPeerOpen(peerId)) {
+      throw peerAuthorityError('native_unavailable', 'Peer authority has no current connection.');
+    }
+    const captured = this.peerAuthorities.get(connection);
+    if (!captured) {
+      throw peerAuthorityError('native_unavailable', 'Peer authority has no handshake binding.');
+    }
+    if (captured.scopeKey !== desired.scopeKey) {
+      throw peerAuthorityError('auth_required', 'A changed account or device requires its own database scope.');
+    }
+    if (captured.permissionKey === desired.permissionKey && captured.expiresAtMs > Date.now()) return false;
+    // Inbound ctoxProtocol alone cannot renew a bound device: only the normal
+    // fresh-connection handshake supplies the native challenge and proof check.
+    this.authorityRefreshScopeKey = captured.scopeKey;
+    const refresh = (async () => {
+      this.peer.removeConnection(peerId, 'capability-authority-changed');
+      const negotiated = await this.ensureNegotiatedPeer();
+      const replacement = this.peer?.connections?.get?.(negotiated?.peerId);
+      const renewed = replacement && this.peerAuthorities.get(replacement);
+      if (!replacement || replacement === connection || !this.isPeerOpen(negotiated?.peerId)
+          || !renewed || renewed.scopeKey !== captured.scopeKey) {
+        throw peerAuthorityError('native_unavailable', 'Peer renewal did not establish a fresh scoped handshake.');
+      }
+      return true;
+    })();
+    this.authorityRefreshPromise = refresh;
+    try {
+      return await refresh;
+    } finally {
+      if (this.authorityRefreshPromise === refresh) {
+        this.authorityRefreshPromise = null;
+        this.authorityRefreshScopeKey = null;
+      }
+    }
   }
 
   async buildProtocolPayloadUncached(collection, params = []) {
@@ -903,16 +990,14 @@ class SharedRoomPeer {
   async routeMasterChangesSince(collection, params, peerId) {
     const registration = collection && this.collections.get(collection);
     if (!registration) {
-      // Unknown collection — return empty changes rather than leaking another
-      // collection's documents.
-      return { documents: [], checkpoint: params?.[0] || null };
+      return missingMasterHandlerResult(collection, 'pull');
     }
     return registration.state.masterChangesSince(params, peerId);
   }
 
   async routeMasterWrite(collection, params, peerId) {
     const registration = collection && this.collections.get(collection);
-    if (!registration) return [];
+    if (!registration) return missingMasterHandlerResult(collection, 'push');
     return registration.state.masterWrite(params, peerId);
   }
 
@@ -923,9 +1008,12 @@ class SharedRoomPeer {
     const representative = this.representativeCollection();
     if (!representative) return null;
     if (!this.isPeerOpen(peerId)) return null;
+    const connection = this.peer?.connections?.get?.(peerId);
     this.handshakeMetrics.protocolNegotiations += 1;
     const localProtocol = await this.peer.protocolPayload(peerId, [], representative.collection);
     if (!this.isPeerOpen(peerId)) return null;
+    const clockRequestStartedAtMs = Date.now();
+    const clockRequestStartedMonotonicMs = globalThis.performance?.now?.() ?? null;
     const remoteProtocol = await this.peer.request(
       peerId,
       'ctoxProtocol',
@@ -933,6 +1021,10 @@ class SharedRoomPeer {
       SHARED_HANDSHAKE_TIMEOUT_MS,
       representative.collection,
     );
+    const clockResponseReceivedAtMs = Date.now();
+    const clockRequestElapsedMs = clockRequestStartedMonotonicMs === null
+      ? clockResponseReceivedAtMs - clockRequestStartedAtMs
+      : globalThis.performance.now() - clockRequestStartedMonotonicMs;
     const normalizedRemoteProtocol = normalizeRemoteProtocol(remoteProtocol);
     if (!this.isPeerOpen(peerId)) return null;
     // Startup is asymmetric: either side may have registered the complete
@@ -976,6 +1068,21 @@ class SharedRoomPeer {
       }
     }
     await this.awaitRemoteMasterReady(peerId);
+    if (!connection || !this.isPeerOpen(peerId)
+      || this.peer?.connections?.get?.(peerId) !== connection) return null;
+    // Only the token-authorized connection may contribute a clock sample.
+    // Its object identity prevents an old close/reconnect generation from
+    // carrying an offset into a newly authenticated peer.
+    const clockAnchorSource = `${this.key}:${generationObjectId(connection)}`;
+    setHybridLogicalClockTimeAnchorFromRoundTrip(
+      normalizedRemoteProtocol.nativeTimeMs,
+      clockRequestStartedAtMs,
+      clockResponseReceivedAtMs,
+      clockRequestElapsedMs,
+      clockAnchorSource,
+    );
+    this.clockAnchorSource = clockAnchorSource;
+    this.clockAnchorPeerId = peerId;
     const queryFetchCapable = remoteSupportsQueryFetch(normalizedRemoteProtocol);
     this.activeRemotePeerId = peerId;
     // Phase 2: the native peer cleared its per-peer active set on the prior
@@ -1146,6 +1253,12 @@ class CtoxWebRtcReplicationState {
     // after the remote/local validity keys and permission digest match during
     // handshake; until then an old marker must not make this collection live.
     this.firstPullCompletedAtMs = 0;
+    this.publishLocalReplicaCoverage();
+    // Historical checkpoint reuse does not prove this connection is current.
+    // Only a drained pull after local writes/checkpoint reads in this generation does.
+    this.pullFresh = false;
+    this.pullFreshnessGeneration = 0;
+    this.lastSuccessfulPullAtMs = 0;
     this.localCheckpointValidityKey = '';
     // SYNC-12: a non-secret digest of THIS browser's own effective read-permission
     // identity (role + capability_epoch), stamped alongside retained checkpoints.
@@ -1157,6 +1270,7 @@ class CtoxWebRtcReplicationState {
     this.readPermissionDigest = '';
     this.activeRemotePeerId = null;
     this.demandLoaderActive = false;
+    this.knowledgeRowsLoader = null;
     this.demandStatus = createV1_5StatusState();
     this.schemaHashValue = null;
     this.peerReadyPromisesByPeer = new Map();
@@ -1310,7 +1424,11 @@ class CtoxWebRtcReplicationState {
         timeoutMs,
       );
     }
-    return this.peer.request(negotiated.peerId, String(method || ''), [params], timeoutMs, this.collection);
+    // The frame's `collection` field is the collection NAME. Passing the
+    // RxCollection object made the native peer drop every such frame, so each
+    // `ctox.outbound.sellify_lookup.v1` ran into its caller's timeout while the
+    // same request with the name answered in under a second (tenant 26.09.2026).
+    return this.peer.request(negotiated.peerId, String(method || ''), [params], timeoutMs, this.collection?.name || null);
   }
 
   async start(connectionHandlerCreator) {
@@ -1340,12 +1458,12 @@ class CtoxWebRtcReplicationState {
     const periodicPullMs = this.periodicPullIntervalMs();
     if (periodicPullMs > 0) {
       // Master-change frames are a low-latency hint, not the sole correctness
-      // mechanism for the command control plane. A frame can be missed while
+      // mechanism for active data. A frame can be missed while
       // the browser reports its active-collection set or while an initial pull
-      // is in flight. The retained checkpoint makes this catch-up cheap and
-      // prevents an accepted native command from remaining `pending_sync`.
+      // is in flight. Keep the existing 1s command cadence and revalidate other
+      // active collections every minute from their retained checkpoint.
       this.periodicPullTimer = setInterval(() => {
-        this.pullFromRemotePeers().catch((error) => this.error$.next(error));
+        this.pullFromRemotePeers({ revalidate: true }).catch((error) => this.error$.next(error));
       }, periodicPullMs);
     }
     const periodicPushMs = this.periodicPushIntervalMs();
@@ -1406,13 +1524,27 @@ class CtoxWebRtcReplicationState {
     this.error$.next(error);
   }
 
+  async ensurePeerAuthority(capabilityToken) {
+    if (this.cancelled || !this.shared) {
+      throw peerAuthorityError('native_unavailable', 'The command bridge has no live shared peer.');
+    }
+    const shared = this.shared;
+    const changed = await shared.ensurePeerAuthority(capabilityToken);
+    if (this.cancelled || this.shared !== shared) {
+      throw peerAuthorityError('native_unavailable', 'The command bridge changed during peer renewal.');
+    }
+    return changed;
+  }
+
   async buildProtocolPayload(deviceProofNonce = null) {
     const checkpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     // #12c: attach the browser's CTOX capability token so the native (master)
     // peer can bind this peer to its role for per-collection read authz. Best
     // effort — a missing/failed token simply omits the field (native treats it
     // as least privilege). Never let token resolution break the handshake.
-    const capabilityToken = await resolveCapabilityToken(this.ctox);
+    // Catalog/grant changes can revoke an unexpired token between connections.
+    // Refresh only at the protocol boundary, never on permission-digest reads.
+    const capabilityToken = await resolveCapabilityToken(this.ctox, { refresh: true });
     const deviceProof = await resolveDeviceProof(this.ctox, deviceProofNonce);
     return buildProtocolPayload({
       collectionName: this.collection.name,
@@ -1442,13 +1574,12 @@ class CtoxWebRtcReplicationState {
   async runPeerReady(peerId, normalizedRemoteProtocol, queryFetchCapable) {
     if (this.cancelled) return;
     this.ctox?.onPeerProtocol?.(normalizedRemoteProtocol);
-    if (Number.isFinite(normalizedRemoteProtocol?.nativeTimeMs)) {
-      Object.assign(
-        this.demandStatus,
-        setHybridLogicalClockTimeAnchor(normalizedRemoteProtocol.nativeTimeMs, Date.now()),
-      );
-    }
+    // The shared handshake owns the time sample. This collection may catch up
+    // long after the native protocol response was produced.
+    Object.assign(this.demandStatus, hybridLogicalClockStatus());
     this.activeRemotePeerId = peerId;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     this.demandStatus.peerConnected = true;
     this.demandStatus.peerCapabilityQueryFetchV1 = queryFetchCapable === true;
     // Seed retained checkpoints only when the native storage generation and
@@ -1471,12 +1602,12 @@ class CtoxWebRtcReplicationState {
     const retained = this.retainedCheckpoints;
     if (retained && validityKey) {
       if (
-        retained.validityKey === validityKey
-        && retained.localValidityKey
-        && retained.localValidityKey === localValidityKey
+        remoteCheckpointStillCovers(retained, validityKey, normalizedRemoteProtocol)
+        && localCheckpointStillCovers(retained.localValidityKey, localValidityKey)
         && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest)
       ) {
         this.firstPullCompletedAtMs = retainedFirstPullCompletedAtMs(retained);
+        this.publishLocalReplicaCoverage();
         if (retained.pull && !this.pullCheckpointsByPeer.has(peerId)) {
           this.pullCheckpointsByPeer.set(peerId, retained.pull);
         }
@@ -1489,6 +1620,7 @@ class CtoxWebRtcReplicationState {
         // later reconnect does the (correct) full resync. The readiness marker
         // shares this validity boundary and must be invalidated with them.
         this.firstPullCompletedAtMs = 0;
+        this.publishLocalReplicaCoverage();
         this.retainedCheckpoints = null;
         clearPersistentCheckpoints(this.checkpointStorageKey);
       }
@@ -1531,10 +1663,12 @@ class CtoxWebRtcReplicationState {
 
   // ----- pull / push (collection-tagged over the shared peer) -------------
 
-  async pullFromRemotePeers() {
+  async pullFromRemotePeers({ revalidate = false } = {}) {
     if (!this.pull || this.cancelled) return;
+    if (!revalidate) this.pullFresh = false;
     if (this.pullInProgressPromise) {
       this.pullAgainAfterCurrent = true;
+      this.publishTransportStatus();
       return this.pullInProgressPromise;
     }
     this.pullInProgress = true;
@@ -1552,6 +1686,7 @@ class CtoxWebRtcReplicationState {
         // master-change event or a page reload. Same shape as the bug the retry
         // timer below was added for, one level up.
         if (!peerIds.length || results.some((result) => result.status === 'rejected')) {
+          this.pullFresh = false;
           this.schedulePullRetry();
         }
       } while (this.pullAgainAfterCurrent && !this.cancelled);
@@ -1604,6 +1739,7 @@ class CtoxWebRtcReplicationState {
   }
 
   async pullFromPeer(peerId) {
+    const freshnessGeneration = this.pullFreshnessGeneration;
     const batchSize = Number(this.pull?.batchSize || 10);
     let activePeerId = peerId;
     let checkpoint = this.pullCheckpointsByPeer.get(activePeerId) || null;
@@ -1611,9 +1747,21 @@ class CtoxWebRtcReplicationState {
       const response = await this.requestMasterChangesSince(activePeerId, checkpoint, batchSize);
       if (this.cancelled) return;
       activePeerId = response.peerId || activePeerId;
-      const result = response.result || {};
-      const documents = Array.isArray(result?.documents) ? result.documents : [];
+      const result = response.result;
+      // An absent or malformed master reply is not an empty collection. Leave
+      // the pull checkpoint and first-pull readiness untouched for retry.
+      if (!result || typeof result !== 'object' || !Array.isArray(result.documents)) {
+        const error = new Error(`masterChangesSince returned no documents array for ${this.collection.name}`);
+        error.code = 'ctox_replication_invalid_master_changes_result';
+        error.phase = 'replication-io';
+        error.direction = 'pull';
+        error.collection = this.collection.name;
+        throw error;
+      }
+      const documents = result.documents;
       if (documents.length) {
+        this.pullFresh = false;
+        this.publishTransportStatus();
         await this.collection.storageCollection.bulkWrite(documents, {
           replicationOrigin: this.replicationOriginForPeer(activePeerId),
         });
@@ -1627,7 +1775,11 @@ class CtoxWebRtcReplicationState {
       // drained completely, including the valid "synced but empty" case. Stamp
       // the marker before persisting so readiness survives a reload.
       if (!documents.length) this.markFirstPullCompleted();
-      await this.persistCheckpointsForPeer(activePeerId);
+      const checkpointPersisted = await this.persistCheckpointsForPeer(activePeerId);
+      if (!documents.length && checkpointPersisted && freshnessGeneration === this.pullFreshnessGeneration && !this.cancelled) {
+        this.pullFresh = true;
+        this.lastSuccessfulPullAtMs = Date.now();
+      }
       // Drain until an EMPTY answer, not until a partial batch: the master
       // legitimately returns fewer documents than asked for (the
       // desktop_file_chunks response limiter caps answers at 96 KiB with a
@@ -1822,7 +1974,7 @@ class CtoxWebRtcReplicationState {
           throw replicationErrorResultError(masterWriteResult, this.collection.name);
         }
         const conflicts = masterWriteResult;
-        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+        const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
         if (!conflictMap.size) {
           rows = [];
           break;
@@ -1902,7 +2054,7 @@ class CtoxWebRtcReplicationState {
         }
         throw replicationErrorResultError(conflicts, this.collection.name);
       }
-      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath);
+      const conflictMap = documentsByPrimaryPath(conflicts, this.collection.schema.primaryPath, this.collection.name);
       if (!conflictMap.size) {
         rows = [];
         break;
@@ -2219,11 +2371,13 @@ class CtoxWebRtcReplicationState {
     }
     try { this.demandLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
     try { this.demandFileLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
+    try { this.knowledgeRowsLoader?.abortAllInFlight?.('replication-cancel'); } catch {}
     try { this.demandSidecar?.stopEvictionScheduler?.(); } catch {}
     try { this.multiTabBroker?.close?.(); } catch {}
     try { await this.demandSidecar?.close?.(); } catch {}
     this.demandLoader = null;
     this.demandFileLoader = null;
+    this.knowledgeRowsLoader = null;
     this.multiTabBroker = null;
     this.demandLoaderActive = false;
     this.demandStatus.queryDemandReadyGeneration = null;
@@ -2253,6 +2407,7 @@ class CtoxWebRtcReplicationState {
       }
       this.demandLoader = null;
       this.demandFileLoader = null;
+      this.knowledgeRowsLoader = null;
       this.demandLoaderActive = true;
       return null;
     }
@@ -2264,16 +2419,7 @@ class CtoxWebRtcReplicationState {
       ? createIndexedDbMetaBackend({ databaseName: dbName })
       : createMemoryMetaBackend();
     this.demandStatus.queryDemandLoadingEnabled = queryDemandEnabled || fileDemandEnabled;
-    const primaryDelete = async (collection, id) => {
-      if (collection !== this.collection.name) return;
-      const stored = await this.collection.storageCollection.getStoredRecord?.(id);
-      if (!stored || Number(stored.pushable || 0) !== 0) {
-        throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
-      }
-      if (typeof this.collection.storageCollection.hardDeleteByIds === 'function') {
-        await this.collection.storageCollection.hardDeleteByIds([id]);
-      }
-    };
+    const primaryDelete = demandSidecarPrimaryDelete(this);
     this.demandSidecar = new QueryMetaStorage(backend, {
       databaseName: dbName,
       schedulerKey: this.collection.storageCollection?.databaseName || this.topic,
@@ -2337,6 +2483,10 @@ class CtoxWebRtcReplicationState {
       multiTabBroker: this.multiTabBroker,
       queryGeneration: () => this.collectionQueryGenerationToken(this.activeRemotePeerId),
       replicationOrigin: demandReplicationOrigin,
+      // SYNC-12: live provider — runPeerReady recomputes this digest at every
+      // handshake, so a same-session role/grant change takes effect at the
+      // next control-plane read without rebuilding the loader.
+      readPermissionDigest: () => this.readPermissionDigest || '',
     }) : null;
     if (typeof this.collection.setDemandLoader === 'function') {
       this.collection.setDemandLoader(this.demandLoader);
@@ -2362,6 +2512,8 @@ class CtoxWebRtcReplicationState {
       status: this.demandStatus,
     }) : null;
 
+    this.knowledgeRowsLoader = knowledgeRowsLoaderForState(this, demandTransport);
+
     this.demandLoaderActive = true;
     this.demandStatus.queryDemandLoadingActive = queryDemandEnabled || fileDemandEnabled;
     return this.demandLoader;
@@ -2370,7 +2522,18 @@ class CtoxWebRtcReplicationState {
   markFirstPullCompleted() {
     if (this.firstPullCompletedAtMs > 0) return;
     this.firstPullCompletedAtMs = Date.now();
+    this.publishLocalReplicaCoverage();
     this.publishTransportStatus();
+  }
+
+  // An eagerly pulled collection whose pull has drained (or resumed from a
+  // valid retained checkpoint) holds the whole authorized collection locally.
+  // Its queries must read that replica instead of a query-demand round trip:
+  // on the customer tenant (30.09.2026) every Outbound reload asked the native
+  // peer for 200 leads (~20 MB) in one window, hit QUERY_COLLECTOR_TIMEOUT,
+  // and the app stayed at "Noch keine Kampagne" with a complete local store.
+  publishLocalReplicaCoverage() {
+    this.collection?.setLocalReplicaComplete?.(Boolean(this.pull) && this.firstPullCompletedAtMs > 0);
   }
 
   collectionReadinessState() {
@@ -2378,6 +2541,13 @@ class CtoxWebRtcReplicationState {
     if (this.pullInProgress) return 'catching-up';
     if (!this.hasOpenReadinessPeer()) return 'offline-pending';
     return 'never-synced';
+  }
+
+  collectionFreshnessState() {
+    if (!this.pull) return null;
+    if (!this.hasOpenReadinessPeer()) return 'offline-pending';
+    if (!this.pullFresh) return 'catching-up';
+    return 'live';
   }
 
   hasOpenReadinessPeer() {
@@ -2406,6 +2576,8 @@ class CtoxWebRtcReplicationState {
     if (!peerId) return;
     const peerStates = new Map(this.peerStates$.getValue() || new Map());
     if (!peerStates.has(peerId)) return;
+    this.pullFresh = false;
+    this.pullFreshnessGeneration += 1;
     // Retain the checkpoints (validity-keyed) BEFORE dropping the peer.
     // Discarding them outright meant EVERY reconnect re-synced the whole
     // collection from a null checkpoint — across ~80 collections that
@@ -2442,6 +2614,7 @@ class CtoxWebRtcReplicationState {
     this.queryReady$?.next?.(null);
     try { this.demandLoader?.abortAllInFlight?.(`peer-${reason}`); } catch {}
     try { this.demandFileLoader?.abortAllInFlight?.(`peer-${reason}`); } catch {}
+    try { this.knowledgeRowsLoader?.abortAllInFlight?.(`peer-${reason}`); } catch {}
     try { this.shared?.abortPeerRequests?.(peerId, reason); } catch {}
     if (!peerStates.size) {
       this.demandStatus.peerConnected = false;
@@ -2482,10 +2655,10 @@ class CtoxWebRtcReplicationState {
 
   async persistCheckpointsForPeer(peerId) {
     const validityKey = this.checkpointValidityKeyForPeer(peerId);
-    if (!validityKey) return;
+    if (!validityKey) return false;
     const localCheckpoint = await this.collection.storageCollection.replicationCheckpointStatus(this.schemaHashValue);
     const localValidityKey = localCheckpointValidityKey(localCheckpoint);
-    if (!localValidityKey) return;
+    if (!localValidityKey) return false;
     this.localCheckpointValidityKey = localValidityKey;
     const retained = {
       validityKey,
@@ -2502,6 +2675,7 @@ class CtoxWebRtcReplicationState {
     };
     this.retainedCheckpoints = retained;
     writePersistentCheckpoints(this.checkpointStorageKey, retained);
+    return true;
   }
 
   remoteProtocolForPeer(peerId) {
@@ -2571,7 +2745,7 @@ class CtoxWebRtcReplicationState {
 
   periodicPullIntervalMs() {
     if (!this.pull) return 0;
-    return ['business_commands', 'ctox_queue_tasks'].includes(this.collection.name) ? 1000 : 0;
+    return ['business_commands', 'ctox_queue_tasks'].includes(this.collection.name) ? 1000 : 60_000;
   }
 
   periodicPushIntervalMs() {
@@ -2667,6 +2841,9 @@ class CtoxWebRtcReplicationState {
       topic: this.topic,
       activePeerCount: Math.max(localPeerCount, sharedPeerCount, connectionPeerCount),
       collectionReadinessState: this.collectionReadinessState(),
+      collectionFreshnessState: this.collectionFreshnessState(),
+      pullEnabled: Boolean(this.pull),
+      lastSuccessfulPullAtMs: this.lastSuccessfulPullAtMs || null,
       firstPullCompletedAtMs: this.firstPullCompletedAtMs || null,
       pullInProgress: this.pullInProgress,
       pushInProgress: this.pushInProgress,
@@ -2730,6 +2907,29 @@ function checkpointValidityKeyFromProtocol(remoteProtocol) {
   return `${epoch}|${sessionId}|${schemaHashValue}`;
 }
 
+// The native epoch hashes the collection HEAD (latest lwt/id). Requiring it to
+// be byte-identical discarded the retained pull checkpoint after every server
+// write, so a busy collection re-pulled completely on each reload (customer
+// tenant, 30.09.2026: leads ~53 MB per reload while remark checks wrote).
+// Same storage generation, collection and schema with a head that has not
+// moved behind the retained pull position means the incremental pull from that
+// position delivers exactly the missing changes. A head older than the retained
+// position (restore/rewrite) or any other key shape keeps exact equality.
+function remoteCheckpointStillCovers(retained, currentKey, remoteProtocol) {
+  const retainedKey = retained?.validityKey;
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const before = String(retainedKey).split('|');
+  const now = String(currentKey).split('|');
+  if (before.length !== 4 || now.length !== 4) return false;
+  if (before[0] !== now[0] || before[1] !== now[1] || before[2] !== now[2]) return false;
+  const retainedLwt = Number(retained?.pull?.lwt);
+  const remoteHeadLwt = Number(remoteProtocol?.checkpoint?.latestLwt);
+  return Number.isFinite(retainedLwt)
+    && Number.isFinite(remoteHeadLwt)
+    && remoteHeadLwt >= retainedLwt;
+}
+
 function localCheckpointValidityKey(checkpoint) {
   if (!checkpoint || typeof checkpoint !== 'object') return '';
   const epoch = typeof checkpoint.epoch === 'string' ? checkpoint.epoch.trim() : '';
@@ -2737,7 +2937,59 @@ function localCheckpointValidityKey(checkpoint) {
     ? checkpoint.schemaHash.trim()
     : '';
   if (!epoch) return '';
-  return `${epoch}|${schemaHashValue}`;
+  const evictionGeneration = Number(checkpoint.evictionGeneration || 0);
+  const storeGeneration = checkpoint.localStoreGeneration;
+  if (storeGeneration !== undefined) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(storeGeneration)) return '';
+    return `${epoch}|${schemaHashValue}|ev${evictionGeneration}|store${storeGeneration}`;
+  }
+  return evictionGeneration > 0
+    ? `${epoch}|${schemaHashValue}|ev${evictionGeneration}`
+    : `${epoch}|${schemaHashValue}`;
+}
+
+// The local key guards against reusing a pull checkpoint after the browser
+// store LOST rows. Requiring the newest local row to be byte-identical also
+// rejected every checkpoint after one ordinary pull or local write since it was
+// stored, so on a busy tenant each page load re-pulled whole eager collections
+// (customer tenant, 30.09.2026: 21 MB of leads and ~35 MB per reload, 60-75 s). A
+// browser-store key stays valid while schema and eviction generation are
+// unchanged and the newest local row is not older than when it was retained.
+// Any other key shape keeps exact equality.
+function localCheckpointStillCovers(retainedKey, currentKey) {
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const retained = parseBrowserLocalCheckpointKey(retainedKey);
+  const current = parseBrowserLocalCheckpointKey(currentKey);
+  if (!retained || !current) return false;
+  return retained.collection === current.collection
+    && retained.schemaHash === current.schemaHash
+    && retained.evictionGeneration === current.evictionGeneration
+    && retained.storeGeneration === current.storeGeneration
+    && Number.isFinite(retained.latestLwt)
+    && Number.isFinite(current.latestLwt)
+    && current.latestLwt >= retained.latestLwt;
+}
+
+function parseBrowserLocalCheckpointKey(key) {
+  const parts = String(key).split('|');
+  if (parts.length > 4) return null;
+  const [epoch = '', schemaHash = '', evictionPart = '', storePart = ''] = parts;
+  const storeGeneration = storePart ? /^store([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(storePart)?.[1] : '';
+  if (storePart && !storeGeneration) return null;
+  const match = /^browser:(.+):(\d+(?:\.\d+)?):([0-9a-f]+)$/.exec(epoch);
+  if (!match) return null;
+  const evictionGeneration = evictionPart
+    ? Number(/^ev(\d+)$/.exec(evictionPart)?.[1] ?? NaN)
+    : 0;
+  if (!Number.isFinite(evictionGeneration)) return null;
+  return {
+    collection: match[1],
+    latestLwt: Number(match[2]),
+    schemaHash,
+    evictionGeneration,
+    storeGeneration,
+  };
 }
 
 function persistentCheckpointStorageKey(topic, collection) {
@@ -2803,9 +3055,19 @@ function hashString(value) {
   return (hash >>> 0).toString(36);
 }
 
-function documentsByPrimaryPath(documents = [], primaryPath = 'id') {
+function documentsByPrimaryPath(documents, primaryPath = 'id', collection = '') {
+  // Only a conflicts ARRAY acknowledges masterWrite. A missing or malformed
+  // reply must leave the local push checkpoint behind the pending document.
+  if (!Array.isArray(documents)) {
+    const error = new Error(`masterWrite returned no conflict array for ${collection || 'unknown collection'}`);
+    error.code = 'ctox_replication_invalid_master_write_result';
+    error.phase = 'replication-io';
+    error.direction = 'push';
+    error.collection = collection;
+    throw error;
+  }
   const map = new Map();
-  for (const doc of Array.isArray(documents) ? documents : []) {
+  for (const doc of documents) {
     const id = primaryValue(doc, primaryPath);
     if (id) map.set(id, doc);
   }
@@ -2866,6 +3128,19 @@ function replicationErrorResult(result) {
     && result.type === 'ctoxError'
     && result.scope === 'replication',
   );
+}
+
+function missingMasterHandlerResult(collection, direction) {
+  return {
+    type: 'ctoxError',
+    scope: 'replication',
+    rxdb: true,
+    code: 'RC_WEBRTC_PEER',
+    phase: 'replication-io',
+    direction,
+    collection: String(collection || ''),
+    message: `no master handler registered for ${collection || 'unknown collection'}`,
+  };
 }
 
 function replicationErrorResultError(result, collection) {
@@ -2933,10 +3208,10 @@ function isStalePendingBusinessCommandConflict(row = {}) {
   return localStatus === 'pending_sync' && masterStatus && masterStatus !== 'pending_sync';
 }
 
-async function resolveCapabilityToken(ctox = {}) {
+async function resolveCapabilityToken(ctox = {}, options = {}) {
   if (typeof ctox?.capabilityTokenProvider === 'function') {
     try {
-      const token = await ctox.capabilityTokenProvider();
+      const token = await ctox.capabilityTokenProvider(options);
       return typeof token === 'string' && token.trim() ? token.trim() : null;
     } catch {
       return null;
@@ -2976,6 +3251,36 @@ export async function resolveDeviceProof(ctox = {}, nonce = null) {
     // the native validator because their proof is absent.
     return null;
   }
+}
+
+// Connection-scoped change detection only. Decoded claims never grant access.
+async function peerAuthorityDescriptor(token) {
+  if (typeof token !== 'string' || !token.trim()) return null;
+  try {
+    const payload = JSON.parse(base64UrlDecodeToString(token.split('.')[0]));
+    if (typeof payload.uid === 'string' && payload.uid && typeof payload.role === 'string'
+        && payload.role && Number.isFinite(payload.epoch) && Number.isFinite(payload.exp)) {
+      const scopeKey = JSON.stringify([
+        payload.uid, payload.device_pairing_id || '', payload.device_id || '', payload.cnf?.jkt || '',
+      ]);
+      return {
+        scopeKey,
+        permissionKey: JSON.stringify([scopeKey, payload.role, payload.epoch]),
+        expiresAtMs: payload.exp,
+      };
+    }
+  } catch {}
+  // Opaque host credentials have no locally inspectable account identity.
+  // Keep identical credentials usable; rotating them requires the host to
+  // establish its scope. No decoded claims here confer native authority.
+  const key = 'opaque:' + await sha256Hex(token);
+  return { scopeKey: key, permissionKey: key, expiresAtMs: Infinity };
+}
+
+function peerAuthorityError(code, message) {
+  return Object.assign(new Error(message), {
+    code, retryable: code === 'native_unavailable', transient: code === 'native_unavailable',
+  });
 }
 
 // SYNC-12: decode the permission-relevant claims from a capability token WITHOUT
@@ -3072,6 +3377,28 @@ function shouldPersistFetchedFileChunks(collectionName = '') {
   return String(collectionName || '') === 'desktop_file_chunks';
 }
 
+// The demand sidecar's LRU budget governs rows that query demand loading
+// materialized, not the replica of an eagerly pulled collection. Deleting an
+// eager row cannot be repaired by the incremental pull (the row is older than
+// the checkpoint), so every such eviction had to invalidate the retained
+// checkpoint: on the customer tenant (30.09.2026) Outbound queries touched
+// more than the 6 MiB budget of leads, the sidecar evicted thousands of rows,
+// and each reload re-pulled ~20 MB while the app briefly saw an emptied store.
+// For eager collections only the sidecar bookkeeping is dropped.
+function demandSidecarPrimaryDelete(state) {
+  return async (collection, id) => {
+    if (collection !== state.collection.name) return;
+    if (state.pull) return;
+    const stored = await state.collection.storageCollection.getStoredRecord?.(id);
+    if (!stored || Number(stored.pushable || 0) !== 0) {
+      throw new Error(`Refusing to evict locally-unsynced ${collection}/${id}`);
+    }
+    if (typeof state.collection.storageCollection.hardDeleteByIds === 'function') {
+      await state.collection.storageCollection.hardDeleteByIds([id]);
+    }
+  };
+}
+
 function shouldAttachQueryDemandLoader(collectionName = '') {
   const name = String(collectionName || '');
   if (name === 'document_blob_chunks' || name === 'spreadsheet_blob_chunks') return true;
@@ -3080,6 +3407,25 @@ function shouldAttachQueryDemandLoader(collectionName = '') {
 
 function shouldAttachFileDemandLoader(collectionName = '') {
   return String(collectionName || '') !== 'desktop_file_chunks';
+}
+
+function knowledgeRowsLoaderForState(state, demandTransport) {
+  if (String(state?.collection?.name || '') !== 'knowledge_tables') return null;
+  if (typeof demandTransport?.fetchRows !== 'function') return null;
+  if (!remoteSupportsRowsFetch(rowsRemoteProtocol(state))) return null;
+  return createRowsDemandLoader({
+    transport: demandTransport,
+    collectionName: 'knowledge_tables',
+  });
+}
+
+function rowsRemoteProtocol(state) {
+  const peerId = state?.activeRemotePeerId || state?.shared?.negotiated?.peerId || '';
+  const fromPeer = peerId
+    ? state?.peerStates$?.getValue?.()?.get?.(peerId)?.remoteProtocol
+    : null;
+  if (fromPeer) return fromPeer;
+  return state?.shared?.negotiated?.remoteProtocol || null;
 }
 
 function shouldAttachFileDemandLoaderBeforeCollectionHandshake(collectionName = '') {
