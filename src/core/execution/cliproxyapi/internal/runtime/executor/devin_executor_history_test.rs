@@ -334,8 +334,20 @@ fn candidate_devin_history_tools_and_signature_classification_keep_upstream_gram
             "automation_update"
         ]
     );
-    assert!(!prepared.tools[0].description.contains("task_id"));
-    assert!(prepared.tools[0].description.contains("taskId"));
+    // ref: internal/translator/common/devin_tools_test.go:30-99 @ d7914afdedca7af95ee974a42453dc49fc1388ce
+    // Upstream changes its exact shell phrases, while custom text stays intact.
+    assert_eq!(prepared.tools[0].description, "Run task_id.");
+    let known_descriptions = parse_devin_interactions_payload(br#"{"tools":[
+        {"name":"exec_command","description":"Runs a command in a bash shell, returning output or a session ID for ongoing interaction.","parameters":{}},
+        {"name":"write_stdin","description":"Writes characters to an existing unified exec session and returns recent output.","parameters":{}}
+    ]}"#, b"");
+    assert_eq!(known_descriptions.tools.len(), 2);
+    assert_eq!(known_descriptions.tools[0].description,
+        "Runs a command in a bash shell, returning output or an session ID for ongoing interaction.");
+    assert_eq!(
+        known_descriptions.tools[1].description,
+        "Writes characters to a existing unified exec session and returns recent output."
+    );
     assert_eq!(
         prepared.tools[0].parameters,
         br#"{ "n":9007199254740993,"n":9223372036854775808 }"#
