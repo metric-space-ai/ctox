@@ -155,17 +155,17 @@ try {
     });
     // Trap full materialization only for this owned fixture journal. The real
     // status/collection-startup paths must complete while these APIs reject.
-    const withBoundedJournalRead = async (operation) => {
+    const withBoundedJournalRead = async (operation, journalDatabaseName = backlogName) => {
       const originalStoreGetAll = IDBObjectStore.prototype.getAll;
       const originalIndexGetAll = IDBIndex.prototype.getAll;
       IDBObjectStore.prototype.getAll = function (...args) {
-        if (this.transaction.db.name === `${backlogName}__recovery_v2`) {
+        if (this.transaction.db.name === `${journalDatabaseName}__recovery_v2`) {
           throw new Error('startup materialized all journal payloads');
         }
         return originalStoreGetAll.apply(this, args);
       };
       IDBIndex.prototype.getAll = function (...args) {
-        if (this.objectStore.transaction.db.name === `${backlogName}__recovery_v2`) {
+        if (this.objectStore.transaction.db.name === `${journalDatabaseName}__recovery_v2`) {
           throw new Error('startup materialized all indexed journal payloads');
         }
         return originalIndexGetAll.apply(this, args);
@@ -205,6 +205,58 @@ try {
     const backlogPendingAfter = (await backlogStorage.recoveryJournal.getStatus()).pendingWrites;
     backlogCollection.close();
     backlogStorage.close();
+
+    // Cross the read-group boundary with persisted native rows and one WAL
+    // batch spanning both groups. Partial ACK then complete ACK must survive.
+    const pagedName = `${databaseName}-paged-reconciliation`;
+    const pagedSchema = {
+      version: 0, type: 'object', primaryKey: 'id',
+      properties: { id: { type: 'string' }, title: { type: 'string' } }, required: ['id'],
+    };
+    const pagedDocuments = Array.from({ length: 205 }, (_, index) => ({
+      id: `paged-${index}`, title: 'persisted native',
+      _meta: { ctoxHlc: `${(index + 1).toString(36)}:0:native-fixture` },
+    }));
+    const pagedStorage = await openCtoxIndexedDbStorage({ databaseName: pagedName });
+    const pagedCollection = pagedStorage.collection('tickets', { schema: pagedSchema });
+    await pagedCollection._bulkUpsertOnce(pagedDocuments, {
+      replicationOrigin: { role: 'native', peerId: 'native-fixture' },
+    });
+    const pagedTx = pagedStorage.recoveryJournal.db.transaction('batches', 'readwrite');
+    pagedTx.objectStore('batches').put({
+      batchId: 'paged-pending', sequence: 1, collection: 'tickets', state: 'pending',
+      rows: pagedDocuments, documentIds: pagedDocuments.map((doc) => doc.id), ackedIds: [],
+      committedDocs: Object.fromEntries(pagedDocuments.map((doc) => [doc.id, doc])),
+      primaryCommittedAtMs: Date.now(), createdAtMs: Date.now(),
+    });
+    await new Promise((resolveDone, rejectDone) => {
+      pagedTx.oncomplete = resolveDone;
+      pagedTx.onerror = () => rejectDone(pagedTx.error);
+      pagedTx.onabort = () => rejectDone(pagedTx.error);
+    });
+    pagedCollection.close();
+    pagedStorage.close();
+    const pagedReopened = await openCtoxIndexedDbStorage({ databaseName: pagedName });
+    const pagedReopenedCollection = pagedReopened.collection('tickets', { schema: pagedSchema });
+    const originalGet = IDBObjectStore.prototype.get;
+    const primaryReadGroups = new Map();
+    let pagedPendingAfterRestart;
+    try {
+      IDBObjectStore.prototype.get = function (key) {
+        if (this.transaction.db.name === pagedName && this.name === 'documents'
+          && Array.isArray(key) && key[0] === 'tickets') {
+          primaryReadGroups.set(this.transaction, (primaryReadGroups.get(this.transaction) || 0) + 1);
+        }
+        return originalGet.call(this, key);
+      };
+      await withBoundedJournalRead(() => pagedReopenedCollection.initializeRecovery(), pagedName);
+      pagedPendingAfterRestart = (await pagedReopened.recoveryJournal.getStatus()).pendingWrites;
+    } finally {
+      IDBObjectStore.prototype.get = originalGet;
+      pagedReopenedCollection.close();
+      pagedReopened.close();
+    }
+    const pagedPrimaryReads = [...primaryReadGroups.values()];
 
     // Upgrade an existing v3 WAL in place: new indexes must not discard its
     // only copy of an unacknowledged browser write.
@@ -420,6 +472,8 @@ try {
     indexedDB.deleteDatabase(`${databaseName}-other__recovery_v2`);
     indexedDB.deleteDatabase(backlogName);
     indexedDB.deleteDatabase(`${backlogName}__recovery_v2`);
+    indexedDB.deleteDatabase(pagedName);
+    indexedDB.deleteDatabase(`${pagedName}__recovery_v2`);
     indexedDB.deleteDatabase(`${legacyStorageName}__recovery_v2`);
     indexedDB.deleteDatabase(storageName);
     indexedDB.deleteDatabase(`${storageName}__recovery_v2`);
@@ -446,6 +500,8 @@ try {
       backlogRecoveryMs,
       backlogFirstWriteMs,
       backlogAckMs,
+      pagedPendingAfterRestart,
+      pagedPrimaryReads,
       pendingAfterCommandAck,
       replay,
       replayed,
@@ -495,6 +551,11 @@ try {
     'the sanitized backlog must exercise status and ACK costs at roughly the observed byte scale');
   assert(result.backlogBytesBefore === result.backlogExpectedBytes,
     'bounded cursor status must preserve exact UTF-8 JSON-array bytes and exclude resolved conflicts');
+  assert(result.pagedPendingAfterRestart === 0,
+    'startup must reconcile a single native-acknowledged batch spanning read groups');
+  assert(result.pagedPrimaryReads.length === 2 && result.pagedPrimaryReads[0] === 200
+    && result.pagedPrimaryReads[1] === 5,
+  '205 persisted native documents must be read in groups of200 and5, not one unbounded transaction');
   assert([result.backlogStatusMs, result.backlogRecoveryMs, result.backlogFirstWriteMs, result.backlogAckMs]
     .every((value) => Number.isFinite(value) && value >= 0),
   'sanitized backlog timings must be recorded for recovery, first write and ACK');
