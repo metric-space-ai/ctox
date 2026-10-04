@@ -5,7 +5,7 @@
 
 use super::{
     attach_queue_projection_store, canonical_queue_route_status,
-    create_queue_task_with_metadata_tx, current_queue_route_status, ensure_queue_account,
+    create_queue_task_with_native_app_origin_tx, current_queue_route_status, ensure_queue_account,
     epoch_millis, load_queue_task_from_conn, now_iso_string, open_channel_db,
     refresh_queue_projection_tasks, resolve_db_path, sanitize_path_component, set_routing_status,
     sha256_hex, BusinessCommandClaimRequest, BusinessCommandControlClaim,
@@ -182,7 +182,11 @@ pub(crate) fn claim_business_command_with_queue(
         }),
         now_ms,
     )?;
-    let mut task = create_queue_task_with_metadata_tx(&tx, request)?;
+    let mut task = create_queue_task_with_native_app_origin_tx(
+        &tx,
+        request,
+        Some(json!({"command_id":claim.command_id,"module":claim.module})),
+    )?;
     let queued_version = accepted_version.saturating_add(1);
     tx.execute(
         "INSERT INTO business_command_task_links (command_id, task_id, created_at_ms)

@@ -976,6 +976,7 @@ struct SharedState {
     // Only a live PromptWorkerActivity owns these keys. Routing cache entries
     // alone do not prove that a worker still exists.
     active_worker_lease_keys: HashSet<String>,
+    active_worker_instance_ids: BTreeMap<String, String>,
     active_worker_threads: BTreeMap<String, usize>,
     parallel_queue_jobs: BTreeMap<String, QueuedPrompt>,
     current_goal_preview: Option<String>,
@@ -1001,6 +1002,7 @@ impl Default for SharedState {
             pending_prompts: VecDeque::new(),
             leased_message_keys_inflight: HashSet::new(),
             active_worker_lease_keys: HashSet::new(),
+            active_worker_instance_ids: BTreeMap::new(),
             active_worker_threads: BTreeMap::new(),
             parallel_queue_jobs: BTreeMap::new(),
             current_goal_preview: None,
@@ -5636,6 +5638,7 @@ fn publish_cockpit_worker_state_with_task(root: &Path, shared: &SharedState, ext
             worker_active_count: shared.worker_active_count,
             worker_phase: shared.worker_phase.clone(),
             active_task_ids,
+            worker_instance_ids: shared.active_worker_instance_ids.clone(),
             last_error: shared.last_error.clone(),
             boot_id: SERVICE_PERFORMANCE_BOOT_ID
                 .get_or_init(|| uuid::Uuid::new_v4().to_string())
@@ -5727,7 +5730,14 @@ impl PromptWorkerActivity {
                     ),
                 );
             } else {
+                let mut shared = lock_shared_state(state);
+                for key in &job.leased_message_keys {
+                    shared
+                        .active_worker_instance_ids
+                        .insert(key.clone(), worker_id.clone());
+                }
                 lease_worker_id = Some(worker_id);
+                publish_cockpit_worker_state(root, &shared);
             }
         }
         Self {
@@ -5785,6 +5795,9 @@ impl Drop for PromptWorkerActivity {
                 .chain(&self.leased_ticket_event_keys)
             {
                 shared.active_worker_lease_keys.remove(key);
+                if shared.active_worker_instance_ids.get(key) == self.lease_worker_id.as_ref() {
+                    shared.active_worker_instance_ids.remove(key);
+                }
                 shared.parallel_queue_jobs.remove(key);
             }
             let (leaked_message_keys, leaked_ticket_event_keys) = if self.leases_released {
@@ -6746,6 +6759,13 @@ fn start_prompt_worker(
                 source_label: job.source_label.clone(),
                 progress_error: Arc::clone(&progress_error),
             });
+            if job.source_label == "queue" && !job.leased_message_keys.is_empty() {
+                session_options.queue_turn_lease = Some(channels::QueueTurnLeaseFence {
+                    root: root.clone(),
+                    message_keys: job.leased_message_keys.clone(),
+                    worker_id: worker_activity.lease_worker_id.clone().unwrap_or_default(),
+                });
+            }
             let invoked_result = if let Some(attempt) = recoverable_attempt.as_ref() {
                 push_event(
                     &event_state,
@@ -9834,14 +9854,14 @@ fn run_completion_review(
         source_label: review_request.source_label.clone(),
         owner_visible,
     };
-    let review_audit_key = match verification::record_slice_assurance(
+    let (review_audit_key, recorded_review) = match verification::record_slice_assurance(
         root,
         &verification_request,
         reply_text,
         None,
         Some(&outcome),
     ) {
-        Ok(recorded) => recorded.run.run_id.clone(),
+        Ok(recorded) => (recorded.run.run_id.clone(), recorded.run),
         Err(err) => {
             push_event(
                 state,
@@ -9858,6 +9878,18 @@ fn run_completion_review(
             };
         }
     };
+    if let Err(error) = crate::business_os::outbound_field_review::publish(
+        root,
+        &job.leased_message_keys,
+        &recorded_review,
+    ) {
+        return CompletionReviewDisposition::Hold {
+            reason: review::HoldReason::Technical {
+                policy_id: "outbound-field-review-publication".to_string(),
+            },
+            summary: format!("Field review could not be bound and persisted: {error}"),
+        };
+    }
     push_event(
         state,
         format!(
@@ -11636,6 +11668,7 @@ fn chat_turn_session_options_for_queue_job(
             additional_writable_roots: Vec::new(),
             additional_readable_roots: Vec::new(),
             worker_attempt: None,
+            queue_turn_lease: None,
             crew_persona: None,
             crew_memory_block: None,
         };
@@ -11660,6 +11693,7 @@ fn chat_turn_session_options_for_queue_job(
             additional_writable_roots: Vec::new(),
             additional_readable_roots: Vec::new(),
             worker_attempt: None,
+            queue_turn_lease: None,
             crew_persona: None,
             crew_memory_block: None,
         };
@@ -11677,6 +11711,7 @@ fn chat_turn_session_options_for_queue_job(
             additional_writable_roots: Vec::new(),
             additional_readable_roots: Vec::new(),
             worker_attempt: None,
+            queue_turn_lease: None,
             crew_persona: None,
             crew_memory_block: None,
         };
