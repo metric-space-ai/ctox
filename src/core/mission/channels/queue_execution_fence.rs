@@ -307,6 +307,47 @@ mod tests {
     }
 
     #[test]
+    fn queue_execution_guard_rejects_released_and_released_again_by_native_api() -> Result<()> {
+        let (root, fence, lifetime) = admitted()?;
+        let old = QueueExecutionFence::capture(&fence, "native-attempt", lifetime)?;
+        let first_attempt = old.routing_attempts()[0].1;
+        update_queue_task(
+            root.path(),
+            QueueTaskUpdateRequest {
+                message_key: fence.message_keys[0].clone(),
+                route_status: Some("pending".into()),
+                ..Default::default()
+            },
+        )?;
+        lease_queue_task(root.path(), &fence.message_keys[0], "ctox-service")?;
+        // Reuse even the worker ID: the persisted lease epoch must still deny
+        // the retained old consumer without relying on worker teardown.
+        record_queue_lease_worker(
+            root.path(),
+            &fence.message_keys,
+            "ctox-service",
+            &fence.worker_id,
+        )?;
+        let next_lifetime = Arc::new(QueueWorkerLifetime::for_native_worker(
+            root.path(),
+            &fence.message_keys,
+            Some(&fence.worker_id),
+        ));
+        let next = QueueExecutionFence::capture(&fence, "next-native-attempt", next_lifetime)?;
+        assert_eq!(next.routing_attempts()[0].1, first_attempt + 1);
+        let mut published = false;
+        assert!(old
+            .with_current_execution(|| {
+                published = true;
+                Ok(())
+            })
+            .is_err());
+        assert!(!published);
+        assert_eq!(next.with_current_execution(|| Ok(17))?, 17);
+        Ok(())
+    }
+
+    #[test]
     fn queue_execution_guard_serializes_cancellation_and_worker_teardown() -> Result<()> {
         let (_root, fence, lifetime) = admitted()?;
         let guard = QueueExecutionFence::capture(&fence, "native-attempt", Arc::clone(&lifetime))?;
