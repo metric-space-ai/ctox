@@ -1,44 +1,59 @@
-# Native guest command emission witness
+# Native guest command emission
 
-A prepared native provider proves the live worker, routing attempt, provider
-session and actual bound turn. Its `command_provenance` describes the command
-that started the worker. It does not authorize later `ctox.guest.observe` or
-`ctox.guest.input` commands. A Business OS user session also does not establish
-which worker emitted a command.
+A prepared provider proves the live worker, routing attempt, provider session
+and actual bound turn. Its `command_provenance` describes the command that
+started the worker; it does not authorize later guest commands. A signed
+Business OS session token likewise does not prove an individual later call.
 
-`NativeProviderTurnOwner::admit_emitted_guest_command` is a bounded producer
-primitive. Only the retained native turn owner can call it. The native emitter
-supplies the actual turn and exact trusted command; the synchronous callback
-must admit that command and reject refused or replayed admission. The callback
-holds the existing worker/provider IMMEDIATE transaction and lifetime locks.
-It must not await, reopen the channel store, or re-enter lifecycle callbacks.
-A private `NativeProviderCommand` is returned only after successful transaction
-commit. IDs are reserved before admission and cannot be reminted after an
-uncertain failure. Each turn admits at most 1024 emission attempts.
+For a native-admitted direct session, the native turn owner now registers an
+in-process dispatcher for its actual harness thread before `turn/start`.
+The fork's MCP handler consults it after the existing configuration, argument,
+approval and safety checks, immediately before ordinary MCP transport. Both the
+approved and no-approval paths use this boundary; refused calls never reach it.
+`NativeMcpInvocation` is constructed privately from the actual core Session and
+TurnContext. Model arguments and asynchronous tool-begin events cannot construct
+this invocation. Dropping the registration removes it; retaining a dispatcher
+Arc cannot prolong registration or the separate native owner lifetime.
 
-The witness binds command ID, type, module, record, canonical payload and client
-context to the actual provider/turn. It cannot be constructed from serialized
-facts, a session token or model-provided labels. JSON object ordering is ignored;
-changed values and replicated commands are rejected.
+The direct-session guest dispatcher intercepts only
+`ctox-business-os/business_os.execute_action` for `ctox.guest.observe` and
+`ctox.guest.input`. Other tools retain ordinary transport. It requires the
+verified initiating actor and workspace, rejects client-supplied identity and
+extra arguments, and creates a TrustedLocal command ID from the actual
+binding/thread/turn/call/server/tool tuple. A reused call ID cannot mint another
+command even with changed arguments. Identity in client context is attribution,
+not a permit. Missing or foreign actual turn, revoked worker and ended provider
+fail closed before guest consumption.
 
-`with_current_command_transaction` consumes the witness at the effect boundary.
-The callback must check current policy/controller and perform the bounded effect
-under that same live worker/provider guard. Clones share one consumption flag.
-Admission failure produces no witness; effect failure burns the witness and
-requires reconciliation rather than repeating an uncertain effect. Cancellation,
-lease replacement/expiry, provider closure, witness-row changes and replaced
-stores retain the underlying provider guard's fail-closed behavior. Returning
-identity for an effect performed later is not guarded admission.
+Only the retained native turn owner can issue a `NativeProviderCommandEmitter`.
+Its `admit_emitted_guest_command` binds command ID, type, module, record,
+canonical payload and client context to the actual bound turn. It holds the
+existing worker/provider IMMEDIATE transaction and lifetime locks; the private
+`NativeProviderCommand` is returned only after transaction commit. Admission IDs
+are reserved before the callback and cannot be reminted after uncertain failure.
+Each turn permits at most 1024 emission attempts, with a 32 KiB command envelope.
+The emitter does not extend its owner's live lifetime.
 
-This primitive is not a wired MCP emitter. The direct-session tool-begin event
-is asynchronous, and the MCP HTTP endpoint's signed session token proves session
-scope rather than an individual later call. Neither may mint this witness. The
-real native emitter/admission connector, VM `GuestCommandOwner::caller` consumer,
-policy/controller integration and installed guest acceptance remain required.
-The command owner must reject calls lacking their retained per-command witness.
+`NativeProviderAdmission::execute_guest_command` is deliberately denied by
+default. A production VM consumer must explicitly implement it and consume the
+exact witness via `with_current_command_transaction`. Its callback must check
+current account/policy/controller and persist the bounded effect under that
+same live native worker transaction. It must not reopen the channel store,
+await, or re-enter `NativeGuestExecution::with_current` or another provider
+guard: those acquire the same transaction/lifetime locks. Clones share one
+consumption flag. An uncertain effect burns the witness and requires
+reconciliation, rather than repeating the effect.
 
-Regression tests use real native queue/worker/provider guards and isolated
-admission/effect tables. They cover envelope changes, canonical JSON equivalence,
-pre-turn/foreign-turn rejection, replicated/invalid input, uncertain admission,
-shared one-shot consumption and revocation. Their results must be recorded
-separately; source tests do not prove the live MCP/VM workflow.
+The in-process callback proves emission, not durable guest admission or a
+successful VM effect. The initiating provenance is not current account
+authorization. The VM caller/controller, authenticated Raft job, atomic effect
+and fresh checkpoint, installed command/frame/input workflow and platform
+acceptance remain required. HTTP callers, tokens and event observers without
+this retained per-command witness must remain denied.
+
+Source regressions cover the real core MCP handler's actual Session/TurnContext,
+invalid JSON before dispatch, model identity labels, registry scoping/teardown,
+native owner revocation, default-consumer denial, envelope mutation, canonical
+JSON equivalence, uncertain admission and shared one-shot consumption. Compiler
+and test results must be recorded on the final source separately; these tests
+do not establish the installed MCP/VM workflow.

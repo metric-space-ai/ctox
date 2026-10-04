@@ -61,6 +61,13 @@ pub(crate) struct NativeProviderBinding {
     record: Arc<ProviderRecord>,
 }
 
+/// Issued only by the actual turn owner to the in-process MCP dispatcher.
+/// Retaining this capability does not prolong that owner's live lifetime.
+#[derive(Clone)]
+pub(crate) struct NativeProviderCommandEmitter {
+    provider: NativeProviderBinding,
+}
+
 /// A single native guest command admitted by the retained turn owner. It is
 /// neither deserializable nor constructible from provider facts/session JSON.
 /// Clones share consumption; a failed or uncertain effect cannot be repeated.
@@ -108,6 +115,18 @@ fn canonical_guest_command(
 /// destination and policy. The future must persist real Raft admission before
 /// returning. A model payload or a persisted witness cannot register this hook.
 pub(crate) trait NativeProviderAdmission: Send + Sync {
+    /// Consume the actual emitted command under its held worker transaction,
+    /// then the real policy/controller guard. Never re-enter provider guards.
+    /// The default is deliberately closed until the native VM owner supplies
+    /// its registered account/controller/effect implementation.
+    fn execute_guest_command(
+        &self,
+        _command: &crate::business_os::store::BusinessCommand,
+        _witness: NativeProviderCommand,
+    ) -> Result<ctox_protocol::mcp::CallToolResult> {
+        anyhow::bail!("native guest command consumer is not registered")
+    }
+
     fn admit<'a>(
         &'a self,
         provider: NativeProviderBinding,
@@ -254,14 +273,12 @@ impl NativeProviderTurnOwner {
         }
     }
 
-    /// Producer primitive, called only at actual native command emission.
-    /// The callback must admit this exact command and reject a refused/replayed
-    /// admission. It runs synchronously inside the live worker/provider guard;
-    /// it may not await, reopen this store or re-enter lifecycle callbacks.
-    /// The witness is returned only after that transaction commits. An ID is
-    /// burned even on admission error, since an external effect may be uncertain.
-    /// A session token, model payload or observed asynchronous tool-begin event
-    /// is NOT a caller for this primitive. Wiring the real emitter is separate.
+    pub(crate) fn command_emitter(&self) -> NativeProviderCommandEmitter {
+        NativeProviderCommandEmitter {
+            provider: self.binding(),
+        }
+    }
+
     #[allow(dead_code)]
     pub(crate) fn admit_emitted_guest_command(
         &self,
@@ -274,35 +291,8 @@ impl NativeProviderTurnOwner {
             &crate::business_os::store::BusinessCommand,
         ) -> Result<()>,
     ) -> Result<NativeProviderCommand> {
-        let canonical_command = canonical_guest_command(command)?;
-        let provider = self.binding();
-        provider.with_live_provider_transaction(|tx, facts, turn| {
-            ensure!(
-                turn == Some(actual_turn_id),
-                "command emission does not belong to the actual bound turn"
-            );
-            let mut emitted = self
-                .record
-                .emitted_commands
-                .lock()
-                .map_err(|_| anyhow::anyhow!("native command emission state poisoned"))?;
-            ensure!(
-                emitted.len() < 1024,
-                "native guest emission budget exhausted"
-            );
-            ensure!(
-                emitted.insert(command.id.as_ref().expect("validated command ID").clone()),
-                "native guest command emission was already attempted"
-            );
-            admit(tx, facts, actual_turn_id, command)?;
-            Ok(())
-        })?;
-        Ok(NativeProviderCommand {
-            provider,
-            turn_id: actual_turn_id.to_owned(),
-            canonical_command,
-            consumed: Arc::new(Mutex::new(false)),
-        })
+        self.command_emitter()
+            .admit_emitted_guest_command(actual_turn_id, command, admit)
     }
 
     /// The actual TurnStart result may bind only the prepared provider session.
@@ -405,6 +395,60 @@ impl NativeProviderBinding {
                 "native provider witness changed, ended or was replayed"
             );
             publish(tx, &self.record.facts, state.turn_id.as_deref())
+        })
+    }
+}
+
+impl NativeProviderCommandEmitter {
+    /// Producer primitive, called only at actual native command emission.
+    /// The callback must admit this exact command and reject a refused/replayed
+    /// admission. It runs synchronously inside the live worker/provider guard;
+    /// it may not await, reopen this store or re-enter lifecycle callbacks.
+    /// The witness is returned only after that transaction commits. An ID is
+    /// burned even on admission error, since an external effect may be uncertain.
+    /// A session token, model payload or observed asynchronous tool-begin event
+    /// is NOT a caller for this primitive. Wiring the real emitter is separate.
+    #[allow(dead_code)]
+    pub(crate) fn admit_emitted_guest_command(
+        &self,
+        actual_turn_id: &str,
+        command: &crate::business_os::store::BusinessCommand,
+        admit: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            &NativeProviderFacts,
+            &str,
+            &crate::business_os::store::BusinessCommand,
+        ) -> Result<()>,
+    ) -> Result<NativeProviderCommand> {
+        let canonical_command = canonical_guest_command(command)?;
+        let provider = self.provider.clone();
+        provider.with_live_provider_transaction(|tx, facts, turn| {
+            ensure!(
+                turn == Some(actual_turn_id),
+                "command emission does not belong to the actual bound turn"
+            );
+            let mut emitted = self
+                .provider
+                .record
+                .emitted_commands
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native command emission state poisoned"))?;
+            ensure!(
+                emitted.len() < 1024,
+                "native guest emission budget exhausted"
+            );
+            ensure!(
+                emitted.insert(command.id.as_ref().expect("validated command ID").clone()),
+                "native guest command emission was already attempted"
+            );
+            admit(tx, facts, actual_turn_id, command)?;
+            Ok(())
+        })?;
+        Ok(NativeProviderCommand {
+            provider,
+            turn_id: actual_turn_id.to_owned(),
+            canonical_command,
+            consumed: Arc::new(Mutex::new(false)),
         })
     }
 }
@@ -940,6 +984,35 @@ mod tests {
                 Ok(())
             })
         }
+    }
+
+    #[test]
+    fn native_guest_emitter_does_not_prolong_owner_or_supply_a_default_consumer() -> Result<()> {
+        let (_root, execution, _) = admitted()?;
+        let owner = prepare(&execution)?;
+        owner.bind_turn("actual-thread", "actual-turn")?;
+        let emitter = owner.command_emitter();
+        let command = guest_command("new-command");
+        let witness =
+            emitter.admit_emitted_guest_command("actual-turn", &command, |_, _, _, _| Ok(()))?;
+        let consumer = Admission {
+            calls: Arc::new(AtomicUsize::new(0)),
+            revoke: None,
+            deny: false,
+        };
+        assert!(
+            consumer.execute_guest_command(&command, witness).is_err(),
+            "an admission hook alone cannot perform guest effects"
+        );
+        drop(owner);
+        assert!(emitter
+            .admit_emitted_guest_command(
+                "actual-turn",
+                &guest_command("after-owner"),
+                |_, _, _, _| panic!("dead owner emitted"),
+            )
+            .is_err());
+        Ok(())
     }
 
     #[tokio::test]

@@ -51,6 +51,34 @@ use std::path::Path;
 use std::sync::Arc;
 use toml_edit::value;
 
+async fn dispatch_mcp_tool(
+    session: &Session,
+    turn: &TurnContext,
+    call_id: &str,
+    server: &str,
+    tool: &str,
+    arguments: Option<serde_json::Value>,
+    meta: Option<serde_json::Value>,
+) -> Result<CallToolResult, String> {
+    // Both callers reach this after the existing approval/safety boundary.
+    // This actual Session/TurnContext, rather than an event or request label,
+    // is the native emission source. Native callbacks enforce their live scope.
+    if let Some(result) = crate::native_mcp_dispatch::dispatch_native_mcp(
+        session,
+        turn,
+        call_id,
+        server,
+        tool,
+        arguments.as_ref(),
+    ) {
+        return result;
+    }
+    session
+        .call_tool(server, tool, arguments, meta)
+        .await
+        .map_err(|e| format!("tool call error: {e:?}"))
+}
+
 /// Handles the specified tool call dispatches the appropriate
 /// `McpToolCallBegin` and `McpToolCallEnd` events to the `Session`.
 pub(crate) async fn handle_mcp_tool_call(
@@ -144,15 +172,16 @@ pub(crate) async fn handle_mcp_tool_call(
                 maybe_mark_thread_memory_mode_polluted(sess.as_ref(), turn_context.as_ref()).await;
 
                 let start = Instant::now();
-                let result = sess
-                    .call_tool(
-                        &server,
-                        &tool_name,
-                        arguments_value.clone(),
-                        request_meta.clone(),
-                    )
-                    .await
-                    .map_err(|e| format!("tool call error: {e:?}"));
+                let result = dispatch_mcp_tool(
+                    &sess,
+                    turn_context,
+                    &call_id,
+                    &server,
+                    &tool_name,
+                    arguments_value.clone(),
+                    request_meta.clone(),
+                )
+                .await;
                 let result = sanitize_mcp_tool_result_for_model(
                     turn_context
                         .model_info
@@ -235,10 +264,16 @@ pub(crate) async fn handle_mcp_tool_call(
 
     let start = Instant::now();
     // Perform the tool call.
-    let result = sess
-        .call_tool(&server, &tool_name, arguments_value.clone(), request_meta)
-        .await
-        .map_err(|e| format!("tool call error: {e:?}"));
+    let result = dispatch_mcp_tool(
+        &sess,
+        turn_context,
+        &call_id,
+        &server,
+        &tool_name,
+        arguments_value.clone(),
+        request_meta,
+    )
+    .await;
     let result = sanitize_mcp_tool_result_for_model(
         turn_context
             .model_info
