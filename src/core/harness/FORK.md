@@ -41,6 +41,25 @@ These are source-added regressions; compiler/test execution and transport
 acceptance must be recorded separately before promotion.
 This change does not implement queue-claim cancellation or publication fencing.
 
+## 2026-10 Rollout writer acknowledgement and publication
+
+Recorder `persist` and `flush` replies carry the writer's actual I/O result.
+A fresh writer prepares its metadata and buffered history in a unique private
+file, flushes it, and publishes the complete pathname by a same-directory,
+create-new hard link. State projections follow publication; caller cancellation
+does not transfer publication ownership. Failure cleanup removes only that
+writer's owned staging file and never another writer's final or staging file.
+This is atomic pathname publication, not a new fsync/power-loss guarantee.
+Session-level flush logging remains separate from a recorder I/O receipt.
+
+The app-server treats an absent file as deferred only while its loaded recorder
+is genuinely awaiting first publication. Missing or invalid materialized
+rollouts fail closed. Recorder regressions cover writer failure, cancellation,
+concurrent readers, state visibility and file ownership. The actual in-process
+persistent-resume regression is in `ctox-app-server-client`; root `cargo test`
+does not execute that nested package. Failure-only diagnostics use read-only
+SQLite handles with bounded lock waits and omit raw message contents.
+
 ## 2026-08 Required Plan and Stable Activity Events
 
 CTOX service-owned queue turns use the upstream-compatible

@@ -282,6 +282,23 @@ perform an uncached durable `pending` count at most every 30 seconds. This
 bounds dispatch latency when a WAL write does not change the cached filesystem
 stamp, without returning to continuous full-router scans.
 
+When a reviewed queue attempt fails its artifact witness, recovery feedback is
+persisted on the same durable queue item. Finalization retains the normal hold,
+retry budget and backoff. The router must acquire a fresh lease before executing
+that feedback; the service does not enqueue an in-memory artifact retry with
+the released attempt's message keys. Proactive outbound work without queue keys
+retains its existing bounded in-process recovery path.
+
+MCP app creation and modification accept an optional stable `idempotency_key`,
+scoped to the resolved native actor and workspace. Identical retries retain
+their canonical command/task and current outcome; changed intent is rejected
+by the native claim. A replay does not reset its compatibility projection or
+reassign its Crew member. Delegation retains its existing actor/module/action
+key mapping, including previously issued IDs. Person research retains its own
+retry contract; other `execute_action` actions reject a supplied retry key.
+All retries still pass current policy and authority checks. These contracts do
+not infer completion from the reply or grant an external agent queue authority.
+
 ## Worker Slice Flow
 
 `start_prompt_worker(...)` is the outer harness entry point for a leased slice.

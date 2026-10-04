@@ -23,6 +23,9 @@ use uuid::Uuid;
 /// Core-facing handle to the SQLite-backed state runtime.
 pub type StateDbHandle = Arc<ctox_state::StateRuntime>;
 
+/// Maximum lock wait for failure-only read-only diagnostics.
+const DIAGNOSTIC_SQLITE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(200);
+
 /// Initialize the state runtime for thread state persistence and backfill checks. To only be used
 /// inside `core`. The initialization should not be done anywhere else.
 pub(crate) async fn init(config: &Config) -> Option<StateDbHandle> {
@@ -89,6 +92,153 @@ pub async fn open_if_present(codex_home: &Path, default_provider: &str) -> Optio
             .await
             .ok()?;
     require_backfill_complete(runtime, codex_home).await
+}
+
+/// Bounded, read-only diagnostics for the persistent-resume failure path.
+///
+/// This intentionally avoids `StateRuntime::init`: no migrations, creation,
+/// checkpoints, read repairs, or deletions are performed. SQLite lock waits and
+/// diagnostic reads are bounded. Message contents are
+/// represented only by sanitized length/category fields.
+#[doc(hidden)]
+pub fn read_only_state_diagnostic(
+    sqlite_home: &Path,
+    thread_id: &str,
+    expected_rollout_path: &Path,
+    expected_title: &str,
+    expected_user_message: &str,
+) -> String {
+    let state_path = ctox_state::state_db_path(sqlite_home);
+    let logs_path = ctox_state::logs_db_path(sqlite_home);
+    if !state_path.try_exists().unwrap_or(false) {
+        return format!(
+            "state_path={} state_path_exists=false;",
+            state_path.display()
+        );
+    }
+    let connection = match rusqlite::Connection::open_with_flags(
+        state_path.as_path(),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    ) {
+        Ok(connection) => connection,
+        Err(err) => return format!("state_path={} open_error={err};", state_path.display()),
+    };
+    if let Err(err) = connection.busy_timeout(DIAGNOSTIC_SQLITE_BUSY_TIMEOUT) {
+        return format!(
+            "state_path={} busy_timeout_error={err};",
+            state_path.display()
+        );
+    }
+    let mut report = format!(
+        "state_path={} state_path_exists=true; logs_path={}; logs_path_exists={};",
+        state_path.display(),
+        logs_path.display(),
+        logs_path.try_exists().unwrap_or(false),
+    );
+
+    match connection.query_row(
+        "SELECT status, last_watermark FROM backfill_state WHERE id = 1",
+        [],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+    ) {
+        Ok((status, watermark)) => report.push_str(&format!(
+            " backfill_status={status} backfill_watermark_present={};",
+            watermark.is_some(),
+        )),
+        Err(rusqlite::Error::QueryReturnedNoRows) => report.push_str(" backfill_status=missing;"),
+        Err(err) => report.push_str(&format!(" backfill_query_error={err};")),
+    }
+
+    match connection.query_row(
+        "SELECT rollout_path, source, model_provider, title, archived, archived_at, \
+         first_user_message, created_at, updated_at FROM threads WHERE id = ?1",
+        [thread_id],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+            ))
+        },
+    ) {
+        Ok((
+            stored_path,
+            source,
+            provider,
+            title,
+            archived,
+            archived_at,
+            first_user_message,
+            created_at,
+            updated_at,
+        )) => {
+            report.push_str(&format!(
+                " row=present rollout_path_matches={} rollout_path_exists={} source={source} provider={provider} title_matches={} title_len={} archived={archived} archived_at={archived_at:?} first_user_message_matches={} first_user_message_len={} created_at={created_at} updated_at={updated_at};",
+                Path::new(&stored_path) == expected_rollout_path,
+                Path::new(&stored_path).try_exists().unwrap_or(false),
+                title == expected_title,
+                title.len(),
+                first_user_message == expected_user_message,
+                first_user_message.len(),
+            ));
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => report.push_str(" row=missing;"),
+        Err(err) => report.push_str(&format!(" row_query_error={err};")),
+    }
+
+    if !logs_path.try_exists().unwrap_or(false) {
+        report.push_str(" warnings=unavailable(logs_db_absent);");
+        return report;
+    }
+
+    let warnings_result = (|| -> rusqlite::Result<Vec<String>> {
+        let connection = rusqlite::Connection::open_with_flags(
+            logs_path.as_path(),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        connection.busy_timeout(DIAGNOSTIC_SQLITE_BUSY_TIMEOUT)?;
+        let mut statement = connection.prepare(
+            "SELECT id, substr(target, 1, 160), substr(COALESCE(message, ''), 1, 4096), \
+             substr(file, 1, 160), line FROM \
+             (SELECT id, target, message, file, line, level FROM logs ORDER BY id DESC LIMIT 200) \
+             WHERE upper(level) = upper('warn') ORDER BY id DESC",
+        )?;
+        let rows = statement.query_map([], |row| {
+            let target: String = row.get(1)?;
+            let message: String = row.get(2)?;
+            let haystack = format!("{target} {message}").to_lowercase();
+            let categories = ["state_db", "rollout", "backfill", "thread"]
+                .iter()
+                .filter(|needle| haystack.contains(**needle))
+                .copied()
+                .collect::<Vec<_>>();
+            Ok(format!(
+                "id={} target={} categories={categories:?} message_prefix_len={} file_line={:?}:{:?}",
+                row.get::<_, i64>(0)?,
+                target.chars().take(160).collect::<String>(),
+                message.len(),
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+            ))
+        })?;
+        let rows = rows.collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter(|warning| !warning.contains("categories=[]"))
+            .take(8)
+            .collect())
+    })();
+    match warnings_result {
+        Ok(warnings) => report.push_str(&format!(" warnings={warnings:?};")),
+        Err(err) => report.push_str(&format!(" warnings_query_error={err};")),
+    }
+    report
 }
 
 async fn require_backfill_complete(
