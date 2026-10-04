@@ -5,6 +5,7 @@ import {
 } from './recovery-crypto.mjs';
 
 const JOURNAL_VERSION = 4;
+const JOURNAL_OPEN_TIMEOUT_MS = 4000;
 const BATCH_STORE = 'batches';
 const BATCH_STATE_COLLECTION_INDEX = 'stateCollection';
 const BATCH_STATE_INDEX = 'state';
@@ -471,6 +472,18 @@ export class CtoxRecoveryJournal {
 function openJournalDatabase(name) {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(name, JOURNAL_VERSION);
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return false;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+      return true;
+    };
+    const timer = setTimeout(() => {
+      finish(reject, recoveryError('indexeddb_journal_unavailable',
+        `IndexedDB open timed out after ${JOURNAL_OPEN_TIMEOUT_MS}ms for recovery journal ${name}`));
+    }, JOURNAL_OPEN_TIMEOUT_MS);
     request.onupgradeneeded = () => {
       const db = request.result;
       const batches = db.objectStoreNames.contains(BATCH_STORE)
@@ -491,10 +504,14 @@ function openJournalDatabase(name) {
     request.onsuccess = () => {
       const db = request.result;
       db.onversionchange = () => db.close();
-      resolve(db);
+      // An IndexedDB open request cannot be cancelled. Once this attempt has
+      // failed, a later success belongs to no caller and must be retired.
+      if (!finish(resolve, db)) {
+        try { db.close(); } catch {}
+      }
     };
-    request.onerror = () => reject(request.error || new Error(`Failed to open recovery journal ${name}`));
-    request.onblocked = () => reject(recoveryError('indexeddb_journal_unavailable', `Recovery journal ${name} is blocked.`));
+    request.onerror = () => finish(reject, request.error || new Error(`Failed to open recovery journal ${name}`));
+    request.onblocked = () => finish(reject, recoveryError('indexeddb_journal_unavailable', `Recovery journal ${name} is blocked.`));
   });
 }
 

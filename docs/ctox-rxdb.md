@@ -52,6 +52,14 @@ Legacy/superseded replica inventory runs after initial module/restore handling,
 outside the critical startup wait. It still preserves all old primaries and
 recovery journals; slow metadata enumeration is not a deletion authorization.
 
+Recovery-journal opening has its own four-second deadline, matching the primary
+IndexedDB open bound. A blocked, failed or timed-out journal attempt closes a
+late successful journal handle; failure also closes the primary handle already
+opened for that attempt. Cleanup retains the original journal error and changes
+no persisted data, schema version or recovery payload. These lifecycle guards
+prove failed-startup handle retirement, not the cause of an observed browser
+renderer crash or installed startup/memory acceptance.
+
 Window placement hydrates from the scoped localStorage cache synchronously after
 core schema registration. Its optional IndexedDB refresh runs in the background,
 so a blocked read does not add the previous 1500ms wait before the first app.

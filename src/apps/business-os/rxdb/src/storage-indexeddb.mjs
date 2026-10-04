@@ -36,12 +36,19 @@ export async function openCtoxIndexedDbStorage({ databaseName = 'ctox_business_o
   const quotaCoordinator = {
     recover: (context = {}) => recoverQueryMetaQuota(databaseName, context),
   };
-  const recoveryJournal = await openRecoveryJournal({
-    databaseName,
-    instanceId: databaseName,
-    quotaCoordinator,
-  });
-  return new CtoxIndexedDbStorage(db, { recoveryJournal, quotaCoordinator });
+  try {
+    const recoveryJournal = await openRecoveryJournal({
+      databaseName,
+      instanceId: databaseName,
+      quotaCoordinator,
+    });
+    return new CtoxIndexedDbStorage(db, { recoveryJournal, quotaCoordinator });
+  } catch (error) {
+    // No caller owns this primary handle until the journal also opens. A
+    // failed journal must not leave it pinning the next startup attempt.
+    try { db.close(); } catch {}
+    throw error;
+  }
 }
 
 export class CtoxIndexedDbStorage {
