@@ -380,10 +380,13 @@ impl State {
                 if *owner != request.actor || *owner == expected.node_id {
                     return Err(InvalidRequest);
                 }
-                if !job.pending_effects.is_empty() || job.checkpoint_requires_refresh {
+                if !job.pending_effects.is_empty() {
                     return Err(ReconciliationRequired);
                 }
                 let checkpoint = job.checkpoint.as_ref().ok_or(CheckpointUnavailable)?;
+                if job.checkpoint_requires_refresh {
+                    return Err(ReconciliationRequired);
+                }
                 if &checkpoint.digest != checkpoint_digest || !checkpoint.replicas.contains(owner) {
                     return Err(CheckpointUnavailable);
                 }

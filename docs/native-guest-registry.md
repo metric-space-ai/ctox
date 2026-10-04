@@ -36,6 +36,18 @@ cannot be replayed. Receipt registration requires completed protected checkpoint
 effect, exact native effect/target derivation and directory identity. Import
 presence alone cannot grant readiness.
 
+The native PersistentSession factory requires this actual registry and an
+already enrolled guest ID. Before TurnStart, it consumes its own Admitted row
+under the actual borrowed worker/provider transaction and invokes
+`bind_execution` for a fresh quorum/provider/account/policy/controller check.
+Command authority is rechecked after each admission/binding await. Missing
+registry, changed authority, ambiguous binding or a second execution attempt
+poisons the session instead of falling back. The retained NativeGuestExecution
+is an observation handle; operations must still revalidate their live fences.
+Production server lifecycle registration/enrollment and actual guest/controller
+workflow acceptance remain unfinished; this constructor is not advertised as a
+working installed guest lane.
+
 Linux process startup retains a native-generated guest-process attempt before
 the first quorum await, accepts only a fresh exact BeginEffect result, then
 retains the actual paused QEMU child before bootstrap. Its runtime/overlay must

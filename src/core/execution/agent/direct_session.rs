@@ -902,6 +902,13 @@ pub(crate) struct PersistentSession {
     native_command_context: Option<JsonValue>,
     #[cfg(unix)]
     native_provider_admission: Option<std::sync::Arc<dyn crate::channels::NativeProviderAdmission>>,
+    #[cfg(unix)]
+    native_guest_registry: Option<(
+        std::sync::Arc<crate::business_os::NativeGuestRegistry>,
+        String,
+    )>,
+    #[cfg(unix)]
+    native_guest_execution: Option<crate::business_os::NativeGuestExecution>,
     /// Set when a turn ended ambiguously (e.g. `turn/start` timed out with
     /// the request still detached server-side). A poisoned session refuses
     /// further turns: reusing it could overlap or steer into the original
@@ -989,7 +996,8 @@ impl PersistentSession {
         settings: &BTreeMap<String, String>,
         command_session_token: &str,
         persona: Option<&str>,
-        admission: std::sync::Arc<dyn crate::channels::NativeProviderAdmission>,
+        registry: std::sync::Arc<crate::business_os::NativeGuestRegistry>,
+        guest_id: &str,
     ) -> Result<Self> {
         let context = crate::business_os::mcp_channel::verify_internal_command_session_token(
             root,
@@ -1024,7 +1032,8 @@ impl PersistentSession {
         );
         session.native_command_context = Some(current);
         session.native_command_session_token = Some(command_session_token.to_owned());
-        session.require_native_provider_admission(admission)?;
+        session.require_native_provider_admission(registry.admission(guest_id)?)?;
+        session.native_guest_registry = Some((registry, guest_id.to_owned()));
         Ok(session)
     }
 
@@ -1350,6 +1359,10 @@ impl PersistentSession {
             native_command_context: None,
             #[cfg(unix)]
             native_provider_admission: None,
+            #[cfg(unix)]
+            native_guest_registry: None,
+            #[cfg(unix)]
+            native_guest_execution: None,
             poisoned: false,
         })
     }
@@ -1454,6 +1467,8 @@ impl PersistentSession {
         let native_command_context = self.native_command_context.clone();
         #[cfg(unix)]
         let native_provider_admission = self.native_provider_admission.clone();
+        #[cfg(unix)]
+        let native_guest_registry = self.native_guest_registry.clone();
         let required_initial_tool = required_initial_tool.map(str::to_string);
         self.ctx_log.log(
             "turn_request",
@@ -1502,6 +1517,10 @@ impl PersistentSession {
                 native_command_context.as_ref(),
                 #[cfg(unix)]
                 native_provider_admission.as_deref(),
+                #[cfg(unix)]
+                native_guest_registry.as_ref(),
+                #[cfg(unix)]
+                &mut self.native_guest_execution,
             )
             .await
         });
@@ -1916,6 +1935,11 @@ impl PersistentSession {
         #[cfg(unix)] native_provider_admission: Option<
             &dyn crate::channels::NativeProviderAdmission,
         >,
+        #[cfg(unix)] native_guest_registry: Option<&(
+            std::sync::Arc<crate::business_os::NativeGuestRegistry>,
+            String,
+        )>,
+        #[cfg(unix)] native_guest_execution: &mut Option<crate::business_os::NativeGuestExecution>,
     ) -> Result<String> {
         let native_guest = native_checkpoint_binding.is_some();
         let lease_reader = queue_turn_lease
@@ -2087,6 +2111,14 @@ impl PersistentSession {
             .transpose()?;
         #[cfg(unix)]
         if let Some(admission) = native_provider_admission {
+            let (registry, guest_id) = native_guest_registry.ok_or_else(|| {
+                SessionPoisoned("native guest has no actual lifecycle registry".into())
+            })?;
+            if native_guest_execution.is_some() {
+                return Err(SessionPoisoned(
+                    "native guest execution already bound; continuation requires lifecycle reconciliation".into()
+                ).into());
+            }
             let provider = provider_owner.as_ref().ok_or_else(|| {
                 anyhow::anyhow!(
                     "guest provider admission requires the actual native worker execution"
@@ -2120,6 +2152,30 @@ impl PersistentSession {
                     "native guest command authority changed after admission; reconciliation required".into()
                 ).into());
             }
+            let execution = registry
+                .bind_admitted_execution(provider.binding(), guest_id)
+                .await
+                .map_err(|error| {
+                    SessionPoisoned(format!(
+                        "native guest controller binding requires reconciliation: {error}"
+                    ))
+                })?;
+            let current =
+                crate::business_os::mcp_channel::verify_internal_command_session_token(root, token)
+                    .map_err(|error| {
+                        SessionPoisoned(format!(
+                            "native guest authority changed after controller binding: {error}"
+                        ))
+                    })?;
+            if native_command_context != Some(&current) {
+                return Err(SessionPoisoned(
+                    "native guest command changed before TurnStart; reconciliation required".into(),
+                )
+                .into());
+            }
+            // Observation handle only. Actual guest operations independently
+            // revalidate provider/account/policy/controller and quorum ownership.
+            *native_guest_execution = Some(execution);
         }
         // Only the explicitly native-admitted guest lane forbids isolated
         // fallback. Ordinary isolated sessions retain their existing rotation.
