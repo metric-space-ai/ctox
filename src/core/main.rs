@@ -325,6 +325,10 @@ fn main() -> anyhow::Result<()> {
     install_process_rustls_crypto_provider();
     raise_open_file_limit();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The isolated guest endpoint owns no CTOX daemon database or CLI ledger.
+    if args.first().map(String::as_str) == Some("__native-guest-desktop") {
+        return business_os::run_native_guest_desktop(&args[1..]);
+    }
     let root = resolve_explicit_or_workspace_root(&args)?;
     if args.first().map(String::as_str) == Some("__native-qwen3-embedding-service") {
         return handle_native_qwen3_embedding_service(&args[1..]);

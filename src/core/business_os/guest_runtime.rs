@@ -22,9 +22,11 @@ mod image;
 #[cfg(target_os = "linux")]
 mod qemu;
 mod qmp;
+mod startup;
 mod x11;
 #[cfg(target_os = "linux")]
 pub(super) use channel::run_guest_desktop_effects;
+pub(crate) use startup::run_native_guest_desktop;
 pub(super) use x11::{X11GuestConfig, X11GuestDriver};
 
 #[derive(Clone, PartialEq, Eq)]
