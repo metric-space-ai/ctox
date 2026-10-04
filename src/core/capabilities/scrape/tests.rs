@@ -427,6 +427,36 @@ fn embed_texts_via_local_socket_uses_internal_embedding_contract() {
 
 #[cfg(unix)]
 #[test]
+fn embed_texts_via_local_socket_rejects_non_numeric_vector_cells() {
+    for data in [r#"[[{"value":1.0}]]"#, r#"[["1.0"]]"#, r#"[[null]]"#] {
+        let root = tempfile::tempdir().unwrap();
+        let socket_path = root.path().join("e.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let server = std::thread::spawn(move || -> Result<()> {
+            let (stream, _) = listener.accept()?;
+            let mut reader = BufReader::new(stream);
+            let mut request = String::new();
+            std::io::BufRead::read_line(&mut reader, &mut request)?;
+            assert!(request.contains("\"kind\":\"embeddings_create\""));
+            let reply = format!(
+                "{{\"kind\":\"embeddings\",\"model\":\"Qwen/Qwen3-Embedding-0.6B\",\"data\":{data},\"prompt_tokens\":4,\"total_tokens\":4}}\n"
+            );
+            std::io::Write::write_all(reader.get_mut(), reply.as_bytes())?;
+            std::io::Write::flush(reader.get_mut())?;
+            Ok(())
+        });
+        let result = embed_texts_via_local_socket(
+            &LocalTransport::UnixSocket { path: socket_path },
+            &["alpha".to_string()],
+            "Qwen/Qwen3-Embedding-0.6B",
+        );
+        server.join().unwrap().unwrap();
+        assert!(result.is_err(), "non-numeric matrix was accepted: {data}");
+    }
+}
+
+#[cfg(unix)]
+#[test]
 fn invoke_responses_text_via_local_socket_streams_internal_response_contract() {
     let root = std::env::temp_dir().join(format!("cr-{}", &stable_digest(&now_iso_string())[..8]));
     let _ = fs::remove_dir_all(&root);
