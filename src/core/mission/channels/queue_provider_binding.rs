@@ -436,7 +436,7 @@ pub(super) mod tests {
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    pub(in crate::channels) fn admitted() -> Result<(
+    pub(crate) fn admitted() -> Result<(
         tempfile::TempDir,
         QueueExecutionFence,
         Arc<QueueWorkerLifetime>,
