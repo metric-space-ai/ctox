@@ -1,4 +1,4 @@
-import { collectionFreshnessFromDiagnostics } from './sync-contract.js?v=20261003-shell-v2-backend-version-v440';
+import { collectionFreshnessFromDiagnostics } from './sync-contract.js?v=20261004-shell-v2-native-lease-badges-v449';
 
 // A warning changes the interpretation of cached data, not its availability.
 export function renderCollectionFreshnessWarning(warning, { collections = [], diagnostics, language = 'de' } = {}) {

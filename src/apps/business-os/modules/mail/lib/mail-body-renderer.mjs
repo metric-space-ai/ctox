@@ -1,6 +1,6 @@
 // Mail body safety pipeline.
 //
-// The Mail renderer must display real mail bodies, which the THESEN detail
+// The Mail renderer must display real mail bodies, which the old detail
 // pane used to flatten to plaintext because `renderTimelineMessage` ignored
 // `body_html`. Two hostile surfaces show up immediately:
 //
