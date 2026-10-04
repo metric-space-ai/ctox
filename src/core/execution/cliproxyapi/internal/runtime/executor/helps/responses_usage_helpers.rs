@@ -65,7 +65,7 @@ fn patch_json(payload: &[u8]) -> Vec<u8> {
         ] {
             let value = usage.get(details);
             let details_path = format!("{path}.{details}");
-            if value.exists() && value.kind() != gjson::Kind::Object {
+            if !value.exists() || value.kind() != gjson::Kind::Object {
                 let replacement = format!(r#"{{"{field}":0}}"#);
                 result = set_raw_path(&result, &details_path, replacement.as_bytes());
             } else {
@@ -110,6 +110,31 @@ mod tests {
             0
         );
         assert_eq!(ensure_responses_usage_details(&patched), patched);
+        // Upstream sjson creates missing detail objects. Our raw-path setter
+        // requires the parent to exist, so exercise both supported usage roots.
+        for (payload, path) in [
+            (
+                br#" {"usage":{"input_tokens":2,"output_tokens":1},"raw":900719925474099312345} "#.as_slice(),
+                "usage",
+            ),
+            (
+                br#" {"response":{"usage":{"input_tokens":2,"output_tokens":1}},"raw":900719925474099312345} "#.as_slice(),
+                "response.usage",
+            ),
+        ] {
+            let patched = ensure_responses_usage_details(payload);
+            let text = std::str::from_utf8(&patched).unwrap();
+            assert_eq!(
+                gjson::get(text, &format!("{path}.input_tokens_details.cached_tokens")).json(),
+                "0"
+            );
+            assert_eq!(
+                gjson::get(text, &format!("{path}.output_tokens_details.reasoning_tokens")).json(),
+                "0"
+            );
+            assert!(text.contains("900719925474099312345"));
+            assert_eq!(ensure_responses_usage_details(&patched), patched);
+        }
     }
     #[test]
     fn candidate_meta_usage_details_sse_compaction_and_absent_usage_are_exact_noops() {
