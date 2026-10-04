@@ -1600,9 +1600,15 @@ mod tests {
             &native_review_view(root, "lead-a", &saved)?["person_field_status"]["person-a"]
                 ["person_email"]
         ));
-        let mut deleted = saved.clone();
-        deleted["_deleted"] = json!(true);
-        store::upsert_rxdb_collection_record(root, COLLECTION, "lead-a", 5, deleted)?;
+        // Ordinary upserts revive rows; exercise the actual native tombstone
+        // path before checking that a saved caller copy has lost authority.
+        {
+            let mut writer = store::BusinessProjectionWriter::open(root)?;
+            writer.tombstone_source_projection(COLLECTION, "lead-a", 5)?;
+        }
+        let deleted = store::load_rxdb_collection_record(root, COLLECTION, "lead-a")?.unwrap();
+        assert_eq!(deleted["_deleted"], true);
+        assert_eq!(deleted["is_deleted"], true);
         assert!(!is_refuted_no_match(
             &native_review_view(root, "lead-a", &saved)?["contacts"][0]["field_status"]
                 ["person_email"]
