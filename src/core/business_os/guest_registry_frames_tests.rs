@@ -1,4 +1,27 @@
 //! State-machine component fixtures; these do not prove a Linux guest or peer.
+#[test]
+fn native_frame_coordinates_use_the_observed_viewport_before_consumption() {
+    use super::super::super::guest_runtime::MouseButton;
+    let mut frame = observation();
+    complete(&mut frame);
+    let outside = GuestInput::Click {
+        x: 2,
+        y: 1,
+        button: MouseButton::Left,
+    };
+    assert!(frame
+        .consume_input("frame", "actual-turn", &outside)
+        .is_err());
+    assert!(!frame.consumed);
+    let inside = GuestInput::Click {
+        x: 1,
+        y: 1,
+        button: MouseButton::Left,
+    };
+    assert!(frame.consume_input("frame", "actual-turn", &inside).is_ok());
+    assert!(frame.consumed);
+}
+
 use super::*;
 fn observation() -> Observation {
     let mut permit = FrameBudget::new().reserve().unwrap();
@@ -11,6 +34,7 @@ fn observation() -> Observation {
             guest_session_id: "fixture-session".into(),
             endpoint_id: "fixture-endpoint".into(),
         },
+        transport: Weak::new(),
         frame: GuestFrame {
             png: vec![1, 2, 3],
             width: 2,

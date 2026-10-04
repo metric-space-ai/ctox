@@ -2,7 +2,7 @@
 //! WebRTC send, and a delivered observation is consumed before an input attempt.
 use super::super::guest_runtime::{GuestAction, GuestFrame, GuestInput};
 use super::*;
-use rxdb::plugins::replication_webrtc::file_fetch_handler::{FileFetchRegistry, GuardedFileSource};
+use rxdb::plugins::replication_webrtc::file_fetch_handler::GuardedFileSource;
 use rxdb::rx_error::{new_rx_error, RxResult};
 use serde_json::{json, Value};
 use std::sync::{
@@ -11,6 +11,9 @@ use std::sync::{
 };
 use std::time::Instant;
 
+pub(super) type Pool = rxdb::plugins::replication_webrtc::RxWebRTCReplicationPool<
+    rxdb::plugins::replication_webrtc::WebRTCRsConnectionHandler,
+>;
 pub(super) const COLLECTION: &str = "guest_frames";
 const CAPTURE_RESERVATION: usize = super::super::guest_runtime::GUEST_FRAME_LIMIT;
 const TOTAL_BYTES: usize = 32 * 1024 * 1024;
@@ -77,6 +80,7 @@ pub(super) struct Observation {
     id: String,
     turn: String,
     endpoint: GuestLiveEndpoint,
+    transport: Weak<Pool>,
     frame: GuestFrame,
     metadata: Value,
     deadline: Instant,
@@ -145,7 +149,25 @@ impl Observation {
 #[path = "guest_registry_frames_tests.rs"]
 mod tests;
 
-struct NativeFrameSource(Weak<NativeGuestRegistry>);
+struct NativeFrameSource {
+    owner: Weak<NativeGuestRegistry>,
+    transport: Weak<Pool>,
+}
+impl NativeFrameSource {
+    fn current_registry(&self) -> Result<Arc<NativeGuestRegistry>> {
+        let registry = self.owner.upgrade().context("native frame owner closed")?;
+        let transport = self
+            .transport
+            .upgrade()
+            .context("native frame transport closed")?;
+        ensure!(
+            !transport.canceled.load(Ordering::SeqCst)
+                && Arc::ptr_eq(&transport, &registry.current_transport()?),
+            "native frame source belongs to a retired transport"
+        );
+        Ok(registry)
+    }
+}
 fn transport_error(error: anyhow::Error) -> rxdb::rx_error::RxError {
     new_rx_error(
         "PERMISSION_DENIED",
@@ -159,12 +181,20 @@ impl NativeGuestRegistry {
         self: &Arc<Self>,
         session: &ctox_sync::native::NativeSyncSession,
     ) -> Result<()> {
-        let transport = &session.pool().file_fetch_registry;
+        let transport = session.pool();
+        ensure!(
+            !transport.canceled.load(Ordering::SeqCst),
+            "native frame pool is closed"
+        );
         let mut attached = self
             .frame_transport
             .lock()
             .map_err(|_| anyhow::anyhow!("native frame transport poisoned"))?;
-        if let Some(current) = attached.as_ref().and_then(Weak::upgrade) {
+        if let Some(current) = attached
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .filter(|pool| !pool.canceled.load(Ordering::SeqCst))
+        {
             ensure!(
                 Arc::ptr_eq(&current, transport),
                 "another live native frame transport is attached"
@@ -172,13 +202,31 @@ impl NativeGuestRegistry {
             return Ok(());
         }
         transport
+            .file_fetch_registry
             .register_guarded_source(
                 COLLECTION,
-                Arc::new(NativeFrameSource(Arc::downgrade(self))),
+                Arc::new(NativeFrameSource {
+                    owner: Arc::downgrade(self),
+                    transport: Arc::downgrade(transport),
+                }),
             )
             .map_err(anyhow::Error::from)?;
         *attached = Some(Arc::downgrade(transport));
         Ok(())
+    }
+    fn current_transport(&self) -> Result<Arc<Pool>> {
+        let pool = self
+            .frame_transport
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native frame transport poisoned"))?
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .context("native frame transport is not attached")?;
+        ensure!(
+            !pool.canceled.load(Ordering::SeqCst),
+            "native frame pool is closed"
+        );
+        Ok(pool)
     }
     fn expire_frames(&self) -> Result<()> {
         let guests: Vec<_> = self
@@ -258,6 +306,16 @@ impl NativeGuestExecution {
                     == entry.assignment.destination.controller_generation,
             "native child effect changed"
         );
+        #[cfg(target_os = "linux")]
+        ensure!(
+            entry
+                .desktop
+                .as_ref()
+                .context("native child missing")?
+                .process_instance_id()
+                == effect.process_instance_id,
+            "native child differs from its registered effect"
+        );
         let job = super::super::guest_commands::block_on_guest(async {
             Ok(self
                 .registry
@@ -280,6 +338,7 @@ impl NativeGuestExecution {
         id: &str,
         apply: impl FnOnce(&mut Observation) -> Result<T>,
     ) -> Result<T> {
+        let transport = self.registry.current_transport()?;
         self.provider
             .with_live_provider_transaction(|tx, facts, turn| {
                 self.with_held_worker(tx, facts, |entry, verify| {
@@ -287,6 +346,11 @@ impl NativeGuestExecution {
                     ensure!(
                         frame.id == id
                             && !frame.consumed
+                            && !transport.canceled.load(Ordering::SeqCst)
+                            && frame
+                                .transport
+                                .upgrade()
+                                .is_some_and(|pool| Arc::ptr_eq(&pool, &transport))
                             && frame.deadline > Instant::now()
                             && turn == Some(frame.turn.as_str()),
                         "native observation expired/replaced or turn changed"
@@ -308,6 +372,12 @@ impl NativeGuestExecution {
                         // process effect is pending. Revoke/stop use this controller.
                         let result =
                             apply(entry.frame.as_mut().context("native observation retired")?);
+                        if transport.canceled.load(Ordering::SeqCst) {
+                            if let Some(frame) = entry.frame.as_mut() {
+                                frame.consumed = true;
+                            }
+                            anyhow::bail!("native frame pool closed during delivery");
+                        }
                         if let Err(error) = verify() {
                             if let Some(frame) = entry.frame.as_mut() {
                                 frame.consumed = true;
@@ -327,19 +397,10 @@ impl NativeGuestExecution {
         action: GuestAction,
         command: &super::super::store::BusinessCommand,
     ) -> Result<ctox_protocol::mcp::CallToolResult> {
-        ensure!(
-            self.registry
-                .frame_transport
-                .lock()
-                .map_err(|_| anyhow::anyhow!("native frame transport poisoned"))?
-                .as_ref()
-                .and_then(Weak::upgrade)
-                .is_some(),
-            "native frame transport is not attached"
-        );
+        let transport = self.registry.current_transport()?;
         #[cfg(not(target_os = "linux"))]
         {
-            let _ = (entry, verify, actual_turn, action, command);
+            let _ = (entry, verify, actual_turn, action, command, transport);
             anyhow::bail!("native guest effects require Linux QEMU");
         }
         #[cfg(target_os = "linux")]
@@ -376,6 +437,7 @@ impl NativeGuestExecution {
                         id: id.clone(),
                         turn: actual_turn.into(),
                         endpoint,
+                        transport: Arc::downgrade(&transport),
                         frame,
                         metadata: metadata.clone(),
                         deadline: Instant::now() + FRAME_LIFETIME,
@@ -389,6 +451,13 @@ impl NativeGuestExecution {
                 }
                 GuestAction::Input { frame_id, input } => {
                     let frame = entry.frame.as_mut().context("native observation missing")?;
+                    ensure!(
+                        frame
+                            .transport
+                            .upgrade()
+                            .is_some_and(|pool| Arc::ptr_eq(&pool, &transport)),
+                        "native input observation belongs to a retired transport"
+                    );
                     let endpoint = frame.consume_input(&frame_id, actual_turn, &input)?;
                     let desktop = entry.desktop.as_mut().context("native child missing")?;
                     super::super::guest_commands::block_on_guest(
@@ -400,6 +469,10 @@ impl NativeGuestExecution {
                     json!({"ok":true, "outcome":"input_applied", "command_id":command.id, "guest_id":self.guest_id})
                 }
             };
+            if transport.canceled.load(Ordering::SeqCst) {
+                self.registry.retire_frame(entry)?;
+                anyhow::bail!("native frame pool closed during guest effect; reconcile");
+            }
             serde_json::from_value(
                 json!({"content":[{"type":"text", "text":result.to_string()}],
                 "structuredContent":result, "isError":false}),
@@ -410,11 +483,7 @@ impl NativeGuestExecution {
 }
 impl GuardedFileSource for NativeFrameSource {
     fn byte_len(&self, id: &str) -> RxResult<u64> {
-        let registry = self
-            .0
-            .upgrade()
-            .context("native frame owner closed")
-            .map_err(transport_error)?;
+        let registry = self.current_registry().map_err(transport_error)?;
         let execution = registry.frame_execution(id).map_err(transport_error)?;
         // A fresh quorum read before a complete transfer; every actual send
         // additionally holds worker/policy/controller and live-child guards.
@@ -434,11 +503,7 @@ impl GuardedFileSource for NativeFrameSource {
         capability_token: &str,
         send: &mut dyn FnMut(&Value, &[u8]) -> RxResult<()>,
     ) -> RxResult<()> {
-        let registry = self
-            .0
-            .upgrade()
-            .context("native frame owner closed")
-            .map_err(transport_error)?;
+        let registry = self.current_registry().map_err(transport_error)?;
         let execution = registry.frame_execution(id).map_err(transport_error)?;
         // Initialize the verifier's native read cache before taking the policy
         // transaction. Revalidate under that same transaction at the actual send.
