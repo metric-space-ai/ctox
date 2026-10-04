@@ -86,6 +86,7 @@ fn validate_provider(
             == Some(facts.attempt_id.as_str()),
         "native guest command does not belong to actual worker attempt"
     );
+    Ok(())
 }
 impl NativeGuestAdmissionOwner for NativeGuestAdmissionResolver {
     fn execute_current_guest_command(
