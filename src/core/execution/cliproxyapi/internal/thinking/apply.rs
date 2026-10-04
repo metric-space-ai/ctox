@@ -5,11 +5,13 @@
 use std::{
     collections::BTreeMap,
     sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    time::SystemTime,
 };
 
 use serde_json::Value;
 
 use crate::internal::{
+    logging::global_logger::{LogEntry, LogLevel, LogOutputController},
     modelconfig,
     registry::{
         embedded_models_catalog, lookup_model_info, lookup_static_registry_model_info, ModelInfo,
@@ -136,6 +138,7 @@ impl ProviderAppliers {
 pub struct ThinkingEngine {
     resolver: Arc<dyn ModelInfoResolver>,
     providers: RwLock<ProviderAppliers>,
+    debug_log_output: Option<Arc<LogOutputController>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -209,7 +212,17 @@ impl ThinkingEngine {
         Self {
             resolver,
             providers: RwLock::new(ProviderAppliers::builtins()),
+            debug_log_output: None,
         }
+    }
+
+    /// Bind the owner's existing log output and typed logging level. No process
+    /// logger or environment configuration is consulted. Rebinding on logging
+    /// configuration reload remains the responsibility of the owning host.
+    pub fn with_log_output(mut self, output: Arc<LogOutputController>, level: LogLevel) -> Self {
+        self.debug_log_output =
+            matches!(level, LogLevel::Trace | LogLevel::Debug).then_some(output);
+        self
     }
 
     /// Returns a cloned handle to the registered provider applier.
@@ -452,6 +465,7 @@ impl ThinkingEngine {
         }
         if native_responses && !suffix.has_suffix {
             // Preserve the baseline and input bytes for native prompt-prefix caching.
+            self.log_native_responses_config(&body, &provider_format, model_info);
             return Ok(body);
         }
 
@@ -553,6 +567,47 @@ impl ThinkingEngine {
             Some(model_info),
             request.summary,
         ))
+    }
+
+    // ref: internal/thinking/apply.go:267-287 @ d7914afd
+    fn log_native_responses_config(
+        &self,
+        body: &[u8],
+        provider: &str,
+        model: Option<&ModelInfoView<'_>>,
+    ) {
+        let (Some(output), Some(model)) = (self.debug_log_output.as_ref(), model) else {
+            return;
+        };
+        if model.thinking.is_none() && !model.user_defined {
+            return;
+        }
+        let config = extract_codex_usage_config(body);
+        if !has_thinking_config(&config) {
+            return;
+        }
+        let mut entry = LogEntry::new(
+            LogLevel::Debug,
+            "thinking: original config from request |",
+            SystemTime::now(),
+        );
+        entry.fields.extend([
+            ("provider".into(), provider.to_owned()),
+            ("model".into(), model.id.to_owned()),
+            ("mode".into(), config.mode.to_string()),
+            ("budget".into(), config.budget.to_string()),
+            ("level".into(), config.level.to_string()),
+        ]);
+        let baseline = extract_codex_config(body);
+        if baseline.mode == ThinkingMode::Level {
+            entry
+                .fields
+                .insert("baseline_level".into(), baseline.level.to_string());
+        }
+        // Diagnostic sink failures must not change native inference or cache bytes.
+        let _ = output.log(&entry);
+        entry.message = "thinking: processed config to apply |".into();
+        let _ = output.log(&entry);
     }
 
     fn apply_user_defined_model(

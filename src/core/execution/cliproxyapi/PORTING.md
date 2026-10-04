@@ -114,9 +114,17 @@
   the Meta preparation consumer. Primary references: frozen d7914afd
   internal/thinking/{configuration_update.go,apply.go,apply_codex_usage_test.go}
   and internal/thinking/provider/{codex,xai}/apply.go.
-  Native execution, five frozen-Go reasoning parent oracles, native effective
-  reasoning diagnostics, production bridge registration and committed-SSE
-  parity remain open. Prepared source cases do not establish full v8 parity.
+  Native Responses passthrough now emits the original/processed diagnostic pair
+  with effective mode/budget/level and an optional top-level baseline level.
+  ThinkingEngine accepts the host's LogOutputController and typed LogLevel; no
+  package-global logger or environment toggle is introduced. The formatter
+  retains baseline_level, and sink failures cannot change inference success or
+  native cache bytes. Four prepared guards cover the frozen six-case diagnostic
+  table through the actual formatter/sink, embedded/selected capabilities,
+  Codex/Responses/xAI aliases, logging-level gates, absent effort, user-defined
+  models, gateway-output isolation and failing sinks. Native execution, five
+  frozen-Go reasoning parent oracles, production bridge/logging-owner binding
+  and committed-SSE parity remain open. Prepared cases do not prove full parity.
 - Further native Meta request-time integration supplies an owned asynchronous
 
   preparation/401-refresh capability, sharing one per-account conductor lock and
@@ -134,9 +142,9 @@
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
   and committed-stream cooldown consumers. The finite targeted controller
-  requires at least213 actual native tests across26 groups, including nine Google
+  requires at least217 actual native tests across27 groups, including nine Google
   request-preparation cases, twelve owned-thinking pipeline cases, twelve Responses
-  update/usage cases and39 new Meta
+  update/usage cases, four native-reasoning diagnostic cases and39 new Meta
   tool/count/response/usage/transport/factory/cooldown/scheduled-refresh guards,
   three new shared cancellation-publication guards,15 existing background-worker
   guards and six retained
@@ -153,7 +161,7 @@
   774c found five private Auth-field initializers. The subsequent corrections
   use mutable owned stream state, explicit owned capability forwarding and
   public Auth::default construction. Format checks do not prove compilation.
-  The full controller also requires169 unique frozen-Go parent tests,
+  The full controller also requires174 unique frozen-Go parent tests,
   including27 Meta executor and10 tool/usage parents; the previously counted
   stale-mint parent is included once. Controller syntax/count validation passed,
   but current native/default-transport/Go/provider checks are pending.

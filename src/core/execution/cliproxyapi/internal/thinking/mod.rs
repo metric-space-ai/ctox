@@ -78,3 +78,6 @@ mod request_pipeline_candidate_test;
 
 #[cfg(test)]
 mod configuration_update_candidate_test;
+
+#[cfg(test)]
+mod native_responses_log_candidate_test;
