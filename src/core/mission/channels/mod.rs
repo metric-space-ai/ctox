@@ -1,4 +1,8 @@
 mod account_helpers;
+#[cfg(unix)]
+mod queue_execution_fence;
+#[cfg(unix)]
+pub(crate) use queue_execution_fence::{QueueExecutionFence, QueueWorkerLifetime};
 mod outbound_review;
 use crate::communication_store::parse_string_json_array;
 pub(crate) use crate::communication_store::{
@@ -4262,6 +4266,8 @@ pub(crate) struct QueueTurnLeaseFence {
     pub(crate) root: PathBuf,
     pub(crate) message_keys: Vec<String>,
     pub(crate) worker_id: String,
+    #[cfg(unix)]
+    pub(crate) execution: Option<QueueExecutionFence>,
 }
 
 pub(crate) struct QueueTurnLeaseReader {
@@ -4303,6 +4309,14 @@ impl QueueTurnLeaseFence {
     }
 
     pub(crate) fn still_owned(&self, reader: &QueueTurnLeaseReader) -> Result<bool> {
+        #[cfg(unix)]
+        if self
+            .execution
+            .as_ref()
+            .is_some_and(|execution| !execution.matches_current_rows(&reader.connection))
+        {
+            return Ok(false);
+        }
         let path = resolve_db_path(&self.root, None);
         #[cfg(unix)]
         let conn = {

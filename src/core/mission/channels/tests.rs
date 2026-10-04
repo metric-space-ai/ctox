@@ -28,6 +28,8 @@ fn queue_turn_fence_rejects_replaced_store_even_with_replayed_lease() -> Result<
         root: root.path().to_owned(),
         message_keys: vec!["queue:system::target".into()],
         worker_id: "worker-target".into(),
+        #[cfg(unix)]
+        execution: None,
     };
     let reader = fence.open_reader()?;
     let retained_reader =
@@ -75,6 +77,8 @@ fn queue_turn_fence_observes_cancel_and_preserves_other_worker() -> Result<()> {
         root: root.path().to_owned(),
         message_keys: vec![key.to_owned()],
         worker_id: worker.into(),
+        #[cfg(unix)]
+        execution: None,
     };
     for (task, worker) in [
         (&target, "worker-target"),
@@ -170,6 +174,8 @@ fn queue_turn_fence_cannot_interrupt_a_released_new_worker() -> Result<()> {
         root: root.path().to_owned(),
         message_keys: keys.clone(),
         worker_id: "old-worker".into(),
+        #[cfg(unix)]
+        execution: None,
     };
     let reader = old.open_reader()?;
     assert!(old.still_owned(&reader)?);
@@ -197,6 +203,8 @@ fn queue_turn_fence_fails_closed_without_creating_a_missing_store() -> Result<()
         root: root.path().to_owned(),
         message_keys: vec!["queue:system::missing".into()],
         worker_id: "worker-target".into(),
+        #[cfg(unix)]
+        execution: None,
     };
     let db_path = resolve_db_path(root.path(), None);
     assert!(!db_path.exists());

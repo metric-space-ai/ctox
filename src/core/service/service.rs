@@ -5448,6 +5448,8 @@ struct PromptWorkerActivity {
     lease_heartbeat_stop: Arc<std::sync::atomic::AtomicBool>,
     lease_heartbeat: Option<thread::JoinHandle<()>>,
     lease_worker_id: Option<String>,
+    #[cfg(unix)]
+    execution_lifetime: Arc<channels::QueueWorkerLifetime>,
 }
 
 struct PreparedCrewAttempt {
@@ -5751,6 +5753,8 @@ impl PromptWorkerActivity {
             lease_heartbeat_stop,
             lease_heartbeat,
             lease_worker_id,
+            #[cfg(unix)]
+            execution_lifetime: Arc::new(channels::QueueWorkerLifetime::default()),
         }
     }
 
@@ -5773,6 +5777,8 @@ impl PromptWorkerActivity {
 
 impl Drop for PromptWorkerActivity {
     fn drop(&mut self) {
+        #[cfg(unix)]
+        self.execution_lifetime.revoke();
         self.lease_heartbeat_stop
             .store(true, std::sync::atomic::Ordering::Release);
         if let Some(handle) = self.lease_heartbeat.take() {
@@ -6760,11 +6766,22 @@ fn start_prompt_worker(
                 progress_error: Arc::clone(&progress_error),
             });
             if job.source_label == "queue" && !job.leased_message_keys.is_empty() {
-                session_options.queue_turn_lease = Some(channels::QueueTurnLeaseFence {
+                let mut fence = channels::QueueTurnLeaseFence {
                     root: root.clone(),
                     message_keys: job.leased_message_keys.clone(),
                     worker_id: worker_activity.lease_worker_id.clone().unwrap_or_default(),
-                });
+                    #[cfg(unix)]
+                    execution: None,
+                };
+                #[cfg(unix)]
+                {
+                    fence.execution = Some(channels::QueueExecutionFence::capture(
+                        &fence,
+                        &attempt_id,
+                        Arc::clone(&worker_activity.execution_lifetime),
+                    )?);
+                }
+                session_options.queue_turn_lease = Some(fence);
             }
             let invoked_result = if let Some(attempt) = recoverable_attempt.as_ref() {
                 push_event(

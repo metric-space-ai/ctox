@@ -32,6 +32,19 @@ Cancellation, a missing row, a replaced store or a replacement worker stops the
 old turn; unrelated workers and a new lease are not interrupted. An unverifiable
 lease fails closed.
 
+On Unix, admission also retains a native queue execution fence with the real
+worker-attempt ID, routing attempts and worker lifetime. A synchronous effect
+callback holds that lifetime lock and an IMMEDIATE native-store transaction,
+then validates the exact unexpired worker rows before entering the separately
+owned guest-controller guard. Supported cancellation/reclaim cannot interleave
+with that callback, and worker teardown revokes all retained clones under the
+same lock. This API is not a reusable permission: callbacks must be bounded,
+must not re-enter the channel database, and do not undo external effects.
+Out-of-band store replacement during a callback requires reconciliation.
+The guest owner's authenticated Raft job/provider-session mapping remains a
+separate registration requirement; queue IDs or matching strings cannot mint
+it. This change does not claim a registered production guest owner or readiness.
+
 The direct-session adapter submits `TurnInterrupt` for its actual thread and
 turn while continuing to drain events, with a ten-second bound. Only a terminal
 event matching both identities is a stop witness. An acknowledgement alone is
