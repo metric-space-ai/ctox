@@ -107,12 +107,22 @@ fn compatibility_dispatches_six_protocol_families_without_the_registered_normal_
         let value: serde_json::Value = serde_json::from_slice(&compat).unwrap();
         assert!(value.get(field).is_some(), "{from} -> {to}: {value}");
         assert!(value.get("normal-translator").is_none());
-        assert!(
-            std::str::from_utf8(&compat)
-                .unwrap()
-                .contains("hidden-thought"),
-            "{from} -> {to}: {value}"
-        );
+        if from.as_str() == "claude" && to.as_str() == "codex" {
+            // ref: codex_claude_request.go:187-191 @ d7914afd.
+            // Codex carries the opaque signature, not plaintext thought text.
+            assert_eq!(value["input"][0]["type"], "reasoning");
+            assert_eq!(value["input"][0]["encrypted_content"], "");
+            assert_eq!(value["input"][0]["summary"], serde_json::json!([]));
+            assert!(value["input"][0]["content"].is_null());
+            assert_eq!(value["input"][1]["content"][0]["text"], "visible");
+        } else {
+            assert!(
+                std::str::from_utf8(&compat)
+                    .unwrap()
+                    .contains("hidden-thought"),
+                "{from} -> {to}: {value}"
+            );
+        }
         assert!(!changed);
         assert_eq!(normalizer.calls.load(Ordering::SeqCst), 2);
     }

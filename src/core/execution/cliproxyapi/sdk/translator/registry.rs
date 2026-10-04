@@ -9,7 +9,8 @@ use super::{
 use crate::internal::thinking::{
     apply_summary_config_for_model, extract_translated_summary_config,
 };
-use crate::internal::translator::common::set_top_level_string;
+use crate::internal::translator::common::set_json_string;
+use crate::internal::util::valid_json_bytes;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -437,8 +438,22 @@ fn configuration_updates(body: &[u8]) -> Vec<String> {
 }
 
 fn normalize_model(raw_json: &[u8], model: &str) -> Vec<u8> {
-    if model.is_empty() {
+    // ref: sdk/translator/registry.go:140-146 — sjson changes only the model.
+    // Re-encoding siblings changes raw configuration-update comparisons and
+    // can lose duplicate keys, large numbers or deeply nested schemas.
+    if model.is_empty() || !valid_json_bytes(raw_json) {
         return raw_json.to_vec();
     }
-    set_top_level_string(raw_json, "model", model)
+    let Ok(document) = std::str::from_utf8(raw_json) else {
+        return raw_json.to_vec();
+    };
+    let root = gjson::parse(document);
+    if root.kind() != gjson::Kind::Object {
+        return raw_json.to_vec();
+    }
+    let current = root.get("model");
+    if current.kind() == gjson::Kind::String && current.str() == model {
+        return raw_json.to_vec();
+    }
+    set_json_string(raw_json, "model", model)
 }

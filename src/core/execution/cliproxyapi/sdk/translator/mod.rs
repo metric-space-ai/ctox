@@ -15,6 +15,8 @@ pub mod builtin;
 #[cfg(test)]
 mod registry_bytes_test;
 #[cfg(test)]
+mod registry_raw_model_test;
+#[cfg(test)]
 mod registry_summary_test;
 #[cfg(test)]
 mod registry_update_intent_test;
