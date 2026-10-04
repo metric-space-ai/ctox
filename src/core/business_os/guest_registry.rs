@@ -465,6 +465,29 @@ impl NativeGuestRegistry {
         })
     }
 
+    /// Producer consumes its own admitted row as an observation, then the
+    /// existing bind path independently revalidates quorum/provider/policy.
+    pub(crate) async fn bind_admitted_execution(
+        self: &Arc<Self>,
+        provider: NativeProviderBinding,
+        guest_id: &str,
+    ) -> Result<NativeGuestExecution> {
+        let (spec, ownership) = provider.with_live_provider_transaction(|tx, facts, _| {
+            let (spec_json, ownership_json): (String, String) = tx.query_row(
+                "SELECT spec_json, ownership_json FROM native_guest_provider_admissions
+                 WHERE binding_id=?1 AND worker_id=?2 AND attempt_id=?3 AND phase='Admitted'",
+                rusqlite::params![facts.binding_id, facts.worker_id, facts.attempt_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok((
+                serde_json::from_str::<ExecutionSpec>(&spec_json)?,
+                serde_json::from_str::<Ownership>(&ownership_json)?,
+            ))
+        })?;
+        self.bind_execution(provider, guest_id, spec, ownership)
+            .await
+    }
+
     /// Bind only the actual quorum result, then revalidate native destination and
     /// provider. Neither a client job string nor a serialized Ownership is enough.
     pub(crate) async fn bind_execution(
