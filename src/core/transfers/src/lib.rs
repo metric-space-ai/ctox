@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
-    io::Read,
+    io::{Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -174,6 +174,96 @@ impl Store {
             error_code: error,
             receipt: receipt.map(|r| serde_json::from_str(&r)).transpose()?,
         })
+    }
+
+    /// Read the exact completed native job from private content storage.
+    /// The native caller must revalidate its original grant/account before and
+    /// after this synchronous read; this API grants no import/execution rights.
+    pub fn read_completed_peer_artifact<T>(
+        &self,
+        expected: &DownloadRequest,
+        consume: impl FnOnce(&mut File) -> Result<T>,
+    ) -> Result<T> {
+        expected.validate()?;
+        let peer = expected
+            .peer_source
+            .as_ref()
+            .context("native peer job required")?;
+        ensure!(
+            peer.collection == "desktop_files",
+            "unsupported checkpoint source"
+        );
+        peer.account_binding
+            .as_ref()
+            .context("original account binding required")?
+            .validate()?;
+        let check = || -> Result<()> {
+            let saved = self.get(&expected.id)?;
+            ensure!(saved.request == *expected, "transfer request changed");
+            ensure!(
+                saved.state == "completed" && self.desired(&expected.id)? == "run",
+                "transfer is not completed and active"
+            );
+            ensure!(
+                saved.completed_bytes == expected.size,
+                "incomplete transfer receipt"
+            );
+            let receipt = saved.receipt.context("completed receipt missing")?;
+            ensure!(
+                receipt.transfer_id == expected.id
+                    && receipt.sha256 == expected.sha256
+                    && receipt.size == expected.size
+                    && receipt.artifact == format!("objects/{}", expected.sha256)
+                    && receipt.transport == "ctox-webrtc-file-v1"
+                    && receipt.engine_revision.is_none(),
+                "receipt differs from native job"
+            );
+            Ok(())
+        };
+        check()?;
+        let path = self.artifacts.join("objects").join(&expected.sha256);
+        let before = fs::symlink_metadata(&path)?;
+        ensure!(
+            before.is_file() && !before.file_type().is_symlink(),
+            "artifact is not a regular file"
+        );
+        let mut file = File::open(path)?;
+        let opened = file.metadata()?;
+        ensure!(
+            opened.is_file() && opened.len() == expected.size,
+            "artifact length mismatch"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            ensure!(
+                before.dev() == opened.dev() && before.ino() == opened.ino(),
+                "artifact changed during open"
+            );
+        }
+        let mut hash = Sha256::new();
+        let mut size = 0u64;
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let count = file.read(&mut buffer)?;
+            if count == 0 {
+                break;
+            }
+            size = size
+                .checked_add(count as u64)
+                .context("artifact length overflow")?;
+            ensure!(size <= expected.size, "artifact exceeds expected length");
+            hash.update(&buffer[..count]);
+        }
+        ensure!(
+            size == expected.size && format!("{:x}", hash.finalize()) == expected.sha256,
+            "artifact content mismatch"
+        );
+        file.seek(SeekFrom::Start(0))?;
+        check()?;
+        let result = consume(&mut file)?;
+        check()?;
+        Ok(result)
     }
 
     /// Cancellation retains partial bytes and is terminal. Pause is resumable.

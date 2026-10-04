@@ -41,6 +41,8 @@ mod secrets;
 mod service;
 mod skill_store;
 mod sync_host;
+#[cfg(unix)]
+mod transfers_checkpoint;
 mod transfers_cli;
 mod transfers_grant;
 mod transfers_native;
