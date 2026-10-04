@@ -37,11 +37,15 @@ Display identities use model (@codex). Observed harness metadata stays in the
 original records. All headers are clickable/keyboard accessible. Numeric sort
 is numeric; unknowns stay last both ways. Sort the full filtered list before
 pagination. Score bars use the0–10scale. Worker first/final means and PR count
-use the identical paired PR cohort and actual model. Unpaired evidence stays
+use the identical paired PR cohort and actual model. A reviewed assignment
+expansion sets `first_end_scope_comparable=false`: keep both historical
+scores in JSON/PR list and as individual chart points, but exclude the pair
+from first/final means and improvement arrows. Unpaired evidence stays
 in JSON/PR list with explicit comparison_excluded counts.
 
-Corrections are evidenced absolute iterations after PR publication (including
-Draft) through merge/close, not percentages or inferred commit/test/rerating/
+Corrections are evidenced absolute delivered iterations after the first
+review-ready package through merge/close, including private corrections before
+publication and Draft PRs, not percentages or inferred commit/test/rerating/
 score-difference counts. Leaderboards show the mean absolute iteration count over the same PR cohort
 used for scores (11 iterations across 2 PRs = 5.5); the PR list retains each
 individual absolute count. JSON preserves both mean and raw iteration total.

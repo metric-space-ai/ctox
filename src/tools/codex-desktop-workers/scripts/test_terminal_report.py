@@ -147,6 +147,10 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(r.parent_worker_pairs([parent,wrong],prs),[])
         missing=copy.deepcopy(worker);missing["corrected"]=None
         self.assertIsNone(r.parent_worker_pairs([parent,missing],prs)[0]["worker_end"])
+        expanded=copy.deepcopy(worker);expanded["first_end_scope_comparable"]=False
+        pair=r.parent_worker_pairs([parent,expanded],prs)[0]
+        self.assertFalse(pair["first_end_scope_comparable"])
+        self.assertEqual((pair["worker_first"],pair["worker_end"]),(4,7))
     def test_iterations_are_evidenced_absolute_counts(self):
         self.assertIsNone(r.rework_iterations({"rework":"substantial"}))
         self.assertEqual(r.rework_iterations({"rework_iterations":0}),0)
@@ -160,10 +164,12 @@ class ReportTests(unittest.TestCase):
                     first={"weighted_total":4},corrected={"weighted_total":8},rework_iterations=2)
         firstonly=copy.deepcopy(paired);firstonly.update(pr_url="first-only",actor_id="b",corrected=None)
         endonly=copy.deepcopy(paired);endonly.update(pr_url="end-only",actor_id="c",first=None)
-        g=r.leaderboard_data([paired,firstonly,endonly])[0]
+        expanded=copy.deepcopy(paired);expanded.update(pr_url="expanded-scope",actor_id="d",
+            first_end_scope_comparable=False,rework_iterations=0,first={"weighted_total":7.3},corrected={"weighted_total":7.8})
+        g=r.leaderboard_data([paired,firstonly,endonly,expanded])[0]
         self.assertEqual((g["prs"],g["first"]["n"],g["corrected"]["n"]),(1,1,1))
         self.assertEqual((g["first"]["mean"],g["corrected"]["mean"]),(4,8))
-        self.assertEqual((g["deliveries"],g["comparison_excluded"]),(3,2))
+        self.assertEqual((g["deliveries"],g["comparison_excluded"]),(4,3))
         self.assertEqual(g["rework"]["iterations"],2)
     def test_rework_leaderboard_averages_counts_per_compared_pr(self):
         a=dict(pr_url="one",role="worker",actor_id="a",schema=r.RUBRIC,model="m",

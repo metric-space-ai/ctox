@@ -397,7 +397,7 @@ def leaderboard_data(records):
             return value.get("weighted_total") if isinstance(value, dict) else value
         independent_rows = rows
         if role == "worker" and rubric == RUBRIC:
-            rows = [r for r in rows if score(r,"first") is not None and score(r,"corrected") is not None]
+            rows = [r for r in rows if r.get("first_end_scope_comparable") is not False and score(r,"first") is not None and score(r,"corrected") is not None]
         historical_parent = role == "parent" and rubric == RUBRIC
         first = [None if historical_parent else score(r, "first") for r in rows]
         corrected = [None if historical_parent else score(r, "corrected") for r in rows]
@@ -444,6 +444,7 @@ def parent_worker_pairs(records, prs):
                 parent_model=pm, worker_first_model=fm, worker_end_model=em,
                 parent_harness=ph, worker_harness=wh,
                 parent_score=parent["parent_completion"]["weighted_total"], worker_first=first, worker_end=end,
+                first_end_scope_comparable=worker.get("first_end_scope_comparable") is not False,
                 combination=json.dumps([ph, pm, wh, worker_models], ensure_ascii=False)))
     return pairs
 

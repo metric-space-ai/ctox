@@ -90,7 +90,7 @@ function refresh(reset=true){
  }}
  boards[role]=[...group].map(([key,aa])=>{
  const [harness,model]=JSON.parse(key);
- if(role==='worker')aa=aa.filter(a=>['first','corrected'].every(s=>stageModel(a,s)===model&&a[s]?.weighted_total!=null));
+ if(role==='worker')aa=aa.filter(a=>a.first_end_scope_comparable!==false&&['first','corrected'].every(s=>stageModel(a,s)===model&&a[s]?.weighted_total!=null));
  const ss=s=>known(aa.map(a=>stageModel(a,s)===model?a[s]?.weighted_total??null:null)),re=aa.map(a=>role==='parent'?reworkCount({url:a.pr_url}):reworkIterations(a,model));
  return {label:model+' (@'+harness+')',prs:new Set(aa.map(a=>a.pr_url)).size,score:avg(ss('parent_completion')),first:avg(ss('first')),end:avg(ss('corrected')),rework:re.length&&re.every(n=>n!=null)?re.reduce((sum,n)=>sum+n,0)/new Set(aa.map(a=>a.pr_url)).size:null};
  }).filter(g=>g.prs>0);
@@ -146,7 +146,7 @@ function drawChart(){
  const point=(v,hollow)=>'<circle class="plotpoint" cx="'+x+'" cy="'+Y(v)+'" r="4.5" fill="'+(hollow?'white':c)+'" stroke="'+c+'"><title>'+title+'</title></circle>';
  if(mode==='first'&&p.worker_first!=null)parts.push(point(p.worker_first,false));
  if(mode==='end'&&p.worker_end!=null)parts.push(point(p.worker_end,false));
- if(mode==='arrows'&&p.worker_first!=null&&p.worker_end!=null){
+ if(mode==='arrows'&&p.first_end_scope_comparable!==false&&p.worker_first!=null&&p.worker_end!=null){
  const y0=Y(p.worker_first),y1=Y(p.worker_end);
  if(y0!==y1){const direction=Math.sign(y1-y0);parts.push('<path class="arrow" stroke="'+c+'" d="M'+x+' '+y0+'V'+y1+'M'+(x-4)+' '+(y1-direction*7)+'L'+x+' '+y1+'L'+(x+4)+' '+(y1-direction*7)+'"><title>'+title+'</title></path>')}
  parts.push(point(p.worker_first,true),point(p.worker_end,false));

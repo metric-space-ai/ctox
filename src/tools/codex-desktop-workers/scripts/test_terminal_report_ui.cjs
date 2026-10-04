@@ -52,6 +52,8 @@ const expectedBoards=JSON.parse(data).leaderboards.filter(g=>g.rubric==='unified
 for(const role of ['parent','worker'])for(const actual of api.getBoards()[role]){
  const expected=expectedBoards.find(g=>g.role===role&&g.model+' (@'+(g.harness||'—')+')'===actual.label);
  assert.ok(expected,actual.label);
+ assert.equal(actual.prs,expected.prs,'Same comparable PR cohort in Python and UI');
+ if(role==='worker')for(const [key,stage] of [['first','first'],['end','corrected']])assert.ok(Math.abs(actual[key]-expected[stage].mean)<0.00051,'Scope expansion must not bias worker score means');
  assert.equal(actual.rework,expected.rework.mean,'Leaderboard must show average corrections per PR');
  if(actual.rework!=null){assert.equal(actual.rework,expected.rework.iterations/actual.prs);assert.ok(document.getElementById(role+'board').innerHTML.includes('>'+actual.rework.toFixed(1)+'</td>'));}
 }
@@ -108,9 +110,19 @@ for(const p of api.getPairs()){
  assert.ok(p.parent_score>=0&&p.parent_score<=10);
 }
 assert.ok(api.getPairs().length>0,'Actual report must exercise paired scores');
-const realPairs=api.getPairs().filter(p=>p.worker_first!=null&&p.worker_end!=null);
+const realPairs=api.getPairs().filter(p=>p.first_end_scope_comparable!==false&&p.worker_first!=null&&p.worker_end!=null);
 assert.equal((svg.match(/class="plotpoint"/g)||[]).length,realPairs.length*2);
 assert.equal((svg.match(/class="arrow"/g)||[]).length,realPairs.filter(p=>p.worker_first!==p.worker_end).length);
+// Changed assignments retain standalone scores without implying improvement by correction.
+const expandedPair={...realPairs[0],pr_url:'expanded-scope-fixture',worker_first:7.3,worker_end:7.8,first_end_scope_comparable:false};
+api.getPairs().push(expandedPair);
+for(const name of ['first','end','arrows']){
+ modes.find(m=>m.dataset.mode===name).onclick();
+ const pointCount=(document.getElementById('scatter').innerHTML.match(/class="plotpoint"/g)||[]).length;
+ const expected=name==='arrows'?realPairs.length*2:api.getPairs().filter(p=>p.parent_score!=null&&(name==='first'?p.worker_first:p.worker_end)!=null).length;
+ assert.equal(pointCount,expected,'Incomparable scores remain individual points, never an improvement arrow');
+}
+api.getPairs().pop();modes.find(m=>m.dataset.mode==='arrows').onclick();
 const selector=document.getElementById('pair'),color=document.getElementById('pair-color');
 const options=[...selector.innerHTML.matchAll(/<option value="[^"]*">([^<]+)<\/option>/g)].map(m=>m[1]);
 assert.equal(new Set(options).size,options.length,'Identical visible model/harness pairs must share one classification');
