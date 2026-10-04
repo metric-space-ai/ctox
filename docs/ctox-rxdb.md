@@ -5,8 +5,9 @@
 Outbound App consumers can request `ctox.outbound.field_review_view.v1` over the
 existing WebRTC auxiliary channel with exactly one `{record_id}` parameter.
 Current `data.read` on `outbound_lead_generation_leads` is required before and
-after the read. Requests are bounded to 2 KiB and replies to 256 KiB; SQLite
-work runs outside the transport executor. No new permission is granted.
+after the read. Serialized parameter JSON is bounded to 2 KiB and result JSON
+to 256 KiB; these limits exclude the existing transport envelope. SQLite work
+runs outside the transport executor. No new permission is granted.
 
 The reply is `{schema, record_id, view}`. Missing/deleted leads have `view:null`.
 The canonical lead and private current native field-status witnesses come from
