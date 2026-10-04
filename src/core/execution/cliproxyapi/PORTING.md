@@ -155,12 +155,21 @@
   64MiB decoded-response budget and sticky terminal errors are host adaptations.
   Original apply-patch declaration classification is an explicit typed native hook;
   actual provider request preparation must bind it rather than trust output names.
-  Seven more prepared regressions cover these aggregate contracts. Auth/refresh,
-  request-history normalization, the provider caller and async streaming consumer
-  still require implementation. These helpers are not provider acceptance.
+  Seven more prepared regressions cover these aggregate contracts. History preparation
+  now merges assistant text/thought/tool steps, matches pending results exactly (or
+  FIFO only when the result ID is absent), and marks orphan results without consuming
+  real user-image positions. Original signatures/images supplement only missing
+  translated material; image recovery stays bound to the original tool ID.
+  Protocol wrappers and structured text are unpacked while arbitrary business JSON
+  and raw argument/schema bytes retain their original spelling. Stable session-ID
+  precedence, zero/null configuration, namespaced automation filtering and native
+  signature detection/base64 grammar follow the pin. Six more regressions cover this
+  owned preparation. Inbound JSON uses Rust's UTF-8 string boundary; valid UTF-8 raw
+  JSON spelling is retained. Auth/refresh, the actual provider caller and async
+  streaming consumer still require implementation. These helpers are not provider acceptance.
   Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
   account-kind collisions, legacy Home execution, public JSON boundaries, native
-  capability refresh and built-in metadata. There are136 prepared candidate test
+  capability refresh and built-in metadata. There are142 prepared candidate test
   functions in total; no candidate Rust or Go tests have executed. The first
   source-pinned Cargo attempt at a5d8 passed formatting and then stopped with23
   compiler errors. Source repairs now address temporary GJSON/path lifetimes,
