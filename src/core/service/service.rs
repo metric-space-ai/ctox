@@ -5742,6 +5742,12 @@ impl PromptWorkerActivity {
                 publish_cockpit_worker_state(root, &shared);
             }
         }
+        #[cfg(unix)]
+        let execution_lifetime = Arc::new(channels::QueueWorkerLifetime::for_native_worker(
+            root,
+            &job.leased_message_keys,
+            lease_worker_id.as_deref(),
+        ));
         Self {
             root: root.to_path_buf(),
             state: state.clone(),
@@ -5754,7 +5760,7 @@ impl PromptWorkerActivity {
             lease_heartbeat,
             lease_worker_id,
             #[cfg(unix)]
-            execution_lifetime: Arc::new(channels::QueueWorkerLifetime::default()),
+            execution_lifetime,
         }
     }
 

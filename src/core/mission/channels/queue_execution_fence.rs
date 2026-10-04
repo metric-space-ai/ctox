@@ -7,8 +7,11 @@ use std::sync::{Arc, Mutex};
 /// Retained only by the actual service worker. Clones cannot outlive revocation
 /// as authority: Drop/shutdown waits for an in-flight bounded callback, then
 /// revokes all previously issued execution fences under this same lock.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct QueueWorkerLifetime {
+    root: PathBuf,
+    message_keys: Vec<String>,
+    worker_id: Option<String>,
     state: Mutex<WorkerLifetimeState>,
 }
 
@@ -19,6 +22,19 @@ struct WorkerLifetimeState {
 }
 
 impl QueueWorkerLifetime {
+    pub(crate) fn for_native_worker(
+        root: &std::path::Path,
+        message_keys: &[String],
+        worker_id: Option<&str>,
+    ) -> Self {
+        Self {
+            root: root.to_owned(),
+            message_keys: message_keys.to_vec(),
+            worker_id: worker_id.map(str::to_owned),
+            state: Mutex::new(WorkerLifetimeState::default()),
+        }
+    }
+
     pub(crate) fn revoke(&self) {
         // Poison is denial too; do not revive a worker after a callback panic.
         if let Ok(mut state) = self.state.lock() {
@@ -69,6 +85,12 @@ impl QueueExecutionFence {
                 && !fence.worker_id.trim().is_empty()
                 && !fence.message_keys.is_empty(),
             "native execution is missing its admitted attempt or worker"
+        );
+        ensure!(
+            lifetime.root == fence.root
+                && lifetime.message_keys == fence.message_keys
+                && lifetime.worker_id.as_deref() == Some(fence.worker_id.as_str()),
+            "native execution does not match its service-owned worker scope"
         );
         let mut state = lifetime
             .state
@@ -224,7 +246,12 @@ mod tests {
             worker_id: "native-worker".into(),
             execution: None,
         };
-        Ok((root, fence, Arc::new(QueueWorkerLifetime::default())))
+        let lifetime = Arc::new(QueueWorkerLifetime::for_native_worker(
+            root.path(),
+            &fence.message_keys,
+            Some(&fence.worker_id),
+        ));
+        Ok((root, fence, lifetime))
     }
 
     #[test]
@@ -337,10 +364,31 @@ mod tests {
         assert!(QueueExecutionFence::capture(
             &fence,
             "native-attempt",
-            Arc::new(QueueWorkerLifetime::default())
+            Arc::new(QueueWorkerLifetime::for_native_worker(
+                &fence.root,
+                &fence.message_keys,
+                Some(&fence.worker_id)
+            ))
         )
         .is_err());
         assert!(!path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn queue_execution_guard_cannot_adopt_another_native_worker_scope() -> Result<()> {
+        let (_root, fence, lifetime) = admitted()?;
+        let guard = QueueExecutionFence::capture(&fence, "native-attempt", Arc::clone(&lifetime))?;
+        let (_other_root, other_fence, _) = admitted()?;
+        // Both roots have a genuinely live lease and deliberately equal worker
+        // and attempt strings. Their native admissions still cannot alias.
+        assert!(QueueExecutionFence::capture(
+            &other_fence,
+            "native-attempt",
+            Arc::clone(&lifetime),
+        )
+        .is_err());
+        assert_eq!(guard.with_current_execution(|| Ok(31))?, 31);
         Ok(())
     }
 
