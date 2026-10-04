@@ -6,9 +6,11 @@ use serde_json::Value;
 
 use crate::internal::{
     registry::ModelInfo,
+    thinking::ModelInfoView,
     thinking::{
-        convert_budget_to_level, has_level, is_user_defined_model,
+        convert_budget_to_level, has_level,
         json::{serialize_if_changed, set_path},
+        model_view::is_user_defined_model_view as is_user_defined_model,
         ProviderApplier, ThinkingConfig, ThinkingError, ThinkingMode, LEVEL_AUTO, LEVEL_NONE,
     },
 };
@@ -29,6 +31,16 @@ impl ProviderApplier for Applier {
         config: &ThinkingConfig,
         model_info: Option<&ModelInfo>,
     ) -> Result<Vec<u8>, ThinkingError> {
+        let view = model_info.map(ModelInfoView::from);
+        self.apply_model_info(body, config, view.as_ref())
+    }
+
+    fn apply_model_info(
+        &self,
+        body: &[u8],
+        config: &ThinkingConfig,
+        model_info: Option<&ModelInfoView<'_>>,
+    ) -> Result<Vec<u8>, ThinkingError> {
         apply_effort_at_path(body, config, model_info, "reasoning_effort")
     }
 }
@@ -40,7 +52,7 @@ impl ProviderApplier for Applier {
 pub(in crate::internal::thinking::provider) fn apply_effort_at_path(
     body: &[u8],
     config: &ThinkingConfig,
-    model_info: Option<&ModelInfo>,
+    model_info: Option<&ModelInfoView<'_>>,
     path: &str,
 ) -> Result<Vec<u8>, ThinkingError> {
     if is_user_defined_model(model_info) {
@@ -60,7 +72,9 @@ pub(in crate::internal::thinking::provider) fn apply_effort_at_path(
     }
 
     let mut effort = "";
-    if config.budget == 0 && (support.zero_allowed || has_level(support.levels, LEVEL_NONE)) {
+    if config.budget == 0
+        && (support.zero_allowed || has_level(support.levels.as_ref(), LEVEL_NONE))
+    {
         effort = LEVEL_NONE;
     }
     if effort.is_empty() && !config.level.is_empty() {

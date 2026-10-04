@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::internal::{
     registry::ModelInfo,
+    thinking::ModelInfoView,
     thinking::{
         convert_budget_to_level,
         json::{get_path, remove_path, serialize_if_changed, set_path},
@@ -47,6 +48,16 @@ impl ProviderApplier for Applier {
         body: &[u8],
         config: &ThinkingConfig,
         model_info: Option<&ModelInfo>,
+    ) -> Result<Vec<u8>, ThinkingError> {
+        let view = model_info.map(ModelInfoView::from);
+        self.apply_model_info(body, config, view.as_ref())
+    }
+
+    fn apply_model_info(
+        &self,
+        body: &[u8],
+        config: &ThinkingConfig,
+        model_info: Option<&ModelInfoView<'_>>,
     ) -> Result<Vec<u8>, ThinkingError> {
         if !matches!(
             config.mode,
@@ -96,7 +107,7 @@ fn apply_budget(
     result: &mut Value,
     original: &Value,
     budget: isize,
-    model_info: Option<&ModelInfo>,
+    model_info: Option<&ModelInfoView<'_>>,
 ) {
     let Some(level) = convert_budget_to_level(budget) else {
         restore_summaries(result, original);
@@ -109,7 +120,12 @@ fn apply_budget(
     }
 }
 
-fn apply_level(result: &mut Value, original: &Value, level: &str, model_info: Option<&ModelInfo>) {
+fn apply_level(
+    result: &mut Value,
+    original: &Value,
+    level: &str,
+    model_info: Option<&ModelInfoView<'_>>,
+) {
     let level = normalize_level(level, model_info);
     if !level.is_empty() {
         set_path(
@@ -158,14 +174,14 @@ fn restore_summaries(result: &mut Value, original: &Value) {
     }
 }
 
-fn normalize_level(level: &str, model_info: Option<&ModelInfo>) -> String {
+fn normalize_level(level: &str, model_info: Option<&ModelInfoView<'_>>) -> String {
     let normalized = level.trim().to_ascii_lowercase();
     if normalized.is_empty() || normalized == LEVEL_NONE || normalized == LEVEL_AUTO {
         return String::new();
     }
     if let Some(levels) = model_info
         .and_then(|model| model.thinking.as_ref())
-        .map(|support| support.levels)
+        .map(|support| support.levels.as_ref())
         .filter(|levels| !levels.is_empty())
     {
         return levels

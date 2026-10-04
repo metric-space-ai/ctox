@@ -13,12 +13,14 @@ use crate::internal::registry::{lookup_model_info, ModelInfo};
 
 use super::{
     convert_budget_to_level, convert_level_to_budget, extract_summary_config,
-    is_budget_capable_provider, is_user_defined_model, parse_level_suffix, parse_numeric_suffix,
-    parse_special_suffix, parse_suffix, strip_inferred_claude_summary_activation,
-    strip_thinking_config, validate_config, AntigravityApplier, ClaudeApplier, CodexApplier,
-    GeminiApplier, InteractionsApplier, KimiApplier, OpenAiApplier, ProviderApplier, SummaryConfig,
-    SummaryMode, ThinkingConfig, ThinkingError, ThinkingLevel, ThinkingMode, XaiApplier,
-    LEVEL_AUTO, LEVEL_HIGH, LEVEL_MAX, LEVEL_NONE, LEVEL_XHIGH,
+    is_budget_capable_provider, model_view::is_user_defined_model_view as is_user_defined_model,
+    parse_level_suffix, parse_numeric_suffix, parse_special_suffix, parse_suffix,
+    strip_thinking_config,
+    summary::strip_inferred_claude_summary_activation_view as strip_inferred_claude_summary_activation,
+    validate::validate_config_view as validate_config, AntigravityApplier, ClaudeApplier,
+    CodexApplier, GeminiApplier, InteractionsApplier, KimiApplier, ModelInfoView, OpenAiApplier,
+    ProviderApplier, SummaryConfig, SummaryMode, ThinkingConfig, ThinkingError, ThinkingLevel,
+    ThinkingMode, XaiApplier, LEVEL_AUTO, LEVEL_HIGH, LEVEL_MAX, LEVEL_NONE, LEVEL_XHIGH,
 };
 
 /// Instance-owned model capability lookup used by [`ThinkingEngine`].
@@ -96,6 +98,19 @@ pub struct ResolvedThinkingRequest<'a> {
     pub model_info: Option<&'a ModelInfo>,
 }
 
+/// Explicitly distinguishes a selected descriptor from registry fallback.
+#[derive(Clone, Copy, Debug)]
+pub struct ResolvedCapabilityThinkingRequest<'a> {
+    pub body: &'a [u8],
+    pub source_body: &'a [u8],
+    pub model: &'a str,
+    pub from_format: &'a str,
+    pub to_format: &'a str,
+    pub provider_key: &'a str,
+    pub model_info: Option<&'a ModelInfoView<'a>>,
+    pub model_info_resolved: bool,
+}
+
 #[derive(Clone, Copy)]
 struct ApplyRequest<'a> {
     body: &'a [u8],
@@ -104,14 +119,14 @@ struct ApplyRequest<'a> {
     from_format: &'a str,
     to_format: &'a str,
     provider_key: &'a str,
-    resolved_model_info: Option<&'a ModelInfo>,
+    resolved_model_info: Option<&'a ModelInfoView<'a>>,
     model_info_resolved: bool,
     summary: &'a SummaryConfig,
 }
 
 struct UserDefinedRequest<'a> {
     body: &'a [u8],
-    model_info: Option<&'a ModelInfo>,
+    model_info: Option<&'a ModelInfoView<'a>>,
     from_format: &'a str,
     to_format: &'a str,
     provider_key: &'a str,
@@ -259,6 +274,27 @@ impl ThinkingEngine {
         request: ResolvedThinkingRequest<'_>,
         summary: &SummaryConfig,
     ) -> Result<Vec<u8>, ThinkingError> {
+        let view = request.model_info.map(ModelInfoView::from);
+        self.apply_thinking_with_capability_info_and_summary(
+            ResolvedCapabilityThinkingRequest {
+                body: request.body,
+                source_body: request.source_body,
+                model: request.model,
+                from_format: request.from_format,
+                to_format: request.to_format,
+                provider_key: request.provider_key,
+                model_info: view.as_ref(),
+                model_info_resolved: true,
+            },
+            summary,
+        )
+    }
+
+    pub fn apply_thinking_with_capability_info_and_summary(
+        &self,
+        request: ResolvedCapabilityThinkingRequest<'_>,
+        summary: &SummaryConfig,
+    ) -> Result<Vec<u8>, ThinkingError> {
         self.apply(ApplyRequest {
             body: request.body,
             source_body: request.source_body,
@@ -267,14 +303,15 @@ impl ThinkingEngine {
             to_format: request.to_format,
             provider_key: request.provider_key,
             resolved_model_info: request.model_info,
-            model_info_resolved: true,
+            model_info_resolved: request.model_info_resolved,
             summary,
         })
     }
 
     fn apply(&self, request: ApplyRequest<'_>) -> Result<Vec<u8>, ThinkingError> {
         let mut provider_format = normalized_provider_name(request.to_format);
-        if request.model_info_resolved && provider_format == "openai-response" {
+        // ref: internal/thinking/apply.go:193-196 @ d7914afd
+        if provider_format == "openai-response" {
             provider_format = "codex".into();
         }
         let mut provider_key = normalized_provider_name(request.provider_key);
@@ -290,14 +327,17 @@ impl ThinkingEngine {
             return Ok(request.body.to_vec());
         };
         let suffix = parse_suffix(request.model);
-        let looked_up;
+        let looked_up = if request.model_info_resolved {
+            None
+        } else {
+            self.resolver
+                .lookup_model_info(&suffix.model_name, &provider_key)
+        };
+        let looked_up_view = looked_up.as_ref().map(ModelInfoView::from);
         let model_info = if request.model_info_resolved {
             request.resolved_model_info
         } else {
-            looked_up = self
-                .resolver
-                .lookup_model_info(&suffix.model_name, &provider_key);
-            looked_up.as_ref()
+            looked_up_view.as_ref()
         };
 
         if is_user_defined_model(model_info) {
@@ -348,7 +388,7 @@ impl ThinkingEngine {
             {
                 output = strip_inferred_claude_summary_activation(&output, Some(model_info));
             }
-            return Ok(super::summary::apply_summary_config_for_provider(
+            return Ok(super::summary::apply_summary_config_for_provider_view(
                 &output,
                 &provider_format,
                 &suffix.model_name,
@@ -372,11 +412,11 @@ impl ThinkingEngine {
             &provider_format,
             suffix.has_suffix,
         )?;
-        let applied = applier.apply(request.body, &validated, Some(model_info))?;
+        let applied = applier.apply_model_info(request.body, &validated, Some(model_info))?;
         if thinking_is_fully_disabled(&validated) {
             return Ok(applied);
         }
-        Ok(super::summary::apply_summary_config_for_provider(
+        Ok(super::summary::apply_summary_config_for_provider_view(
             &applied,
             &provider_format,
             &suffix.model_name,
@@ -405,7 +445,7 @@ impl ThinkingEngine {
             }
         };
         if !has_thinking_config(&config) {
-            return Ok(super::summary::apply_summary_config_for_provider(
+            return Ok(super::summary::apply_summary_config_for_provider_view(
                 request.body,
                 request.to_format,
                 model_id,
@@ -418,11 +458,11 @@ impl ThinkingEngine {
             return Ok(request.body.to_vec());
         };
         config = normalize_user_defined_config(config, request.from_format, request.to_format);
-        let applied = applier.apply(request.body, &config, request.model_info)?;
+        let applied = applier.apply_model_info(request.body, &config, request.model_info)?;
         if thinking_is_fully_disabled(&config) {
             return Ok(applied);
         }
-        Ok(super::summary::apply_summary_config_for_provider(
+        Ok(super::summary::apply_summary_config_for_provider_view(
             &applied,
             request.to_format,
             model_id,
@@ -444,7 +484,7 @@ fn thinking_is_fully_disabled(config: &ThinkingConfig) -> bool {
 fn should_map_configured_high_intent(
     from_format: &str,
     to_format: &str,
-    model_info: &ModelInfo,
+    model_info: &ModelInfoView<'_>,
 ) -> bool {
     if !from_format.trim().eq_ignore_ascii_case(to_format.trim()) {
         return true;
@@ -453,7 +493,10 @@ fn should_map_configured_high_intent(
     !model_type.is_empty() && !is_same_provider_family(to_format, &model_type)
 }
 
-fn map_configured_high_intent(level: ThinkingLevel, model_info: &ModelInfo) -> ThinkingLevel {
+fn map_configured_high_intent(
+    level: ThinkingLevel,
+    model_info: &ModelInfoView<'_>,
+) -> ThinkingLevel {
     let Some(support) = model_info.thinking.as_ref() else {
         return level;
     };

@@ -5,6 +5,7 @@ mod apply;
 mod convert;
 mod errors;
 mod json;
+mod model_view;
 mod provider;
 mod strip;
 mod suffix;
@@ -19,6 +20,7 @@ pub use convert::{
     THRESHOLD_MINIMAL,
 };
 pub use errors::{ErrorCode, ThinkingError};
+pub use model_view::{ModelInfoView, ThinkingSupportView};
 pub use provider::{
     AntigravityApplier, ClaudeApplier, CodexApplier, GeminiApplier, InteractionsApplier,
     KimiApplier, OpenAiApplier, XaiApplier,
@@ -66,5 +68,9 @@ mod apply_configured_api_key_test;
 mod kimi_max_clamp_repro_test;
 pub use apply::{
     extract_reasoning_effort, extract_translated_reasoning_effort, EmbeddedModelInfoResolver,
-    ModelInfoResolver, ResolvedThinkingRequest, ThinkingEngine, ThinkingRequest,
+    ModelInfoResolver, ResolvedCapabilityThinkingRequest, ResolvedThinkingRequest, ThinkingEngine,
+    ThinkingRequest,
 };
+
+#[cfg(test)]
+mod request_pipeline_candidate_test;

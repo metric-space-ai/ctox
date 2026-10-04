@@ -76,13 +76,28 @@
   typed rules are adapted into the canonical configuration; injected configuration
   is instance-owned. Four more cases cover original explicit defaults, aliases,
   header gates, backing identity, call order, legacy rule adaptation and count
-  isolation. These nine Google guards have not executed. Canonical thinking,
-  signature and content-shape parity, production owner binding,
-
-  HTTP workflows and full-provider acceptance remain open; this is not full
+  isolation. These nine Google guards have not executed. Signature and content-shape
+  parity, production owner binding, HTTP workflows and full-provider acceptance remain open; this is not full
   Gemini/Vertex parity. Primary references at the frozen d7914afd commit:
   gemini_executor.go:153-154,279-280,684,888-920;
   gemini_vertex_executor.go:334-335,471-472,928,1022.
+- The canonical request-thinking bridge now owns the thinking and translator
+  registries through explicit handles. A borrowed capability view carries the
+  manager-selected dynamic ID/provider, arbitrary levels, token ceilings and
+  private flags into the same validation, summary and eight native provider
+  algorithms used by the immutable static registry. It preserves both static
+  unsigned and configured signed bounds without leaked strings or a narrowed
+  level enum. Existing static APIs remain available; legacy plugins that cannot
+  consume owned capabilities fail explicitly rather than discarding metadata.
+  Current source owns effort, with an empty-current fallback; current/original
+  source and normalized target summary precedence use the existing owner-scoped
+  translator helper. Primary routing reference: frozen d7914afd
+  internal/runtime/executor/helps/model_capabilities.go:18-31. Nine prepared
+  guards cover all native appliers, configured/static precedence, custom levels,
+  source/summary ownership, registry lookup, Claude ceilings, plugin metadata and
+  signed/unsigned extremes. Native execution and production bridge registration
+  remain open. Canonical configuration-update/SSE intent still needs the complete
+  v8 semantic port; this bridge does not establish that parity.
 - Further native Meta request-time integration supplies an owned asynchronous
 
   preparation/401-refresh capability, sharing one per-account conductor lock and
@@ -100,7 +115,8 @@
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
   and committed-stream cooldown consumers. The finite targeted controller
-  requires189 actual native tests across24 groups, including nine Google request-preparation cases and39 new Meta
+  requires at least198 actual native tests across25 groups, including nine Google
+  request-preparation cases, nine owned-thinking pipeline cases and39 new Meta
   tool/count/response/usage/transport/factory/cooldown/scheduled-refresh guards,
   three new shared cancellation-publication guards,15 existing background-worker
   guards and six retained

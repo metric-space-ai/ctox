@@ -252,3 +252,5 @@ pub use utls_client::{
     UTLS_PROTECTED_HOSTS,
 };
 pub use vertex_payload_helpers::strip_vertex_openai_responses_tool_call_ids;
+
+pub use model_capabilities::RequestThinkingPipeline;
