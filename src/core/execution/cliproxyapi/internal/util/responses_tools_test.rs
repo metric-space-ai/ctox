@@ -121,7 +121,7 @@ fn candidate_responses_tools_collision_aliases_are_stable_and_bounded() {
     assert_eq!(aliases.len(), 2);
     for (wire, _) in aliases {
         assert!(wire.starts_with("a_b_"));
-        assert_eq!(wire.len(), 17);
+        assert_eq!(wire.len(), 16);
     }
     assert!(is_apply_patch_upstream_tool(
         original,
