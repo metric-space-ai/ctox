@@ -28,7 +28,9 @@ use crate::sdk::pluginapi::{
 };
 use crate::sdk::translator::{Format, Registry, TranslationContext, TranslationState};
 
-use super::helps::UsageReporter;
+use super::helps::{
+    RequestThinkingEngine, RequestThinkingInput, RequestThinkingPipeline, UsageReporter,
+};
 
 pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 pub const GEMINI_API_VERSION: &str = "v1beta";
@@ -91,6 +93,7 @@ pub struct GeminiExecutor {
     protocol: GeminiProtocol,
     config: Arc<GeminiExecutorConfig>,
     registry: Arc<Registry>,
+    request_thinking: RequestThinkingPipeline,
     cancellation: TranslationContext,
     usage_manager: Option<Arc<Manager>>,
     payload_config: Arc<super::helps::PayloadApplyConfig>,
@@ -114,6 +117,10 @@ impl GeminiExecutor {
             protocol: GeminiProtocol::GenerateContent,
             payload_config: Arc::new(payload_config_from_legacy(&config)),
             config,
+            request_thinking: RequestThinkingPipeline::new(
+                Arc::new(crate::internal::thinking::ThinkingEngine::default()),
+                registry.clone(),
+            ),
             registry,
             cancellation,
             usage_manager: None,
@@ -128,6 +135,10 @@ impl GeminiExecutor {
             protocol: GeminiProtocol::Interactions,
             payload_config: Arc::new(payload_config_from_legacy(&config)),
             config,
+            request_thinking: RequestThinkingPipeline::new(
+                Arc::new(crate::internal::thinking::ThinkingEngine::default()),
+                registry.clone(),
+            ),
             registry,
             cancellation: TranslationContext::default(),
             usage_manager: None,
@@ -154,6 +165,16 @@ impl GeminiExecutor {
     #[must_use]
     pub fn with_payload_config(mut self, config: Arc<super::helps::PayloadApplyConfig>) -> Self {
         self.payload_config = config;
+        self
+    }
+
+    /// Bind the owning gateway engine to the same instance translator registry.
+    #[must_use]
+    pub fn with_canonical_thinking(
+        mut self,
+        engine: Arc<crate::internal::thinking::ThinkingEngine>,
+    ) -> Self {
+        self.request_thinking = RequestThinkingPipeline::new(engine, self.registry.clone());
         self
     }
 
@@ -190,13 +211,18 @@ impl GeminiExecutor {
         &self,
         request: &ExecutorRequest,
         stream: bool,
-        action: &str,
+        count: bool,
     ) -> Result<(Vec<u8>, Format), PluginExecutionError> {
         self.ensure_active()?;
         let model = base_model(&request.model);
         let from = source_format(request);
-        let to = self.request_to_format(request);
-        let (original, mut body) = if action == "countTokens" {
+        // Dedicated CountTokens always uses GenerateContent's counting contract.
+        let to = if count {
+            Format::from("gemini")
+        } else {
+            self.request_to_format(request)
+        };
+        let (original, mut body) = if count {
             (
                 Vec::new(),
                 self.translate_body(request, &from, &to, &model, stream, &request.payload),
@@ -204,9 +230,31 @@ impl GeminiExecutor {
         } else {
             self.translate_pair(request, &from, &to, &model, stream)
         };
+        // ref: gemini_executor.go:156,282,435,520,686,939-944 @ d7914afd
+        // Frozen Google callers use the default update intent. Source precedence,
+        // selected capabilities and summary are resolved by the canonical bridge.
+        body = self
+            .request_thinking
+            .apply_request_thinking(RequestThinkingInput {
+                body: &body,
+                current_source_payload: &request.payload,
+                original_source_payload: original_request(request),
+                model: &request.model,
+                from_format: if to.as_str() == "interactions" && request.source_format.is_empty() {
+                    "interactions"
+                } else {
+                    from.as_str()
+                },
+                to_format: to.as_str(),
+                provider: "gemini",
+                normalized_updates_changed: false,
+                resolved_model_info: None,
+                resolved_config_model_info: request.resolved_model_info.as_deref(),
+            })
+            .map_err(|error| Arc::new(error) as PluginExecutionError)?;
         if to.as_str() != "interactions" {
             body = fix_gemini_image_aspect_ratio(&model, &body);
-            if action != "countTokens" {
+            if !count {
                 body = self.apply_request_payload(request, &from, &to, &model, &body, &original);
             }
         }
@@ -219,13 +267,12 @@ impl GeminiExecutor {
             } else {
                 json.insert("model".into(), Value::String(model.clone()));
             }
-            apply_interactions_thinking_suffix(&mut json, &request.model);
             if stream {
                 json.insert("stream".into(), Value::Bool(true));
             }
         } else {
             json.insert("model".into(), Value::String(model.clone()));
-            if action == "countTokens" {
+            if count {
                 json.remove("tools");
                 json.remove("generationConfig");
                 json.remove("safetySettings");
@@ -239,15 +286,14 @@ impl GeminiExecutor {
         }
         body = serde_json::to_vec(&json)
             .map_err(|error| plugin_error(GeminiExecutorError::InvalidJson(error.to_string())))?;
-        if to.as_str() == "interactions" && action != "countTokens" {
+        if to.as_str() == "interactions" && !count {
             body = self.apply_request_payload(request, &from, &to, &model, &body, &original);
         }
         // ref: gemini_executor.go:167-177,293-294,697-698 @ d7914afd
-        // Native Interactions uses a different wire contract and bypasses these
-        // GenerateContent history/signature repairs.
         if to.as_str() != "interactions" {
             body = crate::internal::signature::sanitize_gemini_request_thought_signatures(&body);
-            body = if action == "countTokens" {
+            let count_action = count || (!stream && request_action(request) == "countTokens");
+            body = if count_action {
                 super::helps::ensure_gemini_leading_user_content(&body, "contents").into_owned()
             } else {
                 super::helps::ensure_gemini_boundary_user_content(&body, "contents").into_owned()
@@ -435,7 +481,7 @@ impl GeminiExecutor {
     ) -> Result<ExecutorResponse, PluginExecutionError> {
         reject_compact(&request)?;
         let client = require_client(&request)?;
-        let (body, to) = self.prepare_body(&request, false, request_action(&request))?;
+        let (body, to) = self.prepare_body(&request, false, false)?;
         let upstream =
             self.build_request(&request, body.clone(), &to, request_action(&request), false);
         let response = client.execute(upstream).await?;
@@ -477,9 +523,8 @@ impl GeminiExecutor {
     ) -> Result<ExecutorStreamResponse, PluginExecutionError> {
         reject_compact(&request)?;
         let client = require_client(&request)?;
-        let (body, to) = self.prepare_body(&request, true, request_action(&request))?;
-        let upstream =
-            self.build_request(&request, body.clone(), &to, request_action(&request), true);
+        let (body, to) = self.prepare_body(&request, true, false)?;
+        let upstream = self.build_request(&request, body.clone(), &to, "generateContent", true);
         let response = client.execute_stream(upstream).await?;
         ensure_success(response.status_code, &[])?;
         let headers = response.headers;
@@ -592,7 +637,7 @@ impl GeminiExecutor {
         request: ExecutorRequest,
     ) -> Result<ExecutorResponse, PluginExecutionError> {
         let client = require_client(&request)?;
-        let (body, to) = self.prepare_body(&request, false, "countTokens")?;
+        let (body, to) = self.prepare_body(&request, false, true)?;
         let upstream = self.build_request(&request, body, &to, "countTokens", false);
         let response = client.execute(upstream).await?;
         ensure_success(response.status_code, &response.body)?;

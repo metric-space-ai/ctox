@@ -18,7 +18,9 @@ fn candidate_google_preflight_gemini_repairs_signatures_and_count_boundaries() {
         (true, "streamGenerateContent", 3),
         (false, "countTokens", 2),
     ] {
-        let (body, format) = executor.prepare_body(&request, stream, action).unwrap();
+        let (body, format) = executor
+            .prepare_body(&request, stream, action == "countTokens")
+            .unwrap();
         assert_eq!(format.as_str(), "gemini");
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["contents"].as_array().unwrap().len(), len);
@@ -56,9 +58,7 @@ fn candidate_google_preflight_native_interactions_keeps_its_own_history_contract
             ..Default::default()
         };
         for stream in [false, true] {
-            let (body, format) = executor
-                .prepare_body(&request, stream, "generateContent")
-                .unwrap();
+            let (body, format) = executor.prepare_body(&request, stream, false).unwrap();
             assert_eq!(format.as_str(), "interactions");
             let body: Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(body["contents"].as_array().unwrap().len(), 1);
@@ -115,9 +115,7 @@ fn candidate_google_payload_gemini_defaults_use_original_alias_and_headers() {
             headers: BTreeMap::from([("x-scope".into(), vec![scope.into()])]),
             ..Default::default()
         };
-        let (body, _) = executor
-            .prepare_body(&request, false, "generateContent")
-            .unwrap();
+        let (body, _) = executor.prepare_body(&request, false, false).unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert!(body.pointer("/generationConfig/temperature").is_none(), "an original explicit value prevents a default from filling a field removed from working input");
         assert_eq!(body.get("central_default").is_some(), scope == "blue");
@@ -126,9 +124,7 @@ fn candidate_google_payload_gemini_defaults_use_original_alias_and_headers() {
             scope == "blue"
         );
         assert_eq!(body["model"], "upstream-name");
-        let (count, _) = executor
-            .prepare_body(&request, false, "countTokens")
-            .unwrap();
+        let (count, _) = executor.prepare_body(&request, false, true).unwrap();
         let count: Value = serde_json::from_slice(&count).unwrap();
         assert!(count.get("central_default").is_none());
         assert!(count.get("generationConfig").is_none());
@@ -250,9 +246,7 @@ fn candidate_google_payload_legacy_rules_use_the_complete_pipeline_for_both_prot
             },
             ..Default::default()
         };
-        let (body, _) = executor
-            .prepare_body(&request, false, "generateContent")
-            .unwrap();
+        let (body, _) = executor.prepare_body(&request, false, false).unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
         let path = if interactions {
             "/generation_config/thinking_level"
@@ -275,9 +269,6 @@ fn candidate_google_request_gemini_selected_compatibility_covers_all_preparation
             (true, "generateContent"),
             (false, "countTokens"),
         ] {
-            if interactions && action == "countTokens" {
-                continue;
-            }
             for (selected, home, compatible) in [
                 (true, None, true),
                 (true, Some(false), false),
@@ -286,11 +277,9 @@ fn candidate_google_request_gemini_selected_compatibility_covers_all_preparation
             ] {
                 let calls = Arc::new(AtomicUsize::new(0));
                 let registry = Arc::new(Registry::new());
-                let target = if interactions {
-                    "interactions"
-                } else {
-                    "gemini"
-                };
+                // ref: gemini_executor.go:134,834-835 @ d7914afd
+                // Claude input on either account kind uses GenerateContent.
+                let target = "gemini";
                 let observed = calls.clone();
                 registry.register(
                     Format::from("claude"),
@@ -331,7 +320,9 @@ fn candidate_google_request_gemini_selected_compatibility_covers_all_preparation
                     }),
                     ..Default::default()
                 };
-                let (body, format) = executor.prepare_body(&request, stream, action).unwrap();
+                let (body, format) = executor
+                    .prepare_body(&request, stream, action == "countTokens")
+                    .unwrap();
                 let body: Value = serde_json::from_slice(&body).unwrap();
                 assert_eq!(format.as_str(), target);
                 assert_eq!(calls.load(Ordering::SeqCst), usize::from(!compatible));
@@ -369,9 +360,7 @@ fn candidate_google_request_native_interactions_bypass_translation_with_empty_or
             ..Default::default()
         };
         for stream in [false, true] {
-            let (body, format) = executor
-                .prepare_body(&request, stream, "generateContent")
-                .unwrap();
+            let (body, format) = executor.prepare_body(&request, stream, false).unwrap();
             let body: Value = serde_json::from_slice(&body).unwrap();
             assert_eq!(format.as_str(), "interactions");
             assert_eq!(body["native_marker"], 17);
@@ -435,7 +424,9 @@ fn candidate_google_request_gemini_normalizes_before_the_injected_owner_translat
         (true, "generateContent"),
         (false, "countTokens"),
     ] {
-        let (body, _) = executor.prepare_body(&request, stream, action).unwrap();
+        let (body, _) = executor
+            .prepare_body(&request, stream, action == "countTokens")
+            .unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["owner_translation"], true);
     }

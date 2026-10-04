@@ -44,6 +44,8 @@ pub mod devin_executor_response;
 pub mod devin_executor_stream;
 pub mod gemini_executor;
 pub mod gemini_vertex_executor;
+#[cfg(test)]
+mod google_executor_candidate_test;
 pub mod helps;
 pub mod kimi_executor;
 pub mod kimi_thinking_replay;

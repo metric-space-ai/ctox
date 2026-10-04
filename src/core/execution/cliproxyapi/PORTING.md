@@ -94,9 +94,19 @@
   paths, item bytes, duplicate fields and numeric lexemes; valid large media
   remains borrowed by the content helper. Five helper and three actual-preparation
   guards are prepared, alongside four existing sanitizer guards and five frozen-Go
-  parent oracles. Canonical Google thinking/normalizer-intent binding, remaining
-  signature/content and metadata-counting semantics, actual HTTP workflows and
-  full-provider acceptance remain open; this is not full Gemini/Vertex parity. Primary references at the frozen d7914afd commit:
+  parent oracles. Canonical thinking now runs in actual Gemini, native Interactions
+  and shared Vertex preparation before payload rules, using the same instance
+  translator registry and selected owned capabilities. Hosts can inject their
+  existing thinking engine/resolver. Frozen Google callers retain default update
+  intent; current-source effort and original summary use the canonical bridge.
+  Dedicated CountTokens strips tool/generation configuration and uses Gemini even
+  on native Interactions accounts; metadata counting keeps the inference pipeline.
+  Streaming ignores metadata counting and Vertex now emits the upstream SSE/query
+  variants. Six thinking and two scripted selected-client operation guards are
+  prepared across API-key and bearer paths. The Claude compatibility oracle now
+  follows upstream's native-source gate on both account kinds and also tests count.
+  Remaining signature/content semantics, outer-host ownership and live HTTP/full
+  provider acceptance remain open; this is not full Gemini/Vertex parity. Primary references at the frozen d7914afd commit:
   gemini_executor.go:153-154,279-280,684,888-920;
   gemini_vertex_executor.go:334-335,471-472,928,1022.
 - The canonical request-thinking bridge now owns the thinking and translator
@@ -160,7 +170,7 @@
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
   and committed-stream cooldown consumers. The finite targeted controller
-  requires at least240 actual native tests across31 groups, including eight new
+  requires at least248 actual native tests across33 groups, including eight new
   Google content/preflight and four existing sanitizer cases, plus all nine
   Claude error/lifecycle cases and nine Google
   request-preparation cases, twelve owned-thinking pipeline cases, twelve Responses
