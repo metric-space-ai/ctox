@@ -133,6 +133,29 @@ def weighted(result):
     value = round(sum(values[k] * WEIGHTS[k] for k in WEIGHTS), 3)
     return min(value, 4) if result.get("essential_defect") else value
 
+def validate_source_reference(result):
+    """A reviewed working-tree patch is immutable evidence, not an authored commit."""
+    snapshot = result.get("source_snapshot")
+    if snapshot is None:
+        if not re.fullmatch("[a-f0-9]{40}", result.get("head") or ""):
+            raise ValueError("Assessed result requires immutable source head or patch snapshot")
+        return
+    if not isinstance(snapshot, dict) or snapshot.get("kind") != "uncommitted_patch":
+        raise ValueError("Source snapshot must identify an uncommitted patch")
+    if result.get("head") is not None:
+        raise ValueError("Uncommitted patch must not claim an authored source head")
+    if not re.fullmatch("[a-f0-9]{40}", snapshot.get("base_head") or ""):
+        raise ValueError("Patch snapshot requires its immutable base commit")
+    patch = snapshot.get("patch")
+    if not isinstance(patch, str) or not patch.startswith("diff --git ") or not patch.endswith("\n"):
+        raise ValueError("Patch snapshot requires complete retained Git diff text")
+    if hashlib.sha256(patch.encode()).hexdigest() != snapshot.get("sha256"):
+        raise ValueError("Patch snapshot content differs from its immutable hash")
+    evidence = snapshot.get("evidence")
+    if not isinstance(evidence, list) or not evidence or not all(isinstance(e, str) and e.strip() for e in evidence):
+        raise ValueError("Patch snapshot requires historical delivery and source evidence")
+
+
 def record(base, entry):
     inventory = load(base / "terminal-evidence/current.json")
     prs = {p["url"]: p for p in inventory["prs"]}
@@ -154,8 +177,8 @@ def record(base, entry):
             if stage == "parent_completion" and entry["role"] != "parent":
                 raise ValueError("PR-completion assessment belongs to a parent")
             result["weighted_total"] = weighted(result)
-            if result["weighted_total"] is not None and not re.fullmatch("[a-f0-9]{40}", result.get("head") or ""):
-                raise ValueError("Assessed result requires immutable source head")
+            if result["weighted_total"] is not None:
+                validate_source_reference(result)
             if result.get("model"):
                 prov = result.get("provenance") or entry.get("provenance") or {}
                 if prov.get("model") != result["model"] or not (prov.get("turn_id") and prov.get("evidence")):

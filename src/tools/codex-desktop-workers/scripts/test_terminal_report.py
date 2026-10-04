@@ -1,5 +1,6 @@
 """Integrity tests: rubric, history, terminal-only boundaries and report statistics."""
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -159,6 +160,53 @@ class ReportTests(unittest.TestCase):
         pairs=r.parent_worker_pairs([parent,worker,other],{"pr":{"url":"pr","repository":"r","number":1}})
         self.assertEqual(pairs[0]["combination"],pairs[1]["combination"])
         self.assertEqual(pairs[0]["parent_harness"],"codex")
+    def patch_result(self):
+        result = self.result(4)
+        result["head"] = None
+        text = "diff --git a/repair.rs b/repair.rs\n--- a/repair.rs\n+++ b/repair.rs\n@@ -1 +1 @@\n-old\n+new\n"
+        result["source_snapshot"] = dict(kind="uncommitted_patch", base_head="a"*40,
+            patch=text, sha256=hashlib.sha256(text.encode()).hexdigest(),
+            evidence=["original review-ready handoff", "retained full original patch"])
+        return result
+
+    def test_patch_snapshot_rejects_mutation_missing_base_and_fake_head(self):
+        good = self.patch_result()
+        r.validate_source_reference(good)
+        for field, value in (("base_head", None), ("sha256", "f"*64),
+                             ("evidence", []), ("kind", "authored_commit"),
+                             ("patch", "diff --git incomplete")):
+            bad = copy.deepcopy(good)
+            bad["source_snapshot"][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                r.validate_source_reference(bad)
+        bad = copy.deepcopy(good)
+        bad["head"] = "a"*40
+        with self.assertRaises(ValueError):
+            r.validate_source_reference(bad)
+        with self.assertRaises(ValueError):
+            r.validate_source_reference({"head": None})
+
+    def test_uncommitted_first_delivery_is_retained_without_invented_commit(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            pr = dict(url="https://github.com/metric-space-ai/ctox/pull/213",
+                      repository=r.REPOS[0], number=213, state="MERGED", headRefOid="b"*40)
+            r.save(base/"terminal-evidence/current.json", {"prs":[pr]})
+            data = dict(pr_url=pr["url"], role="worker", actor_id="worker",
+                        reviewer="independent", scope="Own original patch",
+                        model=None, provenance={}, first=self.patch_result())
+            real_command = r.command
+            with patch.object(r, "command", side_effect=lambda *a:
+                json.dumps({"state":"MERGED", "headRefOid":"b"*40}) if a[0]=="gh" else real_command(*a)):
+                first = r.record(base, copy.deepcopy(data))
+                data["corrected"] = self.result(8)
+                second = r.record(base, copy.deepcopy(data))
+            self.assertIsNone(second["first"]["head"])
+            self.assertEqual(second["first"], first["first"])
+            self.assertEqual(second["first"]["source_snapshot"], data["first"]["source_snapshot"])
+            self.assertEqual(second["corrected"]["head"], "a"*40)
+            self.assertEqual(r.assessments(base)[0]["record_id"], second["record_id"])
+
     def test_immutable_revisions_and_reject_self_score_live_stop(self):
         with tempfile.TemporaryDirectory() as temp:
             base=Path(temp)

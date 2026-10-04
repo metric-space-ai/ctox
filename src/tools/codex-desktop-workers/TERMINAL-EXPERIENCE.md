@@ -20,6 +20,11 @@ lifecycle states, failure cause and proved corrections. Self-grading is rejected
 Revisions are append-only/read back; only the latest logical actor/package
 record is pooled. Historical first/final results remain immutable.
 
+A review-ready uncommitted delivery uses source_snapshot with its actual base
+commit, complete retained Git patch, SHA256 and historical delivery evidence.
+Its head stays null: the base or a later corrected commit is not the original
+authored head. Recording verifies the patch hash before appending the rating.
+
 Parents get one parent_completion score for the actual PR review/integration/
 checks/merge or justified closure, attributed to the actual closing/action turn.
 Broader product-acceptance grades stay historical; completion cannot silently
