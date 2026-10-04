@@ -18,6 +18,7 @@ mod domain_effect;
 mod external_sql_sync;
 mod guest_commands;
 mod guest_runtime;
+pub(crate) use guest_runtime::run_native_guest_desktop;
 pub(crate) mod harness_cockpit;
 mod hashing;
 mod importer;
