@@ -131,12 +131,20 @@
   validates gzip CRC/concatenated members, bounds both wire/inflated sizes and
   rejects truncated or failed-stream reuse. Typed trailer errors retain upstream
   authentication/quota/permission/timeout classifications and null-string behavior.
-  Six additional regressions cover these boundaries. They are prepared, not executed;
-  protobuf messages, request/auth/refresh and the actual Devin executor consumer
-  still require implementation. This layer alone is not provider acceptance.
+  Six additional regressions cover these boundaries. They are prepared, not executed.
+  The protobuf decoder now preserves text/thinking/signature fragments as raw bytes,
+  decodes timestamps, custom/invalid-JSON tool deltas, headers and separate cache-write
+  usage, and accepts inner/enveloped Token Usage dimension groups. Six more prepared
+  regressions cover pinned fixtures, partial children, numeric/wire bounds and ownership.
+  Valid finite dimension values truncate as upstream; Rust float casts explicitly
+  retain Rust's saturating/NaN-zero behavior for non-finite/out-of-range values,
+  for which Go does not guarantee a portable conversion result. Unknown groups are
+  skipped iteratively only inside submessages with a depth bound; invalid field
+  numbers fail the typed boundary. Request/auth/refresh and the actual Devin
+  executor consumer still require implementation. Neither helper is provider acceptance.
   Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
   account-kind collisions, legacy Home execution, public JSON boundaries, native
-  capability refresh and built-in metadata. There are116 prepared candidate test
+  capability refresh and built-in metadata. There are122 prepared candidate test
   functions in total; none of the current candidate Cargo/Go checks has executed.
   The first admitted57c4 candidate stopped during formatting because an older
   regression used a non-ASCII Rust raw-byte literal. The fixture now obtains
