@@ -1836,7 +1836,13 @@ fn collect_mail_body_parts(parsed: &ParsedMail<'_>) -> Result<(String, String, V
             .map(String::as_str)
             .unwrap_or(&fallback_name)
             .to_string();
-        let size_bytes = parsed.get_body_raw().map(|bytes| bytes.len()).unwrap_or(0);
+        let size_bytes = if parsed.subparts.is_empty() {
+            parsed.get_body_raw().map(|bytes| bytes.len()).unwrap_or(0)
+        } else {
+            // mailparse stores multipart payloads in subparts, leaving its
+            // decoded body empty. Preserve the size of the whole MIME entity.
+            parsed.raw_bytes.len()
+        };
         return Ok((
             String::new(),
             String::new(),
