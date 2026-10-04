@@ -115,7 +115,7 @@ fn normalize_prepared(raw: &[u8]) -> Result<Vec<u8>, &'static str> {
     let choice = root.get("tool_choice");
     if choice.kind() == Kind::Object {
         let normalized = normalize_choice(choice.json(), &index);
-        output = set_raw_path(&output, "tool_choice", normalized.as_bytes());
+        output = set_raw_path(&output, "tool_choice", &normalized);
     }
     Ok(output)
 }
@@ -145,7 +145,8 @@ pub(crate) fn prefer_chat_function_patch_tools(original: &[u8], declarations: &[
     }
     let mut tools = Vec::new();
     for tool in parsed.get("tools").array() {
-        let name = tool.get("name").str();
+        let name_field = tool.get("name");
+        let name = name_field.str();
         if is_custom_tool(&tool) && ordinary.contains(name) && available.contains(name) {
             continue;
         }
@@ -245,7 +246,8 @@ fn collect_namespace_children(
     source_priority: i32,
     descriptors: &mut Vec<Descriptor>,
 ) {
-    let namespace_name = namespace_tool.get("name").str().trim();
+    let namespace_field = namespace_tool.get("name");
+    let namespace_name = namespace_field.str().trim();
     let mut children = namespace_tool.get("tools");
     if children.kind() != Kind::Array {
         children = namespace_tool.get("children");
@@ -298,7 +300,8 @@ fn push_descriptor(
 }
 
 fn tool_name(tool: &Value<'_>) -> String {
-    let name = tool.get("name").str().trim();
+    let name_field = tool.get("name");
+    let name = name_field.str().trim();
     if !name.is_empty() {
         return name.to_owned();
     }
@@ -331,7 +334,8 @@ fn normalize_tools(
     for tool in tools.array() {
         let mut item = tool.json().as_bytes().to_vec();
         if tool.get("type").str() == "namespace" {
-            let child_namespace = tool.get("name").str();
+            let child_namespace_field = tool.get("name");
+            let child_namespace = child_namespace_field.str();
             for key in ["tools", "children"] {
                 let children = tool.get(key);
                 if children.kind() == Kind::Array {
@@ -526,7 +530,7 @@ fn upsert_object_key(object: &[u8], key: &str, raw_value: &[u8]) -> Vec<u8> {
         return object.to_vec();
     };
     let Ok(raw_value) = std::str::from_utf8(raw_value) else {
-        return object.to_vec();
+        return object.as_bytes().to_vec();
     };
     upsert_key(object, key, raw_value).into_bytes()
 }
@@ -1057,7 +1061,8 @@ impl ApplyPatchResponsesBridge {
         }
         self.failed = true;
         self.errors.set_tool_input_error(Some(error.to_owned()));
-        let payload = apply_patch_failure(&self.response_id, self.next_sequence());
+        let sequence = self.next_sequence();
+        let payload = apply_patch_failure(&self.response_id, sequence);
         ApplyPatchTransform {
             events: vec![payload],
             error: Some(error.to_owned()),

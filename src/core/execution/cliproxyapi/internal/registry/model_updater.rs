@@ -371,16 +371,18 @@ impl ModelsUpdater {
         let mut ticker = tokio::time::interval(self.interval);
         ticker.tick().await;
         loop {
+            let stop = tokio::select! {
+                biased;
+                _ = cancelled.wait_for(|value| *value) => true,
+                _ = ticker.tick() => false,
+            };
+            if stop {
+                return;
+            }
             tokio::select! {
                 biased;
                 _ = cancelled.wait_for(|value| *value) => return,
-                _ = ticker.tick() => {
-                    tokio::select! {
-                        biased;
-                        _ = cancelled.wait_for(|value| *value) => return,
-                        _ = self.refresh_catalogs() => {}
-                    }
-                }
+                _ = self.refresh_catalogs() => {}
             }
         }
     }

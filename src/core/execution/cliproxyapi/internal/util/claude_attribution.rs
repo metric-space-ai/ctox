@@ -40,7 +40,7 @@ pub fn strip_claude_code_attribution_system(payload: &[u8]) -> Vec<u8> {
         if attribution {
             removed = true;
         } else if !block.json().is_empty() {
-            kept.push(block.json());
+            kept.push(block.json().to_owned());
         }
         true
     });

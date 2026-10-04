@@ -227,7 +227,7 @@ impl GenericConductorClock for SystemGenericConductorClock {
 /// and is deliberately separate from `HomeAuthRuntime`, whose ephemeral auth
 /// selections remain authoritative in Home mode.
 pub struct GenericAuthRuntime {
-    manager: Arc<AuthManager>,
+    pub(super) manager: Arc<AuthManager>,
     router: Arc<AccountRouter>,
     cooldown: Arc<CooldownConductor>,
     clock: Arc<dyn GenericConductorClock>,

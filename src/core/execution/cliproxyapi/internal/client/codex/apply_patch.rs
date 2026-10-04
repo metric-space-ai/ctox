@@ -51,7 +51,8 @@ pub fn description(tool: &Value<'_>) -> String {
         description.push_str("\n\n");
     }
     description.push_str(PATCH_INSTRUCTIONS);
-    let grammar = tool.get("format.definition").str();
+    let grammar_field = tool.get("format.definition");
+    let grammar = grammar_field.str();
     if !grammar.is_empty() {
         if grammar.contains("*** Environment ID:") {
             description.push_str("\n\nUse *** Environment ID: as specified by the patch grammar.");
@@ -127,7 +128,7 @@ pub(crate) fn go_json_string(value: &str) -> String {
             '\u{2028}' => encoded.push_str("\\u2028"),
             '\u{2029}' => encoded.push_str("\\u2029"),
             control if (control as u32) < 0x20 => {
-                encoded.push_str(&format!("\\u{control:04x}"));
+                encoded.push_str(&format!("\\u{:04x}", control as u32));
             }
             other => encoded.push(other),
         }

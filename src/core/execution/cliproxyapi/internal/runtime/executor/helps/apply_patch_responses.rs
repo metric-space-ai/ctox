@@ -635,7 +635,8 @@ impl ApplyPatchResponsesState {
             let original_root = gjson::parse(&original_text);
             if patch {
                 for namespace_path in ["namespace", "item.namespace"] {
-                    let supplied = original_root.get(namespace_path).str();
+                    let supplied_field = original_root.get(namespace_path);
+                    let supplied = supplied_field.str();
                     if !supplied.is_empty() && supplied != call_namespace {
                         return Err("conflicting apply_patch dispatcher namespace".to_owned());
                     }
@@ -693,7 +694,8 @@ impl ApplyPatchResponsesState {
                     &call_namespace,
                 );
             }
-            let arguments = original_root.get(&field_path(pending_path, "arguments"));
+            let arguments_path = field_path(pending_path, "arguments");
+            let arguments = original_root.get(&arguments_path);
             if patch && arguments.exists() && arguments.kind() != Kind::String {
                 return Err("apply_patch dispatcher arguments snapshot must be a string".to_owned());
             }
@@ -766,13 +768,15 @@ fn dispatcher_event_name(root: &gjson::Value<'_>) -> String {
 fn dispatcher_keys(root: &gjson::Value<'_>) -> Vec<String> {
     let mut keys = Vec::new();
     for path in ["item.id", "item_id"] {
-        let id = root.get(path).str();
+        let id_field = root.get(path);
+        let id = id_field.str();
         if !id.is_empty() {
             keys.push(format!("item:{id}"));
         }
     }
     for path in ["item.call_id", "call_id"] {
-        let id = root.get(path).str();
+        let id_field = root.get(path);
+        let id = id_field.str();
         if !id.is_empty() {
             keys.push(format!("call:{id}"));
         }
@@ -1116,7 +1120,7 @@ mod tests {
                     serde_json::to_string(wrapper).unwrap()
                 );
                 state.remember_dispatcher_arguments(remembered.as_bytes());
-                let restored = gjson::parse(wrapper).get("arguments").json();
+                let restored = gjson::parse(wrapper).get("arguments").json().to_owned();
                 let transformed = format!(
                     r#"{{"type":"response.function_call_arguments.done","item_id":"a","arguments":{}}}"#,
                     serde_json::to_string(&restored).unwrap()
@@ -1138,7 +1142,8 @@ mod tests {
             } else {
                 let expected = gjson::parse(wrappers.last().unwrap())
                     .get("arguments")
-                    .json();
+                    .json()
+                    .to_owned();
                 assert!(
                     error.is_none() && !out.is_empty(),
                     "{label} {out:?} {error:?}"

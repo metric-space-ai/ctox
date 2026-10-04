@@ -271,7 +271,7 @@ pub fn lookup_static_registry_model_info(
     } else {
         Vec::new()
     };
-    [
+    let found = [
         &catalog.claude,
         &catalog.gemini,
         &catalog.vertex,
@@ -287,7 +287,8 @@ pub fn lookup_static_registry_model_info(
     .into_iter()
     .flatten()
     .find(|model| model.id == model_id)
-    .cloned()
+    .cloned();
+    found
 }
 
 pub fn model_override_headers(

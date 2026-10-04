@@ -67,9 +67,8 @@ fn sse_event_data_is_a_self_terminating_frame() {
         sse_event_data("event2", br#"{"b":2}"#),
     ]
     .concat();
-    let frames: Vec<_> = concatenated
-        .split(|byte| *byte == b'\n')
-        .collect::<Vec<_>>()
+    let lines: Vec<_> = concatenated.split(|byte| *byte == b'\n').collect();
+    let frames: Vec<_> = lines
         .split(|line| line.is_empty())
         .filter(|frame| !frame.is_empty())
         .collect();

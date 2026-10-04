@@ -151,7 +151,13 @@
   Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
   account-kind collisions, legacy Home execution, public JSON boundaries, native
   capability refresh and built-in metadata. There are129 prepared candidate test
-  functions in total; none of the current candidate Cargo/Go checks has executed.
+  functions in total; no candidate Rust or Go tests have executed. The first
+  source-pinned Cargo attempt at a5d8 passed formatting and then stopped with23
+  compiler errors. Source repairs now address temporary GJSON/path lifetimes,
+  raw-byte conversions, control-character hex formatting, local catalog iterator
+  drop order, nested cancellation borrows and sibling/public access boundaries.
+  Existing wire/Unicode/ownership/cancellation assertions remain intact; the
+  required native retry and Go oracle execution are still pending.
   The first admitted57c4 candidate stopped during formatting because an older
   regression used a non-ASCII Rust raw-byte literal. The fixture now obtains
   the identical UTF-8 bytes from a string; its Unicode/HTML-preservation guard
