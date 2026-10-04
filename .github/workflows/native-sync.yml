@@ -297,6 +297,22 @@ jobs:
             | tee "$RUNNER_TEMP/ctox-host-proof/command-completion-tests.log"
           cargo test --locked --bin ctox --jobs 2 -- mission::channels::tests::business_command mission::channels::tests::business_control incomplete_plan command_writeback_tests direct_plan_v2 --test-threads=2 \
             | tee "$RUNNER_TEMP/ctox-host-proof/command-transaction-tests.log"
+      - name: Knowledge Parquet snapshot regressions
+        if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test --locked --bin ctox --jobs 2 -- knowledge::data::tests:: --list \
+            | tee "$RUNNER_TEMP/ctox-host-proof/knowledge-tests-list.log"
+          for test_name in \
+            knowledge_table_snapshot_survives_replacement_between_pages \
+            knowledge_table_row_window_clamps_limit_and_rejects_unknown_table \
+            memoized_file_sha256_reuses_digest_until_the_file_changes; do
+            grep -Fx "knowledge::data::tests::$test_name: test" \
+              "$RUNNER_TEMP/ctox-host-proof/knowledge-tests-list.log"
+          done
+          cargo test --locked --bin ctox --jobs 2 -- knowledge::data::tests:: --test-threads=2 \
+            | tee "$RUNNER_TEMP/ctox-host-proof/knowledge-tests.log"
       - name: Fresh capability grants, epochs and installed ownership
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash
@@ -317,6 +333,7 @@ jobs:
             first_party_catalog_apps_get_admin_grants_for_declared_collections_only; do
             grep -F "test business_os::store::tests::$regression ... ok" "$RUNNER_TEMP/ctox-host-proof/capability-grant-tests.log"
           done
+
       - name: Preserve native schema migration history and deletion markers
         if: ${{ !cancelled() && steps.native-binary.outcome == 'success' }}
         shell: bash

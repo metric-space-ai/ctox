@@ -3220,6 +3220,9 @@ fn outbound_apply_research_adapter_scrape_effect(
                             "test_provider_account_inactive",
                             "test_provider_account_inactive",
                         ),
+                        scrape::ScrapeRunStatus::InvalidInput => {
+                            ("test_invalid_input", "test_invalid_input")
+                        }
                         scrape::ScrapeRunStatus::Blocked => ("test_blocked", "test_blocked"),
                         scrape::ScrapeRunStatus::PortalDrift => {
                             ("test_portal_drift", "test_portal_drift")
