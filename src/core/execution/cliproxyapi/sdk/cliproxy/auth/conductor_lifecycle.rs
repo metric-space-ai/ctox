@@ -22,6 +22,9 @@ pub enum AuthLifecycleError {
     DuplicateStoreRecord,
     DurableRecordMissing,
     PersistenceClassChange,
+    AuthNotRegistered,
+    StaleRegistrationEpoch,
+    RegistrationEpochExhausted,
     Store(AuthStoreError),
 }
 
@@ -32,6 +35,9 @@ impl fmt::Display for AuthLifecycleError {
             Self::DuplicateStoreRecord => "auth store contains duplicate stable ids",
             Self::DurableRecordMissing => "durable auth record is missing",
             Self::PersistenceClassChange => "auth update changed persistence ownership",
+            Self::AuthNotRegistered => "auth is no longer registered",
+            Self::StaleRegistrationEpoch => "auth result belongs to an obsolete registration",
+            Self::RegistrationEpochExhausted => "auth registration epoch is exhausted",
             Self::Store(_) => "auth lifecycle store operation failed",
         })
     }
@@ -79,6 +85,7 @@ pub struct AuthLifecycle {
     records: RwLock<BTreeMap<String, Auth>>,
     mutation: RwLock<()>,
     auth_locks: Mutex<BTreeMap<String, Arc<Mutex<()>>>>,
+    registration_epochs: Mutex<BTreeMap<String, u64>>,
     schedule: Arc<RefreshSchedule>,
     refresh: RefreshCoordinator,
     refresh_interval: Duration,
@@ -97,6 +104,7 @@ impl AuthLifecycle {
             records: RwLock::new(BTreeMap::new()),
             mutation: RwLock::new(()),
             auth_locks: Mutex::new(BTreeMap::new()),
+            registration_epochs: Mutex::new(BTreeMap::new()),
             schedule,
             refresh_interval,
         }
@@ -149,6 +157,7 @@ impl AuthLifecycle {
         {
             return Err(AuthLifecycleError::DurableRecordMissing);
         }
+        auth.registration_epoch = self.next_registration_epoch(&auth)?;
         if should_persist(&auth, options.persistence) {
             self.store.save(&auth).map_err(AuthLifecycleError::Store)?;
         }
@@ -159,13 +168,49 @@ impl AuthLifecycle {
 
     pub fn update(
         &self,
+        auth: Auth,
+        options: AuthMutationOptions,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Auth>, AuthLifecycleError> {
+        self.update_internal(None, auth, options, now, false)
+    }
+
+    pub fn update_prepared(
+        &self,
+        base: &Auth,
+        auth: Auth,
+        options: AuthMutationOptions,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Auth>, AuthLifecycleError> {
+        self.update_internal(Some(base), auth, options, now, false)
+    }
+
+    pub fn update_refreshed(
+        &self,
+        base: &Auth,
+        auth: Auth,
+        options: AuthMutationOptions,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Auth>, AuthLifecycleError> {
+        self.update_internal(Some(base), auth, options, now, true)
+    }
+
+    // ref: sdk/cliproxy/auth/conductor_lifecycle.go:175-278 @ d7914af
+    // Validate, persist and install under one lifecycle/per-identity lock scope.
+    fn update_internal(
+        &self,
+        base: Option<&Auth>,
         mut auth: Auth,
         options: AuthMutationOptions,
         now: DateTime<Utc>,
+        refreshed: bool,
     ) -> Result<Option<Auth>, AuthLifecycleError> {
         let id = auth.id.trim().to_owned();
         if id.is_empty() {
             return Ok(None);
+        }
+        if base.is_some_and(|base| base.id.trim() != id) {
+            return Err(AuthLifecycleError::InvalidAuthId);
         }
         auth.id = id.clone();
         let _gate = self
@@ -179,6 +224,11 @@ impl AuthLifecycle {
         let Some(cached) = self.records_read().get(&id).cloned() else {
             return Ok(None);
         };
+        if base.is_some_and(|base| base.registration_epoch != cached.registration_epoch)
+            || (auth.registration_epoch != 0 && auth.registration_epoch < cached.registration_epoch)
+        {
+            return Err(AuthLifecycleError::StaleRegistrationEpoch);
+        }
 
         let cached_persistent = should_persist(&cached, PersistenceIntent::Persist);
         let incoming_persistent = should_persist(&auth, PersistenceIntent::Persist);
@@ -192,6 +242,18 @@ impl AuthLifecycle {
             cached.clone()
         };
 
+        if let Some(base) = base {
+            let mut current = existing.clone();
+            current.preserve_runtime_state_from(&cached);
+            current.registration_epoch = cached.registration_epoch;
+            auth = if refreshed {
+                super::merge_refreshed_auth(base, &current, &auth, now)
+            } else {
+                super::merge_prepared_auth(base, &current, &auth)
+            };
+        } else if auth.registration_epoch == 0 {
+            auth.registration_epoch = cached.registration_epoch;
+        }
         auth.preserve_runtime_state_from(&cached);
         if existing.disabled
             || existing.status == super::AuthStatus::Disabled
@@ -437,10 +499,13 @@ impl AuthLifecycle {
 
     fn replace_records_and_schedule(
         &self,
-        loaded: BTreeMap<String, Auth>,
+        mut loaded: BTreeMap<String, Auth>,
         now: DateTime<Utc>,
     ) -> Result<usize, AuthLifecycleError> {
         let old_ids = self.records_read().keys().cloned().collect::<BTreeSet<_>>();
+        for auth in loaded.values_mut() {
+            auth.registration_epoch = self.next_registration_epoch(auth)?;
+        }
         for id in old_ids {
             self.schedule.remove(&id);
         }
@@ -450,6 +515,25 @@ impl AuthLifecycle {
         let len = loaded.len();
         *self.records_write() = loaded;
         Ok(len)
+    }
+
+    fn next_registration_epoch(&self, auth: &Auth) -> Result<u64, AuthLifecycleError> {
+        let cached_epoch = self
+            .records_read()
+            .get(&auth.id)
+            .map_or(0, |auth| auth.registration_epoch);
+        let mut epochs = self
+            .registration_epochs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let previous = epochs.entry(auth.id.clone()).or_default();
+        let next = (*previous)
+            .max(cached_epoch)
+            .max(auth.registration_epoch)
+            .checked_add(1)
+            .ok_or(AuthLifecycleError::RegistrationEpochExhausted)?;
+        *previous = next;
+        Ok(next)
     }
 
     fn reschedule(&self, auth: &Auth, now: DateTime<Utc>) {
@@ -471,6 +555,10 @@ impl AuthLifecycle {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
+
+#[cfg(test)]
+#[path = "conductor_lifecycle_candidate_test.rs"]
+mod candidate_tests;
 
 impl fmt::Debug for AuthLifecycle {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {

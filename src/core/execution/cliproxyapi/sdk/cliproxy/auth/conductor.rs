@@ -444,8 +444,35 @@ impl AuthManager {
         options: AuthMutationOptions,
         now: DateTime<Utc>,
     ) -> Result<Option<Auth>, AuthManagerError> {
+        self.publish_auth_update(|| self.lifecycle.update(auth, options, now))
+    }
+
+    pub fn update_prepared_auth(
+        &self,
+        base: &Auth,
+        auth: Auth,
+        options: AuthMutationOptions,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Auth>, AuthManagerError> {
+        self.publish_auth_update(|| self.lifecycle.update_prepared(base, auth, options, now))
+    }
+
+    pub fn update_refreshed_auth(
+        &self,
+        base: &Auth,
+        auth: Auth,
+        options: AuthMutationOptions,
+        now: DateTime<Utc>,
+    ) -> Result<Option<Auth>, AuthManagerError> {
+        self.publish_auth_update(|| self.lifecycle.update_refreshed(base, auth, options, now))
+    }
+
+    fn publish_auth_update(
+        &self,
+        operation: impl FnOnce() -> Result<Option<Auth>, super::AuthLifecycleError>,
+    ) -> Result<Option<Auth>, AuthManagerError> {
         let _guard = self.lock_mutation();
-        let updated = self.lifecycle.update(auth, options, now)?;
+        let updated = operation()?;
         if let Some(updated) = &updated {
             if let Err(error) = self.scheduler.refresh_entry(&updated.id) {
                 self.scheduler.remove(&updated.id);

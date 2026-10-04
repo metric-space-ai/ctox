@@ -250,6 +250,9 @@ pub struct Auth {
     pub id: String,
     #[serde(skip)]
     pub index: String,
+    /// Manager-owned registration cycle; never supplied by JSON or storage.
+    #[serde(skip)]
+    pub registration_epoch: u64,
     pub provider: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub prefix: String,
@@ -297,6 +300,7 @@ impl Default for Auth {
         Self {
             id: String::new(),
             index: String::new(),
+            registration_epoch: 0,
             provider: String::new(),
             prefix: String::new(),
             file_name: String::new(),
@@ -368,6 +372,9 @@ impl Auth {
     /// Preserves process-owned state when an external source supplies a fresh
     /// durable representation of the same auth record.
     pub(crate) fn preserve_runtime_state_from(&mut self, existing: &Self) {
+        if self.registration_epoch == 0 {
+            self.registration_epoch = existing.registration_epoch;
+        }
         if self.index.trim().is_empty() {
             self.index.clone_from(&existing.index);
             self.index_assigned = existing.index_assigned;

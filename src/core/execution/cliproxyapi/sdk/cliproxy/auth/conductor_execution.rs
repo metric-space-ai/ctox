@@ -422,24 +422,30 @@ impl GenericAuthRuntime {
             return Ok(());
         };
         let _guard = self.prepare_lock(&auth.id).lock_owned().await;
-        if let Some(current) = self.manager.lifecycle().get_cached(&auth.id) {
-            *auth = current;
-        }
+        *auth = self
+            .manager
+            .lifecycle()
+            .get_cached(&auth.id)
+            .ok_or_else(|| {
+                Arc::new(super::AuthLifecycleError::AuthNotRegistered) as AuthPreparationError
+            })?;
         if !preparer.should_prepare(auth) {
             return Ok(());
         }
+        let base = auth.clone();
         preparer.prepare(auth).await?;
         let published = self
             .manager
-            .update(
+            .update_prepared_auth(
+                &base,
                 auth.clone(),
                 AuthMutationOptions::default(),
                 self.clock.now(),
             )
             .map_err(|error| Arc::new(error) as AuthPreparationError)?;
-        if let Some(published) = published {
-            *auth = published;
-        }
+        *auth = published.ok_or_else(|| {
+            Arc::new(super::AuthLifecycleError::AuthNotRegistered) as AuthPreparationError
+        })?;
         Ok(())
     }
 

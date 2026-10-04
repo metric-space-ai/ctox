@@ -38,6 +38,14 @@ injected host presenter and returns the owned account to the existing Manager.
 Cancellation takes precedence over login work and drops active device/poll
 receivers without a write. Metadata retains subscription observations and the
 separate DCA deadline; no scheduled API-key expiry is fabricated.
-Production host/presenter registration, the executor, on-demand mint preparation
-and manager refresh acceptance still need integration. Synthetic native guards
+The auth manager now accepts preparation and refresh candidates only from the
+current process-owned registration cycle. Re-registering, reloading or removing
+an account invalidates earlier candidates; the epoch is excluded from client JSON
+and persistence. Three-way merging preserves concurrent user settings, disabling
+and active cooldowns. Validation, durable save and installation share the same
+manager/lifecycle locks. Request preparation must use that accepted result and
+fails if the account disappears during minting.
+
+Production host/presenter registration, the Meta executor and its selected
+on-demand mint/refresh capability binding still need integration. Synthetic native guards
 and frozen Go oracles do not establish live Meta, provider hub or App acceptance.

@@ -29,6 +29,7 @@ mod home_model_capabilities;
 pub mod home_result;
 pub mod home_selection;
 pub mod home_session_alias;
+pub mod metadata_merge;
 pub mod oauth_model_alias;
 pub mod persist_policy;
 pub mod response_model_rewriter;
@@ -124,6 +125,10 @@ pub use home_in_flight_publisher::{
 };
 pub use home_selection::{HomeAttemptLease, HomeDispatchSelection};
 pub use home_session_alias::{HomeSessionAliasCache, DEFAULT_HOME_SESSION_ALIAS_TTL};
+pub use metadata_merge::{
+    is_auth_token_payload_key, merge_existing_auth_metadata, merge_prepared_auth,
+    merge_refreshed_auth,
+};
 pub use oauth_model_alias::{
     model_alias_channel, model_alias_lookup_candidates, oauth_model_alias_channel,
     oauth_model_aliases_from_attributes, preserve_resolved_model_suffix,

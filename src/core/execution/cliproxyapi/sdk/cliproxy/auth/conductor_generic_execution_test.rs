@@ -17,6 +17,9 @@ use crate::sdk::pluginapi::{
 
 use super::*;
 
+#[path = "request_auth_prepare_race_test.rs"]
+mod prepared_race_tests;
+
 #[derive(Default)]
 struct MemoryAuthStore(Mutex<BTreeMap<String, Auth>>);
 
