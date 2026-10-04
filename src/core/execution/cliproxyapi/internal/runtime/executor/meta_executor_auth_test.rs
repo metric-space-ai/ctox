@@ -159,6 +159,182 @@ fn candidate_meta_scheduled_cancellation_wakes_all_waiters_and_remembers_earlier
         .is_ready());
 }
 
+#[derive(Default)]
+struct ScheduledStore(Mutex<BTreeMap<String, Auth>>);
+impl crate::sdk::cliproxy::auth::AuthStore for ScheduledStore {
+    fn list(&self) -> Result<Vec<Auth>, crate::sdk::cliproxy::auth::AuthStoreError> {
+        Ok(self.0.lock().unwrap().values().cloned().collect())
+    }
+    fn save(&self, account: &Auth) -> Result<String, crate::sdk::cliproxy::auth::AuthStoreError> {
+        self.0
+            .lock()
+            .unwrap()
+            .insert(account.id.clone(), account.clone());
+        Ok(account.id.clone())
+    }
+    fn delete(&self, id: &str) -> Result<(), crate::sdk::cliproxy::auth::AuthStoreError> {
+        self.0.lock().unwrap().remove(id);
+        Ok(())
+    }
+}
+struct ScheduledClock;
+impl crate::sdk::cliproxy::auth::AutoRefreshClock for ScheduledClock {
+    fn now(&self) -> DateTime<Utc> {
+        Clock.now()
+    }
+}
+struct ScheduledSink;
+impl crate::sdk::cliproxy::auth::ModelResumeSink for ScheduledSink {
+    fn resume_model(&self, _: &str, _: &str) {}
+}
+fn scheduled_worker(
+    client: Arc<Transport>,
+) -> (
+    crate::sdk::cliproxy::auth::AutoRefreshWorker,
+    Arc<crate::sdk::cliproxy::auth::AuthLifecycle>,
+    Arc<ScheduledStore>,
+    Arc<crate::sdk::cliproxy::auth::RefreshSchedule>,
+    u64,
+) {
+    use crate::internal::runtime::executor::meta_executor_scheduled::MetaScheduledRefresher;
+    use crate::sdk::cliproxy::auth::{
+        AuthLifecycle, AuthMutationOptions, AutoRefreshConfig, AutoRefreshWorker,
+        ProviderExecutorRegistration, ProviderExecutorRegistry, RefreshSchedule,
+    };
+    let store = Arc::new(ScheduledStore::default());
+    let schedule = Arc::new(RefreshSchedule::default());
+    let lifecycle = Arc::new(AuthLifecycle::new(
+        store.clone(),
+        schedule.clone(),
+        std::time::Duration::from_secs(5),
+    ));
+    let registry = Arc::new(ProviderExecutorRegistry::default());
+    registry.register(Arc::new(
+        ProviderExecutorRegistration::new(
+            "meta",
+            Arc::new(MetaScheduledRefresher::new(
+                Arc::new(capability(client)),
+                tokio::runtime::Handle::current(),
+            )),
+        )
+        .unwrap(),
+    ));
+    let mut account = auth();
+    account
+        .metadata
+        .insert("refresh_interval_seconds".into(), json!(60));
+    let registered = lifecycle
+        .register(account, AuthMutationOptions::default(), Clock.now())
+        .unwrap();
+    let worker = AutoRefreshWorker::spawn(
+        lifecycle.clone(),
+        schedule.clone(),
+        registry,
+        Arc::new(ScheduledSink),
+        Arc::new(ScheduledClock),
+        AutoRefreshConfig {
+            interval: std::time::Duration::from_secs(5),
+            concurrency: 1,
+            job_buffer: 1,
+        },
+    );
+    (
+        worker,
+        lifecycle,
+        store,
+        schedule,
+        registered.registration_epoch,
+    )
+}
+async fn await_scheduled(predicate: impl Fn() -> bool) {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !predicate() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("owned scheduled worker must finish the observed transition");
+}
+
+#[tokio::test]
+async fn candidate_meta_scheduled_worker_publishes_success_and_next_due_from_real_bridge() {
+    let client = Transport::new(200, minted());
+    let (worker, lifecycle, store, schedule, registered_epoch) = scheduled_worker(client.clone());
+    await_scheduled(|| {
+        lifecycle.get_cached("fixture-meta").is_some_and(|record| {
+            record.metadata.get("api_key") == Some(&json!("LLM|test-only-minted"))
+        })
+    })
+    .await;
+    worker.stop().await;
+    let cached = lifecycle.get_cached("fixture-meta").unwrap();
+    let persisted = store.0.lock().unwrap().get("fixture-meta").unwrap().clone();
+    assert_eq!(cached.metadata, persisted.metadata);
+    assert_eq!(cached.attributes["api_key"], "LLM|test-only-minted");
+    assert!(registered_epoch > 0);
+    assert_eq!(cached.registration_epoch, registered_epoch);
+    assert_eq!(persisted.registration_epoch, registered_epoch);
+    assert_eq!(cached.metadata["subs_tier_name"], json!("Muse Pro"));
+    assert_eq!(
+        schedule.peek(),
+        Some(Clock.now() + chrono::Duration::seconds(60))
+    );
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn candidate_meta_scheduled_worker_records_real_auth_rejection_without_replacing_key() {
+    let client = Transport::new(401, json!({"error":"unauthorized"}));
+    let (worker, lifecycle, store, schedule, _) = scheduled_worker(client.clone());
+    await_scheduled(|| {
+        lifecycle.get_cached("fixture-meta").is_some_and(|record| {
+            record
+                .last_error
+                .as_ref()
+                .is_some_and(|error| error.http_status == 401)
+        })
+    })
+    .await;
+    worker.stop().await;
+    let cached = lifecycle.get_cached("fixture-meta").unwrap();
+    let persisted = store.0.lock().unwrap().get("fixture-meta").unwrap().clone();
+    assert_eq!(cached.metadata, persisted.metadata);
+    assert_eq!(cached.last_error, persisted.last_error);
+    assert_eq!(
+        cached.metadata["access_token"],
+        json!("dca:test-only-device")
+    );
+    assert!(!cached.attributes.contains_key("api_key"));
+    assert!(schedule.is_empty());
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn candidate_meta_scheduled_worker_stop_during_loading_keeps_cached_and_durable_auth() {
+    let client = Transport::held();
+    let (worker, lifecycle, store, _, _) = scheduled_worker(client.clone());
+    let before = lifecycle.get_cached("fixture-meta").unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), client.entered.acquire())
+        .await
+        .unwrap()
+        .unwrap()
+        .forget();
+    tokio::time::timeout(std::time::Duration::from_secs(2), worker.stop())
+        .await
+        .expect("stopping the actual worker cancels its active mint");
+    let cached = lifecycle.get_cached("fixture-meta").unwrap();
+    let persisted = store.0.lock().unwrap().get("fixture-meta").unwrap().clone();
+    for record in [cached, persisted] {
+        assert_eq!(record.metadata, before.metadata);
+        assert_eq!(record.attributes, before.attributes);
+        assert_eq!(record.last_error, before.last_error);
+        assert_eq!(record.status, before.status);
+        assert_eq!(record.last_refreshed_at, before.last_refreshed_at);
+    }
+    assert!(client.sender.lock().unwrap().as_ref().unwrap().is_closed());
+    assert_eq!(client.requests.lock().unwrap().len(), 1);
+}
+
 #[test]
 fn candidate_meta_request_auth_file_key_with_dca_retains_oauth_refresh_capability() {
     let client = Transport::new(200, minted());

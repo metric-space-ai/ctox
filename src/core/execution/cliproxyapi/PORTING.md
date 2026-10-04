@@ -72,7 +72,7 @@
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
   and committed-stream cooldown consumers. The finite targeted controller
-  requires177 actual native tests across22 groups, including36 new Meta
+  requires180 actual native tests across22 groups, including39 new Meta
   tool/count/response/usage/transport/factory/cooldown/scheduled-refresh guards,
   three new shared cancellation-publication guards,15 existing background-worker
   guards and six retained
@@ -91,7 +91,10 @@
   host's existing Tokio handle on the existing blocking worker boundary;
   cancellation wakes active futures without a polling loop or detached task.
   The shared coordinator checks cancellation before recording either success
-  or failure and before saving a candidate. Its new regressions are prepared,
+  or failure and before saving a candidate. Three further tests exercise the
+  real AutoRefreshWorker through that native bridge for success,401 and an
+  aborted body read, including cache/store consistency and next scheduling.
+  These new regressions are prepared,
   not executed. Production transport/thinking/session/usage-owner, presenter
   and scheduled-worker registration, plus reviewed promotion, remain open.
 
@@ -217,7 +220,7 @@
   passed24 scoped groups before the history group reported five passes and one
   incorrect oracle; that oracle was corrected later. Its immutable results retain
   their original source/dependency scope. They do not prove the latest aggregate
-  candidate: its177 targeted native requirements and full Go checks are unrun.
+  candidate: its180 targeted native requirements and full Go checks are unrun.
   The first source-pinned Cargo attempt at a5d8 passed formatting and stopped with23
   compiler errors. Source repairs now address temporary GJSON/path lifetimes,
   raw-byte conversions, control-character hex formatting, local catalog iterator
