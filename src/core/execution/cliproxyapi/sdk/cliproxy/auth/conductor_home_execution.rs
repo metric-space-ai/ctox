@@ -57,7 +57,13 @@ impl HomeAuthRuntime {
                 .attempt()
                 .map_err(|_| HomeExecutionError::AttemptUnavailable)?;
             let execute = |auth: &Auth| {
-                let execution = prepare_executor_request(&request, auth, selection.provider());
+                let execution = super::home_model_capabilities::prepare_home_executor_request(
+                    self.manager().as_ref(),
+                    &request,
+                    auth,
+                    &selection,
+                    &route_model,
+                );
                 let executor = selection.executor();
                 async move {
                     if count_tokens {
@@ -146,7 +152,13 @@ impl HomeAuthRuntime {
         let executor = selection.executor();
         let mut refreshed = false;
         let result = loop {
-            let execution = prepare_executor_request(&request, &auth, selection.provider());
+            let execution = super::home_model_capabilities::prepare_home_executor_request(
+                self.manager().as_ref(),
+                &request,
+                &auth,
+                &selection,
+                &route_model,
+            );
             match executor.execute_stream(execution).await {
                 Ok(mut stream) => match stream.chunks.recv().await {
                     Some(first)
@@ -370,6 +382,10 @@ pub fn prepare_executor_request(
     provider: &str,
 ) -> ExecutorRequest {
     let mut request = request.clone();
+    // A new credential selection must never inherit a previous attempt's
+    // private capability. The generic conductor rebinds from its own snapshot.
+    request.resolved_model_info = None;
+    request.resolved_home_model_options = None;
     request.auth_id.clone_from(&auth.id);
     request.auth_provider = provider.to_owned();
     request.auth_metadata.clone_from(&auth.metadata);

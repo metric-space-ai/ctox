@@ -42,6 +42,13 @@ fn server_tool_type_classifier_matches_candidate_families() {
         "web_search_20250305",
         "code_execution_20250522",
         "tool_search_tool_regex_20251119",
+        "advisor_20260301",
+        "agent_toolset_20260401",
+        "bash_20250124",
+        "text_editor_20250728",
+        "memory_20250818",
+        "computer_20241022",
+        "web_fetch_20260209",
     ] {
         assert!(is_claude_server_tool_type(tool_type));
     }

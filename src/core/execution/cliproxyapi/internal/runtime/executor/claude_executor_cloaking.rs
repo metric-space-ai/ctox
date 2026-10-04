@@ -43,13 +43,22 @@ pub struct ClaudeCloakPolicy {
 }
 
 impl ClaudeCloakPolicy {
+    pub(crate) fn resolved_current_date(&self) -> String {
+        self.current_date
+            .as_deref()
+            .map(str::trim)
+            .filter(|date| !date.is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| current_date_in_timezone(self.timezone))
+    }
+
     pub fn oauth_default() -> Self {
         Self {
             mode: "auto".to_owned(),
             strict_mode: false,
             sensitive_words: Vec::new(),
             client_user_agent: String::new(),
-            billing_version: "2.1.220".to_owned(),
+            billing_version: "2.1.280".to_owned(),
             entrypoint: "cli".to_owned(),
             workload: String::new(),
             oauth_mode: true,

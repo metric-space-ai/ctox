@@ -76,6 +76,7 @@ impl UsageState {
 pub struct ClaudeToResponsesState {
     sequence: u64,
     response_id: String,
+    stop_reason: String,
     text: String,
     text_item_id: String,
     text_output_index: Option<usize>,
@@ -186,6 +187,7 @@ pub fn convert_claude_response_to_openai_responses_non_stream(
     }
 
     let mut response_id = String::new();
+    let mut stop_reason = String::new();
     let mut usage = UsageState::default();
     let mut items = Vec::<OutputItem>::new();
     let mut block_to_item = BTreeMap::<usize, usize>::new();
@@ -209,6 +211,12 @@ pub fn convert_claude_response_to_openai_responses_non_stream(
                     .unwrap_or("")
                     .to_owned();
                 usage.merge(event.pointer("/message/usage"));
+                if let Some(reason) = event
+                    .pointer("/message/stop_reason")
+                    .and_then(Value::as_str)
+                {
+                    stop_reason = reason.to_owned();
+                }
             }
             "content_block_start" => {
                 let block_index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
@@ -329,13 +337,19 @@ pub fn convert_claude_response_to_openai_responses_non_stream(
                     _ => {}
                 }
             }
-            "message_delta" => usage.merge(event.get("usage")),
+            "message_delta" => {
+                usage.merge(event.get("usage"));
+                if let Some(reason) = event.pointer("/delta/stop_reason").and_then(Value::as_str) {
+                    stop_reason = reason.to_owned();
+                }
+            }
             _ => {}
         }
     }
     let request = pick_request(original_request, request);
     let mut state = ClaudeToResponsesState {
         response_id,
+        stop_reason,
         usage,
         ..ClaudeToResponsesState::default()
     };
@@ -354,6 +368,8 @@ pub fn convert_claude_response_to_openai_responses_non_stream(
             }
             OutputKind::Message => {
                 let mut message = message_item(&item.id, &item.text);
+                message["status"] =
+                    Value::String(claude_responses_terminal_state(&state.stop_reason).1.into());
                 message["content"][0]["annotations"] = Value::Array(item.annotations);
                 output.push(message);
             }
@@ -380,7 +396,9 @@ pub fn convert_claude_response_to_openai_responses_non_stream(
         }
     }
     state.reasoning_chars = reasoning_chars;
-    let mut response = response_shell(&state, "", "completed", request);
+    let (_, status, details) = claude_responses_terminal_state(&state.stop_reason);
+    let mut response = response_shell(&state, "", status, request);
+    response["incomplete_details"] = details;
     response["output"] = Value::Array(output);
     let reasoning_tokens = reasoning_chars / 4;
     if reasoning_tokens > 0 {
@@ -546,17 +564,15 @@ pub fn convert_claude_response_to_openai_responses(
                 output.extend(finish_reasoning(state));
             }
         }
-        "message_delta" => state.usage.merge(event.get("usage")),
+        "message_delta" => state.apply(&event),
         "message_stop" => {
             if state.terminal {
                 return Vec::new();
             }
             output.extend(finish_text(state));
             let completed = stream_completed(state, pick_request(original_request, request));
-            output.push(state.emit(
-                "response.completed",
-                json!({"type":"response.completed", "response":completed}),
-            ));
+            let event_type = claude_responses_terminal_state(&state.stop_reason).0;
+            output.push(state.emit(event_type, json!({"type":event_type, "response":completed})));
             state.terminal = true;
         }
         "error" => {
@@ -638,12 +654,30 @@ fn finish_reasoning(state: &mut ClaudeToResponsesState) -> Vec<Vec<u8>> {
     ]
 }
 
+// ref: internal/translator/claude/openai/responses/claude_openai-responses_response.go:166-192 @ 2044a01f
+fn claude_responses_terminal_state(stop_reason: &str) -> (&'static str, &'static str, Value) {
+    if stop_reason.trim().eq_ignore_ascii_case("max_tokens") {
+        (
+            "response.incomplete",
+            "incomplete",
+            json!({"reason":"max_output_tokens"}),
+        )
+    } else if stop_reason.trim().eq_ignore_ascii_case("pause_turn") {
+        // Server-tool iteration pauses are unfinished, without a Responses token-limit reason.
+        ("response.incomplete", "incomplete", Value::Null)
+    } else {
+        ("response.completed", "completed", Value::Null)
+    }
+}
+
 fn stream_completed(state: &ClaudeToResponsesState, request: &[u8]) -> Value {
+    let (_, status, details) = claude_responses_terminal_state(&state.stop_reason);
     let mut response = json!({
         "id": state.response_id,
         "object": "response",
         "created_at": 0,
-        "status": "completed",
+        "status": status,
+        "incomplete_details": details,
         "background": false,
         "error": null
     });
@@ -664,6 +698,11 @@ fn stream_completed(state: &ClaudeToResponsesState, request: &[u8]) -> Value {
             item["namespace"] = Value::String(namespace);
         }
         indexed.insert(tool.output_index, item);
+    }
+    for item in indexed.values_mut() {
+        if item.get("type").and_then(Value::as_str) == Some("message") {
+            item["status"] = Value::String(status.into());
+        }
     }
     if !indexed.is_empty() {
         response["output"] = Value::Array(indexed.into_values().collect());
@@ -704,8 +743,16 @@ impl ClaudeToResponsesState {
                 let msg = &event["message"];
                 self.response_id = msg["id"].as_str().unwrap_or("").into();
                 self.usage.merge(msg.get("usage"));
+                if let Some(reason) = msg.get("stop_reason").and_then(Value::as_str) {
+                    self.stop_reason = reason.to_owned();
+                }
             }
-            "message_delta" => self.usage.merge(event.get("usage")),
+            "message_delta" => {
+                self.usage.merge(event.get("usage"));
+                if let Some(reason) = event.pointer("/delta/stop_reason").and_then(Value::as_str) {
+                    self.stop_reason = reason.to_owned();
+                }
+            }
             "content_block_start" => {
                 let index = event["index"].as_u64().unwrap_or(0) as usize;
                 let block = &event["content_block"];

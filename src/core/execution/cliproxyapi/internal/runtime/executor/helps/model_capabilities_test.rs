@@ -13,7 +13,9 @@ use crate::sdk::translator::Format;
 use super::codex_multi_agent_v2::{
     optimize_codex_multi_agent_v2_request, restore_codex_multi_agent_v2_response,
     rewrite_codex_multi_agent_v2_input, rewrite_codex_spawn_agent_description,
-    translate_request_with_codex_multi_agent_v2, CodexMultiAgentV2Processor,
+    translate_request_pair_with_api_key_model_compatibility_and_update_intent,
+    translate_request_with_codex_multi_agent_v2,
+    translate_request_with_codex_multi_agent_v2_for_executor, CodexMultiAgentV2Processor,
 };
 use super::model_capabilities::{
     apply_request_thinking, RequestThinkingEngine, RequestThinkingInput, RequestThinkingRoute,
@@ -271,6 +273,45 @@ fn codex_multi_agent_wrappers_are_byte_and_field_transparent() {
             CodexCall::Restore(payload.to_vec(), true),
         ]
     );
+}
+
+#[test]
+fn api_key_compatibility_normalizes_reserved_integers_before_the_processor() {
+    let processor = CapturingCodexProcessor::default();
+    let headers = Headers::from([(
+        "User-Agent".to_owned(),
+        vec!["Codex Desktop/1.0".to_owned()],
+    )]);
+    let payload = br#"{"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"yield_time_ms":{"type":"number"}}}}]}"#;
+    let from = Format::from("openai-response");
+    let to = Format::from("claude");
+    let translated = translate_request_with_codex_multi_agent_v2_for_executor(
+        &processor, &headers, "claude", &from, &to, "gpt-5.5", payload, false,
+    );
+    let seen: serde_json::Value = serde_json::from_slice(&translated).unwrap();
+    assert_eq!(
+        seen["tools"][0]["parameters"]["properties"]["yield_time_ms"]["type"],
+        "integer"
+    );
+    let codex_target = translate_request_with_codex_multi_agent_v2_for_executor(
+        &processor, &headers, "codex", &from, &to, "gpt-5.5", payload, false,
+    );
+    assert_eq!(codex_target, payload);
+    let (original, working, updates_changed) =
+        translate_request_pair_with_api_key_model_compatibility_and_update_intent(
+            &processor, &headers, "claude", &from, &to, "gpt-5.5", payload, payload, false, true,
+        );
+    assert!(!updates_changed);
+    assert_eq!(original, working);
+    assert!(!std::ptr::eq(original.as_ptr(), working.as_ptr()));
+    let other = br#"{"tools":[{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"yield_time_ms":{"type":"number"},"cmd":{"type":"string"}}}}]}"#;
+    let (_original, _working, updates_changed) =
+        translate_request_pair_with_api_key_model_compatibility_and_update_intent(
+            &processor, &headers, "claude", &from, &to, "gpt-5.5", payload, other, false, false,
+        );
+    assert!(!updates_changed);
+    let calls = processor.calls.borrow();
+    assert_eq!(calls.len(), 5);
 }
 
 #[test]

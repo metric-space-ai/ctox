@@ -317,7 +317,11 @@ where
         ));
     }
     handler
-        .handle_provider_route(request.provider.as_deref(), &request.body)
+        .handle_provider_route_with_headers(
+            request.provider.as_deref(),
+            &request.headers,
+            &request.body,
+        )
         .await
 }
 
@@ -342,7 +346,11 @@ where
         ));
     }
     handler
-        .handle_provider_route(request.provider.as_deref(), &request.body)
+        .handle_provider_route_with_headers(
+            request.provider.as_deref(),
+            &request.headers,
+            &request.body,
+        )
         .await
 }
 
@@ -2302,7 +2310,40 @@ mod tests {
             chunks.push(String::from_utf8(chunk).unwrap());
         }
         let joined = chunks.join("\n\n");
+        assert!(joined.contains("event: error\n"));
+        assert!(!joined.contains("event: response.failed"));
+        assert!(joined.contains("overloaded_error"));
+        assert!(joined.contains("Claude upstream stream failed"));
+        assert!(!joined.contains("access-secret"));
+        assert!(!joined.contains("response.completed"));
+    }
+
+    #[tokio::test]
+    async fn post_commit_codex_client_error_stays_response_failed() {
+        let error_sse = b"data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_failed\"}}\n\n\
+            data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"token access-secret\"}}\n\n"
+            .to_vec();
+        let (handler, _) = handler_with_response(200, error_sse);
+        let headers = std::collections::BTreeMap::from([(
+            "User-Agent".to_owned(),
+            vec!["Codex Desktop/1.0".to_owned()],
+        )]);
+        let response = handler
+            .handle_route_with_headers(
+                br#"{"model":"claude-sonnet-4-5","stream":true,"input":[]}"#,
+                &headers,
+            )
+            .await;
+        let OpenAiResponsesRouteResponse::Stream(mut stream) = response else {
+            panic!("expected committed stream bootstrap");
+        };
+        let mut chunks = Vec::new();
+        while let Some(chunk) = stream.next_chunk().await {
+            chunks.push(String::from_utf8(chunk).unwrap());
+        }
+        let joined = chunks.join("\n\n");
         assert!(joined.contains("event: response.failed"));
+        assert!(!joined.contains("event: error\n"));
         assert!(joined.contains("overloaded_error"));
         assert!(joined.contains("Claude upstream stream failed"));
         assert!(!joined.contains("access-secret"));
@@ -2455,7 +2496,7 @@ mod tests {
         let requests = count_transport.count_requests.lock().unwrap();
         assert_eq!(requests.len(), 1);
         assert!(!requests[0].1.is_empty());
-        assert_eq!(requests[0].2, "claude-cli/2.1.220 (external, cli)");
+        assert_eq!(requests[0].2, "claude-cli/2.1.280 (external, cli)");
         assert!(requests[0]
             .3
             .iter()

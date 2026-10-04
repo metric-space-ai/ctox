@@ -12,12 +12,16 @@ mod openai_claude_request;
 mod openai_claude_response;
 
 #[cfg(test)]
+mod openai_claude_compat_test;
+#[cfg(test)]
 mod openai_claude_request_test;
 #[cfg(test)]
 mod openai_claude_response_test;
 
 pub use init::register_openai_claude;
-pub use openai_claude_request::convert_claude_request_to_openai;
+pub use openai_claude_request::{
+    convert_claude_request_to_openai, convert_claude_request_to_openai_with_compat,
+};
 pub use openai_claude_response::{
     claude_token_count, convert_openai_response_to_claude,
     convert_openai_response_to_claude_non_stream, OpenAIToClaudeStreamState,

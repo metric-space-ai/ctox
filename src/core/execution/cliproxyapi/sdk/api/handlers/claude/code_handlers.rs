@@ -2,6 +2,7 @@
 // Port-Status: adapted_to_ctox
 // License: MIT (upstream); modifications AGPL-3.0-only
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -14,7 +15,8 @@ use crate::internal::client::claude::models::{
     build_response, resolve_claude_model_id_prefix, ClaudeModel,
 };
 use crate::internal::runtime::executor::{
-    AntigravityAccountPoolError, AntigravityExecutionError, AntigravitySubscriptionAccountPool,
+    normalize_codex_tool_integer_types_for_executor, AntigravityAccountPoolError,
+    AntigravityExecutionError, AntigravitySubscriptionAccountPool,
     AntigravityTrackedResponsesStream,
 };
 
@@ -146,6 +148,7 @@ fn non_empty_json_string(value: Option<&Value>) -> Option<&str> {
 }
 
 fn claude_error_type_from_status(status: u16) -> &'static str {
+    // ref: sdk/api/handlers/claude/code_handlers.go:448-473 @ d7914afd
     match status {
         401 => "authentication_error",
         402 => "billing_error",
@@ -153,7 +156,7 @@ fn claude_error_type_from_status(status: u16) -> &'static str {
         404 => "not_found_error",
         413 => "request_too_large",
         429 => "rate_limit_error",
-        504 => "timeout_error",
+        408 | 504 => "timeout_error",
         529 => "overloaded_error",
         500.. => "api_error",
         _ => "invalid_request_error",
@@ -167,6 +170,7 @@ fn status_text(status: u16) -> &'static str {
         402 => "Payment Required",
         403 => "Forbidden",
         404 => "Not Found",
+        408 => "Request Timeout",
         413 => "Payload Too Large",
         429 => "Too Many Requests",
         500 => "Internal Server Error",
@@ -240,6 +244,16 @@ pub trait ClaudeMessagesRouteHandler: Send + Sync {
         provider: Option<&'a str>,
         body: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = ClaudeMessagesRouteResponse> + Send + 'a>>;
+
+    fn handle_provider_route_with_headers<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        headers: &'a BTreeMap<String, Vec<String>>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = ClaudeMessagesRouteResponse> + Send + 'a>> {
+        let _ = headers;
+        self.handle_provider_route(provider, body)
+    }
 }
 
 impl<T> ClaudeMessagesRouteHandler for Arc<T>
@@ -252,6 +266,15 @@ where
         body: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = ClaudeMessagesRouteResponse> + Send + 'a>> {
         (**self).handle_provider_route(provider, body)
+    }
+
+    fn handle_provider_route_with_headers<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        headers: &'a BTreeMap<String, Vec<String>>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = ClaudeMessagesRouteResponse> + Send + 'a>> {
+        (**self).handle_provider_route_with_headers(provider, headers, body)
     }
 }
 
@@ -278,8 +301,21 @@ impl ClaudeMessagesAntigravityHandler {
     }
 
     pub async fn handle_route(&self, body: &[u8]) -> ClaudeMessagesRouteResponse {
+        self.handle_route_with_headers(body, &BTreeMap::new()).await
+    }
+
+    pub async fn handle_route_with_headers(
+        &self,
+        body: &[u8],
+        headers: &BTreeMap<String, Vec<String>>,
+    ) -> ClaudeMessagesRouteResponse {
         let rewritten_body = rewrite_claude_dd_model_in_body(body);
-        let body = rewritten_body.as_slice();
+        let normalized = normalize_codex_tool_integer_types_for_executor(
+            &rewritten_body,
+            headers,
+            "antigravity",
+        );
+        let body = normalized.as_slice();
         let request = match parse_messages_request(body) {
             Ok(request) => request,
             Err(message) => {
@@ -292,11 +328,12 @@ impl ClaudeMessagesAntigravityHandler {
         if request.stream {
             let outcome = self
                 .pool
-                .execute_claude_stream_configured(
+                .execute_claude_stream_configured_with_client_headers(
                     &request.model,
                     body.to_vec(),
                     self.signature_store.clone(),
                     move |auth_id, model| capabilities(auth_id, model),
+                    headers,
                 )
                 .await;
             return match outcome {
@@ -308,11 +345,12 @@ impl ClaudeMessagesAntigravityHandler {
         }
         let outcome = self
             .pool
-            .execute_claude_non_stream_configured(
+            .execute_claude_non_stream_configured_with_client_headers(
                 &request.model,
                 body.to_vec(),
                 self.signature_store.as_deref(),
                 move |auth_id, model| capabilities(auth_id, model),
+                headers,
             )
             .await;
         match outcome {
@@ -339,6 +377,23 @@ impl ClaudeMessagesRouteHandler for ClaudeMessagesAntigravityHandler {
                 ));
             }
             self.handle_route(body).await
+        })
+    }
+
+    fn handle_provider_route_with_headers<'a>(
+        &'a self,
+        provider: Option<&'a str>,
+        headers: &'a BTreeMap<String, Vec<String>>,
+        body: &'a [u8],
+    ) -> Pin<Box<dyn Future<Output = ClaudeMessagesRouteResponse> + Send + 'a>> {
+        Box::pin(async move {
+            if provider.is_some_and(|provider| !provider.eq_ignore_ascii_case("antigravity")) {
+                return ClaudeMessagesRouteResponse::Buffered(ClaudeMessagesHttpResponse::error(
+                    400,
+                    "requested provider is not configured",
+                ));
+            }
+            self.handle_route_with_headers(body, headers).await
         })
     }
 }

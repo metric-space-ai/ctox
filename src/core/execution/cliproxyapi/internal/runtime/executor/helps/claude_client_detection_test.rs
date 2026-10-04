@@ -26,7 +26,7 @@ fn confirmed_headers(user_agent: &str) -> HeaderMap {
 #[test]
 fn requires_all_message_signals_and_allows_count_tokens_without_metadata() {
     let defaults = ClaudeHeaderDefaults::default();
-    let headers = confirmed_headers("claude-cli/2.1.220 (external, cli)");
+    let headers = confirmed_headers("claude-cli/2.1.280 (external, cli)");
     let detection =
         detect_claude_code_request(Some(&headers), &payload(VALID_USER_ID), false, &defaults);
     assert!(detection.confirmed && detection.strong_signals && detection.native_client);
@@ -76,7 +76,7 @@ fn classifies_native_and_non_native_entrypoints() {
         ("claude-desktop", "claude-desktop", false),
         ("copied-client", "", false),
     ] {
-        let user_agent = format!("claude-cli/2.1.220 (external, {entrypoint})");
+        let user_agent = format!("claude-cli/2.1.280 (external, {entrypoint})");
         let detection = detect_claude_code_request(
             Some(&confirmed_headers(&user_agent)),
             &payload(VALID_USER_ID),
@@ -94,13 +94,13 @@ fn classifies_native_and_non_native_entrypoints() {
 #[test]
 fn rejects_malformed_or_missing_signals() {
     let defaults = ClaudeHeaderDefaults::default();
-    let mut headers = confirmed_headers("claude-cli/2.1.220 (external, cli)");
+    let mut headers = confirmed_headers("claude-cli/2.1.280 (external, cli)");
     headers.remove("X-App");
     assert!(
         !detect_claude_code_request(Some(&headers), &payload(VALID_USER_ID), false, &defaults)
             .confirmed
     );
-    let headers = confirmed_headers("claude-cli/2.1.220 (external, cli)");
+    let headers = confirmed_headers("claude-cli/2.1.280 (external, cli)");
     assert!(
         !detect_claude_code_request(Some(&headers), &payload("user_legacy"), false, &defaults)
             .confirmed

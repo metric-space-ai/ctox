@@ -2,6 +2,8 @@
 // License: AGPL-3.0-only
 
 mod antigravity_grounding_urls;
+mod apply_patch;
+mod apply_patch_responses;
 mod cache_helpers;
 mod claude_builtin_tools;
 mod claude_client_detection;
@@ -16,9 +18,15 @@ mod cloak_obfuscate;
 mod cloak_utils;
 mod codex_input_ids;
 mod codex_multi_agent_v2;
+mod codex_tool_schema;
 mod derived_session;
+pub mod devin_models;
+pub mod devin_proto;
+pub mod devin_request;
+pub mod devin_wire;
 mod home_refresh;
 mod json_retry_helpers;
+mod kimi_responses;
 mod logging_helpers;
 mod model_capabilities;
 mod openai_compat_tool_results;
@@ -63,7 +71,19 @@ mod claude_upstream_test;
 #[cfg(test)]
 mod codex_input_ids_test;
 #[cfg(test)]
+mod codex_multi_agent_v2_compat_test;
+#[cfg(test)]
+mod codex_tool_schema_test;
+#[cfg(test)]
 mod derived_session_test;
+#[cfg(test)]
+mod devin_models_test;
+#[cfg(test)]
+mod devin_proto_test;
+#[cfg(test)]
+mod devin_request_test;
+#[cfg(test)]
+mod devin_wire_test;
 #[cfg(test)]
 mod home_refresh_test;
 #[cfg(test)]
@@ -99,13 +119,18 @@ pub use antigravity_grounding_urls::{
     is_antigravity_vertex_search_redirect, resolve_antigravity_grounding_urls,
     GroundingRedirectError, GroundingRedirectResponse, GroundingRedirectTransport,
 };
+pub use apply_patch::{
+    apply_patch_original_request, apply_patch_requested, is_apply_patch_upstream_tool,
+    APPLY_PATCH_UPSTREAM_ERROR_MESSAGE,
+};
+pub use apply_patch_responses::normalize_apply_patch_responses_request;
 pub use cache_helpers::{codex_prompt_cache_key, CodexCache, CodexPromptCacheStore};
 pub use claude_builtin_tools::{augment_claude_builtin_tool_registry, is_claude_server_tool_type};
 pub use claude_client_detection::{detect_claude_code_request, ClaudeCodeRequestDetection};
 pub use claude_code_session::{
     claude_code_execution_scope, claude_code_prompt_cache, extract_claude_code_agent_id,
-    extract_claude_code_session_id, CLAUDE_CODE_AGENT_HEADER, CLAUDE_CODE_MAIN_AGENT_ID,
-    CLAUDE_CODE_SESSION_HEADER,
+    extract_claude_code_session_id, header_value_case_insensitive, header_values_case_insensitive,
+    CLAUDE_CODE_AGENT_HEADER, CLAUDE_CODE_MAIN_AGENT_ID, CLAUDE_CODE_SESSION_HEADER,
 };
 pub use claude_credential_identity::{
     apply_claude_credential_metadata, claude_agent_session_uuid,
@@ -119,7 +144,9 @@ pub use claude_device_profile::{
     default_claude_device_profile, default_claude_version, map_stainless_arch, map_stainless_os,
     ClaudeDeviceProfile, ClaudeDeviceProfileCache, ClaudeHeaderDefaults,
 };
-pub use claude_diagnostics::{begin_claude_diagnostics, commit_claude_diagnostics};
+pub use claude_diagnostics::{
+    begin_claude_diagnostics, commit_claude_diagnostics, pin_claude_session_date,
+};
 pub use claude_input_tokens::{
     count_claude_input_tokens, ClaudeInputTokenError, ClaudeInputTokenFailureSink,
     ClaudeInputTokenState,
@@ -137,7 +164,16 @@ pub use codex_input_ids::sanitize_codex_input_item_ids;
 pub use codex_multi_agent_v2::{
     optimize_codex_multi_agent_v2_request, restore_codex_multi_agent_v2_response,
     rewrite_codex_multi_agent_v2_input, rewrite_codex_spawn_agent_description,
-    translate_request_with_codex_multi_agent_v2, CodexMultiAgentV2Processor,
+    translate_request_pair_with_api_key_model_compatibility_and_update_intent,
+    translate_request_with_api_key_model_compatibility_and_update_intent_for_executor,
+    translate_request_with_api_key_model_compatibility_for_executor,
+    translate_request_with_codex_multi_agent_v2,
+    translate_request_with_codex_multi_agent_v2_for_executor, CodexMultiAgentV2Processor,
+    RegistryCodexMultiAgentV2Processor,
+};
+pub use codex_tool_schema::{
+    is_codex_target_executor, is_codex_user_agent, normalize_codex_tool_integer_types,
+    normalize_codex_tool_integer_types_for_executor, normalize_codex_tool_schemas,
 };
 pub use derived_session::{
     derived_antigravity_session_id, derived_session_id, derived_session_uuid, provider_session_uuid,
@@ -150,6 +186,7 @@ pub use home_refresh::{
 pub use json_retry_helpers::{
     delete_json_field, parse_retry_delay, RetryDelayError, MAX_RETRY_ERROR_BODY_BYTES,
 };
+pub use kimi_responses::normalize_kimi_responses_input;
 pub use logging_helpers::{
     append_api_response_chunk, append_api_websocket_response, credits_used, mark_credits_used,
     record_api_request, record_api_response_error, record_api_response_metadata,

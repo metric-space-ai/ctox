@@ -36,6 +36,8 @@ pub mod codex_websockets_executor;
 pub mod codex_websockets_request;
 pub mod codex_websockets_session;
 pub mod codex_websockets_stream;
+pub mod devin_executor_history;
+pub mod devin_executor_response;
 pub mod gemini_executor;
 pub mod gemini_vertex_executor;
 pub mod helps;
@@ -128,6 +130,10 @@ mod codex_websockets_executor_store_test;
 mod codex_websockets_executor_test;
 #[cfg(test)]
 mod codex_websockets_spawn_agent_test;
+#[cfg(test)]
+mod devin_executor_history_test;
+#[cfg(test)]
+mod devin_executor_response_test;
 #[cfg(test)]
 mod executor_payload_optimization_test;
 #[cfg(test)]
@@ -313,6 +319,7 @@ pub use gemini_executor::{GeminiExecutor, GeminiExecutorConfig, GeminiExecutorEr
 pub use gemini_vertex_executor::{
     GeminiVertexExecutor, VertexAccessTokenProvider, VertexExecutorError,
 };
+pub use helps::normalize_codex_tool_integer_types_for_executor;
 pub use openai_compat_executor::{
     normalize_openai_tool_results_text_only, openai_compat_image_endpoint_path,
     prepare_openai_compat_images_payload, rewrite_openai_compat_images_multipart_payload,

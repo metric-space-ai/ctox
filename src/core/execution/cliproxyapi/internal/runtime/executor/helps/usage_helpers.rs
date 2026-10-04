@@ -417,6 +417,194 @@ impl StreamUsageBuffer {
     }
 }
 
+/// Plugin executor usage. Codex and OpenAI Responses keep a service tier when
+/// token counts live on the completed object instead of `response.usage`.
+pub fn parse_plugin_executor_response_usage(protocol: &str, payload: &[u8]) -> Detail {
+    if payload.is_empty() {
+        return Detail::default();
+    }
+    match protocol.trim().to_ascii_lowercase().as_str() {
+        "claude" => parse_claude_plugin_payload_usage(payload),
+        "gemini" => parse_gemini_usage(payload),
+        "interactions" | "interactions-response" => parse_interactions_usage(payload),
+        "antigravity" => parse_antigravity_usage(payload),
+        "codex" | "openai-response" => parse_responses_plugin_executor_usage(payload),
+        _ => parse_openai_usage(payload),
+    }
+}
+
+fn parse_responses_plugin_executor_usage(payload: &[u8]) -> Detail {
+    let parsed = parse_codex_usage(payload);
+    if parsed
+        .as_ref()
+        .is_some_and(|detail| has_nonzero_token_usage(detail))
+    {
+        return parsed.unwrap_or_default();
+    }
+    let mut openai = parse_openai_usage(payload);
+    if has_nonzero_token_usage(&openai) {
+        if openai.response_service_tier.is_empty() {
+            if let Some(codex) = parsed.as_ref() {
+                openai
+                    .response_service_tier
+                    .clone_from(&codex.response_service_tier);
+            }
+        }
+        return openai;
+    }
+    parsed.unwrap_or(openai)
+}
+
+/// Streaming counterpart of `parse_plugin_executor_response_usage`.
+///
+/// No production executor calls this yet. The Responses branch falls through
+/// to top-level usage when a service tier arrives without `response.usage`.
+pub fn observe_plugin_executor_stream(
+    protocol: &str,
+    payload: &[u8],
+    buffer: &mut StreamUsageBuffer,
+) {
+    if payload.is_empty() {
+        return;
+    }
+    match protocol.trim().to_ascii_lowercase().as_str() {
+        "claude" => for_each_stream_line(payload, |line| {
+            if let Some(detail) = parse_claude_plugin_stream_line(line) {
+                observe_merged_stream_usage(buffer, detail);
+            }
+        }),
+        "gemini" => for_each_stream_line(payload, |line| {
+            if let Some(detail) = parse_gemini_stream_usage(line) {
+                buffer.observe(detail, true);
+            }
+        }),
+        "interactions" | "interactions-response" => for_each_stream_line(payload, |line| {
+            if let Some(detail) = parse_interactions_stream_usage(line) {
+                observe_merged_stream_usage(buffer, detail);
+            }
+        }),
+        "antigravity" => for_each_stream_line(payload, |line| {
+            if let Some(detail) = parse_antigravity_stream_usage(line) {
+                buffer.observe(detail, true);
+            }
+        }),
+        "codex" | "openai-response" => for_each_stream_line(payload, |line| {
+            if let Some(json_bytes) = json_payload(line) {
+                if let Some(detail) = parse_codex_usage(json_bytes) {
+                    if has_nonzero_token_usage(&detail) {
+                        buffer.observe(detail, true);
+                        return;
+                    }
+                }
+            }
+            buffer.observe_openai_stream(line);
+        }),
+        _ => for_each_stream_line(payload, |line| buffer.observe_openai_stream(line)),
+    }
+}
+
+pub fn observe_merged_stream_usage(buffer: &mut StreamUsageBuffer, update: Detail) {
+    if let Some(existing) = buffer.detail().cloned() {
+        buffer.observe(merge_stream_usage_detail(existing, update), true);
+        return;
+    }
+    buffer.observe(update, true);
+}
+
+pub fn merge_stream_usage_detail(existing: Detail, update: Detail) -> Detail {
+    let mut merged = update;
+    if merged.input_tokens == 0 && existing.input_tokens > 0 {
+        merged.input_tokens = existing.input_tokens;
+    }
+    if merged.cached_tokens == 0 && existing.cached_tokens > 0 {
+        merged.cached_tokens = existing.cached_tokens;
+    }
+    if merged.cache_read_tokens == 0 && existing.cache_read_tokens > 0 {
+        merged.cache_read_tokens = existing.cache_read_tokens;
+    }
+    if merged.cache_creation_tokens == 0 && existing.cache_creation_tokens > 0 {
+        merged.cache_creation_tokens = existing.cache_creation_tokens;
+    }
+    if merged.output_tokens == 0 && existing.output_tokens > 0 {
+        merged.output_tokens = existing.output_tokens;
+    }
+    if merged.reasoning_tokens == 0 && existing.reasoning_tokens > 0 {
+        merged.reasoning_tokens = existing.reasoning_tokens;
+    }
+    if merged.response_service_tier.is_empty() {
+        merged.response_service_tier = existing.response_service_tier;
+    }
+    let mut cached = merged
+        .cache_read_tokens
+        .saturating_add(merged.cache_creation_tokens);
+    if cached == 0 {
+        cached = merged.cached_tokens;
+    }
+    let calculated_total = merged
+        .input_tokens
+        .saturating_add(merged.output_tokens)
+        .saturating_add(cached);
+    if merged.total_tokens == 0 || merged.total_tokens < calculated_total {
+        merged.total_tokens = calculated_total;
+    }
+    merged.token_breakdown = new_independent_token_breakdown(
+        merged.input_tokens,
+        merged.cache_read_tokens,
+        merged.cache_creation_tokens,
+        merged.output_tokens,
+        merged.reasoning_tokens,
+        merged.total_tokens,
+    );
+    merged
+}
+
+fn parse_claude_plugin_payload_usage(payload: &[u8]) -> Detail {
+    let Some(root) = parse_json(payload) else {
+        return Detail::default();
+    };
+    let usage = root
+        .get("usage")
+        .or_else(|| root.pointer("/message/usage"))
+        .filter(|usage| usage.is_object());
+    let Some(usage) = usage else {
+        return Detail::default();
+    };
+    let wrapped = format!(r#"{{"usage":{}}}"#, usage);
+    parse_claude_usage(wrapped.as_bytes())
+}
+
+fn parse_claude_plugin_stream_line(line: &[u8]) -> Option<Detail> {
+    if line.len() > MAX_USAGE_STREAM_CHUNK_BYTES {
+        return None;
+    }
+    let payload = json_payload(line)?;
+    let root = parse_json(payload)?;
+    let usage = root
+        .get("usage")
+        .or_else(|| root.pointer("/message/usage"))
+        .filter(|usage| usage.is_object())?;
+    let wrapped = format!(r#"{{"usage":{}}}"#, usage);
+    Some(parse_claude_usage(wrapped.as_bytes()))
+}
+
+fn for_each_stream_line(payload: &[u8], mut visit: impl FnMut(&[u8])) {
+    let mut rest = payload;
+    while !rest.is_empty() {
+        if let Some(index) = rest.iter().position(|byte| *byte == b'\n') {
+            let (line, next) = rest.split_at(index + 1);
+            if !trim_ascii(line).is_empty() {
+                visit(line);
+            }
+            rest = next;
+            continue;
+        }
+        if !trim_ascii(rest).is_empty() {
+            visit(rest);
+        }
+        break;
+    }
+}
+
 pub fn parse_codex_usage(data: &[u8]) -> Option<Detail> {
     let root = parse_json(data)?;
     let tier = extract_response_service_tier_value(&root);

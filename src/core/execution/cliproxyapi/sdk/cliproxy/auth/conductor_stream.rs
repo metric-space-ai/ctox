@@ -91,7 +91,12 @@ impl GenericAuthRuntime {
             let mut refreshed = false;
 
             loop {
-                let execution = selected_executor_request(&request, &auth, registration.provider());
+                let execution = selected_executor_request(
+                    &self.manager,
+                    &request,
+                    &auth,
+                    registration.provider(),
+                );
                 let stream = match executor.execute_stream(execution).await {
                     Ok(stream) => stream,
                     Err(error) if is_unauthorized_plugin_error(&error) && !refreshed => {

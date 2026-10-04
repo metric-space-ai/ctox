@@ -2,7 +2,7 @@
 // Port-Status: ported
 // License: MIT (upstream); modifications AGPL-3.0-only
 
-use super::get_gjson_bytes_no_copy;
+use super::{get_gjson_bytes_no_copy, parse_gjson_bytes_no_copy};
 
 #[test]
 fn get_gjson_bytes_no_copy_matches_nested_upstream_lookup() {
@@ -41,4 +41,21 @@ fn get_gjson_bytes_no_copy_keeps_full_gjson_path_semantics() {
         get_gjson_bytes_no_copy(input, r#"friends.#(age>45)#.name"#).json(),
         r#"["Roger","Jane"]"#
     );
+}
+
+#[test]
+fn parse_gjson_bytes_no_copy_borrows_the_document() {
+    let input = br#"{"request":{"contents":[{"role":"user"}]}}"#;
+    let root = parse_gjson_bytes_no_copy(input);
+    assert!(root.kind() == gjson::Kind::Object);
+    assert_eq!(root.get("request.contents.0.role").str(), "user");
+    let raw = root.json().as_bytes();
+    assert_eq!(raw.len(), input.len());
+    assert_eq!(raw.as_ptr(), input.as_ptr());
+}
+
+#[test]
+fn parse_gjson_bytes_no_copy_empty_or_invalid_utf8_is_missing() {
+    assert!(!parse_gjson_bytes_no_copy(&[]).exists());
+    assert!(!parse_gjson_bytes_no_copy(&[0xff]).exists());
 }

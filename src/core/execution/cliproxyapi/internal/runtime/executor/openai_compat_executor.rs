@@ -30,6 +30,10 @@ use crate::sdk::translator::{Format, Registry, TranslationContext, TranslationSt
 
 use super::openai_responses_signature::sanitize_openai_responses_reasoning_encrypted_content;
 
+#[cfg(test)]
+#[path = "openai_compat_resolved_compat_test.rs"]
+mod candidate_resolved_model_capability_tests;
+
 pub const OPENAI_COMPAT_IMAGE_HANDLER_TYPE: &str = "openai-image";
 pub const OPENAI_COMPAT_IMAGES_GENERATIONS_PATH: &str = "/images/generations";
 pub const OPENAI_COMPAT_IMAGES_EDITS_PATH: &str = "/images/edits";
@@ -187,14 +191,37 @@ impl OpenAiCompatExecutor {
         let from = Format::from(request.source_format.as_str());
         let base_model = parse_suffix(&request.model).model_name;
         let context = TranslationContext::default();
-        let mut translated = self.registry.translate_request(
-            &context,
-            &from,
-            to,
-            &base_model,
-            &request.payload,
-            stream,
-        );
+        let client =
+            crate::internal::client::codex::optimize_multi_agent_v2::MultiAgentV2Context::default();
+        let metadata = |_: &str| None;
+        let processor = super::helps::RegistryCodexMultiAgentV2Processor {
+            registry: &self.registry,
+            context: &context,
+            client: &client,
+            model_metadata: &metadata,
+            orphan_delegation_compatibility: false,
+        };
+        let mut translated =
+            super::helps::translate_request_with_api_key_model_compatibility_for_executor(
+                &processor,
+                &request.headers,
+                "openai-compat",
+                &from,
+                to,
+                &base_model,
+                &request.payload,
+                stream,
+                request
+                    .resolved_home_model_options
+                    .as_ref()
+                    .map(|options| options.is_compat)
+                    .unwrap_or_else(|| {
+                        request
+                            .resolved_model_info
+                            .as_ref()
+                            .is_some_and(|info| info.is_compat)
+                    }),
+            );
         translated = apply_model_suffix_effort(&translated, &request.model);
         translated =
             self.apply_payload_overrides(&translated, requested_model(request), to.as_str());

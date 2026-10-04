@@ -19,9 +19,10 @@ use crate::internal::auth::claude::{
     CLAUDE_DEVICE_IDS_METADATA_KEY,
 };
 use crate::internal::runtime::executor::{
-    AccountStateClock, ClaudeCloakPolicy, ClaudeMessagesRequest, ClaudeMessagesResponse,
-    ClaudeMessagesStreamResponse, ClaudeMessagesStreamingTransport, ClaudeMessagesTransport,
-    ClaudeSubscriptionAuth, ClaudeSubscriptionMessagesExecutor, ClaudeUpstreamTarget,
+    AccountStateClock, ClaudeCloakPolicy, ClaudeExecutionRequestContext, ClaudeMessagesRequest,
+    ClaudeMessagesResponse, ClaudeMessagesStreamResponse, ClaudeMessagesStreamingTransport,
+    ClaudeMessagesTransport, ClaudeSubscriptionAuth, ClaudeSubscriptionMessagesExecutor,
+    ClaudeUpstreamTarget,
 };
 use crate::sdk::cliproxy::auth::{
     AccountCandidate, AccountRouter, CooldownConductor, CooldownStateRecord, CooldownStateStore,
@@ -662,7 +663,7 @@ async fn provider_count_tokens_preserves_strong_native_session_and_profile() {
         ("X-App".to_owned(), vec!["cli".to_owned()]),
         (
             "User-Agent".to_owned(),
-            vec!["claude-cli/2.1.220 (external, cli)".to_owned()],
+            vec!["claude-cli/2.1.280 (external, cli)".to_owned()],
         ),
         (
             "Anthropic-Beta".to_owned(),
@@ -674,7 +675,7 @@ async fn provider_count_tokens_preserves_strong_native_session_and_profile() {
         ),
         (
             "X-Stainless-Package-Version".to_owned(),
-            vec!["0.94.0".to_owned()],
+            vec!["0.112.1".to_owned()],
         ),
         (
             "X-Stainless-Runtime-Version".to_owned(),
@@ -690,7 +691,7 @@ async fn provider_count_tokens_preserves_strong_native_session_and_profile() {
         let requests = transport.requests.lock().unwrap();
         let captured = requests.last().unwrap();
         assert_eq!(captured.session_id, session_id);
-        assert_eq!(captured.user_agent, "claude-cli/2.1.220 (external, cli)");
+        assert_eq!(captured.user_agent, "claude-cli/2.1.280 (external, cli)");
         assert_eq!(captured.authorization, "Bearer access-token");
         let body: serde_json::Value = serde_json::from_slice(&captured.body).unwrap();
         assert_eq!(body["system"], "native caller system");
@@ -710,7 +711,7 @@ async fn provider_count_tokens_preserves_strong_native_session_and_profile() {
         ("X-App".to_owned(), vec!["cli".to_owned()]),
         (
             "User-Agent".to_owned(),
-            vec!["claude-cli/2.1.220 (external, cli)".to_owned()],
+            vec!["claude-cli/2.1.280 (external, cli)".to_owned()],
         ),
         (
             "Anthropic-Beta".to_owned(),
@@ -906,4 +907,100 @@ async fn provider_path_does_not_promote_user_agent_only_to_verified_cloak_bypass
     let body: serde_json::Value = serde_json::from_slice(&captured[0].body).unwrap();
     assert!(body.get("context_management").is_some());
     assert!(String::from_utf8_lossy(&captured[0].body).contains("Anthropic's official CLI"));
+}
+
+fn reserved_exec_command_body() -> Vec<u8> {
+    br#"{
+        "model":"claude-sonnet-4-5",
+        "max_tokens":32,
+        "messages":[{"role":"user","content":"run"}],
+        "tools":[{
+            "name":"exec_command",
+            "input_schema":{
+                "type":"object",
+                "properties":{"yield_time_ms":{"type":"number"}}
+            }
+        }]
+    }"#
+    .to_vec()
+}
+
+fn yield_time_ms_type(body: &[u8]) -> String {
+    let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+    value["tools"]
+        .as_array()
+        .and_then(|tools| {
+            tools.iter().find_map(|tool| {
+                tool.pointer("/input_schema/properties/yield_time_ms/type")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned)
+            })
+        })
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn codex_client_integer_schema_reaches_claude_upstream_body() {
+    let cooldowns = Arc::new(MemoryCooldownStore::default());
+    let conductor = Arc::new(CooldownConductor::new(cooldowns));
+    let transport = Arc::new(CapturingMessagesTransport::default());
+    let executor = account_executor("account-a", transport.clone(), None, conductor);
+    let body = reserved_exec_command_body();
+    let headers = BTreeMap::from([(
+        "User-Agent".to_owned(),
+        vec!["Codex Desktop/1.0".to_owned()],
+    )]);
+    let context = ClaudeExecutionRequestContext::from_provider_request(
+        "account-a",
+        headers,
+        &body,
+        &body,
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+    let target = ClaudeUpstreamTarget::new("https", "api.anthropic.com").unwrap();
+    executor
+        .execute_for_model_with_context(
+            target,
+            Some("claude-sonnet-4-5"),
+            body,
+            false,
+            Some(&context),
+        )
+        .await
+        .unwrap();
+    let captured = transport.requests.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(yield_time_ms_type(&captured[0].body), "integer");
+}
+
+#[tokio::test]
+async fn non_codex_client_keeps_claude_reserved_number_schema() {
+    let cooldowns = Arc::new(MemoryCooldownStore::default());
+    let conductor = Arc::new(CooldownConductor::new(cooldowns));
+    let transport = Arc::new(CapturingMessagesTransport::default());
+    let executor = account_executor("account-a", transport.clone(), None, conductor);
+    let body = reserved_exec_command_body();
+    let headers = BTreeMap::from([("User-Agent".to_owned(), vec!["curl/8.0".to_owned()])]);
+    let context = ClaudeExecutionRequestContext::from_provider_request(
+        "account-a",
+        headers,
+        &body,
+        &body,
+        BTreeMap::new(),
+        BTreeMap::new(),
+    );
+    let target = ClaudeUpstreamTarget::new("https", "api.anthropic.com").unwrap();
+    executor
+        .execute_for_model_with_context(
+            target,
+            Some("claude-sonnet-4-5"),
+            body,
+            false,
+            Some(&context),
+        )
+        .await
+        .unwrap();
+    let captured = transport.requests.lock().unwrap();
+    assert_eq!(yield_time_ms_type(&captured[0].body), "number");
 }

@@ -2,7 +2,7 @@
 // Port-Status: ported
 // License: MIT (upstream); modifications AGPL-3.0-only
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -37,6 +37,20 @@ use crate::internal::translator::antigravity::claude::{
     AntigravityClaudeRequestTranslationError,
 };
 use crate::internal::translator::antigravity::openai::responses::convert_antigravity_response_to_openai_responses_non_stream;
+
+fn prepare_antigravity_upstream_body(
+    translated_body: &[u8],
+    client_headers: &BTreeMap<String, Vec<String>>,
+    model: &str,
+    project_id: &str,
+) -> Result<Vec<u8>, AntigravityRequestError> {
+    let normalized = super::helps::normalize_codex_tool_integer_types_for_executor(
+        translated_body,
+        client_headers,
+        "antigravity",
+    );
+    prepare_antigravity_generate_body(&normalized, model, project_id)
+}
 use crate::sdk::cliproxy::auth::{
     AccountCandidate, AccountExecutionResult, AccountRouter, AccountRoutingError, CooldownConductor,
 };
@@ -158,8 +172,33 @@ impl AntigravitySubscriptionExecutor {
         original_request: &[u8],
         translated_body: &[u8],
     ) -> Result<AntigravityExecutionOutcome, AntigravityExecutionError> {
+        self.execute_with_client_headers(
+            target,
+            model,
+            original_request,
+            translated_body,
+            &BTreeMap::new(),
+        )
+        .await
+    }
+
+    pub async fn execute_with_client_headers(
+        &self,
+        target: &AntigravityUpstreamTarget,
+        model: &str,
+        original_request: &[u8],
+        translated_body: &[u8],
+        client_headers: &BTreeMap<String, Vec<String>>,
+    ) -> Result<AntigravityExecutionOutcome, AntigravityExecutionError> {
         let raw = self
-            .execute_buffered_raw(target, model, original_request, translated_body, false)
+            .execute_buffered_raw(
+                target,
+                model,
+                original_request,
+                translated_body,
+                false,
+                client_headers,
+            )
             .await?;
         let payload = convert_antigravity_response_to_openai_responses_non_stream(
             original_request,
@@ -188,7 +227,14 @@ impl AntigravitySubscriptionExecutor {
         translated_body: &[u8],
     ) -> Result<AntigravityExecutionOutcome, AntigravityExecutionError> {
         let raw = self
-            .execute_buffered_raw(target, model, original_request, translated_body, true)
+            .execute_buffered_raw(
+                target,
+                model,
+                original_request,
+                translated_body,
+                true,
+                &BTreeMap::new(),
+            )
             .await?;
         let payload = convert_antigravity_response_to_openai_responses_non_stream(
             original_request,
@@ -208,9 +254,17 @@ impl AntigravitySubscriptionExecutor {
         original_request: &[u8],
         translated_body: &[u8],
         web_search_tool_use_id: &str,
+        client_headers: &BTreeMap<String, Vec<String>>,
     ) -> Result<AntigravityExecutionOutcome, AntigravityExecutionError> {
         let raw = self
-            .execute_buffered_raw(target, model, original_request, translated_body, false)
+            .execute_buffered_raw(
+                target,
+                model,
+                original_request,
+                translated_body,
+                false,
+                client_headers,
+            )
             .await?;
         let payload = convert_antigravity_response_to_claude_non_stream(
             original_request,
@@ -242,6 +296,7 @@ impl AntigravitySubscriptionExecutor {
         original_request: &[u8],
         translated_body: &[u8],
         credits_requested: bool,
+        client_headers: &BTreeMap<String, Vec<String>>,
     ) -> Result<AntigravityBufferedRawOutcome, AntigravityExecutionError> {
         let mut credentials = self
             .auth
@@ -250,9 +305,13 @@ impl AntigravitySubscriptionExecutor {
             .map_err(AntigravityExecutionError::Auth)?;
         self.publish_access_token_fingerprint(&credentials);
         for attempt in 1..=2 {
-            let mut body =
-                prepare_antigravity_generate_body(translated_body, model, credentials.project_id())
-                    .map_err(AntigravityExecutionError::Request)?;
+            let mut body = prepare_antigravity_upstream_body(
+                translated_body,
+                client_headers,
+                model,
+                credentials.project_id(),
+            )
+            .map_err(AntigravityExecutionError::Request)?;
             if credits_requested {
                 let (controller, auth_id) = self
                     .credits
@@ -338,8 +397,33 @@ impl AntigravitySubscriptionExecutor {
         original_request: &[u8],
         translated_body: &[u8],
     ) -> Result<AntigravityStreamExecutionOutcome, AntigravityExecutionError> {
-        self.execute_stream_mode(target, model, original_request, translated_body, false)
-            .await
+        self.execute_stream_with_client_headers(
+            target,
+            model,
+            original_request,
+            translated_body,
+            &BTreeMap::new(),
+        )
+        .await
+    }
+
+    pub async fn execute_stream_with_client_headers(
+        &self,
+        target: &AntigravityUpstreamTarget,
+        model: &str,
+        original_request: &[u8],
+        translated_body: &[u8],
+        client_headers: &BTreeMap<String, Vec<String>>,
+    ) -> Result<AntigravityStreamExecutionOutcome, AntigravityExecutionError> {
+        self.execute_stream_mode(
+            target,
+            model,
+            original_request,
+            translated_body,
+            false,
+            client_headers,
+        )
+        .await
     }
 
     pub async fn execute_stream_with_credits(
@@ -349,8 +433,15 @@ impl AntigravitySubscriptionExecutor {
         original_request: &[u8],
         translated_body: &[u8],
     ) -> Result<AntigravityStreamExecutionOutcome, AntigravityExecutionError> {
-        self.execute_stream_mode(target, model, original_request, translated_body, true)
-            .await
+        self.execute_stream_mode(
+            target,
+            model,
+            original_request,
+            translated_body,
+            true,
+            &BTreeMap::new(),
+        )
+        .await
     }
 
     async fn execute_stream_mode(
@@ -360,6 +451,7 @@ impl AntigravitySubscriptionExecutor {
         original_request: &[u8],
         translated_body: &[u8],
         credits_requested: bool,
+        client_headers: &BTreeMap<String, Vec<String>>,
     ) -> Result<AntigravityStreamExecutionOutcome, AntigravityExecutionError> {
         let opened = self
             .open_stream(
@@ -368,6 +460,7 @@ impl AntigravitySubscriptionExecutor {
                 original_request,
                 translated_body,
                 credits_requested,
+                client_headers,
             )
             .await?;
         let mut stream = AntigravityResponsesStream::new(
@@ -396,9 +489,17 @@ impl AntigravitySubscriptionExecutor {
         translated_body: &[u8],
         web_search_tool_use_id: String,
         signature_store: Option<Arc<dyn SignatureKvStore>>,
+        client_headers: &BTreeMap<String, Vec<String>>,
     ) -> Result<AntigravityStreamExecutionOutcome, AntigravityExecutionError> {
         let opened = self
-            .open_stream(target, model, original_request, translated_body, false)
+            .open_stream(
+                target,
+                model,
+                original_request,
+                translated_body,
+                false,
+                client_headers,
+            )
             .await?;
         let mut stream = AntigravityResponsesStream::new_claude(
             opened.response,
@@ -427,6 +528,7 @@ impl AntigravitySubscriptionExecutor {
         original_request: &[u8],
         translated_body: &[u8],
         credits_requested: bool,
+        client_headers: &BTreeMap<String, Vec<String>>,
     ) -> Result<AntigravityOpenedStream, AntigravityExecutionError> {
         let transport = self
             .stream_transport
@@ -439,9 +541,13 @@ impl AntigravitySubscriptionExecutor {
             .map_err(AntigravityExecutionError::Auth)?;
         self.publish_access_token_fingerprint(&credentials);
         for attempt in 1..=2 {
-            let mut body =
-                prepare_antigravity_generate_body(translated_body, model, credentials.project_id())
-                    .map_err(AntigravityExecutionError::Request)?;
+            let mut body = prepare_antigravity_upstream_body(
+                translated_body,
+                client_headers,
+                model,
+                credentials.project_id(),
+            )
+            .map_err(AntigravityExecutionError::Request)?;
             if credits_requested {
                 let (controller, auth_id) = self
                     .credits
@@ -719,6 +825,22 @@ impl AntigravitySubscriptionAccountPool {
         original_request: Vec<u8>,
         translated_body: Vec<u8>,
     ) -> Result<AntigravityPooledExecutionOutcome, AntigravityAccountPoolError> {
+        self.execute_configured_with_client_headers(
+            model,
+            original_request,
+            translated_body,
+            &BTreeMap::new(),
+        )
+        .await
+    }
+
+    pub async fn execute_configured_with_client_headers(
+        &self,
+        model: &str,
+        original_request: Vec<u8>,
+        translated_body: Vec<u8>,
+        client_headers: &BTreeMap<String, Vec<String>>,
+    ) -> Result<AntigravityPooledExecutionOutcome, AntigravityAccountPoolError> {
         let mut remaining = self.candidates.clone();
         let mut attempted_auth_ids = Vec::new();
         let mut last_error = None;
@@ -738,7 +860,13 @@ impl AntigravitySubscriptionAccountPool {
                 .get(&selected.auth_id)
                 .ok_or(AntigravityAccountPoolError::Configuration)?;
             match executor
-                .execute(target, model, &original_request, &translated_body)
+                .execute_with_client_headers(
+                    target,
+                    model,
+                    &original_request,
+                    &translated_body,
+                    client_headers,
+                )
                 .await
             {
                 Ok(outcome) => {
@@ -778,6 +906,27 @@ impl AntigravitySubscriptionAccountPool {
         original_request: Vec<u8>,
         signature_store: Option<&dyn SignatureKvStore>,
         supports_native_web_search: F,
+    ) -> Result<AntigravityPooledExecutionOutcome, AntigravityAccountPoolError>
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        self.execute_claude_non_stream_configured_with_client_headers(
+            model,
+            original_request,
+            signature_store,
+            supports_native_web_search,
+            &BTreeMap::new(),
+        )
+        .await
+    }
+
+    pub async fn execute_claude_non_stream_configured_with_client_headers<F>(
+        &self,
+        model: &str,
+        original_request: Vec<u8>,
+        signature_store: Option<&dyn SignatureKvStore>,
+        supports_native_web_search: F,
+        client_headers: &BTreeMap<String, Vec<String>>,
     ) -> Result<AntigravityPooledExecutionOutcome, AntigravityAccountPoolError>
     where
         F: Fn(&str, &str) -> bool,
@@ -825,6 +974,7 @@ impl AntigravitySubscriptionAccountPool {
                     &original_request,
                     &translated,
                     &web_search_tool_use_id,
+                    client_headers,
                 )
                 .await
             {
@@ -864,6 +1014,27 @@ impl AntigravitySubscriptionAccountPool {
         original_request: Vec<u8>,
         signature_store: Option<Arc<dyn SignatureKvStore>>,
         supports_native_web_search: F,
+    ) -> Result<AntigravityPooledStreamExecutionOutcome, AntigravityAccountPoolError>
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        self.execute_claude_stream_configured_with_client_headers(
+            model,
+            original_request,
+            signature_store,
+            supports_native_web_search,
+            &BTreeMap::new(),
+        )
+        .await
+    }
+
+    pub async fn execute_claude_stream_configured_with_client_headers<F>(
+        &self,
+        model: &str,
+        original_request: Vec<u8>,
+        signature_store: Option<Arc<dyn SignatureKvStore>>,
+        supports_native_web_search: F,
+        client_headers: &BTreeMap<String, Vec<String>>,
     ) -> Result<AntigravityPooledStreamExecutionOutcome, AntigravityAccountPoolError>
     where
         F: Fn(&str, &str) -> bool,
@@ -912,6 +1083,7 @@ impl AntigravitySubscriptionAccountPool {
                     &translated,
                     web_search_tool_use_id,
                     signature_store.clone(),
+                    client_headers,
                 )
                 .await
             {
@@ -954,6 +1126,22 @@ impl AntigravitySubscriptionAccountPool {
         original_request: Vec<u8>,
         translated_body: Vec<u8>,
     ) -> Result<AntigravityPooledStreamExecutionOutcome, AntigravityAccountPoolError> {
+        self.execute_stream_configured_with_client_headers(
+            model,
+            original_request,
+            translated_body,
+            &BTreeMap::new(),
+        )
+        .await
+    }
+
+    pub async fn execute_stream_configured_with_client_headers(
+        &self,
+        model: &str,
+        original_request: Vec<u8>,
+        translated_body: Vec<u8>,
+        client_headers: &BTreeMap<String, Vec<String>>,
+    ) -> Result<AntigravityPooledStreamExecutionOutcome, AntigravityAccountPoolError> {
         let mut remaining = self.candidates.clone();
         let mut attempted_auth_ids = Vec::new();
         let mut last_error = None;
@@ -973,7 +1161,13 @@ impl AntigravitySubscriptionAccountPool {
                 .get(&selected.auth_id)
                 .ok_or(AntigravityAccountPoolError::Configuration)?;
             match executor
-                .execute_stream(target, model, &original_request, &translated_body)
+                .execute_stream_with_client_headers(
+                    target,
+                    model,
+                    &original_request,
+                    &translated_body,
+                    client_headers,
+                )
                 .await
             {
                 Ok(outcome) => {
@@ -1586,6 +1780,64 @@ mod tests {
             None,
             format!(r#"{{"response":{{"responseId":"{id}","candidates":[{{"content":{{"parts":[{{"text":"ok"}}]}}}}]}}}}"#).into_bytes(),
         )
+    }
+
+    #[tokio::test]
+    async fn codex_client_integer_schema_reaches_antigravity_generate_body() {
+        let (auth, _) = auth_with("access-live", Arc::new(UnusedRefresh));
+        let transport = Arc::new(SequenceGenerateTransport::new(vec![
+            success_response("integer-schema"),
+            success_response("number-schema"),
+        ]));
+        let executor =
+            AntigravitySubscriptionExecutor::new(auth, transport.clone(), Duration::from_secs(5))
+                .unwrap();
+        let original = br#"{"model":"gemini-3-flash-agent","input":"hello","tools":[{"type":"function","name":"exec_command","parameters":{"type":"object","properties":{"yield_time_ms":{"type":"number"}}}}]}"#;
+        let translated = convert_openai_responses_request_to_antigravity(
+            "gemini-3-flash-agent",
+            original,
+            false,
+        );
+        let codex_headers = BTreeMap::from([(
+            "User-Agent".to_owned(),
+            vec!["Codex Desktop/1.0".to_owned()],
+        )]);
+        executor
+            .execute_with_client_headers(
+                &AntigravityUpstreamTarget::default_subscription(),
+                "gemini-3-flash-agent",
+                original,
+                &translated,
+                &codex_headers,
+            )
+            .await
+            .unwrap();
+        executor
+            .execute_with_client_headers(
+                &AntigravityUpstreamTarget::default_subscription(),
+                "gemini-3-flash-agent",
+                original,
+                &translated,
+                &BTreeMap::new(),
+            )
+            .await
+            .unwrap();
+        let bodies = transport
+            .bodies
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        assert_eq!(
+            bodies[0].pointer(
+                "/request/tools/0/functionDeclarations/0/parameters/properties/yield_time_ms/type"
+            ),
+            Some(&serde_json::json!("integer"))
+        );
+        assert_eq!(
+            bodies[1].pointer(
+                "/request/tools/0/functionDeclarations/0/parameters/properties/yield_time_ms/type"
+            ),
+            Some(&serde_json::json!("number"))
+        );
     }
 
     fn two_account_pool(

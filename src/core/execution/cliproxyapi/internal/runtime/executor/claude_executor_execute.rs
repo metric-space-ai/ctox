@@ -21,8 +21,9 @@ use super::claude_executor_cloaking::{
     try_apply_claude_cloaking, ClaudeCallerSystemBlockError, ClaudeCloakPolicy,
 };
 use super::claude_executor_diagnostics::{
-    claude_message_id_from_response, commit_claude_diagnostics, inject_claude_diagnostics,
-    observe_claude_stream_line, ClaudeDiagnosticsRequestState,
+    begin_claude_diagnostics_request, claude_message_id_from_response, commit_claude_diagnostics,
+    inject_claude_diagnostics_with_state, observe_claude_stream_line,
+    ClaudeDiagnosticsRequestState,
 };
 use super::claude_executor_request::{
     claude_request_uses_fast_mode, claude_requested_betas, extract_and_remove_claude_betas,
@@ -32,7 +33,8 @@ use super::claude_executor_request::{
 use super::claude_executor_tokens::prepare_claude_first_party_token_count_body;
 use super::helps::{
     apply_claude_credential_metadata, claude_agent_session_uuid_for_request,
-    detect_claude_code_request, ClaudeCodeRequestDetection, ClaudeCredentialIdentityError,
+    detect_claude_code_request, normalize_codex_tool_integer_types_for_executor,
+    ClaudeCodeRequestDetection, ClaudeCredentialIdentityError,
     ClaudeDeviceProfileCache as ClaudeHelperDeviceProfileCache, ClaudeHeaderDefaults,
     ClaudeIdentityKvStore, ClaudeIdentityStoreError, SessionIdCache, SessionIdCacheError,
 };
@@ -303,6 +305,19 @@ pub(super) fn claude_header_defaults(
         arch: value("claude_header_arch"),
         stabilize_device_profile: None,
     }
+}
+
+/// Reserved Codex client fields become integers before OAuth tool-name remap.
+/// Remap changes the tool name and would hide `exec_command` from the matcher.
+/// A missing request context has no client headers, so the body stays unchanged.
+fn normalize_claude_codex_integer_schemas(
+    body: &[u8],
+    context: Option<&ClaudeExecutionRequestContext>,
+) -> Vec<u8> {
+    let Some(context) = context else {
+        return body.to_vec();
+    };
+    normalize_codex_tool_integer_types_for_executor(&body, &context.headers, "claude")
 }
 
 /// Bounded Claude subscription execution path with exactly one unauthorized
@@ -594,6 +609,19 @@ impl ClaudeSubscriptionMessagesExecutor {
             }
         }
         let cloaked = cloak_policy.should_cloak_request();
+        let credential_identity = self
+            .account_state_auth_id()
+            .unwrap_or_else(|| credentials.access_token().expose_secret());
+        let diagnostics_state = if cloaked && target.is_anthropic_api() {
+            begin_claude_diagnostics_request(credential_identity, &session_id)
+        } else {
+            ClaudeDiagnosticsRequestState::default()
+        };
+        if cloaked && target.is_anthropic_api() {
+            // ref: internal/runtime/executor/claude_executor_cloaking.go:214-244 @ 2044a01f
+            cloak_policy.current_date =
+                Some(diagnostics_state.pin_date(&cloak_policy.resolved_current_date()));
+        }
         let body = try_apply_claude_cloaking(
             &body,
             model.unwrap_or_default(),
@@ -601,20 +629,19 @@ impl ClaudeSubscriptionMessagesExecutor {
             Some(&self.cloak_user_id),
         )
         .map_err(ClaudeExecutionError::CallerSystemBlock)?;
-        let credential_identity = self
-            .account_state_auth_id()
-            .unwrap_or_else(|| credentials.access_token().expose_secret());
         let (body, diagnostics_state) = if cloaked && target.is_anthropic_api() {
-            inject_claude_diagnostics(&body, credential_identity, &session_id)
+            inject_claude_diagnostics_with_state(&body, diagnostics_state)
         } else {
-            (body, ClaudeDiagnosticsRequestState::default())
+            (body, diagnostics_state)
         };
+
         let body = self.apply_request_credential_identity(
             context,
             prepared_auth.as_ref(),
             &body,
             &session_id,
         )?;
+        let body = normalize_claude_codex_integer_schemas(&body, context);
         let (body, betas, reverse_map) = prepare_claude_upstream_body_with_identity(
             &body,
             model_info.as_ref(),
@@ -759,6 +786,19 @@ impl ClaudeSubscriptionMessagesExecutor {
             }
         }
         let cloaked = cloak_policy.should_cloak_request();
+        let credential_identity = self
+            .account_state_auth_id()
+            .unwrap_or_else(|| credentials.access_token().expose_secret());
+        let diagnostics_state = if cloaked && target.is_anthropic_api() {
+            begin_claude_diagnostics_request(credential_identity, &session_id)
+        } else {
+            ClaudeDiagnosticsRequestState::default()
+        };
+        if cloaked && target.is_anthropic_api() {
+            // ref: internal/runtime/executor/claude_executor_cloaking.go:214-244 @ 2044a01f
+            cloak_policy.current_date =
+                Some(diagnostics_state.pin_date(&cloak_policy.resolved_current_date()));
+        }
         let body = try_apply_claude_cloaking(
             &body,
             model.unwrap_or_default(),
@@ -766,20 +806,19 @@ impl ClaudeSubscriptionMessagesExecutor {
             Some(&self.cloak_user_id),
         )
         .map_err(ClaudeExecutionError::CallerSystemBlock)?;
-        let credential_identity = self
-            .account_state_auth_id()
-            .unwrap_or_else(|| credentials.access_token().expose_secret());
         let (body, diagnostics_state) = if cloaked && target.is_anthropic_api() {
-            inject_claude_diagnostics(&body, credential_identity, &session_id)
+            inject_claude_diagnostics_with_state(&body, diagnostics_state)
         } else {
-            (body, ClaudeDiagnosticsRequestState::default())
+            (body, diagnostics_state)
         };
+
         let body = self.apply_request_credential_identity(
             context,
             prepared_auth.as_ref(),
             &body,
             &session_id,
         )?;
+        let body = normalize_claude_codex_integer_schemas(&body, context);
         let (body, betas, reverse_map) = prepare_claude_upstream_body_with_identity(
             &body,
             model_info.as_ref(),

@@ -25,6 +25,7 @@ pub mod error_events;
 pub mod errors;
 pub mod home_concurrency;
 pub mod home_in_flight_publisher;
+mod home_model_capabilities;
 pub mod home_result;
 pub mod home_selection;
 pub mod home_session_alias;
@@ -44,7 +45,9 @@ pub use antigravity_credits::{
     AntigravityCreditsClock, AntigravityCreditsHint, AntigravityCreditsHints,
     AntigravityCreditsRequest, AntigravityCreditsStore, AntigravityCreditsStoreError,
 };
-pub use api_key_model_capabilities::{resolved_api_key_model_info, ApiKeyModelRoutingSnapshot};
+pub use api_key_model_capabilities::{
+    resolved_api_key_model_info, resolved_model_info, ApiKeyModelRoutingSnapshot,
+};
 pub use auto_refresh_loop::{
     next_refresh_check_at, AuthRefresherResolver, AutoRefreshClock, AutoRefreshConfig,
     AutoRefreshWorker, RefreshSchedule, SystemAutoRefreshClock,
@@ -173,6 +176,8 @@ mod classification_test;
 #[cfg(test)]
 mod codex_forcemap_ws_forward_test;
 #[cfg(test)]
+mod codex_oauth_model_capabilities_test;
+#[cfg(test)]
 mod conductor_availability_test;
 #[cfg(test)]
 mod conductor_claude_cancellation_test;
@@ -266,5 +271,7 @@ mod selected_auth_metadata_test;
 mod selector_test;
 #[cfg(test)]
 mod types_test;
+#[cfg(test)]
+mod unlisted_codex_api_key_model_test;
 #[cfg(test)]
 mod weight_test;
