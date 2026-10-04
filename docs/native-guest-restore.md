@@ -17,6 +17,12 @@ required capabilities), rejects pending effects, and revalidates after private
 materialization. Artifacts are rehashed by CheckpointStore. Nested files and
 directory entries are flushed without following symlinks. Dropping a stage
 removes only its private unpublished tree; existing user files are untouched.
+The stage retains an open, non-symlink import-parent directory handle. Its
+device/inode must still match the native pathname after staging, before effect
+admission and inside the publication guard. Replacing a private directory at the
+same pathname, even with identical staged bytes, denies publication. Parent
+durability is flushed through the retained handle. The native owner must still
+serialize filesystem publication and directory mutation under its real guard.
 
 `commit_guest_restore` admits one BeginEffect through the existing committed
 authority. Replayed or rejected receipts never dispatch the publication again.
