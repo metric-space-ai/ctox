@@ -140,11 +140,17 @@
   retain Rust's saturating/NaN-zero behavior for non-finite/out-of-range values,
   for which Go does not guarantee a portable conversion result. Unknown groups are
   skipped iteratively only inside submessages with a depth bound; invalid field
-  numbers fail the typed boundary. Request/auth/refresh and the actual Devin
-  executor consumer still require implementation. Neither helper is provider acceptance.
+  numbers fail the typed boundary. The request encoder now carries client metadata,
+  seeded/random fingerprint and tracing identity, complete history/tool/image/reasoning
+  fields, fixed completion flags and stable cascade/session cache IDs. Instance-owned
+  bounded LRU turn counters retain upstream user-boundary behavior without another
+  mutable global. Pinned system/tool-description normalization and the raw-byte
+  UTF-8 boundary buffer are implemented; seven regressions cover these contracts.
+  Auth/refresh, request-history normalization and the actual Devin executor/stream
+  consumer still require implementation. These helpers are not provider acceptance.
   Nine additional OAuth/catalog regressions cover plan selection, stale snapshots,
   account-kind collisions, legacy Home execution, public JSON boundaries, native
-  capability refresh and built-in metadata. There are122 prepared candidate test
+  capability refresh and built-in metadata. There are129 prepared candidate test
   functions in total; none of the current candidate Cargo/Go checks has executed.
   The first admitted57c4 candidate stopped during formatting because an older
   regression used a non-ASCII Rust raw-byte literal. The fixture now obtains

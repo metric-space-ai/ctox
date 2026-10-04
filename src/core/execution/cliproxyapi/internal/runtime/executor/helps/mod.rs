@@ -20,6 +20,7 @@ mod codex_multi_agent_v2;
 mod codex_tool_schema;
 mod derived_session;
 pub mod devin_proto;
+pub mod devin_request;
 pub mod devin_wire;
 mod home_refresh;
 mod json_retry_helpers;
@@ -75,6 +76,8 @@ mod codex_tool_schema_test;
 mod derived_session_test;
 #[cfg(test)]
 mod devin_proto_test;
+#[cfg(test)]
+mod devin_request_test;
 #[cfg(test)]
 mod devin_wire_test;
 #[cfg(test)]
