@@ -1,6 +1,7 @@
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { openUniversalImporter } from '../../shared/universal-importer.js';
 import { createMailContentEditor } from './editor/mail-content-editor.mjs';
+import { mountMailBody } from './lib/mail-body-renderer.mjs';
 import {
   appendMailContentRevision,
   applyContentRevisionToPending,
@@ -528,18 +529,27 @@ export async function mount(ctx) {
   }
 
   function wireReadiness() {
+    const names = ['communication_accounts', 'communication_threads', 'communication_messages'];
+    const snapshots = new Map();
+    const updateReadiness = () => {
+      view.readiness = { ready: names.every((name) => snapshots.get(name)?.ready === true) };
+    };
     if (typeof ctx.sync?.collectionReadiness === 'function') {
-      view.readiness = ctx.sync.collectionReadiness('communication_threads') || null;
+      for (const name of names) snapshots.set(name, ctx.sync.collectionReadiness(name) || null);
+      updateReadiness();
     }
     if (typeof ctx.sync?.subscribeCollectionReadiness === 'function') {
-      const unsubscribe = ctx.sync.subscribeCollectionReadiness('communication_threads', (snapshot) => {
-        view.readiness = snapshot || null;
+      for (const name of names) {
+        const unsubscribe = ctx.sync.subscribeCollectionReadiness(name, (snapshot) => {
+        snapshots.set(name, snapshot || null);
+        updateReadiness();
         if (!view.disposed) {
           scheduleRefresh();
           renderList();
         }
       });
       cleanups.push(() => unsubscribe?.());
+      }
     }
   }
 
@@ -804,7 +814,7 @@ export async function mount(ctx) {
       commands: view.commands,
       t,
     });
-    writePaneCounts(refs.leftPane, { queues: queueRows.length, campaigns: visibleGroups.length });
+    writePaneCounts(refs.leftPane, { queues: queueRows.length, campaigns: visibleGroups.length }, mailCountsKnown(view));
     refs.leftPane.dataset.mailView = view.leftGrammar.view;
     syncViewToggleButton(ctx, refs.leftPane, view.leftGrammar.view, t);
     const search = view.leftGrammar.search;
@@ -839,19 +849,19 @@ export async function mount(ctx) {
     refs.scopeList.innerHTML = rows.length ? rows.map((item) => {
       const scopeType = view.leftGrammar.band === 'campaigns' ? 'campaign' : 'queue';
       const shape = scopeAsList ? 'mail-scope-card--line' : 'mail-scope-card--shard';
-      const meta = scopeAsList ? '' : `<span class="mail-scope-meta">${escapeHtml(item.meta)}</span>`;
+      const meta = scopeAsList ? '' : `<span class="mail-scope-meta">${escapeHtml(mailCountsKnown(view) ? item.meta : t('refreshing', 'Wird aktualisiert…'))}</span>`;
       const section = showFolderSections && (item.id === 'inbound' || item.id === 'approval')
         ? `<div class="mail-scope-section-title">${escapeHtml(item.id === 'inbound' ? t('folders', 'Ordner') : t('workflows', 'Arbeitsabläufe'))}</div>`
         : '';
       return `${section}<button class="mail-scope-card ${shape}${view.scopeType === scopeType && view.scopeId === item.id ? ' is-active' : ''}" type="button" data-mail-scope="${scopeType}" data-mail-scope-id="${escapeAttribute(item.id)}" data-context-record-id="${escapeAttribute(item.id)}" data-context-record-type="${scopeType}" data-context-record-label="${escapeAttribute(item.title)}" data-context-label="${escapeAttribute(item.title)}">
-        <span class="mail-scope-title">${escapeHtml(item.title)}</span>${meta}<span class="mail-scope-count">${escapeHtml(item.countLabel ?? item.count)}</span>
+        <span class="mail-scope-title">${escapeHtml(item.title)}</span>${meta}<span class="mail-scope-count">${escapeHtml(mailCountsKnown(view) ? (item.countLabel ?? item.count) : '…')}</span>
       </button>`;
     }).join('') : `<div class="ctox-empty"><span>${escapeHtml(view.leftGrammar.band === 'campaigns' ? t('noGroups', 'Noch keine E-Mail-Gruppen') : t('noResults', 'Keine passenden Ordner'))}</span></div>`;
     renderNavigationSelection();
     const groupsVisible = view.leftGrammar.band === 'campaigns';
     refs.navigationTitle.textContent = groupsVisible ? t('groups', 'E-Mail-Gruppen') : t('mailbox', 'Postfach');
     refs.newGroup.hidden = !groupsVisible;
-    const footer = `${view.accounts.length} ${t('mailbox', 'Postfächer')} · ${visibleGroups.length} ${t('groups', 'E-Mail-Gruppen')}`;
+    const footer = `${mailCountsKnown(view) ? view.accounts.length : '…'} ${t('mailbox', 'Postfächer')} · ${mailCountsKnown(view) ? visibleGroups.length : '…'} ${t('groups', 'E-Mail-Gruppen')}`;
     refs.sidebarFooter.textContent = footer;
     refs.leftPane.__ctoxPaneGrammar?.setFooter?.(footer);
   }
@@ -887,8 +897,8 @@ export async function mount(ctx) {
       ? t('sent', 'Gesendet') : scopeLabel;
     refs.listPane.dataset.mailView = view.listGrammar.view;
     syncViewToggleButton(ctx, refs.listPane, view.listGrammar.view, t);
-    writePaneCounts(refs.listPane, counts);
-    const range = allRows.length ? `${pageStart + 1}–${pageStart + rows.length} / ${allRows.length}` : '0';
+    writePaneCounts(refs.listPane, counts, mailCountsKnown(view));
+    const range = !mailCountsKnown(view) ? '…' : allRows.length ? `${pageStart + 1}–${pageStart + rows.length} / ${allRows.length}` : '0';
     const footer = `${range} ${t('messages', 'Nachrichten')} · ${view.accountKey ? accountLabel(view.accountKey) : t('allMailboxes', 'alle Postfächer')}`;
     refs.listFooter.textContent = footer;
     refs.prevPage.disabled = view.page === 0;
@@ -1037,6 +1047,13 @@ export async function mount(ctx) {
       <div class="mail-thread-timeline">${timeline.length ? timeline.map(renderTimelineMessage).join('') : `<div class="ctox-empty"><span>${escapeHtml(t('emptyBody', 'Nachrichten erscheinen nach der ersten Synchronisierung.'))}</span></div>`}</div>
       <footer class="ctox-pane-footer"><span>${escapeHtml(replyTo || thread.account_key)}</span></footer>
     </article>`;
+    const bodyHosts = refs.detail.querySelectorAll('[data-mail-message-body]');
+    for (const bodyHost of bodyHosts) {
+      // Resolve from the already account-scoped timeline, never a global
+      // message-key lookup shared by different mailboxes.
+      const message = timeline.find((item) => item.id === bodyHost.dataset.mailMessageBody);
+      mountMailBody(bodyHost, message);
+    }
   }
 
   function renderTimelineMessage(message) {
@@ -1046,7 +1063,7 @@ export async function mount(ctx) {
       : (message.sender_display || message.sender_address || '—');
     return `<section class="mail-message${outbound ? ' is-outbound' : ''}" tabindex="-1" data-context-record-id="${escapeAttribute(message.id)}" data-context-record-type="communication_message">
       <div class="mail-message-head"><strong>${escapeHtml(party)}</strong><span>${escapeHtml(formatRecordTime(message.external_created_at))}</span></div>
-      <div class="mail-message-body">${escapeHtml(message.body_text || message.preview || '')}</div>
+      <div class="mail-message-body" data-mail-message-body="${escapeAttribute(message.id)}"></div>
     </section>`;
   }
 
@@ -1068,10 +1085,11 @@ export async function mount(ctx) {
       </header>
       <div class="mail-delivery-timeline">${messageEventTimeline(message).map((event) => `<div class="mail-delivery-event is-${escapeAttribute(event.state)}"><span></span><div><strong>${escapeHtml(event.label)}</strong><small>${escapeHtml(event.detail)}</small></div></div>`).join('')}</div>
       <div class="mail-thread-timeline">
-        <section class="mail-message is-outbound"><div class="mail-message-head"><strong>${escapeHtml(message.recipient_email || '—')}</strong><span>${escapeHtml(messageStatusLabel(message, t))}</span></div><div class="mail-message-body">${escapeHtml(message.body_text || '')}</div></section>
+        <section class="mail-message is-outbound"><div class="mail-message-head"><strong>${escapeHtml(message.recipient_email || '—')}</strong><span>${escapeHtml(messageStatusLabel(message, t))}</span></div><div class="mail-message-body" data-mail-outbound-body></div></section>
       </div>
       <footer class="ctox-pane-footer"><span>${escapeHtml(messageStatusLabel(message, t))}</span></footer>
     </article>`;
+    mountMailBody(refs.detail.querySelector('[data-mail-outbound-body]'), message);
   }
 
   function renderCampaignDetail(campaignId) {
@@ -2490,11 +2508,15 @@ function normalizePaneGrammar(detail, fallback) {
   };
 }
 
-function writePaneCounts(pane, counts) {
-  pane?.__ctoxPaneGrammar?.setCounts?.(counts);
+function mailCountsKnown(view) {
+  return Boolean(view?.mailReadComplete && !view.loading && !view.mailReadError && view.readiness?.ready !== false);
+}
+
+function writePaneCounts(pane, counts, known = true) {
+  if (known) pane?.__ctoxPaneGrammar?.setCounts?.(counts);
   for (const [key, value] of Object.entries(counts || {})) {
     const node = pane?.querySelector?.(`[data-pg-count="${key}"]`);
-    if (node) node.textContent = ` (${Number(value || 0)})`;
+    if (node) node.textContent = known ? ` (${Number(value || 0)})` : ' (…)';
   }
 }
 
@@ -3330,6 +3352,7 @@ function escapeAttribute(value) {
 
 export const __mailTestHooks = {
   visibleEmailAccounts,
+  mailCountsKnown,
   authoritativeVisibleEmailAccounts,
   visibleMailCampaigns,
   messageBelongsToThread,
