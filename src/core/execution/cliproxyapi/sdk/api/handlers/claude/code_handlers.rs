@@ -260,7 +260,6 @@ impl std::fmt::Debug for ClaudeMessagesAntigravityStream {
             .debug_struct("ClaudeMessagesAntigravityStream")
             .field("upstream", &"[REDACTED]")
             .field("terminal", &self.terminal)
-            .field("emitted_failure", &self.emitted_failure)
             .finish()
     }
 }
