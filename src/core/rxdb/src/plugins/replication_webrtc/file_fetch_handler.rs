@@ -89,9 +89,11 @@ pub type FileChunkStreamFn = dyn Fn(&str, &str, Option<&FileRange>, &mut dyn FnM
     + Send
     + Sync;
 pub type FileAuthCheckFn = dyn Fn(&str, &str) -> bool + Send + Sync;
+pub use super::guarded_file_source::GuardedFileSource;
 
 pub struct FileFetchRegistry {
     sources: Mutex<HashMap<String, Arc<FileChunkStreamFn>>>,
+    guarded_sources: Mutex<HashMap<String, Arc<dyn GuardedFileSource>>>,
     // Keep this field name so the existing in-module count assertion continues
     // to exercise the shared in-flight core without changing its test body.
     inflight_count: FetchInflight,
@@ -103,6 +105,7 @@ impl FileFetchRegistry {
     pub fn new(max_inflight: u64) -> Self {
         Self {
             sources: Mutex::new(HashMap::new()),
+            guarded_sources: Mutex::new(HashMap::new()),
             inflight_count: FetchInflight::new(max_inflight),
             feature_enabled: AtomicBool::new(true),
             auth_check: Mutex::new(None),
@@ -113,6 +116,21 @@ impl FileFetchRegistry {
     /// disk or database read loop and emits chunks through `emit_chunk`.
     pub fn register_stream_source(&self, collection: &str, source: Arc<FileChunkStreamFn>) {
         self.sources.lock().insert(collection.to_string(), source);
+    }
+
+    /// Native registration never replaces another live owner.
+    pub fn register_guarded_source(
+        &self,
+        collection: &str,
+        source: Arc<dyn GuardedFileSource>,
+    ) -> RxResult<()> {
+        let ordinary = self.sources.lock();
+        let mut guarded = self.guarded_sources.lock();
+        if ordinary.contains_key(collection) || guarded.contains_key(collection) {
+            return Err(new_rx_error("GUARDED_SOURCE_EXISTS", None));
+        }
+        guarded.insert(collection.to_owned(), source);
+        Ok(())
     }
 
     pub fn set_feature_enabled(&self, enabled: bool) {
@@ -191,7 +209,7 @@ fn file_fetch_error_code_for_rx_error(err: &RxError) -> (&'static str, bool) {
     }
 }
 
-pub async fn run_file_fetch<H: WebRTCConnectionHandler>(
+pub async fn run_file_fetch<H: WebRTCConnectionHandler + 'static>(
     registry: Arc<FileFetchRegistry>,
     handler: Arc<H>,
     peer: H::Peer,
@@ -248,22 +266,25 @@ pub async fn run_file_fetch<H: WebRTCConnectionHandler>(
         return Ok(());
     }
 
-    let source = match registry.get_source(&request.collection_name) {
-        Some(s) => s,
-        None => {
-            send_file_error(
-                handler.as_ref(),
-                &peer,
-                &message.id,
-                &request.request_id,
-                FILE_FETCH_ERROR_NOT_FOUND,
-                "no file source registered for this collection",
-                false,
-            )
-            .await;
-            return Ok(());
-        }
-    };
+    let source = registry.get_source(&request.collection_name);
+    let guarded_source = registry
+        .guarded_sources
+        .lock()
+        .get(&request.collection_name)
+        .cloned();
+    if source.is_none() && guarded_source.is_none() {
+        send_file_error(
+            handler.as_ref(),
+            &peer,
+            &message.id,
+            &request.request_id,
+            FILE_FETCH_ERROR_NOT_FOUND,
+            "no file source registered for this collection",
+            false,
+        )
+        .await;
+        return Ok(());
+    }
 
     let connection_identity = handler.connection_identity(&peer);
     let cancel_flag = match registry.try_acquire(&connection_identity, &request.request_id) {
@@ -285,7 +306,39 @@ pub async fn run_file_fetch<H: WebRTCConnectionHandler>(
 
     send_fetch_accepted(handler.as_ref(), &peer, &message.id, &request.request_id).await;
 
-    let outcome = stream_file(handler.as_ref(), &peer, &request, source, &cancel_flag).await;
+    let outcome = if let Some(source) = guarded_source {
+        let result = super::guarded_file_source::stream_guarded_file(
+            handler.clone(),
+            peer.clone(),
+            request.clone(),
+            source,
+            cancel_flag.clone(),
+        )
+        .await;
+        if let Err(err) = &result {
+            let (code, retryable) = file_fetch_error_code_for_rx_error(err);
+            send_file_error(
+                handler.as_ref(),
+                &peer,
+                "",
+                &request.request_id,
+                code,
+                "native guarded file delivery refused",
+                retryable,
+            )
+            .await;
+        }
+        result
+    } else {
+        stream_file(
+            handler.as_ref(),
+            &peer,
+            &request,
+            source.expect("checked registered source"),
+            &cancel_flag,
+        )
+        .await
+    };
     registry.release(&connection_identity, &request.request_id);
     outcome
 }
@@ -471,7 +524,7 @@ async fn send_file_error<H: WebRTCConnectionHandler>(
     .await;
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(bytes);
     let mut hex = String::with_capacity(64);

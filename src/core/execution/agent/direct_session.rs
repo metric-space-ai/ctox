@@ -1002,6 +1002,7 @@ impl PersistentSession {
         persona: Option<&str>,
         registry: std::sync::Arc<crate::business_os::NativeGuestRegistry>,
         guest_id: &str,
+        guest_peer: &ctox_sync::native::NativeSyncSession,
     ) -> Result<Self> {
         let context = crate::business_os::mcp_channel::verify_internal_command_session_token(
             root,
@@ -1037,6 +1038,9 @@ impl PersistentSession {
         session.native_command_context = Some(current);
         session.native_command_session_token = Some(command_session_token.to_owned());
         session.require_native_provider_admission(registry.admission(guest_id)?)?;
+        // Install the guarded source on the retained native peer, before any
+        // model turn can observe a guest. Wire claims cannot create this owner.
+        registry.attach_frame_transport(guest_peer)?;
         session.native_guest_registry = Some((registry, guest_id.to_owned()));
         Ok(session)
     }

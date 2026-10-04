@@ -33,6 +33,7 @@
 
 pub mod connection_handler_rs;
 pub mod file_fetch_handler;
+mod guarded_file_source;
 pub mod index_mod;
 pub mod local_session;
 pub(super) mod protocol_contract_generated;
