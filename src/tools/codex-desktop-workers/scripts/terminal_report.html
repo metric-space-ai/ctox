@@ -111,12 +111,13 @@ function scoreCell(a,stage){
  const rows=a.filter(x=>x.rubric==='unified-actor-v1');
  return rows.length?rows.map(x=>scoreBar(stage==='parent_completion'?parentScore(x):value(x,stage))).join(''):'—';
 }
+function mergeTarget(p){return p.merge_target?.branch||p.baseRefName||"";}
 function draw(){
  visible=sorted(visible,sortState.pr,prKey);
  const size=Number($('size').value),pages=Math.max(1,Math.ceil(visible.length/size));page=Math.max(0,Math.min(page,pages-1));
  $('prlist').innerHTML=visible.slice(page*size,(page+1)*size).map(p=>{
  const parent=current(p,'parent'),worker=current(p,'worker');
- return '<tr><td class="prtitle"><a target="_blank" rel="noopener" href="'+E(p.url)+'"><strong>'+E(p.repository.split('/').pop())+' #'+p.number+'</strong> '+E(p.title)+'</a></td><td><span class="tag '+p.state.toLowerCase()+'">'+(p.state==='MERGED'?'gemergt'+(p.baseRefName?' → '+E(p.baseRefName):''):'geschlossen')+'</span>'+(p.stop?' <span class="tag">STOP</span>':'')+'</td><td class="actors">'+actorCell(parent,'P')+actorCell(worker,'W')+'</td><td>'+scoreCell(parent,'parent_completion')+'</td><td>'+scoreCell(worker,'first')+'</td><td>'+scoreCell(worker,'corrected')+'</td><td class="number">'+(reworkCount(p)??'—')+'</td></tr>';
+ return '<tr><td class="prtitle"><a target="_blank" rel="noopener" href="'+E(p.url)+'"><strong>'+E(p.repository.split('/').pop())+' #'+p.number+'</strong> '+E(p.title)+'</a></td><td><span class="tag '+p.state.toLowerCase()+'">'+(p.state==='MERGED'?'gemergt'+(mergeTarget(p)?' → '+E(mergeTarget(p)):''):'geschlossen')+'</span>'+(p.stop?' <span class="tag">STOP</span>':'')+'</td><td class="actors">'+actorCell(parent,'P')+actorCell(worker,'W')+'</td><td>'+scoreCell(parent,'parent_completion')+'</td><td>'+scoreCell(worker,'first')+'</td><td>'+scoreCell(worker,'corrected')+'</td><td class="number">'+(reworkCount(p)??'—')+'</td></tr>';
  }).join('')||'<tr><td colspan="7" class="empty">Keine passenden PRs.</td></tr>';
  $('page').textContent='Seite '+(page+1)+' von '+pages+' · '+(visible.length?page*size+1:0)+'–'+Math.min((page+1)*size,visible.length)+' von '+visible.length;
  $('prev').disabled=page===0;$('next').disabled=page+1>=pages;

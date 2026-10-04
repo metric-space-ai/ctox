@@ -156,6 +156,38 @@ def validate_source_reference(result):
         raise ValueError("Patch snapshot requires historical delivery and source evidence")
 
 
+def validate_merge_target(entry, pr):
+    target = entry.get("merge_target")
+    if target is None:
+        return None
+    if not isinstance(target, dict) or pr.get("state") != "MERGED":
+        raise ValueError("Historical merge target requires a merged PR")
+    if entry.get("role") != "parent" or (entry.get("parent_completion") or {}).get("weighted_total") is None:
+        raise ValueError("Historical merge target belongs to the assessed closing parent")
+    branch = target.get("branch")
+    evidence = target.get("evidence")
+    if not isinstance(branch, str) or not branch.strip():
+        raise ValueError("Historical merge target requires its actual branch")
+    if target.get("head") != pr.get("headRefOid") or target.get("merged_at") != pr.get("mergedAt"):
+        raise ValueError("Historical merge target must match the terminal head and merge time")
+    if not re.fullmatch(r"[0-9a-f]{40}", str(target.get("merge_commit", ""))):
+        raise ValueError("Historical merge target requires the actual merge commit")
+    if not isinstance(evidence, list) or not evidence or not all(isinstance(e, str) and e.strip() for e in evidence):
+        raise ValueError("Historical merge target requires retained merge evidence")
+    return target
+
+
+def historical_merge_target(pr, records):
+    targets = [validate_merge_target(row, pr) for row in records
+               if row.get("pr_url") == pr["url"] and row.get("merge_target") is not None]
+    if not targets:
+        return None
+    identities = {(t["branch"], t["head"], t["merged_at"], t["merge_commit"]) for t in targets}
+    if len(identities) != 1:
+        raise ValueError("Conflicting historical merge targets")
+    return targets[0]
+
+
 def record(base, entry):
     inventory = load(base / "terminal-evidence/current.json")
     prs = {p["url"]: p for p in inventory["prs"]}
@@ -183,6 +215,7 @@ def record(base, entry):
                 prov = result.get("provenance") or entry.get("provenance") or {}
                 if prov.get("model") != result["model"] or not (prov.get("turn_id") and prov.get("evidence")):
                     raise ValueError("Stage model requires matching actual turn evidence")
+    validate_merge_target(entry, pr)
     provenance = entry.get("provenance") or {}
     if entry.get("model") and not (provenance.get("turn_id") and provenance.get("evidence")):
         raise ValueError("Exact model requires exact authoring turn evidence")
@@ -466,6 +499,9 @@ def build(base):
                    unified_corrected=stats([(r.get("corrected") or {}).get("weighted_total") for r in records]),
                    parent_completion=stats([(r.get("parent_completion") or {}).get("weighted_total") for r in records if r["role"] == "parent"]))
     for p in prs:
+        target = historical_merge_target(p, records)
+        if target is not None:
+            p["merge_target"] = target
         p["cycle_hours"] = cycle(p)
         p["stop"] = stop(p)
         p["coverage_reason"] = ("Explicit STOP: historical inventory only" if p["stop"] else

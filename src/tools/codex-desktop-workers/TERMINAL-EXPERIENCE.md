@@ -78,8 +78,12 @@ retain author-specific counts. Unknown whole-PR history is never zero.
 
 Explicit user-requested terminal URLs in terminal-evidence/explicit-terminal-prs.json
 are retained by collection alongside the configured repositories and existing
-external registry cases. Merge target branches are captured as baseRefName;
-an integration-branch merge does not imply delivery to main.
+external registry cases. baseRefName preserves GitHub's current metadata.
+GitHub can retarget a merged PR after its integration branch disappears. A
+historically proved merge_target stores the actual branch, terminal head,
+merge timestamp, merge commit and retained evidence on the closing parent.
+The report validates that binding and displays the historical branch while
+retaining current metadata. An integration merge does not imply delivery to main.
 
 Proved pre-inference failures are retained separately as non_delivery_attempts
 and cannot contribute numeric assessments or delivery statistics. Numeric

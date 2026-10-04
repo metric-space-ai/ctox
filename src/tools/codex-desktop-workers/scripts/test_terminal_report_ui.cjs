@@ -30,7 +30,7 @@ const document={
 document.getElementById('report-data').textContent=data;
 document.getElementById('size').value='25';
 const context=vm.createContext({document,console,Set,Map,JSON,Number,String,Math,Object,Blob,URL,setTimeout});
-const capture='\nglobalThis.testAPI={compare,sorted,refresh,drawChart,prKey,parentScore,reworkCount,current,actorCell,scoreCell,getAll:()=>all,getVisible:()=>visible,getBoards:()=>boards,getMode:()=>mode,getStyles:()=>pairStyles,getPairs:()=>D.parent_worker_pairs};';
+const capture='\nglobalThis.testAPI={compare,sorted,refresh,drawChart,prKey,mergeTarget,parentScore,reworkCount,current,actorCell,scoreCell,getAll:()=>all,getVisible:()=>visible,setVisible:rows=>{visible=rows;draw();},getBoards:()=>boards,getMode:()=>mode,getStyles:()=>pairStyles,getPairs:()=>D.parent_worker_pairs};';
 vm.runInContext(scripts[0][1]+capture,context,{timeout:10000});
 const api=context.testAPI;
 assert.equal(headers.parent.length,4);assert.equal(headers.worker.length,5);assert.equal(headers.pr.length,7);
@@ -72,6 +72,18 @@ for(const pr of JSON.parse(data).prs){
  const parents=api.current(pr,'parent');
  if(parents.some(a=>api.parentScore(a)!=null))assert.ok(parents.every(a=>api.parentScore(a)!=null),'No historical source-only parent rows beside a completion score');
 }
+// GitHub may retarget a merged PR; display the evidenced historical merge target.
+assert.equal(api.mergeTarget({baseRefName:'main',merge_target:{branch:'codex/devops-unification'}}),'codex/devops-unification');
+assert.equal(api.mergeTarget({baseRefName:'main'}),'main');
+for(const pr of JSON.parse(data).prs.filter(p=>p.merge_target)){
+ assert.equal(pr.merge_target.head,pr.headRefOid);
+ assert.equal(pr.merge_target.merged_at,pr.mergedAt);
+}
+const savedList=Array.from(api.getVisible());
+api.setVisible([{url:'historical-target-fixture',repository:'fixture/repo',number:1,title:'integration merge',state:'MERGED',baseRefName:'main',merge_target:{branch:'codex/devops-unification'}}]);
+assert.ok(document.getElementById('prlist').innerHTML.includes('gemergt → codex/devops-unification'));
+assert.ok(!document.getElementById('prlist').innerHTML.includes('gemergt → main'));
+api.setVisible(savedList);
 // A worker's known count does not prove the whole PR correction history.
 const fixture={url:'fixture-pr'},actor={pr_url:'fixture-pr',role:'worker',actor_id:'fixture-worker',rubric:'unified-actor-v1',model:'m',rework_iterations:2,iteration_scope:'actor',iteration_evidence:[{kind:'correction',head:'one'},{kind:'correction',head:'two'}]};
 api.getAll().push(actor);

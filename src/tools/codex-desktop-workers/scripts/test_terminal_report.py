@@ -51,6 +51,44 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(group["score"]["mean"], 7.65)
         self.assertEqual(row["harness"], "claude-desktop")
         self.assertEqual(r.harness_label("unknown-native-client"), "unknown-native-client")
+    def merge_fixture(self):
+        pr = dict(url="pr", state="MERGED", headRefOid="a"*40,
+                  mergedAt="2026-09-13T05:13:49Z", baseRefName="main")
+        target = dict(branch="codex/devops-unification", head="a"*40,
+                      merged_at=pr["mergedAt"], merge_commit="b"*40,
+                      evidence=["actual initial base, normal merge and ancestry receipts"])
+        parent = dict(pr_url="pr", role="parent",
+                      parent_completion=dict(weighted_total=7.75), merge_target=target)
+        return pr, parent
+
+    def test_historical_merge_target_preserves_current_github_base(self):
+        pr, parent = self.merge_fixture()
+        target = r.historical_merge_target(pr, [parent])
+        self.assertEqual(target["branch"], "codex/devops-unification")
+        self.assertEqual(pr["baseRefName"], "main")
+        self.assertIsNone(r.historical_merge_target(pr, []))
+
+    def test_historical_merge_target_rejects_unbound_or_unproved_claim(self):
+        pr, parent = self.merge_fixture()
+        for key, value in [("head", "c"*40), ("merged_at", "wrong"), ("branch", ""),
+                           ("merge_commit", "not-a-commit"), ("evidence", [])]:
+            bad = copy.deepcopy(parent)
+            bad["merge_target"][key] = value
+            with self.assertRaises(ValueError):
+                r.validate_merge_target(bad, pr)
+        for changed in [dict(parent, role="worker"), dict(parent, parent_completion=None)]:
+            with self.assertRaises(ValueError):
+                r.validate_merge_target(changed, pr)
+        with self.assertRaises(ValueError):
+            r.validate_merge_target(parent, dict(pr, state="CLOSED"))
+
+    def test_conflicting_historical_merge_targets_are_not_silently_ranked(self):
+        pr, parent = self.merge_fixture()
+        other = copy.deepcopy(parent)
+        other["merge_target"]["branch"] = "another-branch"
+        with self.assertRaises(ValueError):
+            r.historical_merge_target(pr, [parent, other])
+
     def test_weights_and_essential_cap(self):
         self.assertEqual(r.weighted(self.result()),8)
         result=self.result(9);result["essential_defect"]=True
