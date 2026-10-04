@@ -1,0 +1,564 @@
+//! Native provider preparation and turn witness. A persisted row alone is not authority.
+use super::{resolve_db_path, QueueExecutionFence};
+use anyhow::{ensure, Result};
+use rusqlite::{Connection, OpenFlags};
+use serde::Serialize;
+use serde_json::Value;
+use std::collections::HashMap;
+use std::future::Future;
+use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct NativeProviderFacts {
+    pub(crate) schema: &'static str,
+    pub(crate) binding_id: String,
+    pub(crate) worker_id: String,
+    pub(crate) attempt_id: String,
+    pub(crate) routing_attempts: Vec<(String, i64)>,
+    pub(crate) provider_session_id: String,
+    pub(crate) model_id: String,
+    pub(crate) model_provider_id: Option<String>,
+    pub(crate) api_provider_id: Option<String>,
+    /// Verified at preparation, not a future permission or account identity.
+    pub(crate) command_provenance: Option<Value>,
+}
+
+struct ProviderState {
+    live: bool,
+    turn_id: Option<String>,
+}
+
+struct ProviderRecord {
+    execution: QueueExecutionFence,
+    facts: NativeProviderFacts,
+    facts_json: String,
+    state: Mutex<ProviderState>,
+}
+
+type Registry = HashMap<(PathBuf, String), Weak<ProviderRecord>>;
+fn registry() -> &'static Mutex<Registry> {
+    static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Only the actual direct-session scope retains this owner. Consumers get a
+/// different handle; cloning a consumer cannot prolong the provider's lifetime.
+pub(crate) struct NativeProviderTurnOwner {
+    record: Arc<ProviderRecord>,
+}
+
+#[derive(Clone)]
+pub(crate) struct NativeProviderBinding {
+    record: Arc<ProviderRecord>,
+}
+
+/// Installed only by the native guest producer after it resolves its actual
+/// destination and policy. The future must persist real Raft admission before
+/// returning. A model payload or a persisted witness cannot register this hook.
+pub(crate) trait NativeProviderAdmission: Send + Sync {
+    fn admit<'a>(
+        &'a self,
+        provider: NativeProviderBinding,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+}
+
+fn valid_id(id: &str) -> bool {
+    !id.trim().is_empty() && id.len() <= 256 && !id.chars().any(char::is_control)
+}
+
+impl NativeProviderTurnOwner {
+    /// Called after actual thread create/resume and before TurnStart. No guessed
+    /// gateway-account/harness-version/instance/project or Raft generation.
+    pub(crate) fn prepare(
+        execution: &QueueExecutionFence,
+        provider_session_id: &str,
+        model_id: &str,
+        model_provider_id: Option<&str>,
+        api_provider_id: Option<&str>,
+        verified_command_context: Option<&Value>,
+    ) -> Result<Self> {
+        ensure!(
+            valid_id(provider_session_id) && valid_id(model_id),
+            "native provider preparation has no actual session/model identity"
+        );
+        let command_provenance = verified_command_context.map(|context| {
+            let keys = [
+                "auth_source",
+                "actor",
+                "role",
+                "workspace",
+                "command_id",
+                "payload_hash",
+                "crew_binding",
+                "crew_work_key",
+                "expires_at_ms",
+            ];
+            let mut selected = serde_json::Map::new();
+            for key in keys {
+                if let Some(value) = context.get(key) {
+                    selected.insert(key.to_owned(), value.clone());
+                }
+            }
+            Value::Object(selected)
+        });
+        let facts = NativeProviderFacts {
+            schema: "ctox.native.worker_provider_preparation.v1",
+            binding_id: uuid::Uuid::new_v4().to_string(),
+            worker_id: execution.worker_id().to_owned(),
+            attempt_id: execution.attempt_id().to_owned(),
+            routing_attempts: execution.routing_attempts().to_vec(),
+            provider_session_id: provider_session_id.to_owned(),
+            model_id: model_id.to_owned(),
+            model_provider_id: model_provider_id.map(str::to_owned),
+            api_provider_id: api_provider_id.map(str::to_owned),
+            command_provenance,
+        };
+        let facts_json = serde_json::to_string(&facts)?;
+        ensure!(
+            facts_json.len() <= 16 * 1024,
+            "native provider witness oversized"
+        );
+        let key = (execution.root().to_owned(), facts.attempt_id.clone());
+        // Lock order: exact native execution -> provider registry/state ->
+        // guest controller. Never retain a registry lock while waiting on a
+        // different worker's execution/lifetime lock.
+        let record = execution.with_current_transaction(|tx| {
+            let mut entries = registry()
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native provider registry poisoned"))?;
+            if let Some(existing) = entries.get(&key).and_then(Weak::upgrade) {
+                let state = existing
+                    .state
+                    .try_lock()
+                    .map_err(|_| anyhow::anyhow!("native provider binding is in use"))?;
+                ensure!(
+                    !state.live,
+                    "native attempt already owns a provider session"
+                );
+            }
+            tx.execute_batch(
+                "CREATE TABLE IF NOT EXISTS native_worker_provider_bindings (
+                binding_id TEXT PRIMARY KEY,
+                worker_id TEXT NOT NULL,
+                attempt_id TEXT NOT NULL,
+                provider_session_id TEXT NOT NULL,
+                provider_turn_id TEXT,
+                facts_json TEXT NOT NULL,
+                prepared_at_ms INTEGER NOT NULL,
+                finished_at_ms INTEGER
+            )",
+            )?;
+            tx.execute(
+                "INSERT INTO native_worker_provider_bindings
+                (binding_id, worker_id, attempt_id, provider_session_id, facts_json, prepared_at_ms)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                rusqlite::params![
+                    facts.binding_id,
+                    facts.worker_id,
+                    facts.attempt_id,
+                    facts.provider_session_id,
+                    facts_json,
+                    chrono::Utc::now().timestamp_millis()
+                ],
+            )?;
+            let record = Arc::new(ProviderRecord {
+                execution: execution.clone(),
+                facts,
+                facts_json,
+                state: Mutex::new(ProviderState {
+                    live: true,
+                    turn_id: None,
+                }),
+            });
+            entries.insert(key.clone(), Arc::downgrade(&record));
+            Ok(record)
+        })?;
+        // If commit fails, no owner/consumer is returned; the registry weak
+        // reference expires. An uncertain row cannot restore live authority.
+        Ok(Self { record })
+    }
+
+    pub(crate) fn binding(&self) -> NativeProviderBinding {
+        NativeProviderBinding {
+            record: Arc::clone(&self.record),
+        }
+    }
+
+    /// The actual TurnStart result may bind only the prepared provider session.
+    pub(crate) fn bind_turn(&self, provider_session_id: &str, turn_id: &str) -> Result<()> {
+        ensure!(
+            valid_id(turn_id) && provider_session_id == self.record.facts.provider_session_id,
+            "provider changed after native preparation/admission"
+        );
+        self.record.execution.with_current_transaction(|tx| {
+            let mut state = self
+                .record
+                .state
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native provider state poisoned"))?;
+            ensure!(
+                state.live && state.turn_id.is_none(),
+                "native provider turn already bound/closed"
+            );
+            let updated = tx.execute(
+                "UPDATE native_worker_provider_bindings
+                SET provider_turn_id=?2
+                WHERE binding_id=?1 AND finished_at_ms IS NULL AND provider_turn_id IS NULL
+                AND facts_json=?3",
+                rusqlite::params![
+                    self.record.facts.binding_id,
+                    turn_id,
+                    self.record.facts_json
+                ],
+            )?;
+            ensure!(
+                updated == 1,
+                "native provider preparation no longer matches its record"
+            );
+            state.turn_id = Some(turn_id.to_owned());
+            Ok(())
+        })
+    }
+}
+
+impl NativeProviderBinding {
+    pub(crate) async fn admit_before_start(
+        &self,
+        admission: &dyn NativeProviderAdmission,
+    ) -> Result<()> {
+        self.with_live_provider(|_, turn| {
+            ensure!(
+                turn.is_none(),
+                "provider turn already started before admission"
+            );
+            Ok(())
+        })?;
+        admission.admit(self.clone()).await?;
+        // An await is not a reusable permit. Revalidate the retained provider
+        // and exact worker after the native owner's actual admission completes.
+        self.with_live_provider(|_, turn| {
+            ensure!(turn.is_none(), "provider turn started during admission");
+            Ok(())
+        })
+    }
+
+    /// Current observation only. Raft admission must separately prove native
+    /// destination/policy/account/version and persist its actual job binding.
+    pub(crate) fn with_live_provider<T>(
+        &self,
+        publish: impl FnOnce(&NativeProviderFacts, Option<&str>) -> Result<T>,
+    ) -> Result<T> {
+        self.record.execution.with_current_transaction(|tx| {
+            let state = self
+                .record
+                .state
+                .lock()
+                .map_err(|_| anyhow::anyhow!("native provider state poisoned"))?;
+            ensure!(state.live, "native provider lifetime ended");
+            let (json, turn, finished): (String, Option<String>, Option<i64>) = tx.query_row(
+                "SELECT facts_json, provider_turn_id, finished_at_ms
+                 FROM native_worker_provider_bindings WHERE binding_id=?1",
+                [&self.record.facts.binding_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            ensure!(
+                json == self.record.facts_json && turn == state.turn_id && finished.is_none(),
+                "native provider witness changed, ended or was replayed"
+            );
+            publish(&self.record.facts, state.turn_id.as_deref())
+        })
+    }
+}
+
+pub(crate) fn lookup_native_provider_binding(
+    root: &Path,
+    attempt_id: &str,
+    provider_session_id: &str,
+) -> Result<NativeProviderBinding> {
+    let record = registry()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("native provider registry poisoned"))?
+        .get(&(root.to_owned(), attempt_id.to_owned()))
+        .and_then(Weak::upgrade)
+        .ok_or_else(|| anyhow::anyhow!("no retained native provider preparation"))?;
+    ensure!(
+        record.facts.provider_session_id == provider_session_id,
+        "native provider session does not match its admitted attempt"
+    );
+    let binding = NativeProviderBinding { record };
+    binding.with_live_provider(|_, _| Ok(()))?;
+    Ok(binding)
+}
+
+impl Drop for NativeProviderTurnOwner {
+    fn drop(&mut self) {
+        if let Ok(mut state) = self.record.state.lock() {
+            state.live = false;
+        }
+        // Marking closed is best-effort evidence; a row is never a stop witness
+        // or permission without the retained live native object.
+        if let Ok(conn) = Connection::open_with_flags(
+            resolve_db_path(self.record.execution.root(), None),
+            OpenFlags::SQLITE_OPEN_READ_WRITE,
+        ) {
+            let _ = conn.busy_timeout(std::time::Duration::from_millis(100));
+            let _ = conn.execute(
+                "UPDATE native_worker_provider_bindings SET finished_at_ms=?2
+                WHERE binding_id=?1 AND facts_json=?3",
+                rusqlite::params![
+                    self.record.facts.binding_id,
+                    chrono::Utc::now().timestamp_millis(),
+                    self.record.facts_json
+                ],
+            );
+        }
+        if let Ok(mut entries) = registry().lock() {
+            let key = (
+                self.record.execution.root().to_owned(),
+                self.record.facts.attempt_id.clone(),
+            );
+            if entries
+                .get(&key)
+                .is_some_and(|entry| entry.ptr_eq(&Arc::downgrade(&self.record)))
+            {
+                entries.remove(&key);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // ctox-allow-direct-state-write: isolated native witness/lease fixtures
+    use super::*;
+    use crate::channels::{
+        create_queue_task, lease_queue_task, record_queue_lease_worker, QueueTaskCreateRequest,
+        QueueTurnLeaseFence, QueueWorkerLifetime,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn admitted() -> Result<(
+        tempfile::TempDir,
+        QueueExecutionFence,
+        Arc<QueueWorkerLifetime>,
+    )> {
+        let root = tempfile::tempdir()?;
+        let task = create_queue_task(
+            root.path(),
+            QueueTaskCreateRequest {
+                title: "actual provider fixture".into(),
+                prompt: "provider fixture".into(),
+                thread_key: "queue/provider-binding".into(),
+                workspace_root: None,
+                priority: "normal".into(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: None,
+            },
+        )?;
+        lease_queue_task(root.path(), &task.message_key, "ctox-service")?;
+        record_queue_lease_worker(
+            root.path(),
+            &[task.message_key.clone()],
+            "ctox-service",
+            "provider-worker",
+        )?;
+        let fence = QueueTurnLeaseFence {
+            root: root.path().to_owned(),
+            message_keys: vec![task.message_key],
+            worker_id: "provider-worker".into(),
+            execution: None,
+        };
+        let lifetime = Arc::new(QueueWorkerLifetime::for_native_worker(
+            root.path(),
+            &fence.message_keys,
+            Some(&fence.worker_id),
+        ));
+        let execution = QueueExecutionFence::capture(&fence, "provider-attempt", lifetime.clone())?;
+        Ok((root, execution, lifetime))
+    }
+
+    fn prepare(execution: &QueueExecutionFence) -> Result<NativeProviderTurnOwner> {
+        NativeProviderTurnOwner::prepare(
+            execution,
+            "actual-thread",
+            "actual-model",
+            Some("actual-model-route"),
+            Some("actual-api-route"),
+            None,
+        )
+    }
+
+    #[test]
+    fn native_provider_preparation_precedes_actual_turn_and_selects_verified_provenance(
+    ) -> Result<()> {
+        let (root, execution, _) = admitted()?;
+        let context = serde_json::json!({
+            "actor": "native-actor", "workspace": "native-workspace",
+            "command_id": "native-command", "payload_hash": "native-payload-hash",
+            "crew_binding": "provider-attempt", "secret_token": "never-persist",
+            "allowed_actions": ["not-a-future-grant"],
+        });
+        let owner = NativeProviderTurnOwner::prepare(
+            &execution,
+            "actual-thread",
+            "actual-model",
+            None,
+            None,
+            Some(&context),
+        )?;
+        let binding =
+            lookup_native_provider_binding(root.path(), "provider-attempt", "actual-thread")?;
+        binding.with_live_provider(|facts, turn| {
+            assert_eq!(facts.worker_id, "provider-worker");
+            assert_eq!(facts.attempt_id, "provider-attempt");
+            assert_eq!(facts.provider_session_id, "actual-thread");
+            assert!(turn.is_none());
+            let provenance = facts.command_provenance.as_ref().unwrap();
+            assert_eq!(provenance["actor"], "native-actor");
+            assert!(provenance.get("secret_token").is_none());
+            assert!(provenance.get("allowed_actions").is_none());
+            Ok(())
+        })?;
+        assert!(owner.bind_turn("foreign-thread", "actual-turn").is_err());
+        owner.bind_turn("actual-thread", "actual-turn")?;
+        binding.with_live_provider(|_, turn| {
+            assert_eq!(turn, Some("actual-turn"));
+            Ok(())
+        })?;
+        assert!(owner.bind_turn("actual-thread", "successor-turn").is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn native_provider_owner_drop_and_replayed_row_cannot_revive_consumer() -> Result<()> {
+        let (root, execution, _) = admitted()?;
+        let owner = prepare(&execution)?;
+        let binding = owner.binding();
+        drop(owner);
+        let conn = Connection::open(resolve_db_path(root.path(), None))?;
+        conn.execute(
+            "UPDATE native_worker_provider_bindings SET finished_at_ms=NULL",
+            [],
+        )?;
+        assert!(binding
+            .with_live_provider(|_, _| panic!("dead owner callback"))
+            .is_err());
+        assert!(
+            lookup_native_provider_binding(root.path(), "provider-attempt", "actual-thread")
+                .is_err()
+        );
+        // A newly retained native owner is independent of a stale consumer.
+        let next = prepare(&execution)?;
+        assert!(binding.with_live_provider(|_, _| Ok(())).is_err());
+        next.binding().with_live_provider(|_, turn| {
+            assert!(turn.is_none());
+            Ok(())
+        })?;
+        Ok(())
+    }
+
+    #[test]
+    fn native_provider_rejects_duplicate_session_tampering_and_revoked_worker() -> Result<()> {
+        let (root, execution, lifetime) = admitted()?;
+        let owner = prepare(&execution)?;
+        assert!(prepare(&execution).is_err());
+        assert!(
+            lookup_native_provider_binding(root.path(), "provider-attempt", "foreign-thread")
+                .is_err()
+        );
+        let conn = Connection::open(resolve_db_path(root.path(), None))?;
+        conn.execute(
+            "UPDATE native_worker_provider_bindings SET provider_turn_id='forged-turn'",
+            [],
+        )?;
+        assert!(owner
+            .binding()
+            .with_live_provider(|_, _| panic!("tampered witness"))
+            .is_err());
+        conn.execute(
+            "UPDATE native_worker_provider_bindings SET provider_turn_id=NULL",
+            [],
+        )?;
+        lifetime.revoke();
+        assert!(owner
+            .binding()
+            .with_live_provider(|_, _| panic!("revoked worker"))
+            .is_err());
+        assert!(owner.bind_turn("actual-thread", "actual-turn").is_err());
+        Ok(())
+    }
+
+    struct Admission {
+        calls: Arc<AtomicUsize>,
+        revoke: Option<Arc<QueueWorkerLifetime>>,
+        deny: bool,
+    }
+    impl NativeProviderAdmission for Admission {
+        fn admit<'a>(
+            &'a self,
+            binding: NativeProviderBinding,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+            Box::pin(async move {
+                binding.with_live_provider(|_, turn| {
+                    assert!(turn.is_none(), "model must not start before admission");
+                    Ok(())
+                })?;
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                tokio::task::yield_now().await;
+                if let Some(lifetime) = &self.revoke {
+                    lifetime.revoke();
+                }
+                ensure!(!self.deny, "native guest owner denied");
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn native_provider_admission_revalidates_after_await_and_denies_before_start(
+    ) -> Result<()> {
+        for (revoke, deny) in [(false, false), (true, false), (false, true)] {
+            let (_root, execution, lifetime) = admitted()?;
+            let owner = prepare(&execution)?;
+            let calls = Arc::new(AtomicUsize::new(0));
+            let admission = Admission {
+                calls: calls.clone(),
+                revoke: revoke.then_some(lifetime),
+                deny,
+            };
+            let result = owner.binding().admit_before_start(&admission).await;
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+            assert_eq!(result.is_ok(), !revoke && !deny);
+            if result.is_ok() {
+                owner.bind_turn("actual-thread", "actual-turn")?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn native_provider_cancellation_and_attempt_replacement_deny_publication() -> Result<()> {
+        for mutation in [
+            "route_status='cancelled'",
+            "attempt_count=attempt_count+1",
+            "lease_expires_at='2000-01-01T00:00:00Z'",
+        ] {
+            let (root, execution, _) = admitted()?;
+            let owner = prepare(&execution)?;
+            let conn = Connection::open(resolve_db_path(root.path(), None))?;
+            conn.execute(
+                &format!("UPDATE communication_routing_state SET {mutation}"),
+                [],
+            )?;
+            assert!(owner
+                .binding()
+                .with_live_provider(|_, _| panic!("replaced lease"))
+                .is_err());
+            assert!(owner.bind_turn("actual-thread", "actual-turn").is_err());
+        }
+        Ok(())
+    }
+}

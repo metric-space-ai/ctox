@@ -895,6 +895,10 @@ pub(crate) struct PersistentSession {
     additional_writable_roots: Vec<PathBuf>,
     additional_readable_roots: Vec<PathBuf>,
     persistent_worker: bool,
+    #[cfg(unix)]
+    native_command_context: Option<JsonValue>,
+    #[cfg(unix)]
+    native_provider_admission: Option<std::sync::Arc<dyn crate::channels::NativeProviderAdmission>>,
     /// Set when a turn ended ambiguously (e.g. `turn/start` timed out with
     /// the request still detached server-side). A poisoned session refuses
     /// further turns: reusing it could overlap or steer into the original
@@ -929,7 +933,13 @@ impl PersistentSession {
             .unwrap_or(BUSINESS_OS_MCP_DEFAULT_ADDR);
         let token = crate::business_os::mcp_channel::mcp_operator_auth_token(root)?;
         let thread_config = business_os_mcp_thread_config(addr, &token, command_session_token)?;
-        Self::start_with_instructions_and_tool_mode(
+        #[cfg(unix)]
+        let command_context =
+            crate::business_os::mcp_channel::verify_internal_command_session_token(
+                root,
+                command_session_token,
+            )?;
+        let mut session = Self::start_with_instructions_and_tool_mode(
             root,
             settings,
             None,
@@ -940,7 +950,22 @@ impl PersistentSession {
             Some(thread_config),
             false,
             false,
-        )
+        )?;
+        #[cfg(unix)]
+        {
+            session.native_command_context = Some(command_context);
+        }
+        Ok(session)
+    }
+
+    /// A native guest producer must install its real admission owner before a
+    /// turn. Ordinary queue workflows do not acquire a guest permit here.
+    #[cfg(unix)]
+    pub(crate) fn require_native_provider_admission(
+        &mut self,
+        admission: std::sync::Arc<dyn crate::channels::NativeProviderAdmission>,
+    ) {
+        self.native_provider_admission = Some(admission);
     }
 
     /// Start a fresh worker session that cannot resume the process-wide
@@ -1219,6 +1244,10 @@ impl PersistentSession {
             additional_writable_roots: Vec::new(),
             additional_readable_roots: Vec::new(),
             persistent_worker,
+            #[cfg(unix)]
+            native_command_context: None,
+            #[cfg(unix)]
+            native_provider_admission: None,
             poisoned: false,
         })
     }
@@ -1319,6 +1348,10 @@ impl PersistentSession {
         let additional_writable_roots = self.additional_writable_roots.clone();
         let additional_readable_roots = self.additional_readable_roots.clone();
         let persistent_worker = self.persistent_worker;
+        #[cfg(unix)]
+        let native_command_context = self.native_command_context.clone();
+        #[cfg(unix)]
+        let native_provider_admission = self.native_provider_admission.clone();
         let required_initial_tool = required_initial_tool.map(str::to_string);
         self.ctx_log.log(
             "turn_request",
@@ -1357,6 +1390,10 @@ impl PersistentSession {
                 progress,
                 required_initial_tool.as_deref(),
                 queue_turn_lease,
+                #[cfg(unix)]
+                native_command_context.as_ref(),
+                #[cfg(unix)]
+                native_provider_admission.as_deref(),
             )
             .await
         });
@@ -1711,6 +1748,10 @@ impl PersistentSession {
         progress: &mut dyn FnMut(&JsonValue),
         required_initial_tool: Option<&str>,
         queue_turn_lease: Option<&crate::channels::QueueTurnLeaseFence>,
+        #[cfg(unix)] native_command_context: Option<&JsonValue>,
+        #[cfg(unix)] native_provider_admission: Option<
+            &dyn crate::channels::NativeProviderAdmission,
+        >,
     ) -> Result<String> {
         let lease_reader = queue_turn_lease
             .map(|fence| fence.open_reader())
@@ -1862,17 +1903,96 @@ impl PersistentSession {
                 "queue turn cancelled before turn start: native lease revoked"
             );
         }
-        let turn_resp: TurnStartResponse = start_bound_turn(
-            client,
-            seq,
-            session_thread_id,
-            turn_start_params,
-            &spec,
-            &timeouts,
-        )
-        .await?;
+        #[cfg(unix)]
+        let execution = queue_turn_lease.and_then(|fence| fence.execution.as_ref());
+        #[cfg(unix)]
+        let mut provider_owner = execution
+            .map(|execution| {
+                crate::channels::NativeProviderTurnOwner::prepare(
+                    execution,
+                    session_thread_id,
+                    model,
+                    model_provider,
+                    api_provider,
+                    native_command_context,
+                )
+            })
+            .transpose()?;
+        #[cfg(unix)]
+        if let Some(admission) = native_provider_admission {
+            let provider = provider_owner.as_ref().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "guest provider admission requires the actual native worker execution"
+                )
+            })?;
+            provider.binding().admit_before_start(admission).await?;
+        }
+        // Only the explicitly native-admitted guest lane forbids isolated
+        // fallback. Ordinary isolated sessions retain their existing rotation.
+        #[cfg(unix)]
+        let prepared_guest = native_provider_admission.is_some();
+        #[cfg(not(unix))]
+        let prepared_guest = false;
+        let turn_resp: TurnStartResponse = if prepared_guest {
+            super::session_continuity::start_prepared_turn(
+                client,
+                seq,
+                session_thread_id,
+                turn_start_params,
+                &spec,
+                &timeouts,
+            )
+            .await?
+        } else {
+            start_bound_turn(
+                client,
+                seq,
+                session_thread_id,
+                turn_start_params,
+                &spec,
+                &timeouts,
+            )
+            .await?
+        };
         let thread_id = session_thread_id.clone();
         let turn_id = turn_resp.turn.id;
+        #[cfg(unix)]
+        {
+            // A normal isolated server rejection can rotate the actual thread.
+            // It has no guest admission; replace its observation before binding
+            // the actual turn. An admitted guest can never take this branch.
+            let binding_result = (|| -> Result<()> {
+                if let Some(owner) = provider_owner.as_ref() {
+                    let prepared = owner.binding().with_live_provider(|facts, _| {
+                        Ok(facts.provider_session_id == thread_id)
+                    })?;
+                    if !prepared {
+                        anyhow::ensure!(!prepared_guest, "admitted provider session rotated");
+                        drop(provider_owner.take());
+                        provider_owner = Some(crate::channels::NativeProviderTurnOwner::prepare(
+                            execution.expect("provider owner requires execution"),
+                            &thread_id,
+                            model,
+                            model_provider,
+                            api_provider,
+                            native_command_context,
+                        )?);
+                    }
+                }
+                if let Some(owner) = provider_owner.as_ref() {
+                    owner.bind_turn(&thread_id, &turn_id)?;
+                }
+                Ok(())
+            })();
+            if let Err(error) = binding_result {
+                let terminal =
+                    interrupt_cancelled_queue_turn(client, seq, &thread_id, &turn_id).await;
+                return Err(SessionPoisoned(format!(
+                    "actual provider turn binding failed: {error}; terminal_observed={terminal}"
+                ))
+                .into());
+            }
+        }
 
         // Event loop
         let mut reply_capture = DirectSessionReplyCapture::default();

@@ -2,7 +2,14 @@ mod account_helpers;
 #[cfg(unix)]
 mod queue_execution_fence;
 #[cfg(unix)]
+mod queue_provider_binding;
+#[cfg(unix)]
 pub(crate) use queue_execution_fence::{QueueExecutionFence, QueueWorkerLifetime};
+#[cfg(unix)]
+pub(crate) use queue_provider_binding::{
+    lookup_native_provider_binding, NativeProviderAdmission, NativeProviderBinding,
+    NativeProviderTurnOwner,
+};
 mod outbound_review;
 use crate::communication_store::parse_string_json_array;
 pub(crate) use crate::communication_store::{

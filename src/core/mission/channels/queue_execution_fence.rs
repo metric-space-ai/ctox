@@ -165,6 +165,21 @@ impl QueueExecutionFence {
         &self,
         publish: impl FnOnce() -> Result<T>,
     ) -> Result<T> {
+        self.with_current_transaction(|_| publish())
+    }
+
+    pub(super) fn root(&self) -> &std::path::Path {
+        &self.root
+    }
+
+    pub(super) fn routing_attempts(&self) -> &[(String, i64)] {
+        &self.rows
+    }
+
+    pub(super) fn with_current_transaction<T>(
+        &self,
+        publish: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<T>,
+    ) -> Result<T> {
         let state = self
             .lifetime
             .state
@@ -192,7 +207,7 @@ impl QueueExecutionFence {
                 "native execution routing attempt was replaced"
             );
         }
-        let result = publish()?;
+        let result = publish(&tx)?;
         // Unexpected out-of-band filesystem replacement is an uncertain effect,
         // not a successful publication receipt. The caller must reconcile it.
         ensure!(

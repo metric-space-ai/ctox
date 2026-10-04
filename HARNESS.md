@@ -45,6 +45,27 @@ The guest owner's authenticated Raft job/provider-session mapping remains a
 separate registration requirement; queue IDs or matching strings cannot mint
 it. This change does not claim a registered production guest owner or readiness.
 
+The direct-session producer also retains an actual native provider preparation
+before `turn/start`: worker/attempt and routing attempts, the created/resumed
+provider thread, selected model/provider route, and a whitelist of verified MCP
+command provenance. It stores a witness in the native channel database; it does
+not persist a token or infer a gateway account, harness version, project,
+instance or Raft generation. Only the private live provider owner plus the exact
+execution fence can read that witness as a current observation. Owner teardown,
+lease replacement/cancellation/expiry, record tampering and replay deny retained
+consumers. The actual TurnStart response binds the turn separately.
+
+A native guest producer can install its explicit admission hook on the session.
+The hook must resolve native destination/policy/account/version and persist real
+Raft admission before returning; the adapter checks the retained binding again
+after this await and before model start. An admitted isolated thread cannot
+rotate after rejection. Ordinary isolated sessions retain their existing
+fallback. A failed post-start provider binding interrupts the exact actual turn
+and poisons the session. This seam does not itself register or implement the
+production guest owner, and its witness is neither a guest permit nor an OS
+process-stop receipt. Effect publication still requires the held execution and
+guest-controller guards.
+
 The direct-session adapter submits `TurnInterrupt` for its actual thread and
 turn while continuing to drain events, with a ten-second bound. Only a terminal
 event matching both identities is a stop witness. An acknowledgement alone is

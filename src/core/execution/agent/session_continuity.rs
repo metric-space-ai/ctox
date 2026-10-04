@@ -375,6 +375,57 @@ where
     C: DirectSessionControlClient,
     F: Fn(&str) -> TurnStartParams,
 {
+    start_bound_turn_with_rotation(
+        client,
+        seq,
+        session_thread_id,
+        params_for_thread,
+        spec,
+        timeouts,
+        true,
+    )
+    .await
+}
+
+/// Guest admission is bound to the actual prepared thread. Never rotate it
+/// after admission and submit the same work to an unadmitted replacement.
+pub(crate) async fn start_prepared_turn<C, F>(
+    client: &C,
+    seq: &mut RequestIdSeq,
+    session_thread_id: &mut String,
+    params_for_thread: F,
+    spec: &SessionThreadSpec<'_>,
+    timeouts: &SessionControlTimeouts,
+) -> Result<TurnStartResponse>
+where
+    C: DirectSessionControlClient,
+    F: Fn(&str) -> TurnStartParams,
+{
+    start_bound_turn_with_rotation(
+        client,
+        seq,
+        session_thread_id,
+        params_for_thread,
+        spec,
+        timeouts,
+        false,
+    )
+    .await
+}
+
+async fn start_bound_turn_with_rotation<C, F>(
+    client: &C,
+    seq: &mut RequestIdSeq,
+    session_thread_id: &mut String,
+    params_for_thread: F,
+    spec: &SessionThreadSpec<'_>,
+    timeouts: &SessionControlTimeouts,
+    allow_rotation: bool,
+) -> Result<TurnStartResponse>
+where
+    C: DirectSessionControlClient,
+    F: Fn(&str) -> TurnStartParams,
+{
     let thread_id = session_thread_id.clone();
     // A turn/start TIMEOUT is ambiguous: the facade detaches the request
     // onto its own task, so timing out the caller-side future does NOT
@@ -409,7 +460,7 @@ where
         )) => Err(anyhow::Error::new(SessionPoisoned(format!(
             "turn/start ended ambiguously ({err}); session poisoned instead of retried to avoid a duplicate turn"
         )))),
-        Ok(Err(err @ TypedRequestError::Server { .. })) if spec.persistent_worker => {
+        Ok(Err(err @ TypedRequestError::Server { .. })) if spec.persistent_worker || !allow_rotation => {
             eprintln!(
                 "[ctox direct-session] turn/start on persistent thread {thread_id} was rejected ({err}); refusing replacement"
             );
@@ -962,6 +1013,30 @@ mod tests {
         let turn: TurnStartParams =
             serde_json::from_value(client.params()[0].clone()).expect("turn/start params");
         assert_eq!(turn.thread_id, "thr-keep");
+    }
+
+    #[tokio::test]
+    async fn native_prepared_turn_rejection_does_not_rotate_isolated_session() {
+        let client =
+            ScriptedControlClient::new(vec![ScriptedReply::Server("thread gone".to_string())]);
+        let mut seq = RequestIdSeq::new();
+        let mut thread_id = "actual-prepared-thread".to_string();
+        let error = start_prepared_turn(
+            &client,
+            &mut seq,
+            &mut thread_id,
+            turn_params,
+            &isolated_spec(),
+            &fast_timeouts(),
+        )
+        .await
+        .expect_err("admitted session must not rotate");
+        assert_eq!(
+            continuity_kind(&error),
+            PersistentThreadContinuityKind::TurnStartRejected
+        );
+        assert_eq!(thread_id, "actual-prepared-thread");
+        assert_eq!(client.methods(), vec!["turn/start".to_string()]);
     }
 
     #[tokio::test]
