@@ -1716,6 +1716,16 @@ mod tests {
             Some(canary.to_owned())
         );
         let conn = open_secret_db(root.path())?;
+        let (key, _) = load_existing_secret_master_key(root.path())?;
+        let invalid_utf8 = encrypt_secret_value(&key, &[0xff, 0xfe])?;
+        conn.execute(
+            "UPDATE ctox_secret_records SET nonce_b64 = ?1, ciphertext_b64 = ?2 WHERE scope = ?3 AND secret_name = ?4",
+            params![invalid_utf8.nonce_b64, invalid_utf8.ciphertext_b64, scope, name],
+        )?;
+        assert_eq!(
+            read_secret_value_optional(root.path(), scope, name),
+            Err(SecretReadError::InvalidEncoding)
+        );
         conn.execute(
             "UPDATE ctox_secret_records SET ciphertext_b64 = ?1 WHERE scope = ?2 AND secret_name = ?3",
             params!["not-valid-base64", scope, name],
