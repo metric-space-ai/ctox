@@ -92,10 +92,15 @@
   Current source owns effort, with an empty-current fallback; current/original
   source and normalized target summary precedence use the existing owner-scoped
   translator helper. Primary routing reference: frozen d7914afd
-  internal/runtime/executor/helps/model_capabilities.go:18-31. Nine prepared
+  internal/runtime/executor/helps/model_capabilities.go:18-31. Unselected models
+  now resolve full embedded capabilities, rather than the old Claude-only static
+  view. An explicit live-registry resolver reads provider-specific registration
+  and refreshed catalog snapshots from the injected instance. Legacy resolvers
+  retain exact static descriptors, including unsigned bounds. Twelve prepared
   guards cover all native appliers, configured/static precedence, custom levels,
-  source/summary ownership, registry lookup, Claude ceilings, plugin metadata and
-  signed/unsigned extremes. Native execution and production bridge registration
+  source/summary ownership, lookup/owner/provider isolation, live replacement,
+  Claude ceilings, plugin metadata and signed/unsigned extremes.
+  Native execution and production bridge registration
   remain open. Canonical configuration-update/SSE intent still needs the complete
   v8 semantic port; this bridge does not establish that parity.
 - Further native Meta request-time integration supplies an owned asynchronous
@@ -115,8 +120,8 @@
   reconstruction; Responses usage defaults preserve measured cache/reasoning
   values. Typed quota/reset evidence reaches generic unary, stream bootstrap
   and committed-stream cooldown consumers. The finite targeted controller
-  requires at least198 actual native tests across25 groups, including nine Google
-  request-preparation cases, nine owned-thinking pipeline cases and39 new Meta
+  requires at least201 actual native tests across25 groups, including nine Google
+  request-preparation cases, twelve owned-thinking pipeline cases and39 new Meta
   tool/count/response/usage/transport/factory/cooldown/scheduled-refresh guards,
   three new shared cancellation-publication guards,15 existing background-worker
   guards and six retained

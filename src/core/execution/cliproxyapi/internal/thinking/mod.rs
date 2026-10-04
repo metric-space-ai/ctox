@@ -68,8 +68,8 @@ mod apply_configured_api_key_test;
 mod kimi_max_clamp_repro_test;
 pub use apply::{
     extract_reasoning_effort, extract_translated_reasoning_effort, EmbeddedModelInfoResolver,
-    ModelInfoResolver, ResolvedCapabilityThinkingRequest, ResolvedThinkingRequest, ThinkingEngine,
-    ThinkingRequest,
+    ModelInfoResolver, RegistryModelInfoResolver, ResolvedCapabilityThinkingRequest,
+    ResolvedThinkingRequest, ThinkingEngine, ThinkingRequest,
 };
 
 #[cfg(test)]

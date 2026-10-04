@@ -467,3 +467,168 @@ fn candidate_thinking_pipeline_static_unsigned_and_owned_signed_bounds_are_lossl
         json!(10)
     );
 }
+
+#[test]
+fn candidate_thinking_pipeline_unselected_embedded_model_keeps_private_capabilities() {
+    let engine = ThinkingEngine::default();
+    engine.register_provider("codex", Arc::new(ViewPlugin));
+    let output = run(
+        &pipeline(engine),
+        b"{}",
+        b"{}",
+        b"{}",
+        "gpt-6-astra(high)",
+        "codex",
+        "codex",
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(at(&output, "id"), json!("gpt-6-astra"));
+    assert_eq!(at(&output, "level"), json!("high"));
+    assert_eq!(at(&output, "updates"), json!(true));
+}
+
+#[test]
+fn candidate_thinking_pipeline_live_registry_preserves_provider_and_owner_scope() {
+    use crate::internal::registry::{
+        ModelRegistry, RegistryModelInfo, RegistryThinkingSupport, StaticModelsCatalog,
+    };
+    let make_info = |provider: &str, level: &str, updates: bool| RegistryModelInfo {
+        id: "live-scoped-model".to_owned(),
+        provider_type: provider.to_owned(),
+        support_configuration_update: updates,
+        thinking: Some(RegistryThinkingSupport {
+            levels: vec![level.to_owned()],
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let left = Arc::new(ModelRegistry::new(Arc::new(StaticModelsCatalog::default())));
+    let right = Arc::new(ModelRegistry::new(Arc::new(StaticModelsCatalog::default())));
+    left.register_client("google", "gemini", &[make_info("gemini", "left", false)]);
+    left.register_client("responses", "codex", &[make_info("codex", "high", true)]);
+    right.register_client("google", "gemini", &[make_info("gemini", "right", false)]);
+    let engine = ThinkingEngine::new(Arc::new(super::RegistryModelInfoResolver::new(Arc::clone(
+        &left,
+    ))));
+    engine.register_provider("codex", Arc::new(ViewPlugin));
+    let left_pipeline = pipeline(engine);
+    let right_pipeline = pipeline(ThinkingEngine::new(Arc::new(
+        super::RegistryModelInfoResolver::new(right),
+    )));
+    let current = br#"{"generationConfig":{"thinkingConfig":{"thinkingLevel":"left"}}}"#;
+    let output = run(
+        &left_pipeline,
+        b"{}",
+        current,
+        current,
+        "live-scoped-model",
+        "gemini",
+        "gemini",
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        at(&output, "generationConfig.thinkingConfig.thinkingLevel"),
+        json!("left")
+    );
+    let error = run(
+        &right_pipeline,
+        b"{}",
+        current,
+        current,
+        "live-scoped-model",
+        "gemini",
+        "gemini",
+        None,
+        None,
+    )
+    .unwrap_err();
+    assert_eq!(error.code, ErrorCode::LevelNotSupported);
+    assert!(error.message.contains("right"));
+    let output = run(
+        &left_pipeline,
+        b"{}",
+        b"{}",
+        b"{}",
+        "live-scoped-model(high)",
+        "codex",
+        "codex",
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(at(&output, "updates"), json!(true));
+
+    // Replacing the owner registration must affect the next request; the
+    // thinking bridge must not cache the previous model capability.
+    left.register_client("responses", "codex", &[make_info("codex", "high", false)]);
+    let output = run(
+        &left_pipeline,
+        b"{}",
+        b"{}",
+        b"{}",
+        "live-scoped-model(high)",
+        "codex",
+        "codex",
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(at(&output, "updates"), json!(false));
+}
+
+struct LegacyBoundsOwner;
+impl ModelInfoResolver for LegacyBoundsOwner {
+    fn lookup_model_info(&self, model: &str, provider: &str) -> Option<ModelInfo> {
+        assert_eq!((model, provider), ("legacy-owner-bounds", "claude"));
+        Some(ModelInfo {
+            id: "legacy-owner-bounds",
+            provider_type: "claude",
+            user_defined: false,
+            max_completion_tokens: 0,
+            thinking: Some(ThinkingSupport {
+                min: Some(u64::MAX),
+                max: Some(u64::MAX),
+                zero_allowed: false,
+                dynamic_allowed: false,
+                levels: &[],
+            }),
+        })
+    }
+}
+struct LegacyBoundsApplier;
+impl ProviderApplier for LegacyBoundsApplier {
+    fn apply(
+        &self,
+        _: &[u8],
+        _: &ThinkingConfig,
+        info: Option<&ModelInfo>,
+    ) -> Result<Vec<u8>, ThinkingError> {
+        let support = info.unwrap().thinking.as_ref().unwrap();
+        assert_eq!(support.min, Some(u64::MAX));
+        assert_eq!(support.max, Some(u64::MAX));
+        Ok(br#"{"preserved":true}"#.to_vec())
+    }
+}
+
+#[test]
+fn candidate_thinking_pipeline_legacy_resolver_retains_exact_static_bounds() {
+    let engine = ThinkingEngine::new(Arc::new(LegacyBoundsOwner));
+    engine.register_provider("claude", Arc::new(LegacyBoundsApplier));
+    let output = run(
+        &pipeline(engine),
+        b"{}",
+        b"{}",
+        b"{}",
+        "legacy-owner-bounds(high)",
+        "claude",
+        "claude",
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(at(&output, "preserved"), json!(true));
+}

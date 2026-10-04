@@ -9,7 +9,13 @@ use std::{
 
 use serde_json::Value;
 
-use crate::internal::registry::{lookup_model_info, ModelInfo};
+use crate::internal::{
+    modelconfig,
+    registry::{
+        embedded_models_catalog, lookup_model_info, lookup_static_registry_model_info, ModelInfo,
+        ModelRegistry,
+    },
+};
 
 use super::{
     convert_budget_to_level, convert_level_to_budget, extract_summary_config,
@@ -30,6 +36,17 @@ use super::{
 /// cannot observe or mutate each other's model selection state.
 pub trait ModelInfoResolver: Send + Sync {
     fn lookup_model_info(&self, model: &str, provider: &str) -> Option<ModelInfo>;
+
+    /// Complete instance-owned capability snapshot. Legacy resolvers retain
+    /// their original static descriptor when this returns None; converting it
+    /// into the signed owned type would narrow unsigned budget bounds.
+    fn lookup_owned_model_info(
+        &self,
+        _model: &str,
+        _provider: &str,
+    ) -> Option<modelconfig::ModelInfo> {
+        None
+    }
 }
 
 /// Resolver backed by the embedded, immutable model definitions.
@@ -39,6 +56,43 @@ pub struct EmbeddedModelInfoResolver;
 impl ModelInfoResolver for EmbeddedModelInfoResolver {
     fn lookup_model_info(&self, model: &str, provider: &str) -> Option<ModelInfo> {
         lookup_model_info(model, provider)
+    }
+
+    fn lookup_owned_model_info(
+        &self,
+        model: &str,
+        _provider: &str,
+    ) -> Option<modelconfig::ModelInfo> {
+        let catalog = embedded_models_catalog().ok()?;
+        lookup_static_registry_model_info(&catalog, model.trim()).map(modelconfig::ModelInfo::from)
+    }
+}
+
+/// Uses the host's live registry, including provider-specific registrations
+/// and its refreshable catalog, without introducing package-global ownership.
+pub struct RegistryModelInfoResolver {
+    registry: Arc<ModelRegistry>,
+}
+
+impl RegistryModelInfoResolver {
+    pub fn new(registry: Arc<ModelRegistry>) -> Self {
+        Self { registry }
+    }
+}
+
+impl ModelInfoResolver for RegistryModelInfoResolver {
+    fn lookup_model_info(&self, _model: &str, _provider: &str) -> Option<ModelInfo> {
+        None
+    }
+
+    fn lookup_owned_model_info(
+        &self,
+        model: &str,
+        provider: &str,
+    ) -> Option<modelconfig::ModelInfo> {
+        self.registry
+            .lookup_model_info(model, provider)
+            .map(modelconfig::ModelInfo::from)
     }
 }
 
@@ -327,13 +381,22 @@ impl ThinkingEngine {
             return Ok(request.body.to_vec());
         };
         let suffix = parse_suffix(request.model);
-        let looked_up = if request.model_info_resolved {
+        let looked_up_owned = if request.model_info_resolved {
+            None
+        } else {
+            self.resolver
+                .lookup_owned_model_info(&suffix.model_name, &provider_key)
+        };
+        let looked_up = if request.model_info_resolved || looked_up_owned.is_some() {
             None
         } else {
             self.resolver
                 .lookup_model_info(&suffix.model_name, &provider_key)
         };
-        let looked_up_view = looked_up.as_ref().map(ModelInfoView::from);
+        let looked_up_view = looked_up_owned
+            .as_ref()
+            .map(ModelInfoView::from)
+            .or_else(|| looked_up.as_ref().map(ModelInfoView::from));
         let model_info = if request.model_info_resolved {
             request.resolved_model_info
         } else {
