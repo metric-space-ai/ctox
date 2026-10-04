@@ -303,6 +303,9 @@ pub(crate) struct NativeGuestRegistry {
     frame_budget: Arc<frames::FrameBudget>,
     frame_guests: Mutex<HashMap<String, String>>,
     frame_transport: Mutex<Option<std::sync::Weak<frames::Pool>>>,
+    frame_registration: Mutex<
+        Option<rxdb::plugins::replication_webrtc::file_fetch_handler::GuardedSourceRegistration>,
+    >,
 }
 
 pub(crate) struct NativeGuestExecution {
@@ -365,6 +368,7 @@ impl NativeGuestRegistry {
             frame_budget: frames::FrameBudget::new(),
             frame_guests: Mutex::new(HashMap::new()),
             frame_transport: Mutex::new(None),
+            frame_registration: Mutex::new(None),
         }))
     }
 
@@ -971,7 +975,12 @@ impl NativeGuestExecution {
                 validate_provider(facts, &destination)
             };
             let result = apply(&mut entry, &verify)?;
-            verify()?;
+            if let Err(error) = verify() {
+                // A late lease/authority failure must retire current pixels
+                // before another native command can acquire this controller.
+                self.registry.retire_frame(&mut entry)?;
+                return Err(error);
+            }
             Ok(result)
         })
     }

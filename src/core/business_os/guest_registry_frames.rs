@@ -201,7 +201,11 @@ impl NativeGuestRegistry {
             );
             return Ok(());
         }
-        transport
+        let mut owned_registration = self
+            .frame_registration
+            .lock()
+            .map_err(|_| anyhow::anyhow!("native frame registration poisoned"))?;
+        let registration = transport
             .file_fetch_registry
             .register_guarded_source(
                 COLLECTION,
@@ -211,6 +215,7 @@ impl NativeGuestRegistry {
                 }),
             )
             .map_err(anyhow::Error::from)?;
+        *owned_registration = Some(registration);
         *attached = Some(Arc::downgrade(transport));
         Ok(())
     }
