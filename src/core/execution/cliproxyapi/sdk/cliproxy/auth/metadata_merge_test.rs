@@ -124,14 +124,8 @@ fn candidate_proxy_merge_honors_user_edit_and_explicit_clear_in_either_represent
         };
         let merged = merge_prepared_auth(&make(bs, bm), &make(cs, cm), &make(us, um));
         assert_eq!(merged.proxy_url, expected);
-        assert_eq!(
-            merged.metadata.get("proxy_url"),
-            if expected.is_empty() {
-                None
-            } else {
-                Some(&json!(expected))
-            }
-        );
+        let expected_metadata = (!expected.is_empty()).then(|| json!(expected));
+        assert_eq!(merged.metadata.get("proxy_url"), expected_metadata.as_ref());
     }
 }
 
