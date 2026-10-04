@@ -698,7 +698,7 @@ mod tests {
     fn native_provider_cancellation_and_attempt_replacement_deny_publication() -> Result<()> {
         for mutation in [
             "route_status='cancelled'",
-            "attempt_count=attempt_count+1",
+            "attempt=attempt+1",
             "lease_expires_at='2000-01-01T00:00:00Z'",
         ] {
             let (root, execution, _) = admitted()?;

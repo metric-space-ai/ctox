@@ -60,7 +60,7 @@ pub(crate) struct QueueExecutionFence {
 fn current_attempt(conn: &Connection, key: &str, worker: &str) -> Result<i64> {
     let (attempt, expiry): (i64, String) = conn
         .query_row(
-            "SELECT attempt_count, lease_expires_at FROM communication_routing_state
+            "SELECT attempt, lease_expires_at FROM communication_routing_state
              WHERE message_key=?1 AND route_status='leased'
              AND lease_owner='ctox-service' AND lease_worker_id=?2",
             rusqlite::params![key, worker],
@@ -276,7 +276,7 @@ mod tests {
             "route_status='pending'",
             "lease_owner='foreign-worker'",
             "lease_worker_id='replacement-worker'",
-            "attempt_count=attempt_count+1",
+            "attempt=attempt+1",
             "lease_expires_at='2000-01-01T00:00:00Z'",
             "lease_expires_at='not-a-date'",
         ] {
