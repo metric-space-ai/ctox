@@ -12,8 +12,35 @@ pub fn emit() {
 
     println!("cargo:rustc-env=CTOX_BUILD_VERSION={version}");
     println!("cargo:rerun-if-env-changed=CTOX_BUILD_VERSION");
-    println!("cargo:rerun-if-changed={}", repo_root.join(".git/HEAD").display());
-    println!("cargo:rerun-if-changed={}", repo_root.join("Cargo.toml").display());
+    // A linked worktree's .git is a file, not the directory containing HEAD.
+    for name in ["HEAD", "refs/tags", "packed-refs"] {
+        if let Some(path) = git_metadata_path(&repo_root, name).filter(|path| path.exists()) {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+    if let Some(head) =
+        git_metadata_path(&repo_root, "HEAD").and_then(|path| std::fs::read_to_string(path).ok())
+    {
+        if let Some(reference) = head.trim().strip_prefix("ref: ") {
+            if let (Some(mut path), Some(heads)) = (
+                git_metadata_path(&repo_root, reference),
+                git_metadata_path(&repo_root, "refs/heads"),
+            ) {
+                // A packed branch creates a loose ref on its next commit.
+                // Watch its nearest existing parent until that ref exists.
+                while !path.exists() && path.starts_with(&heads) && path != heads {
+                    path.pop();
+                }
+                if path.exists() {
+                    println!("cargo:rerun-if-changed={}", path.display());
+                }
+            }
+        }
+    }
+    println!(
+        "cargo:rerun-if-changed={}",
+        repo_root.join("Cargo.toml").display()
+    );
     println!(
         "cargo:rerun-if-changed={}",
         repo_root
@@ -36,6 +63,29 @@ fn repo_root() -> PathBuf {
         .find(|path| path.join("Cargo.toml").exists() && path.join("src").exists())
         .map(Path::to_path_buf)
         .unwrap_or(manifest_dir)
+}
+
+fn git_metadata_path(root: &Path, name: &str) -> Option<PathBuf> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--git-path", name])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(text);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    })
 }
 
 fn git_describe(root: &Path) -> Option<String> {
